@@ -60,11 +60,46 @@ launch.
 
 | Limitation | Impact | Tracked |
 | --- | --- | --- |
-| Object storage is in-process (`LocalObjectStorage`) | Uploaded bytes are lost on restart and are not shared between instances. **Not production-ready.** | `docs/decisions/TODO.md`, ADR-0008 |
+| Object storage is in-process (`LocalObjectStorage`) | Uploaded bytes are lost on restart and are not shared between instances. **Not production-ready** — blocked by the production-safety guard below. | `docs/decisions/TODO.md`, ADR-0008 |
 | Image processing runs inline in the completion request | Large photos hold a request open; no retry queue | Phase 4 follow-up |
-| Malware scanning is a hook, not a real engine | Only the EICAR test signature is detected | ADR-0008 |
+| Malware scanning is a hook, not a real engine | Only the EICAR test signature is detected. **Blocked by the production-safety guard below.** | ADR-0008 |
 | No live-PostgreSQL CI job | Prisma adapters are typechecked and built but not integration-tested in CI | Carried over from Phase 1 |
 | Perceptual hash is aHash, not DCT pHash | May be permissive on real-world photos | `docs/decisions/TODO.md` |
+
+## Production-safety guard (fail-fast on non-production adapters)
+
+The two development-only adapters now **refuse to be constructed** when
+`NODE_ENV=production`, so this release cannot be deployed to production with
+them still wired in:
+
+| Adapter | Guarded reason |
+| --- | --- |
+| `LocalObjectStorage` | objects live in process memory — uploads are lost on restart and not shared between instances |
+| `PassthroughMalwareScanner` | performs no real malware analysis; only recognises the EICAR test signature |
+
+Behavior:
+
+- Construction throws `NonProductionAdapterError`. The message names the
+  offending adapter and the required action, for example:
+  `LocalObjectStorage is a non-production adapter and must not be used when
+  NODE_ENV=production. Reason: objects are held in process memory… Required
+  action: configure a durable S3/Azure ObjectStorage adapter.`
+- The error contains **no configuration values or secrets** — the signing secret
+  is never included in the message, stack, or serialized properties (asserted by
+  test).
+- `development`, `test`, and an unset `NODE_ENV` are unaffected, so local
+  development and the test suite work exactly as before.
+- `next build` is unaffected: routes are `force-dynamic` and the adapters are
+  constructed lazily per request, not at build time.
+- An explicit `allowInProduction: true` escape hatch exists for deliberate
+  staging smoke tests against a production-like `NODE_ENV`. **Never set it in a
+  real production deployment.**
+
+> **Scope of the guard.** It fires when the adapter is first constructed — that
+> is, on the first request that touches a property/asset route — not at process
+> boot. A production deployment would therefore start and pass the liveness
+> probe, then fail closed on first use. Boot-time validation of the full adapter
+> set is a Phase 7 hardening item.
 
 ## Not in this release
 

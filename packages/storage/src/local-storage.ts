@@ -1,7 +1,8 @@
 import type { ObjectStorage, SignedUrl } from "@app/domain";
 import { signStorageToken } from "./signing";
+import { assertNotProduction, type ProductionGuardOptions } from "./production-guard";
 
-export interface LocalObjectStorageOptions {
+export interface LocalObjectStorageOptions extends ProductionGuardOptions {
   /** HMAC secret used to sign storage tokens. Server-side only. */
   readonly secret: string;
   /** Base path that serves signed objects, e.g. "/api/storage". */
@@ -17,6 +18,8 @@ export interface LocalObjectStorageOptions {
  *
  * A production S3/Azure adapter replaces this class without touching domain
  * code (see ADR-0008).
+ *
+ * NOT PRODUCTION-SAFE: construction throws under NODE_ENV=production.
  */
 export class LocalObjectStorage implements ObjectStorage {
   private readonly objects = new Map<string, Uint8Array>();
@@ -25,6 +28,12 @@ export class LocalObjectStorage implements ObjectStorage {
   private readonly now: () => Date;
 
   constructor(options: LocalObjectStorageOptions) {
+    assertNotProduction(
+      "LocalObjectStorage",
+      "objects are held in process memory, so uploads are lost on restart and are not shared between instances",
+      "configure a durable S3/Azure ObjectStorage adapter",
+      options,
+    );
     this.secret = options.secret;
     this.basePath = options.basePath ?? "/api/storage";
     this.now = options.now ?? (() => new Date());

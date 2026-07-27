@@ -28,9 +28,9 @@ v1.3 milestone policy existed, so it is a single PR rather than a milestone set.
 
 ### Deviation from the ~500-line PR guideline — disclosed
 
-PR #3 contains **3,620 changed lines across 53 files** excluding the lockfile and
-generated migrations (3,958 / 55 files including them). That is roughly seven
-times the ~500-line target in `CLAUDE.md` v1.3.
+PR #3 contains **5,110 changed lines across 62 files** excluding the lockfile and
+generated migrations (5,448 / 64 files including them; ~45% of the line count is
+documentation). That is well above the ~500-line target in `CLAUDE.md` v1.3.
 
 - **Why:** the work was completed under v1.2, which asked for one PR per phase.
   The milestone policy arrived afterwards.
@@ -87,7 +87,7 @@ times the ~500-line target in `CLAUDE.md` v1.3.
 | Tenant isolation (properties & assets) | ✅ | org-scoped repos + `authorizeOrganization` |
 | Audit logging for property/asset ops | ✅ | 11 new audit actions |
 | Retention & deletion-state foundation | ✅ | `DELETION_PENDING`, `deletionRequestedAt`, `retentionExpiresAt` |
-| Unit tests | ✅ | 31 (media helpers, property/asset services) |
+| Unit tests | ✅ | 45 (media helpers, property/asset services, production guard) |
 | Integration tests | ✅ | 15 (real `sharp` pipeline, signed tokens, end-to-end flow) |
 | Tenant-isolation tests | ✅ | read + write denial |
 | Upload security tests | ✅ | disguised content, size, quarantine, dimensions, count, token misuse |
@@ -115,7 +115,7 @@ TypeScript 5.7.3, Vitest 3.2.7. Re-run after merging `origin/main` (CLAUDE.md v1
 ```text
 pnpm typecheck   → PASS   tsc --noEmit across 10 workspace projects
 pnpm lint        → PASS   eslint . — 0 problems
-pnpm test        → PASS   16 files, 117 tests, 0 failed   (duration 4.30s)
+pnpm test        → PASS   17 files, 131 tests, 0 failed
 pnpm build       → PASS   next build — compiled successfully, 16 routes
 ```
 
@@ -123,7 +123,7 @@ Per-file test results:
 
 | Test file | Tests | Result |
 | --- | --- | --- |
-| `packages/domain/src/property/property.test.ts` | 23 | ✅ |
+| `packages/domain/src/property/property.test.ts` | 25 | ✅ |
 | `packages/video-providers/src/wavespeed/mapping.test.ts` | 16 | ✅ |
 | `packages/domain/src/identity/identity.test.ts` | 12 | ✅ |
 | `packages/storage/src/media-pipeline.integration.test.ts` | 9 | ✅ |
@@ -131,6 +131,7 @@ Per-file test results:
 | `packages/shared/src/security.test.ts` | 8 | ✅ |
 | `packages/shared/src/crypto.test.ts` | 6 | ✅ |
 | `packages/observability/src/redact.test.ts` | 6 | ✅ |
+| `packages/storage/src/production-guard.test.ts` | 12 | ✅ |
 | `packages/storage/src/signing.test.ts` | 6 | ✅ |
 | `packages/shared/src/env.test.ts` | 5 | ✅ |
 | `packages/video-providers/src/wavespeed/wavespeed-provider.test.ts` | 5 | ✅ |
@@ -139,9 +140,10 @@ Per-file test results:
 | `apps/web/src/lib/auth.test.ts` | 2 | ✅ |
 | `apps/worker/src/bootstrap.test.ts` | 2 | ✅ |
 | `packages/video-providers/src/factory.test.ts` | 2 | ✅ |
-| **Total** | **117** | **✅ 0 failures** |
+| **Total** | **131** | **✅ 0 failures** |
 
-Phase 2 added 46 tests (71 → 117).
+Phase 2 added 60 tests (71 → 131), including 14 added during post-review
+hardening (2 download-denial + 12 production-guard).
 
 Build output routes: `/`, `/login`, `/properties/[propertyId]`, `/_not-found`,
 `/api/auth/{register,login,logout}`, `/api/organizations`, `/api/properties`,
@@ -197,20 +199,24 @@ Build output routes: `/`, `/login`, `/properties/[propertyId]`, `/_not-found`,
 | Audit coverage of writes | ✅ all 11 property/asset write paths emit events |
 | Secrets absent from logs | ✅ redacting logger covers keys, tokens, secrets, signed URLs, prediction ids |
 | TypeScript strict / no `any` | ✅ enforced by config and lint |
+| Non-production adapters blocked in production | ✅ `LocalObjectStorage` and `PassthroughMalwareScanner` throw `NonProductionAdapterError` under `NODE_ENV=production` |
+| Guard error message free of secrets | ✅ signing secret absent from message, stack, and serialized properties (asserted) |
+| Download denial for every non-`READY` status | ✅ `REJECTED` and `DELETION_PENDING` now individually asserted, alongside `PENDING_UPLOAD`, `FAILED`, `QUARANTINED` |
 
-## Changed files (53 excluding lockfile and generated migration)
+## Changed files (62 excluding lockfile and generated migration)
 
 **Domain — `packages/domain` (12)**
 `src/property/types.ts` (A), `src/property/ports.ts` (A),
 `src/property/media.ts` (A), `src/property/audit.ts` (A),
 `src/property/property-service.ts` (A), `src/property/asset-service.ts` (A),
 `src/property/index.ts` (A), `src/property/media.test.ts` (A),
-`src/property/property.test.ts` (A), `src/testing/in-memory-property.ts` (A),
+`src/property/property.test.ts` (A/M), `src/testing/in-memory-property.ts` (A),
 `src/testing/index.ts` (M), `src/index.ts` (M), `src/identity/audit.ts` (M)
 
-**Storage — `packages/storage` (7)**
-`src/signing.ts` (A), `src/local-storage.ts` (A), `src/image-processor.ts` (A),
-`src/scanner.ts` (A), `src/signing.test.ts` (A),
+**Storage — `packages/storage` (10)**
+`src/signing.ts` (A), `src/local-storage.ts` (A/M), `src/image-processor.ts` (A),
+`src/scanner.ts` (A/M), `src/production-guard.ts` (A),
+`src/production-guard.test.ts` (A), `src/signing.test.ts` (A),
 `src/media-pipeline.integration.test.ts` (A), `src/index.ts` (M),
 `package.json` (M)
 
@@ -307,15 +313,46 @@ Carried forward with owner phase. Full list in `docs/decisions/TODO.md`.
 | Publish `phase-*-complete` tags | Environment blocks tag refs (above) | Maintainer action |
 | OAuth (Entra ID / Google) + MFA | Phase 1 deferral | Later |
 
+## Production-safety guard (post-review hardening)
+
+Added at review request. Both development-only adapters refuse construction when
+`NODE_ENV=production`:
+
+| Adapter | Guarded reason | Required action in the message |
+| --- | --- | --- |
+| `LocalObjectStorage` | objects held in process memory; uploads lost on restart, not shared between instances | configure a durable S3/Azure `ObjectStorage` adapter |
+| `PassthroughMalwareScanner` | no real malware analysis; only recognises EICAR | configure a real malware-scanning engine behind the `MalwareScanner` port |
+
+- Throws `NonProductionAdapterError`, naming the adapter and the required action.
+- **No secrets in the error**: the signing secret is absent from the message,
+  stack, and serialized own properties (asserted by test).
+- `development`, `test`, and unset `NODE_ENV` are unaffected — local development
+  and the test suite behave exactly as before.
+- `next build` is unaffected: routes are `force-dynamic`, so the adapters are
+  constructed lazily per request rather than at build time (verified — build
+  passes).
+- `allowInProduction: true` is an explicit escape hatch for staging smoke tests
+  against a production-like `NODE_ENV`; it must never be set in production.
+- **Scope:** the guard fires on first adapter construction (first request to a
+  property/asset route), not at process boot. Boot-time validation of the whole
+  adapter set is a Phase 7 hardening item, recorded in
+  `docs/decisions/TODO.md`.
+
+Implementation: `packages/storage/src/production-guard.ts`.
+Tests: `packages/storage/src/production-guard.test.ts` (12 tests).
+
 ## Remaining production blockers
 
-These must be resolved before any production launch:
+These must be resolved before any production launch. The production-safety guard
+above prevents an *accidental* production deployment with the stub adapters, but
+does not supply the missing capabilities.
 
 1. **In-process object storage.** `LocalObjectStorage` loses uploaded bytes on
    restart and cannot be shared across instances. A durable S3/Azure adapter is
-   mandatory.
+   mandatory. (Production use is now blocked by the guard.)
 2. **Malware scanning is a stub.** Only the EICAR signature is detected; a real
-   engine must be wired into the existing `MalwareScanner` port.
+   engine must be wired into the existing `MalwareScanner` port. (Production use
+   is now blocked by the guard.)
 3. **Inline image processing.** CPU-heavy work runs in the request path with no
    queue, retry, or backpressure.
 4. **No live-database integration testing** in CI, so Prisma adapter regressions

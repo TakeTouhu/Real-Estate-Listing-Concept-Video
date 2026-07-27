@@ -75,6 +75,11 @@ Under review in PR #3. Not merged.
 - Download responses set `Cache-Control: private, no-store`,
   `X-Content-Type-Options: nosniff`, and a sandboxing CSP.
 - Client filenames are stripped of path components and control characters.
+- **Production-safety guard:** `LocalObjectStorage` and
+  `PassthroughMalwareScanner` throw `NonProductionAdapterError` when
+  constructed under `NODE_ENV=production`. The message names the adapter and
+  the required action and contains no secrets; development and test are
+  unaffected.
 
 ### Known limitations
 

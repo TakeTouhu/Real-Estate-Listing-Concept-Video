@@ -286,6 +286,46 @@ describe("upload lifecycle", () => {
     expect(ctx.storage.signed.at(-1)?.purpose).toBe("download");
   });
 
+  it("denies a download URL for a REJECTED asset", async () => {
+    const { asset } = await ctx.assets.requestUpload(ctx.ownerId, {
+      organizationId: ctx.orgId,
+      propertyId,
+      originalFilename: "not-an-image.jpg",
+      declaredSizeBytes: 64,
+    });
+    // Content whose real type is not an allowed image is rejected.
+    await ctx.storage.putObject(asset.storageKey, new Uint8Array(Buffer.from("<?php echo 1; ?>")));
+    const { asset: rejected } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
+    expect(rejected.status).toBe("REJECTED");
+
+    await expect(
+      ctx.assets.createDownloadUrl(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(
+      ctx.assets.createDownloadUrl(ctx.ownerId, ctx.orgId, asset.id, "thumbnail"),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("denies a download URL for a DELETION_PENDING asset", async () => {
+    const { asset } = await uploadValid();
+    const { asset: ready } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
+    expect(ready.status).toBe("READY");
+    // Downloadable while READY...
+    await expect(
+      ctx.assets.createDownloadUrl(ctx.ownerId, ctx.orgId, asset.id),
+    ).resolves.toBeDefined();
+
+    // ...and denied once deletion has been requested.
+    const pending = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    expect(pending.status).toBe("DELETION_PENDING");
+    await expect(
+      ctx.assets.createDownloadUrl(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(
+      ctx.assets.createDownloadUrl(ctx.ownerId, ctx.orgId, asset.id, "thumbnail"),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
   it("supports failed-upload recovery without creating a duplicate row", async () => {
     const { asset } = await uploadValid();
     ctx.images.shouldThrow = true;
