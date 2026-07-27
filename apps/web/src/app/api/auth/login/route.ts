@@ -1,25 +1,22 @@
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE, createSessionToken, verifyOperatorToken } from "@/lib/auth";
-import { getServerEnv } from "@/lib/env";
+import { AppError } from "@app/shared";
+import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth";
+import { getIdentityServices } from "@/lib/identity";
+import { formString, redirectWithError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const form = await request.formData();
-  const token = typeof form.get("token") === "string" ? String(form.get("token")) : undefined;
-
-  if (!verifyOperatorToken(token)) {
-    return NextResponse.redirect(new URL("/login?error=1", request.url), { status: 303 });
+  const email = formString(form, "email");
+  const password = formString(form, "password");
+  try {
+    const { token } = await getIdentityServices().auth.login(email, password);
+    const response = NextResponse.redirect(new URL("/", request.url), { status: 303 });
+    response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
+    return response;
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "Sign in failed";
+    return redirectWithError(request.url, "/login", message);
   }
-
-  const env = getServerEnv();
-  const response = NextResponse.redirect(new URL("/", request.url), { status: 303 });
-  response.cookies.set(SESSION_COOKIE, createSessionToken(), {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.NODE_ENV === "production",
-    path: "/",
-    maxAge: env.SESSION_TTL_SECONDS,
-  });
-  return response;
 }

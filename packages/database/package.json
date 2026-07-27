@@ -8,7 +8,23 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@app/domain": "workspace:*",
+    "@app/shared": "workspace:*",
+    "@prisma/client": "5.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "prisma": "5.22.0"
   }
 }

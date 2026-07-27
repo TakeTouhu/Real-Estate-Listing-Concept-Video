@@ -1,57 +1,59 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
-import { buildLiveness, buildReadiness } from "@/lib/health";
+import { getCurrentUser } from "@/lib/auth";
+import { getIdentityServices } from "@/lib/identity";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
-  const session = await getSession();
-  if (!session) {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const current = await getCurrentUser();
+  if (!current) {
     redirect("/login");
   }
-
-  const liveness = buildLiveness();
-  const readiness = await buildReadiness();
+  const params = await searchParams;
+  const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
 
   return (
     <section>
-      <h1>Operations console</h1>
-      <p className="muted">Phase 0 authenticated health-check.</p>
+      <h1>Organizations</h1>
+      <p className="muted">
+        Signed in as {current.user.name} ({current.user.email})
+      </p>
+      {params.error ? (
+        <p className="status-bad" role="alert">
+          {params.error}
+        </p>
+      ) : null}
 
       <div className="card">
-        <h2>Liveness</h2>
-        <dl>
-          <dt>Status</dt>
-          <dd className="status-ok">{liveness.status}</dd>
-          <dt>Service</dt>
-          <dd>{liveness.service}</dd>
-          <dt>Version</dt>
-          <dd>{liveness.version}</dd>
-        </dl>
+        <h2>Your organizations</h2>
+        {organizations.length === 0 ? (
+          <p className="muted">You are not a member of any organization yet.</p>
+        ) : (
+          <ul>
+            {organizations.map(({ organization, role }) => (
+              <li key={organization.id}>
+                {organization.name} <span className="muted">({organization.slug})</span> —{" "}
+                <strong>{role}</strong>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
-      <div className="card">
-        <h2>Readiness</h2>
-        <dl>
-          <dt>Status</dt>
-          <dd className={readiness.status === "ready" ? "status-ok" : "status-bad"}>
-            {readiness.status}
-          </dd>
-          <dt>Video provider</dt>
-          <dd>{readiness.provider}</dd>
-        </dl>
-        <ul>
-          {readiness.checks.map((check) => (
-            <li key={check.name}>
-              <span className={check.ok ? "status-ok" : "status-bad"}>
-                {check.ok ? "PASS" : "FAIL"}
-              </span>{" "}
-              {check.name}
-              {check.detail ? <span className="muted"> — {check.detail}</span> : null}
-            </li>
-          ))}
-        </ul>
-      </div>
+      <form method="post" action="/api/organizations" className="card">
+        <h2>Create organization</h2>
+        <label className="field" htmlFor="org-name">
+          Organization name
+        </label>
+        <input id="org-name" name="name" type="text" required style={{ maxWidth: "100%" }} />
+        <p className="field">
+          <button type="submit">Create</button>
+        </p>
+      </form>
 
       <form method="post" action="/api/auth/logout">
         <button type="submit">Sign out</button>

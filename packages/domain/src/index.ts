@@ -1,8 +1,10 @@
-/**
- * @app/domain — Provider-agnostic domain models, invariants, and services (identity, property, storyboard, generation, billing rules). Implemented from Phase 1 onward.
- *
- * Phase 0 placeholder: this package establishes the module boundary described
- * in CLAUDE.md and SystemArchitecture.md. It intentionally contains no
- * business logic yet.
- */
-export const PACKAGE_NAME = "@app/domain";
+export * from "./identity/types";
+export * from "./identity/roles";
+export * from "./identity/ports";
+export * from "./identity/audit";
+export * from "./identity/authorization";
+export * from "./identity/adapters";
+export * from "./identity/auth-service";
+export * from "./identity/organization-service";
+export * from "./identity/membership-service";
+export { normalizeEmail } from "./identity/util";

@@ -3,12 +3,14 @@
 A commercial, multi-tenant SaaS that generates real-estate interior
 walkthrough-style videos from uploaded property photos.
 
-> **Status: Phase 0 — Engineering foundation.** This repository currently
-> contains the monorepo scaffolding, the video-provider abstraction (with an
-> offline fake adapter; the WaveSpeedAI provider implementation is deferred to
-> Phase 1), a minimal authenticated health-check app, tests, and CI. It does
-> **not** yet generate videos or call the real WaveSpeedAI API. See
-> `docs/Roadmap.md` and `docs/phase-0-completion.md`.
+> **Status: Phase 1 — Identity, organizations, and tenant isolation.** On top of
+> the Phase 0 foundation, this repository now has a PostgreSQL + Prisma
+> persistence layer, the identity domain (users, organizations, memberships,
+> roles, invitations), email/password authentication with server-side sessions,
+> organization-scoped repositories with audit logging, tenant-isolation tests,
+> and the real `WaveSpeedVideoProvider` behind the provider interface (no real
+> API calls in tests). It does **not** yet upload media or generate videos. See
+> `docs/Roadmap.md`, `docs/phase-0-completion.md`, and `docs/phase-1-completion.md`.
 
 ## Design documents
 
@@ -24,16 +26,18 @@ apps/
 ├── web/        # Next.js app: authenticated health-check console + API
 └── worker/     # async generation worker (Phase 0: bootstrap + self-check)
 packages/
-├── shared/            # env schema, errors, money, security utils
+├── shared/            # env schema, errors, money, security + crypto utils
 ├── observability/     # structured logger with redaction
-├── video-providers/   # VideoGenerationProvider + Fake adapter (WaveSpeed: Phase 1)
-├── domain/            # placeholder (Phase 1+)
-├── database/          # placeholder (Phase 1)
+├── video-providers/   # VideoGenerationProvider + Fake + WaveSpeed adapters
+├── domain/            # identity domain: entities, RBAC, services, ports
+├── database/          # Prisma schema, client, org-scoped repositories
 ├── storage/           # placeholder (Phase 2/4)
 ├── queue/             # placeholder (Phase 4)
 └── ai-providers/      # placeholder (Phase 3)
-prisma/  infra/  tests/  docs/
+infra/  tests/  docs/
 ```
+
+The Prisma schema and migrations live in `packages/database/prisma`.
 
 ## Prerequisites
 
