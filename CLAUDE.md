@@ -1,6 +1,6 @@
 # Real Estate Virtual Tour AI - Claude Code Guide
 
-Version: 1.2
+Version: 1.3
 
 ## Role
 
@@ -151,9 +151,56 @@ Real WaveSpeedAI contract tests must be explicitly enabled and spending-limited.
 
 A feature is complete only when authorization, validation, required audit logging, visible error handling, tests, documentation, secret safety, managed-storage output handling, exact-once credit settlement, and production build all pass.
 
+## Pull request and milestone policy
+
+- Keep each pull request as the smallest reviewable vertical milestone.
+- A pull request should normally stay near 500 changed lines or less, excluding lockfiles, generated migrations, and unavoidable machine-generated files.
+- When a phase is larger than that, split it into multiple milestone pull requests before implementation grows further.
+- Suggested naming: `Phase 2A`, `Phase 2B`, `Phase 2C`, and so on.
+- Each milestone PR must independently compile, pass relevant tests, and avoid leaving insecure or publicly reachable partial features.
+- Do not mix unrelated domains, refactors, or later-phase work into the same PR.
+- Do not begin the next phase until every milestone PR for the current phase has been reviewed, CI has passed, and the phase completion criteria are satisfied.
+- The phase completion report must list all milestone PRs, their merge commits, test results, known limitations, and remaining work.
+
+Example split:
+
+```text
+Phase 2A: Property domain and CRUD
+→ review and merge
+Phase 2B: Secure upload and storage abstraction
+→ review and merge
+Phase 2C: Image processing, duplicate foundation, and upload UI
+→ review and merge
+```
+
+## Required phase documentation
+
+Every completed phase must create or update the following documentation as applicable:
+
+- Architecture diagram
+- Entity-relationship diagram
+- Critical sequence diagram
+- OpenAPI specification or API change summary
+- Change log
+- Release notes
+- Database migration notes
+- Phase completion report
+
+Diagrams may use Mermaid inside Markdown. Documentation must describe implemented behavior, not planned behavior presented as complete. If an item does not apply to the phase, record `Not applicable` with the reason instead of omitting it silently.
+
+## Release tag policy
+
+- Every completed and merged phase must receive an annotated Git tag named `phase-N-complete`.
+- Create the tag only after review approval, successful CI, merge into `main`, and verification of the merged commit.
+- Never move, overwrite, reuse, or create a phase-complete tag on a feature branch.
+- Report the tag name, tag object SHA, target commit SHA, and verification result in the phase completion report.
+- If the environment cannot publish tag refs, record the blocker explicitly and provide the exact manual push command. Do not claim the remote tag exists until it is verified on GitHub.
+
 ## Implementation sequence
 
-Implement one phase at a time from `docs/Roadmap.md`. Before each phase: inspect, write a gap analysis, choose the smallest vertical milestone, implement, run checks, write a completion report, commit, push, and open a PR.
+Implement one phase at a time from `docs/Roadmap.md`. Before each phase: inspect, write a gap analysis, split the phase into the smallest reviewable milestones, implement one milestone, run checks, update required documentation, commit, push, and open a PR.
+
+After opening a milestone PR, stop and wait for review unless explicitly instructed to continue. Do not implement all remaining milestones of the phase while an earlier milestone is awaiting review.
 
 ## First assignment
 
