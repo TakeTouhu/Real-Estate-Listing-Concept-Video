@@ -1,0 +1,55 @@
+import { AppError, type ServerEnv } from "@app/shared";
+import type { VideoGenerationProvider } from "./provider";
+import type { VideoModelPricing } from "./types";
+import { FakeVideoProvider } from "./fake/fake-provider";
+import { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
+import { FetchHttpClient, type HttpClient } from "./wavespeed/http";
+
+/**
+ * Placeholder pricing until verified WaveSpeedAI model pricing is wired in
+ * (see ADR-0003 and WaveSpeedAIIntegration.md).
+ */
+export const DEFAULT_WAVESPEED_PRICING: VideoModelPricing = {
+  currency: "USD",
+  costPerSecondMinor: 10,
+};
+
+export interface CreateVideoProviderDeps {
+  readonly http?: HttpClient;
+  readonly now?: () => Date;
+}
+
+/**
+ * Select and construct the configured video provider. Phase 0 defaults to the
+ * fake adapter; the WaveSpeed adapter is only constructed (and its fetch client
+ * only created) when explicitly configured with VIDEO_PROVIDER=wavespeed.
+ */
+export function createVideoProvider(
+  env: ServerEnv,
+  deps: CreateVideoProviderDeps = {},
+): VideoGenerationProvider {
+  if (env.VIDEO_PROVIDER === "wavespeed") {
+    if (!env.WAVESPEED_API_KEY) {
+      throw new AppError(
+        "CONFIGURATION_ERROR",
+        "WAVESPEED_API_KEY is required when VIDEO_PROVIDER=wavespeed",
+      );
+    }
+    return new WaveSpeedVideoProvider(
+      {
+        apiKey: env.WAVESPEED_API_KEY,
+        baseUrl: env.WAVESPEED_API_BASE_URL,
+        modelId: env.WAVESPEED_VIDEO_MODEL_ID,
+        webhookSecret: env.WAVESPEED_WEBHOOK_SECRET,
+        poll: {
+          initialMs: env.WAVESPEED_POLL_INITIAL_MS,
+          maxMs: env.WAVESPEED_POLL_MAX_MS,
+          timeoutMs: env.WAVESPEED_POLL_TIMEOUT_MS,
+        },
+        pricing: DEFAULT_WAVESPEED_PRICING,
+      },
+      { http: deps.http ?? new FetchHttpClient(), now: deps.now },
+    );
+  }
+  return new FakeVideoProvider({ now: deps.now });
+}
