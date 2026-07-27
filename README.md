@@ -3,14 +3,15 @@
 A commercial, multi-tenant SaaS that generates real-estate interior
 walkthrough-style videos from uploaded property photos.
 
-> **Status: Phase 1 — Identity, organizations, and tenant isolation.** On top of
-> the Phase 0 foundation, this repository now has a PostgreSQL + Prisma
-> persistence layer, the identity domain (users, organizations, memberships,
-> roles, invitations), email/password authentication with server-side sessions,
-> organization-scoped repositories with audit logging, tenant-isolation tests,
-> and the real `WaveSpeedVideoProvider` behind the provider interface (no real
-> API calls in tests). It does **not** yet upload media or generate videos. See
-> `docs/Roadmap.md`, `docs/phase-0-completion.md`, and `docs/phase-1-completion.md`.
+> **Status: Phase 2 — Properties and secure media upload.** On top of Phases 0–1
+> (monorepo foundation; identity, organizations, RBAC, sessions, Prisma
+> persistence, audit logging, and the `WaveSpeedVideoProvider` adapter), this
+> repository now has property CRUD and a secure photo-upload pipeline:
+> short-lived signed URLs, tenant-scoped object storage, content-based MIME
+> validation, malware-scan hook with quarantine, EXIF removal, orientation
+> correction, normalization, thumbnails, and perceptual hashing. It does **not**
+> yet run AI analysis or generate videos. See `docs/Roadmap.md`,
+> `docs/progress.md`, and the per-phase completion reports in `docs/`.
 
 ## Design documents
 
@@ -18,6 +19,20 @@ walkthrough-style videos from uploaded property photos.
 (product requirements, architecture, AI pipeline, WaveSpeedAI integration, data
 model, API, UX, security/compliance, SaaS operations, roadmap). Decisions are
 recorded in `docs/decisions/`.
+
+### As-built documentation
+
+| Topic | Document |
+| --- | --- |
+| Delivery status, tags, governance | `docs/progress.md` |
+| Architecture diagram (implemented) | `docs/architecture.md` |
+| Entity-relationship diagram | `docs/er-diagram.md` |
+| Upload lifecycle sequence + state machine | `docs/sequence-upload-lifecycle.md` |
+| API change summary + OpenAPI fragment | `docs/api-changes-phase-2.md` |
+| Change log | `CHANGELOG.md` |
+| Release notes | `docs/release-notes-phase-2.md` |
+| Database migration notes | `docs/migration-notes.md` |
+| Phase completion reports | `docs/phase-0-completion.md`, `docs/phase-1-completion.md`, `docs/phase-2-completion.md` |
 
 ## Repository layout
 
@@ -29,9 +44,9 @@ packages/
 ├── shared/            # env schema, errors, money, security + crypto utils
 ├── observability/     # structured logger with redaction
 ├── video-providers/   # VideoGenerationProvider + Fake + WaveSpeed adapters
-├── domain/            # identity domain: entities, RBAC, services, ports
+├── domain/            # identity + property/media domain: entities, RBAC, services, ports
 ├── database/          # Prisma schema, client, org-scoped repositories
-├── storage/           # placeholder (Phase 2/4)
+├── storage/           # object storage, signed URLs, image pipeline, malware hook
 ├── queue/             # placeholder (Phase 4)
 └── ai-providers/      # placeholder (Phase 3)
 infra/  tests/  docs/

@@ -8,9 +8,10 @@ const nextConfig = {
     "@app/video-providers",
     "@app/domain",
     "@app/database",
+    "@app/storage",
   ],
-  // Prisma's client must not be bundled by the server compiler.
-  serverExternalPackages: ["@prisma/client", ".prisma/client"],
+  // Native/binary packages must not be bundled by the server compiler.
+  serverExternalPackages: ["@prisma/client", ".prisma/client", "sharp"],
   // Linting is run once at the repo root via the flat ESLint config.
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },

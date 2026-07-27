@@ -8,3 +8,5 @@ export * from "./identity/auth-service";
 export * from "./identity/organization-service";
 export * from "./identity/membership-service";
 export { normalizeEmail } from "./identity/util";
+
+export * from "./property/index";

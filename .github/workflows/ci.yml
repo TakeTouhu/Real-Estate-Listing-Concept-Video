@@ -14,6 +14,7 @@ jobs:
       # Real secrets are provided via the environment/secret manager at runtime.
       SESSION_SECRET: ci-session-secret-0000000000000000
       HEALTHCHECK_API_TOKEN: ci-healthcheck-token-000000000000
+      STORAGE_SIGNING_SECRET: ci-storage-signing-secret-0000
       VIDEO_PROVIDER: fake
     steps:
       - uses: actions/checkout@v4
