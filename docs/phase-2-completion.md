@@ -3,7 +3,9 @@
 Version: 2.0
 Date: 2026-07-27
 Phase: 2 — Properties and secure media upload
-Status: **Review candidate (PR #3). Not approved, not merged, not tagged.**
+Status: **Merged.** PR #3 squash-merged into `main` as
+`653372a54d72d8dacc38fb7103ad32f15041cc2f`; tagged `phase-2-complete` locally
+(remote tag publication blocked — see below).
 Governance: prepared against `CLAUDE.md` v1.3
 
 ## Summary
@@ -24,7 +26,7 @@ v1.3 milestone policy existed, so it is a single PR rather than a milestone set.
 
 | Milestone | PR | Merge commit | Status |
 | --- | --- | --- | --- |
-| Phase 2 (single PR — see deviation below) | [#3](https://github.com/TakeTouhu/Real-Estate-Listing-Concept-Video/pull/3) | — | Awaiting review |
+| Phase 2 (single PR — one-time exception, see deviation below) | [#3](https://github.com/TakeTouhu/Real-Estate-Listing-Concept-Video/pull/3) | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | ✅ Reviewed, CI green, merged |
 
 ### Deviation from the ~500-line PR guideline — disclosed
 
@@ -267,10 +269,10 @@ commit.
 | --- | --- | --- | --- | --- | --- |
 | `phase-0-complete` | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | annotated | `76d36045934a97bc4a997a64dcd1e932cfe837de` | ✅ target == Phase 0 merge commit | ❌ **No** |
 | `phase-1-complete` | `62259776f88fa1010736e8a365618b7c20c38902` | annotated | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` | ✅ target == Phase 1 merge commit | ❌ **No** |
-| `phase-2-complete` | — | — | — | Not created | ❌ Not created (awaits review, CI, merge) |
+| `phase-2-complete` | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | annotated | `b13e5490f2014dc43a3815c3570795c955a2089a` | ✅ target == Phase 2 merge commit | ❌ **No** |
 
-Both existing tags were created on `main`, never on a feature branch, and neither
-has been moved, overwritten, or reused.
+All three tags were created on `main`, never on a feature branch, and none has
+been moved, overwritten, or reused.
 
 ### Tag publication blocker — the remote tags do NOT exist
 
@@ -278,15 +280,21 @@ has been moved, overwritten, or reused.
 (`error: RPC failed; HTTP 403`, then `send-pack: unexpected disconnect`),
 retried six times with backoff. The available GitHub tooling exposes only
 read APIs for tags (`get_tag`, `list_tags`) and no create-ref capability.
-`git ls-remote --tags origin` returns **empty**.
+`git ls-remote --tags origin` returns **empty**. Re-attempted after the Phase 2
+merge with three invocations (explicit refspecs, `--tags`, a single tag) — all
+failed identically. Branch pushes to the same remote succeed, so the proxy
+rejects tag refs specifically.
 
-To be unambiguous: **`phase-0-complete` and `phase-1-complete` exist only in the
-local clone. They are not published, and this report does not claim otherwise.**
+To be unambiguous: **`phase-0-complete`, `phase-1-complete`, and
+`phase-2-complete` exist only in the local clone. They are not published, and
+this report does not claim otherwise.**
 
 Exact manual command for a maintainer with direct push access:
 
 ```bash
-git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete
+git push origin refs/tags/phase-0-complete \
+               refs/tags/phase-1-complete \
+               refs/tags/phase-2-complete
 ```
 
 Then verify:
@@ -364,8 +372,9 @@ does not supply the missing capabilities.
 
 ## Next steps
 
-**Phase 3 has not been started.** Per `CLAUDE.md` v1.3 it must not begin until
-PR #3 is reviewed and approved, CI passes, it is merged into `main`, and
-`phase-2-complete` is created **and verified as published**. Phase 3 will be
-split into `Phase 3A` / `Phase 3B` / `Phase 3C` milestone PRs, each reviewed,
-CI-green, and merged before the next begins.
+**Phase 3 has not been started.** PR #3 is merged and `phase-2-complete` is
+created and locally verified, but the remote tag is **not** published (blocker
+above). A proposed milestone split is recorded in
+`docs/phase-3-milestone-plan.md`; no Phase 3 branch or code exists. Each
+milestone (`Phase 3A` / `3B` / `3C`) will be reviewed, CI-green, and merged
+before the next begins.

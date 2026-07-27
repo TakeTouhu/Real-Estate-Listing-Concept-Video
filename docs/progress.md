@@ -34,7 +34,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 | Engineering foundation | ✅ Merged | #1 | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | `phase-0-complete` | `76d36045934a97bc4a997a64dcd1e932cfe837de` |
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
-| 2 | Properties and secure media upload | 🔄 In review | #3 | — | pending merge | — |
+| 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
 | 3 | AI analysis and storyboard | ⏳ Not started | — | — | — | — |
 | 4 | WaveSpeedAI scene generation | ⏳ Not started | — | — | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
@@ -42,23 +42,42 @@ the authoritative scope definition; this file records what has actually shipped.
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
 | 8 | Beta and launch | ⏳ Not started | — | — | — | — |
 
-`phase-0-complete` and `phase-1-complete` are annotated tags created on `main`,
-whose targets were verified to equal the corresponding squash-merge commits.
+All three tags are **annotated** tags created on `main` (never on a feature
+branch), and each target was verified to equal the corresponding squash-merge
+commit. None has been moved, overwritten, or reused.
 
-> ### ⚠️ The remote tags do not exist yet
+| Tag | Tag object SHA | Target commit | Target verified |
+| --- | --- | --- | --- |
+| `phase-0-complete` | `76d36045934a97bc4a997a64dcd1e932cfe837de` | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | ✅ |
+| `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` | `62259776f88fa1010736e8a365618b7c20c38902` | ✅ |
+| `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | ✅ |
+
+> ### ⚠️ The remote tags do not exist
 >
-> Both tags exist **only in the local clone**. Pushing tag refs fails in this
-> development environment with `HTTP 403` (`error: RPC failed; HTTP 403`, then
-> `send-pack: unexpected disconnect`), retried six times with backoff, and the
-> available GitHub tooling exposes no create-ref/create-tag API — only
-> `get_tag` / `list_tags`. `git ls-remote --tags origin` returns empty.
+> All three tags exist **only in the local clone**. Publication remains blocked
+> in this development environment. `git ls-remote --tags origin` returns empty.
+>
+> Attempted 2026-07-27 with three different invocations — explicit refspecs,
+> `--tags`, and a single tag — each failing identically:
+>
+> ```text
+> error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403
+> send-pack: unexpected disconnect while reading sideband packet
+> fatal: the remote end hung up unexpectedly
+> ```
+>
+> Branch pushes to the same remote succeed, so the proxy rejects tag refs
+> specifically. The available GitHub tooling exposes no create-ref/create-tag
+> API — only `get_tag` / `list_tags`.
 >
 > This document does **not** claim the remote tags exist. A maintainer with
 > direct push access must publish them:
 >
 > ```bash
-> git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete
-> git ls-remote --tags origin   # verify
+> git push origin refs/tags/phase-0-complete \
+>                refs/tags/phase-1-complete \
+>                refs/tags/phase-2-complete
+> git ls-remote --tags origin   # verify all three appear
 > ```
 
 ## Phase reports
@@ -82,10 +101,16 @@ whose targets were verified to equal the corresponding squash-merge commits.
 
 ## Known deviation
 
-PR #3 (Phase 2) is ~3,620 changed lines, well over the ~500-line guideline. It
-was implemented under CLAUDE.md v1.2 before the milestone policy existed and is
-retained as the review candidate by reviewer instruction. Phase 3 will be split
-into `Phase 3A` / `3B` / `3C`. See `docs/phase-2-completion.md`.
+PR #3 (Phase 2) was ~5,110 changed lines, well over the ~500-line guideline. It
+was implemented under CLAUDE.md v1.2 before the milestone policy existed and was
+accepted as a **one-time exception** by explicit reviewer decision. Phase 3 is
+split into `Phase 3A` / `3B` / `3C` milestones — see
+`docs/phase-3-milestone-plan.md`.
+
+## Forward planning
+
+- `docs/phase-3-milestone-plan.md` — proposed Phase 3A/3B/3C milestone split
+  (plan only; not approved, no branch or code exists).
 
 ## Decision records
 

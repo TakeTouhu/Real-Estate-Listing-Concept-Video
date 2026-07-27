@@ -52,9 +52,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       any traffic rather than on first use (Phase 7 hardening).
 - [ ] Move image processing off the upload-completion request path into the
       async worker once the queue lands in Phase 4.
-- [ ] Publish the `phase-*-complete` annotated tags to the remote: the dev
-      environment's git proxy rejects tag refs with HTTP 403 and the available
-      GitHub tooling has no tag-creation API. Needs a maintainer push.
+- [ ] **Publish the `phase-*-complete` annotated tags to the remote.** Still
+      blocked as of 2026-07-27: `phase-0-complete`, `phase-1-complete`, and
+      `phase-2-complete` exist only in the local clone and
+      `git ls-remote --tags origin` is empty. Tag-ref pushes fail with
+      `HTTP 403` (retried with explicit refspecs, `--tags`, and a single tag);
+      branch pushes to the same remote succeed, so the proxy rejects tag refs
+      specifically, and the GitHub tooling has no create-ref API. Needs a
+      maintainer push:
+      `git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete refs/tags/phase-2-complete`
 - [ ] Decide the near-duplicate UX (block vs warn) during Phase 3 analysis
       review; Phase 2 only reports `duplicateOf`.
 - [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.

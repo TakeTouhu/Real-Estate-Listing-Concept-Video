@@ -3,9 +3,11 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 2: Properties and secure media upload
+## [phase-2-complete] — Phase 2: Properties and secure media upload
 
-Under review in PR #3. Not merged.
+Merged in PR #3 as `653372a54d72d8dacc38fb7103ad32f15041cc2f`.
+Tagged `phase-2-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`).
 
 ### Added
 
