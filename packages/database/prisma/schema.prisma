@@ -35,6 +35,33 @@ enum InvitationStatus {
   EXPIRED
 }
 
+enum PropertyStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum PropertyType {
+  APARTMENT
+  HOUSE
+  OFFICE
+  RETAIL
+  OTHER
+}
+
+enum MediaAssetStatus {
+  PENDING_UPLOAD
+  UPLOADED
+  SCANNING
+  QUARANTINED
+  PROCESSING
+  READY
+  REJECTED
+  FAILED
+  DELETION_PENDING
+  DELETED
+}
+
 model Organization {
   id          String             @id
   name        String
@@ -113,6 +140,50 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+model Property {
+  id            String         @id
+  organizationId String
+  name          String
+  propertyType  PropertyType
+  addressMasked String?
+  description   String?
+  status        PropertyStatus @default(ACTIVE)
+  createdBy     String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  assets        MediaAsset[]
+
+  @@index([organizationId, status])
+  @@map("properties")
+}
+
+model MediaAsset {
+  id                 String           @id
+  organizationId     String
+  propertyId         String
+  storageKey         String           @unique
+  originalFilename   String
+  mimeType           String?
+  sizeBytes          Int?
+  width              Int?
+  height             Int?
+  sha256             String?
+  perceptualHash     String?
+  status             MediaAssetStatus @default(PENDING_UPLOAD)
+  failureReason      String?
+  thumbnailKey       String?
+  createdBy          String
+  deletionRequestedAt DateTime?
+  retentionExpiresAt DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  property           Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, propertyId, status])
+  @@index([organizationId, sha256])
+  @@map("media_assets")
 }
 
 model AuditLog {

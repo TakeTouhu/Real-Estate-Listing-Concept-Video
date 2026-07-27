@@ -26,6 +26,11 @@ export const serverEnvSchema = z
     // Session lifetime for authenticated user sessions (Phase 1).
     USER_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 
+    // HMAC secret for short-lived, single-purpose storage URLs (Phase 2).
+    STORAGE_SIGNING_SECRET: z
+      .string()
+      .min(16, "STORAGE_SIGNING_SECRET must be at least 16 characters"),
+
     // Video provider selection. Phase 0 defaults to the fake adapter and must
     // never call the real WaveSpeedAI API.
     VIDEO_PROVIDER: z.enum(["fake", "wavespeed"]).default("fake"),

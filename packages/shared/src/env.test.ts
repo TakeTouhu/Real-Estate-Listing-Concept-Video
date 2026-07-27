@@ -4,6 +4,7 @@ import { serverEnvSchema } from "./env";
 const base = {
   SESSION_SECRET: "session-secret-abcdef123456",
   HEALTHCHECK_API_TOKEN: "healthcheck-token-abcdef123456",
+  STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
 };
 
 describe("serverEnvSchema", () => {

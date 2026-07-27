@@ -30,6 +30,20 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       and audit behaviour are currently proven with in-memory adapters.
 - [ ] Add OAuth (Entra ID / Google) and optional MFA for privileged roles.
 
+## Phase 2 follow-ups
+
+- [ ] Replace `LocalObjectStorage` (in-process, not durable or multi-instance
+      safe) with a real S3/Azure adapter behind the same `ObjectStorage` port
+      before production launch (ADR-0008).
+- [ ] Move image processing off the upload-completion request path into the
+      async worker once the queue lands in Phase 4.
+- [ ] Publish the `phase-*-complete` annotated tags to the remote: the dev
+      environment's git proxy rejects tag refs with HTTP 403 and the available
+      GitHub tooling has no tag-creation API. Needs a maintainer push.
+- [ ] Decide the near-duplicate UX (block vs warn) during Phase 3 analysis
+      review; Phase 2 only reports `duplicateOf`.
+- [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).

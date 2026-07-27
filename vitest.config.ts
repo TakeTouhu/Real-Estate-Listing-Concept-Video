@@ -8,6 +8,12 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        // Subpath exports (e.g. "@app/domain/testing") resolve to their folder
+        // barrel. Must precede the bare-package rule.
+        find: /^@app\/([^/]+)\/(.+)$/,
+        replacement: resolve(rootDir, "packages/$1/src/$2/index.ts"),
+      },
+      {
         // Resolve internal workspace packages to their TypeScript source so
         // Vitest transforms them (aliases bypass node_modules externalization).
         find: /^@app\/([^/]+)$/,
