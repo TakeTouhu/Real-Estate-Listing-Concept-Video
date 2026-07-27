@@ -20,6 +20,20 @@ walkthrough-style videos from uploaded property photos.
 model, API, UX, security/compliance, SaaS operations, roadmap). Decisions are
 recorded in `docs/decisions/`.
 
+### As-built documentation
+
+| Topic | Document |
+| --- | --- |
+| Delivery status, tags, governance | `docs/progress.md` |
+| Architecture diagram (implemented) | `docs/architecture.md` |
+| Entity-relationship diagram | `docs/er-diagram.md` |
+| Upload lifecycle sequence + state machine | `docs/sequence-upload-lifecycle.md` |
+| API change summary + OpenAPI fragment | `docs/api-changes-phase-2.md` |
+| Change log | `CHANGELOG.md` |
+| Release notes | `docs/release-notes-phase-2.md` |
+| Database migration notes | `docs/migration-notes.md` |
+| Phase completion reports | `docs/phase-0-completion.md`, `docs/phase-1-completion.md`, `docs/phase-2-completion.md` |
+
 ## Repository layout
 
 ```text
