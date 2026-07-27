@@ -27,13 +27,26 @@ openssl rand -hex 32
 openssl rand -hex 32
 ```
 
-Leave `VIDEO_PROVIDER=fake` for Phase 0. Do **not** set real WaveSpeedAI
-credentials — Phase 0 must not call the real API. `WAVESPEED_API_KEY` is only
-required if you deliberately set `VIDEO_PROVIDER=wavespeed` (not part of Phase 0).
+Set `DATABASE_URL` to a local PostgreSQL instance (Phase 1). Keep
+`VIDEO_PROVIDER=fake` unless you are deliberately exercising the real provider.
 
 Environment variables are validated at load time by the Zod schema in
 `packages/shared/src/env.ts`; invalid or missing values fail fast with a
 readable message.
+
+## 2b. Database (Phase 1)
+
+With `DATABASE_URL` pointing at a running PostgreSQL database:
+
+```bash
+pnpm --filter @app/database run db:generate       # generate the Prisma client
+pnpm --filter @app/database run db:migrate          # apply committed migrations
+# or, to create/apply a new migration during development:
+pnpm --filter @app/database run db:migrate:dev
+```
+
+The Prisma client is also generated automatically on `pnpm install`. The
+required checks (`pnpm check`) do not need a database.
 
 ## 3. Run the web app
 

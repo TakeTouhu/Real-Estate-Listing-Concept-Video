@@ -13,12 +13,18 @@ export const serverEnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
-    // Interim Phase 0 authentication for the health-check app.
+    // PostgreSQL connection string for Prisma (Phase 1). Optional at build/test
+    // time; required at runtime for database-backed features.
+    DATABASE_URL: z.string().url().optional(),
+
+    // Session signing secret for the web session cookie.
     SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
     HEALTHCHECK_API_TOKEN: z
       .string()
       .min(16, "HEALTHCHECK_API_TOKEN must be at least 16 characters"),
     SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+    // Session lifetime for authenticated user sessions (Phase 1).
+    USER_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(604800),
 
     // Video provider selection. Phase 0 defaults to the fake adapter and must
     // never call the real WaveSpeedAI API.

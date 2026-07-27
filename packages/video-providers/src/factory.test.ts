@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AppError, serverEnvSchema } from "@app/shared";
+import { serverEnvSchema } from "@app/shared";
 import { createVideoProvider } from "./factory";
+import type { HttpClient } from "./wavespeed/http";
+
+const noopHttp: HttpClient = { request: () => Promise.resolve({ status: 200, body: "{}" }) };
 
 const baseEnv = {
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -8,18 +11,17 @@ const baseEnv = {
 };
 
 describe("createVideoProvider", () => {
-  it("returns the fake provider in Phase 0", () => {
+  it("defaults to the fake provider in Phase 0", () => {
     const env = serverEnvSchema.parse(baseEnv);
     expect(createVideoProvider(env).name).toBe("fake");
   });
 
-  it("fails fast when wavespeed is selected (deferred to Phase 1)", () => {
+  it("constructs the WaveSpeed provider only when configured with a key", () => {
     const env = serverEnvSchema.parse({
       ...baseEnv,
       VIDEO_PROVIDER: "wavespeed",
       WAVESPEED_API_KEY: "k",
     });
-    expect(() => createVideoProvider(env)).toThrow(AppError);
-    expect(() => createVideoProvider(env)).toThrow(/Phase 1/);
+    expect(createVideoProvider(env, { http: noopHttp }).name).toBe("wavespeed");
   });
 });

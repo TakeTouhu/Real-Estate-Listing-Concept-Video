@@ -17,9 +17,18 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
-- [ ] Implement `WaveSpeedVideoProvider` (submission, status normalization,
-      webhook verification, bounded polling, managed-storage copy) in **Phase 1**
-      — deferred out of Phase 0 per project instruction and ADR-0003.
+- [x] Implement `WaveSpeedVideoProvider` submission/status/cancel/estimate +
+      error normalization behind the adapter boundary (Phase 1, injected HTTP
+      client, offline tests). Webhook handler + polling worker remain Phase 4.
+
+## Phase 1 follow-ups
+
+- [ ] Reconcile the `Credential` table (added in ADR-0006 for email/password
+      auth) with `docs/DataModel.md`, or update the data model.
+- [ ] Add a live-PostgreSQL CI job (`services: postgres` + `prisma migrate
+      deploy`) running the Prisma-adapter integration tests. Tenant-isolation
+      and audit behaviour are currently proven with in-memory adapters.
+- [ ] Add OAuth (Entra ID / Google) and optional MFA for privileged roles.
 
 ## Business rules to confirm (later phases)
 

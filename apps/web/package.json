@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@app/database": "workspace:*",
+    "@app/domain": "workspace:*",
     "@app/observability": "workspace:*",
     "@app/shared": "workspace:*",
     "@app/video-providers": "workspace:*",
