@@ -5,10 +5,3 @@ export * from "./factory";
 
 export { FakeVideoProvider } from "./fake/fake-provider";
 export type { FakeVideoProviderOptions } from "./fake/fake-provider";
-
-export { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
-export type { WaveSpeedProviderDeps } from "./wavespeed/wavespeed-provider";
-export type { WaveSpeedConfig, WaveSpeedPollConfig } from "./wavespeed/config";
-export { FetchHttpClient } from "./wavespeed/http";
-export type { HttpClient, HttpRequest, HttpResponse } from "./wavespeed/http";
-export * from "./wavespeed/mapping";

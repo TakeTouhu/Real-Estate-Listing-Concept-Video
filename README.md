@@ -5,10 +5,10 @@ walkthrough-style videos from uploaded property photos.
 
 > **Status: Phase 0 — Engineering foundation.** This repository currently
 > contains the monorepo scaffolding, the video-provider abstraction (with an
-> offline fake adapter and a WaveSpeedAI skeleton), a minimal authenticated
-> health-check app, tests, and CI. It does **not** yet generate videos or call
-> the real WaveSpeedAI API. See `docs/Roadmap.md` and
-> `docs/phase-0-completion.md`.
+> offline fake adapter; the WaveSpeedAI provider implementation is deferred to
+> Phase 1), a minimal authenticated health-check app, tests, and CI. It does
+> **not** yet generate videos or call the real WaveSpeedAI API. See
+> `docs/Roadmap.md` and `docs/phase-0-completion.md`.
 
 ## Design documents
 
@@ -26,7 +26,7 @@ apps/
 packages/
 ├── shared/            # env schema, errors, money, security utils
 ├── observability/     # structured logger with redaction
-├── video-providers/   # VideoGenerationProvider + Fake + WaveSpeed adapters
+├── video-providers/   # VideoGenerationProvider + Fake adapter (WaveSpeed: Phase 1)
 ├── domain/            # placeholder (Phase 1+)
 ├── database/          # placeholder (Phase 1)
 ├── storage/           # placeholder (Phase 2/4)

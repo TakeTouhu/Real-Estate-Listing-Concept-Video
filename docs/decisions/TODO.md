@@ -2,20 +2,24 @@
 
 Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
-## Must resolve before Phase 4 / production (WaveSpeedAI)
+## WaveSpeedAI
 
-- [ ] Verify the **current** WaveSpeedAI API contract: submit endpoint path,
-      request body fields, response envelope, and status vocabulary. The Phase 0
-      mapping in `packages/video-providers/src/wavespeed/mapping.ts` is a
-      best-effort candidate.
-- [ ] Verify the webhook authentication/signature mechanism WaveSpeedAI
-      currently supports (for `POST /internal/webhooks/wavespeed`).
+- [x] Verify the current WaveSpeedAI public API contract (submit path, result
+      path, response envelope, status vocabulary, polling guidance). Done
+      2026-07-27 — matches `docs/WaveSpeedAIIntegration.md`; see ADR-0005.
+      `docs/WaveSpeedAIIntegration.md` left unchanged.
+- [ ] Confirm the webhook authentication/signature mechanism WaveSpeedAI
+      currently supports (for `POST /internal/webhooks/wavespeed`). The docs
+      page was not machine-fetchable during Phase 0 verification.
 - [ ] Confirm whether WaveSpeedAI supports cancellation, and the endpoint.
 - [ ] Obtain real model capabilities, supported durations/resolutions/aspect
-      ratios, concurrency limits, and **pricing** (placeholder pricing is used
-      in `factory.ts`).
+      ratios, concurrency limits, and **pricing** (placeholder pricing to be
+      wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
+- [ ] Implement `WaveSpeedVideoProvider` (submission, status normalization,
+      webhook verification, bounded polling, managed-storage copy) in **Phase 1**
+      — deferred out of Phase 0 per project instruction and ADR-0003.
 
 ## Business rules to confirm (later phases)
 

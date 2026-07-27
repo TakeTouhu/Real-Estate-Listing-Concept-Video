@@ -7,10 +7,11 @@ Phase: 0 — Engineering foundation
 ## Summary
 
 The engineering foundation is in place: a pnpm monorepo with strict TypeScript,
-a provider-abstraction layer with an offline fake adapter and a WaveSpeedAI
-skeleton, a minimal authenticated health-check Next.js app, a Vitest testing
-foundation, and a GitHub Actions CI pipeline. No real WaveSpeedAI API calls are
-made.
+a provider-abstraction layer with an offline fake adapter (the
+`WaveSpeedVideoProvider` implementation is deferred to Phase 1), a minimal
+authenticated health-check Next.js app, a Vitest testing foundation, and a
+GitHub Actions CI pipeline. No real WaveSpeedAI API calls are made and no
+provider integration code, webhook handlers, or polling workers are present.
 
 ## Completion criteria (from docs/Roadmap.md)
 
@@ -22,7 +23,7 @@ made.
 | No secrets committed | ✅ | `.gitignore` excludes `.env*`; only `.env.example` with placeholders committed; CI uses non-secret test values |
 | Provider interface compiles with a fake adapter | ✅ | `VideoGenerationProvider` + `FakeVideoProvider`; typecheck + tests pass |
 | Phase 0 completion report lists exact results | ✅ | this document |
-| Do not call the real WaveSpeedAI API in Phase 0 | ✅ | default `VIDEO_PROVIDER=fake`; WaveSpeed HTTP client injected; tests offline |
+| Do not call the real WaveSpeedAI API in Phase 0 | ✅ | default `VIDEO_PROVIDER=fake`; factory rejects `wavespeed` (deferred to Phase 1); no provider integration code present |
 
 ## First assignment (from CLAUDE.md)
 
@@ -36,7 +37,7 @@ made.
 | 6. Minimal authenticated health-check application | ✅ | `apps/web` |
 | 7. Testing foundation | ✅ | `vitest.config.ts`, 53 unit tests |
 | 8. `docs/phase-0-completion.md` | ✅ | this document |
-| 9. ADR confirming WaveSpeedAI/adapter/secrets/async/storage/replacement | ✅ | `docs/decisions/0003-wavespeedai-video-provider.md` |
+| 9. ADR confirming WaveSpeedAI/adapter/secrets/async/storage/replacement | ✅ | `docs/decisions/0003-wavespeedai-video-provider.md` (+ ADR-0005 API contract verification) |
 
 ## Exact check results
 
@@ -49,13 +50,11 @@ Environment: Node.js v22, pnpm 10.33.0.
 `eslint .` — **passed**, 0 problems.
 
 ### `pnpm run test`
-`vitest run` — **10 test files, 53 tests, all passed**:
+`vitest run` — **8 test files, 32 tests, all passed**:
 
 - `packages/shared`: `security.test.ts` (8), `env.test.ts` (5)
 - `packages/observability`: `redact.test.ts` (6)
-- `packages/video-providers`: `fake-provider.test.ts` (4),
-  `wavespeed/mapping.test.ts` (16), `wavespeed/wavespeed-provider.test.ts` (5),
-  `factory.test.ts` (2)
+- `packages/video-providers`: `fake-provider.test.ts` (4), `factory.test.ts` (2)
 - `apps/web`: `lib/health.test.ts` (3), `lib/auth.test.ts` (2)
 - `apps/worker`: `bootstrap.test.ts` (2)
 
@@ -66,15 +65,16 @@ Environment: Node.js v22, pnpm 10.33.0.
 
 ## Test layers established (subset of CLAUDE.md "Testing")
 
-- Unit tests for pure logic (env parsing, money, session signing).
-- WaveSpeedAI request/status/error **mapping** tests.
+- Unit tests for pure logic (env parsing, session signing).
 - Secret and signed-URL **redaction** tests.
-- Provider **factory** selection tests.
+- Provider **factory** selection tests (fake default; `wavespeed` rejected).
+- Fake provider behaviour tests.
 - Health/readiness and auth-helper tests.
 
-Deferred layers (DB/storage/queue integration, tenant-isolation, webhook
-dedup, managed-storage copy, exact-once settlement, E2E, spending-limited
-contract tests) belong to later phases; see `docs/gap-analysis.md`.
+Deferred layers (WaveSpeedAI request/status/error mapping and contract tests,
+DB/storage/queue integration, tenant-isolation, webhook dedup, managed-storage
+copy, exact-once settlement, E2E) belong to later phases; see
+`docs/gap-analysis.md`.
 
 ## Security posture in Phase 0
 
@@ -91,5 +91,7 @@ contract tests) belong to later phases; see `docs/gap-analysis.md`.
 Do not begin Phase 1 until this report and the pull request are reviewed and
 merged. Phase 1 delivers PostgreSQL + Prisma, users/organizations/memberships,
 authentication/sessions, organization-scoped repositories, the audit-log
-foundation, and cross-tenant isolation tests. Outstanding provider/business
-questions are tracked in `docs/decisions/TODO.md`.
+foundation, and cross-tenant isolation tests, and — per project instruction —
+begins the `WaveSpeedVideoProvider` implementation behind the existing adapter
+boundary (ADR-0003). Outstanding provider/business questions are tracked in
+`docs/decisions/TODO.md`.

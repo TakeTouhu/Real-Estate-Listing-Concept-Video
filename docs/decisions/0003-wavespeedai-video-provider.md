@@ -2,35 +2,41 @@
 
 - Status: Accepted
 - Date: 2026-07-27
-- Phase: 0 (skeleton); real calls in Phase 4
+- Phase: 0 (interface + ADR only); `WaveSpeedVideoProvider` implemented in Phase 1
 
 ## Context
 
 `CLAUDE.md`, `docs/WaveSpeedAIIntegration.md`, and `docs/SystemArchitecture.md`
 require WaveSpeedAI as the initial image-to-video provider while keeping the
-architecture provider-replaceable. Phase 0 must establish and prove the adapter
-boundary but must **not** call the real WaveSpeedAI API.
+architecture provider-replaceable. Phase 0 must establish and confirm the
+adapter boundary and record the decision, but must **not** call the real
+WaveSpeedAI API and must **not** contain provider integration code, webhook
+handlers, or polling workers. `WaveSpeedVideoProvider` implementation begins in
+Phase 1 after Phase 0 is merged.
 
 ## Decision
 
 ### 1. WaveSpeedAI is the initial provider
 
-Implemented as `WaveSpeedVideoProvider` in `packages/video-providers`. Default
-configuration (from `docs/WaveSpeedAIIntegration.md`):
+The concrete `WaveSpeedVideoProvider` will be implemented in
+`packages/video-providers` in **Phase 1**, behind the `VideoGenerationProvider`
+interface, using the configuration in `docs/WaveSpeedAIIntegration.md`:
 
 - base URL `https://api.wavespeed.ai/api/v3`
 - model `wavespeed-ai/open-video/image-to-video`
 - model ID, pricing, limits, and poll timings are **configuration data**, not
   hard-coded constants.
 
-### 2. Adapter boundary
+### 2. Adapter boundary (established in Phase 0)
 
 The only seam is the `VideoGenerationProvider` interface
 (`createGeneration`, `getStatus`, `cancelGeneration`, `estimateCost`,
 `normalizeError`). Domain and UI code depend on this interface and on
 normalized internal types only (`ProviderGenerationInput/Ref/Status`,
-`ProviderError`, `Money`). No WaveSpeed-specific payload shape crosses the
-boundary; request/response mapping lives in `packages/video-providers/src/wavespeed`.
+`ProviderError`, `Money`). No provider-specific payload shape will cross the
+boundary; WaveSpeed request/response mapping will live inside
+`packages/video-providers` when implemented. In Phase 0 the boundary is proven
+by `FakeVideoProvider`, the offline default.
 
 ### 3. Server-side secrets
 
@@ -46,14 +52,14 @@ ID is stored internally. Status is obtained via verified webhook (preferred) or
 bounded exponential-backoff polling (fallback), normalized into
 `QUEUED / PROCESSING / SUCCEEDED / FAILED_RETRYABLE / FAILED_TERMINAL /
 CANCELLED / TIMED_OUT`. Unknown states are treated as non-terminal for a bounded
-period. (Wired end-to-end in Phase 4.)
+period. (Implemented in Phase 1.)
 
 ### 5. Managed-storage copy
 
 Completed provider outputs are downloaded from the temporary provider URL,
 validated, and copied into organization-scoped managed object storage. Temporary
 provider URLs and prediction IDs are never exposed to customers. (Implemented in
-Phase 4 with `packages/storage`.)
+Phase 1 with `packages/storage`.)
 
 ### 6. Provider replacement strategy
 
@@ -65,17 +71,18 @@ silent switch (`docs/SaaSOperations.md`).
 
 ### 7. Phase 0 safety
 
-All WaveSpeed HTTP access goes through an injected `HttpClient`; tests inject a
-stub, and the factory only constructs a real `fetch` client when
-`VIDEO_PROVIDER=wavespeed` with a key present. The Phase 0 default is `fake`, so
-no real WaveSpeedAI request is possible.
+The Phase 0 default is `VIDEO_PROVIDER=fake`; the factory throws a configuration
+error if `wavespeed` is selected, because that provider is not implemented until
+Phase 1. No real WaveSpeedAI request is possible in Phase 0.
 
 ## Consequences
 
-- The exact WaveSpeedAI request/response shapes, model capabilities, pricing,
-  and commercial-use terms are treated as **candidates** and must be verified
-  against official documentation before Phase 4 / production (tracked in
-  `docs/decisions/TODO.md`).
-- Cost estimation currently uses placeholder pricing.
+- The current WaveSpeedAI public API contract was verified against the official
+  documentation on 2026-07-27; it matches `docs/WaveSpeedAIIntegration.md`, so
+  that document was not changed. The verification snapshot is recorded in
+  ADR-0005.
+- Remaining items to confirm before Phase 1 completion / production (webhook
+  signature mechanism, cancellation support, real pricing, commercial-use
+  terms) are tracked in `docs/decisions/TODO.md`.
 - Provider errors are normalized so retry/settlement logic never branches on
   vendor-specific error shapes.

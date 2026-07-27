@@ -33,4 +33,7 @@ in place without implementing later-phase concerns.
 - Placeholder packages (`domain`, `database`, `storage`, `queue`,
   `ai-providers`) carry no logic yet but establish the boundary and are
   typechecked/linted.
+- `packages/video-providers` ships the `VideoGenerationProvider` interface and
+  the offline `FakeVideoProvider` in Phase 0; the `WaveSpeedVideoProvider`
+  implementation is deferred to Phase 1 (ADR-0003).
 - Prisma/PostgreSQL are deferred to Phase 1; `prisma/` holds a placeholder.

@@ -29,7 +29,7 @@ that satisfies every completion criterion without starting later phases.
 | Testing foundation | Missing | Vitest workspace config + 53 unit tests across domain-free logic, provider adapters, redaction, auth, health |
 | Architecture decision records | Missing | ADR-0001…0004 under `docs/decisions/` |
 | Environment / secret conventions | Missing | Zod-validated server env (`@app/shared`), server-only accessor, `.gitignore` excludes `.env*` |
-| WaveSpeedAI provider ADR & adapter contract | Missing | `VideoGenerationProvider` interface + `WaveSpeedVideoProvider` skeleton + `FakeVideoProvider`; ADR-0003 |
+| WaveSpeedAI provider ADR & adapter contract | Missing | `VideoGenerationProvider` interface + `FakeVideoProvider` (offline default); ADR-0003 + ADR-0005. `WaveSpeedVideoProvider` implementation deferred to Phase 1 |
 | Gap analysis & completion report | Missing | This file + `docs/phase-0-completion.md` |
 
 ## Explicitly deferred (later phases)
@@ -41,8 +41,10 @@ small while preserving module boundaries:
   (`packages/database`, `packages/domain` are placeholders).
 - Property CRUD, signed uploads, EXIF handling — Phase 2 (`packages/storage`).
 - AI analysis / storyboard — Phase 3 (`packages/ai-providers`).
-- Real WaveSpeedAI calls, webhooks, polling worker, managed-storage copy —
-  Phase 4 (`packages/queue`; the roadmap forbids real API calls in Phase 0).
+- `WaveSpeedVideoProvider` implementation (submission, status mapping, webhook
+  verification, polling, managed-storage copy) — begins in Phase 1 per project
+  instruction (the roadmap forbids real API calls in Phase 0; the full
+  scene-generation pipeline is Roadmap Phase 4).
 - FFmpeg composition, review/approval — Phase 5.
 - Stripe billing & credit ledger — Phase 6.
 - Observability backends, IaC, hardening — Phase 7 (`infra/`).
@@ -53,8 +55,9 @@ small while preserving module boundaries:
   Next `transpilePackages` and Vitest aliases resolve them.
 - Phase 0 authentication is a single interim operator token exchanged for a
   signed session cookie; replaced by real identity in Phase 1 (ADR-0004).
-- The WaveSpeed adapter's HTTP access is injected, so all unit tests run
-  offline and no real API call is possible in Phase 0.
+- The WaveSpeed provider is deferred to Phase 1; Phase 0 proves the adapter
+  boundary with the fake adapter only, so no real API call is possible. The
+  current WaveSpeedAI contract was verified against official docs (ADR-0005).
 
 ## Verification
 
