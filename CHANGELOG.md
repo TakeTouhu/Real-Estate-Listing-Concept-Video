@@ -3,9 +3,51 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3A-2b: AnalysisService orchestration
+## [Unreleased] — Phase 3A-2c: refresh, duplicate grouping, ordering, reads
 
-Under review. Not merged. Third Phase 3A milestone — see
+Under review. Not merged. Fourth Phase 3A milestone; completes
+`AnalysisService` to the full Phase 3A-2 contract — see
+`docs/phase-3a2c-completion.md`.
+
+### Added
+
+- **`refresh` option** on `analyzeAsset`. Recomputes an analysis that already
+  `SUCCEEDED`, reusing the same row and calling the provider again, and emits
+  `analysis.refreshed`. Without it, an existing `SUCCEEDED` row is still
+  returned untouched with no provider call.
+- **Stale-state clearing on reservation.** A refresh resets the row to `PENDING`
+  with every result field cleared — room type, all four scores, duplicate group,
+  detected objects, safety flags, suggested order, failure reason — *before* the
+  provider runs, so a refresh that fails ends in `FAILED` with nothing from the
+  previous run surviving.
+- **Duplicate grouping wired into the success path.** `resolveDuplicateGroup`
+  now runs against same-organization assets that carry a perceptual hash,
+  excluding the subject asset, and the result is persisted. Both the asset and
+  analysis lookups are tenant-scoped, so a cross-tenant photo can never
+  influence a group.
+- **`suggestedOrder` persisted** via `roomOrderRank`, following the documented
+  room sequence; `OTHER` ranks after every recognized room type.
+- **Organization-scoped read methods** `listForProperty` and `getForAsset`, with
+  read-level authorization — any member may read, including `REVIEWER`, who
+  cannot start or refresh an analysis. `getForAsset` throws `NOT_FOUND` when no
+  analysis exists.
+- **18 new unit tests** covering refresh semantics, stale-state clearing,
+  duplicate grouping (identical, distant, cross-tenant, and null hashes), room
+  ordering, and read scoping/authorization.
+
+### Not included (deliberately)
+
+- No Prisma schema or migration change — the columns already existed.
+- No HTTP endpoints (Phase 3A-3), no review UI (Phase 3B).
+- No transactional outbox and no concurrent provider-call deduplication; both
+  remain open TODO items.
+- **No real vision provider** — offline deterministic adapter only (ADR-0009).
+
+## [phase-3a2b-complete] — Phase 3A-2b: AnalysisService orchestration
+
+Merged in PR #6 as `40580866469b3d891f719cb9d83f17bf8b692081`.
+Tagged `phase-3a2b-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Merged as a one-time size exception — see
 `docs/phase-3a2b-completion.md`.
 
 ### Added

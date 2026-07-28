@@ -1,11 +1,12 @@
 # Analysis Lifecycle — Sequence Diagram
 
-Version: 1.1
-Status: describes **implemented** behaviour through Phase 3A-2b. The contract
-and provider layer shipped in 3A-1, persistence in 3A-2a, and the orchestrating
-`AnalysisService` in 3A-2b. Steps marked **3A-2c** (refresh, duplicate grouping,
-suggested order) and **3B** (review UI) are labelled so the diagram is not read
-as describing more than currently ships.
+Version: 1.2
+Status: describes **implemented** behaviour through Phase 3A-2c. The contract
+and provider layer shipped in 3A-1, persistence in 3A-2a, the orchestrating
+`AnalysisService` in 3A-2b, and refresh, duplicate grouping, suggested order and
+the read methods in 3A-2c. Steps marked **3A-3** (HTTP endpoints) and **3B**
+(review UI) are labelled so the diagram is not read as describing more than
+currently ships.
 
 ## Analysis of one asset
 
@@ -22,20 +23,21 @@ sequenceDiagram
   participant N as Normalization + rules<br/>(3A-1)
   participant AL as AuditLog
 
-  U->>AS: analyzeAsset(org, assetId)
+  U->>AS: analyzeAsset(org, assetId, {refresh?})
   AS->>AZ: require membership + property:write
   AZ-->>AS: AuthContext (else FORBIDDEN)
   AS->>AR: findById(org, assetId)
   Note over AS,AR: Only READY assets are eligible;<br/>anything else → VALIDATION_FAILED,<br/>missing/DELETED → NOT_FOUND
   AS->>NR: findByAssetId(org, assetId)
 
-  alt SUCCEEDED record exists
+  alt SUCCEEDED record exists and refresh not requested
     NR-->>AS: existing record
     AS-->>U: existing record (idempotent — provider NOT called)
-  else no record, or PENDING/FAILED record
+  else no record, PENDING/FAILED record, or refresh requested
     AS->>NR: create, or reset an existing row, as PENDING
     Note over AS,NR: Reserved before the provider call, so a crash<br/>leaves a visible PENDING row. If a concurrent<br/>insert wins the unique index on assetId, this<br/>request adopts that row instead of creating<br/>a second one.
-    AS->>AL: analysis.requested
+    Note over AS,NR: On reset, every stale result field is cleared<br/>(room type, scores, duplicate group, objects,<br/>flags, suggested order, failure reason), so a<br/>refresh that fails cannot leave last run's<br/>values behind.
+    AS->>AL: analysis.requested | analysis.refreshed
     AS->>S: getObject(asset.storageKey)
 
     alt bytes missing
@@ -58,10 +60,14 @@ sequenceDiagram
         AS->>N: deriveQualityFlags(w, h, blur, brightness)
         N-->>AS: LOW_RESOLUTION / BLURRY / EXPOSURE_PROBLEM warnings
         AS->>AS: merge flags, keeping the most severe per code
-        AS->>NR: status = SUCCEEDED (+ scores, flags)
+        AS->>AR: listWithPerceptualHash(org)
+        Note over AS,AR: Candidates are same-organization, hash-bearing,<br/>and exclude the subject asset, so a cross-tenant<br/>photo can never influence a group.
+        AS->>N: resolveDuplicateGroup(hash, assetId, siblings)
+        N-->>AS: existing group or new dup_<assetId>
+        AS->>N: roomOrderRank(roomType) → suggestedOrder
+        AS->>NR: status = SUCCEEDED (+ scores, flags, group, order)
         Note over AS,AL: The row is persisted BEFORE its audit entry. An<br/>audit failure therefore returns an error while the<br/>analysis stays SUCCEEDED — an intentional<br/>consistency boundary, not atomicity.
         AS->>AL: analysis.succeeded
-        Note over AS,N: Duplicate grouping (resolveDuplicateGroup) and<br/>suggestedOrder (roomOrderRank) are 3A-2c.
         AS-->>U: SUCCEEDED record
       end
     end
@@ -76,6 +82,7 @@ stateDiagram-v2
   PENDING --> SUCCEEDED : provider returned, result normalized
   PENDING --> FAILED : bytes unreadable or provider error
   FAILED --> PENDING : analyzeAsset retried
+  SUCCEEDED --> PENDING : analyzeAsset(refresh: true)
   PENDING --> PENDING : retried after a failed terminal write
   SUCCEEDED --> [*]
 ```
@@ -86,7 +93,7 @@ stateDiagram-v2
 | --- | --- |
 | `ImageAnalysisProvider` interface and normalized request/result types | 3A-1 |
 | `normalizeAnalysisResult`, `deriveQualityFlags`, `analysisProviderError` | 3A-1 |
-| `roomOrderRank`, `resolveDuplicateGroup` (defined; wired in 3A-2c) | 3A-1 |
+| `roomOrderRank`, `resolveDuplicateGroup` (defined in 3A-1, wired in 3A-2c) | 3A-1 / 3A-2c |
 | `DeterministicImageAnalysisProvider` (offline, no network I/O) | 3A-1 |
 | `ANALYSIS_PROVIDER` selection with fail-fast on anything else | 3A-1 |
 | Audit action vocabulary (`analysis.requested` etc.) | 3A-1 |
@@ -94,7 +101,9 @@ stateDiagram-v2
 | `AnalysisService` orchestration, authorization, idempotency, READY-only check | 3A-2b |
 | Audit **emission** | 3A-2b |
 | Failure consistency and retry safety: PENDING reservation, no completed row on provider failure, persist-before-audit, unique-index concurrency reconciliation | 3A-2b |
-| `refresh` re-run, duplicate grouping, `suggestedOrder`, read APIs | ⏭ 3A-2c |
+| `refresh` re-run with stale-state clearing | 3A-2c |
+| Duplicate grouping and `suggestedOrder` persisted | 3A-2c |
+| Read methods `listForProperty` / `getForAsset` (read-level authorization) | 3A-2c |
 | Analysis HTTP endpoints | ⏭ 3A-3 |
 | Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |
 
