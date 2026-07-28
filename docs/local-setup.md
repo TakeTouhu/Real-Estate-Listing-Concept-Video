@@ -81,8 +81,23 @@ runs an offline self-check, logs readiness, and exits.
 ## 5. Run the checks
 
 ```bash
-pnpm check   # typecheck + lint + test + build
+pnpm check   # typecheck + lint + test + build — no database required
 ```
+
+### Database integration tests
+
+`pnpm check` stays offline. The live-PostgreSQL suites are opt-in and need a
+**disposable** database — never a production one:
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/revt_test?schema=public"
+pnpm --filter @app/database run db:migrate   # apply migrations to the empty DB
+pnpm test:db                                 # vitest.integration.config.ts
+```
+
+CI runs the same sequence in the `database` job against a PostgreSQL 16 service
+container, and additionally verifies that the committed migrations have no drift
+against the schema.
 
 ## Notes
 

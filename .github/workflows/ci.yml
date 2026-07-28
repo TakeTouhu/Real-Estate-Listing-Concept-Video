@@ -47,3 +47,56 @@ jobs:
 
       - name: Production build
         run: pnpm run build
+
+  database:
+    # Live PostgreSQL: proves the migrations apply to an empty database, that
+    # the committed schema has no drift, and that the Prisma repositories obey
+    # their tenant-scoping contract. Throwaway credentials only.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: revt
+          POSTGRES_PASSWORD: revt-ci-local
+          POSTGRES_DB: revt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://revt:revt-ci-local@localhost:5432/revt?schema=public
+      SHADOW_DATABASE_URL: postgresql://revt:revt-ci-local@localhost:5432/revt_shadow?schema=public
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @app/database run db:generate
+
+      - name: Apply migrations to an empty database
+        run: pnpm --filter @app/database run db:migrate
+
+      - name: Create shadow database for the drift check
+        run: PGPASSWORD=revt-ci-local psql -h localhost -U revt -d revt -c 'CREATE DATABASE revt_shadow'
+
+      - name: Verify committed migrations match the schema
+        run: pnpm --filter @app/database exec prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
+
+      - name: Database integration tests
+        run: pnpm run test:db

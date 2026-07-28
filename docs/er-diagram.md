@@ -1,6 +1,6 @@
 # Entity-Relationship Diagram
 
-Version: 1.1 (as implemented through Phase 3A-1)
+Version: 1.2 (as implemented through Phase 3A-2a)
 Source of truth: `packages/database/prisma/schema.prisma`
 Status: Describes **implemented** tables only. Entities from
 `docs/DataModel.md` that belong to later phases are listed at the bottom.
@@ -17,6 +17,7 @@ erDiagram
   USERS ||--o{ MEMBERSHIPS : joins
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
+  MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
 
   ORGANIZATIONS {
     string id PK
@@ -106,6 +107,28 @@ erDiagram
     datetime updatedAt
   }
 
+  ASSET_ANALYSES {
+    string id PK
+    string organizationId "tenant scope"
+    string assetId FK_UK "one analysis per asset"
+    string provider "adapter name, not a secret"
+    enum   status "PENDING|SUCCEEDED|FAILED"
+    enum   roomType "nullable, 15 values"
+    float  confidence "nullable, 0..1"
+    float  qualityScore "nullable, 0..1"
+    float  brightnessScore "nullable, 0..1"
+    float  blurScore "nullable, 0..1"
+    string duplicateGroup "nullable, groups near-identical photos"
+    json   detectedObjects "bounded list, normalized"
+    json   safetyFlags "bounded list, BLOCKING|WARNING"
+    int    suggestedOrder "nullable, walkthrough rank"
+    string failureReason "nullable, sanitized"
+    string reviewedBy "nullable, human approver"
+    datetime reviewedAt "nullable"
+    datetime createdAt
+    datetime updatedAt
+  }
+
   AUDIT_LOGS {
     string id PK
     string organizationId FK "nullable"
@@ -126,14 +149,18 @@ erDiagram
   `properties(organizationId, status)`,
   `media_assets(organizationId, propertyId, status)`,
   `media_assets(organizationId, sha256)`,
+  `asset_analyses(organizationId, status)`,
+  `asset_analyses(organizationId, duplicateGroup)`,
   `audit_logs(organizationId)`, `audit_logs(createdAt)`,
   `memberships(userId)`, `invitations(organizationId, email)`,
   `sessions(userId)`.
 - `media_assets.storageKey` is unique, preventing two rows from claiming the
   same object.
+- `asset_analyses.assetId` is unique, so an asset can never accumulate more than
+  one analysis row; a re-run updates the existing row in place.
 - Cascade behavior: deleting an organization cascades memberships, invitations,
-  and properties (and thus assets); `audit_logs.organizationId` is
-  `SetNull` so audit history survives.
+  and properties (and thus assets, and thus analyses); `audit_logs.organizationId`
+  is `SetNull` so audit history survives.
 
 ## Deliberately not stored
 
@@ -143,8 +170,6 @@ erDiagram
 
 ## Not implemented yet (later phases)
 
-`AssetAnalysis` — the domain entity ships in Phase 3A-1, but its table and
-migration land in **Phase 3A-2**, so no `asset_analyses` table exists yet.
 `VideoProject` / `StoryboardScene` (Phase 3C),
 `GenerationJob` / `ProviderGeneration` / `VideoOutput` (Phase 4–5),
 `CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7).

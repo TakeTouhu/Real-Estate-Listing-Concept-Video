@@ -62,6 +62,30 @@ enum MediaAssetStatus {
   DELETED
 }
 
+enum AnalysisStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum RoomType {
+  LIVING_ROOM
+  DINING_ROOM
+  KITCHEN
+  BEDROOM
+  CHILD_ROOM
+  STUDY
+  BATHROOM
+  WASHROOM
+  TOILET
+  ENTRANCE
+  HALLWAY
+  BALCONY
+  STORAGE
+  EXTERIOR
+  OTHER
+}
+
 model Organization {
   id          String             @id
   name        String
@@ -180,10 +204,38 @@ model MediaAsset {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   property           Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  analysis           AssetAnalysis?
 
   @@index([organizationId, propertyId, status])
   @@index([organizationId, sha256])
   @@map("media_assets")
+}
+
+model AssetAnalysis {
+  id              String         @id
+  organizationId  String
+  assetId         String         @unique
+  provider        String
+  status          AnalysisStatus @default(PENDING)
+  roomType        RoomType?
+  confidence      Float?
+  qualityScore    Float?
+  brightnessScore Float?
+  blurScore       Float?
+  duplicateGroup  String?
+  detectedObjects Json           @default("[]")
+  safetyFlags     Json           @default("[]")
+  suggestedOrder  Int?
+  failureReason   String?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  asset           MediaAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, duplicateGroup])
+  @@map("asset_analyses")
 }
 
 model AuditLog {

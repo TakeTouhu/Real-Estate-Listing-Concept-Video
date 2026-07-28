@@ -76,8 +76,9 @@ commit. None has been moved, overwritten, or reused.
 > ```bash
 > git push origin refs/tags/phase-0-complete \
 >                refs/tags/phase-1-complete \
->                refs/tags/phase-2-complete
-> git ls-remote --tags origin   # verify all three appear
+>                refs/tags/phase-2-complete \
+>                refs/tags/phase-3a1-complete
+> git ls-remote --tags origin   # verify all four appear
 > ```
 
 ## Phase reports
@@ -97,7 +98,7 @@ commit. None has been moved, overwritten, or reused.
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md` |
 
 ## Known deviation
 
@@ -110,13 +111,17 @@ split into `Phase 3A` / `3B` / `3C` milestones — see
 ## Phase 3 milestones
 
 Phase 3A was split because it exceeded the ~500-line PR guideline
-(`docs/gap-analysis-phase-3a1.md`).
+(`docs/gap-analysis-phase-3a1.md`). Phase 3A-2 was split again — **before
+implementation**, per the governance rule that splitting must precede coding —
+because its planned 17 files / ≈916 lines did not fit the guideline
+(`docs/phase-3a2a-completion.md`).
 
 | Milestone | Content | Size | Status |
 | --- | --- | --- | --- |
-| 3A-1 | Analysis contracts + deterministic offline provider | 869 | In review (PR #4) |
-| 3A-2 | Persistence + `AnalysisService` | ~790 | Held, not pushed |
-| 3A-3 | Live PostgreSQL CI + DB integration tests | ~462 | Held, not pushed |
+| 3A-1 | Analysis contracts + deterministic offline provider | 869 | **Merged** (PR #4, `a2bbf47`) |
+| 3A-2a | `asset_analyses` persistence + live PostgreSQL CI + DB integration tests | 382 | In review |
+| 3A-2b | `AnalysisService` + in-memory double + service tests | ~500 (estimate) | Not started |
+| 3A-3 | Analysis HTTP endpoints | ~350 (estimate) | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 
