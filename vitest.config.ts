@@ -29,7 +29,13 @@ export default defineConfig({
       "apps/**/*.{test,spec}.ts",
       "tests/**/*.{test,spec}.ts",
     ],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.next/**",
+      // Live-PostgreSQL suites; run via vitest.integration.config.ts.
+      "tests/integration/**",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

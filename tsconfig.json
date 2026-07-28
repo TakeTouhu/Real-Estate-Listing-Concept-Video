@@ -1,0 +1,6 @@
+{
+  // Root-level TypeScript that lives outside any workspace package: Vitest
+  // configs and the cross-cutting suites under tests/.
+  "extends": "./tsconfig.base.json",
+  "include": ["vitest.config.ts", "vitest.integration.config.ts", "tests/**/*.ts"]
+}

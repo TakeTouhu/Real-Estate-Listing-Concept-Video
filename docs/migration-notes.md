@@ -25,6 +25,7 @@ required checks (`pnpm check`) do **not** need a database.
 | --- | --- | --- | --- |
 | 1 | `00000000000000_init` | 1 | Identity foundation |
 | 2 | `00000000000001_phase2_properties_media` | 2 | Properties + media assets |
+| 3 | `00000000000002_phase3a2_asset_analysis` | 3A-2a | Asset analysis results |
 
 ### 1 — `00000000000000_init` (Phase 1)
 
@@ -60,17 +61,43 @@ new enum types. Prisma does not generate down-migrations; a forward fix is
 preferred in production. Dropping these tables destroys uploaded-asset metadata —
 the underlying stored objects would need separate cleanup.
 
-## Phase 3A-1 — no migration
+### 3 — `00000000000002_phase3a2_asset_analysis` (Phase 3A-2a)
 
-**Not applicable.** Phase 3A-1 adds no Prisma model and no migration; the schema
-is unchanged from Phase 2. The `AssetAnalysis` domain entity ships as TypeScript
-types only.
+**Additive only. No existing column is altered, renamed, or dropped, so it is
+safe to apply to a populated Phase 2 database and requires no backfill.**
 
-The `asset_analyses` table, its two enums (`AnalysisStatus`, `RoomType`), and
-migration `00000000000002_phase3a_asset_analysis` are implemented and verified
-locally but land in **Phase 3A-2**. That migration is additive only: three new
-types plus one table with a unique `assetId` and a cascade from `media_assets`,
-requiring no backfill.
+Creates:
+
+- Enums: `AnalysisStatus` (`PENDING`, `SUCCEEDED`, `FAILED`), `RoomType`
+  (the 15 values of `ROOM_TYPES` in `packages/domain/src/analysis/types.ts`).
+- Table `asset_analyses` — tenant-owned via `organizationId`; `assetId` is a
+  unique FK to `media_assets(id)` with `ON DELETE CASCADE`, so an asset has at
+  most one analysis and deleting the asset removes it.
+- Indexes: `asset_analyses(organizationId, status)`,
+  `asset_analyses(organizationId, duplicateGroup)`, plus the unique index on
+  `assetId`.
+
+`detectedObjects` and `safetyFlags` are `jsonb NOT NULL DEFAULT '[]'`; the
+repository always writes normalized, length-bounded arrays, never raw provider
+payloads. Nullable-by-design columns (unknown until an analysis succeeds):
+`roomType`, `confidence`, `qualityScore`, `brightnessScore`, `blurScore`,
+`duplicateGroup`, `suggestedOrder`, `failureReason`, `reviewedBy`, `reviewedAt`.
+
+Generated offline with
+`prisma migrate diff --from-schema-datamodel ... --to-schema-datamodel ... --script`,
+so the SQL is machine-generated from the committed schema rather than hand-written.
+
+**Rollback.** Purely additive, so rollback is
+`DROP TABLE asset_analyses;` followed by `DROP TYPE "RoomType"; DROP TYPE "AnalysisStatus";`.
+Prisma does not generate down-migrations; a forward fix is preferred in
+production. Dropping the table destroys analysis results only — uploaded assets
+and stored objects are untouched, and analyses can be re-derived by re-running
+the deterministic adapter.
+
+### Phase 3A-1 — no migration
+
+**Not applicable.** Phase 3A-1 added no Prisma model and no migration; it shipped
+the `AssetAnalysis` domain entity as TypeScript types only.
 
 ## Schema/migration parity
 
@@ -86,9 +113,6 @@ diff <(grep -v '^$' /tmp/from-schema.sql | sort) \
      <(grep -v '^$' /tmp/from-migrations.sql | sort)
 ```
 
-Verified for this branch: **no drift** — the combined migrations reproduce the
-schema exactly (207 non-empty DDL lines on both sides).
-
 With a reachable shadow database, the canonical check is:
 
 ```bash
@@ -96,6 +120,10 @@ pnpm exec prisma migrate diff --from-migrations prisma/migrations \
   --to-schema-datamodel prisma/schema.prisma \
   --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
 ```
+
+Since Phase 3A-2a this runs in CI in the `database` job against a PostgreSQL 16
+service container, after `prisma migrate deploy` has been applied to an empty
+database. Verified for this branch: **`No difference detected.` (exit 0)**.
 
 ## Operational notes
 

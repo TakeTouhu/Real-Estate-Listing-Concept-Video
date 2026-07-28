@@ -3,9 +3,50 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3A-1: analysis contracts and deterministic offline provider
+## [Unreleased] — Phase 3A-2a: analysis persistence and live-PostgreSQL CI
 
-Under review. Not merged. First of three Phase 3A milestones — see
+Under review. Not merged. Second Phase 3A milestone; scoped to persistence and
+its verification only — see `docs/phase-3a2a-completion.md`.
+
+### Added
+
+- **`asset_analyses` table** (`packages/database/prisma/schema.prisma`) with the
+  `AnalysisStatus` and `RoomType` enums, a unique `assetId` foreign key to
+  `media_assets` (`ON DELETE CASCADE`), `jsonb` columns for detected objects and
+  safety flags, and indexes on `(organizationId, status)` and
+  `(organizationId, duplicateGroup)`.
+- **Migration `00000000000002_phase3a2_asset_analysis`** — additive only, no
+  backfill, generated from the committed schema.
+- **`createPrismaAnalysisRepository`** implementing the Phase 3A-1
+  `AssetAnalysisRepository` port. Every read filters on `organizationId`, so
+  another tenant's row is not found rather than merely forbidden.
+- **Live-PostgreSQL CI job** (`database` in `.github/workflows/ci.yml`): applies
+  the committed migrations to an empty PostgreSQL 16 service container, runs the
+  shadow-database drift check with `--exit-code`, and executes the integration
+  suite. Throwaway credentials only; no production data.
+- **`tests/integration/analysis-repository.db.test.ts`** — real-database
+  coverage for JSON round-tripping, cross-tenant invisibility, the one-analysis-
+  per-asset unique constraint, list filtering, and cascade on asset deletion.
+- **`pnpm test:db`** with `vitest.integration.config.ts`; `pnpm test` stays
+  offline and requires no database.
+- **Root `tsconfig.json`** so the Vitest configs and `tests/**` are typechecked
+  (they previously were linted but not typechecked).
+
+### Not included (deliberately)
+
+- No `AnalysisService`: no authorization, audit emission, idempotency, or
+  provider invocation yet (Phase 3A-2b).
+- No in-memory analysis repository double — it ships with the service that
+  consumes it (Phase 3A-2b).
+- No HTTP endpoints, review UI, storyboard generation, or prompt compilation
+  (Phase 3A-3 / 3B / 3C).
+- **No real vision provider** — offline deterministic adapter only (ADR-0009).
+
+## [phase-3a1-complete] — Phase 3A-1: analysis contracts and deterministic offline provider
+
+Merged in PR #4 as `a2bbf473512c8f0c0df4121b1111e66b08699dd7`.
+Tagged `phase-3a1-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). First Phase 3A milestone — see
 `docs/gap-analysis-phase-3a1.md` for why Phase 3A was split.
 
 ### Added
@@ -39,10 +80,10 @@ Under review. Not merged. First of three Phase 3A milestones — see
 
 ### Not included (deliberately)
 
-- No persistence: no Prisma model, migration, or repository (Phase 3A-2).
+- No persistence: no Prisma model, migration, or repository (Phase 3A-2a).
 - No `AnalysisService`, so no audit emission, authorization, or idempotency
-  behaviour yet — only the audit action vocabulary (Phase 3A-2).
-- No live PostgreSQL CI job (Phase 3A-3).
+  behaviour yet — only the audit action vocabulary (Phase 3A-2b).
+- No live PostgreSQL CI job (Phase 3A-2a).
 - No review UI, storyboard generation, or prompt compilation (Phase 3B / 3C).
 - **No real vision provider** — offline deterministic adapter only (ADR-0009).
 
