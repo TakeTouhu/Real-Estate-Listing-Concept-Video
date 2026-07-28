@@ -1,0 +1,71 @@
+import type { Clock } from "../identity/ports";
+import type { AssetAnalysisRepository } from "../analysis/ports";
+import type { AssetAnalysis } from "../analysis/types";
+
+/** Thrown when a second analysis is created for an asset that already has one. */
+export class DuplicateAnalysisError extends Error {
+  constructor(readonly assetId: string) {
+    super(`analysis already exists for asset ${assetId}`);
+    this.name = "DuplicateAnalysisError";
+  }
+}
+
+/**
+ * In-memory analysis repository mirroring the tenant-scoping contract of the
+ * Prisma adapter: every lookup is filtered by organizationId, so another
+ * tenant's row is invisible rather than merely forbidden.
+ *
+ * It also mirrors the unique index on `asset_analyses.assetId` — including
+ * rejecting asynchronously, the way a database constraint violation surfaces —
+ * so the service's concurrency reconciliation is exercised realistically.
+ */
+export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository {
+  private readonly byId = new Map<string, AssetAnalysis>();
+  constructor(private readonly clock: Clock) {}
+
+  create(input: Omit<AssetAnalysis, "createdAt" | "updatedAt">): Promise<AssetAnalysis> {
+    if ([...this.byId.values()].some((a) => a.assetId === input.assetId)) {
+      return Promise.reject(new DuplicateAnalysisError(input.assetId));
+    }
+    const now = this.clock.now();
+    const row: AssetAnalysis = { ...input, createdAt: now, updatedAt: now };
+    this.byId.set(row.id, row);
+    return Promise.resolve(row);
+  }
+
+  findById(organizationId: string, id: string): Promise<AssetAnalysis | null> {
+    const row = this.byId.get(id);
+    return Promise.resolve(row && row.organizationId === organizationId ? row : null);
+  }
+
+  findByAssetId(organizationId: string, assetId: string): Promise<AssetAnalysis | null> {
+    return Promise.resolve(
+      [...this.byId.values()].find(
+        (a) => a.organizationId === organizationId && a.assetId === assetId,
+      ) ?? null,
+    );
+  }
+
+  listByAssetIds(organizationId: string, assetIds: readonly string[]): Promise<AssetAnalysis[]> {
+    if (assetIds.length === 0) return Promise.resolve([]);
+    const wanted = new Set(assetIds);
+    return Promise.resolve(
+      [...this.byId.values()]
+        .filter((a) => a.organizationId === organizationId && wanted.has(a.assetId))
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+    );
+  }
+
+  update(analysis: AssetAnalysis): Promise<AssetAnalysis> {
+    if (!this.byId.has(analysis.id)) {
+      return Promise.reject(new Error(`analysis ${analysis.id} not found`));
+    }
+    this.byId.set(analysis.id, analysis);
+    return Promise.resolve(analysis);
+  }
+
+  /** Test-only: every stored row regardless of organization. */
+  all(): AssetAnalysis[] {
+    return [...this.byId.values()];
+  }
+}

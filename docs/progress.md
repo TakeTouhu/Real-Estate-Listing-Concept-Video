@@ -77,9 +77,17 @@ commit. None has been moved, overwritten, or reused.
 > git push origin refs/tags/phase-0-complete \
 >                refs/tags/phase-1-complete \
 >                refs/tags/phase-2-complete \
->                refs/tags/phase-3a1-complete
-> git ls-remote --tags origin   # verify all four appear
+>                refs/tags/phase-3a1-complete \
+>                refs/tags/phase-3a2a-complete
+> git ls-remote --tags origin   # verify all five appear
 > ```
+>
+> Local tag records (target verified against the merge commit in each case):
+>
+> | Tag | Tag object | Target commit |
+> | --- | --- | --- |
+> | `phase-3a1-complete` | `af4154f8192ccdcdf96d88c99aeb6119cc7189f5` | `a2bbf473512c8f0c0df4121b1111e66b08699dd7` |
+> | `phase-3a2a-complete` | `00e9f10910a3bf2f255a45a67cce133b7b857af7` | `8d1bed31e4d3744865d1a09a1fc08feb3da3e16f` |
 
 ## Phase reports
 
@@ -98,7 +106,7 @@ commit. None has been moved, overwritten, or reused.
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md` |
 
 ## Known deviation
 
@@ -119,8 +127,9 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | Milestone | Content | Size | Status |
 | --- | --- | --- | --- |
 | 3A-1 | Analysis contracts + deterministic offline provider | 869 | **Merged** (PR #4, `a2bbf47`) |
-| 3A-2a | `asset_analyses` persistence + live PostgreSQL CI + DB integration tests | 382 | In review |
-| 3A-2b | `AnalysisService` + in-memory double + service tests | ~500 (estimate) | Not started |
+| 3A-2a | `asset_analyses` persistence + live PostgreSQL CI + DB integration tests | 382 | **Merged** (PR #5, `8d1bed3`) |
+| 3A-2b | `AnalysisService` + in-memory double + transaction/retry-safety tests | 826 (estimated 509 — over target, disclosed) | In review |
+| 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | ~250 (estimate) | Not started |
 | 3A-3 | Analysis HTTP endpoints | ~350 (estimate) | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |

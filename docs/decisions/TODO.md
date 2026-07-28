@@ -54,20 +54,25 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       async worker once the queue lands in Phase 4.
 - [ ] **Publish the `phase-*-complete` annotated tags to the remote.** Still
       blocked as of 2026-07-28: `phase-0-complete`, `phase-1-complete`,
-      `phase-2-complete`, and `phase-3a1-complete` exist only in the local clone
-      and
+      `phase-2-complete`, `phase-3a1-complete`, and `phase-3a2a-complete` exist
+      only in the local clone and
       `git ls-remote --tags origin` is empty. Tag-ref pushes fail with
       `HTTP 403` (retried with explicit refspecs, `--tags`, and a single tag);
       branch pushes to the same remote succeed, so the proxy rejects tag refs
       specifically, and the GitHub tooling has no create-ref API. Needs a
       maintainer push:
-      `git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete refs/tags/phase-2-complete refs/tags/phase-3a1-complete`
+      `git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete refs/tags/phase-2-complete refs/tags/phase-3a1-complete refs/tags/phase-3a2a-complete`
 - [ ] Decide the near-duplicate UX (block vs warn) during Phase 3 analysis
       review; Phase 2 only reports `duplicateOf`.
 - [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.
 - [ ] Extend the live-PostgreSQL integration suite (added in Phase 3A-2a) to the
       identity and property repositories; it currently covers the analysis
       repository only.
+- [ ] Deduplicate concurrent analysis work. Since Phase 3A-2b the unique index
+      on `asset_analyses.assetId` guarantees a single row and convergent
+      results, but two concurrent requests for the same asset each perform their
+      own provider call. A lease or conditional status update (`PENDING` claimed
+      by exactly one worker) belongs with the job queue in Phase 4.
 
 ## Business rules to confirm (later phases)
 

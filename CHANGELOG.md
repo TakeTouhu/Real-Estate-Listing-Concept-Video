@@ -3,10 +3,58 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3A-2a: analysis persistence and live-PostgreSQL CI
+## [Unreleased] — Phase 3A-2b: AnalysisService orchestration
 
-Under review. Not merged. Second Phase 3A milestone; scoped to persistence and
-its verification only — see `docs/phase-3a2a-completion.md`.
+Under review. Not merged. Third Phase 3A milestone — see
+`docs/phase-3a2b-completion.md`.
+
+### Added
+
+- **`AnalysisService.analyzeAsset`** (`@app/domain`): authorizes
+  `property:write`, accepts READY assets only, reserves a `PENDING` row before
+  calling the provider, merges provider safety flags with platform-derived
+  quality flags keeping the most severe per code, persists `SUCCEEDED`, and
+  emits `analysis.requested` / `analysis.succeeded` / `analysis.failed`.
+- **Transaction and retry safety.** Every write is a single-row status
+  transition. A provider failure can only produce `FAILED`, never a completed
+  record. A failed terminal write leaves the row `PENDING` with null result
+  fields and surfaces the error. The terminal row is persisted *before* its
+  audit entry, so an audit-sink failure propagates over consistent state instead
+  of hiding it. Retries reuse the existing row and converge on the same result.
+- **Concurrency reconciliation.** The unique index on `asset_analyses.assetId`
+  is the concurrency control: a request whose insert loses the race re-reads and
+  adopts the winner's row instead of creating a second one. A create failure
+  that is not a uniqueness conflict is rethrown.
+- **`InMemoryAssetAnalysisRepository`** (`@app/domain/testing`): organization-
+  scoped test double that mirrors the unique-`assetId` constraint and rejects
+  asynchronously, the way a real constraint violation surfaces.
+- **28 new unit tests**, including the six required resilience cases: provider
+  timeout, provider exception, repository write failure, audit write failure,
+  repeated retry after failure, and concurrent duplicate requests.
+
+### Not included (deliberately)
+
+- No `refresh` option, so a `SUCCEEDED` analysis cannot yet be recomputed
+  (Phase 3A-2c).
+- No duplicate-group resolution or `suggestedOrder` persistence, though both
+  pure functions exist from 3A-1 (Phase 3A-2c).
+- No read APIs (`listForProperty`, `getForAsset`) and no HTTP endpoint, so the
+  service is not yet reachable from the web app (Phase 3A-2c / 3A-3).
+- **No real vision provider** — offline deterministic adapter only (ADR-0009).
+
+### Known limitation
+
+Concurrent requests for the same asset each perform their own provider call.
+The row is never duplicated and both converge on the same result, but
+deduplicating the work needs a lease or conditional status update, which belongs
+with the job queue in Phase 4.
+
+## [phase-3a2a-complete] — Phase 3A-2a: analysis persistence and live-PostgreSQL CI
+
+Merged in PR #5 as `8d1bed31e4d3744865d1a09a1fc08feb3da3e16f`.
+Tagged `phase-3a2a-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Scoped to persistence and its verification only — see
+`docs/phase-3a2a-completion.md`.
 
 ### Added
 
