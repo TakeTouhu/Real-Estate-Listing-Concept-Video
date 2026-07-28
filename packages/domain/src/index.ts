@@ -10,3 +10,5 @@ export * from "./identity/membership-service";
 export { normalizeEmail } from "./identity/util";
 
 export * from "./property/index";
+
+export * from "./analysis/index";

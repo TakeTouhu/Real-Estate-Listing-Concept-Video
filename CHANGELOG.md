@@ -3,6 +3,49 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 3A-1: analysis contracts and deterministic offline provider
+
+Under review. Not merged. First of three Phase 3A milestones — see
+`docs/gap-analysis-phase-3a1.md` for why Phase 3A was split.
+
+### Added
+
+- **Analysis domain contracts (`@app/domain`)**
+  - `AssetAnalysis` entity: room type, confidence, quality/brightness/blur
+    scores, duplicate-group reference, detected objects, safety and privacy
+    flags, suggested display order, status, and failure reason.
+  - 15-value `RoomType` vocabulary with an `isRoomType` guard, and
+    `AnalysisStatus` (`PENDING` / `SUCCEEDED` / `FAILED`).
+  - Eight safety/privacy flag codes with `BLOCKING` / `WARNING` severity, plus
+    `hasBlockingFlag` and `isLowConfidence` (threshold 0.6).
+- **`ImageAnalysisProvider` boundary** with normalized `AnalysisRequest` /
+  `AnalysisResult` / `AnalysisProviderError` types (ADR-0009).
+- **Platform-owned normalization**: `normalizeAnalysisResult` (unknown room type
+  → `OTHER` with zero confidence, scores clamped to 0..1 with any non-finite
+  value mapped to 0, objects capped at 50, flags at 20), `deriveQualityFlags`
+  (resolution, blur, exposure warnings), and `analysisProviderError` with
+  explicit retryability.
+- **Ordering and duplicate rules**: `roomOrderRank` implementing the documented
+  room sequence, and `resolveDuplicateGroup` reusing Phase 2 perceptual hashes
+  with hamming distance.
+- **Deterministic offline adapter (`@app/ai-providers`)**:
+  `DeterministicImageAnalysisProvider` performs no network I/O; room type and
+  scores derive from the asset id, brightness is measured from real bytes.
+- **Configuration**: `ANALYSIS_PROVIDER` (server-side, `deterministic` only;
+  the factory fails fast on any other value).
+- **Documentation**: ADR-0009, Phase 3A-1 gap analysis, analysis lifecycle
+  sequence diagram, architecture and ER diagram updates, API change summary
+  (not applicable), migration notes, and the Phase 3A-1 completion report.
+
+### Not included (deliberately)
+
+- No persistence: no Prisma model, migration, or repository (Phase 3A-2).
+- No `AnalysisService`, so no audit emission, authorization, or idempotency
+  behaviour yet — only the audit action vocabulary (Phase 3A-2).
+- No live PostgreSQL CI job (Phase 3A-3).
+- No review UI, storyboard generation, or prompt compilation (Phase 3B / 3C).
+- **No real vision provider** — offline deterministic adapter only (ADR-0009).
+
 ## [phase-2-complete] — Phase 2: Properties and secure media upload
 
 Merged in PR #3 as `653372a54d72d8dacc38fb7103ad32f15041cc2f`.

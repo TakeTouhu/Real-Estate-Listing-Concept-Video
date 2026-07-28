@@ -1,6 +1,6 @@
 # Entity-Relationship Diagram
 
-Version: 1.0 (as implemented through Phase 2)
+Version: 1.1 (as implemented through Phase 3A-1)
 Source of truth: `packages/database/prisma/schema.prisma`
 Status: Describes **implemented** tables only. Entities from
 `docs/DataModel.md` that belong to later phases are listed at the bottom.
@@ -143,7 +143,9 @@ erDiagram
 
 ## Not implemented yet (later phases)
 
-`AssetAnalysis` (Phase 3), `VideoProject` / `StoryboardScene` (Phase 3),
+`AssetAnalysis` — the domain entity ships in Phase 3A-1, but its table and
+migration land in **Phase 3A-2**, so no `asset_analyses` table exists yet.
+`VideoProject` / `StoryboardScene` (Phase 3C),
 `GenerationJob` / `ProviderGeneration` / `VideoOutput` (Phase 4–5),
 `CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7).
 These appear in `docs/DataModel.md` but have no tables yet.

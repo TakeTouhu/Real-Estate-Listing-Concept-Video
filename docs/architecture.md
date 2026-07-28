@@ -1,6 +1,6 @@
 # Architecture Diagram
 
-Version: 1.0 (as implemented through Phase 2)
+Version: 1.1 (as implemented through Phase 3A-1)
 Status: Describes **implemented** behavior only. Components that do not exist yet
 are marked `(not implemented)`.
 
@@ -24,15 +24,17 @@ flowchart TB
   subgraph domain["@app/domain — pure domain, no I/O libraries"]
     identitysvc["AuthService<br/>OrganizationService<br/>MembershipService"]
     propsvc["PropertyService<br/>AssetService"]
+    anasvc["Analysis contracts<br/>normalization · ordering<br/>duplicate rules<br/>(AnalysisService: 3A-2)"]
     authz["authorizeOrganization<br/>RBAC + tenant scope"]
     audit["recordAudit"]
-    ports["Ports:<br/>repositories · ObjectStorage<br/>MalwareScanner · ImageProcessor"]
+    ports["Ports:<br/>repositories · ObjectStorage<br/>MalwareScanner · ImageProcessor<br/>ImageAnalysisProvider"]
   end
 
   subgraph adapters["Adapters"]
     db["@app/database<br/>Prisma repositories"]
     store["@app/storage<br/>LocalObjectStorage<br/>SharpImageProcessor<br/>PassthroughMalwareScanner"]
     vp["@app/video-providers<br/>VideoGenerationProvider<br/>Fake · WaveSpeed"]
+    aip["@app/ai-providers<br/>ImageAnalysisProvider<br/>Deterministic (offline)"]
     obs["@app/observability<br/>redacting logger"]
   end
 
@@ -63,6 +65,8 @@ flowchart TB
 
   ports -.implemented by.-> db
   ports -.implemented by.-> store
+  ports -.implemented by.-> aip
+  anasvc --> ports
 
   db --> pg
   store --> objects
@@ -94,8 +98,12 @@ flowchart TB
 | `@app/domain` identity + property/media services | Implemented |
 | `@app/database` Prisma repositories | Implemented |
 | `@app/storage` object storage, signing, image pipeline, scan hook | Implemented (in-process storage) |
-| `@app/video-providers` Fake + WaveSpeed adapters | Implemented; WaveSpeed not invoked in Phase 2 |
+| `@app/video-providers` Fake + WaveSpeed adapters | Implemented; WaveSpeed not invoked |
+| `@app/domain` analysis contracts, normalization, ordering/duplicate rules | Implemented (Phase 3A-1) |
+| `@app/ai-providers` `ImageAnalysisProvider` + deterministic offline adapter | Implemented (Phase 3A-1); **no real vision vendor** (ADR-0009) |
+| `AnalysisService`, `AssetAnalysis` persistence | **Not implemented** (Phase 3A-2) |
+| Analysis review UI | **Not implemented** (Phase 3B) |
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` queue consumer, generation orchestration | **Not implemented** (Phase 4) |
-| `@app/queue`, `@app/ai-providers` | **Not implemented** (placeholders) |
+| `@app/queue` | **Not implemented** (placeholder) |
 | FFmpeg composition, billing, Stripe | **Not implemented** (Phases 5–6) |

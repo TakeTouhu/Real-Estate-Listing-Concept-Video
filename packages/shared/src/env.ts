@@ -31,6 +31,10 @@ export const serverEnvSchema = z
       .string()
       .min(16, "STORAGE_SIGNING_SECRET must be at least 16 characters"),
 
+    // Image-analysis provider selection. Phase 3 ships the deterministic
+    // offline adapter only; no real vision vendor is integrated (ADR-0009).
+    ANALYSIS_PROVIDER: z.enum(["deterministic"]).default("deterministic"),
+
     // Video provider selection. Phase 0 defaults to the fake adapter and must
     // never call the real WaveSpeedAI API.
     VIDEO_PROVIDER: z.enum(["fake", "wavespeed"]).default("fake"),
