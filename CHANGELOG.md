@@ -15,12 +15,20 @@ Under review. Not merged. Third Phase 3A milestone — see
   calling the provider, merges provider safety flags with platform-derived
   quality flags keeping the most severe per code, persists `SUCCEEDED`, and
   emits `analysis.requested` / `analysis.succeeded` / `analysis.failed`.
-- **Transaction and retry safety.** Every write is a single-row status
-  transition. A provider failure can only produce `FAILED`, never a completed
-  record. A failed terminal write leaves the row `PENDING` with null result
-  fields and surfaces the error. The terminal row is persisted *before* its
-  audit entry, so an audit-sink failure propagates over consistent state instead
-  of hiding it. Retries reuse the existing row and converge on the same result.
+- **Failure-consistent, retry-safe, idempotent at the persisted analysis-row
+  level.** Every write is a single-row status transition. A provider failure can
+  only produce `FAILED`, never a completed record. A failed terminal write leaves
+  the row `PENDING` with null result fields and surfaces the error. Retries reuse
+  the existing row and converge on the same result. This is **not** full
+  transactional atomicity: the analysis row and its audit entry are written
+  separately (see the consistency boundary below).
+- **Documented consistency boundary.** The analysis row is persisted *before*
+  its audit event, so an audit-sink failure can return an error while the
+  analysis remains `SUCCEEDED`. This is intentional — the alternative, losing a
+  completed analysis because its audit write failed, is worse. Strict atomicity
+  between analysis persistence and audit persistence would require a shared
+  database transaction or a transactional outbox; recorded in
+  `docs/decisions/TODO.md`.
 - **Concurrency reconciliation.** The unique index on `asset_analyses.assetId`
   is the concurrency control: a request whose insert loses the race re-reads and
   adopts the winner's row instead of creating a second one. A create failure

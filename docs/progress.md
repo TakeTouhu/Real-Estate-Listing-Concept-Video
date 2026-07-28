@@ -128,7 +128,7 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | --- | --- | --- | --- |
 | 3A-1 | Analysis contracts + deterministic offline provider | 869 | **Merged** (PR #4, `a2bbf47`) |
 | 3A-2a | `asset_analyses` persistence + live PostgreSQL CI + DB integration tests | 382 | **Merged** (PR #5, `8d1bed3`) |
-| 3A-2b | `AnalysisService` + in-memory double + transaction/retry-safety tests | 826 (estimated 509 — over target, disclosed) | In review |
+| 3A-2b | `AnalysisService` + in-memory double + failure-consistency and retry-safety tests | 826 (estimated 509 — accepted as a one-time size exception) | In review |
 | 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | ~250 (estimate) | Not started |
 | 3A-3 | Analysis HTTP endpoints | ~350 (estimate) | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |

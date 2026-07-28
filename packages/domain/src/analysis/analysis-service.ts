@@ -23,21 +23,29 @@ export interface AnalysisServiceDeps {
 /**
  * Analysis orchestration.
  *
- * Consistency model — every write is a single-row transition, so there is no
- * partially-updated state to unwind:
+ * Consistency model. This is **not** transactional atomicity: it is
+ * failure-consistent, retry-safe, and idempotent at the persisted
+ * analysis-row level. Every write is a single-row transition, so there is no
+ * partially-updated row to unwind.
  *
  * - A row is reserved as `PENDING` *before* the provider is called, so a crash
  *   leaves a visible PENDING row rather than nothing at all.
  * - A provider failure transitions that row to `FAILED`; it can never produce a
  *   `SUCCEEDED` record.
- * - The terminal row is persisted *before* its audit entry is written. If the
- *   audit sink fails, the error propagates (it is never swallowed) while the
- *   persisted analysis is already in a consistent terminal state.
  * - If a repository write fails, the row keeps its previous status and the error
  *   surfaces. Re-running the request resumes from that status.
  * - Retries converge: an existing `SUCCEEDED` row is returned untouched, and a
  *   `PENDING`/`FAILED` row is reused rather than duplicated, so repeated
  *   requests yield the same persisted result.
+ *
+ * Audit consistency boundary — intentional, and not atomic. The terminal row is
+ * persisted *before* its audit entry. If the audit sink then fails, the error
+ * propagates to the caller (it is never swallowed) but **the analysis row
+ * remains `SUCCEEDED`**, so that transition may end up without an audit entry.
+ * The ordering is deliberate: the alternative discards a completed analysis
+ * because of a logging outage. Making the two writes atomic requires a shared
+ * database transaction spanning both rows, or a transactional outbox — see
+ * `docs/decisions/TODO.md`.
  */
 export class AnalysisService {
   constructor(private readonly deps: AnalysisServiceDeps) {}

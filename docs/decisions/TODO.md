@@ -68,6 +68,18 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 - [ ] Extend the live-PostgreSQL integration suite (added in Phase 3A-2a) to the
       identity and property repositories; it currently covers the analysis
       repository only.
+- [ ] **Make analysis persistence and audit persistence atomic.** Since Phase
+      3A-2b the analysis row is written before its audit event, so an audit-sink
+      failure returns an error while the analysis row remains `SUCCEEDED`. That
+      boundary is deliberate — the alternative loses a completed analysis when
+      only its audit write failed — but it means the two writes are not atomic.
+      Closing the gap requires either a shared database transaction spanning the
+      analysis row and the audit row, or a transactional outbox (append the audit
+      event to an outbox table inside the same transaction as the analysis row,
+      then publish it asynchronously with at-least-once delivery and dedupe on
+      the event id). The outbox generalizes to credit settlement and provider
+      webhooks in Phases 4–6, so decide it once, at the persistence layer, rather
+      than per service.
 - [ ] Deduplicate concurrent analysis work. Since Phase 3A-2b the unique index
       on `asset_analyses.assetId` guarantees a single row and convergent
       results, but two concurrent requests for the same asset each perform their

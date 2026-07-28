@@ -59,7 +59,7 @@ sequenceDiagram
         N-->>AS: LOW_RESOLUTION / BLURRY / EXPOSURE_PROBLEM warnings
         AS->>AS: merge flags, keeping the most severe per code
         AS->>NR: status = SUCCEEDED (+ scores, flags)
-        Note over AS,AL: The row is persisted before its audit entry, so an<br/>audit-sink failure surfaces as an error over a<br/>consistent terminal row — never silently.
+        Note over AS,AL: The row is persisted BEFORE its audit entry. An<br/>audit failure therefore returns an error while the<br/>analysis stays SUCCEEDED — an intentional<br/>consistency boundary, not atomicity.
         AS->>AL: analysis.succeeded
         Note over AS,N: Duplicate grouping (resolveDuplicateGroup) and<br/>suggestedOrder (roomOrderRank) are 3A-2c.
         AS-->>U: SUCCEEDED record
@@ -93,7 +93,7 @@ stateDiagram-v2
 | `AssetAnalysis` table, migration, tenant-scoped repository | 3A-2a |
 | `AnalysisService` orchestration, authorization, idempotency, READY-only check | 3A-2b |
 | Audit **emission** | 3A-2b |
-| Transaction/retry safety: PENDING reservation, no completed row on provider failure, persist-before-audit, unique-index concurrency reconciliation | 3A-2b |
+| Failure consistency and retry safety: PENDING reservation, no completed row on provider failure, persist-before-audit, unique-index concurrency reconciliation | 3A-2b |
 | `refresh` re-run, duplicate grouping, `suggestedOrder`, read APIs | ⏭ 3A-2c |
 | Analysis HTTP endpoints | ⏭ 3A-3 |
 | Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |
