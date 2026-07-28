@@ -92,7 +92,18 @@ importers:
         specifier: 4.23.1
         version: 4.23.1
 
-  packages/ai-providers: {}
+  packages/ai-providers:
+    dependencies:
+      '@app/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@app/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
 
   packages/database:
     dependencies:

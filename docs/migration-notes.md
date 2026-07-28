@@ -60,6 +60,18 @@ new enum types. Prisma does not generate down-migrations; a forward fix is
 preferred in production. Dropping these tables destroys uploaded-asset metadata —
 the underlying stored objects would need separate cleanup.
 
+## Phase 3A-1 — no migration
+
+**Not applicable.** Phase 3A-1 adds no Prisma model and no migration; the schema
+is unchanged from Phase 2. The `AssetAnalysis` domain entity ships as TypeScript
+types only.
+
+The `asset_analyses` table, its two enums (`AnalysisStatus`, `RoomType`), and
+migration `00000000000002_phase3a_asset_analysis` are implemented and verified
+locally but land in **Phase 3A-2**. That migration is additive only: three new
+types plus one table with a unique `assetId` and a cascade from `media_assets`,
+requiring no backfill.
+
 ## Schema/migration parity
 
 The committed migrations must always equal the schema. Verify offline (no

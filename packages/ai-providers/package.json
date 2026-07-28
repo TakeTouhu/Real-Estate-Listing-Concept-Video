@@ -10,5 +10,12 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@app/domain": "workspace:*",
+    "@app/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1"
   }
 }

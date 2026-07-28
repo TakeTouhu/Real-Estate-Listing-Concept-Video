@@ -35,7 +35,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | 0 | Engineering foundation | ✅ Merged | #1 | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | `phase-0-complete` | `76d36045934a97bc4a997a64dcd1e932cfe837de` |
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
-| 3 | AI analysis and storyboard | ⏳ Not started | — | — | — | — |
+| 3 | AI analysis and storyboard | 🔄 In progress (3A-1 in review) | 3A-1: #4 | — | — | — |
 | 4 | WaveSpeedAI scene generation | ⏳ Not started | — | — | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
@@ -92,12 +92,12 @@ commit. None has been moved, overwritten, or reused.
 | --- | --- |
 | Architecture diagram | `docs/architecture.md` |
 | Entity-relationship diagram | `docs/er-diagram.md` |
-| Critical sequence diagram | `docs/sequence-upload-lifecycle.md` |
-| API change summary / OpenAPI | `docs/api-changes-phase-2.md` |
+| Critical sequence diagram | `docs/sequence-upload-lifecycle.md`, `docs/sequence-analysis-lifecycle.md` |
+| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md` |
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md` |
 
 ## Known deviation
 
@@ -107,11 +107,26 @@ accepted as a **one-time exception** by explicit reviewer decision. Phase 3 is
 split into `Phase 3A` / `3B` / `3C` milestones — see
 `docs/phase-3-milestone-plan.md`.
 
+## Phase 3 milestones
+
+Phase 3A was split because it exceeded the ~500-line PR guideline
+(`docs/gap-analysis-phase-3a1.md`).
+
+| Milestone | Content | Size | Status |
+| --- | --- | --- | --- |
+| 3A-1 | Analysis contracts + deterministic offline provider | 869 | In review (PR #4) |
+| 3A-2 | Persistence + `AnalysisService` | ~790 | Held, not pushed |
+| 3A-3 | Live PostgreSQL CI + DB integration tests | ~462 | Held, not pushed |
+| 3B | Analysis review UI | ~450–500 | Not started |
+| 3C | Storyboard + prompt compilation | ~500 | Not started |
+
+`phase-3-complete` is created only after every Phase 3 milestone is merged and
+verified. A milestone PR never receives a phase tag.
+
 ## Forward planning
 
-- `docs/phase-3-milestone-plan.md` — proposed Phase 3A/3B/3C milestone split
-  (plan only; not approved, no branch or code exists).
+- `docs/phase-3-milestone-plan.md` — approved Phase 3A/3B/3C milestone plan.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0008, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0009, plus `docs/decisions/TODO.md` for open items.
