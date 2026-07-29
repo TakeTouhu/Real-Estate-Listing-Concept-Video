@@ -36,7 +36,8 @@ transaction needs both a commit and a rollback case.
 ### The partial unique index is feasible — verified, not assumed
 
 `@@unique([...], where: {...})` fails `prisma validate` on 5.22, so the index is
-hand-written SQL appended to the generated migration. The risk was that
+hand-written SQL appended to the generated migration, under the conditions set
+by **ADR-0011 — database constraints beyond the Prisma schema**. The risk was that
 `prisma migrate diff --from-migrations --to-schema-datamodel --exit-code` would
 then see an index the datamodel cannot express and fail the `database` CI job. I
 tested that against live PostgreSQL before committing to the approach:
@@ -127,6 +128,7 @@ propagation, and return value.
 | Item | Status |
 | --- | --- |
 | Completion report | This document |
+| ADR | **New** — `docs/decisions/0011-database-constraints-beyond-prisma-schema.md` |
 | ER diagram | Updated — `docs/er-diagram.md` v1.3, review columns and the partial index |
 | Migration notes | Updated — migration 4, including the `migrate dev` caveat |
 | Change log | Updated — `CHANGELOG.md` |

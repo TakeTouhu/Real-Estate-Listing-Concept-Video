@@ -125,7 +125,8 @@ group cannot both succeed — the loser gets a unique violation.
 
 **Prisma cannot express a partial index in `schema.prisma`** (`@@unique(...,
 where: ...)` fails `prisma validate` on 5.22), so this statement is appended to
-the generated migration by hand.
+the generated migration by hand, under **ADR-0011 — database constraints beyond
+the Prisma schema**, which sets the conditions for doing so.
 
 Two consequences, both verified rather than assumed:
 

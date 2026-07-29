@@ -151,4 +151,4 @@ verified. A milestone PR never receives a phase tag.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0010, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0011, plus `docs/decisions/TODO.md` for open items.
