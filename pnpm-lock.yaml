@@ -35,6 +35,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@app/ai-providers':
+        specifier: workspace:*
+        version: link:../../packages/ai-providers
       '@app/database':
         specifier: workspace:*
         version: link:../../packages/database
