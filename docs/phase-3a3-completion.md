@@ -52,6 +52,11 @@ Safety is unaffected: a forged or guessed id fails `authorizeOrganization` with
 asset is `404`. Inventing a session-scoped active organization would be a
 cross-cutting identity change well outside this milestone.
 
+The convention is now recorded in **ADR-0010 — organization context
+resolution**, including the standing obligation it creates: because the id is
+attacker-controlled input, every tenant-scoped endpoint must carry
+cross-tenant tests.
+
 ### 2. `POST` returns `200`, never `201`
 
 Distinguishing "created" from "returned the existing one" is a business fact
@@ -142,6 +147,7 @@ isolation are exercised for real rather than mocked away.
 | Item | Status |
 | --- | --- |
 | Completion report | This document |
+| ADR | **New** — `docs/decisions/0010-organization-context-resolution.md` |
 | API change summary | **New** — `docs/api-changes-phase-3a3.md`; four endpoints are a real API surface change |
 | Change log | Updated — `CHANGELOG.md` |
 | Progress | Updated — `docs/progress.md`, incl. the 3A-2c merge commit and tag record |

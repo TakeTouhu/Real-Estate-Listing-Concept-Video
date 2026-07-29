@@ -6,7 +6,8 @@ All routes are session-authenticated (`rev_session` cookie). `organizationId` is
 supplied by the caller — in the JSON body for `POST`, in the query string for
 `GET` — and membership is verified server-side by `authorizeOrganization`. There
 is no active-organization concept in the session; this matches the Phase 1/2
-convention for `/api/properties` and `/api/assets/*`.
+convention for `/api/properties` and `/api/assets/*`, and is recorded in
+**ADR-0010 — organization context resolution**.
 
 ## Endpoints
 

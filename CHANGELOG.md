@@ -32,7 +32,8 @@ Under review. Not merged. Final Phase 3A milestone — see
   No business decision lives in the web layer, and `AnalysisService` is unchanged
   by this milestone.
 - `organizationId` is caller-supplied and membership-verified, matching the
-  Phase 1/2 convention — the session has no active-organization concept.
+  Phase 1/2 convention — the session has no active-organization concept. The
+  convention is recorded in **ADR-0010 — organization context resolution**.
 - `POST` returns `200` rather than `201`, and a non-`READY` asset is `422` rather
   than `409`: distinguishing those cases in the route would require it to
   interpret why the service refused. See `docs/api-changes-phase-3a3.md`.
