@@ -3,9 +3,49 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3A-3: analysis HTTP endpoints
+## [Unreleased] — Phase 3B-1a: review infrastructure
 
-Under review. Not merged. Final Phase 3A milestone — see
+Under review. Not merged. Persistence and the transaction boundary for human
+review — see `docs/phase-3b1a-completion.md`. **No review service methods**; the
+columns are inert until Phase 3B-1b.
+
+### Added
+
+- **Review columns on `asset_analyses`**: `reviewStatus` (`UNREVIEWED` /
+  `APPROVED` / `REJECTED`, default `UNREVIEWED`), `reviewNote`, and
+  `analysisRevision` (default 1), plus an index on
+  `(organizationId, reviewStatus)`. Additive migration, no backfill.
+- **A partial unique index** making the database authoritative for "at most one
+  `APPROVED` analysis per duplicate group", so concurrent approvals of two
+  members of a group cannot both succeed. Prisma cannot express a partial index,
+  so it is hand-written in the migration under **ADR-0011 — database constraints
+  beyond the Prisma schema**; the CI drift check still passes, and the
+  `prisma migrate dev` caveat is recorded in `docs/migration-notes.md`.
+- **`ReviewTransaction` port** with Prisma and in-memory implementations. The
+  Prisma implementation rebuilds both repositories against the transaction
+  client *inside* `run`, so both writes of a rejection go through the same
+  transaction; the in-memory implementation snapshots and restores state on
+  throw, giving the double real rollback semantics.
+- **Domain review types**: `ReviewStatus`, `REVIEW_STATUSES`, `isReviewStatus`,
+  `isReviewed`. `analysisRevision` identifies the persisted *result* — it starts
+  at 1 and increments only on a successful refresh, so a failed refresh leaves
+  it unchanged.
+- **12 new tests**: 8 live-PostgreSQL (partial-index behaviour across five
+  cases, transaction commit and rollback, review-column round-trip) and 4 for
+  the in-memory transaction double.
+
+### Not included (deliberately)
+
+- No `approve` / `reject` service methods, no audit events, no HTTP surface and
+  no UI — Phase 3B-1b onward.
+- Audit atomicity is **not** covered by `ReviewTransaction`; it remains the
+  transactional-outbox item in `docs/decisions/TODO.md`.
+
+## [phase-3a3-complete] — Phase 3A-3: analysis HTTP endpoints
+
+Merged in PR #8 as `e3fcc7410052ded01e936f75b00dbec239ac2e3e`.
+Tagged `phase-3a3-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Closes Phase 3A — see
 `docs/phase-3a3-completion.md` and `docs/api-changes-phase-3a3.md`.
 
 ### Added

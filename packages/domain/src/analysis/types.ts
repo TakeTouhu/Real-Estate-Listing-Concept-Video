@@ -74,6 +74,26 @@ export interface DetectedObject {
  * normalized to 0..1. Low-confidence classification must be confirmed by a
  * human before generation (enforced in Phase 3B).
  */
+/**
+ * Outcome of the mandatory human review of one analysis revision.
+ *
+ * A decision is immutable for the revision it was made against: once APPROVED
+ * or REJECTED, it cannot be edited. Refreshing the analysis produces a new
+ * revision with the review state cleared, which is the only way to review the
+ * same asset again.
+ */
+export type ReviewStatus = "UNREVIEWED" | "APPROVED" | "REJECTED";
+
+export const REVIEW_STATUSES: readonly ReviewStatus[] = [
+  "UNREVIEWED",
+  "APPROVED",
+  "REJECTED",
+];
+
+export function isReviewStatus(value: unknown): value is ReviewStatus {
+  return typeof value === "string" && (REVIEW_STATUSES as readonly string[]).includes(value);
+}
+
 export interface AssetAnalysis {
   readonly id: string;
   readonly organizationId: string;
@@ -90,6 +110,15 @@ export interface AssetAnalysis {
   readonly safetyFlags: readonly SafetyFlag[];
   readonly suggestedOrder: number | null;
   readonly failureReason: string | null;
+  /**
+   * Identifies the persisted analysis *result*, not the attempt. Starts at 1
+   * for the first successful analysis and increments only on a successful
+   * refresh; a failed refresh leaves it unchanged.
+   */
+  readonly analysisRevision: number;
+  readonly reviewStatus: ReviewStatus;
+  /** Reviewer's stated reason. Required for rejection, optional for approval. */
+  readonly reviewNote: string | null;
   readonly reviewedBy: string | null;
   readonly reviewedAt: Date | null;
   readonly createdAt: Date;
@@ -109,4 +138,9 @@ export function hasBlockingFlag(analysis: AssetAnalysis): boolean {
 
 export function isRoomType(value: unknown): value is RoomType {
   return typeof value === "string" && (ROOM_TYPES as readonly string[]).includes(value);
+}
+
+/** True once a decision has been recorded against the current revision. */
+export function isReviewed(analysis: AssetAnalysis): boolean {
+  return analysis.reviewStatus !== "UNREVIEWED";
 }

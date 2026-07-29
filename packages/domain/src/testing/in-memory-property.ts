@@ -46,6 +46,17 @@ export class InMemoryMediaAssetRepository implements MediaAssetRepository {
   private readonly byId = new Map<string, MediaAsset>();
   constructor(private readonly clock: Clock) {}
 
+  /** Test-only: capture state so a transaction double can roll back. */
+  snapshot(): Map<string, MediaAsset> {
+    return new Map(this.byId);
+  }
+
+  /** Test-only: discard writes made since {@link snapshot}. */
+  restore(state: Map<string, MediaAsset>): void {
+    this.byId.clear();
+    for (const [id, row] of state) this.byId.set(id, row);
+  }
+
   create(input: Omit<MediaAsset, "createdAt" | "updatedAt">): Promise<MediaAsset> {
     const now = this.clock.now();
     const asset: MediaAsset = { ...input, createdAt: now, updatedAt: now };

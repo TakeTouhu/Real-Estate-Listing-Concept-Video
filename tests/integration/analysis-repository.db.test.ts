@@ -33,6 +33,9 @@ function analysisRow(id: string, assetId: string, organizationId = ORG_A) {
     safetyFlags: [],
     suggestedOrder: null,
     failureReason: null,
+    analysisRevision: 1,
+    reviewStatus: "UNREVIEWED" as const,
+    reviewNote: null,
     reviewedBy: null,
     reviewedAt: null,
   };
