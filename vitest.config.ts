@@ -8,6 +8,12 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        // apps/web uses "@/..." for its own source; mirror its tsconfig path so
+        // route handlers can be exercised by tests.
+        find: /^@\/(.+)$/,
+        replacement: resolve(rootDir, "apps/web/src/$1"),
+      },
+      {
         // Subpath exports (e.g. "@app/domain/testing") resolve to their folder
         // barrel. Must precede the bare-package rule.
         find: /^@app\/([^/]+)\/(.+)$/,

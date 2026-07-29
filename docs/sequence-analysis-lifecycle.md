@@ -1,10 +1,10 @@
 # Analysis Lifecycle — Sequence Diagram
 
-Version: 1.2
-Status: describes **implemented** behaviour through Phase 3A-2c. The contract
+Version: 1.3
+Status: describes **implemented** behaviour through Phase 3A-3. The contract
 and provider layer shipped in 3A-1, persistence in 3A-2a, the orchestrating
 `AnalysisService` in 3A-2b, and refresh, duplicate grouping, suggested order and
-the read methods in 3A-2c. Steps marked **3A-3** (HTTP endpoints) and **3B**
+the read methods in 3A-2c, and the HTTP endpoints in 3A-3. Steps marked **3B**
 (review UI) are labelled so the diagram is not read as describing more than
 currently ships.
 
@@ -14,6 +14,7 @@ currently ships.
 sequenceDiagram
   autonumber
   actor U as Creator
+  participant R as Route handler<br/>(3A-3, thin adapter)
   participant AS as AnalysisService<br/>(3A-2b)
   participant AZ as authorizeOrganization
   participant AR as MediaAsset repository
@@ -23,7 +24,9 @@ sequenceDiagram
   participant N as Normalization + rules<br/>(3A-1)
   participant AL as AuditLog
 
-  U->>AS: analyzeAsset(org, assetId, {refresh?})
+  U->>R: POST /analysis or /analysis/refresh
+  Note over R: Authenticate (session), validate the shape of<br/>organizationId, delegate. No business decision<br/>is taken in the web layer.
+  R->>AS: analyzeAsset(org, assetId, {refresh?})
   AS->>AZ: require membership + property:write
   AZ-->>AS: AuthContext (else FORBIDDEN)
   AS->>AR: findById(org, assetId)
@@ -32,7 +35,8 @@ sequenceDiagram
 
   alt SUCCEEDED record exists and refresh not requested
     NR-->>AS: existing record
-    AS-->>U: existing record (idempotent — provider NOT called)
+    AS-->>R: existing record (idempotent — provider NOT called)
+    R-->>U: 200 + AnalysisDto
   else no record, PENDING/FAILED record, or refresh requested
     AS->>NR: create, or reset an existing row, as PENDING
     Note over AS,NR: Reserved before the provider call, so a crash<br/>leaves a visible PENDING row. If a concurrent<br/>insert wins the unique index on assetId, this<br/>request adopts that row instead of creating<br/>a second one.
@@ -43,7 +47,8 @@ sequenceDiagram
     alt bytes missing
       AS->>NR: status = FAILED (sanitized reason)
       AS->>AL: analysis.failed
-      AS-->>U: FAILED record
+      AS-->>R: FAILED record
+      R-->>U: 200 + AnalysisDto (status FAILED)
     else bytes available
       AS->>P: analyze({assetId, bytes, mime, w, h, perceptualHash})
 
@@ -52,7 +57,8 @@ sequenceDiagram
         AS->>P: normalizeError(error)
         AS->>NR: status = FAILED (messageSanitized)
         AS->>AL: analysis.failed
-        AS-->>U: FAILED record
+        AS-->>R: FAILED record
+        R-->>U: 200 + AnalysisDto (status FAILED)
       else provider returns
         P->>N: normalizeAnalysisResult(raw)
         Note over N: unknown room → OTHER/0 confidence;<br/>scores clamped 0..1; non-finite → 0;<br/>objects ≤50, flags ≤20
@@ -68,7 +74,9 @@ sequenceDiagram
         AS->>NR: status = SUCCEEDED (+ scores, flags, group, order)
         Note over AS,AL: The row is persisted BEFORE its audit entry. An<br/>audit failure therefore returns an error while the<br/>analysis stays SUCCEEDED — an intentional<br/>consistency boundary, not atomicity.
         AS->>AL: analysis.succeeded
-        AS-->>U: SUCCEEDED record
+        AS-->>R: SUCCEEDED record
+        R-->>U: 200 + AnalysisDto
+        Note over R,U: The DTO omits organizationId, the provider<br/>name and the review columns; failureReason is<br/>the normalized message, never vendor text.
       end
     end
   end
@@ -104,7 +112,8 @@ stateDiagram-v2
 | `refresh` re-run with stale-state clearing | 3A-2c |
 | Duplicate grouping and `suggestedOrder` persisted | 3A-2c |
 | Read methods `listForProperty` / `getForAsset` (read-level authorization) | 3A-2c |
-| Analysis HTTP endpoints | ⏭ 3A-3 |
+| Analysis HTTP endpoints (thin adapters) | 3A-3 |
+| Rate limiting on the analysis endpoints | ⏭ cross-cutting, see TODO |
 | Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |
 
 ## Low confidence and blocking findings

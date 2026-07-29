@@ -6,3 +6,9 @@
  * business logic yet.
  */
 export const PACKAGE_NAME = "@app/ai-providers";
+
+export {
+  DeterministicImageAnalysisProvider,
+  type DeterministicAnalysisProviderOptions,
+} from "./deterministic-analysis-provider";
+export { createImageAnalysisProvider } from "./factory";

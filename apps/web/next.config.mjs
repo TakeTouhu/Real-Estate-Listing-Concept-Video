@@ -9,6 +9,7 @@ const nextConfig = {
     "@app/domain",
     "@app/database",
     "@app/storage",
+    "@app/ai-providers",
   ],
   // Native/binary packages must not be bundled by the server compiler.
   serverExternalPackages: ["@prisma/client", ".prisma/client", "sharp"],

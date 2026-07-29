@@ -80,6 +80,18 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       the event id). The outbox generalizes to credit settlement and provider
       webhooks in Phases 4–6, so decide it once, at the persistence layer, rather
       than per service.
+- [ ] **Add rate limiting as one cross-cutting milestone.** `CLAUDE.md` requires
+      rate-limiting login, uploads, generation and billing; none of them is
+      limited today, and Phase 3A-3 deliberately did not add it for the analysis
+      endpoints alone, because protecting one of four surfaces reads as
+      protection without being it. Needs a shared limiter (per organization and
+      per IP, with a store that survives multiple instances) applied to
+      `/api/auth/*`, the upload routes, the analysis `POST` routes, and
+      generation when it lands in Phase 4.
+- [ ] **Decide whether analysis should run in the request or on the queue.**
+      Phase 3A-3 runs it synchronously, which is fine for the offline
+      deterministic adapter but not for a real vision vendor. Settle this before
+      any vendor integration; it pairs with the Phase 4 job queue.
 - [ ] Deduplicate concurrent analysis work. Since Phase 3A-2b the unique index
       on `asset_analyses.assetId` guarantees a single row and convergent
       results, but two concurrent requests for the same asset each perform their

@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@app/ai-providers": "workspace:*",
     "@app/database": "workspace:*",
     "@app/domain": "workspace:*",
     "@app/observability": "workspace:*",

@@ -3,11 +3,55 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3A-2c: refresh, duplicate grouping, ordering, reads
+## [Unreleased] — Phase 3A-3: analysis HTTP endpoints
 
-Under review. Not merged. Fourth Phase 3A milestone; completes
-`AnalysisService` to the full Phase 3A-2 contract — see
-`docs/phase-3a2c-completion.md`.
+Under review. Not merged. Final Phase 3A milestone — see
+`docs/phase-3a3-completion.md` and `docs/api-changes-phase-3a3.md`.
+
+### Added
+
+- **Four analysis endpoints**, making `AnalysisService` reachable from the web
+  app for the first time:
+  - `POST /api/properties/{propertyId}/assets/{assetId}/analysis`
+  - `POST /api/properties/{propertyId}/assets/{assetId}/analysis/refresh`
+  - `GET  /api/properties/{propertyId}/assets/{assetId}/analysis`
+  - `GET  /api/properties/{propertyId}/analyses`
+- **Analysis DTO** that omits `organizationId`, the internal `provider` name and
+  the unwritten review columns, and adds `lowConfidence` / `hasBlockingFlag`
+  derived server-side so clients cannot drift from the documented thresholds.
+- **`@app/ai-providers` barrel exports** for `DeterministicImageAnalysisProvider`
+  and `createImageAnalysisProvider`. The barrel still held only the Phase 0
+  placeholder, so the adapter shipped in 3A-1 was unreachable outside its package.
+- **13 route tests** that stub only session resolution and run against a real
+  `AnalysisService`, covering idempotency, refresh, eligibility, authentication,
+  authorization, tenant isolation, validation, and response hygiene.
+
+### Notes
+
+- Route handlers are thin adapters: authenticate, validate shape, delegate, map.
+  No business decision lives in the web layer, and `AnalysisService` is unchanged
+  by this milestone.
+- `organizationId` is caller-supplied and membership-verified, matching the
+  Phase 1/2 convention — the session has no active-organization concept. The
+  convention is recorded in **ADR-0010 — organization context resolution**.
+- `POST` returns `200` rather than `201`, and a non-`READY` asset is `422` rather
+  than `409`: distinguishing those cases in the route would require it to
+  interpret why the service refused. See `docs/api-changes-phase-3a3.md`.
+
+### Not included (deliberately)
+
+- **No rate limiting.** No rate limiter exists anywhere in the codebase yet;
+  adding one for analysis alone would leave login, registration and upload
+  unprotected. Recorded in `docs/decisions/TODO.md` as a cross-cutting milestone.
+- No review UI or approval endpoints (Phase 3B), no Prisma schema change, and no
+  real vision provider (ADR-0009).
+
+## [phase-3a2c-complete] — Phase 3A-2c: refresh, duplicate grouping, ordering, reads
+
+Merged in PR #7 as `e49ae6aa3466fdeaf8d616084c7163a15f9466f5`.
+Tagged `phase-3a2c-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Completes `AnalysisService` to the full Phase 3A-2
+contract — see `docs/phase-3a2c-completion.md`.
 
 ### Added
 

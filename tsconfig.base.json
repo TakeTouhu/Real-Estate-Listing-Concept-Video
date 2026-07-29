@@ -28,7 +28,9 @@
       "@app/database": ["./packages/database/src/index.ts"],
       "@app/storage": ["./packages/storage/src/index.ts"],
       "@app/queue": ["./packages/queue/src/index.ts"],
-      "@app/ai-providers": ["./packages/ai-providers/src/index.ts"]
+      "@app/ai-providers": ["./packages/ai-providers/src/index.ts"],
+      "@app/domain/testing": ["./packages/domain/src/testing/index.ts"],
+      "@/*": ["./apps/web/src/*"]
     }
   }
 }

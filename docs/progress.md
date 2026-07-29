@@ -79,8 +79,9 @@ commit. None has been moved, overwritten, or reused.
 >                refs/tags/phase-2-complete \
 >                refs/tags/phase-3a1-complete \
 >                refs/tags/phase-3a2a-complete \
->                refs/tags/phase-3a2b-complete
-> git ls-remote --tags origin   # verify all six appear
+>                refs/tags/phase-3a2b-complete \
+>                refs/tags/phase-3a2c-complete
+> git ls-remote --tags origin   # verify all seven appear
 > ```
 >
 > Local tag records (target verified against the merge commit in each case):
@@ -90,6 +91,7 @@ commit. None has been moved, overwritten, or reused.
 > | `phase-3a1-complete` | `af4154f8192ccdcdf96d88c99aeb6119cc7189f5` | `a2bbf473512c8f0c0df4121b1111e66b08699dd7` |
 > | `phase-3a2a-complete` | `00e9f10910a3bf2f255a45a67cce133b7b857af7` | `8d1bed31e4d3744865d1a09a1fc08feb3da3e16f` |
 > | `phase-3a2b-complete` | `546823e04b7dded1ed62644d424080689bab46f9` | `40580866469b3d891f719cb9d83f17bf8b692081` |
+> | `phase-3a2c-complete` | `34d0a211e2d65bcfd0edf7bf83aad1e46093793d` | `e49ae6aa3466fdeaf8d616084c7163a15f9466f5` |
 
 ## Phase reports
 
@@ -104,11 +106,11 @@ commit. None has been moved, overwritten, or reused.
 | Architecture diagram | `docs/architecture.md` |
 | Entity-relationship diagram | `docs/er-diagram.md` |
 | Critical sequence diagram | `docs/sequence-upload-lifecycle.md`, `docs/sequence-analysis-lifecycle.md` |
-| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md` |
+| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md` |
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md` |
 
 ## Known deviation
 
@@ -131,8 +133,8 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3A-1 | Analysis contracts + deterministic offline provider | 869 | **Merged** (PR #4, `a2bbf47`) |
 | 3A-2a | `asset_analyses` persistence + live PostgreSQL CI + DB integration tests | 382 | **Merged** (PR #5, `8d1bed3`) |
 | 3A-2b | `AnalysisService` + in-memory double + failure-consistency and retry-safety tests | 826 (estimated 509 — accepted as a one-time size exception) | **Merged** (PR #6, `4058086`) |
-| 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | 333 (estimated ~290) | In review |
-| 3A-3 | Analysis HTTP endpoints | ~350 (estimate) | Not started |
+| 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | 333 (estimated ~290) | **Merged** (PR #7, `e49ae6a`) |
+| 3A-3 | Analysis HTTP endpoints | 571 (estimated ~445 — over target, disclosed) | In review |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 
@@ -145,4 +147,4 @@ verified. A milestone PR never receives a phase tag.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0009, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0010, plus `docs/decisions/TODO.md` for open items.
