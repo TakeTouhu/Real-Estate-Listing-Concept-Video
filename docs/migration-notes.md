@@ -26,6 +26,7 @@ required checks (`pnpm check`) do **not** need a database.
 | 1 | `00000000000000_init` | 1 | Identity foundation |
 | 2 | `00000000000001_phase2_properties_media` | 2 | Properties + media assets |
 | 3 | `00000000000002_phase3a2_asset_analysis` | 3A-2a | Asset analysis results |
+| 4 | `00000000000003_phase3b1a_review_state` | 3B-1a | Human-review state |
 
 ### 1 — `00000000000000_init` (Phase 1)
 
@@ -93,6 +94,52 @@ Prisma does not generate down-migrations; a forward fix is preferred in
 production. Dropping the table destroys analysis results only — uploaded assets
 and stored objects are untouched, and analyses can be re-derived by re-running
 the deterministic adapter.
+
+### 4 — `00000000000003_phase3b1a_review_state` (Phase 3B-1a)
+
+**Additive only. No existing column is altered, renamed, or dropped, so it is
+safe to apply to a populated database and requires no backfill.**
+
+Creates:
+
+- Enum `ReviewStatus` (`UNREVIEWED`, `APPROVED`, `REJECTED`).
+- Columns on `asset_analyses`: `reviewStatus` (NOT NULL, default `UNREVIEWED`),
+  `reviewNote` (nullable), `analysisRevision` (NOT NULL, default 1).
+- Index `asset_analyses(organizationId, reviewStatus)`.
+- **A hand-written partial unique index** (see below).
+
+Existing rows default to `UNREVIEWED` at revision 1, which is correct: nothing
+had been reviewed before this milestone.
+
+#### The hand-written partial unique index
+
+```sql
+CREATE UNIQUE INDEX "asset_analyses_org_dupgroup_approved_key"
+  ON "asset_analyses" ("organizationId", "duplicateGroup")
+  WHERE "duplicateGroup" IS NOT NULL AND "reviewStatus" = 'APPROVED';
+```
+
+It makes the database authoritative for "at most one `APPROVED` analysis per
+duplicate group", so two concurrent approvals of different members of the same
+group cannot both succeed — the loser gets a unique violation.
+
+**Prisma cannot express a partial index in `schema.prisma`** (`@@unique(...,
+where: ...)` fails `prisma validate` on 5.22), so this statement is appended to
+the generated migration by hand.
+
+Two consequences, both verified rather than assumed:
+
+- The CI drift check still passes. `prisma migrate diff --from-migrations
+  --to-schema-datamodel --exit-code` reports `No difference detected.` because
+  Prisma ignores the index it cannot represent.
+- **`prisma migrate dev` may generate a migration that drops this index**, since
+  it is invisible to the datamodel. Inspect every future generated migration for
+  a `DROP INDEX "asset_analyses_org_dupgroup_approved_key"` and remove it.
+
+**Rollback.** Purely additive:
+`DROP INDEX "asset_analyses_org_dupgroup_approved_key";`, drop the three
+columns, then `DROP TYPE "ReviewStatus";`. Dropping them destroys review
+decisions; the audit log retains the history.
 
 ### Phase 3A-1 — no migration
 

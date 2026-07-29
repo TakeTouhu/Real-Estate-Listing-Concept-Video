@@ -428,6 +428,9 @@ describe("concurrency", () => {
       safetyFlags: [],
       suggestedOrder: null,
       failureReason: null,
+      analysisRevision: 1,
+      reviewStatus: "UNREVIEWED",
+      reviewNote: null,
       reviewedBy: null,
       reviewedAt: null,
     });

@@ -23,6 +23,17 @@ export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository 
   private readonly byId = new Map<string, AssetAnalysis>();
   constructor(private readonly clock: Clock) {}
 
+  /** Test-only: capture state so a transaction double can roll back. */
+  snapshot(): Map<string, AssetAnalysis> {
+    return new Map(this.byId);
+  }
+
+  /** Test-only: discard writes made since {@link snapshot}. */
+  restore(state: Map<string, AssetAnalysis>): void {
+    this.byId.clear();
+    for (const [id, row] of state) this.byId.set(id, row);
+  }
+
   create(input: Omit<AssetAnalysis, "createdAt" | "updatedAt">): Promise<AssetAnalysis> {
     if ([...this.byId.values()].some((a) => a.assetId === input.assetId)) {
       return Promise.reject(new DuplicateAnalysisError(input.assetId));

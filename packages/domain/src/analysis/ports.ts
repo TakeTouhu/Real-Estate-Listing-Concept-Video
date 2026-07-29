@@ -1,3 +1,4 @@
+import type { MediaAssetRepository } from "../property/ports";
 import type { AssetAnalysis, DetectedObject, RoomType, SafetyFlag } from "./types";
 
 /**
@@ -66,4 +67,27 @@ export interface AssetAnalysisRepository {
     assetIds: readonly string[],
   ): Promise<AssetAnalysis[]>;
   update(analysis: AssetAnalysis): Promise<AssetAnalysis>;
+}
+
+/** The repositories a review decision writes to, bound to one transaction. */
+export interface ReviewRepositories {
+  readonly analyses: AssetAnalysisRepository;
+  readonly assets: MediaAssetRepository;
+}
+
+/**
+ * Runs a review decision's writes inside a single database transaction.
+ *
+ * Rejecting an asset updates two rows — the analysis review state and the
+ * asset's status — and they must not partially commit. Everything inside `run`
+ * either commits together or not at all; a throw rolls the whole unit back and
+ * propagates.
+ *
+ * The audit entry is deliberately **outside** this boundary. Audit atomicity
+ * needs a shared transaction with the audit table or a transactional outbox,
+ * which remains an open item in `docs/decisions/TODO.md`; this port does not
+ * provide it and must not be described as if it does.
+ */
+export interface ReviewTransaction {
+  run<T>(fn: (repos: ReviewRepositories) => Promise<T>): Promise<T>;
 }

@@ -1,6 +1,6 @@
 # Entity-Relationship Diagram
 
-Version: 1.2 (as implemented through Phase 3A-2a)
+Version: 1.3 (as implemented through Phase 3B-1a)
 Source of truth: `packages/database/prisma/schema.prisma`
 Status: Describes **implemented** tables only. Entities from
 `docs/DataModel.md` that belong to later phases are listed at the bottom.
@@ -123,6 +123,9 @@ erDiagram
     json   safetyFlags "bounded list, BLOCKING|WARNING"
     int    suggestedOrder "nullable, walkthrough rank"
     string failureReason "nullable, sanitized"
+    int    analysisRevision "persisted result, increments on successful refresh"
+    enum   reviewStatus "UNREVIEWED|APPROVED|REJECTED"
+    string reviewNote "nullable, required for rejection"
     string reviewedBy "nullable, human approver"
     datetime reviewedAt "nullable"
     datetime createdAt
@@ -151,6 +154,7 @@ erDiagram
   `media_assets(organizationId, sha256)`,
   `asset_analyses(organizationId, status)`,
   `asset_analyses(organizationId, duplicateGroup)`,
+  `asset_analyses(organizationId, reviewStatus)`,
   `audit_logs(organizationId)`, `audit_logs(createdAt)`,
   `memberships(userId)`, `invitations(organizationId, email)`,
   `sessions(userId)`.
@@ -158,6 +162,12 @@ erDiagram
   same object.
 - `asset_analyses.assetId` is unique, so an asset can never accumulate more than
   one analysis row; a re-run updates the existing row in place.
+- **Partial unique index** `asset_analyses_org_dupgroup_approved_key` on
+  `(organizationId, duplicateGroup) WHERE duplicateGroup IS NOT NULL AND
+  reviewStatus = 'APPROVED'`. The database is authoritative for "at most one
+  approved analysis per duplicate group", so concurrent approvals of two members
+  of a group cannot both succeed. Prisma cannot express a partial index, so it
+  is hand-written in the migration — see `docs/migration-notes.md`.
 - Cascade behavior: deleting an organization cascades memberships, invitations,
   and properties (and thus assets, and thus analyses); `audit_logs.organizationId`
   is `SetNull` so audit history survives.

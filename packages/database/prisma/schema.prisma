@@ -68,6 +68,12 @@ enum AnalysisStatus {
   FAILED
 }
 
+enum ReviewStatus {
+  UNREVIEWED
+  APPROVED
+  REJECTED
+}
+
 enum RoomType {
   LIVING_ROOM
   DINING_ROOM
@@ -227,6 +233,9 @@ model AssetAnalysis {
   safetyFlags     Json           @default("[]")
   suggestedOrder  Int?
   failureReason   String?
+  analysisRevision Int           @default(1)
+  reviewStatus    ReviewStatus   @default(UNREVIEWED)
+  reviewNote      String?
   reviewedBy      String?
   reviewedAt      DateTime?
   createdAt       DateTime       @default(now())
@@ -235,6 +244,10 @@ model AssetAnalysis {
 
   @@index([organizationId, status])
   @@index([organizationId, duplicateGroup])
+  @@index([organizationId, reviewStatus])
+  // A partial unique index enforcing at most one APPROVED analysis per
+  // duplicate group is added by raw SQL in the migration: Prisma cannot express
+  // `WHERE` on an index. See docs/migration-notes.md.
   @@map("asset_analyses")
 }
 
