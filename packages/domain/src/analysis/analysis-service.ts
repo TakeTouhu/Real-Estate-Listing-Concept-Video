@@ -7,7 +7,13 @@ import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
 import { deriveQualityFlags } from "./normalization";
 import type { AssetAnalysisRepository, ImageAnalysisProvider } from "./ports";
+import { resolveDuplicateGroup, roomOrderRank, type DuplicateCandidate } from "./rules";
 import type { AssetAnalysis, SafetyFlag } from "./types";
+
+export interface AnalyzeOptions {
+  /** Recompute an analysis that already SUCCEEDED, reusing the same row. */
+  readonly refresh?: boolean;
+}
 
 export interface AnalysisServiceDeps {
   /** Supplies membership lookup (authorization) and the audit sink. */
@@ -52,23 +58,28 @@ export class AnalysisService {
 
   /**
    * Analyze one READY asset. Safe to call repeatedly: at most one analysis row
-   * exists per asset, and a completed analysis is never recomputed.
+   * exists per asset, and a completed analysis is never recomputed unless
+   * `refresh` is requested.
    */
   async analyzeAsset(
     actorUserId: string,
     organizationId: string,
     assetId: string,
+    options: AnalyzeOptions = {},
   ): Promise<AssetAnalysis> {
     await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
     const asset = await this.requireEligibleAsset(organizationId, assetId);
 
-    const reserved = await this.reserve(organizationId, assetId);
+    const refresh = options.refresh === true;
+    const reserved = await this.reserve(organizationId, assetId, refresh);
     if (reserved.status === "SUCCEEDED") return reserved;
 
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
-      action: AnalysisAuditAction.AnalysisRequested,
+      action: refresh
+        ? AnalysisAuditAction.AnalysisRefreshed
+        : AnalysisAuditAction.AnalysisRequested,
       resourceType: "asset_analysis",
       resourceId: reserved.id,
       metadata: { assetId, provider: this.deps.provider.name },
@@ -105,6 +116,12 @@ export class AnalysisService {
       }),
     );
 
+    const duplicateGroup = resolveDuplicateGroup(
+      asset.perceptualHash,
+      assetId,
+      await this.duplicateCandidates(organizationId, assetId),
+    );
+
     // Single terminal write; if it throws, the row stays PENDING and a retry
     // recomputes the same values.
     const succeeded = await this.deps.analyses.update({
@@ -115,8 +132,10 @@ export class AnalysisService {
       qualityScore: result.qualityScore,
       brightnessScore: result.brightnessScore,
       blurScore: result.blurScore,
+      duplicateGroup,
       detectedObjects: result.detectedObjects,
       safetyFlags,
+      suggestedOrder: roomOrderRank(result.roomType),
       failureReason: null,
       updatedAt: this.deps.clock.now(),
     });
@@ -139,19 +158,34 @@ export class AnalysisService {
 
   /**
    * Obtain the row to work on: an existing SUCCEEDED row (returned as-is by the
-   * caller), or one reserved as PENDING.
+   * caller, unless refreshing), or one reserved as PENDING.
    *
    * The unique index on `assetId` is the concurrency control. When two requests
    * race, the loser's insert is rejected and it adopts the winner's row instead
    * of creating a second one.
    */
-  private async reserve(organizationId: string, assetId: string): Promise<AssetAnalysis> {
+  private async reserve(
+    organizationId: string,
+    assetId: string,
+    refresh: boolean,
+  ): Promise<AssetAnalysis> {
     const existing = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (existing) {
-      if (existing.status === "SUCCEEDED") return existing;
+      if (existing.status === "SUCCEEDED" && !refresh) return existing;
+      // Stale result fields are cleared as the row is reserved, so a refresh
+      // that then fails cannot leave last run's values behind on a FAILED row.
       return this.deps.analyses.update({
         ...existing,
         status: "PENDING",
+        roomType: null,
+        confidence: null,
+        qualityScore: null,
+        brightnessScore: null,
+        blurScore: null,
+        duplicateGroup: null,
+        detectedObjects: [],
+        safetyFlags: [],
+        suggestedOrder: null,
         failureReason: null,
         updatedAt: this.deps.clock.now(),
       });
@@ -183,6 +217,59 @@ export class AnalysisService {
       if (!concurrent) throw error;
       return concurrent;
     }
+  }
+
+  /**
+   * Analyses for a property's assets. Read-level authorization: any member of
+   * the organization may read, including REVIEWER, who cannot start an analysis.
+   */
+  async listForProperty(
+    actorUserId: string,
+    organizationId: string,
+    propertyId: string,
+  ): Promise<AssetAnalysis[]> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    const assets = await this.deps.assets.listByProperty(organizationId, propertyId);
+    return this.deps.analyses.listByAssetIds(
+      organizationId,
+      assets.map((a) => a.id),
+    );
+  }
+
+  /** One asset's analysis, organization-scoped. Read-level authorization. */
+  async getForAsset(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+  ): Promise<AssetAnalysis> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
+    if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    return analysis;
+  }
+
+  /**
+   * Siblings eligible for duplicate comparison: same organization, carrying a
+   * perceptual hash, excluding the subject asset. Both the asset lookup and the
+   * analysis lookup are organization-scoped, so another tenant's photo can never
+   * influence a duplicate group.
+   */
+  private async duplicateCandidates(
+    organizationId: string,
+    selfAssetId: string,
+  ): Promise<DuplicateCandidate[]> {
+    const hashed = await this.deps.assets.listWithPerceptualHash(organizationId);
+    const siblings = hashed.filter((a) => a.id !== selfAssetId);
+    const analyses = await this.deps.analyses.listByAssetIds(
+      organizationId,
+      siblings.map((a) => a.id),
+    );
+    const groups = new Map(analyses.map((a) => [a.assetId, a.duplicateGroup]));
+    return siblings.map((a) => ({
+      assetId: a.id,
+      perceptualHash: a.perceptualHash,
+      duplicateGroup: groups.get(a.id) ?? null,
+    }));
   }
 
   /** Only READY assets are eligible; anything else is rejected explicitly. */

@@ -10,6 +10,7 @@ import type { ObjectStorage } from "../property/ports";
 import { AnalysisService } from "./analysis-service";
 import { analysisProviderError } from "./normalization";
 import type { AnalysisRequest, AnalysisResult, AssetAnalysisRepository, ImageAnalysisProvider } from "./ports";
+import type { AssetAnalysis } from "./types";
 
 const PASSWORD = "password-123456";
 const STORAGE_KEY = "org/o/properties/p/assets/a/normalized.jpg";
@@ -19,7 +20,7 @@ class StubProvider implements ImageAnalysisProvider {
   readonly name = "stub";
   calls = 0;
   failWith: unknown = null;
-  constructor(private readonly result: AnalysisResult) {}
+  constructor(public result: AnalysisResult) {}
   analyze(_request: AnalysisRequest): Promise<AnalysisResult> {
     this.calls += 1;
     if (this.failWith) return Promise.reject(this.failWith);
@@ -130,7 +131,7 @@ async function seedAsset(
   return assets.create({
     id: overrides.id ?? "ast_1",
     organizationId,
-    propertyId: "prp_1",
+    propertyId: overrides.propertyId ?? "prp_1",
     storageKey: overrides.storageKey ?? STORAGE_KEY,
     originalFilename: "photo.jpg",
     mimeType: "image/jpeg",
@@ -138,7 +139,8 @@ async function seedAsset(
     width: 1600,
     height: 1200,
     sha256: "a".repeat(64),
-    perceptualHash: "ffffffffffffffff",
+    perceptualHash:
+      overrides.perceptualHash === undefined ? "ffffffffffffffff" : overrides.perceptualHash,
     status: overrides.status ?? "READY",
     failureReason: null,
     thumbnailKey: null,
@@ -511,5 +513,231 @@ describe("authorization and tenant isolation", () => {
     const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
 
     expect(await fx.analyses.findByAssetId(other.id, fx.assetId)).toBeNull();
+  });
+});
+
+// --- Phase 3A-2c -----------------------------------------------------------
+
+/** Analyze a freshly seeded asset, returning its analysis. */
+async function analyzeSeeded(
+  id: string,
+  overrides: Partial<MediaAsset> = {},
+): Promise<AssetAnalysis> {
+  const asset = await seedAsset(fx.assets, fx.orgId, fx.ownerId, {
+    id,
+    storageKey: `key/${id}`,
+    ...overrides,
+  });
+  await fx.storage.putObject(asset.storageKey, new Uint8Array([9, 9, 9, 9]));
+  return fx.service.analyzeAsset(fx.ownerId, fx.orgId, asset.id);
+}
+
+describe("refresh", () => {
+  it("calls the provider again and reuses the same analysis row", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const refreshed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+
+    expect(fx.provider.calls).toBe(2);
+    expect(refreshed.id).toBe(first.id);
+    expect(refreshed.status).toBe("SUCCEEDED");
+    expect(fx.analyses.all()).toHaveLength(1);
+    expect(actions(fx)).toContain("analysis.refreshed");
+  });
+
+  it("remains idempotent without refresh, leaving the provider uncalled", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const again = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    expect(fx.provider.calls).toBe(1);
+    expect(again.status).toBe("SUCCEEDED");
+    expect(actions(fx)).not.toContain("analysis.refreshed");
+  });
+
+  it("ends in FAILED with no stale result surviving a failed refresh", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(first.roomType).toBe("KITCHEN");
+    expect(first.suggestedOrder).not.toBeNull();
+
+    fx.provider.failWith = new Error("timeout");
+    const failed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+
+    expect(failed.id).toBe(first.id);
+    expect(failed.status).toBe("FAILED");
+    expect(failed.failureReason).toBe("Analysis timed out");
+    // Nothing from the previous successful run may survive.
+    expect(failed.roomType).toBeNull();
+    expect(failed.confidence).toBeNull();
+    expect(failed.qualityScore).toBeNull();
+    expect(failed.duplicateGroup).toBeNull();
+    expect(failed.suggestedOrder).toBeNull();
+    expect(failed.detectedObjects).toEqual([]);
+    expect(failed.safetyFlags).toEqual([]);
+  });
+
+  it("clears a previous failure reason when a later refresh succeeds", async () => {
+    fx.provider.failWith = new Error("timeout");
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    fx.provider.failWith = null;
+
+    const recovered = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+    expect(recovered.status).toBe("SUCCEEDED");
+    expect(recovered.failureReason).toBeNull();
+    expect(fx.analyses.all()).toHaveLength(1);
+  });
+});
+
+describe("duplicate grouping", () => {
+  it("starts a new group for the first analyzed asset", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(first.duplicateGroup).toBe(`dup_${fx.assetId}`);
+  });
+
+  it("puts identical perceptual hashes in the same group", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const twin = await analyzeSeeded("ast_twin", { perceptualHash: "ffffffffffffffff" });
+
+    expect(twin.duplicateGroup).toBe(first.duplicateGroup);
+  });
+
+  it("keeps a distant perceptual hash in its own group", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const distinct = await analyzeSeeded("ast_other", { perceptualHash: "0000000000000000" });
+
+    expect(distinct.duplicateGroup).toBe("dup_ast_other");
+  });
+
+  it("leaves duplicateGroup null when the asset has no perceptual hash", async () => {
+    const unhashed = await analyzeSeeded("ast_nohash", { perceptualHash: null });
+    expect(unhashed.duplicateGroup).toBeNull();
+  });
+
+  it("ignores an identical hash owned by another organization", async () => {
+    const orgs = new OrganizationService(fx.deps);
+    const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
+    const foreign = await seedAsset(fx.assets, other.id, fx.ownerId, {
+      id: "ast_foreign_twin",
+      storageKey: "key/foreign_twin",
+      perceptualHash: "ffffffffffffffff",
+    });
+    await fx.storage.putObject(foreign.storageKey, new Uint8Array([7, 7, 7, 7]));
+    const foreignAnalysis = await fx.service.analyzeAsset(fx.ownerId, other.id, foreign.id);
+
+    // Same hash, different tenant: our asset must not join their group.
+    const mine = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(mine.duplicateGroup).toBe(`dup_${fx.assetId}`);
+    expect(mine.duplicateGroup).not.toBe(foreignAnalysis.duplicateGroup);
+  });
+});
+
+describe("suggested order", () => {
+  it("ranks by the documented room sequence", async () => {
+    fx.provider.result = { ...RESULT, roomType: "EXTERIOR" };
+    const exterior = await analyzeSeeded("ast_ext", { perceptualHash: "0000000000000001" });
+    fx.provider.result = { ...RESULT, roomType: "LIVING_ROOM" };
+    const living = await analyzeSeeded("ast_liv", { perceptualHash: "0000000000000010" });
+    fx.provider.result = { ...RESULT, roomType: "BEDROOM" };
+    const bedroom = await analyzeSeeded("ast_bed", { perceptualHash: "0000000000000100" });
+
+    expect(exterior.suggestedOrder).toBeLessThan(living.suggestedOrder!);
+    expect(living.suggestedOrder).toBeLessThan(bedroom.suggestedOrder!);
+  });
+
+  it("ranks OTHER after every recognized room type", async () => {
+    fx.provider.result = { ...RESULT, roomType: "OTHER" };
+    const other = await analyzeSeeded("ast_other_room", { perceptualHash: "0000000000001000" });
+    fx.provider.result = { ...RESULT, roomType: "BALCONY" };
+    const balcony = await analyzeSeeded("ast_balcony", { perceptualHash: "0000000000010000" });
+
+    expect(other.suggestedOrder).toBeGreaterThan(balcony.suggestedOrder!);
+  });
+});
+
+describe("reads", () => {
+  it("returns only the requested property's analyses, organization-scoped", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await analyzeSeeded("ast_p2", { propertyId: "prp_2", perceptualHash: "0000000000100000" });
+
+    const first = await fx.service.listForProperty(fx.ownerId, fx.orgId, "prp_1");
+    expect(first.map((a) => a.assetId)).toEqual([fx.assetId]);
+
+    const second = await fx.service.listForProperty(fx.ownerId, fx.orgId, "prp_2");
+    expect(second.map((a) => a.assetId)).toEqual(["ast_p2"]);
+  });
+
+  it("returns an empty list for a property in another organization", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const orgs = new OrganizationService(fx.deps);
+    const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
+
+    expect(await fx.service.listForProperty(fx.ownerId, other.id, "prp_1")).toEqual([]);
+  });
+
+  it("returns the analysis for an asset", async () => {
+    const created = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const read = await fx.service.getForAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(read.id).toBe(created.id);
+  });
+
+  it("throws NOT_FOUND when the asset has no analysis", async () => {
+    await expect(
+      fx.service.getForAsset(fx.ownerId, fx.orgId, "ast_never_analyzed"),
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it("lets a REVIEWER read, though they may not start an analysis", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
+    const reviewer = await auth.register({
+      email: "reader@example.com",
+      password: PASSWORD,
+      name: "Reader",
+    });
+    await fx.deps.repos.memberships.create({
+      organizationId: fx.orgId,
+      userId: reviewer.id,
+      role: "REVIEWER",
+    });
+
+    expect((await fx.service.getForAsset(reviewer.id, fx.orgId, fx.assetId)).assetId).toBe(
+      fx.assetId,
+    );
+    expect(await fx.service.listForProperty(reviewer.id, fx.orgId, "prp_1")).toHaveLength(1);
+    await expect(
+      fx.service.analyzeAsset(reviewer.id, fx.orgId, fx.assetId, { refresh: true }),
+    ).rejects.toThrow(/lacks permission/i);
+  });
+
+  it("denies a non-member both reads", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
+    const outsider = await auth.register({
+      email: "nobody@example.com",
+      password: PASSWORD,
+      name: "Nobody",
+    });
+
+    await expect(
+      fx.service.getForAsset(outsider.id, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/do not have access/i);
+    await expect(
+      fx.service.listForProperty(outsider.id, fx.orgId, "prp_1"),
+    ).rejects.toThrow(/do not have access/i);
+  });
+
+  it("keeps another tenant's analysis invisible", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const orgs = new OrganizationService(fx.deps);
+    const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
+
+    // Member of both organizations, but the analysis belongs to the first.
+    await expect(
+      fx.service.getForAsset(fx.ownerId, other.id, fx.assetId),
+    ).rejects.toThrow(/not found/i);
   });
 });
