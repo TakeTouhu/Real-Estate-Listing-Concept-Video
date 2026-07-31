@@ -5,6 +5,31 @@ import type {
   DetectedObject,
   SafetyFlag,
 } from "@app/domain";
+import { DuplicateApprovalConflictError } from "@app/domain";
+
+/**
+ * Translate the storage-specific uniqueness violation into the domain's neutral
+ * conflict type.
+ *
+ * Prisma reports it as P2002 and identifies the constraint by the *fields* it
+ * covers — `Unique constraint failed on the fields: (organizationId,
+ * duplicateGroup)` — not by the index name, which is invisible to the
+ * datamodel (ADR-0011). Verified against live PostgreSQL: an earlier version of
+ * this function matched the index name and silently never fired.
+ *
+ * Those two fields are unique only under the partial index guarding approved
+ * duplicate-group members, so the match is specific: the other unique
+ * constraint on this table covers `assetId` and is left to propagate.
+ */
+function translateWriteError(error: unknown): unknown {
+  if ((error as { code?: unknown }).code !== "P2002") return error;
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? "")];
+  const covers = (field: string) => fields.some((f) => f.includes(field));
+  return covers("organizationId") && covers("duplicateGroup")
+    ? new DuplicateApprovalConflictError()
+    : error;
+}
 
 function toAnalysis(r: DbAssetAnalysis): AssetAnalysis {
   return {
@@ -86,29 +111,40 @@ export function createPrismaAnalysisRepository(prisma: PrismaClient): AssetAnaly
       ).map(toAnalysis);
     },
     async update(analysis) {
-      return toAnalysis(
-        await prisma.assetAnalysis.update({
-          where: { id: analysis.id },
-          data: {
-            status: analysis.status,
-            roomType: analysis.roomType,
-            confidence: analysis.confidence,
-            qualityScore: analysis.qualityScore,
-            brightnessScore: analysis.brightnessScore,
-            blurScore: analysis.blurScore,
-            duplicateGroup: analysis.duplicateGroup,
-            detectedObjects: analysis.detectedObjects as unknown as Prisma.InputJsonValue,
-            safetyFlags: analysis.safetyFlags as unknown as Prisma.InputJsonValue,
-            suggestedOrder: analysis.suggestedOrder,
-            failureReason: analysis.failureReason,
-            analysisRevision: analysis.analysisRevision,
-            reviewStatus: analysis.reviewStatus,
-            reviewNote: analysis.reviewNote,
-            reviewedBy: analysis.reviewedBy,
-            reviewedAt: analysis.reviewedAt,
-          },
-        }),
-      );
+      try {
+        return await updateAnalysis(prisma, analysis);
+      } catch (error) {
+        throw translateWriteError(error);
+      }
     },
   };
+}
+
+async function updateAnalysis(
+  prisma: PrismaClient,
+  analysis: AssetAnalysis,
+): Promise<AssetAnalysis> {
+  return toAnalysis(
+    await prisma.assetAnalysis.update({
+      where: { id: analysis.id },
+      data: {
+        status: analysis.status,
+        roomType: analysis.roomType,
+        confidence: analysis.confidence,
+        qualityScore: analysis.qualityScore,
+        brightnessScore: analysis.brightnessScore,
+        blurScore: analysis.blurScore,
+        duplicateGroup: analysis.duplicateGroup,
+        detectedObjects: analysis.detectedObjects as unknown as Prisma.InputJsonValue,
+        safetyFlags: analysis.safetyFlags as unknown as Prisma.InputJsonValue,
+        suggestedOrder: analysis.suggestedOrder,
+        failureReason: analysis.failureReason,
+        analysisRevision: analysis.analysisRevision,
+        reviewStatus: analysis.reviewStatus,
+        reviewNote: analysis.reviewNote,
+        reviewedBy: analysis.reviewedBy,
+        reviewedAt: analysis.reviewedAt,
+      },
+    }),
+  );
 }

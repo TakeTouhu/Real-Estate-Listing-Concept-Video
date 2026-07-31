@@ -81,8 +81,9 @@ commit. None has been moved, overwritten, or reused.
 >                refs/tags/phase-3a2a-complete \
 >                refs/tags/phase-3a2b-complete \
 >                refs/tags/phase-3a2c-complete \
->                refs/tags/phase-3a3-complete
-> git ls-remote --tags origin   # verify all eight appear
+>                refs/tags/phase-3a3-complete \
+>                refs/tags/phase-3b1a-complete
+> git ls-remote --tags origin   # verify all nine appear
 > ```
 >
 > Local tag records (target verified against the merge commit in each case):
@@ -94,6 +95,7 @@ commit. None has been moved, overwritten, or reused.
 > | `phase-3a2b-complete` | `546823e04b7dded1ed62644d424080689bab46f9` | `40580866469b3d891f719cb9d83f17bf8b692081` |
 > | `phase-3a2c-complete` | `34d0a211e2d65bcfd0edf7bf83aad1e46093793d` | `e49ae6aa3466fdeaf8d616084c7163a15f9466f5` |
 > | `phase-3a3-complete` | `4c85d6d4bc67aa2f0e4485e0348f1cf3a5779457` | `e3fcc7410052ded01e936f75b00dbec239ac2e3e` |
+> | `phase-3b1a-complete` | `5537f3f41f7fe3cacb0fb5e2b57319b90a3f2af6` | `0a7818f10371bcf8072b6b8cc2f501c9b5868f97` |
 
 ## Phase reports
 
@@ -112,7 +114,7 @@ commit. None has been moved, overwritten, or reused.
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md`, `docs/phase-3b1a-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md`, `docs/phase-3b1a-completion.md`, `docs/phase-3b1b-completion.md` |
 
 ## Known deviation
 
@@ -137,8 +139,8 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3A-2b | `AnalysisService` + in-memory double + failure-consistency and retry-safety tests | 826 (estimated 509 — accepted as a one-time size exception) | **Merged** (PR #6, `4058086`) |
 | 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | 333 (estimated ~290) | **Merged** (PR #7, `e49ae6a`) |
 | 3A-3 | Analysis HTTP endpoints | 571 (estimated ~445 — accepted as a one-time exception) | **Merged** (PR #8, `e3fcc74`) |
-| 3B-1a | Review infrastructure: columns, partial unique index, `ReviewTransaction` | 489 (estimated ~312) | In review |
-| 3B-1b | Review domain logic: `approve` / `reject` | ~489 (estimate) | Not started |
+| 3B-1a | Review infrastructure: columns, partial unique index, `ReviewTransaction` | 489 (estimated ~312) | **Merged** (PR #9, `0a7818f`) |
+| 3B-1b | Review domain logic: `approve` / `reject` | 698 — 319 production + 379 tests (estimated 486 — accepted as a milestone exception) | In review |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 

@@ -13,6 +13,7 @@ import {
   createTestDeps,
   InMemoryAssetAnalysisRepository,
   InMemoryMediaAssetRepository,
+  InMemoryReviewTransaction,
 } from "@app/domain/testing";
 
 /**
@@ -173,12 +174,14 @@ beforeEach(async () => {
     propertyId: "prp_foreign",
   });
 
+  const analyses = new InMemoryAssetAnalysisRepository(deps.clock);
   analysisService.value = new AnalysisService({
     identity: deps,
     assets,
-    analyses: new InMemoryAssetAnalysisRepository(deps.clock),
+    analyses,
     storage,
     provider,
+    reviewTx: new InMemoryReviewTransaction(analyses, assets),
     clock: deps.clock,
     ids: deps.ids,
   });

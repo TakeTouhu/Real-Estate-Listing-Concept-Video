@@ -6,9 +6,14 @@ import type { MediaAssetRepository, ObjectStorage } from "../property/ports";
 import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
 import { deriveQualityFlags } from "./normalization";
-import type { AssetAnalysisRepository, ImageAnalysisProvider } from "./ports";
+import {
+  DuplicateApprovalConflictError,
+  type AssetAnalysisRepository,
+  type ImageAnalysisProvider,
+  type ReviewTransaction,
+} from "./ports";
 import { resolveDuplicateGroup, roomOrderRank, type DuplicateCandidate } from "./rules";
-import type { AssetAnalysis, SafetyFlag } from "./types";
+import { hasBlockingFlag, type ApproveInput, type AssetAnalysis, type RejectInput, type SafetyFlag } from "./types";
 
 export interface AnalyzeOptions {
   /** Recompute an analysis that already SUCCEEDED, reusing the same row. */
@@ -24,6 +29,8 @@ export interface AnalysisServiceDeps {
   readonly provider: ImageAnalysisProvider;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** Spans the two writes a rejection makes; see ReviewTransaction. */
+  readonly reviewTx: ReviewTransaction;
 }
 
 /**
@@ -124,8 +131,15 @@ export class AnalysisService {
 
     // Single terminal write; if it throws, the row stays PENDING and a retry
     // recomputes the same values.
+    //
+    // The revision advances here and only here, keyed on `refresh` rather than
+    // on the row reaching SUCCEEDED: an initial analysis and a refresh both end
+    // in SUCCEEDED, and only the latter is a new result superseding an old one.
+    // A refresh that fails never reaches this write, so it leaves the revision
+    // untouched.
     const succeeded = await this.deps.analyses.update({
       ...reserved,
+      analysisRevision: refresh ? reserved.analysisRevision + 1 : reserved.analysisRevision,
       status: "SUCCEEDED",
       roomType: result.roomType,
       confidence: result.confidence,
@@ -172,11 +186,18 @@ export class AnalysisService {
     const existing = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (existing) {
       if (existing.status === "SUCCEEDED" && !refresh) return existing;
-      // Stale result fields are cleared as the row is reserved, so a refresh
-      // that then fails cannot leave last run's values behind on a FAILED row.
+      // Stale result *and* review fields are cleared as the row is reserved, so
+      // a refresh that then fails cannot leave last run's values behind on a
+      // FAILED row, and cannot leave a decision attached to a result that no
+      // longer exists. The revision itself is not touched here — it advances
+      // only on a successful terminal write.
       return this.deps.analyses.update({
         ...existing,
         status: "PENDING",
+        reviewStatus: "UNREVIEWED",
+        reviewNote: null,
+        reviewedBy: null,
+        reviewedAt: null,
         roomType: null,
         confidence: null,
         qualityScore: null,
@@ -275,6 +296,230 @@ export class AnalysisService {
     }));
   }
 
+
+  /**
+   * Approve one analysis revision.
+   *
+   * The decision is immutable for the revision it is made against: a row that
+   * already carries a decision is refused, and only a refresh (which clears the
+   * review state and starts a new revision) makes the asset reviewable again.
+   *
+   * Duplicate groups are a soft block. When the asset's group has more than one
+   * member the caller must name `primaryAssetId`, and it must be this asset —
+   * the reviewer chooses the primary rather than approving by accident. Whether
+   * another member is *already* approved is decided by the PostgreSQL partial
+   * unique index on `(organizationId, duplicateGroup) WHERE reviewStatus =
+   * 'APPROVED'`, not by a read here: a pre-check would be a check-then-act race.
+   */
+  async approve(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+    input: ApproveInput = {},
+  ): Promise<AssetAnalysis> {
+    const { analysis, asset } = await this.requireReviewable(
+      actorUserId,
+      organizationId,
+      assetId,
+    );
+    if (hasBlockingFlag(analysis)) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "An analysis with a blocking safety finding cannot be approved; reject it instead",
+      );
+    }
+    await this.requirePrimaryChoice(organizationId, analysis, assetId, input.primaryAssetId);
+
+    const reason = optionalReason(input.reason);
+    const approved = await this.writeDecision(analysis, "APPROVED", reason, actorUserId);
+    await this.recordDecision(
+      AnalysisAuditAction.AnalysisApproved,
+      actorUserId,
+      approved,
+      asset,
+      reason,
+    );
+    return approved;
+  }
+
+  /**
+   * Reject one analysis revision and mark its asset `REJECTED`, so downstream
+   * generation excludes it through the existing status checks rather than a
+   * parallel rule.
+   *
+   * Both writes go through {@link ReviewTransaction}: they commit together or
+   * not at all. The audit entry is deliberately outside that boundary — see the
+   * class-level note and `docs/decisions/TODO.md`.
+   */
+  async reject(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+    input: RejectInput,
+  ): Promise<AssetAnalysis> {
+    const { analysis, asset } = await this.requireReviewable(
+      actorUserId,
+      organizationId,
+      assetId,
+    );
+    const reason = (input.reason ?? "").trim();
+    if (reason.length === 0) {
+      throw new AppError("VALIDATION_FAILED", "A rejection reason is required");
+    }
+
+    const now = this.deps.clock.now();
+    const rejected = await this.deps.reviewTx.run(async ({ analyses, assets }) => {
+      const updated = await analyses.update({
+        ...analysis,
+        reviewStatus: "REJECTED",
+        reviewNote: reason,
+        reviewedBy: actorUserId,
+        reviewedAt: now,
+        updatedAt: now,
+      });
+      await assets.update({ ...asset, status: "REJECTED", updatedAt: now });
+      return updated;
+    });
+
+    await this.recordDecision(
+      AnalysisAuditAction.AnalysisRejected,
+      actorUserId,
+      rejected,
+      asset,
+      reason,
+    );
+    return rejected;
+  }
+
+  /** Authorize the reviewer and load an analysis that is eligible for a decision. */
+  private async requireReviewable(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+  ): Promise<{ analysis: AssetAnalysis; asset: MediaAsset }> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video:review");
+    const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
+    if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    if (analysis.status !== "SUCCEEDED") {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        `Only a completed analysis can be reviewed (analysis is ${analysis.status})`,
+      );
+    }
+    if (analysis.reviewStatus !== "UNREVIEWED") {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "This analysis revision has already been reviewed; refresh the analysis to review it again",
+      );
+    }
+    const asset = await this.deps.assets.findById(organizationId, assetId);
+    if (!asset) throw new AppError("NOT_FOUND", "Asset not found");
+    return { analysis, asset };
+  }
+
+  /**
+   * A multi-member duplicate group requires the reviewer to name the primary,
+   * and it must be the asset being approved. Only the group's membership is
+   * read here; whether a member is already approved is the database's call.
+   */
+  private async requirePrimaryChoice(
+    organizationId: string,
+    analysis: AssetAnalysis,
+    assetId: string,
+    primaryAssetId: string | undefined,
+  ): Promise<void> {
+    if (!analysis.duplicateGroup) return;
+    const members = await this.duplicateGroupMembers(organizationId, analysis.duplicateGroup);
+    if (members.length < 2) return;
+
+    if (!primaryAssetId) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "This photo has near-duplicates; choose the primary asset before approving",
+      );
+    }
+    if (primaryAssetId !== assetId) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "primaryAssetId must be the asset being approved",
+      );
+    }
+  }
+
+  /** Analyses sharing a duplicate group, organization-scoped. */
+  private async duplicateGroupMembers(
+    organizationId: string,
+    duplicateGroup: string,
+  ): Promise<AssetAnalysis[]> {
+    const hashed = await this.deps.assets.listWithPerceptualHash(organizationId);
+    const analyses = await this.deps.analyses.listByAssetIds(
+      organizationId,
+      hashed.map((a) => a.id),
+    );
+    return analyses.filter((a) => a.duplicateGroup === duplicateGroup);
+  }
+
+  /**
+   * Persist a decision, turning the repository's neutral duplicate-group
+   * conflict into a validation failure. Recognizing the underlying constraint
+   * violation is the adapter's job, so no database vocabulary reaches here.
+   *
+   * The conflict is never retried or reconciled: unlike the insert race in
+   * `reserve`, losing this one means another member is already the approved
+   * primary, which is a decision for the reviewer, not the system.
+   */
+  private async writeDecision(
+    analysis: AssetAnalysis,
+    reviewStatus: "APPROVED" | "REJECTED",
+    reason: string | null,
+    actorUserId: string,
+  ): Promise<AssetAnalysis> {
+    const now = this.deps.clock.now();
+    try {
+      return await this.deps.analyses.update({
+        ...analysis,
+        reviewStatus,
+        reviewNote: reason,
+        reviewedBy: actorUserId,
+        reviewedAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      if (error instanceof DuplicateApprovalConflictError) {
+        throw new AppError(
+          "VALIDATION_FAILED",
+          "Another photo in this duplicate group is already approved",
+        );
+      }
+      throw error;
+    }
+  }
+
+  private recordDecision(
+    action: string,
+    actorUserId: string,
+    analysis: AssetAnalysis,
+    asset: MediaAsset,
+    reason: string | null,
+  ): Promise<unknown> {
+    return recordAudit(this.deps.identity, {
+      organizationId: analysis.organizationId,
+      actorUserId,
+      action,
+      resourceType: "asset_analysis",
+      resourceId: analysis.id,
+      metadata: {
+        analysisId: analysis.id,
+        assetId: asset.id,
+        propertyId: asset.propertyId,
+        organizationId: analysis.organizationId,
+        actorId: actorUserId,
+        reason,
+        analysisRevision: analysis.analysisRevision,
+      },
+    });
+  }
+
   /** Only READY assets are eligible; anything else is rejected explicitly. */
   private async requireEligibleAsset(
     organizationId: string,
@@ -318,6 +563,11 @@ export class AnalysisService {
     });
     return failed;
   }
+}
+
+function optionalReason(reason: string | undefined): string | null {
+  const trimmed = (reason ?? "").trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /** Keep the most severe occurrence of each flag code. */

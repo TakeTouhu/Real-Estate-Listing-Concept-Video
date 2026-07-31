@@ -1,5 +1,5 @@
 import type { Clock } from "../identity/ports";
-import type { AssetAnalysisRepository } from "../analysis/ports";
+import { DuplicateApprovalConflictError, type AssetAnalysisRepository } from "../analysis/ports";
 import type { AssetAnalysis } from "../analysis/types";
 
 /** Thrown when a second analysis is created for an asset that already has one. */
@@ -70,6 +70,23 @@ export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository 
   update(analysis: AssetAnalysis): Promise<AssetAnalysis> {
     if (!this.byId.has(analysis.id)) {
       return Promise.reject(new Error(`analysis ${analysis.id} not found`));
+    }
+    // Mirrors the partial unique index
+    // (organizationId, duplicateGroup) WHERE reviewStatus = 'APPROVED', and
+    // surfaces it as the same neutral error the Prisma adapter translates the
+    // real violation into. A double that let two approvals through would make
+    // the duplicate-conflict tests prove nothing.
+    if (analysis.reviewStatus === "APPROVED" && analysis.duplicateGroup) {
+      const conflict = [...this.byId.values()].some(
+        (a) =>
+          a.id !== analysis.id &&
+          a.organizationId === analysis.organizationId &&
+          a.duplicateGroup === analysis.duplicateGroup &&
+          a.reviewStatus === "APPROVED",
+      );
+      if (conflict) {
+        return Promise.reject(new DuplicateApprovalConflictError());
+      }
     }
     this.byId.set(analysis.id, analysis);
     return Promise.resolve(analysis);

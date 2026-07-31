@@ -1,11 +1,12 @@
 # Analysis Lifecycle — Sequence Diagram
 
-Version: 1.3
-Status: describes **implemented** behaviour through Phase 3A-3. The contract
+Version: 1.4
+Status: describes **implemented** behaviour through Phase 3B-1b. The contract
 and provider layer shipped in 3A-1, persistence in 3A-2a, the orchestrating
 `AnalysisService` in 3A-2b, and refresh, duplicate grouping, suggested order and
-the read methods in 3A-2c, and the HTTP endpoints in 3A-3. Steps marked **3B**
-(review UI) are labelled so the diagram is not read as describing more than
+the read methods in 3A-2c, the HTTP endpoints in 3A-3, and the review decisions
+in 3B-1b. Review is reachable only from the domain: its endpoints are 3B-2 and
+its UI 3B-3, labelled so the diagram is not read as describing more than
 currently ships.
 
 ## Analysis of one asset
@@ -40,7 +41,7 @@ sequenceDiagram
   else no record, PENDING/FAILED record, or refresh requested
     AS->>NR: create, or reset an existing row, as PENDING
     Note over AS,NR: Reserved before the provider call, so a crash<br/>leaves a visible PENDING row. If a concurrent<br/>insert wins the unique index on assetId, this<br/>request adopts that row instead of creating<br/>a second one.
-    Note over AS,NR: On reset, every stale result field is cleared<br/>(room type, scores, duplicate group, objects,<br/>flags, suggested order, failure reason), so a<br/>refresh that fails cannot leave last run's<br/>values behind.
+    Note over AS,NR: On reset, every stale result field AND the review<br/>state are cleared, so a refresh that fails cannot<br/>leave last run's values behind, nor a decision<br/>attached to a result that no longer exists.<br/>The revision is not touched here.
     AS->>AL: analysis.requested | analysis.refreshed
     AS->>S: getObject(asset.storageKey)
 
@@ -72,6 +73,7 @@ sequenceDiagram
         N-->>AS: existing group or new dup_<assetId>
         AS->>N: roomOrderRank(roomType) → suggestedOrder
         AS->>NR: status = SUCCEEDED (+ scores, flags, group, order)
+        Note over AS,NR: analysisRevision advances here and only here,<br/>keyed on whether this run was a refresh:<br/>initial → 1, successful refresh → previous + 1,<br/>failed refresh → unchanged.
         Note over AS,AL: The row is persisted BEFORE its audit entry. An<br/>audit failure therefore returns an error while the<br/>analysis stays SUCCEEDED — an intentional<br/>consistency boundary, not atomicity.
         AS->>AL: analysis.succeeded
         AS-->>R: SUCCEEDED record
@@ -80,6 +82,45 @@ sequenceDiagram
       end
     end
   end
+```
+
+## Review decision (3B-1b)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor R as Reviewer
+  participant AS as AnalysisService<br/>(3B-1b)
+  participant AZ as authorizeOrganization
+  participant NR as AssetAnalysis repository
+  participant TX as ReviewTransaction
+  participant AR as MediaAsset repository
+  participant AL as AuditLog
+
+  R->>AS: approve(org, assetId, {primaryAssetId?, reason?})<br/>or reject(org, assetId, {reason})
+  AS->>AZ: require membership + video:review
+  Note over AS,AZ: CREATOR is denied: whoever runs an analysis<br/>is not whoever approves it.
+  AS->>NR: findByAssetId(org, assetId)
+  Note over AS,NR: Must be SUCCEEDED and UNREVIEWED —<br/>decisions are immutable per revision.
+
+  alt approve
+    Note over AS: A BLOCKING safety flag refuses approval;<br/>rejection stays available.
+    AS->>NR: list duplicate-group members
+    Note over AS,NR: ≥2 members → primaryAssetId required and<br/>must equal this asset. Whether another member<br/>is ALREADY approved is NOT read here.
+    AS->>NR: reviewStatus = APPROVED
+    Note over NR: The partial unique index refuses a second<br/>APPROVED in the group. The violation maps to<br/>VALIDATION_FAILED — never retried or reconciled.
+    AS->>AL: analysis.approved
+  else reject
+    Note over AS: Reason required and non-blank.
+    AS->>TX: run(...)
+    TX->>NR: reviewStatus = REJECTED (+ note, reviewer, time)
+    TX->>AR: MediaAsset.status = REJECTED
+    Note over TX: Both writes commit together or not at all.
+    AS->>AL: analysis.rejected
+  end
+
+  Note over AS,AL: The audit entry is emitted AFTER the commit and is<br/>outside the transaction — see docs/decisions/TODO.md.
+  AS-->>R: decided analysis
 ```
 
 ## Status machine
@@ -112,6 +153,9 @@ stateDiagram-v2
 | `refresh` re-run with stale-state clearing | 3A-2c |
 | Duplicate grouping and `suggestedOrder` persisted | 3A-2c |
 | Read methods `listForProperty` / `getForAsset` (read-level authorization) | 3A-2c |
+| Review columns, partial unique index, `ReviewTransaction` | 3B-1a |
+| `approve` / `reject`, immutability per revision, duplicate primary rule, transactional rejection, review audit | 3B-1b |
+| Review HTTP endpoints | ⏭ 3B-2 |
 | Analysis HTTP endpoints (thin adapters) | 3A-3 |
 | Rate limiting on the analysis endpoints | ⏭ cross-cutting, see TODO |
 | Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |
