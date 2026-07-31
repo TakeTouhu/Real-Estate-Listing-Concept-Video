@@ -2,6 +2,7 @@ import { AnalysisService, hasBlockingFlag, isLowConfidence, type AssetAnalysis }
 import {
   createPrismaAnalysisRepository,
   createPrismaPropertyRepositories,
+  createPrismaReviewTransaction,
   getPrismaClient,
 } from "@app/database";
 import { createImageAnalysisProvider } from "@app/ai-providers";
@@ -30,6 +31,7 @@ export function getAnalysisService(): AnalysisService {
     analyses: createPrismaAnalysisRepository(getPrismaClient()),
     storage: getPropertyServices().storage,
     provider: createImageAnalysisProvider(env),
+    reviewTx: createPrismaReviewTransaction(getPrismaClient()),
     clock: identity.deps.clock,
     ids: identity.deps.ids,
   });

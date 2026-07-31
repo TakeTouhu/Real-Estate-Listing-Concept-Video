@@ -111,9 +111,15 @@ export interface AssetAnalysis {
   readonly suggestedOrder: number | null;
   readonly failureReason: string | null;
   /**
-   * Identifies the persisted analysis *result*, not the attempt. Starts at 1
-   * for the first successful analysis and increments only on a successful
-   * refresh; a failed refresh leaves it unchanged.
+   * Identifies the persisted analysis *result*, not the attempt:
+   *
+   * - first successful analysis → revision 1;
+   * - successful refresh → previous revision + 1;
+   * - failed refresh → revision unchanged.
+   *
+   * The transition is decided by whether the run was a refresh, never inferred
+   * from the row reaching `SUCCEEDED`: an initial analysis and a refresh both
+   * end in `SUCCEEDED`, and only the latter advances the revision.
    */
   readonly analysisRevision: number;
   readonly reviewStatus: ReviewStatus;
@@ -143,4 +149,21 @@ export function isRoomType(value: unknown): value is RoomType {
 /** True once a decision has been recorded against the current revision. */
 export function isReviewed(analysis: AssetAnalysis): boolean {
   return analysis.reviewStatus !== "UNREVIEWED";
+}
+
+/** Reviewer input for approving one analysis revision. */
+export interface ApproveInput {
+  /**
+   * Required when the asset's duplicate group has more than one member: names
+   * the single member to approve, and must equal the asset being approved.
+   */
+  readonly primaryAssetId?: string;
+  /** Optional for approval; recorded as null when absent. */
+  readonly reason?: string;
+}
+
+/** Reviewer input for rejecting one analysis revision. */
+export interface RejectInput {
+  /** Required and non-blank: a rejection without a stated cause is not reviewable. */
+  readonly reason: string;
 }

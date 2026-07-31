@@ -88,9 +88,11 @@ group". Rows with a null group are unconstrained — they have no duplicate
 siblings.
 
 **Domain types** — `ReviewStatus`, `REVIEW_STATUSES`, `isReviewStatus`,
-`isReviewed`, and the three new fields on `AssetAnalysis`. `analysisRevision` is
-documented as identifying the persisted *result*: it starts at 1 and increments
-only on a **successful** refresh, so a failed refresh leaves it unchanged.
+`isReviewed`, and the three new fields on `AssetAnalysis`. `analysisRevision`
+identifies the persisted *result*: first successful analysis → revision 1,
+successful refresh → previous + 1, failed refresh → unchanged. The transition is
+decided by whether the run was a refresh, never inferred from the row reaching
+`SUCCEEDED`, since an initial analysis and a refresh both end there.
 
 **Ports and adapters** — `ReviewRepositories` / `ReviewTransaction` in the
 domain, a Prisma implementation, and an in-memory implementation.

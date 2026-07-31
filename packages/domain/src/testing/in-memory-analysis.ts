@@ -71,6 +71,27 @@ export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository 
     if (!this.byId.has(analysis.id)) {
       return Promise.reject(new Error(`analysis ${analysis.id} not found`));
     }
+    // Mirrors the partial unique index
+    // (organizationId, duplicateGroup) WHERE reviewStatus = 'APPROVED'.
+    // The error carries the real constraint name because the service maps the
+    // conflict by that name; a double that let two approvals through would make
+    // the duplicate-conflict tests prove nothing.
+    if (analysis.reviewStatus === "APPROVED" && analysis.duplicateGroup) {
+      const conflict = [...this.byId.values()].some(
+        (a) =>
+          a.id !== analysis.id &&
+          a.organizationId === analysis.organizationId &&
+          a.duplicateGroup === analysis.duplicateGroup &&
+          a.reviewStatus === "APPROVED",
+      );
+      if (conflict) {
+        return Promise.reject(
+          new Error(
+            'duplicate key value violates unique constraint "asset_analyses_org_dupgroup_approved_key"',
+          ),
+        );
+      }
+    }
     this.byId.set(analysis.id, analysis);
     return Promise.resolve(analysis);
   }

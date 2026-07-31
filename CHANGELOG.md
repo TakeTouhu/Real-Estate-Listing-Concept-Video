@@ -3,11 +3,61 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3B-1a: review infrastructure
+## [Unreleased] — Phase 3B-1b: review domain logic
 
-Under review. Not merged. Persistence and the transaction boundary for human
-review — see `docs/phase-3b1a-completion.md`. **No review service methods**; the
-columns are inert until Phase 3B-1b.
+Under review. Not merged. Makes human review executable — see
+`docs/phase-3b1b-completion.md`.
+
+### Added
+
+- **`AnalysisService.approve` / `.reject`**, gated on `video:review` (OWNER,
+  ADMIN, REVIEWER). **CREATOR is denied**: whoever runs an analysis is not
+  whoever approves it.
+- **Blocking findings cannot be approved.** An analysis carrying a `BLOCKING`
+  safety flag can only be rejected.
+- **Immutable decisions per revision.** A reviewed analysis refuses further
+  decisions; refreshing clears the review state and makes it reviewable again.
+- **Duplicate groups are a soft block.** With more than one member in the group,
+  `primaryAssetId` is required and must equal the asset being approved. Whether
+  another member is already approved is decided by the PostgreSQL partial unique
+  index — the service performs **no pre-check read**, which would be a
+  check-then-act race. A unique violation maps to `VALIDATION_FAILED`, matched
+  by constraint name, and is never retried or reconciled.
+- **Rejection is transactional**: the analysis review update and
+  `MediaAsset.status = REJECTED` commit together or not at all. Rejected assets
+  are then excluded downstream by the existing status checks.
+- **Reason handling**: required and non-blank for rejection, optional for
+  approval, recorded as `null` when absent.
+- **`analysisRevision` transitions**: first successful analysis → 1, successful
+  refresh → previous + 1, failed refresh → unchanged. Keyed on whether the run
+  was a refresh, never inferred from the row reaching `SUCCEEDED`, since an
+  initial analysis and a refresh both end there.
+- **Audit** `analysis.approved` / `analysis.rejected` carrying `analysisId`,
+  `assetId`, `propertyId`, `organizationId`, `actorId`, `reason`, and
+  `analysisRevision`.
+- **32 new tests** covering revision semantics, approval and rejection,
+  immutability, duplicate rules, authorization, tenant isolation, transactional
+  failure consistency, and audit payloads.
+
+### Notes
+
+- No Prisma schema or migration change; everything needed shipped in 3B-1a.
+- `InMemoryAssetAnalysisRepository` now mirrors the partial unique index and
+  rejects with the real constraint name, so the duplicate-conflict tests
+  exercise the mapping rather than passing against a permissive double.
+- Audit atomicity remains outside the transaction — still the transactional-
+  outbox item in `docs/decisions/TODO.md`.
+
+### Not included (deliberately)
+
+- No HTTP endpoints (Phase 3B-2) and no review UI (Phase 3B-3).
+
+## [phase-3b1a-complete] — Phase 3B-1a: review infrastructure
+
+Merged in PR #9 as `0a7818f10371bcf8072b6b8cc2f501c9b5868f97`.
+Tagged `phase-3b1a-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Persistence and the transaction boundary for human
+review — see `docs/phase-3b1a-completion.md`.
 
 ### Added
 

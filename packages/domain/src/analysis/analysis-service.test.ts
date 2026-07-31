@@ -5,6 +5,7 @@ import { AuthService } from "../identity/auth-service";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { InMemoryMediaAssetRepository } from "../testing/in-memory-property";
 import { InMemoryAssetAnalysisRepository } from "../testing/in-memory-analysis";
+import { InMemoryReviewTransaction } from "../testing/in-memory-review-transaction";
 import type { MediaAsset, MediaAssetStatus } from "../property/types";
 import type { ObjectStorage } from "../property/ports";
 import { AnalysisService } from "./analysis-service";
@@ -180,6 +181,7 @@ async function build(): Promise<Fixture> {
       analyses,
       storage,
       provider,
+      reviewTx: new InMemoryReviewTransaction(analyses, assets),
       clock: deps.clock,
       ids: deps.ids,
     }),
@@ -196,6 +198,7 @@ function serviceWith(f: Fixture, analyses: AssetAnalysisRepository): AnalysisSer
     analyses,
     storage: f.storage,
     provider: f.provider,
+    reviewTx: new InMemoryReviewTransaction(f.analyses, f.assets),
     clock: f.deps.clock,
     ids: f.deps.ids,
   });
@@ -742,5 +745,376 @@ describe("reads", () => {
     await expect(
       fx.service.getForAsset(fx.ownerId, other.id, fx.assetId),
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+// --- Phase 3B-1b: review -----------------------------------------------------
+
+/** Seed, store bytes for, and analyze an asset, returning its analysis. */
+async function analyzedAsset(
+  id: string,
+  overrides: Partial<MediaAsset> = {},
+): Promise<AssetAnalysis> {
+  const asset = await seedAsset(fx.assets, fx.orgId, fx.ownerId, {
+    id,
+    storageKey: `key/${id}`,
+    ...overrides,
+  });
+  await fx.storage.putObject(asset.storageKey, new Uint8Array([5, 5, 5, 5]));
+  return fx.service.analyzeAsset(fx.ownerId, fx.orgId, asset.id);
+}
+
+async function memberWithRole(
+  email: string,
+  role: "OWNER" | "ADMIN" | "CREATOR" | "REVIEWER",
+): Promise<string> {
+  const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
+  const user = await auth.register({ email, password: PASSWORD, name: email });
+  await fx.deps.repos.memberships.create({
+    organizationId: fx.orgId,
+    userId: user.id,
+    role,
+  });
+  return user.id;
+}
+
+function auditFor(action: string): Record<string, unknown> | undefined {
+  const entry = fx.deps.repos.auditLogs.all().find((e) => e.action === action);
+  return entry?.metadata as Record<string, unknown> | undefined;
+}
+
+describe("analysisRevision", () => {
+  it("starts at 1 for the first successful analysis", async () => {
+    expect((await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId)).analysisRevision).toBe(1);
+  });
+
+  it("increments on each successful refresh", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const second = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    expect(second.analysisRevision).toBe(2);
+    const third = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    expect(third.analysisRevision).toBe(3);
+  });
+
+  it("leaves the revision unchanged when a refresh fails, then resumes from it", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    fx.provider.failWith = new Error("timeout");
+    const failed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    expect(failed.status).toBe("FAILED");
+    expect(failed.analysisRevision).toBe(1);
+
+    fx.provider.failWith = null;
+    const recovered = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    expect(recovered.analysisRevision).toBe(2);
+  });
+
+  it("does not advance the revision when an initial analysis is retried after failing", async () => {
+    fx.provider.failWith = new Error("timeout");
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    fx.provider.failWith = null;
+
+    const retried = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(retried.status).toBe("SUCCEEDED");
+    expect(retried.analysisRevision).toBe(1);
+  });
+});
+
+describe("approve", () => {
+  it("records the decision with the reviewer, timestamp and optional reason", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, {
+      reason: "Looks good",
+    });
+
+    expect(approved.reviewStatus).toBe("APPROVED");
+    expect(approved.reviewNote).toBe("Looks good");
+    expect(approved.reviewedBy).toBe(fx.ownerId);
+    expect(approved.reviewedAt).not.toBeNull();
+    expect((await fx.assets.findById(fx.orgId, fx.assetId))?.status).toBe("READY");
+  });
+
+  it("treats a blank or absent approval reason as null", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { reason: "   " });
+    expect(approved.reviewNote).toBeNull();
+  });
+
+  it("refuses to approve an analysis carrying a BLOCKING flag", async () => {
+    fx.provider.result = {
+      ...RESULT,
+      safetyFlags: [{ code: "PERSON_DETECTED", severity: "BLOCKING", message: "person visible" }],
+    };
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/blocking safety finding/i);
+    expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
+  });
+
+  it("still allows rejecting an analysis carrying a BLOCKING flag", async () => {
+    fx.provider.result = {
+      ...RESULT,
+      safetyFlags: [{ code: "PERSON_DETECTED", severity: "BLOCKING", message: "person visible" }],
+    };
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    const rejected = await fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, {
+      reason: "Person visible",
+    });
+    expect(rejected.reviewStatus).toBe("REJECTED");
+  });
+});
+
+describe("reject", () => {
+  it("marks the asset REJECTED alongside the analysis", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const rejected = await fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, {
+      reason: "Too blurry",
+    });
+
+    expect(rejected.reviewStatus).toBe("REJECTED");
+    expect(rejected.reviewNote).toBe("Too blurry");
+    expect((await fx.assets.findById(fx.orgId, fx.assetId))?.status).toBe("REJECTED");
+  });
+
+  it("requires a non-blank reason", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await expect(
+      fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "   " }),
+    ).rejects.toThrow(/reason is required/i);
+    await expect(
+      fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "" }),
+    ).rejects.toThrow(/reason is required/i);
+    expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
+  });
+
+  it("applies neither write when the transaction fails part-way", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const original = fx.assets.update.bind(fx.assets);
+    fx.assets.update = () => Promise.reject(new Error("asset write failed"));
+
+    await expect(
+      fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "Too blurry" }),
+    ).rejects.toThrow(/asset write failed/);
+
+    fx.assets.update = original;
+    expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
+    expect((await fx.assets.findById(fx.orgId, fx.assetId))?.status).toBe("READY");
+    expect(actions(fx)).not.toContain("analysis.rejected");
+  });
+});
+
+describe("review immutability", () => {
+  it.each([
+    ["approve", "approve"],
+    ["approve", "reject"],
+    ["reject", "approve"],
+    ["reject", "reject"],
+  ])("refuses to %s then %s the same revision", async (first, second) => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const run = (which: string) =>
+      which === "approve"
+        ? fx.service.approve(fx.ownerId, fx.orgId, fx.assetId)
+        : fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "no" });
+
+    await run(first);
+    await expect(run(second)).rejects.toThrow(/already been reviewed/i);
+  });
+
+  it("becomes reviewable again after a refresh, which clears the decision", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { reason: "fine" });
+
+    const refreshed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+    expect(refreshed.reviewStatus).toBe("UNREVIEWED");
+    expect(refreshed.reviewNote).toBeNull();
+    expect(refreshed.reviewedBy).toBeNull();
+    expect(refreshed.reviewedAt).toBeNull();
+
+    await expect(fx.service.approve(fx.ownerId, fx.orgId, fx.assetId)).resolves.toBeDefined();
+  });
+
+  it("clears the decision even when the refresh then fails", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+
+    fx.provider.failWith = new Error("timeout");
+    const failed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    expect(failed.status).toBe("FAILED");
+    expect(failed.reviewStatus).toBe("UNREVIEWED");
+    expect(failed.reviewedBy).toBeNull();
+  });
+
+  it("refuses to review an analysis that is not SUCCEEDED", async () => {
+    fx.provider.failWith = new Error("timeout");
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/completed analysis/i);
+  });
+});
+
+describe("duplicate groups", () => {
+  it("requires a primary choice once the group has more than one member", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/choose the primary asset/i);
+  });
+
+  it("requires primaryAssetId to be the asset being approved", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { primaryAssetId: "ast_twin" }),
+    ).rejects.toThrow(/must be the asset being approved/i);
+  });
+
+  it("approves the chosen primary", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, {
+      primaryAssetId: fx.assetId,
+    });
+    expect(approved.reviewStatus).toBe("APPROVED");
+  });
+
+  it("needs no primary choice for a single-member group", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await expect(fx.service.approve(fx.ownerId, fx.orgId, fx.assetId)).resolves.toBeDefined();
+  });
+
+  it("maps the database uniqueness conflict to a validation failure", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { primaryAssetId: fx.assetId });
+
+    // The constraint, not a pre-check, refuses the second approval.
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, "ast_twin", { primaryAssetId: "ast_twin" }),
+    ).rejects.toThrow(/already approved/i);
+    expect((await fx.analyses.findByAssetId(fx.orgId, "ast_twin"))?.reviewStatus).toBe("UNREVIEWED");
+  });
+
+  it("rethrows a write failure that is not a duplicate-group conflict", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const original = fx.analyses.update.bind(fx.analyses);
+    fx.analyses.update = () => Promise.reject(new Error("db write failed"));
+
+    await expect(
+      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/db write failed/);
+    fx.analyses.update = original;
+  });
+});
+
+describe("review authorization and tenant isolation", () => {
+  it("denies a CREATOR, who may run analyses but not review them", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const creator = await memberWithRole("creator@example.com", "CREATOR");
+
+    await expect(
+      fx.service.approve(creator, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/lacks permission/i);
+    await expect(
+      fx.service.reject(creator, fx.orgId, fx.assetId, { reason: "no" }),
+    ).rejects.toThrow(/lacks permission/i);
+  });
+
+  it("allows a REVIEWER to approve and reject", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const reviewer = await memberWithRole("reviewer2@example.com", "REVIEWER");
+    await expect(fx.service.approve(reviewer, fx.orgId, fx.assetId)).resolves.toBeDefined();
+
+    const other = await analyzedAsset("ast_other", { perceptualHash: "0000000000000000" });
+    expect(other.reviewStatus).toBe("UNREVIEWED");
+    await expect(
+      fx.service.reject(reviewer, fx.orgId, "ast_other", { reason: "blurry" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("denies a non-member", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
+    const outsider = await auth.register({
+      email: "out2@example.com",
+      password: PASSWORD,
+      name: "Out",
+    });
+
+    await expect(
+      fx.service.approve(outsider.id, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/do not have access/i);
+  });
+
+  it("keeps another tenant's analysis unreviewable", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const orgs = new OrganizationService(fx.deps);
+    const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
+
+    await expect(
+      fx.service.approve(fx.ownerId, other.id, fx.assetId),
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("review audit", () => {
+  it("records every required field on approval", async () => {
+    const analysis = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { reason: "Looks good" });
+
+    expect(auditFor("analysis.approved")).toEqual({
+      analysisId: analysis.id,
+      assetId: fx.assetId,
+      propertyId: "prp_1",
+      organizationId: fx.orgId,
+      actorId: fx.ownerId,
+      reason: "Looks good",
+      analysisRevision: 1,
+    });
+  });
+
+  it("records a null reason when approval carries none, and the revision after a refresh", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, { refresh: true });
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+
+    const meta = auditFor("analysis.approved");
+    expect(meta?.reason).toBeNull();
+    expect(meta?.analysisRevision).toBe(2);
+  });
+
+  it("records every required field on rejection", async () => {
+    const analysis = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "Too blurry" });
+
+    expect(auditFor("analysis.rejected")).toEqual({
+      analysisId: analysis.id,
+      assetId: fx.assetId,
+      propertyId: "prp_1",
+      organizationId: fx.orgId,
+      actorId: fx.ownerId,
+      reason: "Too blurry",
+      analysisRevision: 1,
+    });
+  });
+
+  it("leaks no storage key or provider name into review audit metadata", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+
+    const serialized = JSON.stringify(auditFor("analysis.approved"));
+    expect(serialized).not.toContain(STORAGE_KEY);
+    expect(serialized).not.toContain("normalized.jpg");
+    expect(serialized).not.toContain("stub");
   });
 });

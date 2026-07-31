@@ -4,6 +4,8 @@ export const AnalysisAuditAction = {
   AnalysisSucceeded: "analysis.succeeded",
   AnalysisFailed: "analysis.failed",
   AnalysisRefreshed: "analysis.refreshed",
+  AnalysisApproved: "analysis.approved",
+  AnalysisRejected: "analysis.rejected",
 } as const;
 
 export type AnalysisAuditActionValue =
