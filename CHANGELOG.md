@@ -21,8 +21,9 @@ Under review. Not merged. Makes human review executable — see
   `primaryAssetId` is required and must equal the asset being approved. Whether
   another member is already approved is decided by the PostgreSQL partial unique
   index — the service performs **no pre-check read**, which would be a
-  check-then-act race. A unique violation maps to `VALIDATION_FAILED`, matched
-  by constraint name, and is never retried or reconciled.
+  check-then-act race. The violation is recognized in the Prisma adapter and
+  handed to the domain as a neutral `DuplicateApprovalConflictError`, mapped to
+  `VALIDATION_FAILED`, and never retried or reconciled.
 - **Rejection is transactional**: the analysis review update and
   `MediaAsset.status = REJECTED` commit together or not at all. Rejected assets
   are then excluded downstream by the existing status checks.
@@ -42,9 +43,17 @@ Under review. Not merged. Makes human review executable — see
 ### Notes
 
 - No Prisma schema or migration change; everything needed shipped in 3B-1a.
-- `InMemoryAssetAnalysisRepository` now mirrors the partial unique index and
-  rejects with the real constraint name, so the duplicate-conflict tests
-  exercise the mapping rather than passing against a permissive double.
+- **Database error interpretation lives in the adapter.** The domain reacts to a
+  neutral `DuplicateApprovalConflictError` and imports nothing from Prisma;
+  recognizing the underlying constraint violation is the repository's job.
+- **A live-PostgreSQL test covers the whole runtime path** — service → Prisma
+  repositories → PostgreSQL → adapter translation → `AppError`. It caught a real
+  defect: the adapter matched the violation by index name, which Prisma never
+  reports (it identifies the constraint by covered fields), so the translation
+  would silently never have fired in production.
+- `InMemoryAssetAnalysisRepository` mirrors the partial unique index and raises
+  the same neutral error, so unit tests exercise the mapping rather than passing
+  against a permissive double.
 - Audit atomicity remains outside the transaction — still the transactional-
   outbox item in `docs/decisions/TODO.md`.
 

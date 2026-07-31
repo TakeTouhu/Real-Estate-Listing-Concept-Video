@@ -140,7 +140,7 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | 333 (estimated ~290) | **Merged** (PR #7, `e49ae6a`) |
 | 3A-3 | Analysis HTTP endpoints | 571 (estimated ~445 — accepted as a one-time exception) | **Merged** (PR #8, `e3fcc74`) |
 | 3B-1a | Review infrastructure: columns, partial unique index, `ReviewTransaction` | 489 (estimated ~312) | **Merged** (PR #9, `0a7818f`) |
-| 3B-1b | Review domain logic: `approve` / `reject` | 698 — 319 production + 379 tests (estimated 486 — over target, disclosed) | In review |
+| 3B-1b | Review domain logic: `approve` / `reject` | 698 — 319 production + 379 tests (estimated 486 — accepted as a milestone exception) | In review |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 

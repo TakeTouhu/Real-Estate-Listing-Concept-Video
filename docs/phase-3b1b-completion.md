@@ -8,7 +8,28 @@ Makes human review executable: `approve` and `reject` on `AnalysisService`,
 with the revision semantics, duplicate rule, and transactional rejection agreed
 in the plan.
 
-## Milestone size — over target, disclosed
+## Size exception
+
+**Accepted as a milestone exception.**
+
+- **698 changed code lines** against the approximate **500-line** target at the
+  point the exception was granted. The reviewer-mandated runtime-path
+  integration test and the adapter error boundary added afterwards bring the
+  final total to **982** (production 388, tests 594) — those additions were
+  required before merge and are not part of the original overage.
+- The overage came from **underestimated shared helpers and test coverage** —
+  the plan costed `approve` and `reject` as two methods and did not cost
+  `requireReviewable`, `requirePrimaryChoice`, `duplicateGroupMembers`,
+  `writeDecision`, `recordDecision`, or their documentation.
+- **No milestone scope was added.** Everything delivered is in the approved
+  plan; nothing was pulled forward from 3B-2 or 3B-3.
+- **Future estimates must cost authorization, audit, transaction handling, and
+  invariant enforcement as separate line items**, not as incidental parts of the
+  methods that use them. Each of those four is a cross-cutting concern with its
+  own helper and its own tests, and lumping them into "one service method"
+  is what produced a 2× miss here.
+
+## Milestone size — detail
 
 | File | Changed code lines |
 | --- | --- |
@@ -19,9 +40,14 @@ in the plan.
 | `tests/api/analysis-routes.test.ts` (fixture wiring) | 5 |
 | `packages/domain/src/analysis/audit.ts` | 2 |
 | `apps/web/src/lib/analysis.ts` (wiring) | 2 |
-| **Total** | **698** |
-| — of which production | **319** |
-| — of which tests | **379** |
+| **Subtotal at exception** | **698** |
+| `tests/integration/review-duplicate-conflict.db.test.ts` (mandated) | 195 |
+| `packages/database/src/analysis-repositories.ts` (adapter error boundary) | 82 |
+| `packages/domain/src/analysis/ports.ts` (neutral conflict type) | 16 |
+| net change from removing the domain's string matching | −9 |
+| **Final total** | **982** |
+| — of which production | **388** |
+| — of which tests | **594** |
 
 **The plan estimated ≈166 production and ≈486 total; delivered is 319 and 698.**
 The stop-and-report condition was tied to the estimate, which was inside the
@@ -31,10 +57,11 @@ rather than a pre-emptive stop.
 Where the production estimate went wrong: I costed `approve` and `reject` as two
 methods, and did not cost the five helpers they need —
 `requireReviewable`, `requirePrimaryChoice`, `duplicateGroupMembers`,
-`writeDecision`, `recordDecision` — plus `optionalReason` and
-`isDuplicateApprovalConflict`, and the doc comments explaining the non-obvious
-choices (why there is no pre-check, why the conflict is matched by constraint
-name, why audit sits outside the transaction).
+`writeDecision`, `recordDecision` — plus `optionalReason`, the neutral
+`DuplicateApprovalConflictError` boundary and its adapter translation, and the
+doc comments explaining the non-obvious choices (why there is no pre-check, why
+error interpretation sits in the adapter, why audit sits outside the
+transaction).
 
 ### Why this was not split
 
@@ -45,7 +72,9 @@ approve/reject permutations and only make sense together. The protected test
 categories — authorization, tenant isolation, duplicate concurrency, failure
 consistency — are all present and were not trimmed to hit a number.
 
-**The reviewer should decide whether to accept the overage.**
+The reviewer accepted the overage as a milestone exception rather than splitting
+the PR after implementation, on the grounds that the shared review invariants and
+state-transition tests form one coherent unit.
 
 ## What was implemented
 
@@ -87,11 +116,12 @@ is not whoever approves it.
   unique index on `(organizationId, duplicateGroup) WHERE reviewStatus =
   'APPROVED'` — **the service performs no pre-check read**, because that would
   be a check-then-act race.
-- A unique violation is mapped to `VALIDATION_FAILED`. It is never retried or
+- The conflict is mapped to `VALIDATION_FAILED`. It is never retried or
   reconciled: unlike the insert race in `reserve`, losing here means another
   member is already the primary, which is the reviewer's decision to revisit.
-  The conflict is recognized by constraint name, so an unrelated unique
-  violation is not silently reinterpreted.
+  The violation is recognized **in the Prisma adapter** and handed to the domain
+  as a neutral `DuplicateApprovalConflictError`; the domain never inspects
+  database errors.
 - Reason optional; blank or absent is stored as `null`.
 
 ### Reject
@@ -118,7 +148,8 @@ outbox item in `docs/decisions/TODO.md` and is not claimed here.
 | `pnpm lint` | **pass** — 0 errors, 0 warnings |
 | `pnpm test` | **pass** — **257/257** in 22 files (32 new) |
 | `pnpm build` | **pass** |
-| `pnpm test:db` | **pass** — 13/13 against live PostgreSQL 16 |
+| `pnpm test:db` | **pass** — **15/15** against live PostgreSQL 16 (2 new) |
+| Domain free of Prisma types and DB vocabulary | **pass** — grep for `@prisma`, `P2002`, and the index name returns nothing under `packages/domain/src/` |
 
 **No Prisma schema or migration change** — `git status packages/database/prisma/`
 clean. Everything this milestone needed shipped in 3B-1a.
@@ -135,15 +166,55 @@ clean. Everything this milestone needed shipped in 3B-1a.
 | Authorization | CREATOR denied on both; REVIEWER permitted on both; non-member denied |
 | Tenant isolation | another organization's analysis is unreviewable |
 | Audit | full payload asserted field-by-field on approve and reject; null reason recorded; revision reflects a prior refresh; no storage key or provider name in metadata |
+| **Duplicate conflict, real runtime path** (integration) | two analyses in one `(organizationId, duplicateGroup)`; the first approves; the second is refused with `VALIDATION_FAILED`; the first remains `APPROVED`; the second remains `UNREVIEWED`; and the surfaced error leaks no Prisma text, error code, or constraint name |
+
+### Database error interpretation lives in the adapter
+
+The domain now reacts to a neutral `DuplicateApprovalConflictError` declared in
+`packages/domain/src/analysis/ports.ts`. Recognizing the underlying violation —
+a Prisma error code, a PostgreSQL constraint — happens in
+`createPrismaAnalysisRepository`, and the in-memory double raises the same
+neutral type. The domain imports nothing from Prisma and contains no database
+vocabulary; both are asserted by grep in the verification run.
+
+### The runtime-path test caught a real bug
+
+`tests/integration/review-duplicate-conflict.db.test.ts` exercises
+`AnalysisService` → Prisma repositories → PostgreSQL → adapter translation →
+`AppError`. It failed on first run, and the failure was substantive rather than
+cosmetic.
+
+The adapter originally recognized the conflict by the **index name**
+(`asset_analyses_org_dupgroup_approved_key`). Prisma does not report it. The
+real error is:
+
+```
+Unique constraint failed on the fields: (`organizationId`,`duplicateGroup`)
+```
+
+The index name is invisible to the datamodel (ADR-0011), so Prisma identifies
+the constraint by the fields it covers. **The translation would silently never
+have fired in production**, and the caller would have received a raw Prisma
+error instead of `VALIDATION_FAILED`. Neither the unit tests nor a direct
+constraint test could have shown this: the unit tests use a double that raises
+the neutral type directly, and a constraint test never reaches the adapter.
+
+Detection now matches on the field set, which is specific — those two fields are
+unique only under the partial index, while the table's other unique constraint
+covers `assetId` and is left to propagate.
 
 ### A test-double fidelity note
 
-`InMemoryAssetAnalysisRepository.update` now mirrors the partial unique index and
-rejects with the **real constraint name**. Without that the duplicate-conflict
-test would prove nothing: the double would happily accept two approvals while
-PostgreSQL refuses them, and the mapping to `VALIDATION_FAILED` would never be
-exercised. This is the same fidelity requirement as the transaction double in
-3B-1a.
+`InMemoryAssetAnalysisRepository.update` mirrors the partial unique index and
+raises the same neutral `DuplicateApprovalConflictError` the Prisma adapter
+produces. Without that the unit-level duplicate tests would prove nothing: the
+double would accept two approvals while PostgreSQL refuses them. Same fidelity
+requirement as the transaction double in 3B-1a.
+
+**But the double stands in for the repository *after* translation**, so it
+cannot show whether the adapter recognizes the real violation — which is exactly
+why the runtime-path integration test above was needed, and exactly what it
+caught.
 
 The tests also caught an invalid safety-flag code (`FACE_DETECTED`, which does
 not exist in `SafetyFlagCode`) that Vitest happily ran because it does not

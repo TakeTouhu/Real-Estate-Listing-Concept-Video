@@ -1,5 +1,5 @@
 import type { Clock } from "../identity/ports";
-import type { AssetAnalysisRepository } from "../analysis/ports";
+import { DuplicateApprovalConflictError, type AssetAnalysisRepository } from "../analysis/ports";
 import type { AssetAnalysis } from "../analysis/types";
 
 /** Thrown when a second analysis is created for an asset that already has one. */
@@ -72,9 +72,9 @@ export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository 
       return Promise.reject(new Error(`analysis ${analysis.id} not found`));
     }
     // Mirrors the partial unique index
-    // (organizationId, duplicateGroup) WHERE reviewStatus = 'APPROVED'.
-    // The error carries the real constraint name because the service maps the
-    // conflict by that name; a double that let two approvals through would make
+    // (organizationId, duplicateGroup) WHERE reviewStatus = 'APPROVED', and
+    // surfaces it as the same neutral error the Prisma adapter translates the
+    // real violation into. A double that let two approvals through would make
     // the duplicate-conflict tests prove nothing.
     if (analysis.reviewStatus === "APPROVED" && analysis.duplicateGroup) {
       const conflict = [...this.byId.values()].some(
@@ -85,11 +85,7 @@ export class InMemoryAssetAnalysisRepository implements AssetAnalysisRepository 
           a.reviewStatus === "APPROVED",
       );
       if (conflict) {
-        return Promise.reject(
-          new Error(
-            'duplicate key value violates unique constraint "asset_analyses_org_dupgroup_approved_key"',
-          ),
-        );
+        return Promise.reject(new DuplicateApprovalConflictError());
       }
     }
     this.byId.set(analysis.id, analysis);

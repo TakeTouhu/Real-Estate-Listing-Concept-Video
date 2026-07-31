@@ -6,10 +6,11 @@ import type { MediaAssetRepository, ObjectStorage } from "../property/ports";
 import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
 import { deriveQualityFlags } from "./normalization";
-import type {
-  AssetAnalysisRepository,
-  ImageAnalysisProvider,
-  ReviewTransaction,
+import {
+  DuplicateApprovalConflictError,
+  type AssetAnalysisRepository,
+  type ImageAnalysisProvider,
+  type ReviewTransaction,
 } from "./ports";
 import { resolveDuplicateGroup, roomOrderRank, type DuplicateCandidate } from "./rules";
 import { hasBlockingFlag, type ApproveInput, type AssetAnalysis, type RejectInput, type SafetyFlag } from "./types";
@@ -459,10 +460,13 @@ export class AnalysisService {
   }
 
   /**
-   * Persist a decision, translating the duplicate-group unique violation into a
-   * validation failure. It is never retried or reconciled: unlike the insert
-   * race in `reserve`, losing this one means another member is already the
-   * approved primary, which is a decision for the reviewer, not the system.
+   * Persist a decision, turning the repository's neutral duplicate-group
+   * conflict into a validation failure. Recognizing the underlying constraint
+   * violation is the adapter's job, so no database vocabulary reaches here.
+   *
+   * The conflict is never retried or reconciled: unlike the insert race in
+   * `reserve`, losing this one means another member is already the approved
+   * primary, which is a decision for the reviewer, not the system.
    */
   private async writeDecision(
     analysis: AssetAnalysis,
@@ -481,7 +485,7 @@ export class AnalysisService {
         updatedAt: now,
       });
     } catch (error) {
-      if (isDuplicateApprovalConflict(error)) {
+      if (error instanceof DuplicateApprovalConflictError) {
         throw new AppError(
           "VALIDATION_FAILED",
           "Another photo in this duplicate group is already approved",
@@ -564,17 +568,6 @@ export class AnalysisService {
 function optionalReason(reason: string | undefined): string | null {
   const trimmed = (reason ?? "").trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
- * Recognize the partial unique index guarding one approved analysis per
- * duplicate group. Matched on the constraint name so an unrelated unique
- * violation is not silently reinterpreted as a duplicate-group conflict.
- */
-function isDuplicateApprovalConflict(error: unknown): boolean {
-  const text =
-    error instanceof Error ? `${error.message} ${String((error as { meta?: unknown }).meta ?? "")}` : String(error);
-  return text.includes("asset_analyses_org_dupgroup_approved_key");
 }
 
 /** Keep the most severe occurrence of each flag code. */

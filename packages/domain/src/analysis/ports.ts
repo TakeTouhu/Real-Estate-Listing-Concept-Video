@@ -91,3 +91,19 @@ export interface ReviewRepositories {
 export interface ReviewTransaction {
   run<T>(fn: (repos: ReviewRepositories) => Promise<T>): Promise<T>;
 }
+
+/**
+ * Raised by an {@link AssetAnalysisRepository} when a write would leave two
+ * approved analyses in one duplicate group.
+ *
+ * The rule is enforced by the database, but *recognizing* the violation is
+ * storage-specific — a PostgreSQL constraint name, a driver error code. That
+ * interpretation belongs in the adapter; the domain reacts to this neutral type
+ * and stays free of database vocabulary.
+ */
+export class DuplicateApprovalConflictError extends Error {
+  constructor(message = "Another analysis in this duplicate group is already approved") {
+    super(message);
+    this.name = "DuplicateApprovalConflictError";
+  }
+}
