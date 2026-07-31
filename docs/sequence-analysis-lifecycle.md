@@ -1,13 +1,13 @@
 # Analysis Lifecycle — Sequence Diagram
 
-Version: 1.4
-Status: describes **implemented** behaviour through Phase 3B-1b. The contract
+Version: 1.5
+Status: describes **implemented** behaviour through Phase 3B-2. The contract
 and provider layer shipped in 3A-1, persistence in 3A-2a, the orchestrating
 `AnalysisService` in 3A-2b, and refresh, duplicate grouping, suggested order and
 the read methods in 3A-2c, the HTTP endpoints in 3A-3, and the review decisions
-in 3B-1b. Review is reachable only from the domain: its endpoints are 3B-2 and
-its UI 3B-3, labelled so the diagram is not read as describing more than
-currently ships.
+in 3B-1b, and its HTTP endpoints in 3B-2. The review **UI** is 3B-3 and does not
+exist yet, labelled so the diagram is not read as describing more than currently
+ships.
 
 ## Analysis of one asset
 
@@ -90,6 +90,7 @@ sequenceDiagram
 sequenceDiagram
   autonumber
   actor R as Reviewer
+  participant RT as Route handler<br/>(3B-2, thin adapter)
   participant AS as AnalysisService<br/>(3B-1b)
   participant AZ as authorizeOrganization
   participant NR as AssetAnalysis repository
@@ -97,7 +98,9 @@ sequenceDiagram
   participant AR as MediaAsset repository
   participant AL as AuditLog
 
-  R->>AS: approve(org, assetId, {primaryAssetId?, reason?})<br/>or reject(org, assetId, {reason})
+  R->>RT: POST /analysis/approve or /analysis/reject
+  Note over RT: Authenticate, validate body shape, delegate.<br/>Whether a reason is required, whether<br/>primaryAssetId is needed or matches, and whether<br/>the revision was reviewed are NOT decided here.
+  RT->>AS: approve(org, assetId, {primaryAssetId?, reason?})<br/>or reject(org, assetId, {reason})
   AS->>AZ: require membership + video:review
   Note over AS,AZ: CREATOR is denied: whoever runs an analysis<br/>is not whoever approves it.
   AS->>NR: findByAssetId(org, assetId)
@@ -120,7 +123,9 @@ sequenceDiagram
   end
 
   Note over AS,AL: The audit entry is emitted AFTER the commit and is<br/>outside the transaction — see docs/decisions/TODO.md.
-  AS-->>R: decided analysis
+  AS-->>RT: decided analysis
+  RT-->>R: 200 + AnalysisDto with nested review<br/>{status, note, reviewedAt, reviewedBy, analysisRevision}
+  Note over RT,R: reviewedBy is the reviewer's USER ID only.<br/>A duplicate-group conflict surfaces as 422, not 409.
 ```
 
 ## Status machine
@@ -155,7 +160,8 @@ stateDiagram-v2
 | Read methods `listForProperty` / `getForAsset` (read-level authorization) | 3A-2c |
 | Review columns, partial unique index, `ReviewTransaction` | 3B-1a |
 | `approve` / `reject`, immutability per revision, duplicate primary rule, transactional rejection, review audit | 3B-1b |
-| Review HTTP endpoints | ⏭ 3B-2 |
+| Review HTTP endpoints (thin adapters, nested review DTO) | 3B-2 |
+| Review UI | ⏭ 3B-3 |
 | Analysis HTTP endpoints (thin adapters) | 3A-3 |
 | Rate limiting on the analysis endpoints | ⏭ cross-cutting, see TODO |
 | Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |

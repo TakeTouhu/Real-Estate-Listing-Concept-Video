@@ -82,8 +82,9 @@ commit. None has been moved, overwritten, or reused.
 >                refs/tags/phase-3a2b-complete \
 >                refs/tags/phase-3a2c-complete \
 >                refs/tags/phase-3a3-complete \
->                refs/tags/phase-3b1a-complete
-> git ls-remote --tags origin   # verify all nine appear
+>                refs/tags/phase-3b1a-complete \
+>                refs/tags/phase-3b1b-complete
+> git ls-remote --tags origin   # verify all ten appear
 > ```
 >
 > Local tag records (target verified against the merge commit in each case):
@@ -96,6 +97,7 @@ commit. None has been moved, overwritten, or reused.
 > | `phase-3a2c-complete` | `34d0a211e2d65bcfd0edf7bf83aad1e46093793d` | `e49ae6aa3466fdeaf8d616084c7163a15f9466f5` |
 > | `phase-3a3-complete` | `4c85d6d4bc67aa2f0e4485e0348f1cf3a5779457` | `e3fcc7410052ded01e936f75b00dbec239ac2e3e` |
 > | `phase-3b1a-complete` | `5537f3f41f7fe3cacb0fb5e2b57319b90a3f2af6` | `0a7818f10371bcf8072b6b8cc2f501c9b5868f97` |
+> | `phase-3b1b-complete` | `8a45e866d8a1a753ffb928eed24354e1c1a82d89` | `2f2f3d76d54bc0a6a0d9e8a0f60c3713d3a8cc05` |
 
 ## Phase reports
 
@@ -110,11 +112,11 @@ commit. None has been moved, overwritten, or reused.
 | Architecture diagram | `docs/architecture.md` |
 | Entity-relationship diagram | `docs/er-diagram.md` |
 | Critical sequence diagram | `docs/sequence-upload-lifecycle.md`, `docs/sequence-analysis-lifecycle.md` |
-| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md` |
+| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md`, `docs/api-changes-phase-3b2.md` |
 | Change log | `CHANGELOG.md` |
 | Release notes | `docs/release-notes-phase-2.md` |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md`, `docs/phase-3b1a-completion.md`, `docs/phase-3b1b-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md`, `docs/phase-3b1a-completion.md`, `docs/phase-3b1b-completion.md`, `docs/phase-3b2-completion.md` |
 
 ## Known deviation
 
@@ -140,7 +142,9 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3A-2c | `refresh`, duplicate grouping, `suggestedOrder`, read APIs | 333 (estimated ~290) | **Merged** (PR #7, `e49ae6a`) |
 | 3A-3 | Analysis HTTP endpoints | 571 (estimated ~445 — accepted as a one-time exception) | **Merged** (PR #8, `e3fcc74`) |
 | 3B-1a | Review infrastructure: columns, partial unique index, `ReviewTransaction` | 489 (estimated ~312) | **Merged** (PR #9, `0a7818f`) |
-| 3B-1b | Review domain logic: `approve` / `reject` | 698 — 319 production + 379 tests (estimated 486 — accepted as a milestone exception) | In review |
+| 3B-1b | Review domain logic: `approve` / `reject` | 982 — 388 production + 594 tests (698 at approval; accepted as a milestone exception) | **Merged** (PR #10, `2f2f3d7`) |
+| 3B-2 | Review HTTP endpoints | 497 — 139 production + 358 tests (estimated 418) | In review |
+| 3B-3 | Review UI | not estimated | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 
