@@ -3,9 +3,58 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3B-3a: read-only review surface
+## [Unreleased] — Phase 3B-3b: decision interactions
 
-Under review. Not merged. The first half of the human review UI — see
+Under review. Not merged. The interactive half of the human review UI — see
+`docs/phase-3b3b-completion.md`.
+
+### Added
+
+- **Approve / reject from the review page.** Two explicit controls, never a
+  toggle. Approve carries an optional note; reject requires a reason and stays
+  disabled while it is blank. On success the page calls `router.refresh()` so the
+  server component re-renders from the database.
+- **Duplicate-primary selection** — a radio group names the primary, and approval
+  acts on the selected member, so the request's `primaryAssetId` and its target
+  can never disagree.
+- **Per-row pending and error state** — `Recording…` while in flight, inline
+  errors, and a failed row stays usable.
+- **`apps/web/src/lib/decision-errors.ts`** — status-based error presentation:
+  `401`/`403`/`404` map to their own message, a `422` renders the API's
+  `error.message` **unchanged and unparsed**, and anything else falls back
+  generically.
+- **jsdom + Testing Library** (`jsdom`, `@testing-library/react`,
+  `@testing-library/user-event`) with 13 component tests. The
+  `@vitest-environment jsdom` docblock scopes the DOM to `.tsx` tests, so every
+  node-environment suite is untouched.
+
+### Fixed
+
+- The client panel no longer imports `@/lib/review-view`, which imports
+  `@app/domain`: `next build` caught that it would have pulled server-side domain
+  code into the browser bundle. Error presentation now lives in a standalone
+  import-free module.
+
+### Notes
+
+- **No request carries `analysisRevision`** — the API accepts no revision token,
+  and a test asserts the exact key set of an approve request.
+- Duplicate conflict, already-reviewed, blocking finding, missing primary, and
+  blank reason are **not** distinguished in the UI. They share one error code
+  today, and matching message text would turn a display string into an implicit
+  API contract; a machine-readable refusal reason is recorded in
+  `docs/decisions/TODO.md`.
+- No controls are rendered — not merely disabled — for a decided revision, a
+  viewer without `video:review`, or an approve action barred by a blocking
+  finding.
+- `packages/domain`, the Prisma schema, migrations, and every HTTP contract have
+  a zero diff.
+- Size: 516 code lines (287 production, 229 tests) against a ~500 target,
+  re-cost at 525 before implementation.
+
+## [phase-3b3a-complete] — Phase 3B-3a: read-only review surface
+
+Merged as `c78ecf2` (PR #12). The first half of the human review UI — see
 `docs/phase-3b3a-completion.md`.
 
 ### Added

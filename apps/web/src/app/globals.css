@@ -202,3 +202,34 @@ progress {
   padding-left: 0.75rem;
   margin-top: 0.4rem;
 }
+
+.decision-panel {
+  border-top: 1px dashed var(--border);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.primary-choice {
+  border: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+}
+
+.primary-choice label {
+  display: block;
+}
+
+.decision-row {
+  margin: 0.5rem 0;
+}
+
+.decision-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -5,6 +5,10 @@ import { defineConfig } from "vitest/config";
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Next compiles JSX itself (tsconfig keeps `jsx: preserve`), so component
+  // tests need the automatic runtime declared here or esbuild falls back to
+  // the classic transform and `React` is undefined at render time.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: [
       {
@@ -32,7 +36,7 @@ export default defineConfig({
     environment: "node",
     include: [
       "packages/**/*.{test,spec}.ts",
-      "apps/**/*.{test,spec}.ts",
+      "apps/**/*.{test,spec}.{ts,tsx}",
       "tests/**/*.{test,spec}.ts",
     ],
     exclude: [

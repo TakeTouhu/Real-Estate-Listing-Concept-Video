@@ -98,6 +98,32 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       own provider call. A lease or conditional status update (`PENDING` claimed
       by exactly one worker) belongs with the job queue in Phase 4.
 
+## Phase 3B follow-ups
+
+- [ ] **Expose a machine-readable refusal reason on review errors.** Every
+      domain refusal from `approve` / `reject` — duplicate conflict, already
+      reviewed, blocking finding, missing primary, blank reason — is
+      `VALIDATION_FAILED` / `422` today, so the only thing distinguishing them is
+      the human-readable `error.message`. The review UI therefore renders that
+      message as-is and never parses it (Phase 3B-3b), because matching on the
+      text would turn a display string into an implicit API contract. Adding a
+      stable `reason` code to the error envelope is the prerequisite for
+      case-specific reviewer messaging, a `409` for duplicate conflicts, or any
+      UI behaviour that branches on *which* rule refused.
+- [ ] **`loading.tsx` changes the unauthenticated redirect shape.** With a
+      loading boundary on `/properties/{id}/review`, Next flushes the shell
+      before `redirect("/login")` resolves, so an unauthenticated request gets
+      `200` plus a client-side redirect instead of `307`. No data is exposed —
+      the body is only the skeleton — but the redirect is a visible extra step.
+      Fixing it means dropping the loading state or moving the auth check into
+      middleware.
+- [ ] **Integration-test guard inconsistency.** Only
+      `review-duplicate-conflict.db.test.ts` skips cleanly when `DATABASE_URL`
+      is unset; `analysis-repository.db.test.ts` and `review-transaction.db.test.ts`
+      still fail inside `beforeAll` (they merely *report* their tests as
+      skipped). The same four-line guard fixes both. CI always sets
+      `DATABASE_URL`, so this only affects local runs.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).

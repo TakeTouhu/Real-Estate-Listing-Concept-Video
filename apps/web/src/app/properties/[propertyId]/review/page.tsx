@@ -10,6 +10,7 @@ import {
   type ReviewBoard,
   type ReviewItem,
 } from "@/lib/review-view";
+import { ReviewDecisionPanel } from "./review-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -64,10 +65,23 @@ export default async function ReviewPage({
 
         <Section title="Awaiting decision" count={board.awaiting.length + clusterCount(board)}>
           {board.clusters.map((cluster) => (
-            <Cluster key={cluster.duplicateGroup} cluster={cluster} thumbnails={thumbnails} />
+            <Cluster
+              key={cluster.duplicateGroup}
+              cluster={cluster}
+              thumbnails={thumbnails}
+              organizationId={organization.id}
+              propertyId={property.id}
+            />
           ))}
           {board.awaiting.map((item) => (
-            <Item key={item.assetId} item={item} thumbnails={thumbnails} />
+            <div key={item.assetId}>
+              <Item item={item} thumbnails={thumbnails} />
+              <Decisions
+                organizationId={organization.id}
+                propertyId={property.id}
+                items={[item]}
+              />
+            </div>
           ))}
         </Section>
 
@@ -139,9 +153,13 @@ function Section({
 function Cluster({
   cluster,
   thumbnails,
+  organizationId,
+  propertyId,
 }: {
   cluster: DuplicateCluster;
   thumbnails: Map<string, string>;
+  organizationId: string;
+  propertyId: string;
 }) {
   return (
     <div className="cluster">
@@ -152,7 +170,44 @@ function Cluster({
       {cluster.items.map((item) => (
         <Item key={item.assetId} item={item} thumbnails={thumbnails} />
       ))}
+      <Decisions
+        organizationId={organizationId}
+        propertyId={propertyId}
+        items={cluster.items}
+      />
     </div>
+  );
+}
+
+/**
+ * Mount the decision panel only for members that actually have an action —
+ * so a decided revision, a viewer without `video:review`, and a photo whose
+ * every action is barred render no controls at all rather than disabled ones.
+ */
+function Decisions({
+  organizationId,
+  propertyId,
+  items,
+}: {
+  organizationId: string;
+  propertyId: string;
+  items: readonly ReviewItem[];
+}) {
+  const members = items
+    .filter((item) => item.actions.canApprove || item.actions.canReject)
+    .map((item) => ({
+      assetId: item.assetId,
+      filename: item.filename,
+      canApprove: item.actions.canApprove,
+      canReject: item.actions.canReject,
+    }));
+  if (members.length === 0) return null;
+  return (
+    <ReviewDecisionPanel
+      organizationId={organizationId}
+      propertyId={propertyId}
+      members={members}
+    />
   );
 }
 
