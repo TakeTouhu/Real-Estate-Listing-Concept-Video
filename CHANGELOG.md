@@ -3,9 +3,51 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3B-1b: review domain logic
+## [Unreleased] — Phase 3B-2: review HTTP endpoints
 
-Under review. Not merged. Makes human review executable — see
+Under review. Not merged. Exposes the review decisions over HTTP — see
+`docs/phase-3b2-completion.md` and `docs/api-changes-phase-3b2.md`.
+
+### Added
+
+- **Two endpoints**, both requiring `video:review` (CREATOR denied):
+  - `POST /api/properties/{propertyId}/assets/{assetId}/analysis/approve`
+  - `POST /api/properties/{propertyId}/assets/{assetId}/analysis/reject`
+  Separate routes rather than one endpoint with a decision field: they are
+  distinct consequential actions, and rejection also mutates asset status.
+- **Nested `review` object** on the analysis representation — `status`, `note`,
+  `reviewedAt`, `reviewedBy`, `analysisRevision`. `reviewedBy` is the reviewer's
+  **user id only**, never expanded into name or email. Additive: no previously
+  returned field changed name, type, or position, so the Phase 3A-3 endpoints
+  gain the object without breaking clients.
+- **15 route tests** covering both decisions, the revision travelling with the
+  response, duplicate-group refusals, authentication, CREATOR denial, tenant
+  isolation, malformed input, and response hygiene.
+
+### Notes
+
+- Route handlers stay thin adapters: **`AnalysisService` has a zero-line diff**.
+  Whether a reason is required, whether `primaryAssetId` is needed or matches,
+  and whether a revision was already reviewed are all domain rules the routes
+  never re-check.
+- Duplicate-group conflicts remain **`422`**, asserted by a test to be `422` and
+  not `409`. A future `409` needs a distinct domain error kind and is out of
+  scope.
+- One Phase 3A-3 assertion ("`reviewedBy` never appears") is **superseded** by
+  the decision to expose it, and was rewritten rather than deleted: an unreviewed
+  analysis must now report `reviewedBy: null`, and no user name or email may
+  appear in any body.
+
+### Not included (deliberately)
+
+- No review UI (Phase 3B-3), no rate limiting, no domain change, no Prisma
+  schema change, no migration.
+
+## [phase-3b1b-complete] — Phase 3B-1b: review domain logic
+
+Merged in PR #10 as `2f2f3d76d54bc0a6a0d9e8a0f60c3713d3a8cc05`.
+Tagged `phase-3b1b-complete` locally; the remote tag is **not** yet published
+(see `docs/progress.md`). Makes human review executable — see
 `docs/phase-3b1b-completion.md`.
 
 ### Added

@@ -304,11 +304,19 @@ describe("authentication and tenant isolation", () => {
 describe("response hygiene", () => {
   it("never exposes storage keys, organization ids, or the provider name", async () => {
     const res = await startAnalysis(postReq(ctx.orgId), params());
-    const raw = JSON.stringify(await jsonOf(res));
+    const body = await jsonOf(res);
+    const raw = JSON.stringify(body);
     expect(raw).not.toContain(STORAGE_KEY);
     expect(raw).not.toContain("normalized.jpg");
     expect(raw).not.toContain(ctx.orgId);
     expect(raw).not.toContain("stub");
-    expect(raw).not.toContain("reviewedBy");
+    // Since Phase 3B-2 the DTO carries a nested `review` object, so the reviewer
+    // id is deliberately present. What must stay out is any expansion of it into
+    // user details, and any unreviewed analysis must report null rather than a
+    // placeholder identity.
+    const review = body.review as Record<string, unknown>;
+    expect(review.status).toBe("UNREVIEWED");
+    expect(review.reviewedBy).toBeNull();
+    expect(raw).not.toContain("@example.com");
   });
 });

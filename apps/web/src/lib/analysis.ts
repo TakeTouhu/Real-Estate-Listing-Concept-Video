@@ -39,10 +39,25 @@ export function getAnalysisService(): AnalysisService {
 }
 
 /**
+ * Human-review state, grouped so review concerns stay one cohesive object rather
+ * than eight loose fields on the analysis.
+ *
+ * `reviewedBy` is the reviewer's **user id only**; it is deliberately not
+ * expanded into name or email, which would widen this response into a directory
+ * lookup and leak more about members than a review client needs.
+ */
+export interface ReviewDto {
+  readonly status: AssetAnalysis["reviewStatus"];
+  readonly note: string | null;
+  readonly reviewedAt: string | null;
+  readonly reviewedBy: string | null;
+  readonly analysisRevision: number;
+}
+
+/**
  * Public shape of an analysis. Deliberately omits `organizationId` (implied by
- * the authorized request), `provider` (an internal adapter name), and the
- * review columns (unwritten until the Phase 3B review surface). Storage keys
- * are never part of the entity and so cannot leak here.
+ * the authorized request) and `provider` (an internal adapter name). Storage
+ * keys are never part of the entity and so cannot leak here.
  */
 export interface AnalysisDto {
   readonly id: string;
@@ -61,6 +76,7 @@ export interface AnalysisDto {
   /** Derived server-side so clients cannot diverge on the documented thresholds. */
   readonly lowConfidence: boolean;
   readonly hasBlockingFlag: boolean;
+  readonly review: ReviewDto;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -82,6 +98,13 @@ export function toAnalysisDto(analysis: AssetAnalysis): AnalysisDto {
     failureReason: analysis.failureReason,
     lowConfidence: isLowConfidence(analysis),
     hasBlockingFlag: hasBlockingFlag(analysis),
+    review: {
+      status: analysis.reviewStatus,
+      note: analysis.reviewNote,
+      reviewedAt: analysis.reviewedAt?.toISOString() ?? null,
+      reviewedBy: analysis.reviewedBy,
+      analysisRevision: analysis.analysisRevision,
+    },
     createdAt: analysis.createdAt.toISOString(),
     updatedAt: analysis.updatedAt.toISOString(),
   };
