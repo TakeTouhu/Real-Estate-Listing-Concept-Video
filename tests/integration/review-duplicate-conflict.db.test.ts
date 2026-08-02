@@ -126,7 +126,11 @@ async function seedAnalyzed(assetId: string, analysisId: string): Promise<void> 
   });
 }
 
+/** Opt-in suite: without a test database it must skip, not fail in a hook. */
+const HAS_DB = Boolean(process.env.DATABASE_URL);
+
 beforeEach(async () => {
+  if (!HAS_DB) return;
   await cleanup();
   await prisma.user.create({
     data: { id: REVIEWER, email: `${REVIEWER}@example.com`, name: "Reviewer" },
@@ -151,11 +155,12 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  if (!HAS_DB) return;
   await cleanup();
   await prisma.$disconnect();
 });
 
-describe("duplicate-approval conflict through the real runtime path", () => {
+describe.skipIf(!HAS_DB)("duplicate-approval conflict through the real runtime path", () => {
   it("refuses the second approval with VALIDATION_FAILED and leaves both rows correct", async () => {
     const first = await service.approve(REVIEWER, ORG, ASSET_A, { primaryAssetId: ASSET_A });
     expect(first.reviewStatus).toBe("APPROVED");
