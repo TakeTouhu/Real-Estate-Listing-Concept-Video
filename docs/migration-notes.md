@@ -27,6 +27,7 @@ required checks (`pnpm check`) do **not** need a database.
 | 2 | `00000000000001_phase2_properties_media` | 2 | Properties + media assets |
 | 3 | `00000000000002_phase3a2_asset_analysis` | 3A-2a | Asset analysis results |
 | 4 | `00000000000003_phase3b1a_review_state` | 3B-1a | Human-review state |
+| 5 | `00000000000004_phase3c1_storyboard` | 3C-1 | Video projects + storyboard scenes |
 
 ### 1 — `00000000000000_init` (Phase 1)
 
@@ -94,6 +95,36 @@ Prisma does not generate down-migrations; a forward fix is preferred in
 production. Dropping the table destroys analysis results only — uploaded assets
 and stored objects are untouched, and analyses can be re-derived by re-running
 the deterministic adapter.
+
+### 5 — `00000000000004_phase3c1_storyboard` (Phase 3C-1)
+
+**Additive only. No existing column is altered, renamed, or dropped, so it is
+safe to apply to a populated database and requires no backfill.**
+
+Creates:
+
+- Enum `VideoProjectStatus` (`DRAFT`, `STORYBOARD_READY`, `STORYBOARD_STALE`).
+- Table `video_projects`, including `compositionFingerprint` (nullable) — the
+  digest of the approved-analysis input set a storyboard was composed from.
+- Table `storyboard_scenes`, with `UNIQUE(videoProjectId, position)`.
+- Two **composite** foreign keys from `storyboard_scenes`:
+  `(videoProjectId, propertyId) → video_projects(id, propertyId)` and
+  `(assetId, propertyId) → media_assets(id, propertyId)`.
+- The unique keys those foreign keys require: `video_projects(id, propertyId)`
+  and **`media_assets(id, propertyId)`** — the only change this migration makes
+  to an existing table, and it adds an index rather than altering a column.
+
+`storyboard_scenes` deliberately has **no `organizationId`**. Tenant scope comes
+from the owning project, and the composite foreign keys make a scene whose
+project and asset belong to different properties — and therefore different
+organizations — impossible to insert. Enforcing that in the database rather than
+in application code is the same reasoning as the Phase 3B-1a partial unique
+index.
+
+Rollback: `DROP TABLE storyboard_scenes; DROP TABLE video_projects;` then
+`DROP TYPE "VideoProjectStatus";` and, if desired,
+`DROP INDEX media_assets_id_propertyId_key;`. Nothing else references the new
+tables, and no analysis or asset data is affected.
 
 ### 4 — `00000000000003_phase3b1a_review_state` (Phase 3B-1a)
 

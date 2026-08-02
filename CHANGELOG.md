@@ -3,9 +3,43 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3B-3b: decision interactions
+## [Unreleased] — Phase 3C-1: storyboard persistence
 
-Under review. Not merged. The interactive half of the human review UI — see
+Under review. Not merged. Persistence and infrastructure only — see
+`docs/phase-3c1-completion.md`.
+
+### Added
+
+- **`video_projects`** — provider-neutral project settings for one property's
+  walkthrough, plus `compositionFingerprint`, the digest of the approved-analysis
+  input set a storyboard was composed from. Freshness is *derived* by comparing
+  it with the current eligible set; no module notifies another when an analysis
+  is refreshed.
+- **`storyboard_scenes`** — ordered scenes with `sourceAnalysisRevision`
+  provenance and `UNIQUE(videoProjectId, position)`.
+- **Tenant scope without a duplicated column.** Scenes carry no
+  `organizationId`: reads filter through the owning project, and two composite
+  foreign keys — `(videoProjectId, propertyId)` and `(assetId, propertyId)` —
+  make a scene mixing two properties, and therefore two tenants, impossible to
+  insert. A live-PostgreSQL test proves the database refuses it.
+- `packages/domain/src/storyboard/` types and persistence ports;
+  `createPrismaStoryboardRepositories`.
+- **9 live-PostgreSQL tests** covering round-trip, tenant isolation on read and
+  write, position uniqueness, the cross-tenant insert rejection, and cascades.
+
+### Notes
+
+- No composition algorithm, prompt compiler, moderator, service, HTTP endpoint,
+  or UI — those are later 3C milestones.
+- `durationSeconds`, `aspectRatio`, and `resolution` are stored as requested. No
+  provider capability table and no provisional limits; Phase 4 owns that.
+- `packages/domain/src/analysis/` and every HTTP route have a zero diff.
+- Size: 571 code lines (343 production, 228 tests) against a ~500 target,
+  estimated ~500 — reported, not absorbed.
+
+## [phase-3b3-complete] — Phase 3B-3b: decision interactions
+
+Merged as `6a5c848` (PR #13). The interactive half of the human review UI — see
 `docs/phase-3b3b-completion.md`.
 
 ### Added

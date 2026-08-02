@@ -100,6 +100,7 @@ flowchart TB
 | `@app/storage` object storage, signing, image pipeline, scan hook | Implemented (in-process storage) |
 | `@app/video-providers` Fake + WaveSpeed adapters | Implemented; WaveSpeed not invoked |
 | `@app/domain` analysis contracts, normalization, ordering/duplicate rules | Implemented (Phase 3A-1) |
+| `@app/domain` storyboard entities and persistence ports (`storyboard/`) | Implemented (Phase 3C-1) — composition, prompt compilation, and moderation are later 3C milestones |
 | `@app/ai-providers` `ImageAnalysisProvider` + deterministic offline adapter | Implemented (Phase 3A-1); **no real vision vendor** (ADR-0009) |
 | `AnalysisService`, `AssetAnalysis` persistence | **Not implemented** (Phase 3A-2) |
 | Analysis review UI | **Not implemented** (Phase 3B) |

@@ -1,6 +1,6 @@
 # Entity-Relationship Diagram
 
-Version: 1.3 (as implemented through Phase 3B-1a)
+Version: 1.4 (as implemented through Phase 3C-1)
 Source of truth: `packages/database/prisma/schema.prisma`
 Status: Describes **implemented** tables only. Entities from
 `docs/DataModel.md` that belong to later phases are listed at the bottom.
@@ -18,6 +18,9 @@ erDiagram
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
+  PROPERTIES ||--o{ VIDEO_PROJECTS : "is filmed by"
+  VIDEO_PROJECTS ||--o{ STORYBOARD_SCENES : sequences
+  MEDIA_ASSETS ||--o{ STORYBOARD_SCENES : "is the source of"
 
   ORGANIZATIONS {
     string id PK
@@ -132,6 +135,43 @@ erDiagram
     datetime updatedAt
   }
 
+  VIDEO_PROJECTS {
+    string id PK
+    string organizationId "tenant scope"
+    string propertyId FK
+    string name
+    enum   status "DRAFT|STORYBOARD_READY|STORYBOARD_STALE"
+    int    durationSeconds "requested; provider validation is Phase 4"
+    string aspectRatio "provider-neutral"
+    string resolution "provider-neutral"
+    string stylePreset "nullable"
+    string cameraMotion "nullable"
+    string prompt "nullable, untrusted user text"
+    string negativePrompt "nullable, untrusted user text"
+    boolean includeMusic
+    boolean includeCaptions
+    string brandTemplateId "nullable"
+    string compositionFingerprint "nullable, digest of the APPROVED input set"
+    string createdBy
+    datetime createdAt
+    datetime updatedAt
+  }
+
+  STORYBOARD_SCENES {
+    string id PK
+    string videoProjectId FK "composite with propertyId"
+    string propertyId "half of both composite FKs"
+    string assetId FK "composite with propertyId"
+    int    position "UK with videoProjectId"
+    enum   roomType "nullable, 15 values"
+    int    durationSeconds
+    string cameraMotion "nullable"
+    string compiledPrompt "nullable until Phase 3C-3"
+    int    sourceAnalysisRevision "provenance"
+    datetime createdAt
+    datetime updatedAt
+  }
+
   AUDIT_LOGS {
     string id PK
     string organizationId FK "nullable"
@@ -146,8 +186,10 @@ erDiagram
 
 ## Tenant-scope and index notes
 
-- Every tenant-owned table carries `organizationId`; all repository reads filter
-  on it, so another tenant's row is simply not found.
+- Every tenant-owned table carries `organizationId` — **except
+  `storyboard_scenes`**, which inherits tenant scope through its project (see
+  below). All repository reads filter on the organization either directly or
+  through that relation, so another tenant's row is simply not found.
 - Composite/indexed for tenant queries:
   `properties(organizationId, status)`,
   `media_assets(organizationId, propertyId, status)`,
@@ -168,6 +210,19 @@ erDiagram
   approved analysis per duplicate group", so concurrent approvals of two members
   of a group cannot both succeed. Prisma cannot express a partial index, so it
   is hand-written in the migration — see `docs/migration-notes.md`.
+- **`storyboard_scenes` carries no `organizationId`.** A scene is owned by its
+  project, and duplicating the column would create a second source of truth that
+  application code could let drift. Reads filter through the parent
+  (`videoProject: { organizationId }`), and writes are constrained by two
+  composite foreign keys — `(videoProjectId, propertyId) → video_projects(id,
+  propertyId)` and `(assetId, propertyId) → media_assets(id, propertyId)` — so a
+  scene whose project and asset belong to different properties, and therefore
+  different organizations, **cannot be inserted at all**. The supporting unique
+  keys `video_projects(id, propertyId)` and `media_assets(id, propertyId)` exist
+  only to make those foreign keys possible.
+- `storyboard_scenes(videoProjectId, position)` is unique: two scenes cannot
+  claim the same position in one project. Composition therefore replaces a
+  project's scenes wholesale rather than diffing them.
 - Cascade behavior: deleting an organization cascades memberships, invitations,
   and properties (and thus assets, and thus analyses); `audit_logs.organizationId`
   is `SetNull` so audit history survives.
@@ -180,7 +235,6 @@ erDiagram
 
 ## Not implemented yet (later phases)
 
-`VideoProject` / `StoryboardScene` (Phase 3C),
 `GenerationJob` / `ProviderGeneration` / `VideoOutput` (Phase 4–5),
 `CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7).
 These appear in `docs/DataModel.md` but have no tables yet.
