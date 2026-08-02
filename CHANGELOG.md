@@ -3,9 +3,49 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3B-2: review HTTP endpoints
+## [Unreleased] — Phase 3B-3a: read-only review surface
 
-Under review. Not merged. Exposes the review decisions over HTTP — see
+Under review. Not merged. The first half of the human review UI — see
+`docs/phase-3b3a-completion.md`.
+
+### Added
+
+- **`/properties/{propertyId}/review`** — a read-only page grouping a property's
+  analyses into awaiting decision, decided, and not reviewable yet. Shows signed
+  thumbnails, room labels, analysis revisions, blocking findings, warnings, and
+  low-confidence cautions. Linked from the property page.
+- **Duplicate clusters** — members of a multi-member duplicate group render as
+  one choice; a member already holding the group's approval is named, and the
+  others say so rather than offering an action that would fail.
+- **Immutable decision records** — decision, note, reviewer user id, timestamp,
+  and the revision the decision was made against, with the statement that only a
+  refresh reopens review.
+- **`apps/web/src/lib/review-view.ts`** — the whole presentation model as pure
+  functions over domain records, with 13 unit tests. No React, no fetch.
+- **Presentation-level authorization** — a role without `video:review` sees a
+  read-only banner and no decision affordance; the API enforces the same rule
+  independently.
+- **Loading state** for the review route.
+
+### Fixed
+
+- `tests/integration/review-duplicate-conflict.db.test.ts` now skips without
+  `DATABASE_URL` instead of failing inside a hook. CI, which always sets it, is
+  unaffected.
+
+### Notes
+
+- **Nothing mutates.** Approve/reject controls are Phase 3B-3b. Revision numbers
+  are display-only: no request carries a revision token, and no optimistic
+  concurrency is invented at the UI layer.
+- `packages/domain`, the Prisma schema, migrations, and every HTTP contract have
+  a zero diff.
+- Size: 694 code lines against a ~500 target — reported, not absorbed; see the
+  completion report for where the estimate went wrong.
+
+## [phase-3b2-complete] — Phase 3B-2: review HTTP endpoints
+
+Merged as `50c2e4d` (PR #11). Exposes the review decisions over HTTP — see
 `docs/phase-3b2-completion.md` and `docs/api-changes-phase-3b2.md`.
 
 ### Added

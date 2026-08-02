@@ -48,6 +48,9 @@ export default async function PropertyDetailPage({
           {property.addressMasked ? ` · ${property.addressMasked}` : ""}
         </p>
         {property.description ? <p>{property.description}</p> : null}
+        <p>
+          <a href={`/properties/${property.id}/review`}>Review photo analyses →</a>
+        </p>
 
         <UploadPanel
           organizationId={organization.id}

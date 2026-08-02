@@ -52,6 +52,31 @@ Collect only required listing data. Full address is optional and hidden by defau
 
 Show each image with editable room label, confidence, quality score, privacy flags, and suggested sequence. Users can reorder, exclude, and relabel images. Low-confidence classification cannot silently proceed.
 
+#### Implemented — `/properties/{propertyId}/review` (Phase 3B-3a, read-only)
+
+The review surface is reached from the property page and groups a property's
+analyses into three sections: **awaiting decision**, **decided**, and **not
+reviewable yet** (with the reason — not analyzed, in progress, or the failure
+message). Each row shows a short-lived signed thumbnail, filename, room label,
+analysis revision, blocking findings in the error style, warnings and
+low-confidence as cautions.
+
+Near-duplicates sharing a group render as one cluster stating that only one may
+be approved; a group of one is an ordinary row. When a member already holds the
+group's approval, the others state so rather than offering an action that would
+fail.
+
+A decision is presented as an immutable record — decision, note, reviewer **user
+id**, timestamp, and the revision it was made against — with the statement that
+only refreshing the analysis reopens review.
+
+Authorization is presentational as well as enforced: a role without
+`video:review` sees a read-only banner and no decision affordance. The API
+enforces the same rule independently.
+
+Decision controls (approve / reject, duplicate-primary selection) are Phase
+3B-3b; this milestone reads only.
+
 ### Video customization
 
 Controls:
