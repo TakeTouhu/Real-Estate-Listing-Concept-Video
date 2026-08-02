@@ -74,8 +74,28 @@ Authorization is presentational as well as enforced: a role without
 `video:review` sees a read-only banner and no decision affordance. The API
 enforces the same rule independently.
 
-Decision controls (approve / reject, duplicate-primary selection) are Phase
-3B-3b; this milestone reads only.
+#### Implemented — decision controls (Phase 3B-3b)
+
+Where a decision is available the page mounts approve and reject controls —
+never a single toggle. Approve takes an optional note; reject requires a reason
+and its control stays unusable while the field is blank, mirroring the domain
+rule rather than replacing it. Inside a duplicate cluster a radio group names
+the primary and approval acts on the selected member, so the request's target
+and its `primaryAssetId` cannot disagree.
+
+Controls are absent — not merely disabled — for a decided revision, for a viewer
+without `video:review`, and for approval of a photo carrying a blocking finding.
+
+Each row carries its own pending and error state: `Recording…` while the request
+is in flight, an inline message on failure, and the row stays usable for a
+retry. A successful decision refreshes the server component from the database
+rather than patching state in the browser, because rejection also moves the
+photo between sections.
+
+Failure messages are chosen by HTTP status, and a `422` renders the API's own
+message unchanged. The UI does not tell the individual refusals apart — they
+share one error code, and parsing the message text would turn a display string
+into an implicit API contract.
 
 ### Video customization
 
