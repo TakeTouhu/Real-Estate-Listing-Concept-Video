@@ -54,7 +54,7 @@ commit. None has been moved, overwritten, or reused.
 
 > ### ⚠️ The remote tags do not exist
 >
-> All twelve tags exist **only in the local clone**. Publication remains blocked
+> All thirteen tags exist **only in the local clone**. Publication remains blocked
 > in this development environment. `git ls-remote --tags origin` returns empty.
 >
 > Attempted 2026-07-27 with three different invocations — explicit refspecs,
@@ -85,8 +85,9 @@ commit. None has been moved, overwritten, or reused.
 >                refs/tags/phase-3b1a-complete \
 >                refs/tags/phase-3b1b-complete \
 >                refs/tags/phase-3b2-complete \
->                refs/tags/phase-3b3-complete
-> git ls-remote --tags origin   # verify all twelve appear
+>                refs/tags/phase-3b3-complete \
+>                refs/tags/phase-3c1-complete
+> git ls-remote --tags origin   # verify all thirteen appear
 > ```
 >
 > Local tag records (target verified against the merge commit in each case):
@@ -102,6 +103,7 @@ commit. None has been moved, overwritten, or reused.
 > | `phase-3b1b-complete` | `8a45e866d8a1a753ffb928eed24354e1c1a82d89` | `2f2f3d76d54bc0a6a0d9e8a0f60c3713d3a8cc05` |
 > | `phase-3b2-complete` | `8bfd7ceb4cae81f636ced97e7da3a3639760fd03` | `50c2e4df49e921df4430b2becd0741642e625bee` |
 > | `phase-3b3-complete` | `ff3f866ccda7b550490b1bb26e5780f9002540b2` | `6a5c8484e225f89147b168f54b7d62edfd072dc2` |
+> | `phase-3c1-complete` | `00b1ae3b45036707f09ba59da9687a7173d8f94b` | `f7419bcbaf1b96408fd4e5d5700eb6a539594eac` |
 
 ## Phase reports
 
@@ -150,7 +152,9 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3B-2 | Review HTTP endpoints | 497 — 139 production + 358 tests (estimated 418) | **Merged** (PR #11, `50c2e4d`) |
 | 3B-3a | Read-only review surface | 694 — 436 production + 258 tests (estimated ~455; accepted as a milestone exception) | **Merged** (PR #12, `c78ecf2`) |
 | 3B-3b | Decision interactions + DOM test infrastructure | 516 — 287 production + 229 tests (re-cost 525) | **Merged** (PR #13, `6a5c848`) |
-| 3C-1 | Storyboard persistence: `video_projects`, `storyboard_scenes`, repositories | 571 — 343 production + 228 tests (estimated ~500) | In review |
+| 3C-1 | Storyboard persistence: `video_projects`, `storyboard_scenes`, repositories | 604 — 375 production + 229 tests (accepted as a milestone exception) | **Merged** (PR #14, `f7419bc`) |
+| 3C-2a | Eligible-input selection + composition fingerprint | 354 — 107 production + 247 tests (estimated ~250) | In review |
+| 3C-2b | Deterministic ordering + duration allocation | ~305 planned | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 
@@ -163,4 +167,4 @@ verified. A milestone PR never receives a phase tag.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0011, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0012, plus `docs/decisions/TODO.md` for open items.
