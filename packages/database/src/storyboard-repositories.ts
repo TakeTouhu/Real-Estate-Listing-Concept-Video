@@ -82,30 +82,29 @@ export function createPrismaStoryboardRepositories(
         return rows.map(toProject);
       },
 
-      async update(project) {
-        const { id, organizationId } = project;
-        // Mutable fields only, enumerated: `propertyId` never moves, and
-        // `updatedAt` is left to Prisma's @updatedAt rather than being written
-        // back from a possibly stale in-memory copy.
+      async update(organizationId, id, changes) {
+        // `changes` cannot express propertyId, organizationId, createdAt or
+        // updatedAt, so the fields enumerated here are exactly the mutable set;
+        // an absent key is `undefined`, which Prisma reads as "leave alone".
         //
         // updateMany scopes the write by organization, so another tenant's row
         // matches nothing rather than being overwritten.
         const changed = await prisma.videoProject.updateMany({
           where: { id, organizationId },
           data: {
-            name: project.name,
-            status: project.status,
-            durationSeconds: project.durationSeconds,
-            aspectRatio: project.aspectRatio,
-            resolution: project.resolution,
-            stylePreset: project.stylePreset,
-            cameraMotion: project.cameraMotion,
-            prompt: project.prompt,
-            negativePrompt: project.negativePrompt,
-            includeMusic: project.includeMusic,
-            includeCaptions: project.includeCaptions,
-            brandTemplateId: project.brandTemplateId,
-            compositionFingerprint: project.compositionFingerprint,
+            name: changes.name,
+            status: changes.status,
+            durationSeconds: changes.durationSeconds,
+            aspectRatio: changes.aspectRatio,
+            resolution: changes.resolution,
+            stylePreset: changes.stylePreset,
+            cameraMotion: changes.cameraMotion,
+            prompt: changes.prompt,
+            negativePrompt: changes.negativePrompt,
+            includeMusic: changes.includeMusic,
+            includeCaptions: changes.includeCaptions,
+            brandTemplateId: changes.brandTemplateId,
+            compositionFingerprint: changes.compositionFingerprint,
           },
         });
         if (changed.count === 0) throw new Error(`video project ${id} not found`);

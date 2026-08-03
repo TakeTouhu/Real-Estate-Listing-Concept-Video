@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createPrismaStoryboardRepositories } from "@app/database";
-import type { StoryboardScene, VideoProject } from "@app/domain";
+import type { StoryboardScene } from "@app/domain";
 
 /**
  * Storyboard persistence against live PostgreSQL.
@@ -124,25 +124,33 @@ describe.skipIf(!HAS_DB)("video project persistence", () => {
     expect(created.status).toBe("DRAFT");
     expect(created.compositionFingerprint).toBeNull();
 
-    const updated = await repos.projects.update({
-      ...created,
+    const updated = await repos.projects.update(ORG_A, PROJECT_A, {
       status: "STORYBOARD_READY",
       compositionFingerprint: "sha256:abc",
       prompt: "bright and airy",
       negativePrompt: "no people",
-    } as VideoProject);
+    });
     expect(updated.status).toBe("STORYBOARD_READY");
     expect(updated.compositionFingerprint).toBe("sha256:abc");
     expect(updated.negativePrompt).toBe("no people");
-    // The database owns updatedAt; writing back a stale in-memory copy would
-    // freeze it.
+    // The database owns updatedAt; the update contract cannot express it, so a
+    // stale in-memory copy can never freeze the column.
     expect(updated.updatedAt.getTime()).toBeGreaterThan(created.updatedAt.getTime());
   });
 
-  it("never moves a project to another property, even if asked", async () => {
+  it("leaves unmentioned fields alone, and identity untouched", async () => {
     const created = await repos.projects.create(project(PROJECT_A, ORG_A, PROP_A));
-    const moved = await repos.projects.update({ ...created, propertyId: PROP_B });
-    expect(moved.propertyId).toBe(PROP_A);
+    const updated = await repos.projects.update(ORG_A, PROJECT_A, { name: "Renamed" });
+
+    expect(updated.name).toBe("Renamed");
+    expect(updated.durationSeconds).toBe(created.durationSeconds);
+    expect(updated.aspectRatio).toBe(created.aspectRatio);
+    expect(updated.status).toBe("DRAFT");
+    // propertyId, organizationId and createdAt are not expressible in the
+    // update contract at all — this asserts they also do not drift.
+    expect(updated.propertyId).toBe(PROP_A);
+    expect(updated.organizationId).toBe(ORG_A);
+    expect(updated.createdAt.getTime()).toBe(created.createdAt.getTime());
   });
 
   it("does not return, or update, another organization's project", async () => {
@@ -151,11 +159,7 @@ describe.skipIf(!HAS_DB)("video project persistence", () => {
     expect(await repos.projects.findById(ORG_B, PROJECT_A)).toBeNull();
     expect(await repos.projects.listByProperty(ORG_B, PROP_A)).toEqual([]);
     await expect(
-      repos.projects.update({
-        ...(await repos.projects.findById(ORG_A, PROJECT_A))!,
-        organizationId: ORG_B,
-        name: "hijacked",
-      }),
+      repos.projects.update(ORG_B, PROJECT_A, { name: "hijacked" }),
     ).rejects.toThrow();
 
     const untouched = await repos.projects.findById(ORG_A, PROJECT_A);

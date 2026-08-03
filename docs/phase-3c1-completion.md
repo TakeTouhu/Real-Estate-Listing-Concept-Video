@@ -20,12 +20,13 @@ no Phase 4 work.
 | `packages/database/src/storyboard-repositories.ts` | 145 |
 | `packages/domain/src/storyboard/types.ts` | 82 |
 | `packages/database/prisma/schema.prisma` | 75 |
-| `packages/domain/src/storyboard/ports.ts` | 37 |
+| `packages/domain/src/storyboard/ports.ts` | 66 |
 | barrels (`domain`, `database`, `storyboard/index.ts`) | 4 |
-| **Total** | **571** — 343 production + 228 tests |
+| **Total** | **604** — 375 production + 229 tests |
 
 Generated migration SQL excluded, per policy. Estimated ~500 before
-implementation, so this is **14% over** — schema 75 against 62 (the composite
+implementation, so this is **21% over** (571 at first review, plus the narrowed
+update contract requested in review) — schema 75 against 62 (the composite
 keys and their rationale comments), repositories 145 against 115 (enumerating
 mutable update fields rather than spreading, after the defect below), and tests
 228 against 185 (nine cases, including two the tenant model exists to make
@@ -89,15 +90,41 @@ asset and asserts the database refuses it.
 project's scenes wholesale rather than diffing them — reflected in the
 `replaceForProject` port.
 
-## A defect found while testing
+## Repository update contract — made unrepresentable, as required
 
-The first `update` implementation spread the domain object into Prisma's `data`.
-That wrote back a stale `updatedAt` (defeating `@updatedAt`, so the column would
-have frozen at creation time) and allowed `propertyId` to be rewritten, which
-would have moved a project to another property and slipped past the composite
-keys. Now the mutable fields are enumerated explicitly, matching the analysis
-repository's style, with two tests: `updatedAt` must advance, and a requested
-property move must not take effect.
+`VideoProjectRepository.update(organizationId, id, changes)` accepts a
+`VideoProjectUpdate` covering only genuinely mutable fields. `propertyId`,
+`organizationId`, `createdAt` and `updatedAt` **cannot be supplied at all**: a
+requested property move is a compile error, not a silently ignored field, and
+`updatedAt` stays database-managed because nothing can write it. The
+organization is an addressing argument rather than payload, so a write can never
+target another tenant by carrying a different id in the body.
+
+**This does not conflict materially with the rest of the codebase, and nothing
+else was refactored.** The older ports — `AssetAnalysisRepository`,
+`PropertyRepository`, `MediaAssetRepository`, `InvitationRepository` — still
+take a whole entity and rely on their adapters enumerating mutable columns. The
+new port diverges deliberately and *locally*: it has no other callers yet, so
+adopting the narrower contract required **zero** changes outside this milestone.
+The two styles should not coexist indefinitely; converging them is a
+cross-repository refactor and is recorded in `docs/decisions/TODO.md` for its own
+approval rather than performed here.
+
+### How the earlier version failed
+
+The first implementation spread the domain object into Prisma's `data`. That
+wrote back a stale `updatedAt` (defeating `@updatedAt`, so the column would have
+frozen at creation time) and allowed `propertyId` to be rewritten, moving a
+project to another property straight past the composite keys. Enumerating the
+mutable fields fixed the symptom; the narrowed contract removes the possibility.
+
+## `MIN_STORYBOARD_SCENES` is vocabulary only — confirmed
+
+`grep -rn MIN_STORYBOARD_SCENES` finds exactly one hit: its declaration in
+`packages/domain/src/storyboard/types.ts`. It is referenced by no repository, no
+schema constraint, and no migration. **Persistence enforces no composition
+minimum** — a project with zero scenes stores happily, which is correct, since
+composition is 3C-2/3C-4 work.
 
 ## Verification
 
@@ -119,7 +146,7 @@ property move must not take effect.
 | --- | --- |
 | Project round-trip | nullable settings, status, fingerprint; `updatedAt` advances |
 | Project tenant isolation | another org's project is invisible to `findById` / `listByProperty`, and an update scoped to it changes nothing |
-| Immutability | a requested `propertyId` change does not take effect |
+| Immutability | an update naming only `name` leaves every other field, and identity, untouched |
 | Scene replacement | wholesale replace, position ordering, position reuse after replacement |
 | Position uniqueness | two scenes at one position rejected, leaving no partial write |
 | Scene tenant scope | reads and writes for another org return nothing / reject, resolved through the project |
