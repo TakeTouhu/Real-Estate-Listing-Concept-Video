@@ -124,6 +124,24 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       skipped). The same four-line guard fixes both. CI always sets
       `DATABASE_URL`, so this only affects local runs.
 
+## Phase 3C follow-ups
+
+- [ ] **Align the older repository update contracts, or accept the divergence.**
+      `VideoProjectRepository.update(organizationId, id, changes)` takes only
+      genuinely mutable fields, so `propertyId`, `organizationId`, `createdAt`
+      and `updatedAt` cannot be supplied at all — an attempted property move is a
+      type error rather than a silently ignored field. The older ports
+      (`AssetAnalysisRepository`, `PropertyRepository`, `MediaAssetRepository`,
+      `InvitationRepository`) still take a whole entity and rely on their
+      adapters enumerating the mutable columns. The divergence is deliberate and
+      currently harmless — the new port has no other callers — but the two styles
+      should not coexist indefinitely. Converging them is a cross-repository
+      refactor and needs its own approval.
+- [ ] **`StoryboardScene` generation status vocabulary.** `docs/DataModel.md`
+      lists a `status` column but documents no values, and every plausible one
+      (`GENERATING`, `READY`, `FAILED`) describes Phase 4 generation. The column
+      is deliberately omitted until Phase 4 defines it.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).

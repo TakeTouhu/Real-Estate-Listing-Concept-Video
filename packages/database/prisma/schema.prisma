@@ -184,6 +184,7 @@ model Property {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   assets        MediaAsset[]
+  videoProjects VideoProject[]
 
   @@index([organizationId, status])
   @@map("properties")
@@ -211,7 +212,11 @@ model MediaAsset {
   updatedAt          DateTime         @updatedAt
   property           Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   analysis           AssetAnalysis?
+  scenes             StoryboardScene[]
 
+  // Referenced by storyboard_scenes so a scene and its project must belong to
+  // the same property — and therefore the same organization — by construction.
+  @@unique([id, propertyId])
   @@index([organizationId, propertyId, status])
   @@index([organizationId, sha256])
   @@map("media_assets")
@@ -265,4 +270,74 @@ model AuditLog {
   @@index([organizationId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+enum VideoProjectStatus {
+  DRAFT
+  STORYBOARD_READY
+  STORYBOARD_STALE
+}
+
+/// Project-level settings for one property's walkthrough video.
+///
+/// Provider-neutral by design: aspect ratio, resolution and duration are stored
+/// as requested, and validating them against an actual model's capabilities is
+/// Phase 4 work, not a table of provisional limits here.
+model VideoProject {
+  id                     String             @id
+  organizationId         String
+  propertyId             String
+  name                   String
+  status                 VideoProjectStatus @default(DRAFT)
+  durationSeconds        Int
+  aspectRatio            String
+  resolution             String
+  stylePreset            String?
+  cameraMotion           String?
+  prompt                 String?
+  negativePrompt         String?
+  includeMusic           Boolean            @default(false)
+  includeCaptions        Boolean            @default(false)
+  brandTemplateId        String?
+  /// Deterministic digest of the APPROVED analysis input set a storyboard was
+  /// composed from — (assetId, analysisRevision) over every eligible analysis.
+  /// Freshness is derived by comparing it with the current eligible set, so no
+  /// module has to notify this one when an analysis is refreshed.
+  compositionFingerprint String?
+  createdBy              String
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  property               Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  scenes                 StoryboardScene[]
+
+  @@unique([id, propertyId])
+  @@index([organizationId, propertyId])
+  @@index([organizationId, status])
+  @@map("video_projects")
+}
+
+/// One planned scene. Tenant scope is inherited through VideoProject rather
+/// than denormalized: every read filters on the parent's organizationId, and
+/// the composite foreign keys below make a cross-property — and so cross-tenant
+/// — scene impossible to insert rather than merely discouraged.
+model StoryboardScene {
+  id                     String       @id
+  videoProjectId         String
+  propertyId             String
+  assetId                String
+  position               Int
+  roomType               RoomType?
+  durationSeconds        Int
+  cameraMotion           String?
+  compiledPrompt         String?
+  /// Provenance: the analysis revision this scene was composed from.
+  sourceAnalysisRevision Int
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  videoProject           VideoProject @relation(fields: [videoProjectId, propertyId], references: [id, propertyId], onDelete: Cascade)
+  asset                  MediaAsset   @relation(fields: [assetId, propertyId], references: [id, propertyId], onDelete: Cascade)
+
+  @@unique([videoProjectId, position])
+  @@index([videoProjectId])
+  @@map("storyboard_scenes")
 }

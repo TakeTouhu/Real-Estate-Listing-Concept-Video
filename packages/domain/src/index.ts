@@ -12,3 +12,4 @@ export { normalizeEmail } from "./identity/util";
 export * from "./property/index";
 
 export * from "./analysis/index";
+export * from "./storyboard/index";
