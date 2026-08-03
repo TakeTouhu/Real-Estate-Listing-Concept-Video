@@ -3,9 +3,43 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-1: storyboard persistence
+## [Unreleased] — Phase 3C-2a: eligible-input selection and fingerprint
 
-Under review. Not merged. Persistence and infrastructure only — see
+Under review. Not merged. Two pure functions — see
+`docs/phase-3c2a-completion.md` and ADR-0012.
+
+### Added
+
+- **`selectEligibleAnalyses`** — admits only `SUCCEEDED` + `APPROVED` analyses,
+  projected to the four facts composition may depend on and sorted by `assetId`.
+  An unapproved analysis is never admitted, including to pad a scene count.
+  Two approved analyses sharing one duplicate group raise `VALIDATION_FAILED`
+  rather than being resolved: the partial unique index makes that state
+  impossible, so reaching it means a guarantee was violated and picking a winner
+  would hide the defect.
+- **`computeCompositionFingerprint`** — digests the complete eligible input set
+  as sorted `[assetId, analysisRevision]` tuples, serialized canonically and
+  hashed with SHA-256, returned as `sha256:<hex>`. It changes when an approved
+  asset is added, disappears, or is re-analyzed, and is unaffected by input
+  order, room type, and suggested order. Staleness is therefore *derived* by
+  comparison — no cross-module hook or event exists.
+- **ADR-0012** recording both contracts, including that changing what the
+  fingerprint covers is a breaking change.
+- **24 unit tests**, including the encoding-collision family a delimiter-joined
+  payload would fail.
+
+### Notes
+
+- No minimum scene count here: 0, 1, and 2 eligible analyses are all valid
+  results. The minimum-three rule belongs to Phase 3C-2b.
+- Nothing calls these functions yet; `StoryboardService` arrives in 3C-4.
+- `packages/database/`, `apps/`, the Prisma schema, and migrations have a **zero
+  diff** — every changed file is under `packages/domain/src/storyboard/`.
+- Size: 354 code lines (107 production, 247 tests) against a ~500 target.
+
+## [phase-3c1-complete] — Phase 3C-1: storyboard persistence
+
+Merged as `f7419bc` (PR #14). Persistence and infrastructure only — see
 `docs/phase-3c1-completion.md`.
 
 ### Added
