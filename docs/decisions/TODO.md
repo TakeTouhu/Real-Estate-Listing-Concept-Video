@@ -142,6 +142,25 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       (`GENERATING`, `READY`, `FAILED`) describes Phase 4 generation. The column
       is deliberately omitted until Phase 4 defines it.
 
+## Phase 3C-3 follow-ups
+
+- [ ] **Replace the offline prompt moderator with a real moderation vendor.**
+      `createOfflinePromptModerator` is a deterministic explicit-violation
+      detector over the documented product rules, not semantic moderation:
+      paraphrase passes it, and a test records that. A vendor adapter behind the
+      same `PromptModerator` port, normalizing into the existing
+      `ModerationCode` vocabulary, is the fix. Until then, prompt integrity rests
+      on structural separation (ADR-0014), not on this matcher.
+- [ ] **Unstated moderation rules.** Profanity, competitor names, and
+      advertising-law constraints are not in any product document, so the offline
+      moderator enforces none of them. If they are required, they need stating
+      before implementation — the matcher must not grow a general blacklist by
+      accretion.
+- [ ] **Phase 4 must not flatten `CompiledPrompt`.** The five parts stay
+      separate precisely so untrusted text cannot displace a preservation rule.
+      Rendering to a provider payload has to preserve that; no code enforces it
+      yet because no renderer exists.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).
