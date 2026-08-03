@@ -6,6 +6,7 @@ import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
 import {
   optionalString,
   readJsonBody,
+  requireOrganizationIdFromQuery,
   requiredPositiveInteger,
   requiredString,
 } from "@/lib/request";
@@ -50,6 +51,38 @@ export async function POST(
       },
     );
     return NextResponse.json(toVideoProjectDto(project), { status: 201 });
+  } catch (error) {
+    return appErrorToResponse(error);
+  }
+}
+
+/**
+ * List a property's video projects.
+ *
+ * Discovery only, so the product UI can reload a property and find its projects
+ * through the API rather than reaching into the repository. Any organization
+ * member may read; an unknown or foreign property is `NOT_FOUND`, so the
+ * response never reveals that a property exists in another tenant.
+ *
+ * No pagination, filtering, sorting, or "active project" notion: ordering is
+ * whatever the repository already guarantees (creation order).
+ */
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ propertyId: string }> },
+): Promise<NextResponse> {
+  const current = await getCurrentUser();
+  if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
+  const { propertyId } = await context.params;
+
+  try {
+    const organizationId = requireOrganizationIdFromQuery(request);
+    const projects = await getStoryboardService().listProjects(
+      current.user.id,
+      organizationId,
+      propertyId,
+    );
+    return NextResponse.json({ projects: projects.map(toVideoProjectDto) });
   } catch (error) {
     return appErrorToResponse(error);
   }

@@ -13,6 +13,7 @@ import {
   InMemoryMediaAssetRepository,
   InMemoryPropertyRepository,
 } from "@app/domain/testing";
+import type { AssetAnalysis, MediaAsset, StoryboardScene } from "@app/domain";
 
 /**
  * Route tests for video-project creation. Only session resolution is stubbed;
@@ -35,8 +36,11 @@ vi.mock("@/lib/storyboard", async () => {
   return { ...actual, getStoryboardService: () => storyboardService.value };
 });
 
-const { POST: createProject } = await import(
+const { POST: createProject, GET: listProjects } = await import(
   "@/app/api/properties/[propertyId]/video-projects/route"
+);
+const { GET: readStoryboard, POST: composeStoryboard } = await import(
+  "@/app/api/video-projects/[projectId]/storyboard/route"
 );
 
 interface Context {
@@ -48,6 +52,9 @@ interface Context {
   readonly otherOrgId: string;
   readonly otherPropertyId: string;
   readonly projects: Map<string, VideoProject>;
+  readonly scenes: Map<string, StoryboardScene[]>;
+  readonly analyses: InMemoryAssetAnalysisRepository;
+  readonly approve: (assetId: string, revision?: number) => Promise<void>;
 }
 
 let ctx: Context;
@@ -58,6 +65,9 @@ async function setup(): Promise<Context> {
   const organizations = new OrganizationService(deps);
   const properties = new InMemoryPropertyRepository(deps.clock);
   const projects = new Map<string, VideoProject>();
+  const scenes = new Map<string, StoryboardScene[]>();
+  const assets = new InMemoryMediaAssetRepository(deps.clock);
+  const analyses = new InMemoryAssetAnalysisRepository(deps.clock);
 
   const owner = await auth.register({ email: "owner@example.com", password: PASSWORD, name: "Owner" });
   const { organization: org } = await organizations.createOrganization(owner.id, { name: "Studio" });
@@ -96,8 +106,8 @@ async function setup(): Promise<Context> {
   storyboardService.value = new StoryboardService({
     identity: deps,
     properties,
-    assets: new InMemoryMediaAssetRepository(deps.clock),
-    analyses: new InMemoryAssetAnalysisRepository(deps.clock),
+    assets,
+    analyses,
     storyboards: {
       projects: {
         create: (input: Omit<VideoProject, "createdAt" | "updatedAt">) => {
@@ -109,12 +119,86 @@ async function setup(): Promise<Context> {
           const row = projects.get(id);
           return Promise.resolve(row && row.organizationId === org2 ? row : null);
         },
+        listByProperty: (org2: string, prop: string) =>
+          Promise.resolve(
+            [...projects.values()].filter(
+              (p) => p.organizationId === org2 && p.propertyId === prop,
+            ),
+          ),
+        update: (org2: string, id: string, changes: Partial<VideoProject>) => {
+          const row = projects.get(id);
+          if (!row || row.organizationId !== org2) throw new Error("project not found");
+          const next = { ...row, ...changes, updatedAt: deps.clock.now() };
+          projects.set(id, next);
+          return Promise.resolve(next);
+        },
       },
-      scenes: {},
+      scenes: {
+        listByProject: (org2: string, id: string) =>
+          Promise.resolve(projects.get(id)?.organizationId === org2 ? (scenes.get(id) ?? []) : []),
+        replaceForProject: (
+          _org2: string,
+          id: string,
+          rows: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[],
+        ) => {
+          const stored = rows.map((r) => ({
+            ...r,
+            createdAt: deps.clock.now(),
+            updatedAt: deps.clock.now(),
+          }));
+          scenes.set(id, stored);
+          return Promise.resolve(stored);
+        },
+      },
     } as unknown as ConstructorParameters<typeof StoryboardService>[0]["storyboards"],
     moderator: createOfflinePromptModerator(),
     ids: deps.ids,
   });
+
+  /** Seed an asset with an APPROVED analysis, the only kind composition uses. */
+  async function approve(assetId: string, revision = 1): Promise<void> {
+    await assets.create({
+      id: assetId,
+      organizationId: org.id,
+      propertyId: property.id,
+      storageKey: `org/${org.id}/${assetId}.jpg`,
+      originalFilename: `${assetId}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes: 1000,
+      width: 1600,
+      height: 1200,
+      sha256: null,
+      perceptualHash: "ffffffffffffffff",
+      status: "READY",
+      failureReason: null,
+      thumbnailKey: null,
+      createdBy: owner.id,
+      deletionRequestedAt: null,
+      retentionExpiresAt: null,
+    } as Omit<MediaAsset, "createdAt" | "updatedAt">);
+    await analyses.create({
+      id: `ana_${assetId}`,
+      organizationId: org.id,
+      assetId,
+      provider: "deterministic",
+      status: "SUCCEEDED",
+      roomType: "KITCHEN",
+      confidence: 0.9,
+      qualityScore: 0.8,
+      brightnessScore: 0.5,
+      blurScore: 0.1,
+      duplicateGroup: null,
+      detectedObjects: [],
+      safetyFlags: [],
+      suggestedOrder: null,
+      failureReason: null,
+      analysisRevision: revision,
+      reviewStatus: "APPROVED",
+      reviewNote: null,
+      reviewedBy: owner.id,
+      reviewedAt: deps.clock.now(),
+    } as Omit<AssetAnalysis, "createdAt" | "updatedAt">);
+  }
 
   currentUser.value = { user: { id: owner.id } };
   return {
@@ -126,6 +210,9 @@ async function setup(): Promise<Context> {
     otherOrgId: other.id,
     otherPropertyId: otherProperty.id,
     projects,
+    scenes,
+    analyses,
+    approve,
   };
 }
 
@@ -280,5 +367,272 @@ describe("response hygiene", () => {
     expect(raw).not.toContain("preservation");
     expect(raw).not.toContain("Preserve visible structure");
     expect(raw).not.toContain("offline-documented-rules");
+  });
+});
+
+// --- Phase 3C-5b: compose, read, and list ------------------------------------
+
+function jsonReq(body: unknown, raw?: string): Request {
+  return new Request("http://localhost/api/video-projects/vpr_1/storyboard", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: raw ?? JSON.stringify(body),
+  });
+}
+
+function getReq(path: string, organizationId?: string): Request {
+  const query = organizationId === undefined ? "" : `?organizationId=${organizationId}`;
+  return new Request(`http://localhost${path}${query}`);
+}
+
+function projectParams(projectId: string) {
+  return { params: Promise.resolve({ projectId }) };
+}
+
+function bounds(overrides: Record<string, unknown> = {}) {
+  return { organizationId: ctx.orgId, minSceneSeconds: 2, maxSceneSeconds: 10, ...overrides };
+}
+
+/** Create a project through the route, returning its id. */
+async function newProject(durationSeconds = 12): Promise<string> {
+  const res = await createProject(req(validBody({ durationSeconds })), params());
+  return ((await res.json()) as { id: string }).id;
+}
+
+describe("compose endpoint", () => {
+  it("returns 401 without a session", async () => {
+    const id = await newProject();
+    currentUser.value = null;
+    expect((await composeStoryboard(jsonReq(bounds()), projectParams(id))).status).toBe(401);
+  });
+
+  it("denies a REVIEWER and permits a writer", async () => {
+    const id = await newProject();
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+
+    currentUser.value = { user: { id: ctx.reviewerId } };
+    expect((await composeStoryboard(jsonReq(bounds()), projectParams(id))).status).toBe(403);
+
+    currentUser.value = { user: { id: ctx.ownerId } };
+    expect((await composeStoryboard(jsonReq(bounds()), projectParams(id))).status).toBe(200);
+  });
+
+  it("returns 404 for an unknown or foreign project", async () => {
+    expect((await composeStoryboard(jsonReq(bounds()), projectParams("vpr_missing"))).status).toBe(
+      404,
+    );
+  });
+
+  it("returns 422 for malformed bounds, without composing", async () => {
+    const id = await newProject();
+    for (const body of [
+      bounds({ minSceneSeconds: undefined }),
+      bounds({ maxSceneSeconds: "10" }),
+      bounds({ minSceneSeconds: 0 }),
+      bounds({ minSceneSeconds: -2 }),
+      bounds({ maxSceneSeconds: 10.5 }),
+    ]) {
+      expect((await composeStoryboard(jsonReq(body), projectParams(id))).status).toBe(422);
+    }
+    expect(ctx.scenes.get(id)).toBeUndefined();
+  });
+
+  it("returns 422 below the minimum scene count", async () => {
+    const id = await newProject();
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    const res = await composeStoryboard(jsonReq(bounds()), projectParams(id));
+    expect(res.status).toBe(422);
+  });
+
+  it("returns 422 with the achievable range when the duration cannot be met", async () => {
+    const id = await newProject(100);
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+    const res = await composeStoryboard(jsonReq(bounds()), projectParams(id));
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { details?: Record<string, unknown> } };
+    expect(body.error.details).toMatchObject({
+      minimumAchievableDuration: 6,
+      maximumAchievableDuration: 30,
+    });
+  });
+
+  it("keeps a moderation rejection sanitized", async () => {
+    const marker = "zzqqxx-marker";
+    const created = await createProject(
+      req(validBody({ prompt: `add a family ${marker}` })),
+      params(),
+    );
+    const id = ((await created.json()) as { id: string }).id;
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+
+    const res = await composeStoryboard(jsonReq(bounds()), projectParams(id));
+    expect(res.status).toBe(422);
+    const raw = await res.text();
+    expect(raw).not.toContain(marker);
+    expect(raw).not.toContain("add a family");
+    expect(raw).toContain("ADDS_PEOPLE_OR_LOGOS");
+  });
+
+  it("returns ordered, safe scene DTOs on success", async () => {
+    const id = await newProject();
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+
+    const res = await composeStoryboard(jsonReq(bounds()), projectParams(id));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      scenes: Record<string, unknown>[];
+      fresh: boolean;
+      project: Record<string, unknown>;
+    };
+    expect(body.scenes.map((s) => s.position)).toEqual([1, 2, 3]);
+    expect(body.fresh).toBe(true);
+    expect(body.project.status).toBe("STORYBOARD_READY");
+    expect(Object.keys(body.scenes[0]!).sort()).toEqual([
+      "assetId",
+      "durationSeconds",
+      "id",
+      "position",
+      "roomType",
+      "sourceAnalysisRevision",
+    ]);
+  });
+});
+
+describe("storyboard read endpoint", () => {
+  it("returns 401 without a session", async () => {
+    const id = await newProject();
+    currentUser.value = null;
+    expect(
+      (await readStoryboard(getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId), projectParams(id)))
+        .status,
+    ).toBe(401);
+  });
+
+  it("lets any member read, including a REVIEWER", async () => {
+    const id = await newProject();
+    currentUser.value = { user: { id: ctx.reviewerId } };
+    const res = await readStoryboard(
+      getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId),
+      projectParams(id),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 404 for an unknown or foreign project", async () => {
+    const res = await readStoryboard(
+      getReq("/api/video-projects/vpr_missing/storyboard", ctx.orgId),
+      projectParams("vpr_missing"),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("reports an uncomposed project as no scenes and not fresh", async () => {
+    const id = await newProject();
+    const res = await readStoryboard(
+      getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId),
+      projectParams(id),
+    );
+    const body = (await res.json()) as { scenes: unknown[]; fresh: boolean };
+    expect(body.scenes).toEqual([]);
+    expect(body.fresh).toBe(false);
+  });
+
+  it("reports a composed project as fresh, then stale once its inputs change", async () => {
+    const id = await newProject();
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+    await composeStoryboard(jsonReq(bounds()), projectParams(id));
+
+    const fresh = (await (
+      await readStoryboard(getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId), projectParams(id))
+    ).json()) as { scenes: unknown[]; fresh: boolean };
+    expect(fresh.scenes).toHaveLength(3);
+    expect(fresh.fresh).toBe(true);
+
+    // A fourth approved photo changes the eligible input set.
+    await ctx.approve("ast_d");
+    const stale = (await (
+      await readStoryboard(getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId), projectParams(id))
+    ).json()) as { fresh: boolean };
+    expect(stale.fresh).toBe(false);
+  });
+
+  it("leaks no prompt, provider, storage or tenant internals", async () => {
+    const id = await newProject();
+    await ctx.approve("ast_a");
+    await ctx.approve("ast_b");
+    await ctx.approve("ast_c");
+    await composeStoryboard(jsonReq(bounds({ organizationId: ctx.orgId })), projectParams(id));
+
+    const raw = await (
+      await readStoryboard(getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId), projectParams(id))
+    ).text();
+    expect(raw).not.toContain(ctx.orgId);
+    expect(raw).not.toContain("compiledPrompt");
+    expect(raw).not.toContain("compositionFingerprint");
+    expect(raw).not.toContain("preservation");
+    expect(raw).not.toContain("Preserve visible structure");
+    expect(raw).not.toContain("storageKey");
+    expect(raw).not.toContain("offline-documented-rules");
+  });
+});
+
+describe("project list endpoint", () => {
+  it("returns 401 without a session", async () => {
+    currentUser.value = null;
+    expect(
+      (await listProjects(getReq("/api/properties/prp_1/video-projects", ctx.orgId), params()))
+        .status,
+    ).toBe(401);
+  });
+
+  it("lets any member list a property's projects", async () => {
+    const first = await newProject();
+    const second = await newProject();
+    currentUser.value = { user: { id: ctx.reviewerId } };
+
+    const res = await listProjects(
+      getReq("/api/properties/prp_1/video-projects", ctx.orgId),
+      params(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { projects: { id: string }[] };
+    expect(body.projects.map((p) => p.id).sort()).toEqual([first, second].sort());
+  });
+
+  it("returns 404 for an unknown property and for another tenant's", async () => {
+    expect(
+      (await listProjects(getReq("/api/properties/prp_x/video-projects", ctx.orgId), params("prp_x")))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await listProjects(
+          getReq(`/api/properties/${ctx.otherPropertyId}/video-projects`, ctx.orgId),
+          params(ctx.otherPropertyId),
+        )
+      ).status,
+    ).toBe(404);
+  });
+
+  it("returns safe project DTOs only", async () => {
+    await newProject();
+    const raw = await (
+      await listProjects(getReq("/api/properties/prp_1/video-projects", ctx.orgId), params())
+    ).text();
+    expect(raw).not.toContain(ctx.orgId);
+    expect(raw).not.toContain("compositionFingerprint");
+    expect(raw).not.toContain("createdBy");
+    expect(raw).not.toContain("compiledPrompt");
   });
 });

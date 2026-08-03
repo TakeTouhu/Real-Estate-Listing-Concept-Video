@@ -1,4 +1,9 @@
-import { StoryboardService, type VideoProject } from "@app/domain";
+import {
+  StoryboardService,
+  type StoryboardScene,
+  type StoryboardView,
+  type VideoProject,
+} from "@app/domain";
 import {
   createPrismaAnalysisRepository,
   createPrismaPropertyRepositories,
@@ -74,5 +79,56 @@ export function toVideoProjectDto(project: VideoProject): VideoProjectDto {
     negativePrompt: project.negativePrompt,
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Public shape of one planned scene.
+ *
+ * Carries no `compiledPrompt` in any form — not raw, not parsed. The compiled
+ * prompt, the preservation rules, and the system negative constraints are
+ * server-side generation data that Phase 4 consumes in process (ADR-0014);
+ * nothing about them crosses the HTTP boundary. `propertyId` and the scene's
+ * internal linkage are likewise omitted.
+ */
+export interface StoryboardSceneDto {
+  readonly id: string;
+  readonly assetId: string;
+  readonly position: number;
+  readonly durationSeconds: number;
+  readonly roomType: StoryboardScene["roomType"];
+  /** Which analysis revision this scene was composed from. */
+  readonly sourceAnalysisRevision: number;
+}
+
+export function toStoryboardSceneDto(scene: StoryboardScene): StoryboardSceneDto {
+  return {
+    id: scene.id,
+    assetId: scene.assetId,
+    position: scene.position,
+    durationSeconds: scene.durationSeconds,
+    roomType: scene.roomType,
+    sourceAnalysisRevision: scene.sourceAnalysisRevision,
+  };
+}
+
+/**
+ * A storyboard as the product shows it: the project, its scenes, and whether
+ * the storyboard still matches the approved photos it was composed from.
+ *
+ * `fresh` is a boolean, not the fingerprint — a client has no use for the digest
+ * and no way to recompute it, and exposing it would leak an internal token.
+ */
+export interface StoryboardReadDto {
+  readonly project: VideoProjectDto;
+  readonly scenes: readonly StoryboardSceneDto[];
+  readonly fresh: boolean;
+}
+
+export function toStoryboardReadDto(view: StoryboardView): StoryboardReadDto {
+  return {
+    project: toVideoProjectDto(view.project),
+    scenes: view.scenes.map(toStoryboardSceneDto),
+    fresh: view.fresh,
   };
 }

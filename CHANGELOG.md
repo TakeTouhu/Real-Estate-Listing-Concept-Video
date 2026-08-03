@@ -3,9 +3,50 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-5a: video-project creation path
+## [Unreleased] — Phase 3C-5b: storyboard compose, read, and project list
 
-Under review. Not merged. See `docs/phase-3c5a-completion.md`.
+Under review. Not merged. See `docs/phase-3c5b-completion.md` and
+`docs/api-changes-phase-3c5.md`.
+
+### Added
+
+- **`StoryboardService.isFresh`** and a **shared internal freshness comparison**
+  used by both `isFresh` and `assertFresh`, which remains the Phase 4 hard gate.
+  `isFresh` is `false` for exactly two reasons — nothing composed, or the inputs
+  moved; authorization, `NOT_FOUND`, repository, and invariant failures all
+  **propagate**, so a broken system never reads as a merely outdated storyboard.
+- **`POST /api/video-projects/{projectId}/storyboard`** — compose with
+  caller-supplied `minSceneSeconds` / `maxSceneSeconds`, validated for shape
+  only. Requires `property:write`.
+- **`GET /api/video-projects/{projectId}/storyboard`** — project, scenes, and a
+  `fresh` boolean. Any member may read; an uncomposed project returns
+  `scenes: []` and `fresh: false` with **no invented status**.
+- **`GET /api/properties/{propertyId}/video-projects`** — discovery so the UI
+  can reload a property and find its projects through the API rather than
+  reaching into the repository. No pagination, filtering, sorting, or
+  active-project notion.
+- `StoryboardService.getStoryboard` and `.listProjects` — the application
+  boundary the two read endpoints delegate to.
+- Scene and storyboard-read DTOs.
+
+### Notes
+
+- **No `compiledPrompt` crosses the HTTP boundary** in any form, nor do
+  preservation constraints, system negatives, moderator identity, provider data,
+  storage keys, `organizationId`, or `compositionFingerprint`. A test asserts the
+  scene DTO's exact key set.
+- An unknown or foreign property returns `404` from the list endpoint rather than
+  an empty list, which would itself disclose that the property is not in this
+  tenant.
+- `packages/database/`, the Prisma schema, migrations, the analysis
+  implementation, and the review routes all have a **zero diff**.
+- Size: 732 code lines (252 production, 480 tests), re-cost at ~711 — one
+  coherent HTTP capability, kept in a single PR by the product-completion
+  directive.
+
+## [phase-3c5a-complete] — Phase 3C-5a: video-project creation path
+
+Merged as `afb9fbe` (PR #19). See `docs/phase-3c5a-completion.md`.
 
 ### Added
 

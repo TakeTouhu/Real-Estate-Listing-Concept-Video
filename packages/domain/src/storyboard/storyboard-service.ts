@@ -32,6 +32,15 @@ export interface ComposedStoryboard {
   readonly scenes: readonly StoryboardScene[];
 }
 
+/** Why a storyboard is or is not current. Internal to the freshness check. */
+type FreshnessState = "FRESH" | "STALE" | "NEVER_COMPOSED";
+
+export interface StoryboardView {
+  readonly project: VideoProject;
+  readonly scenes: readonly StoryboardScene[];
+  readonly fresh: boolean;
+}
+
 /**
  * Everything a caller may choose when creating a project — and nothing else.
  *
@@ -204,21 +213,92 @@ export class StoryboardService {
     organizationId: string,
     videoProjectId: string,
   ): Promise<void> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
-
-    const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
-    if (!project) throw new AppError("NOT_FOUND", "Video project not found");
-    if (!project.compositionFingerprint) {
+    const { freshness } = await this.freshnessOf(actorUserId, organizationId, videoProjectId);
+    if (freshness === "NEVER_COMPOSED") {
       throw new AppError("VALIDATION_FAILED", "This project has no composed storyboard");
     }
-
-    const eligible = await this.eligibleInputs(organizationId, project.propertyId);
-    if (computeCompositionFingerprint(eligible) !== project.compositionFingerprint) {
+    if (freshness === "STALE") {
       throw new AppError(
         "VALIDATION_FAILED",
         "The approved photos have changed since this storyboard was composed; compose it again",
       );
     }
+  }
+
+  /**
+   * Whether the stored storyboard still matches the current approved inputs.
+   *
+   * `false` for exactly two reasons — nothing has been composed, or the inputs
+   * have moved. **Every other failure propagates**: an authorization refusal, an
+   * unknown project, a repository error, or the duplicate-approved-input
+   * invariant must not be flattened into "not fresh", which would present a
+   * broken system as a merely outdated storyboard.
+   */
+  async isFresh(
+    actorUserId: string,
+    organizationId: string,
+    videoProjectId: string,
+  ): Promise<boolean> {
+    const { freshness } = await this.freshnessOf(actorUserId, organizationId, videoProjectId);
+    return freshness === "FRESH";
+  }
+
+  /**
+   * The one fingerprint comparison. {@link isFresh} and {@link assertFresh} both
+   * run through here, so the two can never disagree about what stale means, and
+   * `assertFresh` keeps distinct messages by reading the reason rather than
+   * repeating the comparison.
+   */
+  private async freshnessOf(
+    actorUserId: string,
+    organizationId: string,
+    videoProjectId: string,
+  ): Promise<{ project: VideoProject; freshness: FreshnessState }> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+
+    const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
+    if (!project) throw new AppError("NOT_FOUND", "Video project not found");
+    if (!project.compositionFingerprint) return { project, freshness: "NEVER_COMPOSED" };
+
+    const eligible = await this.eligibleInputs(organizationId, project.propertyId);
+    const current = computeCompositionFingerprint(eligible);
+    return {
+      project,
+      freshness: current === project.compositionFingerprint ? "FRESH" : "STALE",
+    };
+  }
+
+  /**
+   * A project with its scenes and whether the storyboard still matches its
+   * inputs. Read-level authorization: any organization member may look.
+   *
+   * A project that has never been composed reads as no scenes and not fresh —
+   * existing semantics, with no status invented for the case.
+   */
+  async getStoryboard(
+    actorUserId: string,
+    organizationId: string,
+    videoProjectId: string,
+  ): Promise<StoryboardView> {
+    const { project, freshness } = await this.freshnessOf(
+      actorUserId,
+      organizationId,
+      videoProjectId,
+    );
+    const scenes = await this.deps.storyboards.scenes.listByProject(organizationId, videoProjectId);
+    return { project, scenes, fresh: freshness === "FRESH" };
+  }
+
+  /** A property's projects, organization-scoped. Discovery for the UI. */
+  async listProjects(
+    actorUserId: string,
+    organizationId: string,
+    propertyId: string,
+  ): Promise<readonly VideoProject[]> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    const property = await this.deps.properties.findById(organizationId, propertyId);
+    if (!property) throw new AppError("NOT_FOUND", "Property not found");
+    return this.deps.storyboards.projects.listByProperty(organizationId, propertyId);
   }
 
   /** Approved analyses for a property, organization-scoped throughout. */

@@ -89,6 +89,7 @@ function harness(options: {
   moderator?: PromptModerator;
   failSceneWrite?: boolean;
   propertyExists?: boolean;
+  failAnalysisRead?: boolean;
 } = {}): Harness {
   const role = options.role === undefined ? ("OWNER" as Role) : options.role;
   const analyses = options.analyses ?? [analysis("ast_a"), analysis("ast_b"), analysis("ast_c")];
@@ -136,7 +137,10 @@ function harness(options: {
         Promise.resolve(analyses.map((a) => ({ id: a.assetId }) as MediaAsset)),
     } as unknown as StoryboardServiceDeps["assets"],
     analyses: {
-      listByAssetIds: (_org: string, _ids: readonly string[]) => Promise.resolve(analyses),
+      listByAssetIds: (_org: string, _ids: readonly string[]) =>
+        options.failAnalysisRead
+          ? Promise.reject(new Error("analysis read failed"))
+          : Promise.resolve(analyses),
     } as unknown as StoryboardServiceDeps["analyses"],
     storyboards: {
       projects: {
@@ -150,12 +154,19 @@ function harness(options: {
               ? stored.project
               : null,
           ),
+        listByProperty: (org: string, prop: string) =>
+          Promise.resolve(
+            stored.project && stored.project.organizationId === org && stored.project.propertyId === prop
+              ? [stored.project]
+              : [],
+          ),
         update: (_org: string, _id: string, changes: Partial<VideoProject>) => {
           stored.project = { ...stored.project!, ...changes };
           return Promise.resolve(stored.project);
         },
       },
       scenes: {
+        listByProject: (_org: string, _id: string) => Promise.resolve(stored.scenes),
         replaceForProject: (
           _org: string,
           _id: string,
@@ -485,6 +496,116 @@ describe("assertFresh", () => {
 
     const foreign = harness({ analyses, project: project({ organizationId: "org_other" }) });
     await expect(foreign.service.assertFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("isFresh shares one comparison with assertFresh", () => {
+  let analyses: AssetAnalysis[];
+  let composed: Harness;
+
+  beforeEach(async () => {
+    analyses = [analysis("ast_a"), analysis("ast_b"), analysis("ast_c")];
+    composed = harness({ analyses });
+    await composed.service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+  });
+
+  function against(current: AssetAnalysis[], options: { failAnalysisRead?: boolean } = {}) {
+    return harness({ analyses: current, project: composed.stored.project, ...options }).service;
+  }
+
+  it("is true only on an exact match", async () => {
+    expect(await against(analyses).isFresh(ACTOR, ORG, PROJECT)).toBe(true);
+  });
+
+  it("is false when nothing has been composed", async () => {
+    const never = harness({ analyses, project: project() });
+    expect(await never.service.isFresh(ACTOR, ORG, PROJECT)).toBe(false);
+  });
+
+  it("is false for a revision change, an addition and a removal", async () => {
+    const refreshed = [analysis("ast_a", { analysisRevision: 2 }), analyses[1]!, analyses[2]!];
+    expect(await against(refreshed).isFresh(ACTOR, ORG, PROJECT)).toBe(false);
+    expect(await against([...analyses, analysis("ast_d")]).isFresh(ACTOR, ORG, PROJECT)).toBe(false);
+    expect(await against(analyses.slice(0, 2)).isFresh(ACTOR, ORG, PROJECT)).toBe(false);
+  });
+
+  it("propagates unrelated failures instead of reporting them as not fresh", async () => {
+    // A broken system must not read as a merely outdated storyboard.
+    const stranger = harness({ analyses, project: composed.stored.project, role: null });
+    await expect(stranger.service.isFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(/access/i);
+
+    const missing = harness({ analyses, project: null });
+    await expect(missing.service.isFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(/not found/i);
+
+    await expect(
+      against(analyses, { failAnalysisRead: true }).isFresh(ACTOR, ORG, PROJECT),
+    ).rejects.toThrow(/analysis read failed/i);
+
+    const conflicted = [
+      analysis("ast_a", { duplicateGroup: "dup_1" }),
+      analysis("ast_b", { duplicateGroup: "dup_1" }),
+      analysis("ast_c"),
+    ];
+    await expect(against(conflicted).isFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(
+      /duplicate group/i,
+    );
+  });
+
+  it("agrees with assertFresh on every outcome", async () => {
+    await expect(against(analyses).assertFresh(ACTOR, ORG, PROJECT)).resolves.toBeUndefined();
+    await expect(against(analyses.slice(0, 2)).assertFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(
+      /changed since/i,
+    );
+    const never = harness({ analyses, project: project() });
+    await expect(never.service.assertFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(
+      /no composed storyboard/i,
+    );
+  });
+});
+
+describe("getStoryboard and listProjects", () => {
+  it("returns no scenes and not fresh before any composition", async () => {
+    const { service } = harness();
+    const view = await service.getStoryboard(ACTOR, ORG, PROJECT);
+    expect(view.scenes).toEqual([]);
+    expect(view.fresh).toBe(false);
+    expect(view.project.status).toBe("DRAFT");
+  });
+
+  it("returns the composed scenes and fresh true", async () => {
+    const { service } = harness();
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+    const view = await service.getStoryboard(ACTOR, ORG, PROJECT);
+    expect(view.scenes).toHaveLength(3);
+    expect(view.fresh).toBe(true);
+  });
+
+  it("lets any member read, and hides another tenant's project", async () => {
+    const reviewer = harness({ role: "REVIEWER" });
+    await expect(reviewer.service.getStoryboard(ACTOR, ORG, PROJECT)).resolves.toBeDefined();
+
+    const foreign = harness({ project: project({ organizationId: "org_other" }) });
+    await expect(foreign.service.getStoryboard(ACTOR, ORG, PROJECT)).rejects.toThrow(/not found/i);
+  });
+
+  it("lists a property's projects", async () => {
+    const { service } = harness();
+    const projects = await service.listProjects(ACTOR, ORG, PROP);
+    expect(projects).toHaveLength(1);
+    expect(projects[0]!.propertyId).toBe(PROP);
+  });
+
+  it("reports an unknown or foreign property as NOT_FOUND rather than an empty list", async () => {
+    // An empty list would confirm the property does not exist *here*, which is
+    // the same disclosure the 404 exists to prevent.
+    const missing = harness({ propertyExists: false });
+    await expect(missing.service.listProjects(ACTOR, ORG, PROP)).rejects.toThrow(
+      /property not found/i,
+    );
+    const { service } = harness();
+    await expect(service.listProjects(ACTOR, ORG, "prp_other")).rejects.toThrow(
+      /property not found/i,
+    );
   });
 });
 
