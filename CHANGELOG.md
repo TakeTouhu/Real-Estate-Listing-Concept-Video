@@ -3,9 +3,51 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-2a: eligible-input selection and fingerprint
+## [Unreleased] — Phase 3C-2b: ordering and duration allocation
 
-Under review. Not merged. Two pure functions — see
+Under review. Not merged. Three pure functions — see
+`docs/phase-3c2b-completion.md` and ADR-0013.
+
+### Added
+
+- **`orderScenes`** — the documented walkthrough sequence, completed over the
+  existing `RoomType` enum: `CHILD_ROOM` after `BEDROOM`, `STUDY` after that,
+  `OTHER`/null/unknown last, wet areas resolved to `BATHROOM → WASHROOM →
+  TOILET`. Ties break by `suggestedOrder` (nulls last) then `assetId`, so the
+  result never depends on input order. A repeated `assetId` raises
+  `VALIDATION_FAILED` rather than being deduplicated; valid input yields a
+  complete permutation.
+- **`allocateDurations`** — caller-supplied bounds, no defaults. `base =
+  floor(total / n)` with the remainder front-loaded, so durations sum exactly to
+  the request and each value stays within bounds.
+- **`requireMinimumScenes`** — the three-scene rule, deliberately separate from
+  the duration math.
+- **ADR-0013** recording the ordering contract and the allocation invariant.
+  ADR-0012 is untouched.
+- **39 unit tests**, including an exhaustive sum-and-bounds check across 12 scene
+  counts × every achievable total.
+
+### Fixed
+
+- A determinism bug the new tests caught before merge: ranking a null
+  `suggestedOrder` as `Infinity` and subtracting yields `NaN` for two nulls, so
+  the `assetId` tie-break never ran and the pair kept its input order.
+
+### Notes
+
+- **Structural failures quote no achievable range.** A scene count below one, a
+  non-positive-integer total or bound, and `min > max` fail on their own terms;
+  only a structurally sound model reports `minimumAchievableDuration` and
+  `maximumAchievableDuration`, in `AppError.details` as well as the message.
+- An unachievable total fails — never satisfied by reusing a photo, never quietly
+  shortened.
+- `packages/database/`, `apps/`, the Prisma schema, and migrations have a **zero
+  diff**.
+- Size: 520 code lines (204 production, 316 tests) against a ~500 target.
+
+## [phase-3c2a-complete] — Phase 3C-2a: eligible-input selection and fingerprint
+
+Merged as `7596699` (PR #15). Two pure functions — see
 `docs/phase-3c2a-completion.md` and ADR-0012.
 
 ### Added
