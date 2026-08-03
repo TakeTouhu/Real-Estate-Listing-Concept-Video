@@ -3,9 +3,46 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-2b: ordering and duration allocation
+## [Unreleased] — Phase 3C-3: prompt compilation and moderation
 
-Under review. Not merged. Three pure functions — see
+Under review. Not merged. See `docs/phase-3c3-completion.md` and ADR-0014.
+
+### Added
+
+- **`compileScenePrompt`** — produces a `CompiledPrompt` **structure**, never an
+  interpolated string, keeping five parts in distinct fields: immutable
+  preservation rules, system-derived scene facts, untrusted user customization,
+  system negative constraints, and the untrusted user negative prompt.
+- **`PromptModerator` port** with `{ field, code }` findings — coded, never
+  vendor prose, never an excerpt of the input.
+- **`createOfflinePromptModerator`** — deterministic, offline, five
+  documented-rule patterns plus polarity, so "do not add people" is allowed
+  while "add people" is flagged, and "do not preserve the original walls" is
+  caught as `DEFEATS_PRESERVATION`.
+- **ADR-0014** recording structural separation as the primary integrity
+  mechanism.
+- **34 unit tests**, including five prompt-injection shapes and a marker test
+  proving no offending text reaches an error or a log.
+
+### Notes
+
+- **Injection is contained structurally, not detected.** User text is data in a
+  field no constraint is read from; nothing scans for "ignore previous
+  instructions", and a test proves such text is confined while preservation,
+  system negatives, and scene facts stay intact.
+- **The offline moderator is an explicit-violation detector, not semantic
+  moderation.** False negatives are expected — a passing test records that a
+  paraphrase gets through — and a real vendor behind the same port is the fix.
+- Rejection is terminal and sanitized: coded findings only, one moderator call
+  per non-empty field, no automatic retry.
+- `packages/database/`, `apps/`, the Prisma schema, and migrations have a **zero
+  diff**.
+- Size: 636 code lines (270 production, 366 tests) against a ~500 target,
+  estimated ~530 — reported, not absorbed.
+
+## [phase-3c2b-complete] — Phase 3C-2b: ordering and duration allocation
+
+Merged as `d7ede3a` (PR #16). Three pure functions — see
 `docs/phase-3c2b-completion.md` and ADR-0013.
 
 ### Added
