@@ -54,7 +54,7 @@ commit. None has been moved, overwritten, or reused.
 
 > ### ⚠️ The remote tags do not exist
 >
-> All sixteen tags exist **only in the local clone**. Publication remains blocked
+> All seventeen tags exist **only in the local clone**. Publication remains blocked
 > in this development environment. `git ls-remote --tags origin` returns empty.
 >
 > Attempted 2026-07-27 with three different invocations — explicit refspecs,
@@ -89,8 +89,9 @@ commit. None has been moved, overwritten, or reused.
 >                refs/tags/phase-3c1-complete \
 >                refs/tags/phase-3c2a-complete \
 >                refs/tags/phase-3c2b-complete \
->                refs/tags/phase-3c3-complete
-> git ls-remote --tags origin   # verify all sixteen appear
+>                refs/tags/phase-3c3-complete \
+>                refs/tags/phase-3c4-complete
+> git ls-remote --tags origin   # verify all seventeen appear
 > ```
 >
 > Local tag records (target verified against the merge commit in each case):
@@ -110,6 +111,7 @@ commit. None has been moved, overwritten, or reused.
 > | `phase-3c2a-complete` | `4b21324ea555c5dff427512e991b82f66e2e329e` | `75966994eafa9f6ec58c2243e34f66f89296f3d9` |
 > | `phase-3c2b-complete` | `f5f5555e21070ab1401107932ffc2bacba562957` | `d7ede3a3ecd2d4ae0bf13c9ea0d19149f06ca2b9` |
 > | `phase-3c3-complete` | `0e471b3c241de745b454954bd0646516770e7af7` | `0b39eb1f4eb98e4d8b4e7e8841c05c1cb31ac1c3` |
+> | `phase-3c4-complete` | `77d9285b175f95bb97828aa99a93642b84189c57` | `003edaf97dbcc651e7ba66affbc06ac523e1fe8d` |
 
 ## Phase reports
 
@@ -162,7 +164,9 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3C-2a | Eligible-input selection + composition fingerprint | 354 — 107 production + 247 tests (estimated ~250) | **Merged** (PR #15, `7596699`) |
 | 3C-2b | Deterministic ordering + duration allocation | 520 — 204 production + 316 tests (accepted as a small exception) | **Merged** (PR #16, `d7ede3a`) |
 | 3C-3 | Prompt compilation + moderation port and offline default | 636 — 270 production + 366 tests (accepted as a milestone exception) | **Merged** (PR #17, `0b39eb1`) |
-| 3C-4 | `StoryboardService`: compose + assertFresh | 603 — 208 production + 395 tests (re-cost ~410) | In review |
+| 3C-4 | `StoryboardService`: compose + assertFresh | 603 — 208 production + 395 tests (accepted as an MVP exception) | **Merged** (PR #18, `003edaf`) |
+| 3C-5a | Video-project creation path (service + HTTP) | 623 — 230 production + 393 tests (estimated 377) | In review |
+| 3C-5b | Storyboard compose + read endpoints, `isFresh` | ~430 planned | Not started |
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |
 

@@ -3,9 +3,40 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-4: storyboard orchestration
+## [Unreleased] — Phase 3C-5a: video-project creation path
 
-Under review. Not merged. See `docs/phase-3c4-completion.md`.
+Under review. Not merged. See `docs/phase-3c5a-completion.md`.
+
+### Added
+
+- **`StoryboardService.createProject`** — the only way a `VideoProject` comes
+  into existence. Authorizes `property:write`, resolves the property through
+  organization-scoped access, and returns `NOT_FOUND` for an unknown or foreign
+  one. Structural validation only: **no provider capability rule** is applied to
+  duration, aspect ratio, or resolution.
+- **`POST /api/properties/{propertyId}/video-projects`** — a thin adapter
+  returning `201` with the project DTO.
+- `apps/web/src/lib/storyboard.ts` — service wiring and `VideoProjectDto`.
+- `requiredString` / `requiredPositiveInteger` shape helpers.
+
+### Notes
+
+- **Lifecycle state is unrepresentable, not ignored.** `CreateProjectInput` has
+  no `status`, no `compositionFingerprint`, and no scenes, so a client cannot
+  present a project as already composed. A new project is always `DRAFT`,
+  unfingerprinted, and sceneless.
+- **Nothing about the compiled prompt, preservation rules, system negative
+  constraints, or the moderator's identity is exposed** over HTTP — a test
+  asserts none of those strings appears in the response.
+- Prisma schema, migrations, the analysis implementation, and the review routes
+  all have a **zero diff**. No new model, no new repository abstraction, no
+  reusable in-memory storyboard repository.
+- Size: 623 code lines (230 production, 393 tests) against a ~500 gate,
+  estimated 377 — reported, not absorbed.
+
+## [phase-3c4-complete] — Phase 3C-4: storyboard orchestration
+
+Merged as `003edaf` (PR #18). See `docs/phase-3c4-completion.md`.
 
 ### Added
 

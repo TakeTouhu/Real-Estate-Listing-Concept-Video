@@ -3,7 +3,7 @@ import { recordAudit } from "../identity/audit";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
 import type { AssetAnalysisRepository } from "../analysis/ports";
-import type { MediaAssetRepository } from "../property/ports";
+import type { MediaAssetRepository, PropertyRepository } from "../property/ports";
 import { allocateDurations, requireMinimumScenes, type DurationBounds } from "./duration";
 import { selectEligibleAnalyses, type EligibleInput } from "./eligibility";
 import { computeCompositionFingerprint } from "./fingerprint";
@@ -19,6 +19,7 @@ export const StoryboardAuditAction = { StoryboardComposed: "storyboard.composed"
 export interface StoryboardServiceDeps {
   /** Supplies membership lookup (authorization) and the audit sink. */
   readonly identity: IdentityServiceDeps;
+  readonly properties: PropertyRepository;
   readonly assets: MediaAssetRepository;
   readonly analyses: AssetAnalysisRepository;
   readonly storyboards: StoryboardRepositories;
@@ -32,6 +33,24 @@ export interface ComposedStoryboard {
 }
 
 /**
+ * Everything a caller may choose when creating a project — and nothing else.
+ *
+ * `status`, `compositionFingerprint`, and the scenes are **not expressible**:
+ * lifecycle state is the server's, so a client cannot present a project as
+ * ready, claim a fingerprint it did not compose, or arrive with scenes. That is
+ * a compile error rather than a field this method has to remember to ignore.
+ */
+export interface CreateProjectInput {
+  readonly name: string;
+  readonly durationSeconds: number;
+  readonly aspectRatio: string;
+  readonly resolution: string;
+  readonly prompt?: string | null;
+  readonly negativePrompt?: string | null;
+  readonly cameraMotion?: string | null;
+}
+
+/**
  * Orchestration only.
  *
  * Every rule already lives in a tested function — eligibility, the minimum,
@@ -42,6 +61,64 @@ export interface ComposedStoryboard {
  */
 export class StoryboardService {
   constructor(private readonly deps: StoryboardServiceDeps) {}
+
+  /**
+   * Create a project for a property. The only way one comes into existence.
+   *
+   * Validation is structural and covers only what the current domain model
+   * states: a name, a whole number of seconds, and the two format strings the
+   * entity requires. Whether a duration or resolution is *achievable* is a
+   * provider question, and Phase 4 owns it — this milestone invents no
+   * capability table and no provisional limit.
+   *
+   * The project always starts `DRAFT` with no fingerprint and no scenes,
+   * because {@link CreateProjectInput} cannot say otherwise.
+   *
+   * @throws AppError NOT_FOUND when the property is unknown or another tenant's.
+   */
+  async createProject(
+    actorUserId: string,
+    organizationId: string,
+    propertyId: string,
+    input: CreateProjectInput,
+  ): Promise<VideoProject> {
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+
+    const property = await this.deps.properties.findById(organizationId, propertyId);
+    if (!property) throw new AppError("NOT_FOUND", "Property not found");
+
+    const name = input.name.trim();
+    if (name.length === 0) throw new AppError("VALIDATION_FAILED", "A project name is required");
+    if (!Number.isInteger(input.durationSeconds) || input.durationSeconds <= 0) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "Requested duration must be a positive whole number of seconds",
+      );
+    }
+    if (input.aspectRatio.trim().length === 0 || input.resolution.trim().length === 0) {
+      throw new AppError("VALIDATION_FAILED", "Aspect ratio and resolution are required");
+    }
+
+    return this.deps.storyboards.projects.create({
+      id: this.deps.ids.generate("vpr"),
+      organizationId,
+      propertyId,
+      name,
+      status: "DRAFT",
+      durationSeconds: input.durationSeconds,
+      aspectRatio: input.aspectRatio.trim(),
+      resolution: input.resolution.trim(),
+      stylePreset: null,
+      cameraMotion: input.cameraMotion ?? null,
+      prompt: input.prompt ?? null,
+      negativePrompt: input.negativePrompt ?? null,
+      includeMusic: false,
+      includeCaptions: false,
+      brandTemplateId: null,
+      compositionFingerprint: null,
+      createdBy: actorUserId,
+    });
+  }
 
   /**
    * Compose a storyboard from the property's approved analyses.

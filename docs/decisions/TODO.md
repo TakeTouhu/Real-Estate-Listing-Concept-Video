@@ -161,6 +161,18 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       Rendering to a provider payload has to preserve that; no code enforces it
       yet because no renderer exists.
 
+## Phase 3C-5 follow-ups
+
+- [ ] **Phase 4 must validate generation against real provider capability
+      before any provider call.** `createProject` accepts `durationSeconds`,
+      `aspectRatio` and `resolution` with structural validation only, and the
+      compose endpoint will accept caller-supplied per-scene duration bounds for
+      the same reason: no capability source exists in Phase 3C, and inventing a
+      provisional table would bake in limits nothing has verified. **These values
+      are not authoritative provider capabilities.** Phase 4 owns checking a
+      requested duration, ratio and resolution against the configured model
+      before spending a provider call.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).
