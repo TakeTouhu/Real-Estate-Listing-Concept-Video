@@ -62,3 +62,21 @@ export function optionalString(body: Record<string, unknown>, key: string): stri
   }
   return value;
 }
+
+/** Shape-only: a required string field. Meaning is the domain's business. */
+export function requiredString(body: Record<string, unknown>, key: string): string {
+  const value = body[key];
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_FIELD_LENGTH) {
+    throw new AppError("VALIDATION_FAILED", `${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+/** Shape-only: a whole number above zero. Achievability is the domain's call. */
+export function requiredPositiveInteger(body: Record<string, unknown>, key: string): number {
+  const value = body[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new AppError("VALIDATION_FAILED", `${key} must be a positive whole number`);
+  }
+  return value;
+}

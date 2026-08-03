@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 import type { AssetAnalysis } from "../analysis/types";
-import type { MediaAsset } from "../property/types";
+import type { MediaAsset, Property } from "../property/types";
 import type { Role } from "../identity/roles";
 import { createOfflinePromptModerator, type PromptModerator } from "./moderation";
 import { orderScenes } from "./ordering";
 import { selectEligibleAnalyses } from "./eligibility";
 import { computeCompositionFingerprint } from "./fingerprint";
-import { StoryboardService, type StoryboardServiceDeps } from "./storyboard-service";
+import {
+  StoryboardService,
+  type CreateProjectInput,
+  type StoryboardServiceDeps,
+} from "./storyboard-service";
 import type { StoryboardScene, VideoProject } from "./types";
 
 const NOW = new Date("2026-08-03T00:00:00.000Z");
@@ -84,6 +88,7 @@ function harness(options: {
   project?: VideoProject | null;
   moderator?: PromptModerator;
   failSceneWrite?: boolean;
+  propertyExists?: boolean;
 } = {}): Harness {
   const role = options.role === undefined ? ("OWNER" as Role) : options.role;
   const analyses = options.analyses ?? [analysis("ast_a"), analysis("ast_b"), analysis("ast_c")];
@@ -118,6 +123,14 @@ function harness(options: {
         },
       },
     } as unknown as StoryboardServiceDeps["identity"],
+    properties: {
+      findById: (org: string, id: string) =>
+        Promise.resolve(
+          options.propertyExists === false || org !== ORG || id !== PROP
+            ? null
+            : ({ id: PROP, organizationId: ORG } as unknown as Property),
+        ),
+    } as unknown as StoryboardServiceDeps["properties"],
     assets: {
       listByProperty: (_org: string, _prop: string) =>
         Promise.resolve(analyses.map((a) => ({ id: a.assetId }) as MediaAsset)),
@@ -127,6 +140,10 @@ function harness(options: {
     } as unknown as StoryboardServiceDeps["analyses"],
     storyboards: {
       projects: {
+        create: (input: Omit<VideoProject, "createdAt" | "updatedAt">) => {
+          stored.project = { ...input, createdAt: NOW, updatedAt: NOW };
+          return Promise.resolve(stored.project);
+        },
         findById: (org: string, id: string) =>
           Promise.resolve(
             stored.project && stored.project.organizationId === org && stored.project.id === id
@@ -156,6 +173,96 @@ function harness(options: {
 
   return { service: new StoryboardService(deps), audits, stored, moderateCalls };
 }
+
+describe("createProject", () => {
+  const input: CreateProjectInput = {
+    name: "  Walkthrough  ",
+    durationSeconds: 30,
+    aspectRatio: "16:9",
+    resolution: "1080p",
+  };
+
+  it("creates a project for a permitted writer, trimming the name", async () => {
+    const { service } = harness({ role: "CREATOR", project: null });
+    const created = await service.createProject(ACTOR, ORG, PROP, input);
+    expect(created.name).toBe("Walkthrough");
+    expect(created.propertyId).toBe(PROP);
+    expect(created.createdBy).toBe(ACTOR);
+  });
+
+  it("starts DRAFT, with no fingerprint and no scenes", async () => {
+    const { service, stored } = harness({ project: null });
+    const created = await service.createProject(ACTOR, ORG, PROP, input);
+    expect(created.status).toBe("DRAFT");
+    expect(created.compositionFingerprint).toBeNull();
+    expect(stored.scenes).toEqual([]);
+  });
+
+  it("gives the client no way to supply lifecycle state", async () => {
+    // Not "ignores them" — CreateProjectInput cannot express status, the
+    // fingerprint, or scenes, so a client claiming a ready project is a
+    // compile error rather than a field this method must remember to drop.
+    const hostile = {
+      ...input,
+      status: "STORYBOARD_READY",
+      compositionFingerprint: "sha256:forged",
+      scenes: [{ assetId: "ast_x" }],
+    } as CreateProjectInput;
+    const { service } = harness({ project: null });
+    const created = await service.createProject(ACTOR, ORG, PROP, hostile);
+    expect(created.status).toBe("DRAFT");
+    expect(created.compositionFingerprint).toBeNull();
+  });
+
+  it("denies a non-member and a REVIEWER", async () => {
+    const stranger = harness({ role: null, project: null });
+    await expect(stranger.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
+      /access/i,
+    );
+    const reviewer = harness({ role: "REVIEWER", project: null });
+    await expect(reviewer.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
+      /permission/i,
+    );
+  });
+
+  it("reports an unknown or foreign property as NOT_FOUND", async () => {
+    const missing = harness({ project: null, propertyExists: false });
+    await expect(missing.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
+      /property not found/i,
+    );
+    const foreign = harness({ project: null });
+    await expect(
+      foreign.service.createProject(ACTOR, "org_other", PROP, input),
+    ).rejects.toThrow(/property not found/i);
+  });
+
+  it("rejects structurally invalid settings", async () => {
+    const { service } = harness({ project: null });
+    await expect(service.createProject(ACTOR, ORG, PROP, { ...input, name: "  " })).rejects.toThrow(
+      /name is required/i,
+    );
+    await expect(
+      service.createProject(ACTOR, ORG, PROP, { ...input, durationSeconds: 30.5 }),
+    ).rejects.toThrow(/whole number/i);
+    await expect(
+      service.createProject(ACTOR, ORG, PROP, { ...input, resolution: "" }),
+    ).rejects.toThrow(/aspect ratio and resolution/i);
+  });
+
+  it("applies no provider capability rule to duration, ratio or resolution", async () => {
+    // An unusual-but-structural request is accepted: judging it is Phase 4's
+    // job, and inventing a limit here would be a provisional capability table.
+    const { service } = harness({ project: null });
+    const created = await service.createProject(ACTOR, ORG, PROP, {
+      ...input,
+      durationSeconds: 987,
+      aspectRatio: "21:9",
+      resolution: "8k",
+    });
+    expect(created.durationSeconds).toBe(987);
+    expect(created.resolution).toBe("8k");
+  });
+});
 
 describe("authorization and tenancy", () => {
   it("denies a non-member", async () => {
