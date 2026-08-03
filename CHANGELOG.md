@@ -3,9 +3,48 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-3: prompt compilation and moderation
+## [Unreleased] — Phase 3C-4: storyboard orchestration
 
-Under review. Not merged. See `docs/phase-3c3-completion.md` and ADR-0014.
+Under review. Not merged. See `docs/phase-3c4-completion.md`.
+
+### Added
+
+- **`StoryboardService.compose`** — authorize `property:write`, load the
+  org-scoped project, select eligible approved analyses, require the minimum,
+  order, allocate durations from **caller-supplied bounds**, compile one
+  structured prompt per scene, compute the fingerprint, replace the scenes,
+  mark the project `STORYBOARD_READY`, and record one audit event.
+- **`StoryboardService.assertFresh`** — Phase 4's gate. Recomputes the
+  fingerprint from the current eligible set and refuses when it differs or when
+  none is stored. Derived, never pushed: no hook, no background marking.
+- Each scene persists its structured `CompiledPrompt` as JSON in the existing
+  `compiledPrompt` column — encoding only, so Phase 4 consumes the reviewed
+  prompt rather than recompiling different content.
+
+### Notes
+
+- **Orchestration only.** No rule is restated: eligibility, the minimum,
+  ordering, allocation, compilation, moderation, and the fingerprint all stay in
+  their existing tested functions. A test asserts the composed order equals
+  `orderScenes`' output rather than a hard-coded sequence.
+- **Moderation runs once per field per compose**, not 2N times. The compiler is
+  invoked once — which is what moderates — and the other scenes reuse its
+  verified output with their own facts. **No allow-all moderator exists**, so
+  nothing can be mistaken for a moderation boundary that isn't one.
+- **No transaction abstraction.** Scenes are written before the project is
+  marked ready, so a scene-write failure leaves the project `DRAFT`, unmarked
+  and unaudited.
+- Deferred as agreed: automatic recomposition, manual scene-edit preservation,
+  idempotency keys, a reusable in-memory double, provider capability tables, new
+  statuses, HTTP, UI, and provider integration.
+- `packages/database/`, `apps/`, the Prisma schema, migrations, and
+  `packages/domain/src/analysis/` all have a **zero diff**.
+- Size: 603 code lines (208 production, 395 tests) against a ~500 gate,
+  re-cost at ~410 — reported, not absorbed.
+
+## [phase-3c3-complete] — Phase 3C-3: prompt compilation and moderation
+
+Merged as `0b39eb1` (PR #17). See `docs/phase-3c3-completion.md` and ADR-0014.
 
 ### Added
 
