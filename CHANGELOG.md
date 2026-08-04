@@ -3,9 +3,53 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-6b: storyboard detail, composition, and freshness UI
+## [Unreleased] — Phase 3D-1: review-correction persistence
 
-Under review. Not merged. See `docs/phase-3c6b-completion.md`.
+Under review. Not merged. See `docs/phase-3d1-completion.md` and ADR-0015.
+
+### Added
+
+- **Four nullable columns on `asset_analyses`** — `roomTypeOverride`,
+  `orderOverride`, `correctedBy`, `correctedAt` — so a reviewer can correct what
+  the analyzer decided. Migration
+  `00000000000005_phase3d1_review_corrections` is purely additive: no backfill,
+  no index, no constraint, no change to any existing column.
+- **`effectiveRoomType(analysis)`** — the single resolution point,
+  `roomTypeOverride ?? roomType`. Plus `isCorrected(analysis)`, which reads the
+  overrides rather than `correctedBy`, so a cleared row reads as uncorrected.
+- **ADR-0015** recording the whole decision: preserved AI output versus
+  mutation, the correction lifecycle, `orderOverride` as a global sort priority
+  rather than an absolute position, the approved Phase 3D-3 precedence rule, the
+  fingerprint payload change and its one-time stale consequence, and why
+  `suggestedOrder` is retained despite being inert.
+
+### Changed
+
+- **A refresh now clears the four correction fields** at reservation, alongside
+  the stale analysis and review state it already cleared. A correction belongs
+  to the revision it was made against, and clearing at reservation means it can
+  never outlive the result it describes — not even on a `FAILED` row.
+
+### Notes
+
+- **The analyzer's output is never overwritten.** `roomType` and
+  `suggestedOrder` keep their values; a correction is stored beside the AI value
+  so the model's answer stays recoverable and `confidence` keeps describing the
+  value it was produced for.
+- **There is deliberately no `effectiveOrder` helper.** `orderOverride` is the
+  priority as stored; a wrapper would imply a derivation that does not exist,
+  and one falling back to `suggestedOrder` would move an ordering decision into
+  the analysis model. Ordering interpretation belongs to the storyboard
+  primitive (Phase 3D-3).
+- **Nothing can write a correction yet** — no service method, no endpoint, no
+  UI. Composition still ignores corrections, by design.
+- No fingerprint change in this milestone.
+- Size: 426 code lines (121 production, 305 tests), re-cost at ~351 against an
+  approved ~460.
+
+## [phase-3c6b-complete] — Phase 3C-6b: storyboard detail, composition, and freshness UI
+
+Merged as `235783b` (PR #22). See `docs/phase-3c6b-completion.md`.
 
 ### Added
 

@@ -186,11 +186,14 @@ export class AnalysisService {
     const existing = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (existing) {
       if (existing.status === "SUCCEEDED" && !refresh) return existing;
-      // Stale result *and* review fields are cleared as the row is reserved, so
-      // a refresh that then fails cannot leave last run's values behind on a
-      // FAILED row, and cannot leave a decision attached to a result that no
-      // longer exists. The revision itself is not touched here — it advances
-      // only on a successful terminal write.
+      // Stale result, review *and* correction fields are cleared as the row is
+      // reserved, so a refresh that then fails cannot leave last run's values
+      // behind on a FAILED row, and cannot leave a decision — or a human
+      // correction — attached to a result that no longer exists. A correction
+      // belongs to the revision it was made against: once the analyzer has been
+      // re-run, "this is a bathroom, not a kitchen" is a statement about a
+      // classification that no longer exists (ADR-0015). The revision itself is
+      // not touched here — it advances only on a successful terminal write.
       return this.deps.analyses.update({
         ...existing,
         status: "PENDING",
@@ -198,6 +201,10 @@ export class AnalysisService {
         reviewNote: null,
         reviewedBy: null,
         reviewedAt: null,
+        roomTypeOverride: null,
+        orderOverride: null,
+        correctedBy: null,
+        correctedAt: null,
         roomType: null,
         confidence: null,
         qualityScore: null,
@@ -229,6 +236,10 @@ export class AnalysisService {
         safetyFlags: [],
         suggestedOrder: null,
         failureReason: null,
+        roomTypeOverride: null,
+        orderOverride: null,
+        correctedBy: null,
+        correctedAt: null,
         analysisRevision: 1,
         reviewStatus: "UNREVIEWED",
         reviewNote: null,

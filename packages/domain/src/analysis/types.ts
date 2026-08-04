@@ -111,6 +111,29 @@ export interface AssetAnalysis {
   readonly suggestedOrder: number | null;
   readonly failureReason: string | null;
   /**
+   * The reviewer's corrected room classification, or null when the analyzer's
+   * {@link AssetAnalysis.roomType} stands.
+   *
+   * Stored **beside** the analyzer's value rather than over it, so the model's
+   * own answer stays recoverable and `confidence` keeps describing the value it
+   * was produced for. Resolve the two with `effectiveRoomType` — never read
+   * `roomType` directly where the corrected value is meant (ADR-0015).
+   */
+  readonly roomTypeOverride: RoomType | null;
+  /**
+   * The reviewer's sort priority, lower appearing earlier.
+   *
+   * A **global priority, not an absolute final position**: it competes with the
+   * automatic room rank rather than pinning a photo to index N, and duplicate
+   * values across photos are allowed and resolve deterministically. It is
+   * deliberately *not* a fallback for `suggestedOrder` — how the two combine is
+   * the storyboard ordering primitive's decision, not this model's (ADR-0015).
+   */
+  readonly orderOverride: number | null;
+  /** Who last corrected this revision, and when. Null while uncorrected. */
+  readonly correctedBy: string | null;
+  readonly correctedAt: Date | null;
+  /**
    * Identifies the persisted analysis *result*, not the attempt:
    *
    * - first successful analysis → revision 1;

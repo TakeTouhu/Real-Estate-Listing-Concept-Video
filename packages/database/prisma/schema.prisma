@@ -238,6 +238,16 @@ model AssetAnalysis {
   safetyFlags     Json           @default("[]")
   suggestedOrder  Int?
   failureReason   String?
+  /// Reviewer's corrected room classification. Null means the analyzer's
+  /// `roomType` stands; the analyzer's value is never overwritten (ADR-0015).
+  roomTypeOverride RoomType?
+  /// Reviewer's global sort priority, lower first. **Not** an absolute final
+  /// position, and deliberately not a fallback for `suggestedOrder` — how it
+  /// participates in ordering belongs to the storyboard primitive (ADR-0015).
+  /// Duplicate values across rows are allowed and resolve deterministically.
+  orderOverride    Int?
+  correctedBy      String?
+  correctedAt      DateTime?
   analysisRevision Int           @default(1)
   reviewStatus    ReviewStatus   @default(UNREVIEWED)
   reviewNote      String?
