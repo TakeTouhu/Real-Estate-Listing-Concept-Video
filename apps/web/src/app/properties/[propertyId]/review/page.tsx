@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import type { MediaAsset } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getAnalysisService } from "@/lib/analysis";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
+import { thumbnailUrls } from "@/lib/thumbnails";
 import {
   buildReviewBoard,
   type DuplicateCluster,
@@ -106,29 +106,6 @@ export default async function ReviewPage({
 /** Awaiting photos inside clusters, so the header counts photos and not cards. */
 function clusterCount(board: ReviewBoard): number {
   return board.clusters.flatMap((c) => c.items).filter((i) => i.bucket === "AWAITING").length;
-}
-
-/**
- * Short-lived signed thumbnail URLs, minted per render and never persisted.
- * An asset with no thumbnail variant simply renders without a preview.
- */
-async function thumbnailUrls(
-  userId: string,
-  organizationId: string,
-  assets: readonly MediaAsset[],
-): Promise<Map<string, string>> {
-  const urls = new Map<string, string>();
-  const previewable = assets.filter((a) => a.status === "READY" && a.thumbnailKey);
-  for (const asset of previewable) {
-    const signed = await getPropertyServices().assets.createDownloadUrl(
-      userId,
-      organizationId,
-      asset.id,
-      "thumbnail",
-    );
-    urls.set(asset.id, signed.url);
-  }
-  return urls;
 }
 
 function Section({

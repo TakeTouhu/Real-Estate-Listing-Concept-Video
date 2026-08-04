@@ -3,9 +3,52 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-6a: video-project discovery and creation UI
+## [Unreleased] — Phase 3C-6b: storyboard detail, composition, and freshness UI
 
-Under review. Not merged. See `docs/phase-3c6a-completion.md`.
+Under review. Not merged. See `docs/phase-3c6b-completion.md`.
+
+### Added
+
+- **`/properties/{propertyId}/video-projects/{projectId}`** — the storyboard
+  detail page, linked from each row of the Videos list. Read-only project
+  settings, the approved-photo count against `MIN_STORYBOARD_SCENES`, the
+  freshness banner, and the composed scenes with short-lived signed thumbnails.
+- **Compose panel** — posts to the existing
+  `POST /api/video-projects/{projectId}/storyboard`. `minSceneSeconds` and
+  `maxSceneSeconds` are explicit required inputs with **no default of any kind**;
+  the button is unavailable until both are whole numbers above zero.
+  Recomposition uses the **same** endpoint — none was added.
+- **`apps/web/src/lib/thumbnails.ts`** — the signed-thumbnail helper extracted
+  unchanged from the review page, now with two consumers. Server-only; returns
+  signed URLs and never a storage key.
+- `mapComposeError` / `COMPOSE_ERRORS` in the existing zero-import client-safe
+  mapper.
+
+### Notes
+
+- **Freshness is decided by `fresh`, never by `project.status`.** The persisted
+  status is written at compose time and nothing updates it when an approval
+  later changes (ADR-0012). A test drives `STORYBOARD_READY` with `fresh: false`
+  and asserts the **stale warning wins** — a stale storyboard is never presented
+  as ready or current.
+- Three states, exhaustively: never composed (`scenes: []`), fresh, and stale.
+- The approved-photo count is informational, labelled as approved photos rather
+  than eligible scenes, does **not** reimplement the duplicate-group eligibility
+  rule, and does **not** gate composition. The compose result is authoritative.
+- `MIN_STORYBOARD_SCENES` is resolved on the server and passed down as a plain
+  number: the presentation module mounts a Client Component, so it carries no
+  domain value import.
+- Nothing outside `apps/web/` changed — `packages/`, the Prisma schema, the
+  migrations, and every API route have a **zero diff**.
+- The clean production build was scanned: no domain, server, or Node-builtin
+  symbol appears in any browser chunk, verified against a positive control from
+  the new compose component.
+- Size: 1160 code lines (527 production, 633 tests) against a ~780 estimate —
+  over the threshold, and reported as such rather than trimmed.
+
+## [phase-3c6a-complete] — Phase 3C-6a: video-project discovery and creation UI
+
+Merged as `efff531` (PR #21). See `docs/phase-3c6a-completion.md`.
 
 ### Added
 
