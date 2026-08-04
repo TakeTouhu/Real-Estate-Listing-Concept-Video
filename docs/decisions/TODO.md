@@ -173,6 +173,27 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       requested duration, ratio and resolution against the configured model
       before spending a provider call.
 
+## Phase 3C-6 follow-ups
+
+- [ ] **Rename, edit settings, and delete a video project — required for
+      commercial-launch readiness, deferred from Phase 3C-6a.** These are
+      *deferred, not judged unnecessary*. Today a customer who mistypes a target
+      length, aspect ratio, resolution, or prompt has no way to correct it: the
+      only remedy is creating another project and abandoning the first, which
+      also leaves unusable projects accumulating on the property. Closing this
+      needs a `PATCH` and a delete endpoint, the matching `StoryboardService`
+      methods with `property:write` authorization and tenant scoping, audit
+      events, and a rule for what happens to an already-composed storyboard when
+      its settings change (almost certainly: invalidate the fingerprint so the
+      storyboard reads stale). **Review before commercial launch.**
+- [ ] **Composition duration bounds have no product-level source.**
+      `minSceneSeconds` and `maxSceneSeconds` will be explicit required inputs in
+      the Phase 3C-6b compose UI, with no default, because no provider-derived
+      value exists yet and a prefilled number would function as a provisional
+      capability assumption however it were labelled. Phase 4 must replace or
+      constrain this input from the configured provider's real capabilities
+      before generation.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).
