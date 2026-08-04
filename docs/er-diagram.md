@@ -126,6 +126,10 @@ erDiagram
     json   safetyFlags "bounded list, BLOCKING|WARNING"
     int    suggestedOrder "nullable, walkthrough rank"
     string failureReason "nullable, sanitized"
+    enum   roomTypeOverride "nullable, reviewer's corrected room; AI roomType preserved"
+    int    orderOverride "nullable, reviewer's sort priority (not a fixed position)"
+    string correctedBy "nullable, who corrected this revision"
+    datetime correctedAt "nullable"
     int    analysisRevision "persisted result, increments on successful refresh"
     enum   reviewStatus "UNREVIEWED|APPROVED|REJECTED"
     string reviewNote "nullable, required for rejection"
@@ -204,6 +208,13 @@ erDiagram
   same object.
 - `asset_analyses.assetId` is unique, so an asset can never accumulate more than
   one analysis row; a re-run updates the existing row in place.
+- The four correction columns (`roomTypeOverride`, `orderOverride`,
+  `correctedBy`, `correctedAt`) are **unindexed by design**: a correction is
+  read as part of the analysis row already being loaded by primary key or by the
+  unique `assetId`, and is never searched by. `orderOverride` carries **no**
+  uniqueness or range constraint — duplicate priorities are legitimate and
+  resolve deterministically during ordering, and which values are *valid* is a
+  product rule owned by the correction service, not by the schema (ADR-0015).
 - **Partial unique index** `asset_analyses_org_dupgroup_approved_key` on
   `(organizationId, duplicateGroup) WHERE duplicateGroup IS NOT NULL AND
   reviewStatus = 'APPROVED'`. The database is authoritative for "at most one

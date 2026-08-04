@@ -431,6 +431,10 @@ describe("concurrency", () => {
       safetyFlags: [],
       suggestedOrder: null,
       failureReason: null,
+      roomTypeOverride: null,
+      orderOverride: null,
+      correctedBy: null,
+      correctedAt: null,
       analysisRevision: 1,
       reviewStatus: "UNREVIEWED",
       reviewNote: null,
@@ -595,6 +599,82 @@ describe("refresh", () => {
     expect(recovered.status).toBe("SUCCEEDED");
     expect(recovered.failureReason).toBeNull();
     expect(fx.analyses.all()).toHaveLength(1);
+  });
+});
+
+describe("refresh and human corrections", () => {
+  /** Put a correction on the current revision the way Phase 3D-2 will. */
+  async function correct(): Promise<void> {
+    const current = await fx.analyses.findByAssetId(fx.orgId, fx.assetId);
+    await fx.analyses.update({
+      ...current!,
+      roomTypeOverride: "LIVING_ROOM",
+      orderOverride: 2,
+      correctedBy: fx.ownerId,
+      correctedAt: new Date("2026-08-04T00:00:00.000Z"),
+    });
+  }
+
+  it("clears every correction field when a refresh succeeds", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await correct();
+
+    const refreshed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+
+    // A correction belongs to the revision it was made against: once the
+    // analyzer has re-run, it describes a classification that no longer exists.
+    expect(refreshed.status).toBe("SUCCEEDED");
+    expect(refreshed.analysisRevision).toBe(2);
+    expect(refreshed.roomTypeOverride).toBeNull();
+    expect(refreshed.orderOverride).toBeNull();
+    expect(refreshed.correctedBy).toBeNull();
+    expect(refreshed.correctedAt).toBeNull();
+    // The analyzer's own output is present again, uncorrected.
+    expect(refreshed.roomType).toBe("KITCHEN");
+  });
+
+  it("clears the corrections even when the refresh then fails", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await correct();
+
+    fx.provider.failWith = new Error("timeout");
+    const failed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+
+    // Clearing happens at reservation, so a correction can never outlive the
+    // result it was made about — not even on a FAILED row.
+    expect(failed.status).toBe("FAILED");
+    expect(failed.roomTypeOverride).toBeNull();
+    expect(failed.orderOverride).toBeNull();
+    expect(failed.correctedBy).toBeNull();
+    expect(failed.correctedAt).toBeNull();
+    // Existing refresh semantics are untouched: a failure does not advance the
+    // revision, and the review state was cleared alongside.
+    expect(failed.analysisRevision).toBe(1);
+    expect(failed.reviewStatus).toBe("UNREVIEWED");
+  });
+
+  it("starts a new analysis with no corrections", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(first.roomTypeOverride).toBeNull();
+    expect(first.orderOverride).toBeNull();
+    expect(first.correctedBy).toBeNull();
+    expect(first.correctedAt).toBeNull();
+  });
+
+  it("leaves corrections alone when an analysis is re-requested without refresh", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await correct();
+
+    // No refresh: the completed analysis is returned untouched, so a reviewer's
+    // correction is not lost to an idempotent re-request.
+    const again = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(again.roomTypeOverride).toBe("LIVING_ROOM");
+    expect(again.orderOverride).toBe(2);
+    expect(again.correctedBy).toBe(fx.ownerId);
   });
 });
 

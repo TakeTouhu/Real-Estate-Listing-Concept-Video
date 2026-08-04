@@ -28,6 +28,7 @@ required checks (`pnpm check`) do **not** need a database.
 | 3 | `00000000000002_phase3a2_asset_analysis` | 3A-2a | Asset analysis results |
 | 4 | `00000000000003_phase3b1a_review_state` | 3B-1a | Human-review state |
 | 5 | `00000000000004_phase3c1_storyboard` | 3C-1 | Video projects + storyboard scenes |
+| 6 | `00000000000005_phase3d1_review_corrections` | 3D-1 | Human review corrections |
 
 ### 1 — `00000000000000_init` (Phase 1)
 
@@ -172,6 +173,61 @@ Two consequences, both verified rather than assumed:
 `DROP INDEX "asset_analyses_org_dupgroup_approved_key";`, drop the three
 columns, then `DROP TYPE "ReviewStatus";`. Dropping them destroys review
 decisions; the audit log retains the history.
+
+### 6 — `00000000000005_phase3d1_review_corrections` (Phase 3D-1)
+
+Four nullable columns on `asset_analyses` so a reviewer can correct what the
+analyzer decided:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `roomTypeOverride` | `"RoomType"` | corrected classification; null means the analyzer's stands |
+| `orderOverride` | `INTEGER` | reviewer's sort priority, lower first |
+| `correctedBy` | `TEXT` | actor |
+| `correctedAt` | `TIMESTAMP(3)` | when |
+
+**Purely additive.** No backfill, no index, no constraint, no change to any
+existing column. `NULL` everywhere means "no human correction", which is exactly
+the behaviour before this migration, so existing rows need no attention and
+application code that ignores these columns keeps working. Verified applying
+cleanly to an **empty** database through the full migration chain, and the drift
+check reports `No difference detected.` (exit 0).
+
+**No index, deliberately.** A correction is read as part of the analysis row
+already being loaded by primary key or by the unique `assetId`, and is never
+searched by.
+
+**No constraint on `orderOverride`, deliberately.** Duplicate priorities across
+rows are legitimate and resolve deterministically during ordering, and which
+values are *valid* is a product rule owned by the correction service (Phase
+3D-2) — the schema must not encode a rule that has not shipped. A live test
+asserts that `0`, a negative, and a large priority all persist unchanged.
+
+**The analyzer's output is untouched.** `roomType` and `suggestedOrder` keep
+their values; a correction is stored beside the AI value, never over it, so the
+model's answer stays recoverable and `confidence` keeps describing the value it
+was produced for (ADR-0015).
+
+**Freshness consequence, arriving in Phase 3D-3, not here.** When the
+composition fingerprint payload widens to include `effectiveRoomType` and
+`orderOverride`, every digest changes, so **every storyboard composed under the
+old format reads stale once** and must be recomposed. That is the fail-safe
+direction and needs **no data migration and no fingerprint backfill**. Phase
+3D-1 changes no fingerprint and has no such effect.
+
+**Rollback.** Purely additive:
+
+```sql
+ALTER TABLE "asset_analyses"
+  DROP COLUMN "roomTypeOverride",
+  DROP COLUMN "orderOverride",
+  DROP COLUMN "correctedBy",
+  DROP COLUMN "correctedAt";
+```
+
+Dropping them destroys any recorded corrections; the audit log (from Phase 3D-2)
+retains the history. The `"RoomType"` enum is shared with `roomType` and must
+**not** be dropped.
 
 ### Phase 3A-1 — no migration
 
