@@ -115,6 +115,43 @@ Controls:
 
 Only display options supported by the configured WaveSpeedAI model capability. Show a preview of the storyboard, not a claim of actual geometry.
 
+#### Implemented — `/properties/{propertyId}/video-projects` (Phase 3C-6a)
+
+The property page now offers **Videos →** alongside **Review photo analyses →**.
+The Videos page lists every video project the property has, each showing its
+name, status (Draft, Storyboard ready, Storyboard stale), target length, aspect
+ratio, resolution, and the customer's own camera-motion, prompt, and
+negative-prompt text where set.
+
+A property may hold any number of projects. There is no active, default, or
+primary project, no pagination, search, filter, or sorting control, and the
+empty state says so rather than implying a project exists. Rows carry no link
+yet — the project detail page arrives in Phase 3C-6b.
+
+Creation is a single panel: name, target length in seconds, aspect ratio, and
+resolution are required, and the button stays unusable until all four are
+filled and the length is a whole number above zero. Camera motion, prompt, and
+negative prompt are optional and are sent only when they carry text. Aspect
+ratio and resolution are free text — the configured provider's real supported
+formats are Phase 4's to establish, and the placeholders show the shape of the
+string, not a claim about what any provider accepts. No lifecycle field is sent:
+a project always starts as a draft with no storyboard.
+
+Authorization is presentational as well as enforced: a role without
+`property:write` reads the list and receives **no create markup at all** — not a
+disabled control — plus a one-line explanation. The API enforces the same rule
+independently.
+
+A successful creation refreshes the server component from the database rather
+than inserting the project locally. Failure messages are chosen by HTTP status
+and a `422` renders the API's own message unchanged, matching the review
+surface.
+
+Not yet implemented: project detail, storyboard composition and preview,
+freshness presentation, and the recompose interaction (Phase 3C-6b); renaming,
+editing settings, and deletion (recorded for commercial-launch readiness in
+`docs/decisions/TODO.md`).
+
 ### Estimate confirmation
 
 Before generation show:

@@ -3,9 +3,50 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3C-5b: storyboard compose, read, and project list
+## [Unreleased] — Phase 3C-6a: video-project discovery and creation UI
 
-Under review. Not merged. See `docs/phase-3c5b-completion.md` and
+Under review. Not merged. See `docs/phase-3c6a-completion.md`.
+
+### Added
+
+- **`/properties/{propertyId}/video-projects`** — the Videos page, reached from
+  a new entry on the property page. Lists every video project the property has
+  with its name, status, target length, aspect ratio, resolution, and the
+  customer's own camera-motion, prompt, and negative-prompt text.
+- **Create panel** — posts to `POST /api/properties/{propertyId}/video-projects`
+  with only the fields `CreateProjectInput` accepts. The button stays unusable
+  until name, target length, aspect ratio, and resolution are all filled and the
+  length is a whole number above zero. A successful `201` clears the form and
+  refreshes the server component; the authoritative list comes from the server,
+  never from a local insert.
+- **`apps/web/src/lib/project-errors.ts`** — client-safe status→message mapping
+  with **no imports**, so nothing drags `@app/domain` into the browser bundle.
+  `422` renders the API's own message and is never parsed.
+- `ProjectsView`, a synchronous presentational component, so the project list
+  and the authorization gating are directly testable under jsdom.
+
+### Notes
+
+- A property may hold **any number** of projects. No active, default, or primary
+  project; no pagination, search, filter, or sorting control.
+- Rows carry **no link** — the project detail route does not exist until Phase
+  3C-6b, and a link to a missing route is worse than none.
+- Authorization is presentational as well as enforced: a role without
+  `property:write` receives **no create markup at all**, not a disabled control.
+  The API remains the security boundary and the client re-derives nothing.
+- **No lifecycle field is ever sent** — no `status`, `compositionFingerprint`,
+  `scenes`, or `createdBy`. A test asserts each is absent from the request body.
+- Aspect ratio and resolution are free text; the placeholders show the shape of
+  the string and make **no claim about provider capability**, which is Phase 4's
+  to establish.
+- Nothing outside `apps/web/` changed — `packages/`, the Prisma schema, and the
+  migrations all have a **zero diff**.
+- The production build was scanned: no domain or server symbol appears in any
+  browser chunk.
+
+## [phase-3c5b-complete] — Phase 3C-5b: storyboard compose, read, and project list
+
+Merged as `37df1b7` (PR #20). See `docs/phase-3c5b-completion.md` and
 `docs/api-changes-phase-3c5.md`.
 
 ### Added

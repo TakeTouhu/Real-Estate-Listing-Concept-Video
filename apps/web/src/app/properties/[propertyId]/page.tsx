@@ -51,6 +51,9 @@ export default async function PropertyDetailPage({
         <p>
           <a href={`/properties/${property.id}/review`}>Review photo analyses →</a>
         </p>
+        <p>
+          <a href={`/properties/${property.id}/video-projects`}>Videos →</a>
+        </p>
 
         <UploadPanel
           organizationId={organization.id}
