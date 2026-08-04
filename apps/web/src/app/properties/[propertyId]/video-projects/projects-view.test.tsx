@@ -104,9 +104,13 @@ describe("project list", () => {
     expect(screen.getByText("· Storyboard stale")).toBeTruthy();
   });
 
-  it("links nowhere — the detail route does not exist until Phase 3C-6b", () => {
-    const { container } = view([project()]);
-    expect(container.querySelectorAll("a")).toHaveLength(0);
+  it("links each project to its own storyboard", () => {
+    view([project({ id: "vpr_1", name: "Hero cut" }), project({ id: "vpr_2", name: "Social cut" })]);
+
+    const hero = screen.getByRole("link", { name: "Hero cut" });
+    const social = screen.getByRole("link", { name: "Social cut" });
+    expect(hero.getAttribute("href")).toBe(`/properties/${PROPERTY}/video-projects/vpr_1`);
+    expect(social.getAttribute("href")).toBe(`/properties/${PROPERTY}/video-projects/vpr_2`);
   });
 
   it("puts no internal field in the browser-facing markup", () => {

@@ -147,10 +147,51 @@ than inserting the project locally. Failure messages are chosen by HTTP status
 and a `422` renders the API's own message unchanged, matching the review
 surface.
 
-Not yet implemented: project detail, storyboard composition and preview,
-freshness presentation, and the recompose interaction (Phase 3C-6b); renaming,
-editing settings, and deletion (recorded for commercial-launch readiness in
-`docs/decisions/TODO.md`).
+Each row links to the project's storyboard.
+
+#### Implemented — `/properties/{propertyId}/video-projects/{projectId}` (Phase 3C-6b)
+
+The storyboard page opens with the project's settings shown **read-only** —
+name, persisted status, target length, aspect ratio, resolution, and the
+customer's own camera motion, prompt, and negative prompt where set — followed
+by how many photos on the property are approved and how many a storyboard needs.
+That count is informational: it does not gate composition, and the compose
+result remains authoritative.
+
+Below it, one banner states which of three things is true:
+
+- **nothing composed yet** — neutral;
+- **current** — this storyboard matches the photos currently approved;
+- **out of date** — the approved photos changed since it was composed, so it
+  cannot be used until it is composed again.
+
+The banner is driven by the freshness the server recomputes at read time, **not**
+by the project's persisted status. A project can read *Storyboard ready* while
+its storyboard no longer matches its inputs, and in that case the page shows the
+out-of-date warning. A stale storyboard is never described as ready or current.
+
+Composition asks for two explicit values — the shortest and longest time any one
+photo is held on screen — with **no prefilled defaults**, and the button stays
+unusable until both are whole numbers above zero. They are presented as scene
+pacing; nothing claims they reflect what a provider supports. Recomposing uses
+the same action, worded *Compose again*.
+
+Scenes render in order with their position, room, source photo, and length, each
+with a short-lived signed thumbnail where the photo has one, under a statement
+that a storyboard is a plan and not a measured floor plan.
+
+Authorization is presentational as well as enforced: a role without
+`property:write` reads the settings, banner, and scenes, and receives **no
+compose markup at all**.
+
+Failures follow the same scheme as the rest of the product: a status decides the
+message, and a `422` renders the API's own sentence unchanged — the achievable
+duration range, the approved-photo minimum, or a moderation refusal, which is
+already sanitized server-side and carries no rejected prompt text.
+
+Not yet implemented: generation itself, job status, and output playback (Phase
+4); renaming, editing settings, and deletion (recorded for commercial-launch
+readiness in `docs/decisions/TODO.md`).
 
 ### Estimate confirmation
 

@@ -30,8 +30,8 @@ interface Props {
  * repository's — this view adds no sorting, filtering, search, or pagination
  * control.
  *
- * Rows carry no link: the project detail route arrives in Phase 3C-6b, and a
- * link to a route that does not exist is worse than none.
+ * Each row links to the project's storyboard (Phase 3C-6b), which is where
+ * composition, the scene preview, and the freshness state live.
  */
 export function ProjectsView({ organizationId, propertyId, projects, canCreate }: Props) {
   return (
@@ -51,7 +51,9 @@ export function ProjectsView({ organizationId, propertyId, projects, canCreate }
         {projects.length === 0 ? (
           <p className="muted">No video projects yet.</p>
         ) : (
-          projects.map((project) => <ProjectRow key={project.id} project={project} />)
+          projects.map((project) => (
+            <ProjectRow key={project.id} project={project} propertyId={propertyId} />
+          ))
         )}
       </div>
     </>
@@ -67,11 +69,17 @@ export function ProjectsView({ organizationId, propertyId, projects, canCreate }
  * constraints, no provider or storage detail. The DTO does not carry them
  * (ADR-0014), so there is nothing here to leak.
  */
-function ProjectRow({ project }: { project: VideoProjectDto }) {
+function ProjectRow({
+  project,
+  propertyId,
+}: {
+  project: VideoProjectDto;
+  propertyId: string;
+}) {
   return (
     <div className="project-row">
       <p className="project-name">
-        {project.name}{" "}
+        <a href={`/properties/${propertyId}/video-projects/${project.id}`}>{project.name}</a>{" "}
         <span className={project.status === "STORYBOARD_READY" ? "status-ok" : "muted"}>
           · {STATUS_LABELS[project.status]}
         </span>
