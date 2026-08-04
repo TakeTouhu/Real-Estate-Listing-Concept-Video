@@ -170,7 +170,7 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3C-5a | Video-project creation path (service + HTTP) | 623 — 230 production + 393 tests (accepted as an MVP exception) | **Merged** (PR #19, `afb9fbe`) |
 | 3C-5b | Storyboard compose + read + project list, `isFresh` | 732 — 252 production + 480 tests (re-cost ~711) | **Merged** (PR #20, `37df1b7`) |
 | 3C-6a | Video-project discovery + creation UI | 845 — 423 production + 422 tests (approved ~430, re-cost ~620 — **reported before implementation**) | **Merged** (PR #21, `efff531`) |
-| 3C-6b | Storyboard detail, composition, freshness, recompose | 1160 — 527 production + 633 tests (estimated ~780; **overran the ~800 threshold without a mid-implementation report**) | In review |
+| 3C-6b | Storyboard detail, composition, freshness, recompose | 1286 — 579 production + 707 tests (estimated ~780; **overran the ~800 threshold without a mid-implementation report**; includes a 126-line nested-route integrity fix found in review) | In review |
 
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |

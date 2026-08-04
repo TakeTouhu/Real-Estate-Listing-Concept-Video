@@ -43,8 +43,24 @@ Under review. Not merged. See `docs/phase-3c6b-completion.md`.
 - The clean production build was scanned: no domain, server, or Node-builtin
   symbol appears in any browser chunk, verified against a positive control from
   the new compose component.
-- Size: 1160 code lines (527 production, 633 tests) against a ~780 estimate —
-  over the threshold, and reported as such rather than trimmed.
+- Size: 1286 code lines (579 production, 707 tests) against a ~780 estimate —
+  over the threshold, and reported as such rather than trimmed. 1160 of those
+  were the first review head; the remaining 126 are the review fix below.
+
+### Fixed (found in review, before merge)
+
+- **Nested-route integrity on the storyboard page.** The page resolved the URL's
+  `propertyId` but loaded the storyboard by `organizationId + projectId` alone,
+  never checking the two agreed. `getStoryboard` is organization-scoped — the
+  security boundary is intact — but a project from a *different property in the
+  same organization* is a valid result, so a hand-built URL could render one
+  property's header, assets, and approved count beside another's project and
+  scenes. `resolveStoryboardForProperty` now returns the not-found result for
+  both a genuine `NOT_FOUND` and a property mismatch, **identically**, so a
+  mismatch never discloses that the project exists elsewhere. The same change
+  stops a genuine `NOT_FOUND` escaping as a 500. `FORBIDDEN`,
+  `VALIDATION_FAILED`, `UNAUTHENTICATED`, and repository errors all still
+  propagate — a broken system must not read as a missing page.
 
 ## [phase-3c6a-complete] — Phase 3C-6a: video-project discovery and creation UI
 

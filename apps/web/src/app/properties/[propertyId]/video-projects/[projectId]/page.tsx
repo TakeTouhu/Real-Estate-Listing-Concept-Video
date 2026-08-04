@@ -6,6 +6,7 @@ import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { humanizeRoomType } from "@/lib/review-view";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
+import { resolveStoryboardForProperty } from "@/lib/storyboard-route";
 import { thumbnailUrls } from "@/lib/thumbnails";
 import { StoryboardView, type SceneRow } from "./storyboard-view";
 
@@ -45,11 +46,17 @@ export default async function StoryboardPage({
       continue;
     }
 
-    const view = await getStoryboardService().getStoryboard(
-      current.user.id,
-      organization.id,
-      projectId,
+    // The project must belong to the property in the URL. The service is
+    // organization-scoped, so a project from another property in the same
+    // organization is a valid result — and rendering it beside this property's
+    // header and assets would be wrong. A mismatch and a missing project both
+    // fall through to the page's ordinary not-found behaviour.
+    const view = await resolveStoryboardForProperty(
+      () => getStoryboardService().getStoryboard(current.user.id, organization.id, projectId),
+      propertyId,
     );
+    if (!view) continue;
+
     const assets = await services.assets.list(current.user.id, organization.id, propertyId);
     const analyses = await getAnalysisService().listForProperty(
       current.user.id,
