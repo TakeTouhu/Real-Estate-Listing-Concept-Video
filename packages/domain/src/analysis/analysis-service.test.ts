@@ -1198,3 +1198,522 @@ describe("review audit", () => {
     expect(serialized).not.toContain("stub");
   });
 });
+
+describe("correct — input semantics", () => {
+  /** A reviewable analysis carrying both overrides already. */
+  async function withBothOverrides(): Promise<AssetAnalysis> {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    return fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "LIVING_ROOM" },
+      order: { set: 4 },
+    });
+  }
+
+  it("sets a room override, leaving the analyzer's own classification alone", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const corrected = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "BALCONY" },
+    });
+
+    expect(corrected.roomTypeOverride).toBe("BALCONY");
+    expect(corrected.roomType).toBe("KITCHEN");
+  });
+
+  it("sets an order override", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const corrected = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: 3 },
+    });
+    expect(corrected.orderOverride).toBe(3);
+  });
+
+  it("leaves the room override untouched when the field is absent", async () => {
+    await withBothOverrides();
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: 9 },
+    });
+
+    expect(after.roomTypeOverride).toBe("LIVING_ROOM");
+    expect(after.orderOverride).toBe(9);
+  });
+
+  it("leaves the order override untouched when the field is absent", async () => {
+    await withBothOverrides();
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+    });
+
+    expect(after.orderOverride).toBe(4);
+    expect(after.roomTypeOverride).toBe("STUDY");
+  });
+
+  it("clears the room override with an explicit null, and only that field", async () => {
+    await withBothOverrides();
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+    });
+
+    expect(after.roomTypeOverride).toBeNull();
+    expect(after.orderOverride).toBe(4);
+  });
+
+  it("clears the order override with an explicit null, and only that field", async () => {
+    await withBothOverrides();
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: null },
+    });
+
+    expect(after.orderOverride).toBeNull();
+    expect(after.roomTypeOverride).toBe("LIVING_ROOM");
+  });
+
+  it("distinguishes absent from cleared on the same request", async () => {
+    // The whole reason for the wrapper: one request clears the room and says
+    // nothing about the order, and the order survives.
+    await withBothOverrides();
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+    });
+    expect(after.roomTypeOverride).toBeNull();
+    expect(after.orderOverride).toBe(4);
+  });
+
+  it("changes both fields in one request", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "ENTRANCE" },
+      order: { set: 1 },
+    });
+
+    expect(after.roomTypeOverride).toBe("ENTRANCE");
+    expect(after.orderOverride).toBe(1);
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(1);
+  });
+
+  it("refuses an input that specifies no field at all", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {}),
+    ).rejects.toThrow(/must specify a room type or an order priority/i);
+    expect(actions(fx)).not.toContain("analysis.corrected");
+  });
+});
+
+describe("correct — validation", () => {
+  const ROOMS = [
+    "EXTERIOR", "ENTRANCE", "HALLWAY", "LIVING_ROOM", "DINING_ROOM", "KITCHEN",
+    "BEDROOM", "CHILD_ROOM", "STUDY", "BATHROOM", "WASHROOM", "TOILET",
+    "STORAGE", "BALCONY", "OTHER",
+  ] as const;
+
+  it("accepts every room type in the existing vocabulary", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    for (const room of ROOMS) {
+      const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+        roomType: { set: room },
+      });
+      expect(after.roomTypeOverride).toBe(room);
+    }
+  });
+
+  it("refuses an unknown room type without echoing what was submitted", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const planted = "PENTHOUSE-JACUZZI-<script>";
+
+    const error = await fx.service
+      .correct(fx.ownerId, fx.orgId, fx.assetId, {
+        roomType: { set: planted as never },
+      })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe("VALIDATION_FAILED");
+    // Untrusted input must not be reflected into a message that reaches logs.
+    expect(JSON.stringify(error)).not.toContain("PENTHOUSE");
+    expect((error as AppError).message).toBe("Unknown room type");
+  });
+
+  it.each([1, 2, 15, 9999, Number.MAX_SAFE_INTEGER])(
+    "accepts the order priority %s",
+    async (priority) => {
+      await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+      const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+        order: { set: priority },
+      });
+      expect(after.orderOverride).toBe(priority);
+    },
+  );
+
+  it.each([
+    ["zero", 0],
+    ["a negative", -1],
+    ["a fraction", 2.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+    ["a string", "3" as unknown as number],
+    ["a boolean", true as unknown as number],
+    ["null-as-value via a non-number", {} as unknown as number],
+  ])("refuses %s as an order priority", async (_label, value) => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: value } }),
+    ).rejects.toThrow(/whole number above zero/i);
+
+    const stored = await fx.analyses.findByAssetId(fx.orgId, fx.assetId);
+    expect(stored?.orderOverride).toBeNull();
+    expect(actions(fx)).not.toContain("analysis.corrected");
+  });
+});
+
+describe("correct — lifecycle", () => {
+  it("succeeds for a SUCCEEDED, UNREVIEWED analysis and repeats while unreviewed", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: 1 } });
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: 2 } });
+    const third = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: 3 },
+    });
+
+    expect(third.orderOverride).toBe(3);
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(3);
+  });
+
+  it("refuses a PENDING analysis", async () => {
+    fx.provider.failWith = new Error("timeout");
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const failed = await fx.analyses.findByAssetId(fx.orgId, fx.assetId);
+    await fx.analyses.update({ ...failed!, status: "PENDING" });
+
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: 1 } }),
+    ).rejects.toThrow(/Only a completed analysis can be reviewed/i);
+  });
+
+  it("refuses a FAILED analysis", async () => {
+    fx.provider.failWith = new Error("timeout");
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: 1 } }),
+    ).rejects.toThrow(/Only a completed analysis can be reviewed/i);
+  });
+
+  it("refuses an APPROVED analysis, directing the reviewer to refresh", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } }),
+    ).rejects.toThrow(/already been reviewed; refresh/i);
+  });
+
+  it("refuses a REJECTED analysis", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "blurry" });
+
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } }),
+    ).rejects.toThrow(/already been reviewed; refresh/i);
+  });
+
+  it("does not advance analysisRevision", async () => {
+    const first = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const corrected = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+      order: { set: 2 },
+    });
+
+    // A human edit is not a new analysis result.
+    expect(corrected.analysisRevision).toBe(first.analysisRevision);
+  });
+
+  it("carries a correction into the approval that follows it", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+      order: { set: 2 },
+    });
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+
+    expect(approved.reviewStatus).toBe("APPROVED");
+    expect(approved.roomTypeOverride).toBe("STUDY");
+    expect(approved.orderOverride).toBe(2);
+  });
+});
+
+describe("correct — authorization and tenancy", () => {
+  it.each(["OWNER", "ADMIN", "REVIEWER"] as const)("allows a %s", async (role) => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const member = await memberWithRole(`${role.toLowerCase()}-corr@example.com`, role);
+
+    const after = await fx.service.correct(member, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+    });
+    expect(after.roomTypeOverride).toBe("STUDY");
+    expect(after.correctedBy).toBe(member);
+  });
+
+  it("denies a CREATOR, who may run analyses but not review them", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const creator = await memberWithRole("creator-corr@example.com", "CREATOR");
+
+    await expect(
+      fx.service.correct(creator, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } }),
+    ).rejects.toThrow(/lacks permission/i);
+    expect(actions(fx)).not.toContain("analysis.corrected");
+  });
+
+  it("does not disclose an unknown asset", async () => {
+    await expect(
+      fx.service.correct(fx.ownerId, fx.orgId, "ast_missing", { order: { set: 1 } }),
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it("does not disclose an asset in another organization", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const orgs = new OrganizationService(fx.deps);
+    const { organization: other } = await orgs.createOrganization(fx.ownerId, { name: "Other" });
+
+    // NOT_FOUND, never FORBIDDEN: existence in another tenant is never revealed.
+    const error = await fx.service
+      .correct(fx.ownerId, other.id, fx.assetId, { order: { set: 1 } })
+      .catch((e: unknown) => e);
+    expect((error as AppError).code).toBe("NOT_FOUND");
+  });
+});
+
+describe("correct — provenance", () => {
+  it("records who corrected the analysis and when", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+    });
+
+    expect(after.correctedBy).toBe(fx.ownerId);
+    expect(after.correctedAt).toEqual(fx.deps.clock.now());
+  });
+
+  it("keeps provenance while any override remains", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+      order: { set: 2 },
+    });
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+    });
+
+    expect(after.roomTypeOverride).toBeNull();
+    expect(after.orderOverride).toBe(2);
+    expect(after.correctedBy).toBe(fx.ownerId);
+    expect(after.correctedAt).not.toBeNull();
+  });
+
+  it("clears provenance when the last override goes, so the row reads uncorrected", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } });
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+    });
+
+    expect(after.roomTypeOverride).toBeNull();
+    expect(after.orderOverride).toBeNull();
+    expect(after.correctedBy).toBeNull();
+    expect(after.correctedAt).toBeNull();
+    // Who cleared it survives in the audit log, not on the row.
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(2);
+  });
+
+  it("updates the timestamp on a later correction", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const first = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: 1 },
+    });
+    fx.deps.clock.advanceSeconds(60);
+    const second = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      order: { set: 2 },
+    });
+
+    expect(second.correctedAt!.getTime()).toBeGreaterThan(first.correctedAt!.getTime());
+  });
+});
+
+describe("correct — no-op", () => {
+  it("writes nothing and audits nothing when the fields restate what is stored", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const corrected = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+      order: { set: 2 },
+    });
+    fx.deps.clock.advanceSeconds(60);
+
+    const again = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "STUDY" },
+      order: { set: 2 },
+    });
+
+    // A change that never happened must not move a timestamp or enter the
+    // compliance record.
+    expect(again.correctedAt).toEqual(corrected.correctedAt);
+    expect(again.updatedAt).toEqual(corrected.updatedAt);
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(1);
+  });
+
+  it("treats clearing an already-absent override as a no-op", async () => {
+    const analyzed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    fx.deps.clock.advanceSeconds(60);
+
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+      order: { set: null },
+    });
+
+    expect(after.updatedAt).toEqual(analyzed.updatedAt);
+    expect(after.correctedBy).toBeNull();
+    expect(actions(fx)).not.toContain("analysis.corrected");
+  });
+});
+
+describe("correct — explicitly confirming the analyzer's own classification", () => {
+  it("is a real stored change even though the effective room does not move", async () => {
+    const analyzed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    expect(analyzed.roomType).toBe("KITCHEN");
+    expect(analyzed.roomTypeOverride).toBeNull();
+
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "KITCHEN" },
+    });
+
+    // null -> KITCHEN is a change to what is *stored*: a person confirmed the
+    // classification, which is meaningful provenance even though the value the
+    // storyboard will use is the same as before.
+    expect(after.roomTypeOverride).toBe("KITCHEN");
+    expect(after.correctedBy).toBe(fx.ownerId);
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(1);
+
+    const metadata = auditFor("analysis.corrected")!;
+    expect(metadata.previousRoomType).toBe("KITCHEN");
+    expect(metadata.newRoomType).toBe("KITCHEN");
+  });
+
+  it("then treats a repeat of the same confirmation as a no-op", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "KITCHEN" } });
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "KITCHEN" } });
+
+    expect(actions(fx).filter((a) => a === "analysis.corrected")).toHaveLength(1);
+  });
+});
+
+describe("correct — audit", () => {
+  it("emits one entry naming the resource, revision, and both before/after pairs", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const analysis = await fx.analyses.findByAssetId(fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "BALCONY" },
+      order: { set: 4 },
+    });
+
+    const entry = fx.deps.repos.auditLogs.all().find((e) => e.action === "analysis.corrected")!;
+    expect(entry.resourceType).toBe("asset_analysis");
+    expect(entry.resourceId).toBe(analysis!.id);
+    expect(entry.metadata).toEqual({
+      analysisId: analysis!.id,
+      assetId: fx.assetId,
+      propertyId: "prp_1",
+      organizationId: fx.orgId,
+      actorId: fx.ownerId,
+      analysisRevision: 1,
+      previousRoomType: "KITCHEN",
+      newRoomType: "BALCONY",
+      previousOrderOverride: null,
+      newOrderOverride: 4,
+    });
+  });
+
+  it("records the unchanged order pair on a room-only change", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { order: { set: 6 } });
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } });
+
+    const entries = fx.deps.repos.auditLogs
+      .all()
+      .filter((e) => e.action === "analysis.corrected");
+    const latest = entries.at(-1)!.metadata as Record<string, unknown>;
+    expect(latest.previousOrderOverride).toBe(6);
+    expect(latest.newOrderOverride).toBe(6);
+    expect(latest.previousRoomType).toBe("KITCHEN");
+    expect(latest.newRoomType).toBe("STUDY");
+  });
+
+  it("records the before/after values when the final override is cleared", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "BALCONY" },
+      order: { set: 4 },
+    });
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: null },
+      order: { set: null },
+    });
+
+    const latest = fx.deps.repos.auditLogs
+      .all()
+      .filter((e) => e.action === "analysis.corrected")
+      .at(-1)!.metadata as Record<string, unknown>;
+    // Effective room falls back to the analyzer's once the override is gone.
+    expect(latest.previousRoomType).toBe("BALCONY");
+    expect(latest.newRoomType).toBe("KITCHEN");
+    expect(latest.previousOrderOverride).toBe(4);
+    expect(latest.newOrderOverride).toBeNull();
+  });
+
+  it("leaks no storage key, provider name, or review note into correction metadata", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } });
+
+    const serialized = JSON.stringify(auditFor("analysis.corrected"));
+    expect(serialized).not.toContain(STORAGE_KEY);
+    expect(serialized).not.toContain("normalized.jpg");
+    expect(serialized).not.toContain("stub");
+    expect(serialized).not.toContain("reviewNote");
+    expect(serialized).not.toContain("thumbnail");
+  });
+});
+
+describe("correct — non-interference", () => {
+  it("never writes the analyzer's own fields", async () => {
+    const analyzed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const after = await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "BALCONY" },
+      order: { set: 4 },
+    });
+
+    expect(after.roomType).toBe(analyzed.roomType);
+    expect(after.suggestedOrder).toBe(analyzed.suggestedOrder);
+    expect(after.confidence).toBe(analyzed.confidence);
+    expect(after.duplicateGroup).toBe(analyzed.duplicateGroup);
+    expect(after.safetyFlags).toEqual(analyzed.safetyFlags);
+    expect(after.analysisRevision).toBe(analyzed.analysisRevision);
+    expect(after.reviewStatus).toBe("UNREVIEWED");
+    expect(after.reviewedBy).toBeNull();
+  });
+
+  it("still has its corrections cleared by a refresh", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.service.correct(fx.ownerId, fx.orgId, fx.assetId, {
+      roomType: { set: "BALCONY" },
+      order: { set: 4 },
+    });
+
+    const refreshed = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId, {
+      refresh: true,
+    });
+    expect(refreshed.roomTypeOverride).toBeNull();
+    expect(refreshed.orderOverride).toBeNull();
+    expect(refreshed.correctedBy).toBeNull();
+    expect(refreshed.correctedAt).toBeNull();
+    expect(refreshed.analysisRevision).toBe(2);
+  });
+});

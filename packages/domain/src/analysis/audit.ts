@@ -6,6 +6,8 @@ export const AnalysisAuditAction = {
   AnalysisRefreshed: "analysis.refreshed",
   AnalysisApproved: "analysis.approved",
   AnalysisRejected: "analysis.rejected",
+  /** A human corrected the analyzer's room classification or the scene order. */
+  AnalysisCorrected: "analysis.corrected",
 } as const;
 
 export type AnalysisAuditActionValue =

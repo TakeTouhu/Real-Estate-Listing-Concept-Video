@@ -3,9 +3,60 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3D-1: review-correction persistence
+## [Unreleased] — Phase 3D-2: the correction operation
 
-Under review. Not merged. See `docs/phase-3d1-completion.md` and ADR-0015.
+Under review. Not merged. See `docs/phase-3d2-completion.md`.
+
+### Added
+
+- **`AnalysisService.correct`** — the write path for the correction columns
+  added in 3D-1. Records and clears a reviewer's room classification and sort
+  priority for the current analysis revision.
+- **`CorrectionField<T>` / `CorrectInput`** — a structural input contract where
+  an absent field leaves the stored override alone, `{ set: null }` clears it,
+  and `{ set: value }` sets it. The three states cannot collapse: the obvious
+  `roomType?: RoomType | null` makes `{}` and `{ roomType: undefined }` the same
+  type, so a caller forwarding an unset value would silently clear a reviewer's
+  work.
+- **`analysis.corrected`** audit action on the existing sink, emitted exactly
+  once per real change, carrying `analysisId`, `assetId`, `propertyId`,
+  `analysisRevision`, the **effective** room before and after, and the stored
+  order override before and after.
+
+### Notes
+
+- **Lifecycle, authorization and tenancy are `requireReviewable`'s** — the same
+  guard approve and reject use, unchanged. Corrections are allowed exactly while
+  a decision is (`SUCCEEDED` + `UNREVIEWED`) and repeatably; `PENDING`, `FAILED`,
+  `APPROVED`, and `REJECTED` are refused. `video:review` admits OWNER, ADMIN and
+  REVIEWER and excludes CREATOR through the existing role map, with no branching.
+  A foreign asset is `NOT_FOUND`, never `FORBIDDEN`.
+- **`analysisRevision` is never advanced by a correction** — it identifies an
+  analysis *result*, and a human edit is not a new result.
+- **Change detection is on the stored override pair, not effective values.**
+  Setting an override to the room the analyzer already chose is a real change
+  (`null → KITCHEN`): a person confirmed the classification, so `isCorrected`
+  becomes true and the row records who. The audit entry then reads
+  `previousRoomType: KITCHEN, newRoomType: KITCHEN`, which is the honest record.
+- **A request that restates the stored values is a true no-op** — no write, no
+  audit, `updatedAt` and `correctedAt` unmoved. A request naming no field at all
+  is refused.
+- **Provenance is self-consistent**: clearing the last override clears
+  `correctedBy` and `correctedAt` too, so the row agrees with `isCorrected`. Who
+  cleared it survives in the audit log.
+- Order priorities require a whole number above zero, with **no upper bound**.
+  Persistence stays rule-free (3D-1); the rule lives in the service only.
+- **No HTTP, DTO, UI, storyboard, or fingerprint change.** Composition still
+  ignores corrections — that is Phase 3D-3.
+- Four files changed, all under `packages/domain/src/analysis/`. No schema or
+  migration change.
+- Size: 708 code lines (189 production, 519 tests), re-cost at ~558 against an
+  approved ~481/~500 — the overrun is the 52-case mandated matrix, reported
+  rather than trimmed.
+
+## [phase-3d1-complete] — Phase 3D-1: review-correction persistence
+
+Merged as `1ebe30a` (PR #23). See `docs/phase-3d1-completion.md` and ADR-0015.
 
 ### Added
 
