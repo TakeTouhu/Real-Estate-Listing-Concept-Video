@@ -171,7 +171,8 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3C-5b | Storyboard compose + read + project list, `isFresh` | 732 — 252 production + 480 tests (re-cost ~711) | **Merged** (PR #20, `37df1b7`) |
 | 3C-6a | Video-project discovery + creation UI | 845 — 423 production + 422 tests (approved ~430, re-cost ~620 — **reported before implementation**) | **Merged** (PR #21, `efff531`) |
 | 3C-6b | Storyboard detail, composition, freshness, recompose | 1286 — 579 production + 707 tests (estimated ~780; **overran the ~800 threshold without a mid-implementation report**; includes a 126-line nested-route integrity fix found in review) | **Merged** (PR #22, `235783b`) |
-| 3D-1 | Review-correction persistence: columns, migration, `effectiveRoomType`, refresh clearing | 426 — 121 production + 305 tests (re-cost ~351, approved ~460) | In review |
+| 3D-1 | Review-correction persistence: columns, migration, `effectiveRoomType`, refresh clearing | 426 — 121 production + 305 tests (re-cost ~351, approved ~460) | **Merged** (PR #23, `1ebe30a`) |
+| 3D-2 | `AnalysisService.correct`: validation, lifecycle, authorization, provenance, audit | 708 — 189 production + 519 tests (re-cost ~558, approved ~481/~500; the 52-case mandated matrix, reported not trimmed) | In review |
 
 ### Phase 3D — closing the Phase 3 review contract
 
@@ -184,8 +185,8 @@ correction that composition silently ignores.
 
 | Milestone | Content | Status |
 | --- | --- | --- |
-| 3D-1 | Schema, migration, domain type, `effectiveRoomType`, refresh clearing | In review |
-| 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | Not started |
+| 3D-1 | Schema, migration, domain type, `effectiveRoomType`, refresh clearing | **Merged** (`1ebe30a`) |
+| 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | In review |
 | 3D-3 | `EligibleInput`, ordering precedence, fingerprint payload | Not started |
 | 3D-4 | HTTP endpoint, DTO exposure, review-UI correction controls | Not started |
 

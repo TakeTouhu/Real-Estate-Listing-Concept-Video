@@ -5,6 +5,7 @@ import type { Clock, IdentityServiceDeps, IdGenerator } from "../identity/ports"
 import type { MediaAssetRepository, ObjectStorage } from "../property/ports";
 import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
+import { effectiveRoomType } from "./effective";
 import { deriveQualityFlags } from "./normalization";
 import {
   DuplicateApprovalConflictError,
@@ -13,7 +14,17 @@ import {
   type ReviewTransaction,
 } from "./ports";
 import { resolveDuplicateGroup, roomOrderRank, type DuplicateCandidate } from "./rules";
-import { hasBlockingFlag, type ApproveInput, type AssetAnalysis, type RejectInput, type SafetyFlag } from "./types";
+import {
+  hasBlockingFlag,
+  isRoomType,
+  type ApproveInput,
+  type AssetAnalysis,
+  type CorrectInput,
+  type CorrectionField,
+  type RejectInput,
+  type RoomType,
+  type SafetyFlag,
+} from "./types";
 
 export interface AnalyzeOptions {
   /** Recompute an analysis that already SUCCEEDED, reusing the same row. */
@@ -402,6 +413,104 @@ export class AnalysisService {
     return rejected;
   }
 
+  /**
+   * Correct what the analyzer decided about one analysis revision.
+   *
+   * The analyzer's own `roomType` and `suggestedOrder` are **never** written
+   * here: a correction is stored beside the AI value in `roomTypeOverride` and
+   * `orderOverride`, so the model's answer stays recoverable and `confidence`
+   * keeps describing the value it was produced for (ADR-0015).
+   *
+   * Eligibility, authorization and tenant scoping are entirely
+   * {@link requireReviewable}'s — the same guard approve and reject use. A
+   * correction is therefore allowed exactly while a decision is: `SUCCEEDED`
+   * and `UNREVIEWED`, repeatably. Once approved or rejected the corrections are
+   * frozen with the decision, and changing them means refreshing the analysis
+   * into a new review cycle. `analysisRevision` is not touched: it identifies an
+   * analysis *result*, and a human edit is not a new result.
+   *
+   * Whether anything changed is decided on the **stored override pair**, not on
+   * the effective values. Setting an override to the same room the analyzer
+   * already chose is a real change — `null → KITCHEN` — because it records that
+   * a person confirmed the classification, which `isCorrected` must then report.
+   *
+   * @throws AppError VALIDATION_FAILED for an empty input, an unknown room
+   *   type, or an order priority that is not a whole number above zero.
+   * @throws AppError NOT_FOUND when the asset or its analysis is unknown or
+   *   another tenant's.
+   */
+  async correct(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+    input: CorrectInput,
+  ): Promise<AssetAnalysis> {
+    if (!("roomType" in input) && !("order" in input)) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "A correction must specify a room type or an order priority",
+      );
+    }
+
+    const { analysis, asset } = await this.requireReviewable(
+      actorUserId,
+      organizationId,
+      assetId,
+    );
+
+    const roomTypeOverride = resolveRoom(input.roomType, analysis.roomTypeOverride);
+    const orderOverride = resolveOrder(input.order, analysis.orderOverride);
+
+    // A true no-op: the caller named fields, but they resolve to what is
+    // already stored. Writing would move `updatedAt` and `correctedAt`, and
+    // auditing would put a change that never happened into a compliance record.
+    if (
+      roomTypeOverride === analysis.roomTypeOverride &&
+      orderOverride === analysis.orderOverride
+    ) {
+      return analysis;
+    }
+
+    // A row with no overrides left carries no provenance either, so it reads as
+    // genuinely uncorrected rather than as a correction someone can no longer
+    // see. Who cleared it survives in the audit log.
+    const corrected = roomTypeOverride !== null || orderOverride !== null;
+    const now = this.deps.clock.now();
+    const updated = await this.deps.analyses.update({
+      ...analysis,
+      roomTypeOverride,
+      orderOverride,
+      correctedBy: corrected ? actorUserId : null,
+      correctedAt: corrected ? now : null,
+      updatedAt: now,
+    });
+
+    await recordAudit(this.deps.identity, {
+      organizationId: analysis.organizationId,
+      actorUserId,
+      action: AnalysisAuditAction.AnalysisCorrected,
+      resourceType: "asset_analysis",
+      resourceId: analysis.id,
+      metadata: {
+        analysisId: analysis.id,
+        assetId: asset.id,
+        propertyId: asset.propertyId,
+        organizationId: analysis.organizationId,
+        actorId: actorUserId,
+        analysisRevision: analysis.analysisRevision,
+        // Effective room values, so the entry reads as what the storyboard will
+        // use rather than as raw override bookkeeping.
+        previousRoomType: effectiveRoomType(analysis),
+        newRoomType: effectiveRoomType(updated),
+        // Order carries no analyzer fallback, so the stored override is the
+        // whole story.
+        previousOrderOverride: analysis.orderOverride,
+        newOrderOverride: updated.orderOverride,
+      },
+    });
+    return updated;
+  }
+
   /** Authorize the reviewer and load an analysis that is eligible for a decision. */
   private async requireReviewable(
     actorUserId: string,
@@ -579,6 +688,53 @@ export class AnalysisService {
 function optionalReason(reason: string | undefined): string | null {
   const trimmed = (reason ?? "").trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * The room override this request leaves behind: the current one when the field
+ * is absent, otherwise what the caller asked for.
+ *
+ * Only the existing `RoomType` vocabulary is accepted — no aliases, no case
+ * folding, nothing invented. The rejection **does not echo the submitted
+ * value**: an unknown room type is untrusted caller input, and reflecting it
+ * into an error message (and from there into logs) is the habit that turns a
+ * validation failure into an injection surface.
+ */
+function resolveRoom(
+  field: CorrectionField<RoomType> | undefined,
+  current: RoomType | null,
+): RoomType | null {
+  if (field === undefined) return current;
+  if (field.set === null) return null;
+  if (!isRoomType(field.set)) {
+    throw new AppError("VALIDATION_FAILED", "Unknown room type");
+  }
+  return field.set;
+}
+
+/**
+ * The order override this request leaves behind.
+ *
+ * A priority must be a whole number above zero. `Number.isInteger` is false for
+ * `NaN`, `Infinity`, `-Infinity`, and every non-number, so one check covers the
+ * fractional, non-finite and wrong-type cases together — and `> 0` rules out
+ * zero and negatives.
+ *
+ * **No upper bound.** A ceiling would be a capability claim, and priorities are
+ * compared, never allocated: an arbitrarily large one is meaningful and
+ * harmless. Persistence enforces none of this (Phase 3D-1) — the rule lives
+ * here and only here.
+ */
+function resolveOrder(
+  field: CorrectionField<number> | undefined,
+  current: number | null,
+): number | null {
+  if (field === undefined) return current;
+  if (field.set === null) return null;
+  if (typeof field.set !== "number" || !Number.isInteger(field.set) || field.set <= 0) {
+    throw new AppError("VALIDATION_FAILED", "Order priority must be a whole number above zero");
+  }
+  return field.set;
 }
 
 /** Keep the most severe occurrence of each flag code. */

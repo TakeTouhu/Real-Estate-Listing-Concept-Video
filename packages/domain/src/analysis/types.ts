@@ -190,3 +190,33 @@ export interface RejectInput {
   /** Required and non-blank: a rejection without a stated cause is not reviewable. */
   readonly reason: string;
 }
+
+/**
+ * One field of a correction, wrapped so that "leave it alone" and "clear it"
+ * cannot be confused.
+ *
+ * The obvious shape — `roomType?: RoomType | null` — collapses the two: without
+ * `exactOptionalPropertyTypes`, `{ roomType: undefined }` and `{}` are the same
+ * type, so a caller that forwards an unset value would silently clear a
+ * reviewer's correction. Wrapping makes the distinction structural: the field's
+ * *presence* says whether to touch it, and `set` says what to write.
+ */
+export type CorrectionField<T> = {
+  readonly set: T | null;
+};
+
+/**
+ * A reviewer's correction to one analysis revision.
+ *
+ * Absent field → the stored override is left unchanged.
+ * `{ set: null }` → the stored override is cleared.
+ * `{ set: value }` → the stored override is set.
+ *
+ * An input specifying neither field is refused rather than treated as a no-op:
+ * it is a caller mistake, not an intention (ADR-0015).
+ */
+export interface CorrectInput {
+  readonly roomType?: CorrectionField<RoomType>;
+  /** The reviewer's sort priority. Positive whole numbers only when setting. */
+  readonly order?: CorrectionField<number>;
+}
