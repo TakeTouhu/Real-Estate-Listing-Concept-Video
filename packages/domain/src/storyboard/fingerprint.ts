@@ -15,20 +15,37 @@ const FINGERPRINT_PREFIX = "sha256";
  * encoding unambiguous, so no id containing a delimiter can make two different
  * sets collide.
  *
- * It captures **identity of the input set only**. Scene order and durations are
- * deliberately excluded: reordering a storyboard or changing its length does not
- * make it stale, whereas an approved photo appearing, disappearing, or being
- * re-analyzed does.
+ * It captures the identity of the input set **and the human decisions that
+ * change what would be generated from it**. Scene durations and the resulting
+ * scene sequence are still excluded — those are outputs. The digest changes
+ * when an eligible approved asset is added, when one disappears, when an
+ * eligible asset's `analysisRevision` changes, when a reviewer's effective room
+ * classification changes, and when their order priority changes — and is
+ * unaffected by the order the inputs arrive in.
  *
- * Comparing a stored fingerprint with a freshly computed one is how staleness is
- * detected, so no module has to notify another when an analysis is refreshed.
- * The digest therefore changes when an eligible approved asset is added, when
- * one disappears, and when an eligible asset's `analysisRevision` changes — and
- * is unaffected by the order the inputs arrive in.
+ * `roomType` is the effective room already resolved by
+ * `selectEligibleAnalyses`; this module never reads an `AssetAnalysis` and never
+ * resolves an override itself. `analysisRevision` is **not** advanced by a
+ * correction, which is exactly why the correction values have to appear here.
+ *
+ * **The payload changed in Phase 3D-3 (ADR-0015).** Two extra members are
+ * serialized even when both are null, so a digest computed under the Phase 3C
+ * format will not match one computed now. Every storyboard composed before this
+ * change therefore reads **stale once** and must be recomposed. That is
+ * deliberate and fail-safe: there is no compatibility fallback, no dual-format
+ * support, and no backfill, because treating an old digest as fresh would be
+ * asserting something this function can no longer verify.
  */
 export function computeCompositionFingerprint(inputs: readonly EligibleInput[]): string {
   const canonical = inputs
-    .map((input): readonly [string, number] => [input.assetId, input.analysisRevision])
+    .map(
+      (input): readonly [string, number, string | null, number | null] => [
+        input.assetId,
+        input.analysisRevision,
+        input.roomType,
+        input.orderOverride,
+      ],
+    )
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return `${FINGERPRINT_PREFIX}:${sha256Hex(JSON.stringify(canonical))}`;
 }

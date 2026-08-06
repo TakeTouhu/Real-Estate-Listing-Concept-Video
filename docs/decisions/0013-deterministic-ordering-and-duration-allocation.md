@@ -116,3 +116,41 @@ for being too small, not for an unachievable length.
 - **Distributing the remainder to the longest or most important scenes** —
   rejected as premature: "importance" is not a property the analysis provides,
   and front-loading is deterministic and explainable.
+
+## Superseded in part — 2026-08-04 (Phase 3D-3, ADR-0015)
+
+The duration allocation, the minimum-scene rule, the duplicate-`assetId`
+refusal, and `ROOM_RANK` itself are all unchanged. The **comparator above is no
+longer current.**
+
+It was:
+
+```
+room rank → suggestedOrder (nulls last) → assetId
+```
+
+Phase 3D gave reviewers an explicit order priority, so the comparator is now:
+
+```
+primary key = orderOverride ?? roomRank(effectiveRoomType)   ascending
+→ an explicit priority beats an automatic rank on an exact numeric tie
+→ effective room rank
+→ suggestedOrder (nulls last)
+→ assetId
+```
+
+Three points worth restating, because they are easy to get wrong:
+
+- The priority is **global**, sharing one numeric space with the room ranks. It
+  is not "corrected photos first": a priority of `8` genuinely sits later than an
+  exterior shot ranked `1`.
+- It is a **priority, not a position**. Duplicate priorities are legitimate and
+  resolve through the tie-breaks; nothing is renumbered or clamped, so a priority
+  of `150` sorts after an unclassified photo's fallback rank of `99`.
+- `roomType` reaching the comparator is the **effective** room, already resolved
+  by `selectEligibleAnalyses`. Ordering never reads a correction itself.
+
+With no priorities set anywhere, the primary key is the room rank and ordering
+behaves exactly as this ADR originally described.
+
+See ADR-0015 for the current correction contract.

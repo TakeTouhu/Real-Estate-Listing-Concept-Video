@@ -625,3 +625,81 @@ describe("no console output", () => {
     err.mockRestore();
   });
 });
+
+describe("human corrections reach composition", () => {
+  /**
+   * The production path is correct-then-approve: a reviewer fixes the analyzer
+   * while the analysis is UNREVIEWED, then approves it. These fixtures are the
+   * resulting rows — an approved analysis already carrying its correction.
+   */
+  it("stores the corrected room type on the scene, not the analyzer's", async () => {
+    const analyses = [
+      analysis("ast_a", { roomType: "BATHROOM", roomTypeOverride: "LIVING_ROOM" }),
+      analysis("ast_b", { roomType: "KITCHEN" }),
+      analysis("ast_c", { roomType: "BALCONY" }),
+    ];
+    const { service, stored } = harness({ analyses });
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+
+    const corrected = stored.scenes.find((s) => s.assetId === "ast_a");
+    expect(corrected?.roomType).toBe("LIVING_ROOM");
+  });
+
+  it("orders by the corrected room rank", async () => {
+    // Analyzer order would be LIVING_ROOM(4) → KITCHEN(6) → BATHROOM(10).
+    // Correcting the bathroom shot to ENTRANCE(2) moves it to the front.
+    const analyses = [
+      analysis("ast_liv", { roomType: "LIVING_ROOM" }),
+      analysis("ast_kit", { roomType: "KITCHEN" }),
+      analysis("ast_fix", { roomType: "BATHROOM", roomTypeOverride: "ENTRANCE" }),
+    ];
+    const { service, stored } = harness({ analyses });
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+
+    expect(stored.scenes.map((s) => s.assetId)).toEqual(["ast_fix", "ast_liv", "ast_kit"]);
+    expect(stored.scenes.map((s) => s.position)).toEqual([1, 2, 3]);
+  });
+
+  it("orders by an explicit priority against the automatic ranks", async () => {
+    // EXTERIOR ranks 1; priority 2 sits between it and LIVING_ROOM's 4.
+    const analyses = [
+      analysis("ast_liv", { roomType: "LIVING_ROOM" }),
+      analysis("ast_ext", { roomType: "EXTERIOR" }),
+      analysis("ast_pin", { roomType: "TOILET", orderOverride: 2 }),
+    ];
+    const { service, stored } = harness({ analyses });
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+
+    expect(stored.scenes.map((s) => s.assetId)).toEqual(["ast_ext", "ast_pin", "ast_liv"]);
+  });
+
+  it("is immediately fresh after composing from corrected inputs", async () => {
+    const analyses = [
+      analysis("ast_a", { roomTypeOverride: "STUDY", orderOverride: 1 }),
+      analysis("ast_b", { roomType: "KITCHEN" }),
+      analysis("ast_c", { roomType: "BALCONY", orderOverride: 9 }),
+    ];
+    const { service, stored } = harness({ analyses });
+    const composed = await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+
+    // The stored fingerprint was computed from the same corrected inputs the
+    // freshness check will re-read, so nothing reads stale on the way out.
+    stored.project = composed.project;
+    await expect(service.isFresh(ACTOR, ORG, PROJECT)).resolves.toBe(true);
+    await expect(service.assertFresh(ACTOR, ORG, PROJECT)).resolves.toBeUndefined();
+  });
+
+  it("composes the same scene count and audit trail as an uncorrected property", async () => {
+    const { service, stored, audits } = harness({
+      analyses: [
+        analysis("ast_a", { roomTypeOverride: "STUDY" }),
+        analysis("ast_b", { orderOverride: 3 }),
+        analysis("ast_c"),
+      ],
+    });
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+
+    expect(stored.scenes).toHaveLength(3);
+    expect(audits.filter((a) => a.action === "storyboard.composed")).toHaveLength(1);
+  });
+});

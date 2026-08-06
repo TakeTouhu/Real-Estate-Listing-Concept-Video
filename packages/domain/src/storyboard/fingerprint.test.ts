@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { EligibleInput } from "./eligibility";
 import { computeCompositionFingerprint } from "./fingerprint";
 
-function input(assetId: string, analysisRevision = 1): EligibleInput {
-  return { assetId, analysisRevision, roomType: "KITCHEN", suggestedOrder: 1 };
+function input(
+  assetId: string,
+  analysisRevision = 1,
+  overrides: Partial<EligibleInput> = {},
+): EligibleInput {
+  return {
+    assetId,
+    analysisRevision,
+    roomType: "KITCHEN",
+    orderOverride: null,
+    suggestedOrder: 1,
+    ...overrides,
+  };
 }
 
 const BASE = [input("ast_a"), input("ast_b"), input("ast_c")];
@@ -52,15 +63,17 @@ describe("what must not change the fingerprint", () => {
     expect(computeCompositionFingerprint(shuffled)).toBe(computeCompositionFingerprint(BASE));
   });
 
-  it("ignores room type and suggested order — it identifies the input set only", () => {
-    // Ordering and duration are storyboard decisions, not input identity:
-    // reordering a storyboard does not make it stale.
-    const relabelled: EligibleInput[] = BASE.map((i) => ({
-      ...i,
-      roomType: "BALCONY",
-      suggestedOrder: 99,
-    }));
-    expect(computeCompositionFingerprint(relabelled)).toBe(computeCompositionFingerprint(BASE));
+  it("ignores suggestedOrder — analyzer output nobody can correct", () => {
+    // `suggestedOrder` is derived from the analyzer's own room type and cannot
+    // move without `roomType` or `analysisRevision` moving too, so it adds no
+    // information the digest does not already carry.
+    //
+    // Room type used to be listed here as well. Since Phase 3D-3 it is the
+    // *effective* room and a reviewer can change it without any other field
+    // moving, so it now participates — see "correction sensitivity" below and
+    // ADR-0015.
+    const rescored: EligibleInput[] = BASE.map((i) => ({ ...i, suggestedOrder: 99 }));
+    expect(computeCompositionFingerprint(rescored)).toBe(computeCompositionFingerprint(BASE));
   });
 });
 
@@ -92,5 +105,70 @@ describe("encoding is unambiguous", () => {
     const first = computeCompositionFingerprint([input("ast_a", 4)]);
     const second = computeCompositionFingerprint([input("ast_a", 4)]);
     expect(first).toBe(second);
+  });
+});
+
+describe("correction sensitivity", () => {
+  // A correction never advances `analysisRevision` — that identifies an
+  // analysis *result*, and a human edit is not one. So the digest has to carry
+  // the corrected values itself, or a changed correction would go unnoticed.
+  const SAME_ASSET = "ast_a";
+  const SAME_REVISION = 7;
+
+  it("changes when the effective room type changes, with asset and revision fixed", () => {
+    const kitchen = [input(SAME_ASSET, SAME_REVISION, { roomType: "KITCHEN" })];
+    const living = [input(SAME_ASSET, SAME_REVISION, { roomType: "LIVING_ROOM" })];
+
+    expect(computeCompositionFingerprint(kitchen)).not.toBe(
+      computeCompositionFingerprint(living),
+    );
+  });
+
+  it("changes when an effective room becomes null, or stops being null", () => {
+    const classified = [input(SAME_ASSET, SAME_REVISION, { roomType: "KITCHEN" })];
+    const unclassified = [input(SAME_ASSET, SAME_REVISION, { roomType: null })];
+
+    expect(computeCompositionFingerprint(classified)).not.toBe(
+      computeCompositionFingerprint(unclassified),
+    );
+  });
+
+  it("changes when the order priority changes, with asset and revision fixed", () => {
+    const two = [input(SAME_ASSET, SAME_REVISION, { orderOverride: 2 })];
+    const five = [input(SAME_ASSET, SAME_REVISION, { orderOverride: 5 })];
+
+    expect(computeCompositionFingerprint(two)).not.toBe(computeCompositionFingerprint(five));
+  });
+
+  it("distinguishes no priority from a stated one", () => {
+    const none = [input(SAME_ASSET, SAME_REVISION, { orderOverride: null })];
+    const stated = [input(SAME_ASSET, SAME_REVISION, { orderOverride: 1 })];
+
+    // Setting a priority and clearing it are both real changes to what would
+    // be generated.
+    expect(computeCompositionFingerprint(none)).not.toBe(computeCompositionFingerprint(stated));
+  });
+
+  it("is stable when the correction-sensitive values are identical", () => {
+    const build = () => [
+      input("ast_a", 3, { roomType: "BALCONY", orderOverride: 4 }),
+      input("ast_b", 1, { roomType: "STUDY", orderOverride: null }),
+    ];
+    expect(computeCompositionFingerprint(build())).toBe(computeCompositionFingerprint(build()));
+  });
+
+  it("ignores the order the corrected inputs arrive in", () => {
+    const a = input("ast_a", 3, { roomType: "BALCONY", orderOverride: 4 });
+    const b = input("ast_b", 1, { roomType: "STUDY", orderOverride: 2 });
+    const c = input("ast_c", 2, { roomType: null, orderOverride: null });
+
+    expect(computeCompositionFingerprint([a, b, c])).toBe(
+      computeCompositionFingerprint([c, a, b]),
+    );
+  });
+
+  it("still returns the documented sha256:<hex> form for corrected inputs", () => {
+    const corrected = [input("ast_a", 1, { roomType: "STUDY", orderOverride: 12 })];
+    expect(computeCompositionFingerprint(corrected)).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 });
