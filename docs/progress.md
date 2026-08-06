@@ -52,13 +52,11 @@ commit. None has been moved, overwritten, or reused.
 | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` | `62259776f88fa1010736e8a365618b7c20c38902` | ✅ |
 | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | ✅ |
 
-> ### ⚠️ The remote tags do not exist
+> ### ⚠️ No completion tag has been published to the remote
 >
-> All eighteen tags exist **only in the local clone**. Publication remains blocked
-> in this development environment. `git ls-remote --tags origin` returns empty.
->
-> Attempted 2026-07-27 with three different invocations — explicit refspecs,
-> `--tags`, and a single tag — each failing identically:
+> Every `phase-*-complete` tag exists **only in the local clone**. Publication is
+> blocked in this development environment and has been re-attempted, and re-failed,
+> at every milestone closure since Phase 0.
 >
 > ```text
 > error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403
@@ -70,50 +68,28 @@ commit. None has been moved, overwritten, or reused.
 > specifically. The available GitHub tooling exposes no create-ref/create-tag
 > API — only `get_tag` / `list_tags`.
 >
-> This document does **not** claim the remote tags exist. A maintainer with
-> direct push access must publish them:
+> **This document does not claim any remote tag exists.** Deliberately no count
+> and no ref list is recorded here: both go stale at every milestone, and a stale
+> number reads as a claim about remote state. Inspect the real state instead:
 >
 > ```bash
-> git push origin refs/tags/phase-0-complete \
->                refs/tags/phase-1-complete \
->                refs/tags/phase-2-complete \
->                refs/tags/phase-3a1-complete \
->                refs/tags/phase-3a2a-complete \
->                refs/tags/phase-3a2b-complete \
->                refs/tags/phase-3a2c-complete \
->                refs/tags/phase-3a3-complete \
->                refs/tags/phase-3b1a-complete \
->                refs/tags/phase-3b1b-complete \
->                refs/tags/phase-3b2-complete \
->                refs/tags/phase-3b3-complete \
->                refs/tags/phase-3c1-complete \
->                refs/tags/phase-3c2a-complete \
->                refs/tags/phase-3c2b-complete \
->                refs/tags/phase-3c3-complete \
->                refs/tags/phase-3c4-complete \
->                refs/tags/phase-3c5a-complete
-> git ls-remote --tags origin   # verify all eighteen appear
+> git tag -l 'phase-*-complete'                     # what exists locally
+> git for-each-ref --format='%(refname:short) %(objecttype) %(*objectname)' \
+>   refs/tags/                                      # tag object type and target
+> git ls-remote --tags origin                       # what exists on the remote
 > ```
 >
-> Local tag records (target verified against the merge commit in each case):
+> A maintainer with tag-push permission publishes them normally:
 >
-> | Tag | Tag object | Target commit |
-> | --- | --- | --- |
-> | `phase-3a1-complete` | `af4154f8192ccdcdf96d88c99aeb6119cc7189f5` | `a2bbf473512c8f0c0df4121b1111e66b08699dd7` |
-> | `phase-3a2a-complete` | `00e9f10910a3bf2f255a45a67cce133b7b857af7` | `8d1bed31e4d3744865d1a09a1fc08feb3da3e16f` |
-> | `phase-3a2b-complete` | `546823e04b7dded1ed62644d424080689bab46f9` | `40580866469b3d891f719cb9d83f17bf8b692081` |
-> | `phase-3a2c-complete` | `34d0a211e2d65bcfd0edf7bf83aad1e46093793d` | `e49ae6aa3466fdeaf8d616084c7163a15f9466f5` |
-> | `phase-3a3-complete` | `4c85d6d4bc67aa2f0e4485e0348f1cf3a5779457` | `e3fcc7410052ded01e936f75b00dbec239ac2e3e` |
-> | `phase-3b1a-complete` | `5537f3f41f7fe3cacb0fb5e2b57319b90a3f2af6` | `0a7818f10371bcf8072b6b8cc2f501c9b5868f97` |
-> | `phase-3b1b-complete` | `8a45e866d8a1a753ffb928eed24354e1c1a82d89` | `2f2f3d76d54bc0a6a0d9e8a0f60c3713d3a8cc05` |
-> | `phase-3b2-complete` | `8bfd7ceb4cae81f636ced97e7da3a3639760fd03` | `50c2e4df49e921df4430b2becd0741642e625bee` |
-> | `phase-3b3-complete` | `ff3f866ccda7b550490b1bb26e5780f9002540b2` | `6a5c8484e225f89147b168f54b7d62edfd072dc2` |
-> | `phase-3c1-complete` | `00b1ae3b45036707f09ba59da9687a7173d8f94b` | `f7419bcbaf1b96408fd4e5d5700eb6a539594eac` |
-> | `phase-3c2a-complete` | `4b21324ea555c5dff427512e991b82f66e2e329e` | `75966994eafa9f6ec58c2243e34f66f89296f3d9` |
-> | `phase-3c2b-complete` | `f5f5555e21070ab1401107932ffc2bacba562957` | `d7ede3a3ecd2d4ae0bf13c9ea0d19149f06ca2b9` |
-> | `phase-3c3-complete` | `0e471b3c241de745b454954bd0646516770e7af7` | `0b39eb1f4eb98e4d8b4e7e8841c05c1cb31ac1c3` |
-> | `phase-3c4-complete` | `77d9285b175f95bb97828aa99a93642b84189c57` | `003edaf97dbcc651e7ba66affbc06ac523e1fe8d` |
-> | `phase-3c5a-complete` | `04927d6cd64fcc103d5eb1b7a6e495c0c3d96ca1` | `afb9fbeb373b8b14cef989bc4a4210de753652b9` |
+> ```bash
+> git push origin --tags
+> git ls-remote --tags origin                       # verify
+> ```
+>
+> Each tag is annotated, created on `main` after the merge was pulled and
+> verified, and targets the exact squash-merge commit. None has been moved,
+> overwritten, or reused. Per-milestone tag object SHAs and targets are recorded
+> in each `docs/phase-*-completion.md`.
 
 ## Phase reports
 
@@ -172,7 +148,8 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3C-6a | Video-project discovery + creation UI | 845 — 423 production + 422 tests (approved ~430, re-cost ~620 — **reported before implementation**) | **Merged** (PR #21, `efff531`) |
 | 3C-6b | Storyboard detail, composition, freshness, recompose | 1286 — 579 production + 707 tests (estimated ~780; **overran the ~800 threshold without a mid-implementation report**; includes a 126-line nested-route integrity fix found in review) | **Merged** (PR #22, `235783b`) |
 | 3D-1 | Review-correction persistence: columns, migration, `effectiveRoomType`, refresh clearing | 426 — 121 production + 305 tests (re-cost ~351, approved ~460) | **Merged** (PR #23, `1ebe30a`) |
-| 3D-2 | `AnalysisService.correct`: validation, lifecycle, authorization, provenance, audit | 708 — 189 production + 519 tests (re-cost ~558, approved ~481/~500; the 52-case mandated matrix, reported not trimmed) | In review |
+| 3D-2 | `AnalysisService.correct`: validation, lifecycle, authorization, provenance, audit | 708 — 189 production + 519 tests (re-cost ~558, approved ~481/~500; the 52-case mandated matrix, reported not trimmed) | **Merged** (PR #24, `3d59332`) |
+| 3D-3 | Corrections reach composition: projection, ordering precedence, fingerprint payload | 413 — 92 production + 321 tests (approved range ~445–560) | In review |
 
 ### Phase 3D — closing the Phase 3 review contract
 
@@ -186,8 +163,8 @@ correction that composition silently ignores.
 | Milestone | Content | Status |
 | --- | --- | --- |
 | 3D-1 | Schema, migration, domain type, `effectiveRoomType`, refresh clearing | **Merged** (`1ebe30a`) |
-| 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | In review |
-| 3D-3 | `EligibleInput`, ordering precedence, fingerprint payload | Not started |
+| 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | **Merged** (`3d59332`) |
+| 3D-3 | `EligibleInput`, ordering precedence, fingerprint payload | In review |
 | 3D-4 | HTTP endpoint, DTO exposure, review-UI correction controls | Not started |
 
 | 3B | Analysis review UI | ~450–500 | Not started |

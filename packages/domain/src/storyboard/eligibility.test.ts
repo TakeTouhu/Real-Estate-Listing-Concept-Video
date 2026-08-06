@@ -133,7 +133,7 @@ describe("projection and ordering", () => {
     expect(inOrder.map((i) => i.assetId)).toEqual(["a", "b", "c"]);
   });
 
-  it("projects exactly the four facts composition may depend on", () => {
+  it("projects exactly the five facts composition may depend on", () => {
     const [input] = selectEligibleAnalyses([
       analysis("a", { analysisRevision: 3, roomType: "BALCONY", suggestedOrder: 7 }),
     ]);
@@ -141,6 +141,7 @@ describe("projection and ordering", () => {
       assetId: "a",
       analysisRevision: 3,
       roomType: "BALCONY",
+      orderOverride: null,
       suggestedOrder: 7,
     });
   });
@@ -151,5 +152,57 @@ describe("projection and ordering", () => {
     ]);
     expect(input!.roomType).toBeNull();
     expect(input!.suggestedOrder).toBeNull();
+  });
+});
+
+describe("human corrections in the projection", () => {
+  it("projects the reviewer's room type when one was recorded", () => {
+    const [projected] = selectEligibleAnalyses([
+      analysis("a", { roomType: "BATHROOM", roomTypeOverride: "LIVING_ROOM" }),
+    ]);
+    // Composition sees only the effective value; the analyzer's own answer
+    // stays on the analysis for provenance (ADR-0015).
+    expect(projected!.roomType).toBe("LIVING_ROOM");
+  });
+
+  it("projects the analyzer's room type when no correction was recorded", () => {
+    const [projected] = selectEligibleAnalyses([
+      analysis("a", { roomType: "BATHROOM", roomTypeOverride: null }),
+    ]);
+    expect(projected!.roomType).toBe("BATHROOM");
+  });
+
+  it("lets a reviewer classify a photo the analyzer could not", () => {
+    const [projected] = selectEligibleAnalyses([
+      analysis("a", { roomType: null, roomTypeOverride: "STUDY" }),
+    ]);
+    expect(projected!.roomType).toBe("STUDY");
+  });
+
+  it("projects the order priority verbatim, including when it is absent", () => {
+    const [stated] = selectEligibleAnalyses([analysis("a", { orderOverride: 4 })]);
+    const [absent] = selectEligibleAnalyses([analysis("b", { orderOverride: null })]);
+    expect(stated!.orderOverride).toBe(4);
+    expect(absent!.orderOverride).toBeNull();
+  });
+
+  it("carries no correction provenance into composition", () => {
+    const [projected] = selectEligibleAnalyses([
+      analysis("a", {
+        roomTypeOverride: "STUDY",
+        orderOverride: 2,
+        correctedBy: "usr_reviewer",
+        correctedAt: NOW,
+      }),
+    ]);
+    // Composition has no use for who corrected a photo or when, and the narrow
+    // projection is what keeps that true.
+    expect(Object.keys(projected!).sort()).toEqual([
+      "analysisRevision",
+      "assetId",
+      "orderOverride",
+      "roomType",
+      "suggestedOrder",
+    ]);
   });
 });

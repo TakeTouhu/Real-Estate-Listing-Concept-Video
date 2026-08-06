@@ -3,9 +3,64 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3D-2: the correction operation
+## [Unreleased] — Phase 3D-3: corrections reach composition
 
-Under review. Not merged. See `docs/phase-3d2-completion.md`.
+Under review. Not merged. See `docs/phase-3d3-completion.md`.
+
+### Changed
+
+- **`selectEligibleAnalyses` now projects the effective room type** and the
+  reviewer's order priority. `EligibleInput.roomType` means the *effective*
+  classification from this milestone on, and `EligibleInput.orderOverride` is
+  new. This projection is the **only** place a correction enters composition —
+  `orderScenes` never imports `effectiveRoomType`, `fingerprint.ts` never reads
+  an `AssetAnalysis`, and **`StoryboardService` changed by zero lines**.
+- **`orderScenes` sorts by a global priority.** The primary key is
+  `orderOverride ?? roomRank(effectiveRoomType)`; ties break by an explicit
+  priority beating an automatic rank, then effective room rank, `suggestedOrder`
+  (nulls last), and `assetId`. Priority and room ranks share one numeric space,
+  so a priority of `2` slots *between* `ENTRANCE` and `LIVING_ROOM` rather than
+  jumping the sequence, and a priority of `8` genuinely sits later than an
+  exterior shot. Priorities are never clamped. With no priorities set anywhere,
+  ordering is unchanged from Phase 3C.
+- **The composition fingerprint payload is now
+  `[assetId, analysisRevision, roomType, orderOverride]`** — a correction does
+  not advance `analysisRevision`, so the corrected values must appear in the
+  digest themselves. Canonical sort, `JSON.stringify`, SHA-256, and
+  `sha256:<hex>` are unchanged.
+
+### ⚠️ One-time stale consequence
+
+The fingerprint **format** changed, and two extra members are serialized even
+when both are null. A digest computed under the Phase 3C format cannot match one
+computed now, so **every storyboard composed before this milestone reads stale
+once and must be recomposed.**
+
+This is deliberate and fail-safe. There is no compatibility fallback, no
+dual-format support, no backfill, and **no database migration** — treating an old
+digest as fresh would assert something the function can no longer verify.
+
+### Notes
+
+- Correction provenance stays out of `EligibleInput`: composition has no use for
+  who corrected a photo or when, and a test asserts the projected key set.
+- `suggestedOrder` keeps its tie-break role and the duplicate-`assetId` refusal
+  is untouched. Duplicate *priorities* are legitimate and resolve
+  deterministically.
+- Two pre-existing 3C assertions were updated because they described the
+  contract this milestone changes — the fingerprint's "ignores room type" case
+  became "ignores `suggestedOrder`", and eligibility's "four facts" became
+  "five". Every other 3C assertion is untouched and green.
+- Dated supersession notes were appended to **ADR-0012** and **ADR-0013**;
+  neither historical record was rewritten.
+- Seven files changed, all under `packages/domain/src/storyboard/`. Zero diff
+  across the schema, migrations, `AnalysisService`, roles, HTTP, UI, and
+  providers.
+- Size: 413 code lines (92 production, 321 tests) against an approved ~445–560.
+
+## [phase-3d2-complete] — Phase 3D-2: the correction operation
+
+Merged as `3d59332` (PR #24). See `docs/phase-3d2-completion.md`.
 
 ### Added
 

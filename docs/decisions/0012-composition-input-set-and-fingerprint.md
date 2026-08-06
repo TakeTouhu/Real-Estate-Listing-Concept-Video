@@ -84,3 +84,37 @@ approved photo appearing, disappearing, or being re-analyzed does.
   exists in `asset_analyses`. The digest answers the only question the gate asks.
 - **Hashing the whole `AssetAnalysis` rows** — would make a storyboard stale
   when an unrelated field changed, which is noise rather than safety.
+
+## Superseded in part — 2026-08-04 (Phase 3D-3, ADR-0015)
+
+This record stands as the reasoning for a *derived* fingerprint and for keeping
+the digest narrow. The **payload definition above is no longer current.**
+
+The tuple was `[assetId, analysisRevision]`, on the stated ground that room type
+and order are storyboard decisions rather than input identity. Phase 3D introduced
+human corrections, which invalidates that ground: a reviewer can now change the
+effective room classification or set an order priority **without** any change to
+the eligible asset set or to `analysisRevision` — a correction deliberately does
+not advance the revision, because the revision identifies an analysis *result*.
+
+The canonical tuple is therefore now:
+
+```
+[ assetId, analysisRevision, roomType, orderOverride ]
+```
+
+where `roomType` is the **effective** room supplied by `selectEligibleAnalyses`.
+The canonical `assetId` sort, `JSON.stringify` serialization, SHA-256, and the
+`sha256:<hex>` external format are unchanged.
+
+Two consequences, both accepted:
+
+- Existing fingerprints computed under the old format do not match the new one.
+  Every storyboard composed before Phase 3D-3 reads **stale once** and must be
+  recomposed. There is no compatibility fallback, no dual-format support and no
+  backfill — treating an old digest as fresh would assert something the function
+  can no longer verify.
+- Scene durations and the resulting scene sequence remain excluded. Those are
+  outputs; the digest still describes inputs.
+
+See ADR-0015 for the current correction contract.

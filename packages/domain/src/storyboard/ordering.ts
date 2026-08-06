@@ -46,17 +46,47 @@ function rankOf(roomType: RoomType | null): number {
 }
 
 /**
+ * The number each input sorts by: the reviewer's priority when they set one,
+ * otherwise the automatic rank of its effective room.
+ *
+ * The two share **one** numeric space, which is what makes the priority global.
+ * A priority of `2` therefore lands between `ENTRANCE` (2) and `LIVING_ROOM`
+ * (4) rather than jumping the whole automatic sequence, and a priority of `8`
+ * genuinely sits later than an exterior shot.
+ *
+ * Priorities are **not clamped**. Room ranks stop at 15 and an unclassified
+ * photo falls back to {@link FALLBACK_RANK}, so a priority of `150` sorts after
+ * an unclassified photo. That is the reviewer's stated intent, and normalizing
+ * it would silently overrule them (ADR-0015).
+ */
+function primaryKey(input: EligibleInput): number {
+  return input.orderOverride ?? rankOf(input.roomType);
+}
+
+/**
  * Order eligible inputs into the walkthrough sequence.
  *
- * Deterministic and total: equal room ranks break by `suggestedOrder` ascending
- * with nulls last, then by `assetId` ascending, so the result never depends on
- * the order the inputs arrived in.
+ * Deterministic and total. The primary key is {@link primaryKey}; ties then
+ * break by, in order: an explicit human priority beating an automatic room rank,
+ * the effective room rank, `suggestedOrder` ascending with nulls last, and
+ * `assetId` ascending. So the result never depends on the order the inputs
+ * arrived in.
+ *
+ * The explicit-beats-automatic step matters only on an exact numeric tie — a
+ * reviewer who typed `1` meant this photo to lead, and an exterior shot that
+ * merely ranks 1 by default should yield to that. It is a tie-break, **not** a
+ * rule that lifts every corrected photo above every uncorrected one.
+ *
+ * `roomType` here is already the *effective* room: `selectEligibleAnalyses`
+ * resolved any correction before this function ever sees it, so ordering never
+ * reads an override itself.
  *
  * The output is a **permutation of the input** — nothing is added, nothing is
  * dropped, and no room is fabricated for a type that has no photo. A repeated
  * `assetId` is refused rather than deduplicated: two inputs claiming one asset
  * means the caller built the set wrongly, and silently keeping one would hide
- * that while quietly changing the scene count.
+ * that while quietly changing the scene count. A repeated *priority* is
+ * ordinary and resolves through the tie-breaks below.
  *
  * @throws AppError VALIDATION_FAILED when two inputs share an `assetId`.
  */
@@ -74,6 +104,15 @@ export function orderScenes(inputs: readonly EligibleInput[]): readonly Eligible
   }
 
   return [...inputs].sort((a, b) => {
+    const byPriority = primaryKey(a) - primaryKey(b);
+    if (byPriority !== 0) return byPriority;
+
+    // Only reachable on an exact numeric tie: a stated priority outranks a
+    // room rank that happens to be the same number.
+    const aExplicit = a.orderOverride !== null;
+    const bExplicit = b.orderOverride !== null;
+    if (aExplicit !== bExplicit) return aExplicit ? -1 : 1;
+
     const byRoom = rankOf(a.roomType) - rankOf(b.roomType);
     if (byRoom !== 0) return byRoom;
     const bySuggested = compareSuggestedOrder(a.suggestedOrder, b.suggestedOrder);

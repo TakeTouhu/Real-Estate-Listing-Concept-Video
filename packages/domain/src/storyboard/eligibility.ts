@@ -1,4 +1,5 @@
 import { AppError } from "@app/shared";
+import { effectiveRoomType } from "../analysis/effective";
 import type { AssetAnalysis, RoomType } from "../analysis/types";
 
 /**
@@ -11,7 +12,22 @@ import type { AssetAnalysis, RoomType } from "../analysis/types";
 export interface EligibleInput {
   readonly assetId: string;
   readonly analysisRevision: number;
+  /**
+   * The **effective** room classification — the reviewer's correction where one
+   * exists, otherwise the analyzer's (ADR-0015). Since Phase 3D-3 this is not
+   * necessarily `AssetAnalysis.roomType`, and composition must not reach past
+   * this projection to find the analyzer's original.
+   */
   readonly roomType: RoomType | null;
+  /**
+   * The reviewer's sort priority, lower first, or null when they set none.
+   *
+   * A **global** priority rather than an absolute position: it competes with
+   * the automatic room rank rather than pinning a photo to an index, and
+   * duplicate values across photos are legitimate. How it competes is
+   * `orderScenes`'s contract (ADR-0015).
+   */
+  readonly orderOverride: number | null;
   /** The analyzer's suggested rank; a tiebreaker for ordering in Phase 3C-2b. */
   readonly suggestedOrder: number | null;
 }
@@ -60,11 +76,16 @@ export function selectEligibleAnalyses(
     seenGroups.add(group);
   }
 
+  // The one place a human correction enters composition. Everything downstream
+  // — ordering, the fingerprint, the service — reads `EligibleInput` and never
+  // learns that overrides exist (ADR-0015). Provenance stays out deliberately:
+  // composition has no use for who corrected a photo or when.
   return eligible
     .map((a) => ({
       assetId: a.assetId,
       analysisRevision: a.analysisRevision,
-      roomType: a.roomType,
+      roomType: effectiveRoomType(a),
+      orderOverride: a.orderOverride,
       suggestedOrder: a.suggestedOrder,
     }))
     .sort((a, b) => (a.assetId < b.assetId ? -1 : a.assetId > b.assetId ? 1 : 0));
