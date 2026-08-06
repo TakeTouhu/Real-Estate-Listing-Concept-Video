@@ -1,4 +1,11 @@
-import { AnalysisService, hasBlockingFlag, isLowConfidence, type AssetAnalysis } from "@app/domain";
+import {
+  AnalysisService,
+  effectiveRoomType,
+  hasBlockingFlag,
+  isCorrected,
+  isLowConfidence,
+  type AssetAnalysis,
+} from "@app/domain";
 import {
   createPrismaAnalysisRepository,
   createPrismaPropertyRepositories,
@@ -63,7 +70,24 @@ export interface AnalysisDto {
   readonly id: string;
   readonly assetId: string;
   readonly status: AssetAnalysis["status"];
+  /**
+   * The **analyzer's** classification, preserved verbatim. A human correction
+   * never overwrites it (ADR-0015), so this is what the model said and stays
+   * answerable even after a reviewer disagrees.
+   */
   readonly roomType: AssetAnalysis["roomType"];
+  /** The reviewer's corrected classification, or null when none was recorded. */
+  readonly roomTypeOverride: AssetAnalysis["roomType"];
+  /**
+   * The value composition actually uses: the correction when one exists,
+   * otherwise the analyzer's. Derived on the server so the browser never
+   * reimplements the resolution.
+   */
+  readonly effectiveRoomType: AssetAnalysis["roomType"];
+  /** The reviewer's global scene-order priority, lower first, or null. */
+  readonly orderOverride: number | null;
+  /** Whether either override is currently set. */
+  readonly corrected: boolean;
   readonly confidence: number | null;
   readonly qualityScore: number | null;
   readonly brightnessScore: number | null;
@@ -87,6 +111,10 @@ export function toAnalysisDto(analysis: AssetAnalysis): AnalysisDto {
     assetId: analysis.assetId,
     status: analysis.status,
     roomType: analysis.roomType,
+    roomTypeOverride: analysis.roomTypeOverride,
+    effectiveRoomType: effectiveRoomType(analysis),
+    orderOverride: analysis.orderOverride,
+    corrected: isCorrected(analysis),
     confidence: analysis.confidence,
     qualityScore: analysis.qualityScore,
     brightnessScore: analysis.brightnessScore,

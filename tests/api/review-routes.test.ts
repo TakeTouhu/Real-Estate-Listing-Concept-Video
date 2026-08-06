@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AnalysisService,
+  authorizeOrganization,
   AuthService,
   OrganizationService,
   type AnalysisRequest,
@@ -28,8 +29,10 @@ const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
 
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null }));
 const analysisService = vi.hoisted(() => ({ value: null as unknown }));
+const propertyServices = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve(currentUser.value) }));
+vi.mock("@/lib/property", () => ({ getPropertyServices: () => propertyServices.value }));
 vi.mock("@/lib/analysis", async () => {
   const actual = await vi.importActual<typeof import("@/lib/analysis")>("@/lib/analysis");
   return { ...actual, getAnalysisService: () => analysisService.value };
@@ -88,6 +91,7 @@ class MapStorage implements ObjectStorage {
 interface Ctx {
   deps: ReturnType<typeof createTestDeps>;
   assets: InMemoryMediaAssetRepository;
+  analyses: InMemoryAssetAnalysisRepository;
   storage: MapStorage;
   provider: StubProvider;
   service: AnalysisService;
@@ -181,6 +185,7 @@ beforeEach(async () => {
   ctx = {
     deps,
     assets,
+    analyses,
     storage,
     provider,
     service,
@@ -191,6 +196,17 @@ beforeEach(async () => {
     otherOrgId: other.id,
   };
   analysisService.value = service;
+  // Mirrors AssetService.list: organization membership is authorized, then the
+  // property's assets are read organization-scoped. That is exactly what
+  // requireAssetInProperty depends on.
+  propertyServices.value = {
+    assets: {
+      async list(userId: string, organizationId: string, propertyId: string) {
+        await authorizeOrganization(deps, userId, organizationId);
+        return assets.listByProperty(organizationId, propertyId);
+      },
+    },
+  };
   currentUser.value = { user: { id: owner.id } };
   await analyzed("ast_1", { perceptualHash: "0000000000000001" });
 });
@@ -342,5 +358,314 @@ describe("response hygiene", () => {
     expect(raw).not.toContain(STORAGE_KEY);
     expect(raw).not.toContain(ctx.orgId);
     expect(raw).not.toContain("stub");
+  });
+});
+
+const { POST: refresh } = await import(
+  "@/app/api/properties/[propertyId]/assets/[assetId]/analysis/refresh/route"
+);
+const { POST: correct } = await import(
+  "@/app/api/properties/[propertyId]/assets/[assetId]/analysis/correction/route"
+);
+
+/** Read the current analysis straight from the service, bypassing HTTP. */
+async function stored(assetId = "ast_1") {
+  return ctx.service.getForAsset(ctx.ownerId, ctx.orgId, assetId);
+}
+
+describe("POST /analysis/correction — JSON state translation", () => {
+  beforeEach(async () => {
+    await analyzed("ast_1");
+    currentUser.value = { user: { id: ctx.ownerId } };
+  });
+
+  it("sets a room override and leaves the analyzer's classification alone", async () => {
+    const res = await correct(req({ organizationId: ctx.orgId, roomType: "BALCONY" }), params());
+    const body = await jsonOf(res);
+
+    expect(res.status).toBe(200);
+    expect(body.roomTypeOverride).toBe("BALCONY");
+    expect(body.roomType).toBe("KITCHEN");
+    expect(body.effectiveRoomType).toBe("BALCONY");
+    expect(body.corrected).toBe(true);
+  });
+
+  it("sets an order priority", async () => {
+    const res = await correct(req({ organizationId: ctx.orgId, order: 3 }), params());
+    expect((await jsonOf(res)).orderOverride).toBe(3);
+  });
+
+  it("leaves an override unchanged when its key is omitted", async () => {
+    await correct(req({ organizationId: ctx.orgId, roomType: "STUDY", order: 4 }), params());
+    const res = await correct(req({ organizationId: ctx.orgId, order: 9 }), params());
+    const body = await jsonOf(res);
+
+    // An omitted key must not be read as `undefined` and turned into a clear.
+    expect(body.roomTypeOverride).toBe("STUDY");
+    expect(body.orderOverride).toBe(9);
+  });
+
+  it("clears an override with an explicit null, and only that one", async () => {
+    await correct(req({ organizationId: ctx.orgId, roomType: "STUDY", order: 4 }), params());
+    const res = await correct(req({ organizationId: ctx.orgId, roomType: null }), params());
+    const body = await jsonOf(res);
+
+    expect(body.roomTypeOverride).toBeNull();
+    expect(body.orderOverride).toBe(4);
+    // The effective room falls back to the analyzer's once the override is gone.
+    expect(body.effectiveRoomType).toBe("KITCHEN");
+    expect(body.corrected).toBe(true);
+  });
+
+  it("clears the order priority with an explicit null", async () => {
+    await correct(req({ organizationId: ctx.orgId, order: 4 }), params());
+    const res = await correct(req({ organizationId: ctx.orgId, order: null }), params());
+    const body = await jsonOf(res);
+
+    expect(body.orderOverride).toBeNull();
+    expect(body.corrected).toBe(false);
+  });
+
+  it("changes both fields in one request", async () => {
+    const res = await correct(
+      req({ organizationId: ctx.orgId, roomType: "ENTRANCE", order: 1 }),
+      params(),
+    );
+    const body = await jsonOf(res);
+    expect(body.roomTypeOverride).toBe("ENTRANCE");
+    expect(body.orderOverride).toBe(1);
+  });
+
+  it("returns 422 when neither field is supplied", async () => {
+    const res = await correct(req({ organizationId: ctx.orgId }), params());
+    expect(res.status).toBe(422);
+    expect((await stored()).roomTypeOverride).toBeNull();
+  });
+
+  it("returns 200 and writes nothing when the request restates stored values", async () => {
+    await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params());
+    const before = await stored();
+
+    const res = await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params());
+    expect(res.status).toBe(200);
+    expect((await stored()).updatedAt).toEqual(before.updatedAt);
+  });
+});
+
+describe("POST /analysis/correction — representable malformed values", () => {
+  beforeEach(async () => {
+    await analyzed("ast_1");
+    currentUser.value = { user: { id: ctx.ownerId } };
+  });
+
+  it("returns 422 for an unknown room without echoing what was submitted", async () => {
+    const planted = "PENTHOUSE-JACUZZI-<script>";
+    const res = await correct(
+      req({ organizationId: ctx.orgId, roomType: planted }),
+      params(),
+    );
+
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(await jsonOf(res))).not.toContain("PENTHOUSE");
+  });
+
+  it.each([
+    ["zero", 0],
+    ["a negative", -2],
+    ["a fraction", 2.5],
+    ["a string", "3"],
+    ["an object", { value: 3 }],
+    ["an array", [3]],
+  ])("returns 422 for %s as an order priority", async (_label, order) => {
+    const res = await correct(req({ organizationId: ctx.orgId, order }), params());
+
+    expect(res.status).toBe(422);
+    expect((await stored()).orderOverride).toBeNull();
+  });
+
+  it("returns 422 for a malformed body, never a 500", async () => {
+    const res = await correct(
+      new Request("http://t/c", { method: "POST", body: "not json" }),
+      params(),
+    );
+    expect(res.status).toBe(422);
+  });
+});
+
+describe("POST /analysis/correction — lifecycle, authorization and tenancy", () => {
+  it("returns 401 when unauthenticated", async () => {
+    await analyzed("ast_1");
+    currentUser.value = null;
+    const res = await correct(req({ organizationId: ctx.orgId, order: 1 }), params());
+    expect(res.status).toBe(401);
+  });
+
+  it("allows a REVIEWER and refuses a CREATOR", async () => {
+    await analyzed("ast_1");
+    const reviewer = await new AuthService(ctx.deps, { sessionTtlSeconds: 3600 }).register({
+      email: "r@e.com",
+      password: PASSWORD,
+      name: "Reviewer",
+    });
+    await ctx.deps.repos.memberships.create({
+      organizationId: ctx.orgId,
+      userId: reviewer.id,
+      role: "REVIEWER",
+    });
+
+    currentUser.value = { user: { id: reviewer.id } };
+    expect(
+      (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,
+    ).toBe(200);
+
+    currentUser.value = { user: { id: ctx.creatorId } };
+    expect(
+      (await correct(req({ organizationId: ctx.orgId, roomType: "BALCONY" }), params())).status,
+    ).toBe(403);
+  });
+
+  it("returns 422 once the revision has been decided", async () => {
+    await analyzed("ast_1");
+    currentUser.value = { user: { id: ctx.ownerId } };
+    await approve(req({ organizationId: ctx.orgId }), params());
+
+    const res = await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params());
+    expect(res.status).toBe(422);
+  });
+
+  it("returns 404 for an asset that has never been analyzed", async () => {
+    const asset = await seed(ctx.assets, ctx.orgId, ctx.ownerId, { id: "ast_fresh" });
+    await ctx.storage.putObject(asset.storageKey, new Uint8Array([1]));
+    currentUser.value = { user: { id: ctx.ownerId } };
+
+    // The asset is under the right property, so route integrity passes; the
+    // domain then finds no analysis row at all.
+    const res = await correct(req({ organizationId: ctx.orgId, order: 1 }), params("ast_fresh"));
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 422 for an analysis that is not SUCCEEDED", async () => {
+    await analyzed("ast_1");
+    const current = await ctx.analyses.findByAssetId(ctx.orgId, "ast_1");
+    await ctx.analyses.update({ ...current!, status: "PENDING" });
+    currentUser.value = { user: { id: ctx.ownerId } };
+
+    const res = await correct(req({ organizationId: ctx.orgId, order: 1 }), params());
+    expect(res.status).toBe(422);
+  });
+
+  it("returns 404 for an unknown asset and for another organization's asset", async () => {
+    await analyzed("ast_1");
+    currentUser.value = { user: { id: ctx.ownerId } };
+
+    expect(
+      (await correct(req({ organizationId: ctx.orgId, order: 1 }), params("ast_missing"))).status,
+    ).toBe(404);
+    expect(
+      (await correct(req({ organizationId: ctx.otherOrgId, order: 1 }), params())).status,
+    ).toBe(404);
+  });
+});
+
+describe("response hygiene — correction fields", () => {
+  it("returns the correction state and no internal identifiers", async () => {
+    await analyzed("ast_1");
+    currentUser.value = { user: { id: ctx.ownerId } };
+    const res = await correct(
+      req({ organizationId: ctx.orgId, roomType: "STUDY", order: 2 }),
+      params(),
+    );
+    const body = await jsonOf(res);
+    const raw = JSON.stringify(body);
+
+    expect(body.roomType).toBe("KITCHEN");
+    expect(body.roomTypeOverride).toBe("STUDY");
+    expect(body.effectiveRoomType).toBe("STUDY");
+    expect(body.orderOverride).toBe(2);
+    expect(body.corrected).toBe(true);
+
+    for (const internal of [
+      "correctedBy",
+      "correctedAt",
+      "compositionFingerprint",
+      "organizationId",
+      "storageKey",
+      "normalized.jpg",
+      "sha256",
+      "stub",
+    ]) {
+      expect(raw).not.toContain(internal);
+    }
+  });
+});
+
+describe("nested property/asset route integrity", () => {
+  /**
+   * The URL names a property; the analysis services only ever knew the asset.
+   * A same-organization asset filed under a different property must not be
+   * actionable through a hand-built path — the defect class Phase 3C-6b hit on
+   * the storyboard page.
+   */
+  beforeEach(async () => {
+    await analyzed("ast_1");
+    await analyzed("ast_elsewhere", { propertyId: "prp_2", perceptualHash: null });
+    currentUser.value = { user: { id: ctx.ownerId } };
+  });
+
+  const wrongProperty = () => params("ast_elsewhere", "prp_1");
+
+  it("acts on an asset that really belongs to the URL property", async () => {
+    expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(200);
+  });
+
+  it.each([
+    ["approve", (p: ReturnType<typeof params>) => approve(req({ organizationId: ctx.orgId }), p)],
+    [
+      "reject",
+      (p: ReturnType<typeof params>) =>
+        reject(req({ organizationId: ctx.orgId, reason: "blurry" }), p),
+    ],
+    ["refresh", (p: ReturnType<typeof params>) => refresh(req({ organizationId: ctx.orgId }), p)],
+    [
+      "correction",
+      (p: ReturnType<typeof params>) =>
+        correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), p),
+    ],
+  ])("rejects a same-organization asset under another property on %s", async (_name, call) => {
+    const res = await call(wrongProperty());
+    expect(res.status).toBe(404);
+
+    // And the action did not happen.
+    const untouched = await stored("ast_elsewhere");
+    expect(untouched.reviewStatus).toBe("UNREVIEWED");
+    expect(untouched.roomTypeOverride).toBeNull();
+  });
+
+  it.each([
+    ["approve", (p: ReturnType<typeof params>) => approve(req({ organizationId: ctx.orgId }), p)],
+    [
+      "reject",
+      (p: ReturnType<typeof params>) =>
+        reject(req({ organizationId: ctx.orgId, reason: "blurry" }), p),
+    ],
+    ["refresh", (p: ReturnType<typeof params>) => refresh(req({ organizationId: ctx.orgId }), p)],
+    [
+      "correction",
+      (p: ReturnType<typeof params>) =>
+        correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), p),
+    ],
+  ])("returns the same 404 for a genuinely unknown asset on %s", async (_name, call) => {
+    // Identical outcome to the mismatch above, so neither discloses the other.
+    expect((await call(params("ast_missing"))).status).toBe(404);
+  });
+
+  it("does not flatten an unrelated domain failure into 404", async () => {
+    // A CREATOR on a correctly-addressed asset is a permission problem, and must
+    // stay a 403 rather than being hidden behind the route-integrity check.
+    currentUser.value = { user: { id: ctx.creatorId } };
+    expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(403);
+    expect(
+      (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,
+    ).toBe(403);
   });
 });

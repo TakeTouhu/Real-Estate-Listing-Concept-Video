@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AnalysisService,
+  authorizeOrganization,
   AuthService,
   OrganizationService,
   type AnalysisRequest,
@@ -26,10 +27,12 @@ const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
 
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null }));
 const analysisService = vi.hoisted(() => ({ value: null as unknown }));
+const propertyServices = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => Promise.resolve(currentUser.value),
 }));
+vi.mock("@/lib/property", () => ({ getPropertyServices: () => propertyServices.value }));
 vi.mock("@/lib/analysis", async () => {
   const actual = await vi.importActual<typeof import("@/lib/analysis")>("@/lib/analysis");
   return { ...actual, getAnalysisService: () => analysisService.value };
@@ -175,6 +178,17 @@ beforeEach(async () => {
   });
 
   const analyses = new InMemoryAssetAnalysisRepository(deps.clock);
+  // Mirrors AssetService.list: organization membership is authorized, then the
+  // property's assets are read organization-scoped. That is exactly what
+  // requireAssetInProperty depends on.
+  propertyServices.value = {
+    assets: {
+      async list(userId: string, organizationId: string, propertyId: string) {
+        await authorizeOrganization(deps, userId, organizationId);
+        return assets.listByProperty(organizationId, propertyId);
+      },
+    },
+  };
   analysisService.value = new AnalysisService({
     identity: deps,
     assets,
