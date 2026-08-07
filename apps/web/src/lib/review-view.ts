@@ -1,10 +1,13 @@
 import {
+  effectiveRoomType,
+  isCorrected,
   hasBlockingFlag,
   hasPermission,
   isLowConfidence,
   type AssetAnalysis,
   type MediaAsset,
   type Role,
+  type RoomType,
   type SafetyFlag,
 } from "@app/domain";
 
@@ -37,6 +40,28 @@ export interface ReviewActions {
   readonly unavailableReason: string | null;
 }
 
+/**
+ * Correction state as the review page shows it.
+ *
+ * `effectiveRoomType` comes from the analysis DTO, already resolved on the
+ * server — the browser never recomputes `roomTypeOverride ?? roomType`
+ * (ADR-0015).
+ */
+export interface CorrectionState {
+  /** Humanized, for display beside what the reviewer chose. */
+  readonly analyzerRoomType: string;
+  readonly effectiveRoomType: string;
+  /** Raw enum value, so a select can preselect it. Null when uncorrected. */
+  readonly roomTypeOverride: RoomType | null;
+  readonly orderOverride: number | null;
+  readonly corrected: boolean;
+  /**
+   * Presentation only: whether to offer the correction controls. The API is the
+   * security boundary and enforces the same rule independently.
+   */
+  readonly canCorrect: boolean;
+}
+
 export interface ReviewItem {
   readonly assetId: string;
   readonly filename: string;
@@ -51,6 +76,8 @@ export interface ReviewItem {
   readonly notReviewableReason: string | null;
   readonly decision: DecisionRecord | null;
   readonly actions: ReviewActions;
+  /** Null only while an asset has no analysis row at all. */
+  readonly correction: CorrectionState | null;
 }
 
 /** Analyses sharing a perceptual-duplicate group, shown as one choice. */
@@ -106,6 +133,30 @@ function actionsOf(
 }
 
 /**
+ * Correction state for one analysis.
+ *
+ * `canCorrect` mirrors the domain's rule as presentation: only a `SUCCEEDED`,
+ * still-undecided analysis is correctable, and only by a member who may review.
+ * A decided or not-yet-reviewable row still reports its values, so the page can
+ * show them read-only.
+ */
+function correctionOf(
+  analysis: AssetAnalysis | undefined,
+  bucket: ReviewBucket,
+  canReview: boolean,
+): CorrectionState | null {
+  if (!analysis) return null;
+  return {
+    analyzerRoomType: humanizeRoomType(analysis.roomType),
+    effectiveRoomType: humanizeRoomType(effectiveRoomType(analysis)),
+    roomTypeOverride: analysis.roomTypeOverride,
+    orderOverride: analysis.orderOverride,
+    corrected: isCorrected(analysis),
+    canCorrect: bucket === "AWAITING" && canReview,
+  };
+}
+
+/**
  * Join assets to their analyses and bucket them.
  *
  * Duplicate groups with more than one member become clusters shown as a single
@@ -158,6 +209,7 @@ export function buildReviewBoard(
             }
           : null,
       actions: actionsOf(analysis, bucket, canReview, approved !== null && approved !== asset.id),
+      correction: correctionOf(analysis, bucket, canReview),
     };
     return { item, group };
   });

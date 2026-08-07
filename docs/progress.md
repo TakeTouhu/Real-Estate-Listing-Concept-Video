@@ -150,7 +150,8 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3D-1 | Review-correction persistence: columns, migration, `effectiveRoomType`, refresh clearing | 426 — 121 production + 305 tests (re-cost ~351, approved ~460) | **Merged** (PR #23, `1ebe30a`) |
 | 3D-2 | `AnalysisService.correct`: validation, lifecycle, authorization, provenance, audit | 708 — 189 production + 519 tests (re-cost ~558, approved ~481/~500; the 52-case mandated matrix, reported not trimmed) | **Merged** (PR #24, `3d59332`) |
 | 3D-3 | Corrections reach composition: projection, ordering precedence, fingerprint payload | 413 — 92 production + 321 tests (approved range ~445–560) | **Merged** (PR #25, `1e51453`) |
-| 3D-4a | Correction HTTP contract, additive DTO, nested-route integrity fix | 609 — 170 production + 439 tests (re-cost ~684) | In review |
+| 3D-4a | Correction HTTP contract, additive DTO, nested-route integrity fix | 609 — 170 production + 439 tests (re-cost ~684) | **Merged** (PR #26, `cc0d3d5`) |
+| 3D-4b | Review-page correction controls + unsaved/decision interlock | 1080 — 510 production + 570 tests (re-cost ~865; over, reported not trimmed) | In review |
 
 ### Phase 3D — closing the Phase 3 review contract
 
@@ -166,8 +167,8 @@ correction that composition silently ignores.
 | 3D-1 | Schema, migration, domain type, `effectiveRoomType`, refresh clearing | **Merged** (`1ebe30a`) |
 | 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | **Merged** (`3d59332`) |
 | 3D-3 | `EligibleInput`, ordering precedence, fingerprint payload | **Merged** (`1e51453`) |
-| 3D-4a | Correction HTTP contract + DTO + nested-route integrity | In review |
-| 3D-4b | Review-page correction controls | Not started |
+| 3D-4a | Correction HTTP contract + DTO + nested-route integrity | **Merged** (`cc0d3d5`) |
+| 3D-4b | Review-page correction controls + interlock | In review |
 
 | 3B | Analysis review UI | ~450–500 | Not started |
 | 3C | Storyboard + prompt compilation | ~500 | Not started |

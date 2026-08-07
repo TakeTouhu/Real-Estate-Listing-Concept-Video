@@ -3,9 +3,72 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3D-4a: correction HTTP contract
+## [Unreleased] — Phase 3D-4b: review-page correction controls
 
-Under review. Not merged. See `docs/phase-3d4a-completion.md` and
+Under review. Not merged. See `docs/phase-3d4b-completion.md`.
+
+### Added
+
+- **Correction controls on the review page.** A reviewer sees what the analyzer
+  read the room as, can override it or restore the analyzer's result, can set or
+  clear an order priority, and saves that with an explicit **Save correction**
+  action — separate from Approve and Reject.
+- **`ReviewItemControls`** — a small client wrapper holding one piece of state:
+  which corrections are unsaved. No context, no store, no form framework, no
+  domain rule.
+- **`correction-errors.ts`** — zero-import client-safe status mapping, `422`
+  rendering the API's own message unparsed.
+- `ReviewItem.correction` carrying `analyzerRoomType`, `effectiveRoomType`,
+  `roomTypeOverride`, `orderOverride`, `corrected`, `canCorrect`.
+  `effectiveRoomType` comes from the domain helper **server-side**; the browser
+  never re-derives `roomTypeOverride ?? roomType`.
+
+### Changed
+
+- **Unsaved corrections now block Approve and Reject.** Approving with edits
+  still on screen would freeze the revision around the *old* stored correction
+  and silently discard what the reviewer can see. While any correction here is
+  dirty the decision controls are unavailable and say why; a **failed** save
+  keeps them blocked, because the edits are still unsaved. `ReviewDecisionPanel`
+  gained one presentation-only optional prop, `disabledReason` — its request
+  payload and business semantics are untouched, and it knows nothing about how
+  corrections are stored.
+
+### Notes
+
+- **The three HTTP states survive into the UI.** Each field tracks
+  `{ touched, value }` explicitly: untouched omits the key, an explicit clear
+  sends `null`, a value sets it. Dirtiness is never inferred from an empty
+  input, because that cannot separate "never touched" from "deliberately
+  cleared". The room select carries an explicit *Use analyzer result* option so
+  `null` is expressible.
+- A field touched and returned to its stored value stays dirty and is sent — the
+  domain already has correct no-op semantics, and a client-side stored-value
+  diff would be presentation pretending to be a business rule.
+- **A successful save does not unlock the decision.** It asks for
+  `router.refresh()` and stays blocked until the refreshed render lands: a `200`
+  means the write succeeded, not that the screen is fresh. Because
+  `router.refresh()` preserves client state, `review/page.tsx` keys the controls
+  on authoritative correction and review state, so the refreshed payload — and
+  only it — remounts them and resets local edit state. A save the domain treats
+  as a no-op changes nothing authoritative, so the interlock holds and **Discard
+  changes** is the escape.
+- Decided revisions show their corrections **read-only**. No post-decision
+  editing; refresh remains the path to a new reviewable revision.
+- Room options are built server-side and passed as plain data. The clean-build
+  scan finds none of `ROOM_TYPES`, `humanizeRoomType`, `isRoomType`,
+  `effectiveRoomType`, `isCorrected`, `AnalysisService`, `StoryboardService`,
+  `@app/domain`, `@app/database`, `PrismaClient`, `node:crypto|fs|util`,
+  `authorizeOrganization`, or `CorrectionField` in any client chunk, with a
+  `CorrectionPanel` literal as positive control.
+- Zero diff across all of `packages/` and across `apps/web/src/app/api/` — **no
+  API contract change**.
+- Size: 1080 code lines (510 production, 570 tests) against a re-cost of ~865 —
+  over, and reported rather than trimmed. A review fix added 66 more.
+
+## [phase-3d4a-complete] — Phase 3D-4a: correction HTTP contract
+
+Merged as `cc0d3d5` (PR #26). See `docs/phase-3d4a-completion.md` and
 `docs/api-changes-phase-3d4a.md`.
 
 ### Added

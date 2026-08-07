@@ -274,3 +274,35 @@ button:disabled {
   overflow-wrap: anywhere;
   font-weight: 600;
 }
+
+.review-controls {
+  border-top: 1px dashed var(--border);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.correction-panel {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.correction-panel p {
+  margin: 0.2rem 0;
+}
+
+.correction-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.4rem;
+}
+
+select {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+}

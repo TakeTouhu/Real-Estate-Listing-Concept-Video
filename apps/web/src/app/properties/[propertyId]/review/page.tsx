@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { ROOM_TYPES } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getAnalysisService } from "@/lib/analysis";
 import { getIdentityServices } from "@/lib/identity";
@@ -6,18 +7,33 @@ import { getPropertyServices } from "@/lib/property";
 import { thumbnailUrls } from "@/lib/thumbnails";
 import {
   buildReviewBoard,
+  humanizeRoomType,
   type DuplicateCluster,
   type ReviewBoard,
   type ReviewItem,
 } from "@/lib/review-view";
-import { ReviewDecisionPanel } from "./review-panel";
+import { ReviewItemControls, type CorrectionTarget } from "./review-item-controls";
+import type { RoomOption } from "./correction-panel";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Read-only review surface (Phase 3B-3a). Decision controls arrive in 3B-3b;
- * nothing here mutates, so it exposes no data a member could not already read
- * through the analysis API.
+ * Room choices for the correction control, resolved **here** and passed down as
+ * plain data. The correction panel is a Client Component, so importing
+ * `ROOM_TYPES` or `humanizeRoomType` there would put domain code in the browser
+ * bundle — the boundary rule established in Phase 3B-3b and repeated for
+ * `minimumScenes` in 3C-6b.
+ */
+const ROOM_OPTIONS: readonly RoomOption[] = ROOM_TYPES.map((value) => ({
+  value,
+  label: humanizeRoomType(value),
+}));
+
+/**
+ * The review surface: what the analyzer decided, what a person corrected, and
+ * the approve/reject decision. Corrections and decisions are separate writes,
+ * and a decided revision shows its corrections read-only — changing them means
+ * refreshing the analysis into a new revision (ADR-0015).
  */
 export default async function ReviewPage({
   params,
@@ -76,7 +92,7 @@ export default async function ReviewPage({
           {board.awaiting.map((item) => (
             <div key={item.assetId}>
               <Item item={item} thumbnails={thumbnails} />
-              <Decisions
+              <Controls
                 organizationId={organization.id}
                 propertyId={property.id}
                 items={[item]}
@@ -147,7 +163,7 @@ function Cluster({
       {cluster.items.map((item) => (
         <Item key={item.assetId} item={item} thumbnails={thumbnails} />
       ))}
-      <Decisions
+      <Controls
         organizationId={organizationId}
         propertyId={propertyId}
         items={cluster.items}
@@ -157,11 +173,15 @@ function Cluster({
 }
 
 /**
- * Mount the decision panel only for members that actually have an action —
- * so a decided revision, a viewer without `video:review`, and a photo whose
- * every action is barred render no controls at all rather than disabled ones.
+ * Mount the review controls where the member actually has something to do.
+ *
+ * Corrections and decisions are separate writes, but they are coordinated:
+ * {@link ReviewItemControls} blocks approval while a correction is unsaved, so
+ * an approval cannot freeze the revision around correction state the reviewer
+ * can still see on screen. Nothing renders when the member can neither correct
+ * nor decide — absent controls rather than disabled ones.
  */
-function Decisions({
+function Controls({
   organizationId,
   propertyId,
   items,
@@ -178,12 +198,45 @@ function Decisions({
       canApprove: item.actions.canApprove,
       canReject: item.actions.canReject,
     }));
-  if (members.length === 0) return null;
+  const corrections: CorrectionTarget[] = items
+    .filter((item) => item.correction?.canCorrect)
+    .map((item) => ({
+      assetId: item.assetId,
+      filename: item.filename,
+      analyzerRoomType: item.correction!.analyzerRoomType,
+      roomTypeOverride: item.correction!.roomTypeOverride,
+      orderOverride: item.correction!.orderOverride,
+    }));
+  if (members.length === 0 && corrections.length === 0) return null;
+
+  // Authoritative-reset seam.
+  //
+  // `router.refresh()` re-fetches the server payload but deliberately preserves
+  // client state, so the controls' unsaved-correction interlock would survive a
+  // successful save and block the decision forever. Keying the wrapper on the
+  // authoritative correction and review state means the refreshed payload —
+  // and only it — remounts the controls, discarding local edit state at exactly
+  // the moment the screen becomes fresh.
+  const authoritativeKey = items
+    .map((item) =>
+      [
+        item.assetId,
+        item.analysisRevision ?? "",
+        item.bucket,
+        item.correction?.roomTypeOverride ?? "",
+        item.correction?.orderOverride ?? "",
+      ].join(":"),
+    )
+    .join("|");
+
   return (
-    <ReviewDecisionPanel
+    <ReviewItemControls
+      key={authoritativeKey}
       organizationId={organizationId}
       propertyId={propertyId}
+      corrections={corrections}
       members={members}
+      roomOptions={ROOM_OPTIONS}
     />
   );
 }
@@ -229,6 +282,17 @@ function Item({ item, thumbnails }: { item: ReviewItem; thumbnails: Map<string, 
               Final for this revision. Refresh the analysis to review this photo again.
             </p>
           </div>
+        ) : null}
+        {/* Read-only for a decided or not-yet-reviewable row: the correction is
+            visible but not editable, because the decision froze it. */}
+        {item.correction && !item.correction.canCorrect && item.correction.corrected ? (
+          <p className="muted">
+            Corrected · analyzer read this as {item.correction.analyzerRoomType}, used as{" "}
+            {item.correction.effectiveRoomType}
+            {item.correction.orderOverride === null
+              ? ""
+              : ` · order priority ${item.correction.orderOverride}`}
+          </p>
         ) : null}
         {item.actions.unavailableReason ? (
           <p className="muted">{item.actions.unavailableReason}</p>

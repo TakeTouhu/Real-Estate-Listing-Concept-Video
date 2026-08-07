@@ -97,6 +97,44 @@ message unchanged. The UI does not tell the individual refusals apart — they
 share one error code, and parsing the message text would turn a display string
 into an implicit API contract.
 
+#### Implemented — correction controls (Phase 3D-4b)
+
+A reviewer no longer has to reject an otherwise usable photo because the
+analyzer misread the room. Each awaiting photo shows what the analyzer read the
+room as, and offers two corrections:
+
+- **Room** — a select over the existing vocabulary, with an explicit **Use
+  analyzer result** choice that clears the override rather than leaving an empty
+  field.
+- **Order priority** — *lower numbers appear earlier*. A global priority, not an
+  absolute scene position: duplicate values are legitimate, nothing is
+  renumbered, and a photo without one keeps its automatic room rank.
+
+Corrections are saved with an explicit **Save correction**, which is a different
+write from Approve and Reject. The analyzer's own classification is never
+overwritten, and the audit records the correction separately from the decision.
+
+**Unsaved corrections block the decision.** Approving with edits still on screen
+would freeze the revision around the *old* stored correction and silently
+discard what the reviewer can see, so while a correction is unsaved the Approve
+and Reject controls are unavailable and say: *Save or discard your correction
+changes before approving or rejecting.* A failed save keeps them blocked,
+because the change is still unsaved. **Discard changes** restores the stored
+values locally, without a request.
+
+Saving refreshes the page from the server rather than merging the response in
+the browser, so the effective room, the corrected marker, and the decision
+controls all come from authoritative state.
+
+A role without `video:review` receives **no correction controls at all** — not
+disabled ones — and a decided photo shows its correction **read-only**: what the
+analyzer read, what was used instead, and the order priority if set. Changing a
+correction after a decision means refreshing the analysis into a new revision;
+the immutable-per-revision rule is unchanged.
+
+The corrected values are what storyboard composition uses (Phase 3D-3), and a
+correction that would alter a composed storyboard makes it read stale.
+
 ### Video customization
 
 Controls:
