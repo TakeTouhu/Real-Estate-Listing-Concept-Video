@@ -100,10 +100,13 @@ flowchart TB
 | `@app/storage` object storage, signing, image pipeline, scan hook | Implemented (in-process storage) |
 | `@app/video-providers` Fake + WaveSpeed adapters | Implemented; WaveSpeed not invoked |
 | `@app/domain` analysis contracts, normalization, ordering/duplicate rules | Implemented (Phase 3A-1) |
-| `@app/domain` storyboard entities and persistence ports (`storyboard/`) | Implemented (Phase 3C-1) — composition, prompt compilation, and moderation are later 3C milestones |
+| `@app/domain` storyboard module: entities, persistence ports, eligibility, ordering, duration allocation, fingerprint, `CompiledPrompt`, `StoryboardService` | Implemented (Phase 3C) |
+| `PromptModerator` port + offline documented-rules default | Implemented (Phase 3C-3, ADR-0014); **no real moderation vendor** |
 | `@app/ai-providers` `ImageAnalysisProvider` + deterministic offline adapter | Implemented (Phase 3A-1); **no real vision vendor** (ADR-0009) |
-| `AnalysisService`, `AssetAnalysis` persistence | **Not implemented** (Phase 3A-2) |
-| Analysis review UI | **Not implemented** (Phase 3B) |
+| `AnalysisService`, `AssetAnalysis` persistence | Implemented (Phase 3A-2) |
+| Human review: `approve` / `reject`, immutable per revision | Implemented (Phase 3B) |
+| Human corrections: room override and order priority, separate from the decision | Implemented (Phase 3D, ADR-0015) |
+| Analysis review UI, storyboard UI | Implemented (Phases 3B-3, 3C-6, 3D-4b) |
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` queue consumer, generation orchestration | **Not implemented** (Phase 4) |
 | `@app/queue` | **Not implemented** (placeholder) |

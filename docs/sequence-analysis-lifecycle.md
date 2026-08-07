@@ -128,6 +128,56 @@ sequenceDiagram
   Note over RT,R: reviewedBy is the reviewer's USER ID only.<br/>A duplicate-group conflict surfaces as 422, not 409.
 ```
 
+## Correction (3D-2 domain, 3D-4 HTTP and UI)
+
+A correction is **not** a decision. It is a different request, a different audit
+event, and a different button, and it never approves anything.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor R as Reviewer
+  participant UI as CorrectionPanel<br/>(3D-4b, client)
+  participant RT as Route handler<br/>(3D-4a, thin adapter)
+  participant GA as requireAssetInProperty<br/>(3D-4a)
+  participant AS as AnalysisService.correct<br/>(3D-2)
+  participant AZ as authorizeOrganization
+  participant NR as AssetAnalysis repository
+  participant AL as AuditLog
+
+  R->>UI: change room, or set/clear an order priority
+  Note over UI: Each field is {touched, value}. Untouched omits<br/>the key; an explicit clear sends null; a value sets it.<br/>While anything is unsaved, Approve and Reject are<br/>unavailable — approving would freeze the revision<br/>around the OLD stored correction.
+  R->>UI: Save correction
+  UI->>RT: POST /analysis/correction {organizationId, roomType?, order?}
+  Note over RT: Presence, not truthiness, decides the three states.<br/>The room vocabulary and the positive-integer rule<br/>are NOT restated here.
+  RT->>GA: is this asset really under this property?
+  Note over GA: A same-org asset filed elsewhere is<br/>indistinguishable from one that does not exist.
+  RT->>AS: correct(org, assetId, {roomType?, order?})
+  AS->>AZ: require membership + video:review
+  Note over AS,AZ: CREATOR is denied, exactly as for a decision.
+  AS->>NR: findByAssetId(org, assetId)
+  Note over AS,NR: Must be SUCCEEDED and UNREVIEWED.<br/>A decided revision is corrected only by refreshing<br/>it into a new revision.
+
+  alt the stored values would not change
+    Note over AS: True no-op: no write, no audit event.
+    AS-->>RT: the unchanged analysis
+  else a real change
+    AS->>NR: roomTypeOverride / orderOverride (+ correctedBy, correctedAt)
+    Note over NR: roomType and suggestedOrder are NEVER overwritten.<br/>The analyzer's own reading survives underneath.
+    AS->>AL: analysis.corrected<br/>{effective room before/after, order before/after}
+    AS-->>RT: the corrected analysis
+  end
+
+  RT-->>UI: 200 + AnalysisDto {effectiveRoomType, roomTypeOverride,<br/>orderOverride, corrected}
+  UI->>UI: router.refresh() — and stay blocked
+  Note over UI: 200 means the write landed, not that the screen<br/>is fresh. Only the refreshed server render, which<br/>changes the controls' authoritative key and remounts<br/>them, clears local edit state.
+```
+
+The corrected value is what composition uses: `selectEligibleAnalyses` projects
+`effectiveRoomType(analysis)` and carries `orderOverride`, and both are in the
+composition fingerprint — so a correction that would change a composed
+storyboard makes it read stale (3D-3, ADR-0015).
+
 ## Status machine
 
 ```mermaid
@@ -161,15 +211,33 @@ stateDiagram-v2
 | Review columns, partial unique index, `ReviewTransaction` | 3B-1a |
 | `approve` / `reject`, immutability per revision, duplicate primary rule, transactional rejection, review audit | 3B-1b |
 | Review HTTP endpoints (thin adapters, nested review DTO) | 3B-2 |
-| Review UI | ⏭ 3B-3 |
 | Analysis HTTP endpoints (thin adapters) | 3A-3 |
+| Review UI: three buckets, duplicate clusters, immutable decision records | 3B-3a |
+| Review UI: separate Approve / Reject controls, per-row pending and error state | 3B-3b |
+| Storyboard persistence, eligibility, ordering, duration allocation, fingerprint | 3C-1 / 3C-2 |
+| `CompiledPrompt` compilation and the `PromptModerator` port | 3C-3 |
+| `StoryboardService.compose` and the `assertFresh` gate | 3C-4 |
+| Video-project and storyboard HTTP endpoints | 3C-5 |
+| Video-project and storyboard UI, freshness banner, recompose | 3C-6 |
+| Correction columns, `effectiveRoomType` / `isCorrected`, refresh clearing | 3D-1 |
+| `AnalysisService.correct`, lifecycle guard, provenance, `analysis.corrected` audit | 3D-2 |
+| Corrections reaching eligibility, ordering, and the fingerprint | 3D-3 |
+| Correction HTTP contract and the nested property/asset guard on all six handlers | 3D-4a |
+| Correction UI and the unsaved-correction / decision interlock | 3D-4b |
 | Rate limiting on the analysis endpoints | ⏭ cross-cutting, see TODO |
-| Review UI, storyboard, prompt compilation | ⏭ 3B / 3C |
+| Scene generation through a video provider | ⏭ Phase 4 |
 
 ## Low confidence and blocking findings
 
-`isLowConfidence` (≤ 0.6, or null) and `hasBlockingFlag` are available from
-3A-1, and `AnalysisService` *records* the signals it computes. Nothing enforces
-them yet.
-Enforcement (a low-confidence classification cannot silently proceed, and
-blocking findings must be resolved) is delivered with the review UI in Phase 3B.
+`isLowConfidence` (≤ 0.6, or null) and `hasBlockingFlag` are computed and
+recorded from 3A-1.
+
+Both are enforced as of Phase 3B. A blocking finding refuses approval in
+`AnalysisService.approve`, and the review page presents no approval affordance
+for such a photo — rejection stays available. Low confidence is surfaced as a
+caution on the row, so a low-confidence classification cannot pass silently: a
+human either approves it deliberately or, from Phase 3D, corrects the room and
+then approves.
+
+Nothing reaches composition without an explicit human decision —
+`selectEligibleAnalyses` admits `APPROVED` analyses only.

@@ -35,14 +35,14 @@ the authoritative scope definition; this file records what has actually shipped.
 | 0 | Engineering foundation | ✅ Merged | #1 | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | `phase-0-complete` | `76d36045934a97bc4a997a64dcd1e932cfe837de` |
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
-| 3 | AI analysis and storyboard | 🔄 In progress (3A-1 in review) | 3A-1: #4 | — | — | — |
+| 3 | AI analysis, human review and correction, storyboard | ✅ Merged (24 milestones, #4 … #27) | #27 (final) | `541ada413a6c7b71df5169faca0592626c9be454` | `phase-3-complete` | see the tag table below |
 | 4 | WaveSpeedAI scene generation | ⏳ Not started | — | — | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
 | 8 | Beta and launch | ⏳ Not started | — | — | — | — |
 
-All three tags are **annotated** tags created on `main` (never on a feature
+All four phase tags are **annotated** tags created on `main` (never on a feature
 branch), and each target was verified to equal the corresponding squash-merge
 commit. None has been moved, overwritten, or reused.
 
@@ -51,6 +51,10 @@ commit. None has been moved, overwritten, or reused.
 | `phase-0-complete` | `76d36045934a97bc4a997a64dcd1e932cfe837de` | `5185fea6fdf5458b72a316ec94fcd0fe9cc54443` | ✅ |
 | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` | `62259776f88fa1010736e8a365618b7c20c38902` | ✅ |
 | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | ✅ |
+| `phase-3-complete` | `bbc711d2e7aa8275e17f301f0eec24f51f8f0512` | `541ada413a6c7b71df5169faca0592626c9be454` | ✅ |
+
+Milestone tags (`phase-3d4b-complete` and its siblings) are recorded in their own
+milestone completion reports, not here.
 
 > ### ⚠️ No completion tag has been published to the remote
 >
@@ -96,6 +100,8 @@ commit. None has been moved, overwritten, or reused.
 - `docs/gap-analysis.md`, `docs/phase-0-completion.md`
 - `docs/gap-analysis-phase-1.md`, `docs/phase-1-completion.md`
 - `docs/gap-analysis-phase-2.md`, `docs/phase-2-completion.md`
+- `docs/gap-analysis-phase-3a1.md`, `docs/phase-3-completion.md`, plus one
+  milestone report per Phase 3 milestone (`docs/phase-3{a,b,c,d}*-completion.md`)
 
 ## Required phase documentation (CLAUDE.md v1.3)
 
@@ -104,11 +110,11 @@ commit. None has been moved, overwritten, or reused.
 | Architecture diagram | `docs/architecture.md` |
 | Entity-relationship diagram | `docs/er-diagram.md` |
 | Critical sequence diagram | `docs/sequence-upload-lifecycle.md`, `docs/sequence-analysis-lifecycle.md` |
-| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md`, `docs/api-changes-phase-3b2.md` |
+| API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md`, `docs/api-changes-phase-3b2.md`, `docs/api-changes-phase-3c5.md`, `docs/api-changes-phase-3d4a.md` |
 | Change log | `CHANGELOG.md` |
-| Release notes | `docs/release-notes-phase-2.md` |
+| Release notes | `docs/release-notes-phase-2.md`. **Not applicable to Phase 3** — no release is cut, because the product cannot yet generate video. |
 | Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2}-completion.md`, `docs/phase-3a1-completion.md`, `docs/phase-3a2a-completion.md`, `docs/phase-3a2b-completion.md`, `docs/phase-3a2c-completion.md`, `docs/phase-3a3-completion.md`, `docs/phase-3b1a-completion.md`, `docs/phase-3b1b-completion.md`, `docs/phase-3b2-completion.md` |
+| Phase completion reports | `docs/phase-{0,1,2,3}-completion.md`, plus one report per Phase 3 milestone — `docs/phase-3{a,b,c,d}*-completion.md` (24 files; listed individually here they only go stale, so use `ls docs/phase-3*-completion.md`) |
 
 ## Known deviation
 
@@ -151,16 +157,16 @@ because its planned 17 files / ≈916 lines did not fit the guideline
 | 3D-2 | `AnalysisService.correct`: validation, lifecycle, authorization, provenance, audit | 708 — 189 production + 519 tests (re-cost ~558, approved ~481/~500; the 52-case mandated matrix, reported not trimmed) | **Merged** (PR #24, `3d59332`) |
 | 3D-3 | Corrections reach composition: projection, ordering precedence, fingerprint payload | 413 — 92 production + 321 tests (approved range ~445–560) | **Merged** (PR #25, `1e51453`) |
 | 3D-4a | Correction HTTP contract, additive DTO, nested-route integrity fix | 609 — 170 production + 439 tests (re-cost ~684) | **Merged** (PR #26, `cc0d3d5`) |
-| 3D-4b | Review-page correction controls + unsaved/decision interlock | 1080 — 510 production + 570 tests (re-cost ~865; over, reported not trimmed) | In review |
+| 3D-4b | Review-page correction controls + unsaved/decision interlock | 1080 — 510 production + 570 tests (re-cost ~865; over, reported not trimmed; includes the optimistic-unlock fix found in review) | **Merged** (PR #27, `541ada4`) |
 
 ### Phase 3D — closing the Phase 3 review contract
 
 Phase 3's roadmap scope includes **"editable room labels and image order"**, and
 its completion criterion is *"users can review and correct all AI decisions
 before generation."* Phases 3A–3C shipped approve and reject but no correction
-path, so `phase-3-complete` is **not** created until Phase 3D ships. Milestones
-are strictly ordered — 3D-4 must not precede 3D-3, or a reviewer could record a
-correction that composition silently ignores.
+path, so `phase-3-complete` was **not** created until Phase 3D shipped.
+Milestones were strictly ordered — 3D-4 could not precede 3D-3, or a reviewer
+could have recorded a correction that composition silently ignored.
 
 | Milestone | Content | Status |
 | --- | --- | --- |
@@ -168,18 +174,22 @@ correction that composition silently ignores.
 | 3D-2 | `AnalysisService.correct`, lifecycle guards, authorization, audit | **Merged** (`3d59332`) |
 | 3D-3 | `EligibleInput`, ordering precedence, fingerprint payload | **Merged** (`1e51453`) |
 | 3D-4a | Correction HTTP contract + DTO + nested-route integrity | **Merged** (`cc0d3d5`) |
-| 3D-4b | Review-page correction controls + interlock | In review |
+| 3D-4b | Review-page correction controls + interlock | **Merged** (`541ada4`) |
 
-| 3B | Analysis review UI | ~450–500 | Not started |
-| 3C | Storyboard + prompt compilation | ~500 | Not started |
-
-`phase-3-complete` is created only after every Phase 3 milestone is merged and
-verified. A milestone PR never receives a phase tag.
+Phase 3 is closed. Every milestone is merged and verified on `main`, the full
+completion gate was run against the merged tree, and `phase-3-complete` targets
+the 3D-4b squash-merge commit. A milestone PR never receives a phase tag. See
+`docs/phase-3-completion.md`.
 
 ## Forward planning
 
-- `docs/phase-3-milestone-plan.md` — approved Phase 3A/3B/3C milestone plan.
+- `docs/phase-3-milestone-plan.md` — the approved Phase 3A/3B/3C milestone plan.
+  Phase 3D was added later, after review found that the Roadmap scope item
+  *"editable room labels and image order"* had no implementation.
+- Phase 4 — WaveSpeedAI scene generation. Plan under review; not started.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0014, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0015, plus `docs/decisions/TODO.md` for open items.
+ADR-0015 is the current authority on review corrections; ADR-0012 and ADR-0013
+each carry a dated partial-supersession note rather than a rewrite.

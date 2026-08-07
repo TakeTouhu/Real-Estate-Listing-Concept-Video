@@ -3,9 +3,51 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3D-4b: review-page correction controls
+## [phase-3-complete] — AI analysis, human review and correction, storyboard
 
-Under review. Not merged. See `docs/phase-3d4b-completion.md`.
+Phase 3 closes at `541ada413a6c7b71df5169faca0592626c9be454` (PR #27), across 24
+milestone PRs (#4 … #27). See `docs/phase-3-completion.md` for the full
+milestone record and completion evidence.
+
+The Roadmap criterion for Phase 3 is *users can review and correct all AI
+decisions before generation.* Phases 3A–3C delivered review; **correction**
+arrived in Phase 3D, and only with it merged is the criterion met.
+
+### Phase 3 in one paragraph
+
+A property's photos are analyzed by a swappable `ImageAnalysisProvider` — today
+a deterministic offline adapter, no vision vendor. A human reviewer then sees
+every AI decision and can approve it, reject it, or **correct** it: change the
+room the analyzer read, or give a photo an order priority. Approved photos, with
+their corrected values, compose into a storyboard whose freshness is recomputed
+at read time, so a storyboard that no longer matches its inputs reads stale and
+cannot pass the `assertFresh` gate that Phase 4 generation will sit behind.
+Nothing is generated and nothing is published; a storyboard is a plan.
+
+### Closure documentation
+
+- `docs/phase-3-completion.md` — new.
+- `docs/architecture.md` — component table corrected: it listed `AnalysisService`,
+  analysis persistence, and the review UI as *not implemented* after all three
+  had shipped, and had no entry for corrections or the moderation port.
+- `docs/sequence-analysis-lifecycle.md` — a correction sequence added (it had
+  none), and the by-milestone table brought from 3B-2 up to 3D-4b. The
+  low-confidence/blocking note no longer says enforcement is pending: it landed
+  in 3B.
+
+### Known limitations carried forward
+
+No generation yet; video projects cannot be renamed, edited, or deleted; aspect
+ratio and resolution are free text until a provider's real capabilities are
+known; a no-op correction leaves the decision interlock engaged by design;
+`LocalObjectStorage` is still in-process; image processing still runs inline in
+the upload request; `suggestedOrder` is inert in ordering and preserved as
+analyzer output only.
+
+## [phase-3d4b-complete] — Phase 3D-4b: review-page correction controls
+
+Merged in PR #27 as `541ada413a6c7b71df5169faca0592626c9be454`.
+See `docs/phase-3d4b-completion.md`.
 
 ### Added
 
