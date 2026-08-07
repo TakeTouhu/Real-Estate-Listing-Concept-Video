@@ -45,8 +45,14 @@ Under review. Not merged. See `docs/phase-3d4b-completion.md`.
 - A field touched and returned to its stored value stays dirty and is sent — the
   domain already has correct no-op semantics, and a client-side stored-value
   diff would be presentation pretending to be a business rule.
-- Success calls `router.refresh()` and rebuilds from the server; nothing is
-  merged optimistically and nothing unlocks locally.
+- **A successful save does not unlock the decision.** It asks for
+  `router.refresh()` and stays blocked until the refreshed render lands: a `200`
+  means the write succeeded, not that the screen is fresh. Because
+  `router.refresh()` preserves client state, `review/page.tsx` keys the controls
+  on authoritative correction and review state, so the refreshed payload — and
+  only it — remounts them and resets local edit state. A save the domain treats
+  as a no-op changes nothing authoritative, so the interlock holds and **Discard
+  changes** is the escape.
 - Decided revisions show their corrections **read-only**. No post-decision
   editing; refresh remains the path to a new reviewable revision.
 - Room options are built server-side and passed as plain data. The clean-build
@@ -58,7 +64,7 @@ Under review. Not merged. See `docs/phase-3d4b-completion.md`.
 - Zero diff across all of `packages/` and across `apps/web/src/app/api/` — **no
   API contract change**.
 - Size: 1080 code lines (510 production, 570 tests) against a re-cost of ~865 —
-  over, and reported rather than trimmed.
+  over, and reported rather than trimmed. A review fix added 66 more.
 
 ## [phase-3d4a-complete] — Phase 3D-4a: correction HTTP contract
 

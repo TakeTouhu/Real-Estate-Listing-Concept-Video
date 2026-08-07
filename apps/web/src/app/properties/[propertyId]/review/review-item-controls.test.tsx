@@ -84,6 +84,13 @@ function lastRequest(): { url: string; body: Record<string, unknown> } {
 
 const CORRECTION_URL = `/api/properties/${PROPERTY}/assets/${ASSET}/analysis/correction`;
 
+/**
+ * Stand-ins for the key `review/page.tsx` builds from authoritative correction
+ * and review state. Changing it is what remounts the controls after a refresh.
+ */
+const AUTHORITATIVE_KEY_BEFORE = `${ASSET}:1:AWAITING::`;
+const AUTHORITATIVE_KEY_AFTER = `${ASSET}:1:AWAITING:BALCONY:`;
+
 describe("room field — the three HTTP states", () => {
   it("omits roomType when the reviewer never touched it", async () => {
     fetchMock.mockResolvedValue(respond(200));
@@ -283,15 +290,92 @@ describe("unsaved corrections block the review decision", () => {
     expect(rejectButton().disabled).toBe(true);
   });
 
-  it("refreshes the server state on a successful save rather than unlocking locally", async () => {
+  it("stays blocked immediately after a successful save, having only asked for a refresh", async () => {
     fetchMock.mockResolvedValue(respond(200));
     controls();
     await userEvent.selectOptions(roomSelect(), "BALCONY");
     await userEvent.click(saveButton());
 
-    // Authority to unlock comes from the rebuilt server render, not from
-    // optimistic local state.
+    // A 200 says the write landed, not that the screen is fresh. Unlocking here
+    // would let an approval through against a stale render — the defect this
+    // test exists to catch. Asserting only `refresh` was called is what let it
+    // through the first time.
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(approveButton().disabled).toBe(true);
+    expect(rejectButton().disabled).toBe(true);
+    expect(screen.getByText(/Save or discard your correction changes/)).toBeTruthy();
+  });
+
+  it("unlocks only when the refreshed authoritative render remounts the controls", async () => {
+    fetchMock.mockResolvedValue(respond(200));
+    const { rerender } = render(
+      <ReviewItemControls
+        key={AUTHORITATIVE_KEY_BEFORE}
+        organizationId={ORG}
+        propertyId={PROPERTY}
+        corrections={[target()]}
+        members={[member()]}
+        roomOptions={ROOM_OPTIONS}
+      />,
+    );
+    await userEvent.selectOptions(roomSelect(), "BALCONY");
+    await userEvent.click(saveButton());
+    expect(approveButton().disabled).toBe(true);
+
+    // The real page keys these controls on authoritative correction and review
+    // state, so the refreshed payload — and only it — remounts them. Simulate
+    // exactly that: the server now reports the saved override.
+    rerender(
+      <ReviewItemControls
+        key={AUTHORITATIVE_KEY_AFTER}
+        organizationId={ORG}
+        propertyId={PROPERTY}
+        corrections={[target({ roomTypeOverride: "BALCONY" })]}
+        members={[member()]}
+        roomOptions={ROOM_OPTIONS}
+      />,
+    );
+
+    expect(approveButton().disabled).toBe(false);
+    expect(screen.queryByText(/Save or discard your correction changes/)).toBeNull();
+    // Reject is governed by its own blank-reason rule, not by the interlock;
+    // supplying a reason makes it available again too.
+    await userEvent.type(screen.getByLabelText("Reason for a.jpg"), "too blurry");
+    expect(rejectButton().disabled).toBe(false);
+    // The remounted panel starts from the new authoritative value.
+    expect((roomSelect() as HTMLSelectElement).value).toBe("BALCONY");
+  });
+
+  it("does not unlock on a re-render that carries no authoritative change", async () => {
+    fetchMock.mockResolvedValue(respond(200));
+    const { rerender } = render(
+      <ReviewItemControls
+        key={AUTHORITATIVE_KEY_BEFORE}
+        organizationId={ORG}
+        propertyId={PROPERTY}
+        corrections={[target()]}
+        members={[member()]}
+        roomOptions={ROOM_OPTIONS}
+      />,
+    );
+    await userEvent.selectOptions(roomSelect(), "BALCONY");
+    await userEvent.click(saveButton());
+
+    // Same key: the server state did not change, so nothing remounts and the
+    // interlock correctly holds. The reviewer's escape is Discard, not a
+    // silent unlock.
+    rerender(
+      <ReviewItemControls
+        key={AUTHORITATIVE_KEY_BEFORE}
+        organizationId={ORG}
+        propertyId={PROPERTY}
+        corrections={[target()]}
+        members={[member()]}
+        roomOptions={ROOM_OPTIONS}
+      />,
+    );
+
+    expect(approveButton().disabled).toBe(true);
   });
 
   it("never submits an unsaved correction through Approve", async () => {

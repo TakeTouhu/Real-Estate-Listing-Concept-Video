@@ -209,8 +209,29 @@ function Controls({
     }));
   if (members.length === 0 && corrections.length === 0) return null;
 
+  // Authoritative-reset seam.
+  //
+  // `router.refresh()` re-fetches the server payload but deliberately preserves
+  // client state, so the controls' unsaved-correction interlock would survive a
+  // successful save and block the decision forever. Keying the wrapper on the
+  // authoritative correction and review state means the refreshed payload —
+  // and only it — remounts the controls, discarding local edit state at exactly
+  // the moment the screen becomes fresh.
+  const authoritativeKey = items
+    .map((item) =>
+      [
+        item.assetId,
+        item.analysisRevision ?? "",
+        item.bucket,
+        item.correction?.roomTypeOverride ?? "",
+        item.correction?.orderOverride ?? "",
+      ].join(":"),
+    )
+    .join("|");
+
   return (
     <ReviewItemControls
+      key={authoritativeKey}
       organizationId={organizationId}
       propertyId={propertyId}
       corrections={corrections}

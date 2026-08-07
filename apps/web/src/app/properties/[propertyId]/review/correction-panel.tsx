@@ -114,11 +114,14 @@ export function CorrectionPanel({
         },
       );
       if (response.ok) {
-        // Rebuild from the server rather than merging the response here: the
-        // effective room, the corrected marker and the decision controls all
-        // derive from authoritative state, and the refresh resets dirty state
-        // with fresh initial values.
-        onDirtyChange(assetId, false);
+        // Ask for a rebuilt server render, and **stay dirty until it lands**.
+        //
+        // A 200 says the write succeeded, not that what is on screen is fresh.
+        // Clearing the interlock here would make Approve actionable while the
+        // page may still show the previous render — the exact window an
+        // approval must not slip through. The authoritative refreshed payload
+        // remounts these controls (see the key in `review/page.tsx`), and that
+        // remount is what resets the dirty state.
         router.refresh();
         return;
       }

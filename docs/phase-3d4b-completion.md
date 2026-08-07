@@ -23,7 +23,7 @@ quietly undo the other.
 | `lib/correction-errors.ts` | 40 |
 | `globals.css` | 32 |
 | `review/review-panel.tsx` | 27 (−3) |
-| **Total** | **1080** — 510 production + 570 tests |
+| **Total** | **1080** — 510 production + 570 tests (before the review fix; see below) |
 
 I re-cost to **~865 and reported it before writing code**, judging 1.8% over
 your ~850 threshold to be within noise rather than materially above. **The
@@ -69,8 +69,24 @@ corrections are stored.
 
 A **failed** save keeps the edits dirty, so it does **not** unlock the decision —
 tested explicitly, because that is the case where an unlock would be most
-dangerous. A successful save calls `router.refresh()` and lets the Server
-Component rebuild; nothing unlocks optimistically.
+dangerous.
+
+A **successful** save asks for `router.refresh()` and **stays blocked until the
+refreshed render lands**. A `200` says the write succeeded, not that what is on
+screen is fresh; unlocking on the response would leave a window where Approve
+is actionable against the previous render.
+
+`router.refresh()` re-fetches the server payload but deliberately **preserves
+client state**, so removing the optimistic unlock alone would have locked the
+decision forever. `review/page.tsx` therefore keys the controls on authoritative
+correction and review state — asset id, analysis revision, bucket, stored
+override, stored priority — so the refreshed payload, and only it, remounts them
+and resets the local edit state.
+
+One consequence, tested and accepted: a save that the domain treats as a **no-op**
+changes no authoritative state, so the key does not change and the interlock
+holds. The reviewer's escape is **Discard changes**, which is instant and
+requires no request. Holding is the conservative direction.
 
 For a duplicate cluster, one decision panel serves several photos, so any dirty
 member blocks it — correct, since approving the cluster acts on the member being
@@ -134,7 +150,7 @@ present in `static/chunks/app/properties/[propertyId]/review/page-*.js`.
 | --- | --- |
 | `pnpm typecheck` | **pass** — 0 errors |
 | `pnpm lint` | **pass** — 0 errors, 0 warnings |
-| `pnpm test` | **pass** — **735/735** in 45 files (48 new) |
+| `pnpm test` | **pass** — **737/737** in 45 files (50 new) |
 | `pnpm build` | **pass** — clean rebuild |
 | `pnpm test:db` | **pass** — 27/27, unchanged |
 | Bundle scan | **pass** — 15 symbols absent, positive control present |
@@ -144,9 +160,10 @@ correction audit, schema, migration, storyboard eligibility/ordering/fingerprint
 or provider change) and across `apps/web/src/app/api/` (**no API contract
 change** — the 3D-4a contract is untouched).
 
-No defect was discovered by the build, the tests, or the scan.
+No defect was discovered by the build, the tests, or the scan. One was found
+by **review** — see below.
 
-### Coverage (48 new cases)
+### Coverage (50 new cases)
 
 **Room field (4):** untouched omits the key; a chosen value is sent; clearing an
 existing override sends `null` with the key present; clearing while the order is
@@ -161,12 +178,16 @@ Save disabled and no request when nothing is dirty; Save held while a non-empty
 priority is `0` or `2.5` and enabled at `3`; ten forbidden lifecycle, identity
 and internal fields each absent from the body.
 
-**Interlock (9):** decisions available while clean; blocked after a room edit
+**Interlock (11):** decisions available while clean; blocked after a room edit
 and after an order edit; still blocked when an existing override is *cleared*;
-**still blocked after a failed save**; a successful save requests
-`router.refresh()` rather than unlocking locally; a click on a disabled Approve
-sends nothing at all; any dirty member blocks a cluster's decision; discarding
-restores the stored value and re-enables the decision without any request.
+**still blocked after a failed save**; **still blocked immediately after a
+successful save**, with only `router.refresh()` requested and the explanation
+still on screen; unlocked **only** when the refreshed authoritative render
+remounts the controls, which also reseeds the panel from the new stored value;
+**not** unlocked by a re-render carrying no authoritative change; a click on a
+disabled Approve sends nothing at all; any dirty member blocks a cluster's
+decision; discarding restores the stored value and re-enables the decision
+without any request.
 
 **Separation (2):** saving issues exactly one request, to the correction
 endpoint; approving sends only `{organizationId, primaryAssetId}` with four
@@ -207,6 +228,20 @@ composition; the analyzer's `roomType`/`suggestedOrder` preserved;
 correction-sensitive freshness intact; CREATOR unable to correct; decided
 revisions read-only; all checks green; a clean bundle boundary — plus a Phase 3
 report listing every 3A–3D milestone PR and merge commit.
+
+## Review fix — the optimistic unlock
+
+Review caught a real defect in the first head. `CorrectionPanel` called
+`onDirtyChange(assetId, false)` **before** `router.refresh()` resolved, clearing
+the parent's interlock while the page could still show the old render — exactly
+the window an approval must not slip through. This report's earlier wording
+claimed nothing unlocked optimistically; that was wrong about the code as
+shipped, and is corrected above.
+
+The fix is two lines of behaviour: drop the optimistic clear, and key the
+controls on authoritative state so the refreshed payload does the reset. Three
+regression tests replace the one weak assertion (`refresh` was called) that let
+it through.
 
 ## Known limitations
 
