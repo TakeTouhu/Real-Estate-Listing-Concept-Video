@@ -36,7 +36,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
 | 3 | AI analysis, human review and correction, storyboard | ✅ Merged (24 milestones, #4 … #27) | #27 (final) | `541ada413a6c7b71df5169faca0592626c9be454` | `phase-3-complete` | see the tag table below |
-| 4 | WaveSpeedAI scene generation | ⏳ Not started | — | — | — | — |
+| 4 | WaveSpeedAI scene generation | 🔄 In progress (4A-1 in review) | 4A-1: TBD | — | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
@@ -181,6 +181,35 @@ completion gate was run against the merged tree, and `phase-3-complete` targets
 the 3D-4b squash-merge commit. A milestone PR never receives a phase tag. See
 `docs/phase-3-completion.md`.
 
+## Phase 4 milestones
+
+Phase 4 generates the first real scene through a video provider. Webhook support
+is **deferred** — WaveSpeedAI documents polling as a supported task-completion
+path, so bounded polling is the MVP completion mechanism, and no milestone is
+reserved for a webhook.
+
+| Milestone | Content | Size | Status |
+| --- | --- | --- | --- |
+| 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) | In review |
+| 4A-2 | Generation persistence, migration, partial unique index, repository, live PostgreSQL tests | — | Not started |
+| 4B | `GenerationService.startScene`, freshness gate, provider/model capability contract and fit review, prompt rendering boundary, idempotent job creation | — | Not started |
+| 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
+| 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
+| 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
+
+Phase 4A was split before implementation because a calibrated re-cost put it at
+~950–1,150 lines, materially over the ~800 guideline. 4A-1 must merge before
+4A-2, because the database invariants in 4A-2 depend on the reviewed
+state-machine semantics.
+
+**Commercial/provider gate.** Engineering against fake providers continues, but
+production customer traffic through WaveSpeedAI, a paid production integration,
+and any claim of commercial launch readiness are all blocked until the selected
+model's commercial-use licence, WaveSpeedAI's terms for use as a backend to a
+paid customer-facing SaaS, commercial delivery of generated output, and the
+data-retention/privacy terms are verified and recorded — preferably by written
+confirmation rather than inference from marketing copy.
+
 ## Forward planning
 
 - `docs/phase-3-milestone-plan.md` — the approved Phase 3A/3B/3C milestone plan.
@@ -190,6 +219,8 @@ the 3D-4b squash-merge commit. A milestone PR never receives a phase tag. See
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0015, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0016, plus `docs/decisions/TODO.md` for open items.
 ADR-0015 is the current authority on review corrections; ADR-0012 and ADR-0013
-each carry a dated partial-supersession note rather than a rewrite.
+each carry a dated partial-supersession note rather than a rewrite. ADR-0016
+covers scene-generation state, local idempotency, and ambiguous provider
+submission.

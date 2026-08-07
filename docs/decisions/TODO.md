@@ -194,6 +194,22 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       constrain this input from the configured provider's real capabilities
       before generation.
 
+## Phase 4A-1 follow-ups
+
+- [ ] **An ambiguous provider submission needs an operator reconciliation path.**
+      `SUBMISSION_UNKNOWN` has no automatic exit and still holds the local
+      generation identity (ADR-0016), so one dropped connection during
+      submission blocks that scene from being generated again until a human
+      intervenes. That is the correct trade — a stalled scene beats a duplicate
+      charge — but it is not free, and nothing resolves it today. Closing this
+      needs a way to establish what the provider actually did (querying it for
+      the prediction, or explicit operator judgement), an explicit
+      operator-driven transition that is **not** a re-POST, and an audit event
+      recording who decided what. Deliberately not implemented in Phase 4A-1: it
+      is a real operational feature, not a state-machine edge, and inventing an
+      automatic version of it would defeat the protection. **Revisit once Phase
+      4C shows how often ambiguity actually occurs.**
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).
