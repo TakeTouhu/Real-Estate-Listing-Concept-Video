@@ -3,6 +3,55 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4A-1: generation state model and request identity
+
+Under review. Not merged. See `docs/phase-4a1-completion.md`.
+
+### Added
+
+- **Scene-generation state vocabulary** — eight states covering one attempt to
+  generate one scene through a video provider, with the legal moves in a single
+  transition table rather than scattered conditionals.
+- **`SUBMISSION_UNKNOWN`** — a first-class state for a submission whose outcome
+  could not be established. It has **no automatic exit at all**, because the
+  provider may already hold a billed prediction for that request.
+- **Active / terminal sets.** Active — `QUEUED`, `SUBMITTING`, `PROCESSING`,
+  `FAILED_RETRYABLE`, `SUBMISSION_UNKNOWN` — are the states that hold the local
+  generation identity. `ACTIVE_SCENE_GENERATION_STATES` is exported so Phase
+  4A-2's hand-written partial-index predicate has one source, and a test pins its
+  contents so SQL and domain cannot drift apart silently.
+- **`computeGenerationRequestHash`** — `sha256:<hex>` over a fixed-order tuple of
+  the facts that decide what would be generated: asset, compiled prompt,
+  duration, camera motion, aspect ratio, resolution, provider, model.
+- **`SceneGenerationProvenance`** — the minimum facts a persisted attempt carries
+  so it is understandable without the storyboard scene it came from.
+- **ADR-0016** — scene generation state, local idempotency, and ambiguous
+  provider submission.
+
+### Notes
+
+- **Storyboard scenes are ephemeral, so there is no foreign key to them.**
+  `replaceForProject` deletes every scene row and re-inserts with fresh ids on
+  each compose, and an attempt that may represent a paid call must outlive that.
+  The field is named `sourceStoryboardSceneId` to make the non-relational meaning
+  unmistakable. Tenant ownership comes through the persistent `VideoProject`; no
+  `organizationId` is denormalized to compensate.
+- **The four ways a submission ends are kept distinct**, because their financial
+  consequences differ. Only positive evidence that the POST was *not* accepted
+  produces `FAILED_RETRYABLE`.
+- **Scene position and `sourceAnalysisRevision` are excluded from the hash**, so
+  reordering a storyboard or refreshing an analysis that changes nothing
+  generative cannot manufacture a second paid request.
+- **No claim of provider exactly-once.** The guarantee is one active *local* job
+  per request identity and no automatic duplicate POST when submission is
+  ambiguous — the external API offers no idempotency mechanism that would make a
+  retry provably safe.
+- **Operational cost recorded, not hidden:** one dropped connection during
+  submission blocks that scene until a human resolves it. Tracked in
+  `docs/decisions/TODO.md`.
+- Pure domain: no schema, no migration, no repository, no provider call, no
+  queue, no worker, no HTTP or UI. Nothing calls any of it yet.
+
 ## [phase-3-complete] — AI analysis, human review and correction, storyboard
 
 Phase 3 closes at `541ada413a6c7b71df5169faca0592626c9be454` (PR #27), across 24
