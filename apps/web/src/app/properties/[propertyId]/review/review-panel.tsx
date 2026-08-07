@@ -17,6 +17,16 @@ interface Props {
   readonly propertyId: string;
   /** One member for an ordinary photo; two or more for a duplicate cluster. */
   readonly members: readonly DecisionMember[];
+  /**
+   * Presentation-only: why decisions are temporarily unavailable, or null when
+   * they are available. Set while a sibling correction has unsaved changes, so
+   * an approval cannot freeze the revision around correction state the reviewer
+   * can still see on screen but has not saved.
+   *
+   * This component does not know what corrections are or how they are stored —
+   * only that something asked it to hold off. The request payload is unaffected.
+   */
+  readonly disabledReason?: string | null;
 }
 
 /**
@@ -37,7 +47,12 @@ interface Props {
  * sending one would invent an optimistic-concurrency contract that does not
  * exist; a stale view is caught by the domain's "already reviewed" refusal.
  */
-export function ReviewDecisionPanel({ organizationId, propertyId, members }: Props) {
+export function ReviewDecisionPanel({
+  organizationId,
+  propertyId,
+  members,
+  disabledReason = null,
+}: Props) {
   const router = useRouter();
   const isCluster = members.length > 1;
   const [primary, setPrimary] = useState<string | null>(isCluster ? null : (members[0]?.assetId ?? null));
@@ -82,6 +97,7 @@ export function ReviewDecisionPanel({ organizationId, propertyId, members }: Pro
 
   return (
     <div className="decision-panel">
+      {disabledReason ? <p className="status-bad">{disabledReason}</p> : null}
       {isCluster ? (
         <fieldset className="primary-choice">
           <legend>Which photo is the primary?</legend>
@@ -118,7 +134,11 @@ export function ReviewDecisionPanel({ organizationId, propertyId, members }: Pro
             {member.canApprove ? (
               <button
                 type="button"
-                disabled={pending !== null || (isCluster && selected?.assetId !== member.assetId)}
+                disabled={
+                  disabledReason !== null ||
+                  pending !== null ||
+                  (isCluster && selected?.assetId !== member.assetId)
+                }
                 onClick={() => void decide("approve", member.assetId)}
               >
                 Approve
@@ -127,7 +147,11 @@ export function ReviewDecisionPanel({ organizationId, propertyId, members }: Pro
             {member.canReject ? (
               <button
                 type="button"
-                disabled={pending !== null || (reasons[member.assetId] ?? "").trim().length === 0}
+                disabled={
+                  disabledReason !== null ||
+                  pending !== null ||
+                  (reasons[member.assetId] ?? "").trim().length === 0
+                }
                 onClick={() => void decide("reject", member.assetId)}
               >
                 Reject

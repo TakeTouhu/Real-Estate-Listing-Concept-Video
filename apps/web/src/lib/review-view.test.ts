@@ -254,3 +254,81 @@ describe("labels", () => {
     expect(humanizeRoomType(null)).toBe("Unclassified");
   });
 });
+
+describe("correction state", () => {
+  it("shows the analyzer's room and the effective room from the DTO helper", () => {
+    const board = buildReviewBoard(
+      [asset("a")],
+      [analysis("a", { roomType: "BATHROOM", roomTypeOverride: "LIVING_ROOM" })],
+      "OWNER",
+    );
+    const correction = board.awaiting[0]!.correction!;
+
+    // Humanized on the server; the browser never resolves the override itself.
+    expect(correction.analyzerRoomType).toBe("Bathroom");
+    expect(correction.effectiveRoomType).toBe("Living room");
+    expect(correction.roomTypeOverride).toBe("LIVING_ROOM");
+    expect(correction.corrected).toBe(true);
+  });
+
+  it("falls back to the analyzer's room when nothing was corrected", () => {
+    const board = buildReviewBoard([asset("a")], [analysis("a", { roomType: "KITCHEN" })], "OWNER");
+    const correction = board.awaiting[0]!.correction!;
+
+    expect(correction.analyzerRoomType).toBe("Kitchen");
+    expect(correction.effectiveRoomType).toBe("Kitchen");
+    expect(correction.roomTypeOverride).toBeNull();
+    expect(correction.corrected).toBe(false);
+  });
+
+  it("carries the stored order priority through, including when absent", () => {
+    const withPriority = buildReviewBoard([asset("a")], [analysis("a", { orderOverride: 4 })], "OWNER");
+    const without = buildReviewBoard([asset("b")], [analysis("b")], "OWNER");
+
+    expect(withPriority.awaiting[0]!.correction!.orderOverride).toBe(4);
+    expect(without.awaiting[0]!.correction!.orderOverride).toBeNull();
+  });
+
+  it("allows correcting an awaiting analysis for a member who may review", () => {
+    const board = buildReviewBoard([asset("a")], [analysis("a")], "REVIEWER");
+    expect(board.awaiting[0]!.correction!.canCorrect).toBe(true);
+  });
+
+  it("refuses correction for a member without video:review", () => {
+    // Presentation only — the API enforces the same rule independently.
+    const board = buildReviewBoard([asset("a")], [analysis("a")], "CREATOR");
+    expect(board.awaiting[0]!.correction!.canCorrect).toBe(false);
+  });
+
+  it("refuses correction once the revision has been decided, but keeps the values", () => {
+    const decided = analysis("a", {
+      reviewStatus: "APPROVED",
+      roomTypeOverride: "STUDY",
+      orderOverride: 2,
+      reviewedBy: "usr_reviewer",
+      reviewedAt: NOW,
+    });
+    const board = buildReviewBoard([asset("a")], [decided], "OWNER");
+    const correction = board.decided[0]!.correction!;
+
+    // Read-only: visible, not editable. Refresh is the way to a new revision.
+    expect(correction.canCorrect).toBe(false);
+    expect(correction.effectiveRoomType).toBe("Study");
+    expect(correction.orderOverride).toBe(2);
+    expect(correction.corrected).toBe(true);
+  });
+
+  it("refuses correction for an analysis that has not succeeded", () => {
+    const board = buildReviewBoard(
+      [asset("a")],
+      [analysis("a", { status: "PENDING", reviewStatus: "UNREVIEWED" })],
+      "OWNER",
+    );
+    expect(board.notReviewable[0]!.correction!.canCorrect).toBe(false);
+  });
+
+  it("reports no correction state for an asset with no analysis at all", () => {
+    const board = buildReviewBoard([asset("a")], [], "OWNER");
+    expect(board.notReviewable[0]!.correction).toBeNull();
+  });
+});
