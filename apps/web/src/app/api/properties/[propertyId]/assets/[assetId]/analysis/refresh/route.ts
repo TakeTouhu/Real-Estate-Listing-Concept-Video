@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
+import { requireAssetInProperty } from "@/lib/asset-route";
 import { getCurrentUser } from "@/lib/auth";
 import { getAnalysisService, toAnalysisDto } from "@/lib/analysis";
 import { appErrorToResponse } from "@/lib/http";
@@ -20,10 +21,11 @@ export async function POST(
 ): Promise<NextResponse> {
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
-  const { assetId } = await context.params;
+  const { propertyId, assetId } = await context.params;
 
   try {
     const organizationId = await requireOrganizationId(request);
+    await requireAssetInProperty(current.user.id, organizationId, propertyId, assetId);
     const analysis = await getAnalysisService().analyzeAsset(
       current.user.id,
       organizationId,

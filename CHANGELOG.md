@@ -3,9 +3,58 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 3D-3: corrections reach composition
+## [Unreleased] — Phase 3D-4a: correction HTTP contract
 
-Under review. Not merged. See `docs/phase-3d3-completion.md`.
+Under review. Not merged. See `docs/phase-3d4a-completion.md` and
+`docs/api-changes-phase-3d4a.md`.
+
+### Added
+
+- **`POST /api/properties/{propertyId}/assets/{assetId}/analysis/correction`** —
+  exposes the Phase 3D-2 correction operation. JSON semantics: an omitted key
+  leaves the stored override unchanged, `null` clears it, a value sets it. The
+  adapter decides by **property presence** (`"roomType" in body`), never by
+  truthiness, because `null` is meaningful. Requires `video:review`.
+- **Five additive `AnalysisDto` fields** — `roomTypeOverride`,
+  `effectiveRoomType`, `orderOverride`, `corrected`, alongside the existing
+  `roomType`, which continues to carry the **analyzer's** classification.
+  `effectiveRoomType` is resolved server-side so the browser never reimplements
+  it. Every existing field keeps its name, type, nesting and semantics.
+
+### Fixed
+
+- **Nested property/asset route integrity across every analysis action.** All
+  five existing handlers — analyze, read, approve, reject, refresh —
+  destructured `propertyId` from the URL and then ignored it, so a
+  same-organization asset filed under a *different* property could be acted on
+  through a hand-built path. Not a cross-tenant leak (the services resolve the
+  asset organization-scoped) but wrong, and the same defect class as Phase
+  3C-6b. `requireAssetInProperty` now runs before delegation on all six routes.
+  A mismatch and a genuinely unknown asset produce the **same** `404`, so
+  nothing discloses that the asset exists elsewhere. **No request or response
+  contract changed** — a caller using a correct URL sees identical behaviour,
+  and a member without permission still gets `403` rather than a `404`.
+
+### Notes
+
+- `AnalysisService.correct` is **unchanged**; no JSON semantics entered the
+  domain, and no domain signature was altered for HTTP path semantics.
+- The route check is URL integrity, not authorization: it authorizes
+  organization membership exactly as these routes already did, and the action's
+  own permission check still runs afterwards. No unrelated error is flattened
+  into `404`.
+- `correctedBy`, `correctedAt`, audit metadata, fingerprints, provider
+  internals, storage keys and organization internals remain unexposed.
+- The client-safe correction error mapper is **deferred to 3D-4b** rather than
+  shipped as dead production code.
+- **No UI yet.** Phase 3 is not complete until 3D-4b ships the reviewer-facing
+  controls.
+- Zero diff across all of `packages/`, and across the review UI and CSS.
+- Size: 609 code lines (170 production, 439 tests), re-cost at ~684.
+
+## [phase-3d3-complete] — Phase 3D-3: corrections reach composition
+
+Merged as `1e51453` (PR #25). See `docs/phase-3d3-completion.md`.
 
 ### Changed
 
