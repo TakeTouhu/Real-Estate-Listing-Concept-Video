@@ -4,3 +4,4 @@ export { createPrismaPropertyRepositories } from "./property-repositories";
 export { createPrismaAnalysisRepository } from "./analysis-repositories";
 export { createPrismaReviewTransaction } from "./review-transaction";
 export { createPrismaStoryboardRepositories } from "./storyboard-repositories";
+export { createPrismaSceneGenerationRepository } from "./generation-repositories";

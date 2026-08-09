@@ -3,9 +3,59 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4A-2a: scene-generation persistence
+## [Unreleased] — Phase 4A-2b: scene-generation repository boundary
 
-Under review. Not merged. See `docs/phase-4a2a-completion.md`.
+Under review. Not merged. See `docs/phase-4a2b-completion.md`.
+
+### Added
+
+- **`SceneGenerationRepository`** — four methods: `create`, `findById`,
+  `findActiveByRequestIdentity`, `update`. No `delete` (history is retained
+  because it can record a paid call), no generic `save`, no listing, no
+  worker-claim method.
+- **`SceneGenerationUpdate`** — the narrow contract. Ten identity, provenance and
+  timestamp fields are *absent from the type*, so mutating them is a compile
+  error rather than a silently ignored property.
+- **`SceneGenerationNotFoundError`** — a typed neutral error instead of the plain
+  `Error` older repositories throw. A worker has to tell "the row is gone or not
+  mine" apart from "the database failed" to classify a retry, and matching
+  message strings for that would be a bug waiting on a wording change. Local to
+  this module; the older repositories are untouched.
+- **`ActiveGenerationConflictError`** — raised only for the active-request
+  identity collision.
+- **`createPrismaSceneGenerationRepository`** — the adapter, with P2002
+  translation built on the runtime shape verified in Phase 4A-2a.
+
+### Notes
+
+- **Only the active-request collision is translated.** Recognition is an exact,
+  order-insensitive match on `meta.target` against
+  `["videoProjectId", "requestHash"]` — never the index name, which Prisma does
+  not emit, and never a message substring. Exact cardinality means a future
+  unique constraint over a superset stays a different invariant. Two real
+  database failures prove the narrowness: a **duplicate primary key** (also
+  `P2002`, but `target: ["id"]`) and an **invalid project FK** (`P2003`) both
+  propagate untouched.
+- **Tenant scope is carried by the query**, never by an application check after
+  an unscoped read — `videoProject: { organizationId }` on every read, and
+  `updateMany` with the same predicate for writes. `count === 0` is the single
+  code path for both "unknown id" and "another tenant's", so they are
+  indistinguishable by construction.
+- **`providerPredictionId` outlives `PROCESSING`.** An absent key means "leave
+  alone", so a state-only update cannot clear it; only an explicit `null` does.
+  Proven on `SUCCEEDED`, `FAILED_RETRYABLE` and `FAILED_TERMINAL` rows.
+- `findActiveByRequestIdentity` is documented as a convenience lookup, **not**
+  concurrency control: two callers can both find nothing, so `create` still
+  handles the database collision.
+- The repository holds no state machine — whether a transition is legal stays a
+  domain question answered by `assertTransition`.
+- 44 live PostgreSQL cases. No schema or migration change; 4A-2a's SQL invariant
+  matrix is not repeated.
+
+## [phase-4a2a-complete] — Phase 4A-2a: scene-generation persistence
+
+Merged in PR #29 as `6e681c2c60d3aad36dc725bd5841ac13a0248a15`.
+See `docs/phase-4a2a-completion.md`.
 
 ### Added
 
