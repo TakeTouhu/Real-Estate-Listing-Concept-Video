@@ -190,17 +190,23 @@ reserved for a webhook.
 
 | Milestone | Content | Size | Status |
 | --- | --- | --- | --- |
-| 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) | In review |
-| 4A-2 | Generation persistence, migration, partial unique index, repository, live PostgreSQL tests | — | Not started |
+| 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) + a 118/19 review fix allowing `PROCESSING → FAILED_RETRYABLE` | **Merged** (PR #28, `daa685b`) |
+| 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | re-cost ~725 raw / ~800–900 calibrated | In review |
+| 4A-2b | Generation repository port, Prisma adapter, neutral conflict translation | — | Not started |
 | 4B | `GenerationService.startScene`, freshness gate, provider/model capability contract and fit review, prompt rendering boundary, idempotent job creation | — | Not started |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
 
 Phase 4A was split before implementation because a calibrated re-cost put it at
-~950–1,150 lines, materially over the ~800 guideline. 4A-1 must merge before
-4A-2, because the database invariants in 4A-2 depend on the reviewed
-state-machine semantics.
+~950–1,150 lines, materially over the ~800 guideline. 4A-1 had to merge before
+4A-2, because the database invariants depend on the reviewed state-machine
+semantics. **Phase 4A-2 was then split again**, before implementation, when a
+re-cost against merged main put the combined scope at ~1,050–1,250: 4A-2a is the
+table and its invariants, 4A-2b the repository port and adapter. The split is by
+layer rather than by concern because the active-request partial unique index must
+ship in the *same migration* as the table — deferring it would leave the entity
+persisted without its duplicate-charge protection.
 
 **Commercial/provider gate.** Engineering against fake providers continues, but
 production customer traffic through WaveSpeedAI, a paid production integration,

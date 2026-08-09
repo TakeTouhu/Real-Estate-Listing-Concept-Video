@@ -310,15 +310,19 @@ model VideoProject {
   includeCaptions        Boolean            @default(false)
   brandTemplateId        String?
   /// Deterministic digest of the APPROVED analysis input set a storyboard was
-  /// composed from — (assetId, analysisRevision) over every eligible analysis.
-  /// Freshness is derived by comparing it with the current eligible set, so no
-  /// module has to notify this one when an analysis is refreshed.
+  /// composed from — (assetId, analysisRevision, effectiveRoomType,
+  /// orderOverride) over every eligible analysis, since Phase 3D-3 (ADR-0015).
+  /// The last two carry the reviewer's corrections, which do not advance
+  /// analysisRevision and would otherwise be invisible here. Freshness is
+  /// derived by comparing it with the current eligible set, so no module has to
+  /// notify this one when an analysis is refreshed or corrected.
   compositionFingerprint String?
   createdBy              String
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
   property               Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   scenes                 StoryboardScene[]
+  generations            SceneGeneration[]
 
   @@unique([id, propertyId])
   @@index([organizationId, propertyId])
@@ -350,4 +354,75 @@ model StoryboardScene {
   @@unique([videoProjectId, position])
   @@index([videoProjectId])
   @@map("storyboard_scenes")
+}
+
+enum SceneGenerationState {
+  QUEUED
+  SUBMITTING
+  PROCESSING
+  SUCCEEDED
+  FAILED_RETRYABLE
+  FAILED_TERMINAL
+  SUBMISSION_UNKNOWN
+  CANCELLED
+}
+
+/// One attempt to generate one scene through a video provider.
+///
+/// An attempt-and-history record, not a work item: it can represent a paid
+/// external call, so it is written to outlive the things it refers to.
+///
+/// **Two of its id columns are deliberately NOT foreign keys.**
+/// `sourceStoryboardSceneId` points at a row StoryboardService.compose routinely
+/// deletes and recreates with a new id, and `assetId` points at a photo the
+/// retention pipeline may remove. A cascade from either would erase the record
+/// of a paid call on an ordinary user action, and a restrict would block
+/// recomposition. Referential integrity is the wrong tool for a row the system
+/// deliberately deletes; both are provenance (ADR-0016).
+///
+/// Tenant scope is inherited through VideoProject, never denormalized — the
+/// same model storyboard_scenes uses.
+model SceneGeneration {
+  id                      String               @id
+  videoProjectId          String
+  /// Provenance only — no FK. Recomposition replaces storyboard scenes.
+  sourceStoryboardSceneId String
+  /// Provenance only — no FK. Assets may be removed under retention policy.
+  assetId                 String
+  /// Which analysis revision the scene was composed from. Not request identity.
+  sourceAnalysisRevision  Int
+  /// Local idempotency identity: sha256 digest of the generation request facts.
+  /// Unique per project across ACTIVE states only — enforced by the partial
+  /// unique index added by raw SQL in the migration.
+  requestHash             String
+  /// Internal only. Which provider and model the request was addressed to.
+  providerName            String
+  providerModelId         String
+  state                   SceneGenerationState @default(QUEUED)
+  /// Internal only. Non-null exactly when a provider prediction is known.
+  /// Never exposed to a customer (ADR-0016).
+  providerPredictionId    String?
+  submittedAt             DateTime?
+  lastPolledAt            DateTime?
+  /// Normalized provider diagnostics. Internal only; never a customer message.
+  normalizedErrorCode     String?
+  normalizedErrorMessage  String?
+  /// Managed-storage key for the copied output. Null until Phase 4D. A
+  /// temporary provider URL is deliberately never persisted.
+  outputStorageKey        String?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  /// RESTRICT, not Cascade. A generation may record a paid provider attempt, so
+  /// a future physical project deletion must resolve retention policy
+  /// deliberately rather than silently erasing history through a cascade that
+  /// happened to be in the schema. No physical deletion path exists today, so
+  /// this changes no current behaviour (docs/decisions/TODO.md).
+  videoProject            VideoProject         @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+
+  @@index([videoProjectId])
+  @@index([state])
+  // At most one ACTIVE attempt per (videoProjectId, requestHash) is enforced by
+  // a partial unique index added by raw SQL in the migration: Prisma cannot
+  // express `WHERE` on an index. See docs/migration-notes.md.
+  @@map("scene_generations")
 }

@@ -3,9 +3,70 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4A-1: generation state model and request identity
+## [Unreleased] — Phase 4A-2a: scene-generation persistence
 
-Under review. Not merged. See `docs/phase-4a1-completion.md`.
+Under review. Not merged. See `docs/phase-4a2a-completion.md`.
+
+### Added
+
+- **`scene_generations`** — one row per attempt to generate one scene through a
+  video provider, with the `SceneGenerationState` enum carrying exactly the eight
+  Phase 4A-1 states.
+- **An active-request partial unique index** on `(videoProjectId, requestHash)`
+  over the five active states, created in the same migration as the table. The
+  database — not application code — is authoritative for *at most one active
+  attempt per request identity*, so two concurrent submissions cannot both
+  produce a billed provider call. Terminal states release the identity, so a
+  deliberate regeneration stays possible.
+- **`tests/schema/active-generation-states.test.ts`** — reads the real migration
+  SQL, parses the state literals out of the index predicate, and compares them
+  with `ACTIVE_SCENE_GENERATION_STATES`. Hand-written SQL cannot import
+  TypeScript, so nothing else stops the two definitions of "active" drifting
+  apart — and drift there would let a second billed POST through.
+- `SceneGeneration` domain entity type extending `SceneGenerationProvenance`.
+
+### Notes
+
+- **This table records money, and the schema reflects that.** Three decisions are
+  the opposite of the schema default:
+  - `videoProjectId` is **`ON DELETE RESTRICT`**, unlike every other child here.
+    A future physical deletion must resolve retention policy for paid-attempt
+    history deliberately rather than inheriting a cascade. It changes no current
+    behaviour — property removal is a *soft* delete and nothing physically
+    deletes a property or project today.
+  - `sourceStoryboardSceneId` has **no FK**: `replaceForProject` deletes and
+    recreates every scene on each recompose, so a cascade would destroy a paid
+    call's record during an ordinary user action and a restrict would block
+    recomposition.
+  - `assetId` has **no FK**, for the same reason one step later — the retention
+    pipeline removes assets, and history still has to explain what was generated.
+- **No `organizationId` column.** Tenant scope resolves through the owning
+  project, as `storyboard_scenes` does. A live test asserts the absence.
+- **Not persisted:** any temporary provider output URL (Phase 4D copies to
+  managed storage and keeps the managed key) and any retry counter (no worker
+  exists yet to have a policy). A live test asserts no column name contains
+  `url`.
+- **Real error shapes captured, not translated.** The collision surfaces as
+  `P2002` with `meta.target = ["videoProjectId","requestHash"]` — the
+  hand-written index name appears nowhere, matching the lesson in
+  `analysis-repositories.ts` that an earlier name-matching translation silently
+  never fired. Phase 4A-2b will translate it; this milestone only pins the truth.
+- Persistence only: no repository port, no adapter, no service, no queue, no
+  worker, no HTTP/UI, no provider call.
+
+### Fixed
+
+- `schema.prisma`'s `compositionFingerprint` comment still described the Phase 3C
+  payload `(assetId, analysisRevision)`; since Phase 3D-3 it also carries
+  `effectiveRoomType` and `orderOverride`.
+- `docs/er-diagram.md` listed provider prediction ids under *"deliberately not
+  stored"*. They **are** stored now, internal-only, because `PROCESSING` asserts
+  a known prediction and polling needs it.
+
+## [phase-4a1-complete] — Phase 4A-1: generation state model and request identity
+
+Merged in PR #28 as `daa685bd472dd3d632b630334d9c1bc5fcc72f36`.
+See `docs/phase-4a1-completion.md`.
 
 ### Added
 
