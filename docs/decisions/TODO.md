@@ -210,6 +210,23 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       automatic version of it would defeat the protection. **Revisit once Phase
       4C shows how often ambiguity actually occurs.**
 
+## Phase 4A-2a follow-ups
+
+- [ ] **Define retention/archive behaviour for scene-generation history before
+      any physical deletion path ships.** `scene_generations.videoProjectId` uses
+      `ON DELETE RESTRICT`, deliberately unlike every other child in this schema,
+      because a generation row can record a paid provider attempt and must not be
+      erased by a cascade nobody reasoned about. Today this changes nothing:
+      property removal is a **soft** delete and no code physically deletes a
+      property or a video project. But the moment a real deletion path is built —
+      the Phase 7 retention job, a project-delete endpoint, a tenant offboarding
+      flow — it will hit that `RESTRICT` and **must not** be "fixed" by switching
+      to `CASCADE`. The product has to decide first: how long paid-attempt
+      history is kept, whether it is archived or summarized before deletion, and
+      what a billing dispute needs to be able to reconstruct. That is a
+      product/finance decision, not a schema tweak. **Revisit before Phase 7, and
+      before any project-deletion feature.**
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).

@@ -29,6 +29,7 @@ required checks (`pnpm check`) do **not** need a database.
 | 4 | `00000000000003_phase3b1a_review_state` | 3B-1a | Human-review state |
 | 5 | `00000000000004_phase3c1_storyboard` | 3C-1 | Video projects + storyboard scenes |
 | 6 | `00000000000005_phase3d1_review_corrections` | 3D-1 | Human review corrections |
+| 7 | `00000000000006_phase4a2a_scene_generations` | 4A-2a | Scene-generation attempts |
 
 ### 1 — `00000000000000_init` (Phase 1)
 
@@ -228,6 +229,119 @@ ALTER TABLE "asset_analyses"
 Dropping them destroys any recorded corrections; the audit log (from Phase 3D-2)
 retains the history. The `"RoomType"` enum is shared with `roomType` and must
 **not** be dropped.
+
+### 7 — `00000000000006_phase4a2a_scene_generations` (Phase 4A-2a)
+
+One new enum and one new table recording **attempts to generate a scene through
+a video provider**. Purely additive: no existing table, column, index, or
+constraint is touched.
+
+`SceneGenerationState` carries exactly the eight states Phase 4A-1 defined —
+`QUEUED`, `SUBMITTING`, `PROCESSING`, `SUCCEEDED`, `FAILED_RETRYABLE`,
+`FAILED_TERMINAL`, `SUBMISSION_UNKNOWN`, `CANCELLED`. No database-only state
+exists.
+
+#### This table records money, and the schema reflects that
+
+A `scene_generations` row can represent a paid external call. Three decisions
+follow from that, and each is the opposite of the default a schema generator
+would pick.
+
+**The video-project foreign key is `ON DELETE RESTRICT`, not `CASCADE`.** Every
+other child in this schema cascades; this one deliberately does not. A future
+physical deletion path must resolve retention policy for paid-attempt history
+*deliberately*, rather than discovering that a cascade nobody thought about
+erased it. It is fail-closed, and it changes **no current behaviour**: property
+removal today is a soft delete (`status = 'DELETED'`, assets to
+`DELETION_PENDING`), and nothing in the product physically deletes a property or
+a video project. Recorded as a TODO — before physical deletion ships, the product
+must define retention/archive behaviour for generation history.
+
+**`sourceStoryboardSceneId` has no foreign key.** `StoryboardService.compose`
+writes through `replaceForProject`, which deletes every scene row for a project
+and re-inserts with freshly generated ids. Recomposition is routine — a reviewer
+corrects a room and composes again. A cascade would destroy the record of a paid
+call on an ordinary user action; a restrict would block recomposition entirely.
+Referential integrity is the wrong tool for a row the system deliberately
+deletes, so the column is provenance. A live test creates a generation, runs the
+**real** `replaceForProject`, and proves the scene is gone while the attempt,
+its provenance value, and its project ownership are intact.
+
+**`assetId` has no foreign key either**, for the same reason one step later:
+media assets are removed by the retention pipeline, and generation history may
+still need to explain what was generated from what.
+
+#### Tenant scope
+
+No `organizationId` column. Ownership is the `videoProjectId` relation, and
+reads resolve the tenant through `videoProject: { organizationId }` — the model
+`storyboard_scenes` already uses. A live test asserts the column's absence and
+that another organization's generation is indistinguishable from one that does
+not exist.
+
+#### The hand-written partial unique index
+
+Prisma cannot express `WHERE` on an index, so this is raw SQL in the migration,
+the same pattern as Phase 3B-1a:
+
+```sql
+CREATE UNIQUE INDEX "scene_generations_active_request_key"
+  ON "scene_generations" ("videoProjectId", "requestHash")
+  WHERE "state" IN ('QUEUED', 'SUBMITTING', 'PROCESSING', 'FAILED_RETRYABLE', 'SUBMISSION_UNKNOWN');
+```
+
+It makes the **database** authoritative for *at most one active attempt per
+`(videoProjectId, requestHash)`*, which is what makes concurrent submissions
+safe: the loser gets a uniqueness violation rather than a second, separately
+billed provider POST. A check-then-insert application read would not survive
+concurrency, and a plain `@@unique` would block deliberate regeneration forever.
+
+Two predicate memberships are load-bearing. `FAILED_RETRYABLE` is included
+because it can return to `QUEUED`, so releasing the identity there would allow a
+duplicate submission path. `SUBMISSION_UNKNOWN` is included because the provider
+may already hold a billed prediction for that request. The three terminal states
+are excluded, so a finished attempt releases the identity and a deliberate
+regeneration can create a new row.
+
+**It is created in the same migration as the table**, on purpose: shipping the
+table first would leave a window in which duplicate active attempts are
+possible.
+
+**The predicate is guarded against drift.**
+`tests/schema/active-generation-states.test.ts` reads this file, parses the
+state literals out of the `WHERE … IN (…)` clause, and compares them as a set
+with `ACTIVE_SCENE_GENERATION_STATES` from the domain. Adding or removing a
+domain active state fails that test until the SQL is updated deliberately.
+
+#### What is deliberately not persisted
+
+No temporary provider output URL — Phase 4D copies a completed output into
+managed storage and persists the managed key, so a URL that expires never has to
+survive a worker step. A live test asserts no column name contains `url`. No
+retry counter either: no worker exists yet to have a retry policy, and a
+speculative column would be a guess about a design that has not been reviewed.
+
+`providerPredictionId`, the normalized error fields, and `outputStorageKey` are
+**internal only**. There is no customer-facing DTO in this milestone, and
+ADR-0016 §9 governs when there is.
+
+#### Verification
+
+Applied cleanly to a dropped-and-recreated **empty** database through the full
+seven-migration chain, and the drift check reports `No difference detected.`
+(exit 0). The partial index and the `ON DELETE RESTRICT` foreign key were both
+confirmed present in `psql \d scene_generations`.
+
+**Rollback.** Purely additive:
+
+```sql
+DROP TABLE "scene_generations";
+DROP TYPE "SceneGenerationState";
+```
+
+Dropping the table destroys the record of every provider attempt, including paid
+ones. That is precisely the loss `ON DELETE RESTRICT` exists to prevent
+accidentally, so a rollback here is a deliberate decision, never routine cleanup.
 
 ### Phase 3A-1 — no migration
 

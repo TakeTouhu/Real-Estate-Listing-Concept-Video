@@ -21,6 +21,7 @@ erDiagram
   PROPERTIES ||--o{ VIDEO_PROJECTS : "is filmed by"
   VIDEO_PROJECTS ||--o{ STORYBOARD_SCENES : sequences
   MEDIA_ASSETS ||--o{ STORYBOARD_SCENES : "is the source of"
+  VIDEO_PROJECTS ||--o{ SCENE_GENERATIONS : "attempts (RESTRICT)"
 
   ORGANIZATIONS {
     string id PK
@@ -176,6 +177,26 @@ erDiagram
     datetime updatedAt
   }
 
+  SCENE_GENERATIONS {
+    string id PK
+    string videoProjectId FK "ON DELETE RESTRICT"
+    string sourceStoryboardSceneId "provenance, NO FK"
+    string assetId "provenance, NO FK"
+    int    sourceAnalysisRevision "provenance"
+    string requestHash "active-UK with videoProjectId"
+    string providerName "internal"
+    string providerModelId "internal"
+    enum   state "8 values, default QUEUED"
+    string providerPredictionId "nullable, internal only"
+    datetime submittedAt "nullable"
+    datetime lastPolledAt "nullable"
+    string normalizedErrorCode "nullable, internal"
+    string normalizedErrorMessage "nullable, internal"
+    string outputStorageKey "nullable until Phase 4D"
+    datetime createdAt
+    datetime updatedAt
+  }
+
   AUDIT_LOGS {
     string id PK
     string organizationId FK "nullable"
@@ -234,18 +255,54 @@ erDiagram
 - `storyboard_scenes(videoProjectId, position)` is unique: two scenes cannot
   claim the same position in one project. Composition therefore replaces a
   project's scenes wholesale rather than diffing them.
+- **`scene_generations` carries no `organizationId` either**, for the same
+  reason: it is owned by its `video_projects` row, and reads resolve the tenant
+  through `videoProject: { organizationId }`.
+- **Two of its id columns are deliberately not foreign keys.**
+  `sourceStoryboardSceneId` points at a row `replaceForProject` deletes and
+  recreates on every recomposition, and `assetId` points at a photo the
+  retention pipeline may remove. A generation row can record a *paid* provider
+  attempt, so a cascade from either would destroy that record during an ordinary
+  user action, and a restrict would block recomposition. Both are provenance
+  (ADR-0016).
+- **Partial unique index** `scene_generations_active_request_key` on
+  `(videoProjectId, requestHash) WHERE state IN ('QUEUED', 'SUBMITTING',
+  'PROCESSING', 'FAILED_RETRYABLE', 'SUBMISSION_UNKNOWN')`. The database is
+  authoritative for "at most one **active** attempt per request identity", so
+  two concurrent submissions cannot both produce a billed provider call.
+  Terminal states release the identity, allowing deliberate regeneration.
+  Hand-written in the migration, and guarded against drift from the domain's
+  `ACTIVE_SCENE_GENERATION_STATES` by
+  `tests/schema/active-generation-states.test.ts`.
 - Cascade behavior: deleting an organization cascades memberships, invitations,
   and properties (and thus assets, and thus analyses); `audit_logs.organizationId`
-  is `SetNull` so audit history survives.
+  is `SetNull` so audit history survives. **`scene_generations` is the one
+  exception**: its foreign key to `video_projects` is `ON DELETE RESTRICT`, so a
+  project cannot be physically deleted while an attempt exists. That is
+  fail-closed on purpose — no physical deletion path exists today, and a future
+  one must resolve retention policy for paid-attempt history deliberately rather
+  than inheriting a cascade.
 
 ## Deliberately not stored
 
 - Raw passwords, raw session tokens, and raw invitation tokens — only salted
   scrypt hashes / SHA-256 hashes.
-- Provider prediction ids, temporary provider URLs, and signed URLs.
+- **Temporary provider output URLs** and signed URLs. A generation attempt never
+  stores a URL that expires: Phase 4D copies a completed output into managed
+  storage and persists `outputStorageKey`, so nothing later depends on a link
+  going stale. A live test asserts no `scene_generations` column name contains
+  `url`.
+- Retry counters on `scene_generations` — no worker exists yet to have a retry
+  policy, and a speculative column would be a guess at an unreviewed design.
+
+  **Changed in Phase 4A-2a:** provider prediction ids *are* now stored, in
+  `scene_generations.providerPredictionId`. They have to be — `PROCESSING`
+  asserts a known prediction, and polling needs it. They remain **internal
+  only**: never in a customer-facing DTO, never logged (ADR-0016 §9). This entry
+  previously listed them as not stored at all.
 
 ## Not implemented yet (later phases)
 
-`GenerationJob` / `ProviderGeneration` / `VideoOutput` (Phase 4–5),
-`CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7).
-These appear in `docs/DataModel.md` but have no tables yet.
+`VideoOutput` (Phase 5), `CreditLedger` / `Subscription` (Phase 6),
+`ConsentRecord` (Phase 6–7). These appear in `docs/DataModel.md` but have no
+tables yet. The Phase 4 generation attempt is `scene_generations`, above.

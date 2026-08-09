@@ -110,3 +110,48 @@ export interface SceneGenerationProvenance {
   /** Internal only. Never reaches a customer-facing DTO. */
   readonly providerModelId: string;
 }
+
+/**
+ * One persisted attempt to generate one scene through a video provider.
+ *
+ * Extends the immutable provenance with the mutable execution record. The split
+ * is not cosmetic: everything in {@link SceneGenerationProvenance} fixes *what
+ * was asked for* and never changes, while the fields below record *what
+ * happened* and are the only ones a worker writes.
+ *
+ * Ownership is the `videoProjectId` relation and nothing else. There is no
+ * `organizationId` column — tenant scope resolves through the owning project,
+ * exactly as `StoryboardScene`'s does, so a read that forgets to scope is a
+ * missing join rather than a silently unfiltered query.
+ *
+ * `providerPredictionId`, `normalizedErrorCode`, `normalizedErrorMessage` and
+ * `outputStorageKey` are **internal only**. None of them appears in a
+ * customer-facing DTO — there is no such DTO in this milestone, and ADR-0016 §9
+ * governs when there is.
+ *
+ * Deliberately absent: any temporary provider output URL. Phase 4D copies a
+ * completed output into managed storage and persists the managed key, so a URL
+ * that expires never needs to survive a worker step. Also absent: a retry
+ * counter, because no worker exists yet to have a retry policy.
+ */
+export interface SceneGeneration extends SceneGenerationProvenance {
+  readonly id: string;
+  /** The persistent owner. Tenant scope resolves through this project. */
+  readonly videoProjectId: string;
+  readonly state: SceneGenerationState;
+  /**
+   * Internal only. Non-null exactly when a provider prediction is known, which
+   * is what `PROCESSING` asserts.
+   */
+  readonly providerPredictionId: string | null;
+  readonly submittedAt: Date | null;
+  readonly lastPolledAt: Date | null;
+  /** Normalized provider error code. Internal diagnostics, never a customer message. */
+  readonly normalizedErrorCode: string | null;
+  /** Sanitized provider error message. Internal diagnostics. */
+  readonly normalizedErrorMessage: string | null;
+  /** Managed-storage key for the copied output. Null until Phase 4D. */
+  readonly outputStorageKey: string | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
