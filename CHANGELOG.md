@@ -9,10 +9,10 @@ Under review. Not merged. See `docs/phase-4a2b-completion.md`.
 
 ### Added
 
-- **`SceneGenerationRepository`** — four methods: `create`, `findById`,
-  `findActiveByRequestIdentity`, `update`. No `delete` (history is retained
-  because it can record a paid call), no generic `save`, no listing, no
-  worker-claim method.
+- **`SceneGenerationRepository`** — four methods:
+  `create(organizationId, input)`, `findById`, `findActiveByRequestIdentity`,
+  `update`. No `delete` (history is retained because it can record a paid call),
+  no generic `save`, no listing, no worker-claim method.
 - **`SceneGenerationUpdate`** — the narrow contract. Ten identity, provenance and
   timestamp fields are *absent from the type*, so mutating them is a compile
   error rather than a silently ignored property.
@@ -41,6 +41,16 @@ Under review. Not merged. See `docs/phase-4a2b-completion.md`.
   `updateMany` with the same predicate for writes. `count === 0` is the single
   code path for both "unknown id" and "another tenant's", so they are
   indistinguishable by construction.
+- **Review found and fixed a tenant-boundary defect in `create`.** It was the one
+  operation not organization-addressed, and the adapter inserted a
+  caller-supplied `videoProjectId` without checking ownership — so a caller for
+  organization A could write into organization B's project, *and* read B's state
+  back, because a colliding request would answer
+  `ActiveGenerationConflictError`. `create` now takes `organizationId` and
+  verifies the project **before** inserting, so a foreign caller never reaches the
+  active-request index. A nonexistent project and another tenant's project give
+  the same neutral `SceneGenerationNotFoundError`. No `organizationId` column was
+  added anywhere.
 - **`providerPredictionId` outlives `PROCESSING`.** An absent key means "leave
   alone", so a state-only update cannot clear it; only an explicit `null` does.
   Proven on `SUCCEEDED`, `FAILED_RETRYABLE` and `FAILED_TERMINAL` rows.
@@ -49,7 +59,7 @@ Under review. Not merged. See `docs/phase-4a2b-completion.md`.
   handles the database collision.
 - The repository holds no state machine — whether a transition is legal stays a
   domain question answered by `assertTransition`.
-- 44 live PostgreSQL cases. No schema or migration change; 4A-2a's SQL invariant
+- 51 live PostgreSQL cases. No schema or migration change; 4A-2a's SQL invariant
   matrix is not repeated.
 
 ## [phase-4a2a-complete] — Phase 4A-2a: scene-generation persistence

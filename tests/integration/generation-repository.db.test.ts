@@ -112,6 +112,7 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("create and mapping", () => {
   it("returns the full mapped entity", async () => {
     const created = await repo.create(
+      ORG_A,
       generation("gen_map", {
         state: "PROCESSING",
         providerPredictionId: "pred_abc",
@@ -135,7 +136,7 @@ describe.skipIf(!HAS_DB)("create and mapping", () => {
   });
 
   it("round-trips the nullable execution fields", async () => {
-    const created = await repo.create(generation("gen_nulls"));
+    const created = await repo.create(ORG_A, generation("gen_nulls"));
     expect(created.providerPredictionId).toBeNull();
     expect(created.submittedAt).toBeNull();
     expect(created.lastPolledAt).toBeNull();
@@ -146,16 +147,86 @@ describe.skipIf(!HAS_DB)("create and mapping", () => {
 
   it("takes createdAt and updatedAt from persistence", async () => {
     // The caller cannot supply either — they are absent from NewSceneGeneration.
-    const created = await repo.create(generation("gen_ts"));
+    const created = await repo.create(ORG_A, generation("gen_ts"));
     expect(created.createdAt).toBeInstanceOf(Date);
     expect(created.updatedAt).toBeInstanceOf(Date);
     expect(created.createdAt.getTime()).toBeGreaterThan(0);
   });
 });
 
+describe.skipIf(!HAS_DB)("create is bounded by the caller's organization", () => {
+  // Review found the first version of `create` trusting `input.videoProjectId`
+  // outright. Two things were wrong with that, and the second is the worse one:
+  // a caller could write into another tenant's project, and could then *read*
+  // that tenant's state back — a colliding request would answer
+  // ActiveGenerationConflictError, disclosing that the other organization has an
+  // attempt in flight for that exact request.
+
+  it("accepts a project the caller's organization owns", async () => {
+    const created = await repo.create(ORG_A, generation("gen_own"));
+    expect(created.videoProjectId).toBe(PROJECT_A);
+  });
+
+  it("refuses a project belonging to another organization", async () => {
+    const error = await rejectionOf(
+      repo.create(ORG_A, generation("gen_cross", { videoProjectId: PROJECT_B })),
+    );
+    expect(error).toBeInstanceOf(SceneGenerationNotFoundError);
+  });
+
+  it("refuses a nonexistent project with the SAME error", async () => {
+    const foreign = (await rejectionOf(
+      repo.create(ORG_A, generation("gen_cross", { videoProjectId: PROJECT_B })),
+    )) as Error;
+    const unknown = (await rejectionOf(
+      repo.create(ORG_A, generation("gen_unknown", { videoProjectId: "vpr_never_existed" })),
+    )) as Error;
+
+    expect(unknown).toBeInstanceOf(SceneGenerationNotFoundError);
+    // Same type and same message, so a caller cannot tell "that project is
+    // someone else's" from "that project does not exist".
+    expect(unknown.name).toBe(foreign.name);
+    expect(unknown.message).toBe(foreign.message);
+  });
+
+  it("writes nothing when the project is not the caller's", async () => {
+    await rejectionOf(repo.create(ORG_A, generation("gen_cross", { videoProjectId: PROJECT_B })));
+    expect(await prisma.sceneGeneration.count({ where: { id: "gen_cross" } })).toBe(0);
+    expect(await prisma.sceneGeneration.count({ where: { videoProjectId: PROJECT_B } })).toBe(0);
+  });
+
+  it("does not disclose another tenant's active generation through a conflict", async () => {
+    // The disclosure this defect enabled. B has an active attempt for hash X;
+    // A asks for the same project and hash. A must learn nothing — not even
+    // that a conflict exists.
+    await repo.create(ORG_B, generation("gen_b_active", { videoProjectId: PROJECT_B }));
+
+    const error = await rejectionOf(
+      repo.create(ORG_A, generation("gen_probe", { videoProjectId: PROJECT_B })),
+    );
+
+    expect(error).toBeInstanceOf(SceneGenerationNotFoundError);
+    expect(error).not.toBeInstanceOf(ActiveGenerationConflictError);
+    // B's row is untouched and still the only one.
+    expect(await prisma.sceneGeneration.count({ where: { videoProjectId: PROJECT_B } })).toBe(1);
+  });
+
+  it("leaks no project id, organization, or database detail when refusing", async () => {
+    const error = (await rejectionOf(
+      repo.create(ORG_A, generation("gen_cross", { videoProjectId: PROJECT_B })),
+    )) as Error;
+    const text = `${error.name} ${error.message}`;
+    expect(text).not.toContain(PROJECT_B);
+    expect(text).not.toContain(ORG_A);
+    expect(text).not.toContain(ORG_B);
+    expect(text).not.toContain("Prisma");
+    expect(text).not.toContain("video_projects");
+  });
+});
+
 describe.skipIf(!HAS_DB)("tenant-scoped reads", () => {
   beforeEach(async () => {
-    await repo.create(generation("gen_read"));
+    await repo.create(ORG_A, generation("gen_read"));
   });
 
   it("finds an attempt for its owning organization", async () => {
@@ -181,7 +252,7 @@ describe.skipIf(!HAS_DB)("findActiveByRequestIdentity", () => {
   it.each(["QUEUED", "SUBMITTING", "PROCESSING", "FAILED_RETRYABLE", "SUBMISSION_UNKNOWN"] as const)(
     "finds an attempt that is %s",
     async (state: SceneGenerationState) => {
-      await repo.create(generation("gen_active", { state }));
+      await repo.create(ORG_A, generation("gen_active", { state }));
       const found = await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, HASH);
       expect(found?.id).toBe("gen_active");
       expect(found?.state).toBe(state);
@@ -191,33 +262,33 @@ describe.skipIf(!HAS_DB)("findActiveByRequestIdentity", () => {
   it.each(["SUCCEEDED", "FAILED_TERMINAL", "CANCELLED"] as const)(
     "does not return an attempt that is %s",
     async (state: SceneGenerationState) => {
-      await repo.create(generation("gen_done", { state }));
+      await repo.create(ORG_A, generation("gen_done", { state }));
       expect(await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, HASH)).toBeNull();
     },
   );
 
   it("cannot see another tenant's active attempt", async () => {
-    await repo.create(generation("gen_mine"));
+    await repo.create(ORG_A, generation("gen_mine"));
     expect(await repo.findActiveByRequestIdentity(ORG_B, PROJECT_A, HASH)).toBeNull();
   });
 
   it("is not disturbed by the same request hash in another tenant", async () => {
-    await repo.create(generation("gen_a", { videoProjectId: PROJECT_A }));
-    await repo.create(generation("gen_b", { id: "gen_b", videoProjectId: PROJECT_B }));
+    await repo.create(ORG_A, generation("gen_a", { videoProjectId: PROJECT_A }));
+    await repo.create(ORG_B, generation("gen_b", { id: "gen_b", videoProjectId: PROJECT_B }));
 
     expect((await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe("gen_a");
     expect((await repo.findActiveByRequestIdentity(ORG_B, PROJECT_B, HASH))?.id).toBe("gen_b");
   });
 
   it("returns null for a request hash nobody has attempted", async () => {
-    await repo.create(generation("gen_a"));
+    await repo.create(ORG_A, generation("gen_a"));
     expect(await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, "sha256:other")).toBeNull();
   });
 });
 
 describe.skipIf(!HAS_DB)("tenant-scoped update", () => {
   beforeEach(async () => {
-    await repo.create(generation("gen_upd"));
+    await repo.create(ORG_A, generation("gen_upd"));
   });
 
   it("applies changes for the owning organization", async () => {
@@ -259,7 +330,7 @@ describe.skipIf(!HAS_DB)("tenant-scoped update", () => {
 
 describe.skipIf(!HAS_DB)("mutable execution fields", () => {
   beforeEach(async () => {
-    await repo.create(generation("gen_fields"));
+    await repo.create(ORG_A, generation("gen_fields"));
   });
 
   it("updates each field independently", async () => {
@@ -325,6 +396,7 @@ describe.skipIf(!HAS_DB)("providerPredictionId retention", () => {
     // work that may have been paid for. Clearing it as a side effect of leaving
     // PROCESSING would lose the only handle on that work.
     await repo.create(
+      ORG_A,
       generation("gen_pred", { state: "PROCESSING", providerPredictionId: "pred_123" }),
     );
 
@@ -337,6 +409,7 @@ describe.skipIf(!HAS_DB)("providerPredictionId retention", () => {
     "keeps the prediction id on a %s row",
     async (state: SceneGenerationState) => {
       await repo.create(
+        ORG_A,
         generation("gen_pred", { state: "PROCESSING", providerPredictionId: "pred_123" }),
       );
       const moved = await repo.update(ORG_A, "gen_pred", { state });
@@ -346,6 +419,7 @@ describe.skipIf(!HAS_DB)("providerPredictionId retention", () => {
 
   it("clears it only when the caller asks explicitly", async () => {
     await repo.create(
+      ORG_A,
       generation("gen_pred", { state: "PROCESSING", providerPredictionId: "pred_123" }),
     );
     const cleared = await repo.update(ORG_A, "gen_pred", { providerPredictionId: null });
@@ -355,7 +429,7 @@ describe.skipIf(!HAS_DB)("providerPredictionId retention", () => {
 
 describe.skipIf(!HAS_DB)("database-managed updatedAt and immutable identity", () => {
   it("advances updatedAt on every write", async () => {
-    const created = await repo.create(generation("gen_touch"));
+    const created = await repo.create(ORG_A, generation("gen_touch"));
     await new Promise((resolve) => setTimeout(resolve, 15));
     const updated = await repo.update(ORG_A, "gen_touch", { state: "SUBMITTING" });
     expect(updated.updatedAt.getTime()).toBeGreaterThan(created.updatedAt.getTime());
@@ -365,7 +439,7 @@ describe.skipIf(!HAS_DB)("database-managed updatedAt and immutable identity", ()
   it("leaves identity and provenance untouched through execution updates", async () => {
     // The primary guarantee is the narrow SceneGenerationUpdate type — none of
     // these fields can be expressed. This is the runtime regression guard.
-    const created = await repo.create(generation("gen_immutable"));
+    const created = await repo.create(ORG_A, generation("gen_immutable"));
     const updated = await repo.update(ORG_A, "gen_immutable", {
       state: "PROCESSING",
       providerPredictionId: "pred_x",
@@ -385,22 +459,22 @@ describe.skipIf(!HAS_DB)("database-managed updatedAt and immutable identity", ()
 
 describe.skipIf(!HAS_DB)("active-request conflict translation", () => {
   it("accepts the first active attempt", async () => {
-    const created = await repo.create(generation("gen_first"));
+    const created = await repo.create(ORG_A, generation("gen_first"));
     expect(created.id).toBe("gen_first");
   });
 
   it.each(["QUEUED", "SUBMITTING", "PROCESSING", "FAILED_RETRYABLE", "SUBMISSION_UNKNOWN"] as const)(
     "raises the neutral conflict when an attempt is already %s",
     async (state: SceneGenerationState) => {
-      await repo.create(generation("gen_holder", { state }));
-      const error = await rejectionOf(repo.create(generation("gen_second")));
+      await repo.create(ORG_A, generation("gen_holder", { state }));
+      const error = await rejectionOf(repo.create(ORG_A, generation("gen_second")));
       expect(error).toBeInstanceOf(ActiveGenerationConflictError);
     },
   );
 
   it("exposes no Prisma, code, index name, or database text", async () => {
-    await repo.create(generation("gen_holder"));
-    const error = (await rejectionOf(repo.create(generation("gen_second")))) as Error & {
+    await repo.create(ORG_A, generation("gen_holder"));
+    const error = (await rejectionOf(repo.create(ORG_A, generation("gen_second")))) as Error & {
       code?: unknown;
     };
     const text = `${error.name} ${error.message} ${JSON.stringify(error)}`;
@@ -414,8 +488,8 @@ describe.skipIf(!HAS_DB)("active-request conflict translation", () => {
   it.each(["SUCCEEDED", "FAILED_TERMINAL", "CANCELLED"] as const)(
     "permits a new active attempt once the previous one is %s",
     async (state: SceneGenerationState) => {
-      await repo.create(generation("gen_done", { state }));
-      const next = await repo.create(generation("gen_next"));
+      await repo.create(ORG_A, generation("gen_done", { state }));
+      const next = await repo.create(ORG_A, generation("gen_next"));
       expect(next.id).toBe("gen_next");
     },
   );
@@ -427,9 +501,9 @@ describe.skipIf(!HAS_DB)("errors that must NOT be translated", () => {
     // covered fields. Recognition is by exact target set, so this must not
     // become a conflict — a worker retrying on it would be retrying the wrong
     // thing.
-    await repo.create(generation("gen_dup"));
+    await repo.create(ORG_A, generation("gen_dup"));
     const error = (await rejectionOf(
-      repo.create(generation("gen_dup", { requestHash: "sha256:different" })),
+      repo.create(ORG_A, generation("gen_dup", { requestHash: "sha256:different" })),
     )) as { code?: string };
 
     expect(error).not.toBeInstanceOf(ActiveGenerationConflictError);
@@ -437,15 +511,42 @@ describe.skipIf(!HAS_DB)("errors that must NOT be translated", () => {
     expect(error.code).toBe("P2002");
   });
 
-  it("propagates a foreign-key failure rather than calling it not-found", async () => {
-    // A missing project is a database failure, not "the row is not yours".
-    // Flattening it would corrupt a worker's retry classification.
-    const error = (await rejectionOf(
-      repo.create(generation("gen_orphan", { videoProjectId: "vpr_nonexistent" })),
-    )) as { code?: string };
+  it("keeps the video-project foreign key live and untranslated", async () => {
+    // Since the tenant-boundary fix, a nonexistent project is caught by the
+    // ownership check and correctly surfaces as SceneGenerationNotFoundError —
+    // "no project of yours has that id" is exactly what happened. That makes
+    // the FK unreachable through `create`, so it is exercised directly here to
+    // prove the database guarantee is still live and that nothing in this
+    // milestone started swallowing it.
+    //
+    // It also proves the narrowness from the other side: translateWriteError
+    // checks `code === "P2002"` first, so a P2003 cannot become a conflict no
+    // matter which fields it names.
+    const error = (await prisma.sceneGeneration
+      .create({ data: generation("gen_fk", { videoProjectId: "vpr_nonexistent" }) })
+      .then(
+        () => null,
+        (e: unknown) => e as { code?: string },
+      ))!;
 
+    expect(error.code).toBe("P2003");
     expect(error).not.toBeInstanceOf(ActiveGenerationConflictError);
     expect(error).not.toBeInstanceOf(SceneGenerationNotFoundError);
-    expect(error.code).toBe("P2003");
+  });
+
+  it("does not turn a not-found refusal into a database error, or the reverse", async () => {
+    // The two neutral errors must stay distinct: one means "not yours or not
+    // there", the other means the write collided. A future worker classifies a
+    // retry on exactly that difference.
+    const notFound = await rejectionOf(
+      repo.create(ORG_A, generation("gen_nf", { videoProjectId: PROJECT_B })),
+    );
+    await repo.create(ORG_A, generation("gen_c1"));
+    const conflict = await rejectionOf(repo.create(ORG_A, generation("gen_c2")));
+
+    expect(notFound).toBeInstanceOf(SceneGenerationNotFoundError);
+    expect(notFound).not.toBeInstanceOf(ActiveGenerationConflictError);
+    expect(conflict).toBeInstanceOf(ActiveGenerationConflictError);
+    expect(conflict).not.toBeInstanceOf(SceneGenerationNotFoundError);
   });
 });

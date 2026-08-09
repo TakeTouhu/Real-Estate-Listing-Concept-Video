@@ -86,6 +86,12 @@ function toGeneration(r: DbSceneGeneration): SceneGeneration {
  * is not this tenant's, which is the same answer they give when it does not
  * exist at all.
  *
+ * `create` is the one operation that cannot express the boundary as a predicate
+ * on the row being written — the row does not exist yet, and its project id is
+ * caller-supplied. It therefore verifies ownership of the target project first,
+ * and refuses with the same neutral not-found error. Review caught the earlier
+ * version of this method, which trusted `input.videoProjectId` outright.
+ *
  * The adapter persists what it is asked to persist. It holds no state machine:
  * whether a requested transition is legal is decided by the domain, and there
  * are no SQL triggers.
@@ -94,7 +100,28 @@ export function createPrismaSceneGenerationRepository(
   prisma: PrismaClient,
 ): SceneGenerationRepository {
   return {
-    async create(input: NewSceneGeneration) {
+    async create(organizationId: string, input: NewSceneGeneration) {
+      // The tenant boundary, and it must come BEFORE the insert.
+      //
+      // `input.videoProjectId` is caller-supplied. Without this check a caller
+      // could write an attempt into another organization's project — and then
+      // read that organization's state back out, because a colliding request
+      // would answer ActiveGenerationConflictError and so disclose that the
+      // other tenant has an attempt in flight for that exact request. Checking
+      // first means a foreign caller never reaches the active-request index.
+      //
+      // This is a boundary check only. It is emphatically **not**
+      // `find active -> if absent -> create`: the partial unique index remains
+      // the sole concurrency and idempotency authority, and the collision below
+      // is still handled.
+      const project = await prisma.videoProject.findFirst({
+        where: { id: input.videoProjectId, organizationId },
+        select: { id: true },
+      });
+      // A project that does not exist and one belonging to another tenant give
+      // the same answer, so this cannot be used to probe for either.
+      if (!project) throw new SceneGenerationNotFoundError();
+
       try {
         // Enumerated rather than spread, so a future field on the entity cannot
         // become a silent write, and neither timestamp can be supplied.

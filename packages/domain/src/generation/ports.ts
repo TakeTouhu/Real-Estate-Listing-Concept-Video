@@ -66,13 +66,28 @@ export interface SceneGenerationUpdate {
  */
 export interface SceneGenerationRepository {
   /**
-   * Persist a new attempt.
+   * Persist a new attempt under a project this organization owns.
    *
-   * @throws {ActiveGenerationConflictError} when an active attempt already
-   * exists for this `(videoProjectId, requestHash)`. The database decides that,
-   * not a prior read — see the error's own note.
+   * `organizationId` is an addressing argument here for the same reason it is
+   * on every other method, and its absence would be a tenant hole rather than a
+   * convenience: `input.videoProjectId` is caller-supplied, so without an
+   * ownership check a caller could write an attempt into **another tenant's**
+   * project. Worse, it could then read that tenant's state back out — a
+   * colliding request would answer {@link ActiveGenerationConflictError}, which
+   * discloses that the other organization has an attempt in flight for that
+   * exact request.
+   *
+   * The ownership check therefore runs **before** the insert, so a foreign
+   * caller never reaches the active-request index at all.
+   *
+   * @throws {SceneGenerationNotFoundError} when this organization owns no
+   * project with that id — whether it does not exist or belongs elsewhere.
+   * @throws {ActiveGenerationConflictError} when the project *is* this
+   * organization's and an active attempt already holds this
+   * `(videoProjectId, requestHash)`. The database decides that, not a prior
+   * read — see the error's own note.
    */
-  create(input: NewSceneGeneration): Promise<SceneGeneration>;
+  create(organizationId: string, input: NewSceneGeneration): Promise<SceneGeneration>;
 
   /** The attempt, or `null` when it does not exist **or** belongs elsewhere. */
   findById(organizationId: string, id: string): Promise<SceneGeneration | null>;

@@ -21,7 +21,7 @@ reason:
 
 ```ts
 export interface SceneGenerationRepository {
-  create(input: NewSceneGeneration): Promise<SceneGeneration>;
+  create(organizationId: string, input: NewSceneGeneration): Promise<SceneGeneration>;
   findById(organizationId, id): Promise<SceneGeneration | null>;
   findActiveByRequestIdentity(organizationId, videoProjectId, requestHash): Promise<SceneGeneration | null>;
   update(organizationId, id, changes: SceneGenerationUpdate): Promise<SceneGeneration>;
@@ -39,6 +39,45 @@ claiming strategy is undecided.
 `organizationId` is an **addressing argument** on every operation, never payload,
 so a write cannot target another tenant's row by carrying a different id in the
 body.
+
+### Review found a tenant-boundary defect in `create` — fixed
+
+The first version of this milestone had `create(input: NewSceneGeneration)`: the
+only operation that was **not** organization-addressed. The adapter inserted
+`videoProjectId: input.videoProjectId` without proving the project belonged to
+the caller, which meant a caller acting for organization A could write an attempt
+into organization B's project.
+
+The second consequence was worse than the first. A colliding request would answer
+`ActiveGenerationConflictError`, so a foreign caller could **read B's state back
+out** — learning that B has an attempt in flight for that exact request hash.
+A write hole that doubles as a read oracle.
+
+The fix, and why the ordering matters:
+
+```ts
+create(organizationId: string, input: NewSceneGeneration): Promise<SceneGeneration>
+```
+
+```ts
+const project = await prisma.videoProject.findFirst({
+  where: { id: input.videoProjectId, organizationId },
+  select: { id: true },
+});
+if (!project) throw new SceneGenerationNotFoundError();
+```
+
+The ownership check runs **before** the insert, so a foreign caller never reaches
+the active-request index and cannot observe a conflict at all. A nonexistent
+project and another tenant's project produce the same error, so neither can be
+probed for.
+
+This is a tenant-boundary check **only**. It is not `find active → if absent →
+create`: the partial unique index remains the sole concurrency and idempotency
+authority, and the collision is still handled below it.
+
+No `organizationId` column was added to `SceneGeneration`,
+`NewSceneGeneration`, the Prisma model, or the table.
 
 `findActiveByRequestIdentity` is documented in the port as a **convenience
 lookup, not concurrency control**: two callers can both find nothing, so
@@ -122,6 +161,7 @@ application-side check after an unscoped read:
 
 | Operation | Predicate |
 | --- | --- |
+| `create` | ownership of the target project verified first: `videoProject.findFirst({ id, organizationId })` |
 | `findById` | `{ id, videoProject: { organizationId } }` |
 | `findActiveByRequestIdentity` | `+ state: { in: ACTIVE_SCENE_GENERATION_STATES }` |
 | `update` | `updateMany({ where: { id, videoProject: { organizationId } } })`, then a **same-scoped** reload |
@@ -148,24 +188,48 @@ Structural, not incidental: the adapter only writes a key the caller supplied, s
 no state change can null it as a side effect. The repository encodes no provider
 lifecycle semantics.
 
-## Unrelated errors propagate — evidence
+## Tenant-boundary evidence for `create`
 
-Both triggered as **real database failures**, no mocking of Prisma internals:
+| Case | Result |
+| --- | --- |
+| Own organization's project | created |
+| Another organization's project | `SceneGenerationNotFoundError` |
+| Nonexistent project | **same** error — same name, same message, asserted |
+| Foreign-project attempt | **zero** rows written, for that id and for the target project |
+| **B has an active attempt for hash X; A calls `create` with B's project and hash X** | `SceneGenerationNotFoundError`, **not** `ActiveGenerationConflictError`; B's single row untouched |
+| Refusal message content | contains no project id, no organization id, no `Prisma`, no `video_projects` |
+
+## Unrelated errors propagate — evidence
 
 | Trigger | Code | Result |
 | --- | --- | --- |
 | Duplicate primary key (same `id`, different `requestHash`) | `P2002` | **not** translated; propagates with `code === "P2002"` |
 | `videoProjectId` referencing a nonexistent project | `P2003` | **not** translated; propagates |
 
-The first is the sharpest guard available: same error code, different covered
-fields. A worker retrying on a mis-translated duplicate-key would be retrying the
-wrong thing entirely.
+The duplicate primary key is the sharpest guard available: same error code,
+different covered fields. A worker retrying on a mis-translated duplicate-key
+would be retrying the wrong thing entirely.
 
-## Test matrix — 44 live PostgreSQL cases
+**One consequence of the tenant fix, stated plainly:** the FK is now unreachable
+through `create`, because a nonexistent project is caught by the ownership check
+first — and `SceneGenerationNotFoundError` is the *correct* answer there, since
+"no project of yours has that id" is exactly what happened. The P2003 case is
+therefore exercised directly against Prisma rather than through the repository,
+proving the database guarantee is still live and that nothing in this milestone
+started swallowing it. `translateWriteError` tests `code === "P2002"` before
+anything else, so no P2003 can become a conflict regardless of the path that
+reaches it.
+
+A further test pins the two neutral errors as mutually exclusive: a not-found
+refusal is never a conflict, and a conflict is never a not-found. A future
+worker classifies a retry on exactly that difference.
+
+## Test matrix — 51 live PostgreSQL cases
 
 | Group | Cases |
 | --- | --- |
 | create and mapping | full mapped entity, nullable round-trip, timestamps from persistence |
+| **create tenant boundary** | own project accepted, foreign refused, unknown refused **identically**, zero rows written, **foreign active conflict not disclosed**, no detail leaked |
 | tenant-scoped reads | owning-org find, foreign `null`, unknown `null`, foreign and unknown **equal** |
 | `findActiveByRequestIdentity` | all 5 active states found, all 3 terminal states not found, cross-tenant invisible, same hash in another tenant unaffected, unknown hash `null` |
 | tenant-scoped update | owning-org succeeds, foreign throws, unknown throws the **same** error, row untouched after a foreign attempt, no detail leaked |
@@ -196,7 +260,7 @@ invariant that prevents a duplicate charge. Re-evaluate once the
 | `pnpm lint` | clean |
 | `pnpm test` | **806 / 806**, 48 files (unchanged — this milestone adds only live-DB tests) |
 | `pnpm build` | clean production build |
-| `pnpm test:db` | **97 / 97**, 6 files (53 → +44) |
+| `pnpm test:db` | **104 / 104**, 6 files (53 → **+51**) |
 
 No migration-from-empty or drift gate is claimed: schema and migrations have zero
 diff.
@@ -226,7 +290,7 @@ implementation exposed no new architectural fact.
 ## Known limitations
 
 - **Nothing calls this repository yet.** Its first consumer is Phase 4B's
-  `GenerationService`.
+  `GenerationService`, which must pass `organizationId` to `create`.
 - **No listing.** Deliberate; arrives with a real reader.
 - **The older repositories still throw plain `Error` for not-found.** Improved
   locally here, not layer-wide — a candidate for a future cleanup, recorded but
