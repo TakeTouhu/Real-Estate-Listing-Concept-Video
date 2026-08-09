@@ -20,7 +20,7 @@ import { SCENE_GENERATION_STATES, type SceneGenerationState } from "./types";
 const EXPECTED: Readonly<Record<SceneGenerationState, readonly SceneGenerationState[]>> = {
   QUEUED: ["SUBMITTING", "CANCELLED"],
   SUBMITTING: ["PROCESSING", "FAILED_RETRYABLE", "FAILED_TERMINAL", "SUBMISSION_UNKNOWN"],
-  PROCESSING: ["SUCCEEDED", "FAILED_TERMINAL"],
+  PROCESSING: ["SUCCEEDED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
   FAILED_RETRYABLE: ["QUEUED"],
   SUBMISSION_UNKNOWN: [],
   SUCCEEDED: [],
@@ -68,14 +68,42 @@ describe("the transition contract", () => {
     expect(canTransition("FAILED_RETRYABLE", "SUBMITTING")).toBe(false);
   });
 
-  it("does not treat a failing status poll as a state change", () => {
-    // GET is idempotent, so a transport failure while polling is retried in
-    // place. There is no PROCESSING -> FAILED_RETRYABLE edge to tempt anyone
-    // into resubmitting a prediction that already exists.
-    expect(canTransition("PROCESSING", "FAILED_RETRYABLE")).toBe(false);
-    expect(canTransition("PROCESSING", "SUBMITTING")).toBe(false);
+  it("can represent every verdict the provider port normalizes about a known prediction", () => {
+    // `ProviderGenerationState` in @app/video-providers already distinguishes a
+    // retryable prediction failure from a terminal one. A successful poll can
+    // report either, so both must be reachable — otherwise Phase 4C would have
+    // to misclassify a retryable failure as terminal.
+    expect(canTransition("PROCESSING", "SUCCEEDED")).toBe(true);
+    expect(canTransition("PROCESSING", "FAILED_RETRYABLE")).toBe(true);
+    expect(canTransition("PROCESSING", "FAILED_TERMINAL")).toBe(true);
+  });
+
+  it("keeps one route back into a provider POST from a retryable prediction failure", () => {
+    // The retry goes through FAILED_RETRYABLE, never straight from PROCESSING,
+    // so `FAILED_RETRYABLE -> QUEUED -> SUBMITTING` stays the only path.
     expect(canTransition("PROCESSING", "QUEUED")).toBe(false);
+    expect(canTransition("PROCESSING", "SUBMITTING")).toBe(false);
+    expect(canTransition("FAILED_RETRYABLE", "QUEUED")).toBe(true);
+    expect(canTransition("QUEUED", "SUBMITTING")).toBe(true);
+  });
+
+  it("has no edge for a failing status GET, because that is not a state change", () => {
+    // Two different situations that must not be conflated:
+    //
+    //   transport failure of the GET  — "we do not know the latest provider
+    //                                    state"; retried in place, stays
+    //                                    PROCESSING, no transition at all
+    //   a successful GET reporting
+    //   FAILED_RETRYABLE              — "we learned this known prediction
+    //                                    failed retryably"; that IS a
+    //                                    transition, covered above
+    //
+    // The absence asserted here is the first case. A prediction whose fate we
+    // simply could not read is never recorded as a failure, and never becomes
+    // SUBMISSION_UNKNOWN either — that state is about an ambiguous *submission*,
+    // and this prediction id is already known.
     expect(canTransition("PROCESSING", "SUBMISSION_UNKNOWN")).toBe(false);
+    expect(canTransition("PROCESSING", "PROCESSING")).toBe(false);
   });
 
   it.each(TERMINAL_SCENE_GENERATION_STATES)("leaves %s terminal", (state) => {

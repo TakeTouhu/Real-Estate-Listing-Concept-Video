@@ -39,6 +39,13 @@ Under review. Not merged. See `docs/phase-4a1-completion.md`.
 - **The four ways a submission ends are kept distinct**, because their financial
   consequences differ. Only positive evidence that the POST was *not* accepted
   produces `FAILED_RETRYABLE`.
+- **Polling separates "we could not read the state" from "we read a failure".**
+  A transport failure of the status GET is **not** a state change: the job stays
+  `PROCESSING` and the idempotent GET is retried. A *successful* GET that reports
+  a retryable prediction failure is `PROCESSING → FAILED_RETRYABLE`, matching the
+  `ProviderGenerationState` vocabulary the shipped provider port already
+  normalizes. `PROCESSING → QUEUED` stays absent, so
+  `FAILED_RETRYABLE → QUEUED → SUBMITTING` remains the only route into a POST.
 - **Scene position and `sourceAnalysisRevision` are excluded from the hash**, so
   reordering a storyboard or refreshing an analysis that changes nothing
   generative cannot manufacture a second paid request.

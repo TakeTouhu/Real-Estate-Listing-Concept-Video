@@ -136,10 +136,31 @@ are distinct:
 | acceptance cannot be ruled out | `SUBMISSION_UNKNOWN` | **never** |
 | provider rejected it terminally | `FAILED_TERMINAL` | no |
 
-Once a prediction id is known the job is `PROCESSING`, and a failing status GET
-is retried in place rather than becoming a state change — GET is idempotent, so
-there is deliberately no edge from `PROCESSING` that could tempt anyone into
-resubmitting.
+Once a prediction id is known the job is `PROCESSING`, and two different things
+can go wrong while polling. They are **not** the same event and are not the same
+edge:
+
+| While polling | Means | Effect |
+| --- | --- | --- |
+| the status **GET itself** fails — timeout, reset, transient network | *we do not know the latest provider state* | **no transition**; the job stays `PROCESSING` and the idempotent GET is retried with bounded backoff |
+| a **successful** GET reports a retryable prediction failure | *we learned this known prediction failed, and the provider classifies it as safely retryable* | `PROCESSING → FAILED_RETRYABLE` |
+| a **successful** GET reports a terminal prediction failure | *we learned this prediction failed for good* | `PROCESSING → FAILED_TERMINAL` |
+
+The middle row exists because the already-shipped provider port normalizes
+exactly that verdict: `ProviderGenerationState` in `@app/video-providers`
+distinguishes `FAILED_RETRYABLE` from `FAILED_TERMINAL`, and a domain state
+machine that could not represent it would force the worker to misclassify a
+retryable prediction failure as terminal. Phase 4A-1 defines the shared
+vocabulary, so it has to be compatible with the abstraction that already ships.
+
+A retryable prediction failure then follows the one approved route back —
+`FAILED_RETRYABLE → QUEUED → SUBMITTING`. There is deliberately no
+`PROCESSING → QUEUED` and no `PROCESSING → SUBMITTING`, so exactly one path
+leads into a provider POST.
+
+A prediction whose fate could not be read is never recorded as a failure, and
+never becomes `SUBMISSION_UNKNOWN` either: that state is about an ambiguous
+*submission*, and here the prediction id is already known.
 
 ### 8. Local idempotency is not provider exactly-once
 

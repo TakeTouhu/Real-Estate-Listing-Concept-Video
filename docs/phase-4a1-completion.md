@@ -34,7 +34,7 @@ Eight states. Each exists because the *external* call has that semantic.
 ```
 QUEUED             → SUBMITTING, CANCELLED
 SUBMITTING         → PROCESSING, FAILED_RETRYABLE, FAILED_TERMINAL, SUBMISSION_UNKNOWN
-PROCESSING         → SUCCEEDED, FAILED_TERMINAL
+PROCESSING         → SUCCEEDED, FAILED_RETRYABLE, FAILED_TERMINAL
 FAILED_RETRYABLE   → QUEUED
 SUBMISSION_UNKNOWN → (nothing)
 SUCCEEDED          → (nothing)
@@ -47,15 +47,40 @@ omission:
 
 - **`FAILED_RETRYABLE → SUBMITTING` is absent.** A retry re-enters through
   `QUEUED`, so there is one path into a POST rather than two.
-- **`PROCESSING` has no failure-retry edge.** A failing status GET is retried in
-  place, not recorded as a state change: GET is idempotent, and an edge here
-  would invite resubmitting a prediction that already exists.
+- **`PROCESSING → QUEUED` and `PROCESSING → SUBMITTING` are absent.** A
+  retryable prediction failure goes through `FAILED_RETRYABLE` first, so
+  `FAILED_RETRYABLE → QUEUED → SUBMITTING` remains the only route into a
+  provider POST.
 - **Post-submission cancellation is absent.** `SUBMITTING → CANCELLED` and
   `PROCESSING → CANCELLED` are refused; whether the provider offers useful
   cancellation semantics is not yet known.
 - **Terminal states have no outgoing edges at all.** A deliberate regeneration
   is a new job, so a previous attempt's record — possibly of a paid call — is
   never overwritten.
+
+### Polling: two different failures, one of which is not a state change
+
+Review found the first version of this state machine had `PROCESSING → SUCCEEDED,
+FAILED_TERMINAL` only, on the reasoning that "a failing poll is retried in
+place". That conflated two situations, and would have forced Phase 4C either to
+misclassify a retryable prediction failure as terminal or to rewrite the state
+model after persistence was already built. Corrected here:
+
+| While polling | Means | Effect |
+| --- | --- | --- |
+| the status **GET itself** fails — timeout, reset, transient network | *we do not know the latest provider state* | **no transition**; stays `PROCESSING`, the idempotent GET is retried with bounded backoff |
+| a **successful** GET reports a retryable prediction failure | *we learned this known prediction failed, and the provider classifies it as safely retryable* | `PROCESSING → FAILED_RETRYABLE` |
+| a **successful** GET reports a terminal prediction failure | *we learned this prediction failed for good* | `PROCESSING → FAILED_TERMINAL` |
+
+The middle row is required by the abstraction that already ships:
+`ProviderGenerationState` in `@app/video-providers` distinguishes
+`FAILED_RETRYABLE` from `FAILED_TERMINAL`, and a `getStatus` that succeeds may
+report either. Phase 4A-1 defines the shared vocabulary, so it has to be
+compatible with that port rather than the port bending to fit it.
+
+A prediction whose fate could not be read is never recorded as a failure, and
+never becomes `SUBMISSION_UNKNOWN` — that state is about an ambiguous
+*submission*, and here the prediction id is already known.
 
 ## Active and terminal sets
 

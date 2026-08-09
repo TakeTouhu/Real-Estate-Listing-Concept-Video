@@ -11,6 +11,11 @@ import type { SceneGenerationState } from "./types";
  * Nothing here knows about HTTP, providers, backoff, or timeouts. Deciding
  * *which* transition a given failure warrants is the worker's job (Phase 4C);
  * this module only says which are legal at all.
+ *
+ * The vocabulary is compatible with the already-shipped `ProviderGenerationState`
+ * in `@app/video-providers`: every verdict that port can normalize about a known
+ * prediction — succeeded, retryably failed, terminally failed — has somewhere to
+ * go from `PROCESSING`.
  */
 const TRANSITIONS: Readonly<Record<SceneGenerationState, readonly SceneGenerationState[]>> = {
   // Nothing has been sent yet, so cancelling costs nothing and risks nothing.
@@ -22,10 +27,23 @@ const TRANSITIONS: Readonly<Record<SceneGenerationState, readonly SceneGeneratio
   // request. Anything that leaves acceptance in doubt is `SUBMISSION_UNKNOWN`.
   SUBMITTING: ["PROCESSING", "FAILED_RETRYABLE", "FAILED_TERMINAL", "SUBMISSION_UNKNOWN"],
 
-  // A prediction id is known. A failing status GET does **not** appear here:
-  // GET is idempotent, so a transport failure while polling is retried in place
-  // and is not a state change at all.
-  PROCESSING: ["SUCCEEDED", "FAILED_TERMINAL"],
+  // A prediction id is known, so the provider's own verdict on it is what moves
+  // this job. Two different things can go wrong while polling, and they are
+  // deliberately not the same edge:
+  //
+  // - **The status GET itself fails** (timeout, reset, transient network). That
+  //   means "we do not know the latest provider state", not that anything
+  //   failed. GET is idempotent, so the worker retries it with bounded backoff
+  //   and the job **stays `PROCESSING`**. There is no edge for this, by design.
+  //
+  // - **The status GET succeeds and reports a failure.** Now we have learned
+  //   something: the known prediction failed. The provider port already
+  //   normalizes that verdict into `FAILED_RETRYABLE` or `FAILED_TERMINAL`
+  //   (`ProviderGenerationState`), so both are reachable from here. A retryable
+  //   prediction failure then follows the one approved route back —
+  //   `FAILED_RETRYABLE -> QUEUED -> SUBMITTING` — which is why
+  //   `PROCESSING -> QUEUED` is still absent.
+  PROCESSING: ["SUCCEEDED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
 
   // Demonstrably safe to try again — back to the start of the submission path.
   FAILED_RETRYABLE: ["QUEUED"],
