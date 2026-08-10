@@ -227,6 +227,35 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       product/finance decision, not a schema tweak. **Revisit before Phase 7, and
       before any project-deletion feature.**
 
+## Phase 4B follow-ups
+
+- [ ] **Phase 4C MUST recover `QUEUED` generations that were never durably
+      enqueued.** Phase 4B-1b creates the `SceneGeneration` row *before* calling
+      `SceneGenerationQueue.enqueue`, because a database transaction cannot span
+      an abstract queue and pretending otherwise would only look atomic. If
+      enqueue fails the row is deliberately left `QUEUED` — it holds the request
+      identity, so a retry reuses it instead of duplicating — but **nothing will
+      process it** until a worker sweeps for `QUEUED` rows with no queue
+      delivery. The `(state)` index added in Phase 4A-2a exists for that scan.
+      This is not optional cleanup: without it, an enqueue failure silently
+      strands customer work. **Required before Phase 4C ships.**
+- [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
+      added `findLatestSucceededByRequestIdentity`, which prevents *automatic
+      repeat spend* — but returning a succeeded attempt is not the same as
+      returning a usable video. Reuse must additionally require a valid
+      `outputStorageKey`, which nothing populates until Phase 4D. Until then,
+      "reuse" means "do not silently pay again", not "here is your video".
+      **Revisit in 4D.**
+- [ ] **The provider adapter sends fields the selected model may not accept.**
+      `mapToWaveSpeedRequest` sends `aspect_ratio`, and conditionally
+      `negative_prompt` and `camera_motion`. Current documentation for
+      `wavespeed-ai/open-video/image-to-video` documents none of the three.
+      Phase 4B-2 must reconcile the adapter with the verified contract, and must
+      resolve the aspect-ratio product question explicitly — either authoritative
+      evidence the model honours the requested ratio by another mechanism, a
+      different model, or a reviewed change to the product contract. **Dropping
+      `aspectRatio` silently is not an option.** Blocks every real provider call.
+
 ## Business rules to confirm (later phases)
 
 - [ ] Credit pricing model and platform margin (Phase 6).

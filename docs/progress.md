@@ -36,7 +36,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
 | 3 | AI analysis, human review and correction, storyboard | ✅ Merged (24 milestones, #4 … #27) | #27 (final) | `541ada413a6c7b71df5169faca0592626c9be454` | `phase-3-complete` | see the tag table below |
-| 4 | WaveSpeedAI scene generation | 🔄 In progress (4A-1 in review) | 4A-1: TBD | — | — | — |
+| 4 | WaveSpeedAI scene generation | 🔄 In progress (4A closed; 4B-1a in review) | #28, #29, #30 merged | `53cc574cf3f3b1138c794c84cb6baa79b1479100` (latest) | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
@@ -192,8 +192,10 @@ reserved for a webhook.
 | --- | --- | --- | --- |
 | 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) + a 118/19 review fix allowing `PROCESSING → FAILED_RETRYABLE` | **Merged** (PR #28, `daa685b`) |
 | 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | 761 — 189 production + 572 tests (re-cost ~725 raw / ~800–900; **first estimate in six milestones that did not overrun**) | **Merged** (PR #29, `6e681c2`) |
-| 4A-2b | Generation repository port, narrow update contract, Prisma adapter, typed not-found and conflict errors, P2002 translation, organization-addressed `create` | re-cost ~737 raw / ~765–870; includes a review fix for a `create`-path tenant-boundary defect | In review |
-| 4B | `GenerationService.startScene`, freshness gate, provider/model capability contract and fit review, prompt rendering boundary, idempotent job creation | — | Not started |
+| 4A-2b | Generation repository port, narrow update contract, Prisma adapter, typed not-found and conflict errors, P2002 translation, organization-addressed `create` | 789 + a 178/35 review fix for a `create`-path tenant-boundary defect | **Merged** (PR #30, `53cc574`) |
+| 4B-1a | Capability contract + pure validation, narrow succeeded lookup, in-memory generation repository | re-cost ~729 raw / ~760–820 | In review |
+| 4B-1b | `GenerationService.startScene` orchestration, queue port, audit | pre-approved at ~830–900 | Not started |
+| 4B-2 | Verified provider/model capability descriptor + adapter contract corrections | — | Not started (blocked on provider-contract verification) |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
