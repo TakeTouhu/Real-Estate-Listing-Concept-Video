@@ -191,8 +191,8 @@ reserved for a webhook.
 | Milestone | Content | Size | Status |
 | --- | --- | --- | --- |
 | 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) + a 118/19 review fix allowing `PROCESSING → FAILED_RETRYABLE` | **Merged** (PR #28, `daa685b`) |
-| 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | re-cost ~725 raw / ~800–900 calibrated | In review |
-| 4A-2b | Generation repository port, Prisma adapter, neutral conflict translation | — | Not started |
+| 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | 761 — 189 production + 572 tests (re-cost ~725 raw / ~800–900; **first estimate in six milestones that did not overrun**) | **Merged** (PR #29, `6e681c2`) |
+| 4A-2b | Generation repository port, narrow update contract, Prisma adapter, typed not-found and conflict errors, P2002 translation, organization-addressed `create` | re-cost ~737 raw / ~765–870; includes a review fix for a `create`-path tenant-boundary defect | In review |
 | 4B | `GenerationService.startScene`, freshness gate, provider/model capability contract and fit review, prompt rendering boundary, idempotent job creation | — | Not started |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
