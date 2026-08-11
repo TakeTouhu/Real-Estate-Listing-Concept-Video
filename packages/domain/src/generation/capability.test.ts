@@ -115,6 +115,49 @@ describe("optional customer-authored inputs", () => {
     );
   });
 
+  it.each([
+    ["null", null],
+    ["empty", ""],
+    ["spaces", "   "],
+    ["a tab and newline", "\n\t"],
+  ])("treats a %s negative prompt as absent, not as a requirement", (_label, negativePrompt) => {
+    // Review caught this: blank text was being read as a customer requirement.
+    // `compileScenePrompt` normalizes blank and whitespace-only user text to
+    // absent, so such a project compiles to `userNegative: null` and the model
+    // never sees it. Refusing here would block work over a field that was never
+    // going to be sent.
+    const cannot = capability({ negativePrompt: "UNSUPPORTED" });
+    expect(() => assertSettingsSupported(settings({ negativePrompt }), cannot)).not.toThrow();
+  });
+
+  it("still requires support once the negative prompt has real content", () => {
+    const cannot = capability({ negativePrompt: "UNSUPPORTED" });
+    expect(refusalOf(settings({ negativePrompt: "  no people  " }), cannot)!.code).toBe(
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("does not rewrite the negative prompt while interpreting it", () => {
+    // Capability *interpretation*, not normalization — the stored project value
+    // must survive untouched.
+    const s = settings({ negativePrompt: "  no people  " });
+    assertSettingsSupported(s, capability({ negativePrompt: "SUPPORTED" }));
+    expect(s.negativePrompt).toBe("  no people  ");
+  });
+
+  it("does not apply the blank rule to camera motion", () => {
+    // Deliberate asymmetry. `createProject` stores cameraMotion as given
+    // without trimming, nothing normalizes it downstream, and it reaches the
+    // provider as stored — so a blank one IS part of the request, including in
+    // the request hash. Treating it as absent here would make this rule
+    // disagree with what is actually being asked for.
+    const cannot = capability({ cameraMotion: "UNSUPPORTED" });
+    expect(refusalOf(settings({ cameraMotion: "   " }), cannot)!.code).toBe("VALIDATION_FAILED");
+    expect(() =>
+      assertSettingsSupported(settings({ cameraMotion: null }), cannot),
+    ).not.toThrow();
+  });
+
   it("refuses a camera motion the model does not honour", () => {
     const cannot = capability({ cameraMotion: "UNSUPPORTED" });
     expect(refusalOf(settings({ cameraMotion: "slow push in" }), cannot)!.code).toBe(

@@ -67,6 +67,19 @@ The last two refuse **only when actually requested** — a project that never se
 one is unaffected by the model lacking it, and refusing then would block work
 for no benefit.
 
+**"Requested" follows prompt compilation's own meaning for the negative
+prompt.** Blank and whitespace-only text is **absent**: `compileScenePrompt`
+normalizes it to `null`, so such a project compiles to `userNegative: null` and
+the model never sees it. Refusing there would block work over a field that was
+never going to be sent. The stored project value is read, never rewritten — this
+is capability *interpretation*, not normalization.
+
+**`cameraMotion` deliberately keeps a plain null check.** `createProject` stores
+it as given without trimming, nothing normalizes it downstream, and it reaches
+the provider as stored — so a blank camera motion genuinely *is* part of the
+request, including in the request hash. Applying the whitespace rule there would
+make this validation disagree with what is actually being asked for.
+
 Checks run in a fixed order, so the first refusal a caller sees is stable.
 
 **No real capability values ship in this milestone.** Every test uses a fixture
@@ -134,8 +147,12 @@ hand-rolled imitation would be a second, unverified source of truth.
   restating it, so the double cannot drift from the domain and therefore cannot
   drift from the SQL predicate the domain's own test pins. All five active
   states block a duplicate; all three terminal states release.
-- **Succeeded lookup** mirrors the adapter's semantics including deterministic
-  latest selection, using an insertion counter where the adapter uses `id`.
+- **Succeeded lookup** implements the adapter's ordering exactly: `createdAt`
+  descending, then **`id` descending**. Not merely "some deterministic order" —
+  the *same* one, or a service test could observe a different row than
+  production when two attempts share a timestamp and lexical id order runs
+  opposite to insertion order. `<` / `>` rather than `localeCompare`, matching
+  `orderScenes` and staying closer to PostgreSQL's ordering.
 - **Update** enumerates mutable fields, so identity and provenance cannot be
   written; an absent key leaves the field alone, which is what keeps a
   state-only update from clearing `providerPredictionId`.
@@ -156,6 +173,30 @@ real boundary check without a database.
 | `pnpm test:db` | **118 / 118**, 6 files (104 → +14); generation repository **65 / 65** |
 
 Schema and migrations: **zero diff**.
+
+## Defects found in review
+
+Both were P2s in the reviewed head `1c7d067`, fixed in place:
+
+1. **Blank negative prompts were treated as real capability requirements.**
+   `settings.negativePrompt !== null` counted `""`, `"   "` and `"\n\t"` as
+   customer-authored requirements, so a project with whitespace-only text would
+   have been refused against a model lacking negative-prompt support — even
+   though compilation normalizes it away and the model never receives it. Now
+   gated on non-whitespace content via a pure `isProvided` helper.
+2. **The in-memory succeeded lookup used a different tie-break than Prisma.**
+   The double ordered by insertion sequence where the adapter orders by `id`
+   descending. Those disagree exactly when insertion order runs opposite to
+   lexical order — so a service test could have observed a different row than
+   production, defeating the purpose of a shared double. The insertion-sequence
+   mechanism is removed; the double now uses `createdAt DESC, id DESC`.
+
+   The regression test is constructed to discriminate: `gen_zzz` is inserted
+   **first** and `gen_aaa` **second** with an identical timestamp, so
+   insertion-order-descending answers `gen_aaa` while the contract answers
+   `gen_zzz`. Verified by temporarily restoring the old comparator — the test
+   fails against it and passes against `id DESC`. The live PostgreSQL tie-break
+   test was made symmetric for the same reason.
 
 ## Defects discovered during implementation
 

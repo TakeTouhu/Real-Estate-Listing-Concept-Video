@@ -32,10 +32,6 @@ export class InMemorySceneGenerationRepository implements SceneGenerationReposit
   private readonly byId = new Map<string, SceneGeneration>();
   /** projectId → organizationId, the fixture stand-in for the video_projects row. */
   private readonly projectOwners = new Map<string, string>();
-  /** Monotonic insertion counter, breaking `createdAt` ties deterministically. */
-  private sequence = 0;
-  private readonly sequenceById = new Map<string, number>();
-
   constructor(private readonly clock: Clock) {}
 
   /** Test fixture: declare that `videoProjectId` belongs to `organizationId`. */
@@ -75,7 +71,6 @@ export class InMemorySceneGenerationRepository implements SceneGenerationReposit
     const now = this.clock.now();
     const row: SceneGeneration = { ...input, createdAt: now, updatedAt: now };
     this.byId.set(row.id, row);
-    this.sequenceById.set(row.id, ++this.sequence);
     return Promise.resolve(row);
   }
 
@@ -105,10 +100,14 @@ export class InMemorySceneGenerationRepository implements SceneGenerationReposit
     requestHash: string,
   ): Promise<SceneGeneration | null> {
     if (!this.owns(organizationId, videoProjectId)) return Promise.resolve(null);
-    // Same ordering the adapter declares: newest `createdAt` first, then a
-    // stable tie-break. Insertion order stands in for the adapter's `id`
-    // descending — both give one deterministic answer, which is the property
-    // the caller depends on.
+    // Exactly the adapter's ordering: `createdAt` descending, then `id`
+    // descending. Not "some deterministic order" — the *same* one, or a service
+    // test could observe a different row than production when two attempts share
+    // a timestamp and lexical id order differs from insertion order, which is
+    // precisely the case the double exists to model faithfully.
+    //
+    // `<` / `>` rather than `localeCompare`, matching `orderScenes` and staying
+    // closer to PostgreSQL's ordering than a locale-sensitive comparison.
     const rows = [...this.byId.values()]
       .filter(
         (candidate) =>
@@ -118,9 +117,8 @@ export class InMemorySceneGenerationRepository implements SceneGenerationReposit
       )
       .sort((a, b) => {
         const byTime = b.createdAt.getTime() - a.createdAt.getTime();
-        return byTime !== 0
-          ? byTime
-          : (this.sequenceById.get(b.id) ?? 0) - (this.sequenceById.get(a.id) ?? 0);
+        if (byTime !== 0) return byTime;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
       });
     return Promise.resolve(rows[0] ?? null);
   }

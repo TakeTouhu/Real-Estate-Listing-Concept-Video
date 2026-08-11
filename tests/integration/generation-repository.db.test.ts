@@ -378,7 +378,9 @@ describe.skipIf(!HAS_DB)("findLatestSucceededByRequestIdentity", () => {
 
   it("orders deterministically when two succeeded at the same instant", async () => {
     const at = new Date("2026-08-09T12:00:00.000Z");
-    for (const id of ["gen_aaa", "gen_zzz"]) {
+    // Inserted in the order OPPOSITE to `id` descending, so physical/insertion
+    // order cannot accidentally produce the right answer.
+    for (const id of ["gen_zzz", "gen_aaa"]) {
       await prisma.sceneGeneration.create({
         data: { ...generation(id, { state: "SUCCEEDED" }), createdAt: at, updatedAt: at },
       });

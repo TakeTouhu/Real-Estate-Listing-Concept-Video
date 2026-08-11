@@ -85,6 +85,23 @@ export interface GenerationRequestSettings {
   readonly negativePrompt: string | null;
 }
 
+/**
+ * Whether a customer-authored optional field carries anything real.
+ *
+ * Blank and whitespace-only text is **absent**, not empty — the same meaning
+ * `compileScenePrompt`'s `normalize` already applies, which is what makes this
+ * correct rather than merely convenient. A project whose negative prompt is
+ * `"   "` compiles to `userNegative: null`, so the model never sees it; refusing
+ * such a request for lacking negative-prompt support would block work over a
+ * field that was never going to be sent.
+ *
+ * Reads the string, never rewrites it. The stored project value is untouched —
+ * this is capability *interpretation*, not normalization.
+ */
+function isProvided(text: string | null): boolean {
+  return text !== null && text.trim().length > 0;
+}
+
 function durationAccepted(seconds: number, policy: DurationPolicy): boolean {
   if (!Number.isInteger(seconds) || seconds <= 0) return false;
   return policy.kind === "RANGE"
@@ -149,7 +166,14 @@ export function assertSettingsSupported(
   // The optional customer-authored inputs. Each is refused only when actually
   // requested: a project that never set one is unaffected by the model lacking
   // it, and refusing then would block work for no benefit.
-  if (settings.negativePrompt !== null && capability.negativePrompt === "UNSUPPORTED") {
+  //
+  // "Requested" follows prompt compilation's own meaning — blank and
+  // whitespace-only text is absent. `cameraMotion` deliberately uses a plain
+  // null check instead: `createProject` stores it as given without trimming,
+  // nothing normalizes it downstream, and it reaches the provider as stored.
+  // Treating a blank one as absent here would make this rule disagree with what
+  // the request actually is, including the request hash.
+  if (isProvided(settings.negativePrompt) && capability.negativePrompt === "UNSUPPORTED") {
     throw new AppError(
       "VALIDATION_FAILED",
       "This model does not honour a negative prompt; remove it or choose another model",

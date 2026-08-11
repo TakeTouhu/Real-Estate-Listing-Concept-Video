@@ -167,14 +167,39 @@ describe("latest succeeded lookup", () => {
     );
   });
 
-  it("breaks a same-timestamp tie deterministically", async () => {
-    // Two attempts in the same instant is entirely possible; the caller still
-    // has to get one stable answer.
-    await repo.create(ORG_A, generation("gen_first", { state: "SUCCEEDED" }));
-    await repo.create(ORG_A, generation("gen_second", { state: "SUCCEEDED" }));
-    const a = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
-    const b = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
-    expect(a?.id).toBe(b?.id);
+  it("breaks a same-timestamp tie by id descending, exactly as Prisma does", async () => {
+    // Review caught the double using insertion order here, which is NOT the
+    // adapter's `id DESC`. The two disagree precisely when insertion order runs
+    // opposite to lexical order — so that is what this constructs.
+    //
+    // Inserted "gen_zzz" FIRST and "gen_aaa" SECOND, with an identical
+    // timestamp. Insertion-order-descending would answer "gen_aaa"; the
+    // repository contract answers "gen_zzz". A test where the two orders agree
+    // would have passed under the defect.
+    await repo.create(ORG_A, generation("gen_zzz", { state: "SUCCEEDED" }));
+    await repo.create(ORG_A, generation("gen_aaa", { state: "SUCCEEDED" }));
+
+    const stored = repo.all();
+    expect(stored[0]!.id).toBe("gen_zzz"); // insertion order, for contrast
+    expect(stored[0]!.createdAt).toEqual(stored[1]!.createdAt); // a genuine tie
+
+    const found = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
+    expect(found?.id).toBe("gen_zzz");
+    // And stable across repeats.
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe(
+      "gen_zzz",
+    );
+  });
+
+  it("prefers a newer timestamp over a lexically greater id", async () => {
+    // `createdAt` is the primary key of the ordering; `id` only breaks ties.
+    await repo.create(ORG_A, generation("gen_zzz", { state: "SUCCEEDED" }));
+    deps.clock.advanceSeconds(60);
+    await repo.create(ORG_A, generation("gen_aaa", { state: "SUCCEEDED" }));
+
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe(
+      "gen_aaa",
+    );
   });
 
   it("is tenant-scoped and project-scoped", async () => {
