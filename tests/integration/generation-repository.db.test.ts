@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createPrismaSceneGenerationRepository } from "@app/database";
 import {
+  ACTIVE_SCENE_GENERATION_STATES,
   ActiveGenerationConflictError,
   SceneGenerationNotFoundError,
   type NewSceneGeneration,
@@ -24,6 +25,7 @@ const ORG_B = "org_itest_gr_b";
 const PROP_A = "prp_itest_gr_a";
 const PROP_B = "prp_itest_gr_b";
 const PROJECT_A = "vpr_itest_gr_a";
+const PROJECT_A2 = "vpr_itest_gr_a2";
 const PROJECT_B = "vpr_itest_gr_b";
 const HASH = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -49,6 +51,21 @@ function generation(id: string, overrides: Partial<NewSceneGeneration> = {}): Ne
     outputStorageKey: null,
     ...overrides,
   };
+}
+
+function seedProject(organizationId: string, propertyId: string, projectId: string) {
+  return prisma.videoProject.create({
+    data: {
+      id: projectId,
+      organizationId,
+      propertyId,
+      name: "Walkthrough",
+      durationSeconds: 12,
+      aspectRatio: "16:9",
+      resolution: "1080p",
+      createdBy: "usr_itest_gr",
+    },
+  });
 }
 
 async function seedTenant(organizationId: string, propertyId: string, projectId: string) {
@@ -101,6 +118,9 @@ beforeEach(async () => {
   await cleanup();
   await seedTenant(ORG_A, PROP_A, PROJECT_A);
   await seedTenant(ORG_B, PROP_B, PROJECT_B);
+  // A second project in the SAME organization, so "scoped per project" is
+  // distinguishable from "scoped per tenant".
+  await seedProject(ORG_A, PROP_A, PROJECT_A2);
 });
 
 afterAll(async () => {
@@ -283,6 +303,122 @@ describe.skipIf(!HAS_DB)("findActiveByRequestIdentity", () => {
   it("returns null for a request hash nobody has attempted", async () => {
     await repo.create(ORG_A, generation("gen_a"));
     expect(await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, "sha256:other")).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("findLatestSucceededByRequestIdentity", () => {
+  // The narrow history query, and the only one this repository has. It exists
+  // so an identical already-succeeded request does not automatically become a
+  // second billable attempt. Terminal states release the active identity, so
+  // findActiveByRequestIdentity provably cannot see these rows.
+
+  it("returns a succeeded attempt for the owning organization", async () => {
+    await repo.create(ORG_A, generation("gen_ok", { state: "SUCCEEDED" }));
+    const found = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
+    expect(found?.id).toBe("gen_ok");
+    expect(found?.state).toBe("SUCCEEDED");
+  });
+
+  it("cannot be seen by another organization", async () => {
+    await repo.create(ORG_A, generation("gen_ok", { state: "SUCCEEDED" }));
+    expect(await repo.findLatestSucceededByRequestIdentity(ORG_B, PROJECT_A, HASH)).toBeNull();
+  });
+
+  it("returns null for an unknown project or an unattempted request hash", async () => {
+    await repo.create(ORG_A, generation("gen_ok", { state: "SUCCEEDED" }));
+    expect(
+      await repo.findLatestSucceededByRequestIdentity(ORG_A, "vpr_never_existed", HASH),
+    ).toBeNull();
+    expect(
+      await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, "sha256:never"),
+    ).toBeNull();
+  });
+
+  it.each(ACTIVE_SCENE_GENERATION_STATES)("does not return an attempt that is %s", async (state) => {
+    // An in-flight attempt is the other lookup's business. Returning it here
+    // would let the service treat "still running" as "already delivered".
+    await repo.create(ORG_A, generation("gen_active", { state }));
+    expect(await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH)).toBeNull();
+  });
+
+  it.each(["FAILED_TERMINAL", "CANCELLED"] as const)(
+    "does not return an attempt that is %s",
+    async (state: SceneGenerationState) => {
+      // These release the identity precisely so a new attempt is allowed.
+      await repo.create(ORG_A, generation("gen_term", { state }));
+      expect(await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH)).toBeNull();
+    },
+  );
+
+  it("returns the most recent when several have succeeded", async () => {
+    // createdAt descending, id descending as tie-break — declared by the
+    // adapter rather than left to the planner.
+    await prisma.sceneGeneration.create({
+      data: {
+        ...generation("gen_old", { state: "SUCCEEDED" }),
+        createdAt: new Date("2026-08-01T00:00:00.000Z"),
+        updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+    });
+    await prisma.sceneGeneration.create({
+      data: {
+        ...generation("gen_new", { state: "SUCCEEDED" }),
+        createdAt: new Date("2026-08-09T00:00:00.000Z"),
+        updatedAt: new Date("2026-08-09T00:00:00.000Z"),
+      },
+    });
+
+    const found = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
+    expect(found?.id).toBe("gen_new");
+    // Stable across repeats: nothing depends on physical row order.
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe(
+      "gen_new",
+    );
+  });
+
+  it("orders deterministically when two succeeded at the same instant", async () => {
+    const at = new Date("2026-08-09T12:00:00.000Z");
+    // Inserted in the order OPPOSITE to `id` descending, so physical/insertion
+    // order cannot accidentally produce the right answer.
+    for (const id of ["gen_zzz", "gen_aaa"]) {
+      await prisma.sceneGeneration.create({
+        data: { ...generation(id, { state: "SUCCEEDED" }), createdAt: at, updatedAt: at },
+      });
+    }
+    // `id` descending breaks the tie, so the answer is defined rather than
+    // whatever the database happened to return first.
+    const found = await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH);
+    expect(found?.id).toBe("gen_zzz");
+  });
+
+  it("does not confuse the same request hash under another project", async () => {
+    await repo.create(ORG_A, generation("gen_p1", { state: "SUCCEEDED" }));
+    await repo.create(
+      ORG_A,
+      generation("gen_p2", { videoProjectId: PROJECT_A2, state: "SUCCEEDED" }),
+    );
+
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe(
+      "gen_p1",
+    );
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A2, HASH))?.id).toBe(
+      "gen_p2",
+    );
+  });
+
+  it("does not confuse the same request hash in another tenant", async () => {
+    await repo.create(ORG_A, generation("gen_a", { state: "SUCCEEDED" }));
+    await repo.create(
+      ORG_B,
+      generation("gen_b", { videoProjectId: PROJECT_B, state: "SUCCEEDED" }),
+    );
+
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))?.id).toBe(
+      "gen_a",
+    );
+    expect((await repo.findLatestSucceededByRequestIdentity(ORG_B, PROJECT_B, HASH))?.id).toBe(
+      "gen_b",
+    );
   });
 });
 

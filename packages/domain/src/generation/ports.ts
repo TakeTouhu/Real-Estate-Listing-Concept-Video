@@ -107,6 +107,34 @@ export interface SceneGenerationRepository {
   ): Promise<SceneGeneration | null>;
 
   /**
+   * The most recent **succeeded** attempt holding this request identity, if any.
+   *
+   * Exists for one narrow reason: an identical request that has already
+   * succeeded must not automatically become another attempt, because on a paid
+   * provider that is a second charge for a result we already have. Terminal
+   * states release the active identity, so
+   * {@link SceneGenerationRepository.findActiveByRequestIdentity} cannot see
+   * this and a separate lookup is unavoidable.
+   *
+   * Narrow on purpose — it is not a history API. There is no listing, no
+   * pagination, no general terminal or state filter, because no caller needs
+   * one and a broader query would invite policy nobody has agreed.
+   *
+   * "Most recent" is defined explicitly rather than left to the database:
+   * `createdAt` descending, then `id` descending as a tie-break, so two rows
+   * written in the same millisecond still order deterministically.
+   *
+   * **This is duplicate-spend prevention, not output reuse.** Whether a
+   * succeeded attempt's managed output is actually still usable depends on
+   * `outputStorageKey`, which nothing populates until Phase 4D.
+   */
+  findLatestSucceededByRequestIdentity(
+    organizationId: string,
+    videoProjectId: string,
+    requestHash: string,
+  ): Promise<SceneGeneration | null>;
+
+  /**
    * Apply execution-field changes to one attempt.
    *
    * @throws {SceneGenerationNotFoundError} when no row in this organization has

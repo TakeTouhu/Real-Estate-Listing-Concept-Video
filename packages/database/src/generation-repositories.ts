@@ -176,6 +176,27 @@ export function createPrismaSceneGenerationRepository(
       return row ? toGeneration(row) : null;
     },
 
+    async findLatestSucceededByRequestIdentity(
+      organizationId: string,
+      videoProjectId: string,
+      requestHash: string,
+    ) {
+      const row = await prisma.sceneGeneration.findFirst({
+        where: {
+          videoProjectId,
+          requestHash,
+          state: "SUCCEEDED",
+          videoProject: { organizationId },
+        },
+        // Explicit and total. `createdAt` alone can tie — two attempts written
+        // in the same millisecond are entirely possible — so `id` breaks it,
+        // and the caller gets the same row every time rather than whatever the
+        // planner happened to return.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      return row ? toGeneration(row) : null;
+    },
+
     async update(organizationId: string, id: string, changes: SceneGenerationUpdate) {
       // `changes` cannot express identity, provenance, or either timestamp, so
       // the fields enumerated here are exactly the mutable set. An absent key

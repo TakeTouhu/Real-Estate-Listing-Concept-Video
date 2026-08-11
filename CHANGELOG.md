@@ -3,9 +3,51 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4A-2b: scene-generation repository boundary
+## [Unreleased] — Phase 4B-1a: generation foundations
 
-Under review. Not merged. See `docs/phase-4a2b-completion.md`.
+Under review. Not merged. See `docs/phase-4b1a-completion.md`.
+
+### Added
+
+- **`VideoModelCapability` + `VideoModelCapabilityProvider`** — a provider-neutral
+  description of what a configured model can actually do, and the port through
+  which orchestration reads it. `DurationPolicy` has both a range and an
+  enumerated form because real models differ and collapsing them would force a
+  lie about whichever does not fit.
+- **`assertSettingsSupported`** — the pure rule that refuses a request the model
+  cannot satisfy, before anything billable can happen. Duration, resolution,
+  aspect ratio, and the two optional customer-authored inputs.
+- **`findLatestSucceededByRequestIdentity`** — the one narrow history query the
+  repository has. Terminal states release the active identity, so the active
+  lookup provably cannot see a succeeded attempt; without this, an identical
+  already-succeeded request would automatically become a second paid attempt.
+- **`InMemorySceneGenerationRepository`** — models the repository contract for
+  Phase 4B-1b's service tests, importing `ACTIVE_SCENE_GENERATION_STATES` rather
+  than restating it.
+
+### Notes
+
+- **"No `aspect_ratio` parameter" is not "aspect ratio supported".**
+  `AspectRatioSupport` describes the *delivered video*, not request fields.
+  Absence of a way to ask is not evidence the request was honoured, so a model
+  marked `UNSUPPORTED` causes a project requesting a ratio to be **refused** —
+  never silently served an unknown shape.
+- **No real capability values ship here.** Every test uses a fixture descriptor
+  explicitly labelled as invented; the verified WaveSpeed descriptor is Phase
+  4B-2's, after the provider contract is checked against an authoritative source.
+- The succeeded lookup orders by `createdAt` then `id`, both descending —
+  explicit and total, because two attempts can share a millisecond. A live test
+  creates exactly that tie.
+- **Duplicate-spend prevention is not output reuse.** Whether a succeeded
+  attempt is usable depends on `outputStorageKey`, which nothing populates until
+  Phase 4D.
+- No `GenerationService`, no queue, no provider call, no schema change. Nothing
+  calls the capability provider yet.
+
+## [phase-4a2b-complete] — Phase 4A-2b: scene-generation repository boundary
+
+Merged in PR #30 as `53cc574cf3f3b1138c794c84cb6baa79b1479100`.
+See `docs/phase-4a2b-completion.md`.
 
 ### Added
 
