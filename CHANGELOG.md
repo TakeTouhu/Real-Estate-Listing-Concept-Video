@@ -3,6 +3,49 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4B-1b: single-scene generation admission
+
+Under review. Not merged. See `docs/phase-4b1b-completion.md`.
+
+### Added
+
+- **`GenerationService.startScene`** — the one operation that safely admits a
+  single storyboard scene for generation: authorize `property:write` → hard
+  freshness gate → resolve the scene only inside the scoped storyboard view →
+  refuse a scene with no compiled prompt → snapshot capability once and validate
+  → compute the request hash → reuse an active or succeeded attempt, else create
+  → enqueue → audit. It creates nothing on any refusal or reuse, calls no
+  provider, and writes no storage.
+- **`SceneGenerationQueue` + `SceneGenerationJob`** — a domain-owned queue port
+  whose entire payload is `{ generationId }`; no organization id, prompt,
+  provider detail, URL, or credential. The production `@app/queue` adapter is
+  still deferred to Phase 4C.
+- **`generation.requested` audit action** (`resourceType: scene_generation`) —
+  emitted once per newly created attempt, only after a successful enqueue, with
+  an explicit metadata allowlist and no prompt or secret leakage.
+- **`StoryboardReader`** — a narrow consumer-owned port (freshness + the scoped
+  project and scenes) that `StoryboardService` satisfies structurally, so
+  generation orchestration reuses the freshness decision without re-deriving a
+  fingerprint.
+- **`RecordingSceneGenerationQueue`** — a test-only queue double that records
+  payloads and can fail the next enqueue on demand.
+
+### Notes
+
+- **Ordering is `create → enqueue → audit`.** A job never accepted by the queue
+  is never recorded as requested for execution. Enqueue failure leaves a durable
+  `QUEUED` row (not deleted, not failed, identity intact) and audits nothing; a
+  later call returns that row without re-enqueuing. Phase 4C's `QUEUED` sweep is
+  the recovery mechanism, not `startScene`.
+- **Reuse is duplicate-spend prevention, not output reuse.** A succeeded attempt
+  is returned to avoid a second charge; whether its output is usable waits on
+  `outputStorageKey` in Phase 4D. Deliberate regeneration is not exposed here.
+- **The database partial unique index remains the concurrency authority.** A
+  create that loses the active-request race converges by re-reading active then
+  succeeded; an unreconcilable conflict is a neutral `INTERNAL_ERROR`, never a
+  validation error. `create` is attempted at most once — no retry loop.
+- No schema, migration, provider, or storage change. See ADR-0017.
+
 ## [Unreleased] — Phase 4B-1a: generation foundations
 
 Under review. Not merged. See `docs/phase-4b1a-completion.md`.

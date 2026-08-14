@@ -193,8 +193,8 @@ reserved for a webhook.
 | 4A-1 | Generation state model, active/terminal sets, request identity, ADR-0016 | 655 — 310 production + 345 tests (estimated 517; **overran, reported not trimmed**) + a 118/19 review fix allowing `PROCESSING → FAILED_RETRYABLE` | **Merged** (PR #28, `daa685b`) |
 | 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | 761 — 189 production + 572 tests (re-cost ~725 raw / ~800–900; **first estimate in six milestones that did not overrun**) | **Merged** (PR #29, `6e681c2`) |
 | 4A-2b | Generation repository port, narrow update contract, Prisma adapter, typed not-found and conflict errors, P2002 translation, organization-addressed `create` | 789 + a 178/35 review fix for a `create`-path tenant-boundary defect | **Merged** (PR #30, `53cc574`) |
-| 4B-1a | Capability contract + pure validation, narrow succeeded lookup, in-memory generation repository | re-cost ~729 raw / ~760–820 | In review |
-| 4B-1b | `GenerationService.startScene` orchestration, queue port, audit | pre-approved at ~830–900 | Not started |
+| 4B-1a | Capability contract + pure validation, narrow succeeded lookup, in-memory generation repository | 920 (two P2 fixes) | **Merged** (PR #31, `7d1cca8`) |
+| 4B-1b | `GenerationService.startScene` single-scene admission, queue port, `generation.requested` audit, `StoryboardReader` port, recording queue double | ~360 prod / ~590 test / ~450 docs | In review |
 | 4B-2 | Verified provider/model capability descriptor + adapter contract corrections | — | Not started (blocked on provider-contract verification) |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
@@ -227,8 +227,9 @@ confirmation rather than inference from marketing copy.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0016, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0017, plus `docs/decisions/TODO.md` for open items.
 ADR-0015 is the current authority on review corrections; ADR-0012 and ADR-0013
 each carry a dated partial-supersession note rather than a rewrite. ADR-0016
 covers scene-generation state, local idempotency, and ambiguous provider
-submission.
+submission; ADR-0017 covers single-scene generation admission, reuse precedence,
+and the `create → enqueue → audit` side-effect ordering.

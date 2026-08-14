@@ -1,4 +1,47 @@
+import type { StoryboardView } from "../storyboard/storyboard-service";
 import type { SceneGeneration, SceneGenerationState } from "./types";
+
+/**
+ * The **only** slice of `StoryboardService` that generation orchestration
+ * depends on.
+ *
+ * A consumer-owned port, not an import of the concrete service. `StoryboardService`
+ * satisfies it structurally, which a compile-time assignment in the tests pins,
+ * so the two shapes cannot silently diverge. The value of the narrowing is
+ * concrete: `GenerationService` can be tested against a tiny stub instead of the
+ * full analysis/asset/moderator harness `StoryboardService` needs, and — more
+ * importantly — the freshness *decision* stays behind this boundary. Nothing on
+ * the generation side re-derives a fingerprint or re-implements what "fresh"
+ * means; it calls {@link assertFresh} and reads {@link StoryboardView.fresh}.
+ *
+ * Both methods authorize internally (membership for the read; `assertFresh`
+ * likewise), so the port is not a way around authorization — the service still
+ * performs its own `property:write` check first.
+ */
+export interface StoryboardReader {
+  /**
+   * Refuse a project whose storyboard is absent or stale, with the existing
+   * distinct messages. Throws `VALIDATION_FAILED` for both `NEVER_COMPOSED` and
+   * `STALE`; the generation side does not distinguish them.
+   */
+  assertFresh(
+    actorUserId: string,
+    organizationId: string,
+    videoProjectId: string,
+  ): Promise<void>;
+
+  /**
+   * The project, its scenes (organization- and project-scoped), and whether the
+   * stored storyboard still matches its inputs. The scene set is the **only**
+   * place a `storyboardSceneId` may be resolved, which is what makes a scene
+   * from another project indistinguishable from a missing one.
+   */
+  getStoryboard(
+    actorUserId: string,
+    organizationId: string,
+    videoProjectId: string,
+  ): Promise<StoryboardView>;
+}
 
 /**
  * A generation attempt as it is first written. `createdAt` and `updatedAt` are

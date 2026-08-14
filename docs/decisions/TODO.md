@@ -238,7 +238,21 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       process it** until a worker sweeps for `QUEUED` rows with no queue
       delivery. The `(state)` index added in Phase 4A-2a exists for that scan.
       This is not optional cleanup: without it, an enqueue failure silently
-      strands customer work. **Required before Phase 4C ships.**
+      strands customer work. **Required before Phase 4C ships.** As of Phase
+      4B-1b this stranded-`QUEUED` condition is live: `GenerationService.startScene`
+      leaves the row `QUEUED` on enqueue (or audit) failure and a later call
+      returns it without re-enqueuing, so the recovery sweep is now the only
+      thing that will move it forward.
+- [ ] **Phase 4C MUST define a trusted, system-scoped worker lookup for a
+      `generationId`-only queue job.** The Phase 4B-1b queue payload
+      (`SceneGenerationJob`) is `{ generationId }` and nothing else — no
+      `organizationId`, by decision (ADR-0017 §13). But every tenant-facing
+      `SceneGenerationRepository` method requires an `organizationId`, so a
+      worker holding only the job payload cannot currently load the row. Phase
+      4C must add a system-scoped read that resolves a generation from its id
+      alone **without** weakening or widening the organization-scoped
+      tenant-facing methods, and **without** adding tenant identifiers to the
+      queue payload. **Required before Phase 4C ships.**
 - [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
       added `findLatestSucceededByRequestIdentity`, which prevents *automatic
       repeat spend* — but returning a succeeded attempt is not the same as
