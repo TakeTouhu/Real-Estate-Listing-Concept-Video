@@ -2,19 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { WaveSpeedVideoProvider } from "./wavespeed-provider";
 import type { WaveSpeedConfig } from "./config";
 import type { HttpClient, HttpRequest, HttpResponse } from "./http";
+import { WAVESPEED_OPEN_VIDEO_MODEL_ID } from "@app/shared";
 import { isProviderErrorException } from "../errors";
 import type { ProviderGenerationInput, ProviderGenerationRef } from "../types";
 
 const config: WaveSpeedConfig = {
   apiKey: "super-secret-key",
   baseUrl: "https://api.wavespeed.ai/api/v3",
-  modelId: "wavespeed-ai/open-video/image-to-video",
   poll: { initialMs: 1000, maxMs: 10000, timeoutMs: 60000 },
   pricing: { currency: "USD", costPerSecondMinor: 10 },
 };
 
 const input: ProviderGenerationInput = {
-  modelId: config.modelId,
+  modelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
   sourceImageUrl: "https://storage.internal/o/org/img?token=x",
   prompt: "bright natural interior",
   durationSeconds: 5,
@@ -83,7 +83,7 @@ describe("WaveSpeedVideoProvider (injected http, no network)", () => {
     const provider = new WaveSpeedVideoProvider(config, { http, now });
     const ref: ProviderGenerationRef = {
       provider: "wavespeed",
-      modelId: config.modelId,
+      modelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
       predictionId: "pred_9",
       submittedAt: now().toISOString(),
     };

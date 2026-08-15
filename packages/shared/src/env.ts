@@ -9,6 +9,23 @@ const booleanish = z
   .enum(["true", "false", "1", "0"])
   .transform((v) => v === "true" || v === "1");
 
+/**
+ * The single authoritative id of the configured WaveSpeedAI video model.
+ *
+ * It lives here, beside the environment schema, because that is the one place
+ * both sides of the boundary can reach: `@app/video-providers` depends on
+ * `@app/shared`, not the reverse, so a constant in the adapter package could
+ * not supply this schema's default. Previously the id was a bare literal here
+ * *and* an unused `WaveSpeedConfig.modelId` field, which let the capability
+ * descriptor and the configured default drift apart silently (ADR-0019).
+ *
+ * This is the **default model for new admissions only**. It is emphatically not
+ * the model an existing generation executes against: a persisted
+ * `providerModelId` is frozen at admission and stays authoritative, so changing
+ * this constant can never retarget work already admitted.
+ */
+export const WAVESPEED_OPEN_VIDEO_MODEL_ID = "wavespeed-ai/open-video/image-to-video";
+
 export const serverEnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -42,10 +59,7 @@ export const serverEnvSchema = z
     // WaveSpeedAI configuration (server-side only; optional while provider=fake).
     WAVESPEED_API_KEY: z.string().min(1).optional(),
     WAVESPEED_API_BASE_URL: z.string().url().default("https://api.wavespeed.ai/api/v3"),
-    WAVESPEED_VIDEO_MODEL_ID: z
-      .string()
-      .min(1)
-      .default("wavespeed-ai/open-video/image-to-video"),
+    WAVESPEED_VIDEO_MODEL_ID: z.string().min(1).default(WAVESPEED_OPEN_VIDEO_MODEL_ID),
     WAVESPEED_WEBHOOK_SECRET: z.string().min(1).optional(),
     WAVESPEED_POLL_INITIAL_MS: z.coerce.number().int().positive().default(2000),
     WAVESPEED_POLL_MAX_MS: z.coerce.number().int().positive().default(15000),

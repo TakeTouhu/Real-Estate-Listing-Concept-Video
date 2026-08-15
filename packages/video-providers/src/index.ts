@@ -12,3 +12,9 @@ export type { WaveSpeedConfig, WaveSpeedPollConfig } from "./wavespeed/config";
 export { FetchHttpClient } from "./wavespeed/http";
 export type { HttpClient, HttpRequest, HttpResponse } from "./wavespeed/http";
 export * from "./wavespeed/mapping";
+export {
+  OPEN_VIDEO_CAPABILITY,
+  OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS,
+  OPEN_VIDEO_REQUEST_FIELDS,
+  createOpenVideoCapabilityProvider,
+} from "./wavespeed/capability";

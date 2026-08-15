@@ -288,6 +288,34 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       provider boundary and must preserve ADR-0014's structural separation of
       preservation rules, system negatives, and user text. A second renderer
       anywhere is a defect. **Required before Phase 4C ships.**
+- [ ] **PHASE 5 HARD PREREQUISITE — normalize the delivered video to the
+      admitted `requestAspectRatio`.** The selected OpenVideo model documents no
+      `aspect_ratio` parameter, so the capability is declared
+      `COMPOSITION_OWNED` (ADR-0019): admission accepts and persists the
+      requested ratio, and the provider is never asked for it. **Phase 5 is NOT
+      complete while the product can accept a requested aspect ratio and
+      silently deliver another one.** This is not an OpenVideo guarantee and must
+      never be described as one. The admitted value is on the generation row as
+      `requestAspectRatio` and needs no lookup.
+- [ ] **Phase 4B-2b must render camera-motion intent into the positive prompt.**
+      `cameraMotion` is declared `PROMPT_RENDERED` (ADR-0019 §8) because the
+      model's documentation states the prompt controls motion. That declaration
+      is a promise the type system cannot enforce; if 4B-2b does not render
+      `CompiledPrompt.sceneFacts.cameraMotion`, the descriptor becomes a lie and
+      must be changed to `UNSUPPORTED` instead.
+- [ ] **WaveSpeedAI `preset` parameter — contract unresolved.** It appears in the
+      official Quick Start example (`preset: "tuned"`) but not in the model's
+      high-level parameter table, so its required/optional status and allowed
+      values are unknown. Phase 4B-2a deliberately does **not** send it. Resolve
+      against the authoritative API/schema material before any milestone adds it;
+      an example is not a specification.
+- [ ] **Earlier duration validation (UX follow-up, deliberately not done).**
+      `DurationBounds` comes from the compose request body with no server-side
+      clamp, so a caller can compose 1s or 30s scenes that only fail later at
+      generation admission against OpenVideo's documented 3–20s range. Coupling
+      Phase 3 composition to one provider's limits needs provider-aware
+      composition, which the architecture does not have; admission remains the
+      provider-specific authority. Revisit if the late failure proves confusing.
 - [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
       added `findLatestSucceededByRequestIdentity`, which prevents *automatic
       repeat spend* — but returning a succeeded attempt is not the same as

@@ -229,3 +229,59 @@ describe("outcome", () => {
     expect(lastRequest().body.name).toBe("Walkthrough");
   });
 });
+
+/**
+ * Phase 4B-2a: the unsupported negative-prompt control.
+ *
+ * The configured production model documents no `negative_prompt` parameter, so
+ * a project carrying one is refused at generation admission. Offering the field
+ * here would invite a customer to write a requirement the product cannot honour
+ * and fail them later, at the point they ask for a video (ADR-0019).
+ *
+ * These assertions discriminate: the pre-existing "optional fields only when
+ * they carry text" case passed before the removal too, because a blank field
+ * was already omitted from the body.
+ */
+describe("unsupported provider features are not offered", () => {
+  it("renders no negative-prompt control", () => {
+    panel();
+    expect(screen.queryByLabelText("Anything to avoid? (optional)")).toBeNull();
+    expect(screen.queryByLabelText(/avoid/i)).toBeNull();
+  });
+
+  it("keeps the controls whose intent the model can honour", () => {
+    // Aspect ratio survives because composition owns the guarantee; camera
+    // motion survives because the model's prompt input carries the intent.
+    panel();
+    expect(screen.getByLabelText("Aspect ratio")).toBeTruthy();
+    expect(screen.getByLabelText("Camera motion (optional)")).toBeTruthy();
+    expect(screen.getByLabelText("Resolution")).toBeTruthy();
+  });
+
+  it("cannot send negativePrompt even with every visible field filled", async () => {
+    fetchMock.mockResolvedValue(respond(201));
+    panel();
+    await fillRequired();
+    await userEvent.type(
+      screen.getByLabelText("What should the walkthrough feel like? (optional)"),
+      "bright and airy",
+    );
+    await userEvent.type(screen.getByLabelText("Camera motion (optional)"), "SLOW_PAN");
+    await userEvent.click(createButton());
+
+    const { body } = lastRequest();
+    expect(body).not.toHaveProperty("negativePrompt");
+    // And nothing else crept in: exactly the fields this form can express.
+    expect(Object.keys(body).sort()).toEqual(
+      [
+        "organizationId",
+        "name",
+        "durationSeconds",
+        "aspectRatio",
+        "resolution",
+        "prompt",
+        "cameraMotion",
+      ].sort(),
+    );
+  });
+});

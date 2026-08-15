@@ -30,31 +30,61 @@ describe("request mapping", () => {
     );
   });
 
-  it("maps normalized input to the candidate request body", () => {
-    const req = mapToWaveSpeedRequest(input, "https://api.wavespeed.ai/api/v3");
+  it("sends exactly the documented request fields, and nothing else", () => {
+    // The load-bearing assertion of Phase 4B-2a. An earlier version of this
+    // adapter sent `aspect_ratio`, `negative_prompt` and `camera_motion` — none
+    // of which the selected OpenVideo model documents — and the old test froze
+    // that shape rather than catching it. An exact key set, not `toMatchObject`,
+    // is what makes an undocumented field impossible to reintroduce quietly.
+    const req = mapToWaveSpeedRequest(
+      { ...input, seed: undefined },
+      "https://api.wavespeed.ai/api/v3",
+    );
     expect(req.url).toBe(
       "https://api.wavespeed.ai/api/v3/wavespeed-ai/open-video/image-to-video",
     );
-    expect(req.body).toMatchObject({
+    expect(Object.keys(req.body).sort()).toEqual(
+      ["duration", "image", "prompt", "resolution"].sort(),
+    );
+    expect(req.body).toEqual({
       image: input.sourceImageUrl,
       prompt: input.prompt,
-      negative_prompt: input.negativePrompt,
-      camera_motion: input.cameraMotion,
-      seed: 42,
       duration: 6,
-      aspect_ratio: "16:9",
       resolution: "1080p",
     });
   });
 
-  it("omits optional fields when absent", () => {
+  it("adds seed only when a caller supplies one", () => {
+    const withSeed = mapToWaveSpeedRequest({ ...input, seed: 42 }, "https://api.wavespeed.ai/api/v3");
+    expect(Object.keys(withSeed.body).sort()).toEqual(
+      ["duration", "image", "prompt", "resolution", "seed"].sort(),
+    );
+    expect(withSeed.body.seed).toBe(42);
+  });
+
+  it.each(["aspect_ratio", "negative_prompt", "camera_motion", "preset"])(
+    "never sends %s, which this model does not document",
+    (field) => {
+      // Present on the normalized input, absent from the wire. Aspect ratio is
+      // COMPOSITION_OWNED (Phase 5 normalizes the output); the negative prompt
+      // is refused at admission; camera motion travels in the prompt; `preset`
+      // has an unresolved contract.
+      const req = mapToWaveSpeedRequest(
+        { ...input, seed: 42 },
+        "https://api.wavespeed.ai/api/v3",
+      );
+      expect(req.body).not.toHaveProperty(field);
+    },
+  );
+
+  it("builds the submit url from the input model id, not from configuration", () => {
+    // What lets an already-admitted generation execute against the model it was
+    // admitted under, even after the configured default changes.
     const req = mapToWaveSpeedRequest(
-      { ...input, negativePrompt: undefined, cameraMotion: undefined, seed: undefined },
+      { ...input, modelId: "some-vendor/frozen-model" },
       "https://api.wavespeed.ai/api/v3",
     );
-    expect(req.body).not.toHaveProperty("negative_prompt");
-    expect(req.body).not.toHaveProperty("camera_motion");
-    expect(req.body).not.toHaveProperty("seed");
+    expect(req.url).toBe("https://api.wavespeed.ai/api/v3/some-vendor/frozen-model");
   });
 });
 
