@@ -398,6 +398,22 @@ model SceneGeneration {
   /// Internal only. Which provider and model the request was addressed to.
   providerName            String
   providerModelId         String
+  /// --- Immutable request snapshot (ADR-0018) ---------------------------------
+  /// Everything needed to rebuild the exact admitted provider request without
+  /// dereferencing the storyboard scene (recomposition deletes it) or reading
+  /// mutable project settings. With assetId + providerName + providerModelId
+  /// above, these complete all eight requestHash facts, so a row can recompute
+  /// its own hash. Nullable ONLY for rows admitted before this contract existed;
+  /// those are never backfilled, because fabricating a snapshot from today's
+  /// storyboard would forge a request that was never admitted.
+  /// Customer-authored text. Never logged, audited, or put on a queue payload.
+  requestCompiledPrompt   String?
+  /// The scene's own allocated duration, not the project total.
+  requestDurationSeconds  Int?
+  /// Null is a legitimate request value here, not only a legacy marker.
+  requestCameraMotion     String?
+  requestAspectRatio      String?
+  requestResolution       String?
   state                   SceneGenerationState @default(QUEUED)
   /// Internal only. Non-null exactly when a provider prediction is known.
   /// Never exposed to a customer (ADR-0016).

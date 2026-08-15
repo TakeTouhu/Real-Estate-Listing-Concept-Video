@@ -145,6 +145,15 @@ The order is fixed and the reasoning is financial: **audit is emitted only after
 the queue has accepted the job.** A record of "requested for execution" that
 outran a successful enqueue would assert work that a worker will never see.
 
+> **Amended 2026-08-15 by ADR-0018 (Phase 4B-1c).** The `create` step now
+> durably persists the immutable request snapshot as well — the compiled prompt,
+> duration, camera motion, aspect ratio and resolution the request was admitted
+> under — taken from the same resolved scene, project and capability that
+> produced `requestHash`, with nothing re-read in between. The ordering itself is
+> unchanged; what changes is that the row written before the enqueue is now
+> sufficient to reconstruct the request without the storyboard scene or the
+> project's current settings. See ADR-0018.
+
 - **Enqueue failure** leaves the durable `QUEUED` row exactly as it is — not
   deleted, not marked `FAILED_RETRYABLE` or `FAILED_TERMINAL`, its active
   identity intact — audits nothing, and propagates the queue error. A later

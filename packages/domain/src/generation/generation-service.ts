@@ -174,12 +174,15 @@ export class GenerationService {
     );
     if (succeeded) return succeeded;
 
-    // (11) A genuinely new attempt.
+    // (11) A genuinely new attempt. The compiled prompt is passed separately as
+    // a proven `string`, so the snapshot cannot be written with a null prompt
+    // even if this guard were ever moved or removed.
     return this.admitNewAttempt(
       actorUserId,
       organizationId,
       view.project,
       scene,
+      scene.compiledPrompt,
       requestHash,
       capability,
     );
@@ -198,6 +201,8 @@ export class GenerationService {
     organizationId: string,
     project: VideoProject,
     scene: StoryboardScene,
+    /** Proven non-null by the caller; typed as `string` so it cannot regress. */
+    compiledPrompt: string,
     requestHash: string,
     capability: VideoModelCapability,
   ): Promise<SceneGeneration> {
@@ -211,6 +216,21 @@ export class GenerationService {
       requestHash,
       providerName: capability.providerName,
       providerModelId: capability.providerModelId,
+      // The immutable request snapshot (ADR-0018), taken from the SAME resolved
+      // `scene`, `project` and `capability` that produced `requestHash` above —
+      // nothing is re-read in between, so the snapshot and the hash cannot
+      // describe different requests. It is what makes an admitted attempt
+      // executable after recomposition deletes the scene or the project's
+      // settings are edited.
+      //
+      // The prompt arrives as a proven `string`, so this field can never be
+      // silently null for a new attempt. Stored opaque and byte-identical to
+      // what was hashed — never parsed, never re-serialized.
+      requestCompiledPrompt: compiledPrompt,
+      requestDurationSeconds: scene.durationSeconds,
+      requestCameraMotion: scene.cameraMotion,
+      requestAspectRatio: project.aspectRatio,
+      requestResolution: project.resolution,
       state: "QUEUED",
       providerPredictionId: null,
       submittedAt: null,

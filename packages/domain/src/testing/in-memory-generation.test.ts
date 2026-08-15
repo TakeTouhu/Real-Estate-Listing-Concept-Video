@@ -36,6 +36,11 @@ function generation(id: string, o: Partial<NewSceneGeneration> = {}): NewSceneGe
     requestHash: HASH,
     providerName: "fixture-provider",
     providerModelId: "fixture/model-v1",
+    requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    requestDurationSeconds: 5,
+    requestCameraMotion: "SLOW_PAN",
+    requestAspectRatio: "16:9",
+    requestResolution: "1080p",
     state: "QUEUED",
     providerPredictionId: null,
     submittedAt: null,
@@ -229,6 +234,55 @@ describe("update", () => {
     expect(unknown).toBeInstanceOf(SceneGenerationNotFoundError);
     expect(unknown.message).toBe(foreign.message);
     expect((await repo.findById(ORG_A, "gen_1"))?.state).toBe("QUEUED");
+  });
+
+  it("carries the immutable request snapshot through create and read", async () => {
+    const stored = (await repo.findById(ORG_A, "gen_1"))!;
+    expect(stored.requestCompiledPrompt).toBe(
+      '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    );
+    expect(stored.requestDurationSeconds).toBe(5);
+    expect(stored.requestCameraMotion).toBe("SLOW_PAN");
+    expect(stored.requestAspectRatio).toBe("16:9");
+    expect(stored.requestResolution).toBe("1080p");
+  });
+
+  it("cannot mutate the snapshot through an update", async () => {
+    // `SceneGenerationUpdate` cannot express these fields at all, so this is a
+    // compile-time guarantee first; the assertion pins the runtime behaviour of
+    // an execution-field update leaving the snapshot alone.
+    const before = (await repo.findById(ORG_A, "gen_1"))!;
+    const after = await repo.update(ORG_A, "gen_1", {
+      state: "PROCESSING",
+      providerPredictionId: "pred_1",
+    });
+
+    expect(after.requestCompiledPrompt).toBe(before.requestCompiledPrompt);
+    expect(after.requestDurationSeconds).toBe(before.requestDurationSeconds);
+    expect(after.requestCameraMotion).toBe(before.requestCameraMotion);
+    expect(after.requestAspectRatio).toBe(before.requestAspectRatio);
+    expect(after.requestResolution).toBe(before.requestResolution);
+  });
+
+  it("represents a legacy attempt whose snapshot is absent", async () => {
+    // Rows admitted before Phase 4B-1c carry nulls and must remain loadable
+    // rather than being coerced into fabricated values.
+    await repo.create(
+      ORG_A,
+      generation("gen_legacy", {
+        requestHash: "sha256:legacy",
+        requestCompiledPrompt: null,
+        requestDurationSeconds: null,
+        requestCameraMotion: null,
+        requestAspectRatio: null,
+        requestResolution: null,
+      }),
+    );
+    const stored = (await repo.findById(ORG_A, "gen_legacy"))!;
+    expect(stored.requestCompiledPrompt).toBeNull();
+    expect(stored.requestDurationSeconds).toBeNull();
+    expect(stored.requestAspectRatio).toBeNull();
+    expect(stored.requestResolution).toBeNull();
   });
 
   it("leaves identity and provenance untouched", async () => {

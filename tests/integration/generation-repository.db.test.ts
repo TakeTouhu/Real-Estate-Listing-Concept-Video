@@ -42,6 +42,11 @@ function generation(id: string, overrides: Partial<NewSceneGeneration> = {}): Ne
     requestHash: HASH,
     providerName: "fake",
     providerModelId: "fake/image-to-video",
+    requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    requestDurationSeconds: 5,
+    requestCameraMotion: "SLOW_PAN",
+    requestAspectRatio: "16:9",
+    requestResolution: "1080p",
     state: "QUEUED",
     providerPredictionId: null,
     submittedAt: null,
@@ -684,5 +689,100 @@ describe.skipIf(!HAS_DB)("errors that must NOT be translated", () => {
     expect(notFound).not.toBeInstanceOf(ActiveGenerationConflictError);
     expect(conflict).toBeInstanceOf(ActiveGenerationConflictError);
     expect(conflict).not.toBeInstanceOf(SceneGenerationNotFoundError);
+  });
+});
+
+/**
+ * Phase 4B-1c: the immutable request snapshot, proven against real PostgreSQL.
+ *
+ * Nullability, integer vs text mapping, and "an absent update key leaves the
+ * column alone" are all database behaviours, not TypeScript ones, so they are
+ * verified here rather than inferred from the in-memory double.
+ */
+describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
+  // No local hooks: the file-level beforeEach already cleans and re-seeds the
+  // tenants, and adding another cleanup here would run after it and delete them.
+
+  it("round-trips all five snapshot fields through create and read", async () => {
+    const created = await repo.create(ORG_A, generation("gen_snap"));
+
+    expect(created.requestCompiledPrompt).toBe(
+      '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    );
+    expect(created.requestDurationSeconds).toBe(5);
+    expect(created.requestCameraMotion).toBe("SLOW_PAN");
+    expect(created.requestAspectRatio).toBe("16:9");
+    expect(created.requestResolution).toBe("1080p");
+
+    // And the same values come back on a fresh read, not just from the insert.
+    const read = (await repo.findById(ORG_A, "gen_snap"))!;
+    expect(read.requestCompiledPrompt).toBe(created.requestCompiledPrompt);
+    expect(read.requestDurationSeconds).toBe(5);
+    expect(read.requestCameraMotion).toBe("SLOW_PAN");
+    expect(read.requestAspectRatio).toBe("16:9");
+    expect(read.requestResolution).toBe("1080p");
+  });
+
+  it("stores a legacy row with a null snapshot and reads it back as null", async () => {
+    // The migration adds nullable columns and backfills nothing, so a row that
+    // predates the contract must remain representable and must NOT acquire
+    // fabricated values.
+    await repo.create(
+      ORG_A,
+      generation("gen_legacy_db", {
+        requestCompiledPrompt: null,
+        requestDurationSeconds: null,
+        requestCameraMotion: null,
+        requestAspectRatio: null,
+        requestResolution: null,
+      }),
+    );
+
+    const read = (await repo.findById(ORG_A, "gen_legacy_db"))!;
+    expect(read.requestCompiledPrompt).toBeNull();
+    expect(read.requestDurationSeconds).toBeNull();
+    expect(read.requestCameraMotion).toBeNull();
+    expect(read.requestAspectRatio).toBeNull();
+    expect(read.requestResolution).toBeNull();
+  });
+
+  it("preserves the snapshot across an execution-field update", async () => {
+    await repo.create(ORG_A, generation("gen_upd"));
+    const updated = await repo.update(ORG_A, "gen_upd", {
+      state: "PROCESSING",
+      providerPredictionId: "pred_db_1",
+      submittedAt: new Date("2026-08-15T00:00:00.000Z"),
+    });
+
+    expect(updated.state).toBe("PROCESSING");
+    expect(updated.providerPredictionId).toBe("pred_db_1");
+    // Untouched — SceneGenerationUpdate cannot express these, and the adapter
+    // enumerates only the mutable set.
+    expect(updated.requestCompiledPrompt).toBe(
+      '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    );
+    expect(updated.requestDurationSeconds).toBe(5);
+    expect(updated.requestCameraMotion).toBe("SLOW_PAN");
+    expect(updated.requestAspectRatio).toBe("16:9");
+    expect(updated.requestResolution).toBe("1080p");
+  });
+
+  it("returns the snapshot from the active and latest-succeeded lookups too", async () => {
+    // Both lookups are separate queries; each must map the new columns.
+    await repo.create(ORG_A, generation("gen_active_snap"));
+    const active = (await repo.findActiveByRequestIdentity(ORG_A, PROJECT_A, HASH))!;
+    expect(active.requestAspectRatio).toBe("16:9");
+    expect(active.requestDurationSeconds).toBe(5);
+
+    await repo.update(ORG_A, "gen_active_snap", { state: "SUCCEEDED" });
+    const succeeded = (await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))!;
+    expect(succeeded.requestCompiledPrompt).toBe(active.requestCompiledPrompt);
+    expect(succeeded.requestResolution).toBe("1080p");
+  });
+
+  it("keeps an integer duration an integer, not a string", async () => {
+    const created = await repo.create(ORG_A, generation("gen_int", { requestDurationSeconds: 17 }));
+    expect(created.requestDurationSeconds).toBe(17);
+    expect(typeof created.requestDurationSeconds).toBe("number");
   });
 });
