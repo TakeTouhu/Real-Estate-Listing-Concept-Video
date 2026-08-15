@@ -63,6 +63,14 @@ function toGeneration(r: DbSceneGeneration): SceneGeneration {
     requestHash: r.requestHash,
     providerName: r.providerName,
     providerModelId: r.providerModelId,
+    // The immutable request snapshot (ADR-0018). Mapped explicitly like every
+    // other field; a legacy row simply carries nulls through, which is what
+    // lets `generationRequestFactsFrom` fail closed instead of guessing.
+    requestCompiledPrompt: r.requestCompiledPrompt,
+    requestDurationSeconds: r.requestDurationSeconds,
+    requestCameraMotion: r.requestCameraMotion,
+    requestAspectRatio: r.requestAspectRatio,
+    requestResolution: r.requestResolution,
     state: r.state,
     providerPredictionId: r.providerPredictionId,
     submittedAt: r.submittedAt,
@@ -135,6 +143,11 @@ export function createPrismaSceneGenerationRepository(
             requestHash: input.requestHash,
             providerName: input.providerName,
             providerModelId: input.providerModelId,
+            requestCompiledPrompt: input.requestCompiledPrompt,
+            requestDurationSeconds: input.requestDurationSeconds,
+            requestCameraMotion: input.requestCameraMotion,
+            requestAspectRatio: input.requestAspectRatio,
+            requestResolution: input.requestResolution,
             state: input.state,
             providerPredictionId: input.providerPredictionId,
             submittedAt: input.submittedAt,

@@ -3,9 +3,50 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4B-1c: immutable generation request snapshot
+
+Under review. Not merged. See `docs/phase-4b1c-completion.md` and ADR-0018.
+
+### Added
+
+- **An immutable request snapshot on `SceneGeneration`** —
+  `requestCompiledPrompt`, `requestDurationSeconds`, `requestCameraMotion`,
+  `requestAspectRatio`, `requestResolution`, captured at admission. These are
+  exactly the request-hash facts the row did not already carry, so an admitted
+  generation now holds all eight and can **recompute its own `requestHash`**.
+- **`generationRequestFactsFrom(generation)`** — rebuilds the admitted request
+  from the persisted row alone, and **fails closed** with a neutral
+  `INTERNAL_ERROR` for a legacy row whose snapshot is absent rather than falling
+  back to current storyboard or project state.
+- Migration `00000000000007_phase4b1c_request_snapshot` — five nullable columns,
+  no backfill, no hash rewrite, no deletion, no new index; the restraint is
+  asserted by `tests/schema/request-snapshot-columns.test.ts`.
+
+### Fixed
+
+- **An admitted generation is no longer unexecutable after recomposition.**
+  `replaceForProject` deletes every storyboard scene, and `VideoProjectUpdate`
+  can change `aspectRatio`/`resolution` after admission — so the compiled prompt,
+  duration and camera motion were unrecoverable and the project settings were
+  unsafe to re-read. A worker that fell back to current state would have
+  submitted, and paid for, a request the customer never approved under the
+  stored hash. Surfaced by review of PR #32; contract recorded in ADR-0018, which
+  narrowly amends ADR-0016 §3 and ADR-0017 §10.
+
+### Unchanged (deliberately)
+
+- `computeGenerationRequestHash` — no fact added, removed, reordered, or
+  versioned. The snapshot completes the existing contract rather than altering it.
+- The queue payload is still exactly `{ generationId }`.
+- Audit metadata keeps its existing allowlist and still carries no prompt text.
+- No provider call, no worker, no production queue adapter, no real WaveSpeed
+  capability values, and no prompt renderer — the compiled prompt is stored
+  opaque so exactly one renderer can be built later at the provider boundary.
+
 ## [Unreleased] — Phase 4B-1b: single-scene generation admission
 
-Under review. Not merged. See `docs/phase-4b1b-completion.md`.
+Merged as `c169bd604543cc973c741f85bcec168562ec742a` (PR #32).
+See `docs/phase-4b1b-completion.md`.
 
 ### Added
 

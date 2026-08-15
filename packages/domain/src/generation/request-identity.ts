@@ -1,5 +1,5 @@
-import { sha256Hex } from "@app/shared";
-import type { GenerationRequestFacts } from "./types";
+import { AppError, sha256Hex } from "@app/shared";
+import type { GenerationRequestFacts, SceneGeneration } from "./types";
 
 /** Prefix documenting the digest algorithm in the stored value itself. */
 const REQUEST_HASH_PREFIX = "sha256";
@@ -59,4 +59,69 @@ export function computeGenerationRequestHash(facts: GenerationRequestFacts): str
     facts.providerModelId,
   ];
   return `${REQUEST_HASH_PREFIX}:${sha256Hex(JSON.stringify(canonical))}`;
+}
+
+/**
+ * Rebuild the request facts of an **already admitted** generation from its own
+ * persisted row.
+ *
+ * This is the reconstruction half of the identity contract. `requestHash` proves
+ * two requests are the same; it cannot say what either one *was*, because it is
+ * one-way. So a worker that holds only a generation id rebuilds the request from
+ * the row's immutable snapshot — never by dereferencing `sourceStoryboardSceneId`
+ * (recomposition deletes that scene) and never by reading the project's current
+ * `aspectRatio` or `resolution` (those are mutable, and reading them could
+ * submit a request the customer never approved under this identity).
+ *
+ * Because the snapshot covers exactly the hash facts the row did not already
+ * carry, this function closes a loop that can be asserted rather than trusted:
+ *
+ * ```
+ * computeGenerationRequestHash(generationRequestFactsFrom(g)) === g.requestHash
+ * ```
+ *
+ * **Fails closed.** A generation admitted before the snapshot existed has `null`
+ * in those columns and simply cannot be reconstructed — its inputs are gone. The
+ * honest answer is to refuse, so this throws rather than substituting today's
+ * storyboard or project values, which would silently fabricate a request that
+ * was never admitted and whose hash would not match. What a worker does with
+ * that refusal — the normalized failure state for an unexecutable legacy row —
+ * is Phase 4C's decision, recorded in `docs/decisions/TODO.md`.
+ *
+ * `requestCameraMotion` is deliberately **not** part of the completeness check:
+ * `null` there is a legitimate request that carries no camera motion, and the
+ * hash was computed over exactly that null.
+ *
+ * @throws AppError INTERNAL_ERROR when the row predates the snapshot contract.
+ *   The message names no id, hash, prompt, tenant, or provider detail.
+ */
+export function generationRequestFactsFrom(
+  generation: SceneGeneration,
+): GenerationRequestFacts {
+  const { requestCompiledPrompt, requestDurationSeconds, requestAspectRatio, requestResolution } =
+    generation;
+
+  if (
+    requestCompiledPrompt === null ||
+    requestDurationSeconds === null ||
+    requestAspectRatio === null ||
+    requestResolution === null
+  ) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "This generation predates the request snapshot and cannot be reconstructed",
+    );
+  }
+
+  return {
+    assetId: generation.assetId,
+    compiledPrompt: requestCompiledPrompt,
+    durationSeconds: requestDurationSeconds,
+    // Null is a real value here, not a missing one — see above.
+    cameraMotion: generation.requestCameraMotion,
+    aspectRatio: requestAspectRatio,
+    resolution: requestResolution,
+    providerName: generation.providerName,
+    providerModelId: generation.providerModelId,
+  };
 }

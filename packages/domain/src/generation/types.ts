@@ -112,12 +112,75 @@ export interface SceneGenerationProvenance {
 }
 
 /**
+ * The immutable **execution snapshot**: everything needed to rebuild the exact
+ * provider request this attempt was admitted for, taken at admission and never
+ * changed afterwards.
+ *
+ * This exists because {@link SceneGenerationProvenance} alone cannot rebuild a
+ * request. `requestHash` is a one-way digest — it *identifies* a request and
+ * cannot reconstruct one — and the row it came from is not reachable later:
+ * `sourceStoryboardSceneId` is provenance with no foreign key, and
+ * recomposition deletes every scene of a project. Project settings are worse
+ * than unreachable, they are *mutable*: `VideoProjectUpdate` can change
+ * `aspectRatio` and `resolution` after admission, so reading them at execution
+ * time could submit — and pay for — a request the customer never approved under
+ * this identity. "Still queryable later" is not "safe to read later" (ADR-0018).
+ *
+ * The set is exactly the {@link GenerationRequestFacts} not already persisted
+ * elsewhere on the row. Together with `assetId`, `providerName` and
+ * `providerModelId`, an attempt therefore carries all eight hash facts and can
+ * **recompute its own `requestHash`** — an invariant, not a convention.
+ *
+ * Nothing beyond that is copied. Scene position, room type, and project
+ * presentation settings are absent because they do not reach the provider.
+ *
+ * Every field is nullable **only** for rows written before this snapshot
+ * existed. Those legacy rows are not backfilled — fabricating a snapshot from
+ * today's storyboard would forge a request that was never admitted — so `null`
+ * means "this attempt predates the contract and cannot be reconstructed", and
+ * consumers must fail closed rather than fall back to current state.
+ */
+export interface SceneGenerationRequestSnapshot {
+  /**
+   * The canonical `CompiledPrompt` JSON exactly as admitted, byte-identical to
+   * the string that was hashed.
+   *
+   * Stored opaque and never re-serialized: parsing and re-encoding could change
+   * the bytes and silently break the hash invariant. Rendering it into provider
+   * prose is a later, single implementation at the provider boundary (ADR-0014);
+   * no second representation is persisted here.
+   *
+   * Contains customer-authored text. Byte-identical copies already live in
+   * `storyboard_scenes.compiledPrompt` and `video_projects.prompt`, so this adds
+   * no new class of data — but it must never reach audit metadata, a queue
+   * payload, an error message, or a log.
+   */
+  readonly requestCompiledPrompt: string | null;
+  /** The scene's own allocated duration — not the project's total. */
+  readonly requestDurationSeconds: number | null;
+  /**
+   * Null is genuinely meaningful here, not only a legacy marker: a request may
+   * legitimately carry no camera motion. It is stored exactly as admitted,
+   * untrimmed, matching what the hash saw.
+   */
+  readonly requestCameraMotion: string | null;
+  /** Snapshotted because the project's value is mutable after admission. */
+  readonly requestAspectRatio: string | null;
+  /** Snapshotted because the project's value is mutable after admission. */
+  readonly requestResolution: string | null;
+}
+
+/**
  * One persisted attempt to generate one scene through a video provider.
  *
- * Extends the immutable provenance with the mutable execution record. The split
- * is not cosmetic: everything in {@link SceneGenerationProvenance} fixes *what
- * was asked for* and never changes, while the fields below record *what
- * happened* and are the only ones a worker writes.
+ * Three parts, and the split is not cosmetic. {@link SceneGenerationProvenance}
+ * records *where the request came from*; {@link SceneGenerationRequestSnapshot}
+ * fixes *what was asked for*, immutably, so the request survives its source
+ * being deleted or edited; the fields below record *what happened* and are the
+ * only ones a worker writes.
+ *
+ * The first two never change after admission — neither is expressible in
+ * `SceneGenerationUpdate`, so re-labelling a paid attempt is a compile error.
  *
  * Ownership is the `videoProjectId` relation and nothing else. There is no
  * `organizationId` column — tenant scope resolves through the owning project,
@@ -134,7 +197,9 @@ export interface SceneGenerationProvenance {
  * that expires never needs to survive a worker step. Also absent: a retry
  * counter, because no worker exists yet to have a retry policy.
  */
-export interface SceneGeneration extends SceneGenerationProvenance {
+export interface SceneGeneration
+  extends SceneGenerationProvenance,
+    SceneGenerationRequestSnapshot {
   readonly id: string;
   /** The persistent owner. Tenant scope resolves through this project. */
   readonly videoProjectId: string;

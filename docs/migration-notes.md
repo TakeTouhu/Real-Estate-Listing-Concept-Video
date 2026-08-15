@@ -343,6 +343,61 @@ Dropping the table destroys the record of every provider attempt, including paid
 ones. That is precisely the loss `ON DELETE RESTRICT` exists to prevent
 accidentally, so a rollback here is a deliberate decision, never routine cleanup.
 
+### 8 — `00000000000007_phase4b1c_request_snapshot` (Phase 4B-1c)
+
+Adds five nullable columns to `scene_generations`, the immutable execution
+snapshot of ADR-0018:
+
+| Column | Type | Null |
+| --- | --- | --- |
+| `requestCompiledPrompt` | `TEXT` | yes |
+| `requestDurationSeconds` | `INTEGER` | yes |
+| `requestCameraMotion` | `TEXT` | yes |
+| `requestAspectRatio` | `TEXT` | yes |
+| `requestResolution` | `TEXT` | yes |
+
+**What it deliberately does not do**, and why each matters:
+
+- **No backfill.** A row admitted before this contract has no recoverable
+  snapshot — its storyboard scene may already be deleted, and the project's
+  aspect ratio or resolution may have been edited since. Copying today's values
+  in would forge a request that was never admitted, one whose facts would not
+  even reproduce the stored `requestHash`.
+- **No `requestHash` is rewritten**, and **no historical row is deleted**.
+- **No index and no constraint.** These columns are reconstruction payload, never
+  a lookup key; identity lookups keep using the existing
+  `(videoProjectId, requestHash)` partial unique index and the `(state)` index.
+
+`tests/schema/request-snapshot-columns.test.ts` reads this migration file and
+asserts all of the above, so the restraint cannot be silently undone.
+
+**Nullability is legacy compatibility only.** Every generation admitted through
+`GenerationService.startScene` from this phase onward writes all five, except
+`requestCameraMotion` where `null` is a legitimate request value. `null` in the
+other four means "predates the contract"; `generationRequestFactsFrom` fails
+closed on it rather than substituting current state.
+
+**Conditional backfill, if it is ever wanted.** A legacy row is safely
+backfillable only if its `sourceStoryboardSceneId` still exists *and*
+recomputing the hash from that scene plus the current project reproduces the
+stored `requestHash` — the hash is its own verifier, and a match proves the copy
+is reconstruction rather than fabrication. No such script is part of this
+milestone.
+
+**Rollback.**
+
+```sql
+ALTER TABLE "scene_generations"
+  DROP COLUMN "requestCompiledPrompt",
+  DROP COLUMN "requestDurationSeconds",
+  DROP COLUMN "requestCameraMotion",
+  DROP COLUMN "requestAspectRatio",
+  DROP COLUMN "requestResolution";
+```
+
+Safe for schema shape, but it re-opens the reconstruction gap: every admitted
+generation becomes unexecutable again once its storyboard scene is replaced.
+
 ### Phase 3A-1 — no migration
 
 **Not applicable.** Phase 3A-1 added no Prisma model and no migration; it shipped

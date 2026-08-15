@@ -59,6 +59,19 @@ snapshot and not an event-sourced log — position, room type, and duration are
 not copied, because `requestHash` already fixes everything that decides what
 would be generated.
 
+> **Amended 2026-08-15 by ADR-0018 (Phase 4B-1c).** The last sentence above is
+> true of request *identity* and false of request *reconstruction*: `requestHash`
+> is one-way, so it cannot rebuild what it identifies. Provenance alone therefore
+> proved insufficient — with the scene deleted by recomposition and the project's
+> `aspectRatio`/`resolution` mutable after admission, a worker holding only a
+> generation id could not rebuild the admitted request, and reading current state
+> instead would have submitted a request the customer never approved. An admitted
+> generation now also carries an immutable execution snapshot
+> (`requestCompiledPrompt`, `requestDurationSeconds`, `requestCameraMotion`,
+> `requestAspectRatio`, `requestResolution`). The rest of this section stands:
+> `sourceStoryboardSceneId` is still provenance only, still has no FK, and is
+> still never dereferenced. See ADR-0018.
+
 ### 4. Tenant ownership comes through `VideoProject`
 
 `VideoProject` is persistent and already carries `organizationId`, so reads

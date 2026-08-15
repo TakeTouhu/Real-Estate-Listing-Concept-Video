@@ -253,6 +253,41 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       alone **without** weakening or widening the organization-scoped
       tenant-facing methods, and **without** adding tenant identifiers to the
       queue payload. **Required before Phase 4C ships.**
+- [x] **Phase 4B-1c (immutable generation request snapshot) must be merged
+      before Phase 4C implementation begins.** Landed as the follow-up to the
+      PR #32 review finding; ADR-0018 records the contract. Phase 4C is a
+      **hard blocked** milestone until it is merged and verified on `main`.
+- [ ] **Phase 4C worker must fail closed for a legacy generation missing its
+      immutable snapshot fields.** `generationRequestFactsFrom` throws
+      `INTERNAL_ERROR` for a row admitted before ADR-0018; those rows have no
+      recoverable request and must **never** be reconstructed from the current
+      storyboard or project. Phase 4C decides the normalized failure state and
+      reason code for such a row — this milestone deliberately does not, because
+      the state machine's failure vocabulary is the worker's contract.
+      **Required before Phase 4C ships.**
+- [ ] **Phase 4C worker must derive a fresh signed source-image URL from durable
+      asset identity.** `SceneGeneration.assetId` is the reference; no temporary
+      URL, signed URL, or storage credential is ever persisted on a generation
+      (ADR-0018 §6). The worker resolves `assetId` → `MediaAsset.storageKey` →
+      `ObjectStorage.createSignedDownloadUrl` at execution time.
+      **Required before Phase 4C ships.**
+- [ ] **Phase 4C worker must fail closed when the source asset is missing or
+      deleted.** `assetId` has no foreign key and assets may be removed under
+      retention policy. A generation whose photo is gone is genuinely
+      unexecutable and needs a normalized reason rather than a silent failure or
+      a substituted image. **Required before Phase 4C ships.**
+- [ ] **Phase 4C provider request construction must use the immutable
+      `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
+      (recomposition deletes it) and never the project's current `aspectRatio`
+      or `resolution` (both mutable after admission). Reading either could
+      submit — and pay for — a request the customer never approved under the
+      stored `requestHash` (ADR-0018 §3). **Required before Phase 4C ships.**
+- [ ] **Exactly one `CompiledPrompt` → provider prompt renderer may exist.**
+      None exists today; Phase 4B-1c deliberately did not add one, storing the
+      compiled prompt opaquely instead. The single implementation belongs at the
+      provider boundary and must preserve ADR-0014's structural separation of
+      preservation rules, system negatives, and user text. A second renderer
+      anywhere is a defect. **Required before Phase 4C ships.**
 - [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
       added `findLatestSucceededByRequestIdentity`, which prevents *automatic
       repeat spend* — but returning a succeeded attempt is not the same as

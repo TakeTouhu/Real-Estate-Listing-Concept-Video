@@ -22,7 +22,7 @@ import {
   type SceneGenerationState,
   type StoryboardReader,
 } from "./index";
-import { computeGenerationRequestHash } from "./request-identity";
+import { computeGenerationRequestHash, generationRequestFactsFrom } from "./request-identity";
 
 /**
  * The single-scene admission service. Every test drives the real
@@ -127,6 +127,13 @@ function genRow(id: string, state: SceneGenerationState, overrides: Partial<Scen
     requestHash: expectedHash(),
     providerName: "fixture-provider",
     providerModelId: "fixture/model-v1",
+    // The immutable snapshot, consistent with the default scene/project
+    // fixtures so a seeded row reproduces `expectedHash()`.
+    requestCompiledPrompt: scene().compiledPrompt,
+    requestDurationSeconds: scene().durationSeconds,
+    requestCameraMotion: scene().cameraMotion,
+    requestAspectRatio: project().aspectRatio,
+    requestResolution: project().resolution,
     state,
     providerPredictionId: null,
     submittedAt: null,
@@ -672,6 +679,58 @@ describe("startScene — new-attempt initialization", () => {
     expect(result.normalizedErrorCode).toBeNull();
     expect(result.normalizedErrorMessage).toBeNull();
     expect(result.outputStorageKey).toBeNull();
+  });
+
+  it("persists the complete immutable request snapshot (ADR-0018)", async () => {
+    const h = harness();
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    // Taken from the admitted scene and project, not re-read from anywhere.
+    expect(result.requestCompiledPrompt).toBe(scene().compiledPrompt);
+    expect(result.requestDurationSeconds).toBe(scene().durationSeconds);
+    expect(result.requestCameraMotion).toBe(scene().cameraMotion);
+    expect(result.requestAspectRatio).toBe(project().aspectRatio);
+    expect(result.requestResolution).toBe(project().resolution);
+  });
+
+  it("never writes a null snapshot for a newly admitted attempt", async () => {
+    const h = harness();
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    // requestCameraMotion is excluded: null is a legitimate request value there.
+    expect(result.requestCompiledPrompt).not.toBeNull();
+    expect(result.requestDurationSeconds).not.toBeNull();
+    expect(result.requestAspectRatio).not.toBeNull();
+    expect(result.requestResolution).not.toBeNull();
+  });
+
+  it("snapshots the scene duration rather than the project total", async () => {
+    // The project asks for 12s overall; this scene's allocation is 5s. A worker
+    // must submit 5, which is also what the hash covers.
+    const h = harness();
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(project().durationSeconds).toBe(12);
+    expect(result.requestDurationSeconds).toBe(5);
+  });
+
+  it("stores the compiled prompt byte-identically, without parsing it", async () => {
+    const h = harness();
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    // Byte-for-byte the admitted string — a parse/re-serialize round trip would
+    // reorder or reformat and silently break the hash invariant.
+    expect(result.requestCompiledPrompt).toBe(scene().compiledPrompt);
+    expect(computeGenerationRequestHash(generationRequestFactsFrom(result))).toBe(
+      result.requestHash,
+    );
+  });
+
+  it("keeps the snapshot consistent with the request hash it was admitted under", async () => {
+    const h = harness();
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(computeGenerationRequestHash(generationRequestFactsFrom(result))).toBe(
+      result.requestHash,
+    );
   });
 
   it("freezes provider and model from the single capability snapshot", async () => {
