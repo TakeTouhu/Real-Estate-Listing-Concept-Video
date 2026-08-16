@@ -7,6 +7,7 @@ import {
   OPEN_VIDEO_REQUEST_FIELDS,
   createOpenVideoCapabilityProvider,
 } from "./capability";
+import { mapToWaveSpeedRequest } from "./mapping";
 
 /**
  * The verified OpenVideo descriptor.
@@ -128,6 +129,13 @@ describe("admission against the real descriptor", () => {
   });
 });
 
+/** The three secrets that have no schema default. */
+const SECRETS = {
+  SESSION_SECRET: "x".repeat(16),
+  HEALTHCHECK_API_TOKEN: "y".repeat(16),
+  STORAGE_SIGNING_SECRET: "z".repeat(16),
+};
+
 describe("model identity is single-sourced", () => {
   it("uses the same id as the configured environment default", () => {
     // One constant feeds both. Before Phase 4B-2a the id was a bare literal in
@@ -137,11 +145,7 @@ describe("model identity is single-sourced", () => {
     // memoizes process-wide and would leak state between test files. Only the
     // two secrets have no default, so that is all this fixture supplies; the
     // model id comes from the schema's own default.
-    const env = serverEnvSchema.parse({
-      SESSION_SECRET: "x".repeat(16),
-      HEALTHCHECK_API_TOKEN: "y".repeat(16),
-      STORAGE_SIGNING_SECRET: "z".repeat(16),
-    });
+    const env = serverEnvSchema.parse({ ...SECRETS });
     expect(env.WAVESPEED_VIDEO_MODEL_ID).toBe(WAVESPEED_OPEN_VIDEO_MODEL_ID);
     expect(OPEN_VIDEO_CAPABILITY.providerModelId).toBe(WAVESPEED_OPEN_VIDEO_MODEL_ID);
     expect(OPEN_VIDEO_CAPABILITY.providerModelId).toBe(env.WAVESPEED_VIDEO_MODEL_ID);
@@ -167,4 +171,77 @@ describe("documented request fields", () => {
       expect(all).not.toContain(field);
     },
   );
+});
+
+/**
+ * The Phase 4B-2a review blocker: a conflicting model override.
+ *
+ * `WAVESPEED_VIDEO_MODEL_ID` accepted any non-empty string while the capability
+ * descriptor hard-coded the OpenVideo constant. Setting it to another id split
+ * the system in two — the self-check exercised the configured model, while
+ * admission validated against OpenVideo's capabilities and froze OpenVideo's id
+ * onto the row, so a later submission would have paid OpenVideo for work the
+ * operator configured elsewhere.
+ *
+ * These cases fail against the pre-fix schema, which accepted the override.
+ */
+describe("a conflicting model override fails closed", () => {
+  it("accepts the supported id stated explicitly", () => {
+    const env = serverEnvSchema.parse({
+      ...SECRETS,
+      WAVESPEED_VIDEO_MODEL_ID: WAVESPEED_OPEN_VIDEO_MODEL_ID,
+    });
+    expect(env.WAVESPEED_VIDEO_MODEL_ID).toBe(OPEN_VIDEO_CAPABILITY.providerModelId);
+  });
+
+  it.each([
+    ["another vendor's model", "vendor/other-model"],
+    ["a plausible sibling", "wavespeed-ai/open-video/text-to-video"],
+    ["a near miss", "wavespeed-ai/open-video/image-to-video "],
+  ])("refuses %s", (_label, WAVESPEED_VIDEO_MODEL_ID) => {
+    const result = serverEnvSchema.safeParse({ ...SECRETS, WAVESPEED_VIDEO_MODEL_ID });
+    expect(result.success).toBe(false);
+    const paths = result.success ? [] : result.error.issues.map((i) => i.path.join("."));
+    expect(paths).toContain("WAVESPEED_VIDEO_MODEL_ID");
+  });
+
+  it("cannot let self-check and admission hold different model identities", () => {
+    // Everything that reads the configured id — health and worker self-checks —
+    // and everything that reads the descriptor — admission — now provably agree,
+    // because a value that disagreed would not parse at all.
+    const configured = serverEnvSchema.parse({ ...SECRETS }).WAVESPEED_VIDEO_MODEL_ID;
+    expect(configured).toBe(OPEN_VIDEO_CAPABILITY.providerModelId);
+    expect(serverEnvSchema.safeParse({ ...SECRETS, WAVESPEED_VIDEO_MODEL_ID: "vendor/x" }).success).toBe(
+      false,
+    );
+  });
+
+  it("does not turn the constraint into multi-model routing", () => {
+    // Exactly one production descriptor, and no selection mechanism.
+    expect(createOpenVideoCapabilityProvider().current()).toBe(OPEN_VIDEO_CAPABILITY);
+    expect(OPEN_VIDEO_CAPABILITY.providerModelId).toBe(WAVESPEED_OPEN_VIDEO_MODEL_ID);
+  });
+});
+
+describe("a frozen generation model id survives configuration", () => {
+  it("submits to input.modelId, never to the configured default", () => {
+    // The submission mapping reads the frozen id off the request, so an
+    // already-admitted generation executes against the model it was admitted
+    // under even if configuration later changes.
+    const frozen = "some-vendor/frozen-model";
+    const req = mapToWaveSpeedRequest(
+      {
+        modelId: frozen,
+        sourceImageUrl: "https://storage.internal/o/img",
+        prompt: "p",
+        durationSeconds: 5,
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        requestHash: "h",
+      },
+      "https://api.wavespeed.ai/api/v3",
+    );
+    expect(req.url).toBe("https://api.wavespeed.ai/api/v3/some-vendor/frozen-model");
+    expect(req.url).not.toContain(WAVESPEED_OPEN_VIDEO_MODEL_ID);
+  });
 });

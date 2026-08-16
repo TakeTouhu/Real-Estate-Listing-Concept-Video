@@ -136,6 +136,36 @@ function isProvided(text: string | null): boolean {
   return text !== null && text.trim().length > 0;
 }
 
+/**
+ * `W:H`, where both sides are positive numbers.
+ *
+ * Integers and decimals both occur in real use — `16:9`, `9:16`, `1:1`, `4:3`,
+ * and cinematic ratios like `2.39:1`. A leading sign is not matched at all, so
+ * `-16:9` fails here rather than needing a separate check.
+ */
+const ASPECT_RATIO_SYNTAX = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/;
+
+/**
+ * Whether a string is a usable aspect ratio at all.
+ *
+ * Separate from, and prior to, the question of *who* honours it. Review found
+ * that `COMPOSITION_OWNED` skipped every aspect-ratio check, so `"wide"` or
+ * `"banana"` could be admitted, hashed into the request identity, frozen into
+ * the immutable snapshot, and enqueued as billable work — leaving the
+ * composition stage a value it cannot normalize to. Moving the guarantee off the
+ * provider must not mean nobody checks it.
+ *
+ * Reads only. Nothing here trims, rounds, or rewrites: `16:9` must stay exactly
+ * `16:9`, because the string is a request-hash fact and any normalization would
+ * silently change request identity.
+ */
+function isValidAspectRatioSyntax(value: string): boolean {
+  if (!ASPECT_RATIO_SYNTAX.test(value)) return false;
+  // The pattern admits `0:9` and `16:0`; a zero side is not a ratio.
+  const [width, height] = value.split(":").map(Number);
+  return width! > 0 && height! > 0;
+}
+
 function durationAccepted(seconds: number, policy: DurationPolicy): boolean {
   if (!Number.isInteger(seconds) || seconds <= 0) return false;
   return policy.kind === "RANGE"
@@ -179,6 +209,17 @@ export function assertSettingsSupported(
     throw new AppError(
       "VALIDATION_FAILED",
       `This model supports the resolutions ${capability.resolutions.join(", ")}; the project asks for ${settings.resolution}`,
+    );
+  }
+
+  // Syntax first, and for every ownership kind. A value nobody can interpret is
+  // refused before the question of who honours it even arises — otherwise
+  // `COMPOSITION_OWNED` would admit billable work with a ratio the composition
+  // stage cannot normalize to.
+  if (!isValidAspectRatioSyntax(settings.aspectRatio)) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      `"${settings.aspectRatio}" is not a valid aspect ratio; use a width:height ratio such as 16:9`,
     );
   }
 

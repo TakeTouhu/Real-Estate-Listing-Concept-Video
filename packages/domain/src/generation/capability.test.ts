@@ -294,3 +294,91 @@ describe("optional-input delivery mechanism", () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * Aspect-ratio syntax — the Phase 4B-2a review blocker.
+ *
+ * `COMPOSITION_OWNED` skipped every aspect-ratio check, so an arbitrary
+ * non-empty string passed admission, entered the request hash and the immutable
+ * snapshot, and became billable work the composition stage could never
+ * normalize to. Moving the guarantee off the provider must not mean nobody
+ * validates it.
+ *
+ * These cases fail against the pre-fix implementation.
+ */
+describe("aspect-ratio syntax is required regardless of who owns delivery", () => {
+  const composed = capability({ aspectRatios: { kind: "COMPOSITION_OWNED" } });
+
+  it.each(["16:9", "9:16", "1:1", "4:3", "2.39:1"])(
+    "accepts the valid ratio %s under COMPOSITION_OWNED",
+    (aspectRatio) => {
+      expect(() => assertSettingsSupported(settings({ aspectRatio }), composed)).not.toThrow();
+    },
+  );
+
+  it.each([
+    ["a bare word", "wide"],
+    ["nonsense", "banana"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+    ["a slash separator", "16/9"],
+    ["a missing side", "16:"],
+    ["a leading separator", ":9"],
+    ["non-numeric sides", "a:b"],
+    ["a zero width", "0:9"],
+    ["a zero height", "16:0"],
+    ["both sides zero", "0:0"],
+    ["a negative width", "-16:9"],
+    ["a negative height", "16:-9"],
+    ["a trailing space", "16:9 "],
+    ["three parts", "16:9:1"],
+  ])("refuses %s under COMPOSITION_OWNED", (_label, aspectRatio) => {
+    const error = refusalOf(settings({ aspectRatio }), composed);
+    expect(error).toBeInstanceOf(AppError);
+    expect(error!.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("refuses invalid syntax under PROVIDER_HONORED too, before the allowlist", () => {
+    // The syntax gate runs first, so the refusal is about the value being
+    // unusable rather than about it being absent from the provider's list.
+    const honored = capability({
+      aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
+    });
+    expect(refusalOf(settings({ aspectRatio: "wide" }), honored)!.message).toContain(
+      "not a valid aspect ratio",
+    );
+  });
+
+  it("still applies the allowlist to a syntactically valid ratio", () => {
+    const honored = capability({
+      aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
+    });
+    expect(() => assertSettingsSupported(settings({ aspectRatio: "16:9" }), honored)).not.toThrow();
+    expect(refusalOf(settings({ aspectRatio: "4:3" }), honored)!.message).toContain(
+      "supports the aspect ratios",
+    );
+  });
+
+  it("refuses under UNSUPPORTED even when the ratio is syntactically valid", () => {
+    const impossible = capability({ aspectRatios: { kind: "UNSUPPORTED" } });
+    expect(refusalOf(settings({ aspectRatio: "16:9" }), impossible)!.code).toBe(
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("does not rewrite or normalize the ratio it validates", () => {
+    // The string is a request-hash fact; normalizing it would silently change
+    // request identity.
+    const s = settings({ aspectRatio: "2.39:1" });
+    assertSettingsSupported(s, composed);
+    expect(s.aspectRatio).toBe("2.39:1");
+  });
+
+  it("still enforces unrelated checks under COMPOSITION_OWNED", () => {
+    const narrow = capability({
+      aspectRatios: { kind: "COMPOSITION_OWNED" },
+      resolutions: ["1080p"],
+    });
+    expect(refusalOf(settings({ resolution: "480p" }), narrow)!.code).toBe("VALIDATION_FAILED");
+  });
+});

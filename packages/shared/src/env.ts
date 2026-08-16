@@ -78,6 +78,30 @@ export const serverEnvSchema = z
         message: "WAVESPEED_API_KEY is required when VIDEO_PROVIDER=wavespeed",
       });
     }
+
+    // One production model identity, enforced at configuration resolution.
+    //
+    // The variable stays for compatibility, but it may only *restate* the
+    // supported model — it cannot select a different one. Without this, setting
+    // it to another id split the system in two: the self-check exercised the
+    // configured model while admission validated against OpenVideo's
+    // capabilities and froze OpenVideo's id onto the row, so a later submission
+    // would have paid OpenVideo for work the operator configured elsewhere.
+    //
+    // Failing closed here rather than at first use means a misconfigured
+    // deployment cannot start and admit anything at all. Supporting a genuinely
+    // different model needs its own verified capability descriptor, which is a
+    // deliberate future decision, not an environment override (ADR-0019).
+    if (env.WAVESPEED_VIDEO_MODEL_ID !== WAVESPEED_OPEN_VIDEO_MODEL_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["WAVESPEED_VIDEO_MODEL_ID"],
+        message:
+          `WAVESPEED_VIDEO_MODEL_ID must be "${WAVESPEED_OPEN_VIDEO_MODEL_ID}". ` +
+          "Selecting a different model requires a verified capability descriptor for it; " +
+          "an environment override cannot switch models.",
+      });
+    }
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

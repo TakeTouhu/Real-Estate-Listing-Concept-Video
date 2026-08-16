@@ -42,8 +42,10 @@ type FeatureDelivery =
   | { kind: "UNSUPPORTED" };
 ```
 
-`COMPOSITION_OWNED` accepts without provider-value validation — the provider is
-never asked, so its opinion is irrelevant to a guarantee it does not make.
+`COMPOSITION_OWNED` skips the *provider allowlist* — the provider is never asked,
+so its opinion is irrelevant to a guarantee it does not make. Aspect-ratio
+**syntax** validation still applies to every ownership kind (see review blocker 2
+below).
 `PROMPT_RENDERED` is a real delivery: the intent reaches the model through its
 documented `prompt` input.
 
@@ -93,7 +95,7 @@ composition and the prompt input respectively deliver them.
 | --- | --- |
 | `pnpm typecheck` | clean |
 | `pnpm lint` | clean |
-| `pnpm test` | **999 passed**, 54 files (+47) |
+| `pnpm test` | **1031 passed**, 54 files (+79) |
 | `pnpm build` | clean |
 | `pnpm test:db` | **123 passed**, 6 files (pure regression) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` (exit 0) |
@@ -136,6 +138,49 @@ assertions on the rendered control and an exact request-body key set.
   provider's limits needs provider-aware composition the architecture lacks.
   Recorded as a UX follow-up.
 - No pricing/billing policy, no provider call, no Phase 4C work.
+
+## Review blockers fixed
+
+Independent pre-merge review of `863f8de` raised two P1 blockers. Both were
+confirmed real against the committed code and fixed in place.
+
+### Blocker 1 — a conflicting model override split the system in two
+
+`WAVESPEED_VIDEO_MODEL_ID` accepted any non-empty string while the descriptor
+hard-coded the constant. With `WAVESPEED_VIDEO_MODEL_ID=vendor/other-model`, the
+health and worker self-checks exercised `vendor/other-model` while admission
+validated against OpenVideo's capabilities and froze OpenVideo's id onto the row
+— so Phase 4C would have paid OpenVideo for work configured elsewhere.
+
+**Fix:** the env schema fails closed at configuration resolution when the value
+is anything other than `WAVESPEED_OPEN_VIDEO_MODEL_ID`. The variable stays for
+compatibility but may only restate the supported id. A misconfigured deployment
+cannot start, so it cannot admit anything. No multi-model routing.
+
+The original test asserted equality only at the schema *default* — precisely the
+gap the finding exploited. New tests cover the override path directly.
+
+### Blocker 2 — `COMPOSITION_OWNED` accepted any non-empty string as a ratio
+
+`COMPOSITION_OWNED` skipped every aspect-ratio check, and nothing upstream
+validated syntax (`createProject` checks only non-blank, the API uses
+`requiredString`, the UI is free text). So `wide` or `banana` was admitted,
+hashed into request identity, frozen into the immutable snapshot, and enqueued as
+billable work the composition stage could never normalize to.
+
+**Fix:** syntax validation runs for **every** ownership kind, *before* the
+ownership branch. Accepted form is `width:height` with positive numbers, integer
+or decimal. Only the provider *allowlist* is skipped under `COMPOSITION_OWNED`.
+The value is read, never rewritten — it is a request-hash fact.
+
+### Both fixes are mutation-verified
+
+| Mutation | Result |
+| --- | --- |
+| Remove the aspect-ratio syntax check | **16 of 61** capability tests fail |
+| Remove the model-override guard | **4 of 36** descriptor tests fail |
+
+Each implementation was restored and re-verified green afterwards.
 
 ## Obligations created
 

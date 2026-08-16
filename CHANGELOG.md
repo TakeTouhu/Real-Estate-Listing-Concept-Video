@@ -36,6 +36,18 @@ Under review. Not merged. See `docs/phase-4b2a-completion.md` and ADR-0019.
   adapter builds submit URLs from `input.modelId`) and let the descriptor and
   configured default drift apart unnoticed.
 
+### Fixed after review
+
+- **A conflicting `WAVESPEED_VIDEO_MODEL_ID` override no longer splits the
+  system into two model identities.** The variable accepted any non-empty string
+  while the descriptor hard-coded the constant, so self-checks could exercise one
+  model while admission validated against — and froze — another. Configuration
+  resolution now fails closed on any value other than the supported id.
+- **`COMPOSITION_OWNED` no longer admits an arbitrary string as an aspect
+  ratio.** Syntax validation (`width:height`, positive numbers) runs for every
+  ownership kind before the ownership branch; only the provider allowlist is
+  skipped. The value is never rewritten, since it is a request-hash fact.
+
 ### Changed
 
 - The project-creation UI no longer offers a negative-prompt control, since the

@@ -150,6 +150,60 @@ is authoritative for an already-admitted generation.** The configured default
 applies to *new* admissions only and can never retarget work already admitted
 under a frozen `providerModelId`.
 
+### 11. Amended after review: one model identity is enforced, not merely defaulted
+
+Review found that `WAVESPEED_VIDEO_MODEL_ID` accepted any non-empty string while
+the capability descriptor hard-coded the constant. Setting it to a different id
+split the system in two: the health and worker self-checks exercised the
+configured model, while admission validated against OpenVideo's capabilities and
+froze OpenVideo's id onto the row — so a later submission would have paid
+OpenVideo for work the operator had configured elsewhere.
+
+**Production has exactly one model identity, and an arbitrary override cannot
+switch models during Phase 4B-2a.** The variable stays for compatibility but may
+only *restate* the supported id; any other value fails closed at configuration
+resolution, so a misconfigured deployment cannot start and admit anything.
+Supporting a genuinely different model requires a verified capability descriptor
+for it — a deliberate decision, not an environment override. This is not
+multi-model routing, and none is introduced.
+
+### 12. Amended after review: `COMPOSITION_OWNED` still requires valid syntax
+
+Review also found that `COMPOSITION_OWNED` skipped **every** aspect-ratio check,
+so an arbitrary non-empty string such as `wide` or `banana` passed admission,
+entered the request hash, was frozen into the immutable snapshot, and became
+billable work the composition stage could never normalize to.
+
+`COMPOSITION_OWNED` means *the provider does not validate or honour the requested
+ratio*. It does **not** mean any string is a ratio.
+
+Aspect-ratio **syntax validation is mandatory for every ownership kind** and runs
+*before* the ownership branch:
+
+| Case | Behaviour |
+| --- | --- |
+| blank or syntactically invalid | reject, whatever the ownership |
+| `COMPOSITION_OWNED` + valid syntax | accept; no provider allowlist applies |
+| `PROVIDER_HONORED` + valid syntax | accept only if also in the provider's list |
+| `UNSUPPORTED` | reject |
+
+Only the provider *allowlist* is skipped under `COMPOSITION_OWNED`; system-level
+syntax validation is never skipped. Accepted form is `width:height` with positive
+numbers, integer or decimal — `16:9`, `9:16`, `1:1`, `4:3`, `2.39:1`. Zero,
+negative, non-numeric, malformed-separator and multi-part values are refused.
+
+The value is **read, never rewritten**: no trimming, rounding, or
+re-representation, because the string is a request-hash fact and normalizing it
+would silently change request identity. No new domain type or schema is
+introduced — the existing string contract is unchanged and only admission is
+strengthened.
+
+### 13. Both amendments leave every durable contract untouched
+
+The 8-fact `requestHash` tuple, all five Phase 4B-1c snapshot fields, the Prisma
+schema, and the migrations are **unchanged**. No historical hash is rewritten.
+Both fixes are admission- and configuration-time validation only.
+
 ## Consequences
 
 - The product can generate again: `COMPOSITION_OWNED` unblocks the 100% refusal
