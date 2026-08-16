@@ -60,7 +60,16 @@ landed (§6).
 - `UNSUPPORTED` — cannot be expressed; refuse.
 
 `PROMPT_RENDERED` is a **promise about the renderer** that the type system
-cannot check. A test pins the declaration to the renderer's behaviour instead.
+cannot check.
+
+**As of Phase 4B-2a that promise is unpinned.** No renderer exists yet, so no
+test can tie the declaration to any behaviour — the only test writable today
+would assert that the constant equals `PROMPT_RENDERED`, which restates the
+declaration rather than verifying it. Writing the pinning test is a **completion
+condition of Phase 4B-2b**, alongside the renderer itself: if that phase's
+renderer does not carry camera-motion intent, this declaration is false and must
+become `UNSUPPORTED`. Nothing can submit to a provider before then (§8), so the
+gap admits no paid work in the interim.
 
 ### 3. The verified OpenVideo descriptor
 
@@ -166,6 +175,34 @@ resolution, so a misconfigured deployment cannot start and admit anything.
 Supporting a genuinely different model requires a verified capability descriptor
 for it — a deliberate decision, not an environment override. This is not
 multi-model routing, and none is introduced.
+
+**This is a deviation, and it is recorded as one.** `WAVESPEED_VIDEO_MODEL_ID`
+remains a configuration variable in name while accepting exactly one value, so
+the schema now rejects inputs that are, in isolation, perfectly well-formed. An
+operator reading only the variable's name would reasonably expect to be able to
+select a model. That expectation is deliberately not met: a model id without a
+verified capability descriptor is not a configuration choice, it is an
+unvalidated request contract pointed at a paid endpoint. Failing closed is the
+lesser cost. The variable is kept rather than deleted so existing deployments and
+the two self-check call sites continue to resolve, and so the constraint is
+visible where an operator would look for it.
+
+**Exit path.** Nothing here is meant to be permanent, and the deviation should
+not calcify into "one model forever". The shape that removes it is a **keyed
+descriptor registry**: a map from model id to its verified `VideoModelCapability`,
+with the environment variable validated against the registry's keys rather than
+against a single constant. Adding a model would then mean adding a verified
+descriptor — the evidence-gathering step this ADR exists to enforce — and the
+schema check would relax on its own, with no further ADR needed. Admission would
+select the descriptor by the configured id, and a persisted `providerModelId`
+would resolve through the same registry, preserving the frozen-model invariant of
+§10 unchanged.
+
+That registry is **not built here**. It has no second model to hold, so building
+it now would be speculative structure around a set of one, and the honest state
+today is a single verified descriptor plus a check that says so. The work is
+recorded in `docs/decisions/TODO.md` and belongs to whichever phase first has a
+second verified model to add.
 
 ### 12. Amended after review: `COMPOSITION_OWNED` still requires valid syntax
 

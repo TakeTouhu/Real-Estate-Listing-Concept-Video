@@ -67,7 +67,11 @@ export type AspectRatioSupport =
  * - `PROMPT_RENDERED` — no dedicated parameter exists, and the approved prompt
  *   renderer expresses the intent faithfully through the documented prompt
  *   input. **Declaring this is a promise about the renderer**, which the type
- *   system cannot check; a test pins it instead.
+ *   system cannot check — and which, as of Phase 4B-2a, no test checks either,
+ *   because no renderer exists to check against. Pinning it is a completion
+ *   condition of Phase 4B-2b (ADR-0019 §2, §8). Until then the declaration is
+ *   an unverified assertion; a provider whose renderer does not carry the
+ *   intent must declare `UNSUPPORTED` instead.
  * - `UNSUPPORTED` — the intent cannot be expressed at all, so a request
  *   carrying it is refused. It is never silently dropped, and never rewritten
  *   into some other field.

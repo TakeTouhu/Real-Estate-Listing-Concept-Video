@@ -42,7 +42,11 @@ export const OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS = ["seed"] as const;
  *   already carries camera motion as a *system-derived scene fact*. Phase 4B-2b's
  *   renderer is obliged to express it through the documented `prompt` input.
  *   That obligation is a promise this constant makes on the renderer's behalf,
- *   so a test pins the two together.
+ *   and **nothing verifies it yet**: no renderer exists in Phase 4B-2a, so the
+ *   only writable test would restate this constant rather than check any
+ *   behaviour. The pinning test is a completion condition of Phase 4B-2b. If
+ *   that renderer does not carry camera motion, this line is false and must
+ *   become `UNSUPPORTED`.
  */
 export const OPEN_VIDEO_CAPABILITY: VideoModelCapability = Object.freeze({
   providerName: "wavespeed",

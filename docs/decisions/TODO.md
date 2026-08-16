@@ -316,6 +316,32 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       Phase 3 composition to one provider's limits needs provider-aware
       composition, which the architecture does not have; admission remains the
       provider-specific authority. Revisit if the late failure proves confusing.
+- [ ] **Replace the single-model environment check with a keyed descriptor
+      registry.** Phase 4B-2a made `WAVESPEED_VIDEO_MODEL_ID` fail closed on any
+      value other than `WAVESPEED_OPEN_VIDEO_MODEL_ID`, because a model id
+      without a verified `VideoModelCapability` is an unvalidated request
+      contract pointed at a paid endpoint. That is a **recorded deviation**
+      (ADR-0019 §11): the variable is a configuration knob in name that accepts
+      exactly one value. The exit path is a map from model id to verified
+      descriptor, with the schema validated against the registry's keys instead
+      of a single constant — adding a model then means adding a verified
+      descriptor, and the check relaxes on its own with no further ADR. Admission
+      selects by configured id; a persisted `providerModelId` resolves through
+      the same registry, keeping the frozen-model invariant (ADR-0019 §10)
+      unchanged. **Not built in 4B-2a**: with one model it would be speculative
+      structure around a set of one. Belongs to whichever phase first has a
+      second verified model to add.
+- [ ] **Pin the `PROMPT_RENDERED` camera-motion declaration to real renderer
+      behaviour (Phase 4B-2b completion condition).** `OPEN_VIDEO_CAPABILITY`
+      declares `cameraMotion: PROMPT_RENDERED`, which asserts that the approved
+      renderer expresses camera-motion intent through the documented `prompt`
+      input. **Nothing verifies that today** — no renderer exists in Phase
+      4B-2a, so the only writable test would restate the constant rather than
+      check behaviour, which is the tautology this gap must not be papered over
+      with. Phase 4B-2b must add the real pinning test; if its renderer does not
+      carry the intent, the declaration is false and must become `UNSUPPORTED`.
+      No submission path exists before then, so no paid work is admitted against
+      the unverified claim in the interim.
 - [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
       added `findLatestSucceededByRequestIdentity`, which prevents *automatic
       repeat spend* — but returning a succeeded attempt is not the same as
