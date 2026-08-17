@@ -50,7 +50,9 @@ export async function computeReadiness(
     modelId: env.WAVESPEED_VIDEO_MODEL_ID,
     sourceImageUrl: "https://internal.placeholder/self-check",
     prompt: "readiness self-check",
-    durationSeconds: 1,
+    // Inside the configured model's documented 3–20s range. A self-check that
+    // describes a request the model would reject is not a check of the wiring.
+    durationSeconds: 5,
     aspectRatio: "16:9",
     resolution: "720p",
     requestHash: "readiness-self-check",

@@ -331,17 +331,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       unchanged. **Not built in 4B-2a**: with one model it would be speculative
       structure around a set of one. Belongs to whichever phase first has a
       second verified model to add.
-- [ ] **Pin the `PROMPT_RENDERED` camera-motion declaration to real renderer
-      behaviour (Phase 4B-2b completion condition).** `OPEN_VIDEO_CAPABILITY`
-      declares `cameraMotion: PROMPT_RENDERED`, which asserts that the approved
-      renderer expresses camera-motion intent through the documented `prompt`
-      input. **Nothing verifies that today** — no renderer exists in Phase
-      4B-2a, so the only writable test would restate the constant rather than
-      check behaviour, which is the tautology this gap must not be papered over
-      with. Phase 4B-2b must add the real pinning test; if its renderer does not
-      carry the intent, the declaration is false and must become `UNSUPPORTED`.
-      No submission path exists before then, so no paid work is admitted against
-      the unverified claim in the interim.
+- [x] **Pin the `PROMPT_RENDERED` camera-motion declaration to real renderer
+      behaviour (Phase 4B-2b completion condition).** **Closed in Phase 4B-2b.**
+      `renderPrompt` carries the requested motion into the prompt, and
+      `capability.test.ts` asserts the descriptor's `cameraMotion` equals
+      `PROMPT_RENDERED` *only if* the renderer demonstrably carries it and
+      omits it when absent — so a renderer that stopped carrying motion would
+      force the declaration to `UNSUPPORTED` rather than allow the test to be
+      relaxed. Mutation-verified: removing the rendering fails 5 tests
+      (ADR-0020 §3).
 - [ ] **Managed-output reuse for an identical succeeded request.** Phase 4B-1a
       added `findLatestSucceededByRequestIdentity`, which prevents *automatic
       repeat spend* — but returning a succeeded attempt is not the same as
@@ -349,15 +347,52 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       `outputStorageKey`, which nothing populates until Phase 4D. Until then,
       "reuse" means "do not silently pay again", not "here is your video".
       **Revisit in 4D.**
-- [ ] **The provider adapter sends fields the selected model may not accept.**
-      `mapToWaveSpeedRequest` sends `aspect_ratio`, and conditionally
-      `negative_prompt` and `camera_motion`. Current documentation for
-      `wavespeed-ai/open-video/image-to-video` documents none of the three.
-      Phase 4B-2 must reconcile the adapter with the verified contract, and must
-      resolve the aspect-ratio product question explicitly — either authoritative
-      evidence the model honours the requested ratio by another mechanism, a
-      different model, or a reviewed change to the product contract. **Dropping
-      `aspectRatio` silently is not an option.** Blocks every real provider call.
+- [x] **The provider adapter sends fields the selected model may not accept.**
+      **Closed in Phase 4B-2a** (merged as `be92596`). `mapToWaveSpeedRequest`
+      now sends exactly `image`, `prompt`, `duration`, `resolution`, plus `seed`
+      when supplied, pinned by an exact key-set assertion. `aspectRatio` was not
+      dropped silently: it stays a request-identity and snapshot fact, and
+      `AspectRatioSupport.COMPOSITION_OWNED` moves the delivery guarantee to
+      Phase 5 composition, which is recorded above as a hard prerequisite.
+      Phase 4B-2b then removed `negativePrompt` and `cameraMotion` from
+      `ProviderGenerationInput` itself, so no unread field remains on the type
+      that describes a paid request.
+
+## Phase 4B-2b follow-ups
+
+- [ ] **The rendered prompt is not covered by the request hash (Phase 4C
+      prerequisite).** Request identity hashes the compiled prompt *structure*.
+      The string actually submitted is a function of that structure **and the
+      renderer's code** — headings, section order, bullet syntax, the trimming
+      rule — and the renderer version is recorded nowhere on the row. A
+      generation admitted under one renderer version and executed after a deploy
+      that changed a heading would submit text the customer's approved request
+      never described, under a hash that still validates. Nothing detects this
+      today only because nothing submits yet; Phase 4C is the first code that
+      does, and must close it before submitting. Two candidate shapes, both
+      reviewable: pin a renderer version into the request identity, or freeze the
+      rendered string alongside the structure at admission. ADR-0020,
+      *Consequences*.
+- [ ] **Camera motion reaches the model as unmoderated customer text.**
+      `VideoProject.cameraMotion` is free text typed in the create panel. It
+      flows to `StoryboardScene.cameraMotion`, into `SceneFacts.cameraMotion`,
+      and — as of Phase 4B-2b — into the rendered prompt. `compileScenePrompt`
+      moderates `prompt` and `negativePrompt` but **not** camera motion, and
+      `SceneFacts` is documented as "System-derived, never user text", which for
+      this field is wrong. Phase 4B-2b did not widen moderation, because
+      changing what admission accepts belongs in its own reviewable change; it
+      renders the value under a customer heading below the rules rather than as
+      a system fact above them. Fix by routing the field through the moderator
+      or constraining it to a vocabulary, and correct the `SceneFacts` comment
+      either way. ADR-0020, *Consequences*.
+- [ ] **Prompt length is unbounded and unmeasured.** Every generation carries
+      roughly 600 characters of preamble before the customer's own words, which
+      render last. The vendor publishes no `prompt` length limit, and no paid
+      call may be made to discover one. If OpenVideo truncates or weights early
+      tokens, the customer's styling request is the part most likely to be lost.
+      Measurable in Phase 4C/4D once generations can be produced and compared;
+      ADR-0020 records the reversal conditions rather than pre-emptively
+      shortening the prompt and trading a product rule for unmeasured adherence.
 
 ## Business rules to confirm (later phases)
 

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { WAVESPEED_OPEN_VIDEO_MODEL_ID, serverEnvSchema } from "@app/shared";
-import { assertSettingsSupported, type GenerationRequestSettings } from "@app/domain";
+import {
+  assertSettingsSupported,
+  renderPrompt,
+  PRESERVATION_RULES,
+  SYSTEM_NEGATIVE_CONSTRAINTS,
+  type CompiledPrompt,
+  type GenerationRequestSettings,
+} from "@app/domain";
 import {
   OPEN_VIDEO_CAPABILITY,
   OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS,
@@ -243,5 +250,78 @@ describe("a frozen generation model id survives configuration", () => {
     );
     expect(req.url).toBe("https://api.wavespeed.ai/api/v3/some-vendor/frozen-model");
     expect(req.url).not.toContain(WAVESPEED_OPEN_VIDEO_MODEL_ID);
+  });
+});
+
+/**
+ * The declaration follows the behaviour, never the reverse.
+ *
+ * Phase 4B-2a declared `cameraMotion: PROMPT_RENDERED` as a promise about a
+ * renderer that did not exist yet, and said so at the point of definition
+ * rather than writing a test that could only restate the constant. Phase 4B-2b
+ * builds the renderer, so the promise becomes checkable — and that is what
+ * these assertions do. They are the completion condition of this milestone.
+ */
+describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
+  const MOTION = "slow dolly forward";
+
+  function compiledWithMotion(cameraMotion: string | null): CompiledPrompt {
+    return {
+      preservation: [...PRESERVATION_RULES],
+      sceneFacts: {
+        assetId: "ast_1",
+        position: 1,
+        roomType: "LIVING_ROOM",
+        durationSeconds: 6,
+        cameraMotion,
+      },
+      userCustomization: null,
+      negativeConstraints: { system: [...SYSTEM_NEGATIVE_CONSTRAINTS], user: null },
+    };
+  }
+
+  it("renders camera motion into the documented prompt field", () => {
+    // The whole basis of the declaration: the model has no motion parameter,
+    // so the only faithful delivery is through `prompt`.
+    const req = mapToWaveSpeedRequest(
+      {
+        modelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
+        sourceImageUrl: "https://storage.internal/o/img",
+        prompt: renderPrompt(compiledWithMotion(MOTION)),
+        durationSeconds: 6,
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        requestHash: "h",
+      },
+      "https://api.wavespeed.ai/api/v3",
+    );
+    expect(req.body.prompt).toContain(MOTION);
+  });
+
+  it("declares cameraMotion to match what the renderer actually does", () => {
+    // If the renderer stops carrying motion, this does not fail loosely — it
+    // demands the descriptor be corrected to UNSUPPORTED. Softening the test
+    // to keep the declaration is the one repair that is not available.
+    const carried =
+      renderPrompt(compiledWithMotion(MOTION)).includes(MOTION) &&
+      !renderPrompt(compiledWithMotion(null)).includes(MOTION);
+    expect(OPEN_VIDEO_CAPABILITY.cameraMotion).toEqual({
+      kind: carried ? "PROMPT_RENDERED" : "UNSUPPORTED",
+    });
+  });
+
+  it("keeps negativePrompt UNSUPPORTED honest: the renderer never delivers one", () => {
+    // `UNSUPPORTED` means a project carrying user negative text is refused at
+    // admission. It must not mean the text is quietly folded into the positive
+    // prompt, which would invert it.
+    const withUserNegative: CompiledPrompt = {
+      ...compiledWithMotion(MOTION),
+      negativeConstraints: {
+        system: [...SYSTEM_NEGATIVE_CONSTRAINTS],
+        user: "SENTINEL_USER_NEGATIVE_TEXT",
+      },
+    };
+    expect(OPEN_VIDEO_CAPABILITY.negativePrompt).toEqual({ kind: "UNSUPPORTED" });
+    expect(renderPrompt(withUserNegative)).not.toContain("SENTINEL_USER_NEGATIVE_TEXT");
   });
 });
