@@ -36,6 +36,7 @@ function view(projects: VideoProjectDto[], canCreate = true) {
       propertyId={PROPERTY}
       projects={projects}
       canCreate={canCreate}
+      cameraMotionOptions={[{ value: "STATIC", label: "Static (no camera movement)" }]}
     />,
   );
 }
@@ -78,7 +79,7 @@ describe("project list", () => {
         durationSeconds: 45,
         aspectRatio: "9:16",
         resolution: "720p",
-        cameraMotion: "SLOW_PAN",
+        cameraMotion: "SLOW_DOLLY_FORWARD",
         prompt: "bright and airy",
         negativePrompt: "no harsh shadows",
       }),
@@ -87,7 +88,7 @@ describe("project list", () => {
     expect(screen.getByText("45 seconds")).toBeTruthy();
     expect(screen.getByText("9:16")).toBeTruthy();
     expect(screen.getByText("720p")).toBeTruthy();
-    expect(screen.getByText("SLOW_PAN")).toBeTruthy();
+    expect(screen.getByText("Slow dolly forward")).toBeTruthy();
     expect(screen.getByText("bright and airy")).toBeTruthy();
     expect(screen.getByText("no harsh shadows")).toBeTruthy();
   });
@@ -115,7 +116,7 @@ describe("project list", () => {
 
   it("puts no internal field in the browser-facing markup", () => {
     const { container } = view([
-      project({ prompt: "bright and airy", cameraMotion: "SLOW_PAN" }),
+      project({ prompt: "bright and airy", cameraMotion: "SLOW_DOLLY_FORWARD" }),
     ]);
     const markup = container.innerHTML;
 
@@ -133,6 +134,42 @@ describe("project list", () => {
     ]) {
       expect(markup).not.toContain(internal);
     }
+  });
+});
+
+describe("camera motion is shown as a label, never as an internal token", () => {
+  // Every approved value, so this proves the mapping path is used rather than
+  // one hard-coded case.
+  it.each([
+    ["STATIC", "Static (no camera movement)"],
+    ["SLOW_DOLLY_FORWARD", "Slow dolly forward"],
+    ["SLOW_PAN_LEFT", "Slow pan left"],
+    ["SLOW_PAN_RIGHT", "Slow pan right"],
+  ])("renders %s as its customer label", (token, label) => {
+    // Scoped to the row's definition list: the create form's <option> carries
+    // the same label, and matching that would not prove the row was fixed.
+    const { container } = view([project({ cameraMotion: token })]);
+    const shown = [...container.querySelectorAll("dd")].map((node) => node.textContent);
+    expect(shown).toContain(label);
+    expect(shown).not.toContain(token);
+  });
+
+  it("keeps a legacy free-text value readable and marks it as legacy", () => {
+    // A project written before Phase 4C-0b. It is the customer's own data, so it
+    // stays visible and unmodified, but it must not read as a selectable option.
+    view([project({ cameraMotion: "slow orbit around the island" })]);
+    expect(screen.getByText(/slow orbit around the island/)).toBeTruthy();
+    expect(screen.getByText(/legacy value/)).toBeTruthy();
+  });
+
+  it("marks nothing as legacy when the value is approved", () => {
+    view([project({ cameraMotion: "SLOW_PAN_RIGHT" })]);
+    expect(screen.queryByText(/legacy value/)).toBeNull();
+  });
+
+  it("shows no camera-motion row at all when unspecified", () => {
+    view([project({ cameraMotion: null })]);
+    expect(screen.queryByText("Camera motion")).toBeNull();
   });
 });
 

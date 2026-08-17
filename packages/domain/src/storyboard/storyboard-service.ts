@@ -10,6 +10,7 @@ import { computeCompositionFingerprint } from "./fingerprint";
 import type { PromptModerator } from "./moderation";
 import { orderScenes } from "./ordering";
 import { compileScenePrompt, type CompiledPrompt } from "./prompt";
+import { assertApprovedCameraMotion } from "./camera-motion";
 import type { StoryboardRepositories } from "./ports";
 import type { StoryboardScene, VideoProject } from "./types";
 
@@ -107,6 +108,11 @@ export class StoryboardService {
     if (input.aspectRatio.trim().length === 0 || input.resolution.trim().length === 0) {
       throw new AppError("VALIDATION_FAILED", "Aspect ratio and resolution are required");
     }
+    // Camera motion is customer-selected but system-constrained: only an
+    // approved token may be stored. The check is here, in the domain, and not in
+    // the HTTP route or the form, because the route serves API callers too and a
+    // control the UI hides is not a control (ADR-0022).
+    const cameraMotion = assertApprovedCameraMotion(input.cameraMotion ?? null);
 
     return this.deps.storyboards.projects.create({
       id: this.deps.ids.generate("vpr"),
@@ -118,7 +124,7 @@ export class StoryboardService {
       aspectRatio: input.aspectRatio.trim(),
       resolution: input.resolution.trim(),
       stylePreset: null,
-      cameraMotion: input.cameraMotion ?? null,
+      cameraMotion,
       prompt: input.prompt ?? null,
       negativePrompt: input.negativePrompt ?? null,
       includeMusic: false,
@@ -330,12 +336,18 @@ export class StoryboardService {
     ordered: readonly EligibleInput[],
     durations: readonly number[],
   ): Promise<readonly CompiledPrompt[]> {
+    // A project written before the vocabulary existed can still hold free text.
+    // Composing it would compile that text into every scene's prompt, so it is
+    // refused here with an error a person can act on, rather than silently
+    // dropped or carried to a model.
+    const cameraMotion = assertApprovedCameraMotion(project.cameraMotion);
+
     const facts = (input: EligibleInput, index: number) => ({
       assetId: input.assetId,
       position: index + 1,
       roomType: input.roomType,
       durationSeconds: durations[index]!,
-      cameraMotion: project.cameraMotion,
+      cameraMotion,
     });
 
     const first = await compileScenePrompt(

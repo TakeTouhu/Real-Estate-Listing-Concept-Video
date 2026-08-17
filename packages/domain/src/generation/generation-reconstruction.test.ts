@@ -34,7 +34,7 @@ const ACTOR = "usr_rc";
 const ADMITTED = {
   compiledPrompt: '{"preservation":["keep"],"sceneFacts":{"p":1},"userCustomization":"warm light"}',
   durationSeconds: 5,
-  cameraMotion: "SLOW_PAN",
+  cameraMotion: "SLOW_PAN_LEFT",
   aspectRatio: "16:9",
   resolution: "1080p",
 } as const;
@@ -43,7 +43,7 @@ const ADMITTED = {
 const AFTER_RECOMPOSE = {
   compiledPrompt: '{"preservation":["keep"],"sceneFacts":{"p":1},"userCustomization":"cool light"}',
   durationSeconds: 9,
-  cameraMotion: "FAST_ZOOM",
+  cameraMotion: "SLOW_PAN_RIGHT",
   aspectRatio: "9:16",
   resolution: "720p",
 } as const;

@@ -376,18 +376,16 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       reviewable: pin a renderer version into the request identity, or freeze the
       rendered string alongside the structure at admission. ADR-0020,
       *Consequences*.
-- [ ] **Camera motion reaches the model as unmoderated customer text.**
-      `VideoProject.cameraMotion` is free text typed in the create panel. It
-      flows to `StoryboardScene.cameraMotion`, into `SceneFacts.cameraMotion`,
-      and — as of Phase 4B-2b — into the rendered prompt. `compileScenePrompt`
-      moderates `prompt` and `negativePrompt` but **not** camera motion, and
-      `SceneFacts` is documented as "System-derived, never user text", which for
-      this field is wrong. Phase 4B-2b did not widen moderation, because
-      changing what admission accepts belongs in its own reviewable change; it
-      renders the value under a customer heading below the rules rather than as
-      a system fact above them. Fix by routing the field through the moderator
-      or constraining it to a vocabulary, and correct the `SceneFacts` comment
-      either way. ADR-0020, *Consequences*.
+- [x] **Camera motion reaches the model as unmoderated customer text.**
+      **Closed in Phase 4C-0b.** `cameraMotion` is now a closed four-value
+      vocabulary (`STATIC`, `SLOW_DOLLY_FORWARD`, `SLOW_PAN_LEFT`,
+      `SLOW_PAN_RIGHT`) enforced in the domain at project write, at composition,
+      and at generation admission — not in the HTTP route or the form, because
+      the same route serves API callers. The renderer maps each token to a
+      reviewed sentence and never emits the token or any stored text. The
+      `SceneFacts` comment is now accurate: the value is customer-selected,
+      system-constrained intent. Moderation was rejected as the primary control;
+      ADR-0022 records why. Mutation-verified at all three enforcement points.
 - [ ] **Prompt length is unbounded and unmeasured.** Every generation carries
       roughly 600 characters of preamble before the customer's own words, which
       render last. The vendor publishes no `prompt` length limit, and no paid

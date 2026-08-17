@@ -1,4 +1,6 @@
 import {
+  humanizeCameraMotion,
+  isCameraMotion,
   StoryboardService,
   type StoryboardScene,
   type StoryboardView,
@@ -80,6 +82,36 @@ export function toVideoProjectDto(project: VideoProject): VideoProjectDto {
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),
   };
+}
+
+/**
+ * How one persisted camera motion should be shown to a customer.
+ *
+ * The DTO deliberately keeps the **token** — it is the API contract, and a client
+ * that reads a project needs the same value it would send back. Labels are
+ * presentation, so they are derived here, at the read surface, rather than baked
+ * into the wire shape.
+ *
+ * There is no second vocabulary: this delegates to `isCameraMotion` and
+ * `humanizeCameraMotion`, so adding an approved motion changes one domain
+ * constant and this follows automatically.
+ *
+ * `approved: false` is the **legacy** case — a project written before Phase
+ * 4C-0b can still hold arbitrary text (ADR-0022). Such a value stays readable
+ * because it is the customer's own data, is returned unmodified, and is never
+ * guessed onto a token. Callers mark it so it cannot be mistaken for an approved
+ * option.
+ */
+export interface CameraMotionDisplay {
+  readonly label: string;
+  readonly approved: boolean;
+}
+
+export function cameraMotionDisplay(value: string | null): CameraMotionDisplay | null {
+  if (value === null || value.trim().length === 0) return null;
+  return isCameraMotion(value)
+    ? { label: humanizeCameraMotion(value), approved: true }
+    : { label: value, approved: false };
 }
 
 /**

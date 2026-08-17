@@ -1,5 +1,5 @@
-import type { VideoProjectDto } from "@/lib/storyboard";
-import { CreateProjectPanel } from "./create-panel";
+import { cameraMotionDisplay, type VideoProjectDto } from "@/lib/storyboard";
+import { CreateProjectPanel, type CameraMotionOption } from "./create-panel";
 
 /**
  * Human labels for the persisted project status.
@@ -20,6 +20,8 @@ interface Props {
   readonly projects: readonly VideoProjectDto[];
   /** Whether this member's role carries `property:write`. Decided by the server. */
   readonly canCreate: boolean;
+  /** Approved camera motions, resolved server-side and passed as plain data. */
+  readonly cameraMotionOptions: readonly CameraMotionOption[];
 }
 
 /**
@@ -33,11 +35,21 @@ interface Props {
  * Each row links to the project's storyboard (Phase 3C-6b), which is where
  * composition, the scene preview, and the freshness state live.
  */
-export function ProjectsView({ organizationId, propertyId, projects, canCreate }: Props) {
+export function ProjectsView({
+  organizationId,
+  propertyId,
+  projects,
+  canCreate,
+  cameraMotionOptions,
+}: Props) {
   return (
     <>
       {canCreate ? (
-        <CreateProjectPanel organizationId={organizationId} propertyId={propertyId} />
+        <CreateProjectPanel
+          organizationId={organizationId}
+          propertyId={propertyId}
+          cameraMotionOptions={cameraMotionOptions}
+        />
       ) : (
         <p className="card muted">
           Your role can read this property&rsquo;s video projects but cannot create one.
@@ -76,6 +88,10 @@ function ProjectRow({
   project: VideoProjectDto;
   propertyId: string;
 }) {
+  // The DTO carries the token, because that is the API contract. The label is a
+  // read-surface concern, derived from the one domain vocabulary (ADR-0022).
+  const motion = cameraMotionDisplay(project.cameraMotion);
+
   return (
     <div className="project-row">
       <p className="project-name">
@@ -91,10 +107,15 @@ function ProjectRow({
         <dd>{project.aspectRatio}</dd>
         <dt>Resolution</dt>
         <dd>{project.resolution}</dd>
-        {project.cameraMotion ? (
+        {motion ? (
           <>
             <dt>Camera motion</dt>
-            <dd>{project.cameraMotion}</dd>
+            <dd>
+              {motion.label}
+              {motion.approved ? null : (
+                <span className="muted"> (legacy value, no longer selectable)</span>
+              )}
+            </dd>
           </>
         ) : null}
         {project.prompt ? (

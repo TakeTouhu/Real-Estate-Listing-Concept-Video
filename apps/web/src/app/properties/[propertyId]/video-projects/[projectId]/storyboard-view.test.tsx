@@ -126,7 +126,7 @@ describe("project settings", () => {
         durationSeconds: 45,
         aspectRatio: "9:16",
         resolution: "720p",
-        cameraMotion: "SLOW_PAN",
+        cameraMotion: "SLOW_DOLLY_FORWARD",
         prompt: "bright and airy",
         negativePrompt: "no harsh shadows",
       }),
@@ -137,7 +137,7 @@ describe("project settings", () => {
     expect(screen.getByText("45 seconds")).toBeTruthy();
     expect(screen.getByText("9:16")).toBeTruthy();
     expect(screen.getByText("720p")).toBeTruthy();
-    expect(screen.getByText("SLOW_PAN")).toBeTruthy();
+    expect(screen.getByText("Slow dolly forward")).toBeTruthy();
     expect(screen.getByText("bright and airy")).toBeTruthy();
     expect(screen.getByText("no harsh shadows")).toBeTruthy();
     // Read-only: with composition unavailable there is no input at all.
@@ -157,6 +157,25 @@ describe("project settings", () => {
   it("uses the minimum it is given rather than a hardcoded one", () => {
     view({ minimumScenes: 5 });
     expect(screen.getByText(/at least 5 approved photos/)).toBeTruthy();
+  });
+});
+
+describe("camera motion is shown as a label, never as an internal token", () => {
+  it.each([
+    ["STATIC", "Static (no camera movement)"],
+    ["SLOW_DOLLY_FORWARD", "Slow dolly forward"],
+    ["SLOW_PAN_LEFT", "Slow pan left"],
+    ["SLOW_PAN_RIGHT", "Slow pan right"],
+  ])("renders %s as its customer label on the detail surface", (token, label) => {
+    view({ project: project({ cameraMotion: token }) });
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText(token)).toBeNull();
+  });
+
+  it("keeps a legacy free-text value readable and marks it as legacy", () => {
+    view({ project: project({ cameraMotion: "slow orbit around the island" }) });
+    expect(screen.getByText(/slow orbit around the island/)).toBeTruthy();
+    expect(screen.getByText(/legacy value/)).toBeTruthy();
   });
 });
 
@@ -219,7 +238,7 @@ describe("authorization presentation", () => {
 describe("privacy", () => {
   it("puts no internal field in the browser-facing markup", () => {
     const { container } = view({
-      project: project({ prompt: "bright and airy", cameraMotion: "SLOW_PAN" }),
+      project: project({ prompt: "bright and airy", cameraMotion: "SLOW_DOLLY_FORWARD" }),
       scenes: THREE_SCENES,
       fresh: true,
     });

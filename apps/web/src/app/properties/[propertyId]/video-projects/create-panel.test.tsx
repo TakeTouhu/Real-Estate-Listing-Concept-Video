@@ -24,8 +24,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The server page resolves these from the domain vocabulary; here they are fixed. */
+const CAMERA_MOTION_OPTIONS = [
+  { value: "STATIC", label: "Static (no camera movement)" },
+  { value: "SLOW_DOLLY_FORWARD", label: "Slow dolly forward" },
+  { value: "SLOW_PAN_LEFT", label: "Slow pan left" },
+  { value: "SLOW_PAN_RIGHT", label: "Slow pan right" },
+];
+
 function panel() {
-  return render(<CreateProjectPanel organizationId={ORG} propertyId={PROPERTY} />);
+  return render(
+    <CreateProjectPanel
+      organizationId={ORG}
+      propertyId={PROPERTY}
+      cameraMotionOptions={CAMERA_MOTION_OPTIONS}
+    />,
+  );
 }
 
 function respond(status: number, body: unknown = {}): Response {
@@ -122,13 +136,39 @@ describe("request", () => {
       screen.getByLabelText("What should the walkthrough feel like? (optional)"),
       "bright and airy",
     );
-    await userEvent.type(screen.getByLabelText("Camera motion (optional)"), "SLOW_PAN");
+    await userEvent.selectOptions(
+      screen.getByLabelText("Camera motion (optional)"),
+      "SLOW_PAN_LEFT",
+    );
     await userEvent.click(createButton());
 
     const { body } = lastRequest();
     expect(body.prompt).toBe("bright and airy");
-    expect(body.cameraMotion).toBe("SLOW_PAN");
+    expect(body.cameraMotion).toBe("SLOW_PAN_LEFT");
     expect(body).not.toHaveProperty("negativePrompt");
+  });
+
+  it("offers only approved camera motions, and no free-text entry", async () => {
+    // The control cannot express an arbitrary instruction at all. The server
+    // refuses one regardless (ADR-0022) — this is the surface, not the boundary.
+    panel();
+    const control = screen.getByLabelText("Camera motion (optional)") as HTMLSelectElement;
+    expect(control.tagName).toBe("SELECT");
+    expect([...control.options].map((o) => o.value)).toEqual([
+      "",
+      "STATIC",
+      "SLOW_DOLLY_FORWARD",
+      "SLOW_PAN_LEFT",
+      "SLOW_PAN_RIGHT",
+    ]);
+  });
+
+  it("omits cameraMotion entirely when left unspecified", async () => {
+    fetchMock.mockResolvedValue(respond(201));
+    panel();
+    await fillRequired();
+    await userEvent.click(createButton());
+    expect(lastRequest().body).not.toHaveProperty("cameraMotion");
   });
 
   it("sends no lifecycle or internal field", async () => {
@@ -266,7 +306,10 @@ describe("unsupported provider features are not offered", () => {
       screen.getByLabelText("What should the walkthrough feel like? (optional)"),
       "bright and airy",
     );
-    await userEvent.type(screen.getByLabelText("Camera motion (optional)"), "SLOW_PAN");
+    await userEvent.selectOptions(
+      screen.getByLabelText("Camera motion (optional)"),
+      "SLOW_PAN_LEFT",
+    );
     await userEvent.click(createButton());
 
     const { body } = lastRequest();
