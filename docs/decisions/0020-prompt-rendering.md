@@ -28,10 +28,20 @@ told about a scene has to fit in `prompt`.
 
 ## Decision
 
-### 1. One renderer, in the domain, producing a string from a structure
+### 1. One renderer, in the domain, taking the persisted snapshot
 
-`renderPrompt(compiled: CompiledPrompt): string` lives in
+`renderPrompt(requestCompiledPrompt: string): string` lives in
 `packages/domain/src/generation/prompt-render.ts`.
+
+**Its input is the durable column, not a typed object.** A generation stores
+`requestCompiledPrompt` as an opaque JSON string (ADR-0018). A first revision of
+this renderer accepted an already-typed `CompiledPrompt`, which left Phase 4C no
+honest route from the stored column to the renderer except
+`JSON.parse(value) as CompiledPrompt`. Pre-merge review found three reachable
+consequences of that unchecked cast — a row with no preservation rules, a row
+with no system constraints, and a row carrying a customer negative prompt each
+produced a plausible, sendable prompt. Parsing and validation therefore belong
+*inside* the renderer, where they cannot be skipped by the caller.
 
 It is in the domain rather than beside an adapter because *what the model is
 told* is product policy: the preservation rules are quoted from
@@ -39,10 +49,12 @@ told* is product policy: the preservation rules are quoted from
 compose its own phrasing. The adapter's job stays narrow — put this string in
 the field the vendor documents.
 
-It is pure and total. Same structure in, same string out; no clock, no
-environment, no network, nothing mutated. The direction is one-way: it reads a
-`CompiledPrompt` and never writes back, re-compiles, or normalizes the stored
-structure. `CompiledPrompt` remains the hashed, persisted, reviewable form.
+It is pure and total. Same stored string in, same prompt out; no clock, no
+environment, no network, nothing mutated. The direction is one-way: it reads the
+stored snapshot and never writes back, re-compiles, or normalizes it. The
+persisted structure remains the hashed, reviewable form; this is a projection of
+it, and execution never needs the mutable project or storyboard to reconstruct
+what was approved.
 
 ### 2. The format: labelled plain-text sections, fixed order, `-` bullets
 
@@ -137,23 +149,30 @@ field. Dropping the list because the vendor lacks a parameter would silently
 retire a stated product constraint, so it goes in the only channel there is,
 phrased in the same imperative voice the preservation rules already use.
 
-`negativeConstraints.user` is **never** rendered, and the asymmetry is not
-inconsistency. Folding a negative into a positive prompt inverts its meaning:
-the customer asked for the absence of a thing and would be asking for its
-presence. For the only production model the question is moot at admission —
-`negativePrompt: UNSUPPORTED` refuses such a project outright — but the renderer
-is provider-neutral and must hold for a model that admits one.
+`negativeConstraints.user` is **never** rendered, and a non-blank one is
+**refused outright**. The asymmetry is not inconsistency. Folding a negative
+into a positive prompt inverts its meaning: the customer asked for the absence
+of a thing and would be asking for its presence. Silently omitting it is not the
+safe alternative either — it discards a stated customer requirement, and the
+first revision of this renderer did exactly that. Neither is available, so the
+renderer fails closed.
 
-The exclusion is structural rather than remembered. `renderPrompt` projects the
-compiled prompt onto a narrow internal type that has **no field capable of
-carrying the user negative**, and `CompiledPrompt` is not assignable to that
-type, so it cannot be forwarded wholesale by accident. Reintroducing the user
-negative requires adding a field *and* populating it, in a diff that says so.
+For the only production model the question should never arise: admission refuses
+such a project because `negativePrompt: UNSUPPORTED`. Reaching the renderer with
+one means corrupt or legacy state, which is precisely when silent behaviour is
+worst.
 
-This is a review affordance, not an impossibility proof. Nothing stops a caller
-constructing the narrow type by hand and putting the wrong text in the wrong
-field. What the split buys is that the mistake has to be written down somewhere
-a reviewer reads, and a sentinel-string test fails if it ever is.
+The refusal is the control. The structural exclusion behind it is the second
+line: `renderPrompt` projects onto a narrow internal type that has **no field
+capable of carrying the user negative**, and `CompiledPrompt` is not assignable
+to that type, so it cannot be forwarded wholesale by accident. Reintroducing the
+user negative requires adding a field *and* populating it, in a diff that says
+so.
+
+That second line is a review affordance, not an impossibility proof — nothing
+stops a caller constructing the narrow type by hand. It is worth keeping anyway,
+because the two mechanisms fail differently: the refusal catches bad *data*, and
+the type catches bad *code*.
 
 ### 6. Three facts are deliberately not rendered
 
@@ -171,14 +190,44 @@ An **unclassified** room renders no line at all. "Room: unclassified" spends
 tokens on something the model cannot act on, and guessing a likely label is
 exactly what `SceneFacts.roomType` documents as forbidden.
 
-### 7. An empty render is refused
+### 7. The renderer fails closed, and says nothing about the data
 
-If the whole structure renders to nothing, `renderPrompt` throws
-`INTERNAL_ERROR`. The preservation rules are system constants copied into every
-compilation, so an empty result means the structure was built wrong — not that a
-customer left a field blank. `INTERNAL_ERROR` rather than `VALIDATION_FAILED`
-for that reason. An empty `prompt` posted to a paid endpoint is a charge for
-nothing.
+`JSON.parse` succeeding is not evidence of anything, so every field the renderer
+reads is checked before it is read. Three layers, in order:
+
+1. **Shape.** Malformed JSON, a non-object root, and every wrong field type are
+   refused. Nothing downstream can meet `undefined` and throw a raw `TypeError`
+   instead of a domain error. An unknown `roomType` is refused rather than
+   rendered.
+2. **Safety content.** `preservation` and `negativeConstraints.system` must
+   equal the frozen constants — **exact sequence equality**, not subset or
+   superset, because `compileScenePrompt` writes exactly
+   `[...PRESERVATION_RULES]` and `[...SYSTEM_NEGATIVE_CONSTRAINTS]`. A missing
+   rule silently weakens the request; an extra entry would render unreviewed
+   text at system trust level. Before this check, an empty
+   `negativeConstraints.system` rendered a complete prompt with
+   "text overlays claiming measurements or floor plans" simply absent — a
+   product rule from `CLAUDE.md` that no preservation rule covers.
+3. **Customer negative.** A non-blank `negativeConstraints.user` is **refused**,
+   not dropped. See §5.
+
+Every refusal is `INTERNAL_ERROR` with a **fixed sentence chosen by code**. None
+of the conditions is reachable for a request admitted through
+`GenerationService`, so reaching one means stored state disagrees with the code
+that wrote it — not something a customer can act on, and the reason why
+`VALIDATION_FAILED` would be wrong. No compiled prompt, customer text, room
+type, asset id, generation id, request hash, tenant id, or credential appears in
+any message or in `details`; a test asserts that against sentinel values.
+
+The reasons are distinct rather than uniformly opaque, because an operator needs
+to know *which* invariant failed and no reason needs the data to say so.
+
+**Consequence, deliberately accepted.** Exact-equality means editing
+`PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS` invalidates every
+generation already admitted and not yet executed: they fail closed rather than
+executing under rules the customer's approved request never described. Changing
+the rules is a re-admission event, not a silent upgrade. This is the same drift
+problem recorded below, resolved here in the safe direction.
 
 ## Consequences
 
@@ -277,8 +326,19 @@ them.
 **Fold the customer's negative prompt in as "avoid X".** Superficially it is the
 same words with a heading, and it is the transformation that inverts their
 meaning most quietly. It is also what a future contributor will most plausibly
-try, which is why the exclusion is structural and pinned by test rather than
-left to the comment above.
+try, which is why a stored row carrying one is refused outright and the
+exclusion behind that refusal is structural and pinned by test.
+
+**Silently drop the customer's negative prompt.** The first revision of this
+renderer did, on the reasoning that admission already refuses one so the case is
+unreachable. "Unreachable" is exactly the claim corrupt or legacy state
+falsifies, and the failure mode is a paid generation that quietly ignores a
+constraint the customer stated. Refusing is the only disposition that neither
+inverts the meaning nor discards the requirement.
+
+**Validate in the caller instead of the renderer.** Would leave Phase 4C free to
+write `JSON.parse(value) as CompiledPrompt`, and a second caller free to skip
+the check entirely. A guarantee a caller can decline is not a guarantee.
 
 **Skip the system negatives because the model has no negative field.** Would
 silently retire "text overlays claiming measurements or floor plans", which no

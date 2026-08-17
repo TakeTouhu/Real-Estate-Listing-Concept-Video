@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WAVESPEED_OPEN_VIDEO_MODEL_ID, serverEnvSchema } from "@app/shared";
+import { AppError, WAVESPEED_OPEN_VIDEO_MODEL_ID, serverEnvSchema } from "@app/shared";
 import {
   assertSettingsSupported,
   renderPrompt,
@@ -265,6 +265,11 @@ describe("a frozen generation model id survives configuration", () => {
 describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
   const MOTION = "slow dolly forward";
 
+  /** The renderer's input is the persisted column, so build that. */
+  function storedWithMotion(cameraMotion: string | null): string {
+    return JSON.stringify(compiledWithMotion(cameraMotion));
+  }
+
   function compiledWithMotion(cameraMotion: string | null): CompiledPrompt {
     return {
       preservation: [...PRESERVATION_RULES],
@@ -287,7 +292,7 @@ describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
       {
         modelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
         sourceImageUrl: "https://storage.internal/o/img",
-        prompt: renderPrompt(compiledWithMotion(MOTION)),
+        prompt: renderPrompt(storedWithMotion(MOTION)),
         durationSeconds: 6,
         aspectRatio: "16:9",
         resolution: "1080p",
@@ -303,25 +308,31 @@ describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
     // demands the descriptor be corrected to UNSUPPORTED. Softening the test
     // to keep the declaration is the one repair that is not available.
     const carried =
-      renderPrompt(compiledWithMotion(MOTION)).includes(MOTION) &&
-      !renderPrompt(compiledWithMotion(null)).includes(MOTION);
+      renderPrompt(storedWithMotion(MOTION)).includes(MOTION) &&
+      !renderPrompt(storedWithMotion(null)).includes(MOTION);
     expect(OPEN_VIDEO_CAPABILITY.cameraMotion).toEqual({
       kind: carried ? "PROMPT_RENDERED" : "UNSUPPORTED",
     });
   });
 
-  it("keeps negativePrompt UNSUPPORTED honest: the renderer never delivers one", () => {
+  it("keeps negativePrompt UNSUPPORTED honest: the renderer refuses to deliver one", () => {
     // `UNSUPPORTED` means a project carrying user negative text is refused at
-    // admission. It must not mean the text is quietly folded into the positive
-    // prompt, which would invert it.
-    const withUserNegative: CompiledPrompt = {
+    // admission. It must not mean the text is folded into the positive prompt,
+    // which would invert it, nor silently dropped, which would discard a stated
+    // customer requirement. A stored row that carries one fails closed.
+    const withUserNegative = JSON.stringify({
       ...compiledWithMotion(MOTION),
       negativeConstraints: {
         system: [...SYSTEM_NEGATIVE_CONSTRAINTS],
         user: "SENTINEL_USER_NEGATIVE_TEXT",
       },
-    };
+    } satisfies CompiledPrompt);
     expect(OPEN_VIDEO_CAPABILITY.negativePrompt).toEqual({ kind: "UNSUPPORTED" });
-    expect(renderPrompt(withUserNegative)).not.toContain("SENTINEL_USER_NEGATIVE_TEXT");
+    expect(() => renderPrompt(withUserNegative)).toThrow(AppError);
+    try {
+      renderPrompt(withUserNegative);
+    } catch (error) {
+      expect((error as AppError).message).not.toContain("SENTINEL_USER_NEGATIVE_TEXT");
+    }
   });
 });

@@ -364,7 +364,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       prerequisite).** Request identity hashes the compiled prompt *structure*.
       The string actually submitted is a function of that structure **and the
       renderer's code** — headings, section order, bullet syntax, the trimming
-      rule — and the renderer version is recorded nowhere on the row. A
+      rule — and the renderer version is recorded nowhere on the row. The
+      renderer now validates the stored structure and fails closed, which closes
+      the *corrupt-input* half of this area but not the *drift* half: a valid row
+      still renders differently under a changed renderer. A
       generation admitted under one renderer version and executed after a deploy
       that changed a heading would submit text the customer's approved request
       never described, under a hash that still validates. Nothing detects this

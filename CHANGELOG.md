@@ -9,11 +9,20 @@ Under review. Not merged. See `docs/phase-4b2b-completion.md` and ADR-0020.
 
 ### Added
 
-- **`renderPrompt`** in `@app/domain` — the single function turning a structured
-  `CompiledPrompt` into the one string the provider's documented `prompt`
-  parameter carries. Labelled plain-text sections in fixed order, every
-  system-authored section before every customer-authored one. Pure, total, and
-  one-way: `CompiledPrompt` remains the hashed, persisted form.
+- **`renderPrompt(requestCompiledPrompt: string): string`** in `@app/domain` —
+  the single function turning a **persisted** generation request into the one
+  string the provider's documented `prompt` parameter carries. Its input is the
+  durable snapshot column, so execution never needs the mutable project or
+  storyboard, and no caller has a reason to write
+  `JSON.parse(value) as CompiledPrompt`. Labelled plain-text sections in fixed
+  order, every system-authored section before every customer-authored one. Pure,
+  total, and one-way.
+- **Fail-closed validation inside the renderer.** Malformed JSON, a non-object
+  root, wrong field types, and an unknown room type are refused; `preservation`
+  and `negativeConstraints.system` must equal the frozen constants by exact
+  sequence equality; a non-blank customer negative prompt is refused rather than
+  dropped. Every refusal is `INTERNAL_ERROR` with a fixed sentence chosen by
+  code, and a test asserts no stored content reaches the message or `details`.
 - **The `PROMPT_RENDERED` pinning test.** `capability.test.ts` asserts
   `OPEN_VIDEO_CAPABILITY.cameraMotion` equals `PROMPT_RENDERED` **only if** the
   renderer demonstrably carries the requested motion and omits it when absent —
@@ -48,6 +57,24 @@ Under review. Not merged. See `docs/phase-4b2b-completion.md` and ADR-0020.
 - No worker, no queue adapter, no provider call, no storage implementation, no
   moderation change, no HTTP or DTO change. `CompiledPrompt` is not exposed over
   HTTP.
+
+### Fixed after review
+
+Pre-merge review found three P1 blockers; all are fixed on this branch.
+
+- **The renderer could not consume the persisted representation.** It took a
+  typed `CompiledPrompt` while `requestCompiledPrompt` is a JSON string, leaving
+  Phase 4C no safe bridge. The public contract is now the stored string, with
+  parsing and validation inside the renderer where a caller cannot skip them.
+- **System safety constraints could disappear silently.** A row with empty
+  `preservation` or empty `negativeConstraints.system` rendered a complete,
+  plausible, sendable prompt carrying none of the product's rules — including
+  "text overlays claiming measurements or floor plans", which no preservation
+  rule covers.
+- **A customer negative prompt was silently discarded.** It is now refused.
+  Dropping it discards a stated customer requirement; folding it in inverts it.
+- Corrupt input threw a raw `TypeError` instead of a neutral domain error. The
+  same validation closes that path.
 
 ### Known gaps recorded, not closed
 

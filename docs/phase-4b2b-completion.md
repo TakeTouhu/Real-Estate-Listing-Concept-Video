@@ -18,13 +18,21 @@ This milestone writes that renderer, and pins the declaration to it.
 
 ## What shipped
 
-### `renderPrompt` — one function, in the domain
+### `renderPrompt` — one function, in the domain, on the durable boundary
 
-`packages/domain/src/generation/prompt-render.ts`. Pure, total, one-way:
-`CompiledPrompt` in, string out; nothing mutated, no clock, environment, or
-network. It lives in the domain because *what the model is told* is product
-policy — the preservation rules are quoted from `docs/AIVideoPipeline.md` and a
-second provider must inherit them rather than invent its own phrasing.
+`packages/domain/src/generation/prompt-render.ts`. Signature:
+
+```ts
+renderPrompt(requestCompiledPrompt: string): string
+```
+
+It takes the **persisted snapshot column**, not a typed object, so execution
+never needs the mutable project or storyboard to reconstruct what was approved,
+and Phase 4C has no reason to write `JSON.parse(value) as CompiledPrompt`.
+Pure, total, one-way; nothing mutated, no clock, environment, or network. It
+lives in the domain because *what the model is told* is product policy — the
+preservation rules are quoted from `docs/AIVideoPipeline.md` and a second
+provider must inherit them rather than invent its own phrasing.
 
 Sample output:
 
@@ -52,6 +60,23 @@ warm evening light, calm pace
 
 The format, its costs, and its reversal conditions are ADR-0020.
 
+### It fails closed, in three layers
+
+1. **Shape.** Malformed JSON, a non-object root, every wrong field type, and an
+   unknown `roomType` are refused. No property access downstream can meet
+   `undefined` and throw a raw `TypeError`.
+2. **Safety content.** `preservation` and `negativeConstraints.system` must equal
+   the frozen constants by **exact sequence equality**. A missing rule silently
+   weakens the request; an extra entry would render unreviewed text at system
+   trust level.
+3. **Customer negative.** A non-blank `negativeConstraints.user` is **refused**,
+   not dropped and not folded in.
+
+Every refusal is `INTERNAL_ERROR` with a fixed sentence chosen by code. A test
+asserts that no compiled prompt, customer customization, camera motion, customer
+negative text, or asset id appears in the message or `details` — checked against
+sentinel values.
+
 ### The user's negative prompt is structurally excluded
 
 `renderPrompt` projects onto a narrow internal type with **no field capable of
@@ -60,11 +85,11 @@ that type, so it cannot be forwarded wholesale by accident. The same type omits
 `assetId`, `position` and `durationSeconds`, so an internal identifier has no
 route into a provider payload.
 
-This is a review affordance, not an impossibility proof — a caller could build
-the narrow type by hand and put the wrong text in the wrong field. What it buys
-is that the mistake must be written down where a reviewer reads it, and a
-sentinel-string test fails if it ever is. ADR-0020 §5 states that limit rather
-than overclaiming.
+This is the **second** line of defence — the refusal above is the control. It is
+a review affordance, not an impossibility proof: a caller could build the narrow
+type by hand. It is worth keeping because the two mechanisms fail differently,
+the refusal catching bad data and the type catching bad code. ADR-0020 §5 states
+that limit rather than overclaiming.
 
 ### The `PROMPT_RENDERED` pinning test — the completion condition
 
@@ -108,7 +133,7 @@ so no video is generated yet.
 | --- | --- |
 | `pnpm typecheck` | clean |
 | `pnpm lint` | clean |
-| `pnpm test` | **1052 passed**, 55 files (baseline 1031 / 54; **+21 tests, +1 file**) |
+| `pnpm test` | **1067 passed**, 55 files (baseline 1031 / 54; **+36 tests, +1 file**) |
 | `pnpm build` | clean |
 | `pnpm test:db` | **123 passed**, 6 files (pure regression) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` (exit 0) |
@@ -122,13 +147,16 @@ implementation; no moderation change; no HTTP route, DTO, or UI change;
 ### Mutation verification
 
 Each mutation was applied to the merged implementation, the suite run, and the
-implementation restored and re-verified green (1052/55).
+implementation restored and re-verified green (1067/55).
 
 | Mutation | Result |
 | --- | --- |
 | Renderer stops emitting the camera-motion section | **5 fail**, including both pinning tests |
 | Renderer folds `negativeConstraints.user` into the `Avoid:` list | **2 fail** |
 | Self-check duration reverted to 1 | **1 fail** |
+| Drop `assertSafetyContentIntact` | **7 fail** |
+| Drop the customer-negative refusal | **2 fail** |
+| Replace validation with `JSON.parse(...) as CompiledPrompt` | **4 fail** |
 
 The first is the one that matters: it fails the descriptor-linkage test, which
 is the assertion that would otherwise have been a tautology.
@@ -171,6 +199,15 @@ the request identity, or freeze the rendered string at admission — and the cho
 is left to that phase rather than pre-empted here. The renderer was kept minimal
 partly because of this: it authors headings and bullet characters and no prose.
 
+**Pre-merge review found three P1 blockers, all fixed on this branch.** The
+renderer took a typed object while the persisted column is a JSON string, so
+nothing bridged them safely; a row with empty `preservation` or empty
+`negativeConstraints.system` rendered a complete, sendable prompt carrying none
+of the product's safety rules, including the floor-plan constraint; and a
+present customer negative was silently discarded rather than failing closed. A
+raw `TypeError` on corrupt input disappeared with the same fix. The renderer's
+public contract changed from `CompiledPrompt` to `string` as a result.
+
 **Three documentation sites carried the now-false "nothing verifies this yet"
 claim** — the domain `FeatureDelivery` doc, the OpenVideo descriptor comment, and
 ADR-0019 §2/§8. These were corrected in Task A to state the declaration was
@@ -191,17 +228,26 @@ what actually holds, and ADR-0019 gets dated amendments rather than a rewrite.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 220 |
-| Tests | 302 |
-| Docs | 510 |
-| **Total** | **1,032** |
+| Production | 367 |
+| Tests | 465 |
+| Docs | 871 |
+| **Total** | **1,703** across 20 files |
 
-Above the ~500 reviewability guideline, and roughly half of it is documentation —
-ADR-0020 is 285 lines on its own. **Production is 220 lines** across five files.
+Well above the ~500 reviewability guideline, and roughly half of it is
+documentation. The figures grew after the pre-merge review: fixing the three P1
+blockers added parsing and validation to the renderer and a fail-closed test
+matrix around it.
+
+Two of my earlier reports understated this. The first said 18 files / 1,032
+lines; the real figure at that head was 20 files / 1,267, because I computed the
+count before writing the completion report and never recomputed. These numbers
+are measured from `git diff --numstat be92596..HEAD` at the current head.
+
 The split that would reduce the number is not available: the renderer, the
-pinning test that makes the descriptor honest, and the removal of the two fields
-the renderer supersedes are one change; shipping the renderer without the pin
-would re-open exactly the gap this milestone closes.
+validation that makes it safe to call from a persisted row, the pinning test
+that makes the descriptor honest, and the removal of the two fields the renderer
+supersedes are one contract. Shipping any part alone re-opens a gap this
+milestone closes.
 
 ## Obligations created
 
