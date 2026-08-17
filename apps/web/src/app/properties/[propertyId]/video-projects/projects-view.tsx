@@ -1,4 +1,4 @@
-import type { VideoProjectDto } from "@/lib/storyboard";
+import { cameraMotionDisplay, type VideoProjectDto } from "@/lib/storyboard";
 import { CreateProjectPanel, type CameraMotionOption } from "./create-panel";
 
 /**
@@ -88,6 +88,10 @@ function ProjectRow({
   project: VideoProjectDto;
   propertyId: string;
 }) {
+  // The DTO carries the token, because that is the API contract. The label is a
+  // read-surface concern, derived from the one domain vocabulary (ADR-0022).
+  const motion = cameraMotionDisplay(project.cameraMotion);
+
   return (
     <div className="project-row">
       <p className="project-name">
@@ -103,10 +107,15 @@ function ProjectRow({
         <dd>{project.aspectRatio}</dd>
         <dt>Resolution</dt>
         <dd>{project.resolution}</dd>
-        {project.cameraMotion ? (
+        {motion ? (
           <>
             <dt>Camera motion</dt>
-            <dd>{project.cameraMotion}</dd>
+            <dd>
+              {motion.label}
+              {motion.approved ? null : (
+                <span className="muted"> (legacy value, no longer selectable)</span>
+              )}
+            </dd>
           </>
         ) : null}
         {project.prompt ? (

@@ -53,6 +53,26 @@ The heading drops its "the rules above take precedence" caveat — there is no
 customer text left in the section to caveat — and becomes
 `Camera motion (customer-selected):`.
 
+### Customers see labels, never internal tokens
+
+Closing the vocabulary introduced its identifiers, and review found that both
+read surfaces still rendered the persisted value directly — a customer who chose
+"Slow dolly forward" saw `SLOW_DOLLY_FORWARD`. A repository-wide search found
+exactly two such sites, `projects-view.tsx` and `storyboard-view.tsx`; both are
+Server Components already importing the domain through `@/lib/storyboard`, so
+`cameraMotionDisplay` lives in that existing projection layer.
+
+It delegates to `isCameraMotion` and `humanizeCameraMotion`, so there is **no
+second vocabulary**: adding an approved motion changes one domain constant and
+both surfaces follow. `VideoProjectDto` keeps the **token**, because that is the
+API contract and a client reading a project needs the same value it would send
+back — labels are a read-surface concern, not a wire-shape change.
+
+**Legacy free text stays readable.** A project written before this milestone can
+hold arbitrary text; it is the customer's own data, so it is returned unmodified,
+never guessed onto a token, and marked `(legacy value, no longer selectable)` so
+it cannot be mistaken for an approved option.
+
 ### The type narrows, and the compiler found the rest
 
 `SceneFacts.cameraMotion` becomes `CameraMotion | null`. That surfaced every
@@ -65,7 +85,7 @@ module's own "never user text" comment true rather than aspirational.
 | --- | --- |
 | `pnpm typecheck` | clean |
 | `pnpm lint` | clean |
-| `pnpm test` | **1112 passed**, 56 files (baseline 1067 / 55; **+45 tests, +1 file**) |
+| `pnpm test` | **1124 passed**, 56 files (baseline 1067 / 55; **+57 tests, +1 file**) |
 | `pnpm build` | clean |
 | `pnpm test:db` | **123 passed**, 6 files (pure regression) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` (exit 0) |
@@ -77,8 +97,10 @@ module's own "never user text" comment true rather than aspirational.
 | Drop the admission check | **2 fail** |
 | Drop the `createProject` and `compose` checks | **4 fail** |
 | Renderer emits the raw token instead of the sentence | **8 fail** |
+| Read surfaces render the raw token again | **12 fail** |
+| Legacy free text is reported as approved | **2 fail** |
 
-Each restored and re-verified green (1112/56).
+Each restored and re-verified green (1124/56).
 
 ## Invariants held
 
@@ -103,18 +125,26 @@ call.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 295 |
-| Tests | 418 |
-| Docs | 309 |
-| **Total** | **1,022** across 24 files |
+| Production | 356 |
+| Tests | 485 |
+| Docs | 463 |
+| **Total** | **1,304** across 28 files |
 
-Measured from `git diff --numstat cd9d136..HEAD` at the committed head. Above the
-~800–950 estimate in the approved plan: production came in at 295 against ~150,
-because narrowing `SceneFacts.cameraMotion` propagated into the UI prop chain
-(server page → projects view → create panel) rather than staying inside the
-domain. Tests ran to 418 against ~280 for the same reason — the fixture updates
-were spread across seven files. Docs came in *under* estimate at 309 against
-~420.
+Measured from `git diff --numstat cd9d136..HEAD` at the final committed head, and
+reconciling exactly with GitHub's raw additions plus deletions.
+
+**A previous revision of this report understated the size.** It claimed 309 docs
+and 1,022 total across 24 files, because the figures were computed from the
+staged index before this report itself was written. Production and test counts
+were correct then; docs and the total were not. The figures above are measured
+after the final commit exists.
+
+Above the ~800–950 estimate in the approved plan. Production overran ~150 because
+narrowing `SceneFacts.cameraMotion` propagated into the UI prop chain (server
+page → projects view → create panel) rather than staying inside the domain, and
+the label fix added a projection helper and two read surfaces. Tests overran ~280
+for the same reasons — fixture updates spread across seven files, plus per-token
+label coverage on both surfaces.
 
 ## Known gaps
 

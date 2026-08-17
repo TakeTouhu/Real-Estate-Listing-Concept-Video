@@ -1,4 +1,4 @@
-import type { VideoProjectDto } from "@/lib/storyboard";
+import { cameraMotionDisplay, type VideoProjectDto } from "@/lib/storyboard";
 import { ComposePanel } from "./compose-panel";
 
 /** Human labels for the persisted project status. */
@@ -75,6 +75,9 @@ export function StoryboardView({
   canCompose,
 }: Props) {
   const freshness = freshnessOf(scenes, fresh);
+  // The DTO carries the token, because that is the API contract. The label is a
+  // read-surface concern, derived from the one domain vocabulary (ADR-0022).
+  const motion = cameraMotionDisplay(project.cameraMotion);
 
   return (
     <>
@@ -91,10 +94,15 @@ export function StoryboardView({
           <dd>{project.aspectRatio}</dd>
           <dt>Resolution</dt>
           <dd>{project.resolution}</dd>
-          {project.cameraMotion ? (
+          {motion ? (
             <>
               <dt>Camera motion</dt>
-              <dd>{project.cameraMotion}</dd>
+              <dd>
+                {motion.label}
+                {motion.approved ? null : (
+                    <span className="muted"> (legacy value, no longer selectable)</span>
+                )}
+              </dd>
             </>
           ) : null}
           {project.prompt ? (
