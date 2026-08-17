@@ -3,9 +3,92 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4B-2a: honest provider contract
+## [Unreleased] — Phase 4B-2b: the prompt renderer
 
-Under review. Not merged. See `docs/phase-4b2a-completion.md` and ADR-0019.
+Under review. Not merged. See `docs/phase-4b2b-completion.md` and ADR-0020.
+
+### Added
+
+- **`renderPrompt(requestCompiledPrompt: string): string`** in `@app/domain` —
+  the single function turning a **persisted** generation request into the one
+  string the provider's documented `prompt` parameter carries. Its input is the
+  durable snapshot column, so execution never needs the mutable project or
+  storyboard, and no caller has a reason to write
+  `JSON.parse(value) as CompiledPrompt`. Labelled plain-text sections in fixed
+  order, every system-authored section before every customer-authored one. Pure,
+  total, and one-way.
+- **Fail-closed validation inside the renderer.** Malformed JSON, a non-object
+  root, wrong field types, and an unknown room type are refused; `preservation`
+  and `negativeConstraints.system` must equal the frozen constants by exact
+  sequence equality; a non-blank customer negative prompt is refused rather than
+  dropped. Every refusal is `INTERNAL_ERROR` with a fixed sentence chosen by
+  code, and a test asserts no stored content reaches the message or `details`.
+- **The `PROMPT_RENDERED` pinning test.** `capability.test.ts` asserts
+  `OPEN_VIDEO_CAPABILITY.cameraMotion` equals `PROMPT_RENDERED` **only if** the
+  renderer demonstrably carries the requested motion and omits it when absent —
+  so a renderer that stopped carrying motion would force the declaration to
+  `UNSUPPORTED` rather than allow the test to be relaxed. This discharges the
+  obligation ADR-0019 §2 and §8 recorded as a Phase 4B-2b completion condition.
+- A worker self-check assertion that the offline check's settings fall inside
+  the configured model's documented range, read from the descriptor.
+
+### Fixed
+
+- **The offline provider self-check asked for a duration the model would
+  reject.** `apps/web/src/lib/health.ts` and `apps/worker/src/bootstrap.ts` used
+  `durationSeconds: 1`, outside the documented 3–20s range. `estimateCost` never
+  validates, so nothing failed and the check exercised the adapter with a request
+  admission would refuse. Both now use 5.
+- **The README claimed Phase 2.** It described property CRUD and secure upload as
+  the current state, three phases after that stopped being true.
+
+### Removed
+
+- **`negativePrompt` and `cameraMotion` from `ProviderGenerationInput`.** Neither
+  was read: Phase 4B-2a stopped sending `negative_prompt` and `camera_motion`
+  because the selected model documents neither, and motion now travels inside
+  `prompt`. An unread optional field on the type describing a paid request reads
+  as a capability the system has.
+
+### Unchanged (deliberately)
+
+- The 8-fact `requestHash` tuple, all five Phase 4B-1c snapshot fields, and the
+  database schema. No migration.
+- No worker, no queue adapter, no provider call, no storage implementation, no
+  moderation change, no HTTP or DTO change. `CompiledPrompt` is not exposed over
+  HTTP.
+
+### Fixed after review
+
+Pre-merge review found three P1 blockers; all are fixed on this branch.
+
+- **The renderer could not consume the persisted representation.** It took a
+  typed `CompiledPrompt` while `requestCompiledPrompt` is a JSON string, leaving
+  Phase 4C no safe bridge. The public contract is now the stored string, with
+  parsing and validation inside the renderer where a caller cannot skip them.
+- **System safety constraints could disappear silently.** A row with empty
+  `preservation` or empty `negativeConstraints.system` rendered a complete,
+  plausible, sendable prompt carrying none of the product's rules — including
+  "text overlays claiming measurements or floor plans", which no preservation
+  rule covers.
+- **A customer negative prompt was silently discarded.** It is now refused.
+  Dropping it discards a stated customer requirement; folding it in inverts it.
+- Corrupt input threw a raw `TypeError` instead of a neutral domain error. The
+  same validation closes that path.
+
+### Known gaps recorded, not closed
+
+- The **rendered string is not covered by the request hash** — it is a function
+  of the hashed structure *and* the renderer's code, and the renderer version is
+  recorded nowhere. A Phase 4C prerequisite (ADR-0020, *Consequences*).
+- **Camera motion reaches the model as unmoderated customer text.** It is free
+  text typed at project creation and `compileScenePrompt` does not moderate it.
+  Rendered under a customer heading below the rules rather than laundered as a
+  system fact; the fix belongs in its own change.
+
+## Phase 4B-2a: honest provider contract
+
+Merged as `be92596` (PR #34). See `docs/phase-4b2a-completion.md` and ADR-0019.
 
 ### Added
 

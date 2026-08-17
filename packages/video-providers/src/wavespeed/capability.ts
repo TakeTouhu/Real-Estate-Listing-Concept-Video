@@ -39,14 +39,13 @@ export const OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS = ["seed"] as const;
  *   folded into the positive prompt, which would invert its meaning.
  * - **`cameraMotion: PROMPT_RENDERED`** — also no dedicated parameter, but the
  *   documentation states the prompt controls motion, and `CompiledPrompt`
- *   already carries camera motion as a *system-derived scene fact*. Phase 4B-2b's
- *   renderer is obliged to express it through the documented `prompt` input.
- *   That obligation is a promise this constant makes on the renderer's behalf,
- *   and **nothing verifies it yet**: no renderer exists in Phase 4B-2a, so the
- *   only writable test would restate this constant rather than check any
- *   behaviour. The pinning test is a completion condition of Phase 4B-2b. If
- *   that renderer does not carry camera motion, this line is false and must
- *   become `UNSUPPORTED`.
+ *   already carries camera motion as a scene fact. Phase 4B-2b's renderer
+ *   expresses it through the documented `prompt` input, so this is **no longer
+ *   a promise**: `capability.test.ts` asserts this declaration equals
+ *   `PROMPT_RENDERED` only if `renderPrompt` demonstrably carries the motion
+ *   and omits it when there is none. If a change stops the renderer carrying
+ *   it, that test demands this line become `UNSUPPORTED` rather than allowing
+ *   itself to be relaxed (ADR-0020 §3).
  */
 export const OPEN_VIDEO_CAPABILITY: VideoModelCapability = Object.freeze({
   providerName: "wavespeed",

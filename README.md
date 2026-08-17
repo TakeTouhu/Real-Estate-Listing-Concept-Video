@@ -3,15 +3,21 @@
 A commercial, multi-tenant SaaS that generates real-estate interior
 walkthrough-style videos from uploaded property photos.
 
-> **Status: Phase 2 — Properties and secure media upload.** On top of Phases 0–1
-> (monorepo foundation; identity, organizations, RBAC, sessions, Prisma
-> persistence, audit logging, and the `WaveSpeedVideoProvider` adapter), this
-> repository now has property CRUD and a secure photo-upload pipeline:
-> short-lived signed URLs, tenant-scoped object storage, content-based MIME
-> validation, malware-scan hook with quarantine, EXIF removal, orientation
-> correction, normalization, thumbnails, and perceptual hashing. It does **not**
-> yet run AI analysis or generate videos. See `docs/Roadmap.md`,
-> `docs/progress.md`, and the per-phase completion reports in `docs/`.
+> **Status: Phase 4 — WaveSpeedAI scene generation (in progress).** Phases 0–3
+> are merged: the monorepo foundation; identity, organizations, RBAC, sessions,
+> Prisma persistence and audit logging; property CRUD and a secure photo-upload
+> pipeline (short-lived signed URLs, tenant-scoped object storage, content-based
+> MIME validation, malware-scan hook with quarantine, EXIF removal, orientation
+> correction, normalization, thumbnails, perceptual hashing); and AI image
+> analysis with mandatory human review, correction, and storyboard composition.
+>
+> Phase 4 is partly delivered. A scene generation can be **admitted** — authorized,
+> capability-checked against the verified provider model, snapshotted immutably,
+> and enqueued — and the prompt sent to that model is now rendered from the
+> compiled structure. Nothing submits to a provider yet: there is no worker, no
+> queue adapter, and no managed-storage output copy, so **the product does not yet
+> generate a video**. See `docs/Roadmap.md`, `docs/progress.md`, and the per-phase
+> completion reports in `docs/`.
 
 ## Design documents
 

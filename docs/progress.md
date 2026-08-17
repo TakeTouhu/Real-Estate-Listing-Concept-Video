@@ -36,7 +36,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | 1 | Identity, organizations, tenant isolation | ✅ Merged | #2 | `62259776f88fa1010736e8a365618b7c20c38902` | `phase-1-complete` | `7d8bc81b460568becc82bc49cfc15b345d23d5a6` |
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
 | 3 | AI analysis, human review and correction, storyboard | ✅ Merged (24 milestones, #4 … #27) | #27 (final) | `541ada413a6c7b71df5169faca0592626c9be454` | `phase-3-complete` | see the tag table below |
-| 4 | WaveSpeedAI scene generation | 🔄 In progress (4A closed; 4B-1a in review) | #28, #29, #30 merged | `53cc574cf3f3b1138c794c84cb6baa79b1479100` (latest) | — | — |
+| 4 | WaveSpeedAI scene generation | 🔄 In progress (4A and 4B-1 closed; 4B-2a merged, 4B-2b in review) | #28 … #34 merged | `be9259681ba3caf179f8ec73aee98943a9672cd8` (latest) | — | — |
 | 5 | Video composition and review | ⏳ Not started | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
@@ -55,6 +55,13 @@ commit. None has been moved, overwritten, or reused.
 
 Milestone tags (`phase-3d4b-complete` and its siblings) are recorded in their own
 milestone completion reports, not here.
+
+`phase-4b2a-complete` is the first tag whose target is a **merge commit** rather
+than a squash-merge commit: PR #34 was merged with `--merge` on instruction, to
+keep the three-commit sequence (original contract fix, blocker fixes, correction
+of an unverified claim) as the record. Tag object `2310161d7804388262744a39c344c3bded56e211`,
+target `be9259681ba3caf179f8ec73aee98943a9672cd8`, created on `main` after the
+merge was fetched and verified. Publication failed exactly as below.
 
 > ### ⚠️ No completion tag has been published to the remote
 >
@@ -102,19 +109,23 @@ milestone completion reports, not here.
 - `docs/gap-analysis-phase-2.md`, `docs/phase-2-completion.md`
 - `docs/gap-analysis-phase-3a1.md`, `docs/phase-3-completion.md`, plus one
   milestone report per Phase 3 milestone (`docs/phase-3{a,b,c,d}*-completion.md`)
+- one milestone report per Phase 4 milestone (`docs/phase-4*-completion.md`);
+  Phase 4 itself is not complete, so there is no `docs/phase-4-completion.md`
 
 ## Required phase documentation (CLAUDE.md v1.3)
 
 | Document | Location |
 | --- | --- |
-| Architecture diagram | `docs/architecture.md` |
-| Entity-relationship diagram | `docs/er-diagram.md` |
+| Architecture diagram | `docs/architecture.md` — Phase 4B-2b adds the generation module, `renderPrompt`, and the capability descriptor to the component-status table. No boundary changed, so the runtime diagram is unchanged. |
+| Entity-relationship diagram | `docs/er-diagram.md`. **Not applicable to Phase 4B-2b** — zero schema, migration, and Prisma diff. |
 | Critical sequence diagram | `docs/sequence-upload-lifecycle.md`, `docs/sequence-analysis-lifecycle.md` |
 | API change summary / OpenAPI | `docs/api-changes-phase-2.md`, `docs/api-changes-phase-3a1.md`, `docs/api-changes-phase-3a3.md`, `docs/api-changes-phase-3b2.md`, `docs/api-changes-phase-3c5.md`, `docs/api-changes-phase-3d4a.md` |
 | Change log | `CHANGELOG.md` |
-| Release notes | `docs/release-notes-phase-2.md`. **Not applicable to Phase 3** — no release is cut, because the product cannot yet generate video. |
-| Database migration notes | `docs/migration-notes.md` |
-| Phase completion reports | `docs/phase-{0,1,2,3}-completion.md`, plus one report per Phase 3 milestone — `docs/phase-3{a,b,c,d}*-completion.md` (24 files; listed individually here they only go stale, so use `ls docs/phase-3*-completion.md`) |
+| Sequence diagram (Phase 4B-2b) | **Not applicable** — the milestone adds one pure function with no new interaction between components. The admission sequence is unchanged and already recorded for Phase 4B-1b. |
+| API change summary (Phase 4B-2b) | **Not applicable** — no route, request, response, or DTO changed. `CompiledPrompt` and the rendered string are server-side generation data and are not exposed over HTTP. |
+| Release notes | `docs/release-notes-phase-2.md`. **Not applicable to Phases 3 and 4** — no release is cut, because the product still cannot generate video. |
+| Database migration notes | `docs/migration-notes.md`. **Not applicable to Phase 4B-2b** — no migration; `prisma migrate diff` reports `No difference detected.` |
+| Phase completion reports | `docs/phase-{0,1,2,3}-completion.md`, plus one report per Phase 3 and Phase 4 milestone — `docs/phase-3*-completion.md`, `docs/phase-4*-completion.md` (listed individually here they only go stale, so use `ls docs/phase-*-completion.md`) |
 
 ## Known deviation
 
@@ -194,8 +205,10 @@ reserved for a webhook.
 | 4A-2a | `scene_generations` table, migration, active-request partial unique index, SQL/domain agreement guard, live PostgreSQL evidence | 761 — 189 production + 572 tests (re-cost ~725 raw / ~800–900; **first estimate in six milestones that did not overrun**) | **Merged** (PR #29, `6e681c2`) |
 | 4A-2b | Generation repository port, narrow update contract, Prisma adapter, typed not-found and conflict errors, P2002 translation, organization-addressed `create` | 789 + a 178/35 review fix for a `create`-path tenant-boundary defect | **Merged** (PR #30, `53cc574`) |
 | 4B-1a | Capability contract + pure validation, narrow succeeded lookup, in-memory generation repository | 920 (two P2 fixes) | **Merged** (PR #31, `7d1cca8`) |
-| 4B-1b | `GenerationService.startScene` single-scene admission, queue port, `generation.requested` audit, `StoryboardReader` port, recording queue double | ~360 prod / ~590 test / ~450 docs | In review |
-| 4B-2 | Verified provider/model capability descriptor + adapter contract corrections | — | Not started (blocked on provider-contract verification) |
+| 4B-1b | `GenerationService.startScene` single-scene admission, queue port, `generation.requested` audit, `StoryboardReader` port, recording queue double | ~360 prod / ~590 test / ~450 docs | **Merged** (PR #32, `c169bd6`) |
+| 4B-1c | Immutable generation request snapshot: five persisted request-hash facts, `generationRequestFactsFrom`, additive migration (ADR-0018) | ~1,040 | **Merged** (PR #33, `e52d302`) |
+| 4B-2a | Ownership-aware capability semantics, verified OpenVideo descriptor, adapter request-body correction, single model identity (ADR-0019) | 1,023 + two P1 review fixes | **Merged** (PR #34, `be92596`) |
+| 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,032 — 220 production + 302 tests + 510 docs | In review |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
@@ -223,7 +236,8 @@ confirmation rather than inference from marketing copy.
 - `docs/phase-3-milestone-plan.md` — the approved Phase 3A/3B/3C milestone plan.
   Phase 3D was added later, after review found that the Roadmap scope item
   *"editable room labels and image order"* had no implementation.
-- Phase 4 — WaveSpeedAI scene generation. Plan under review; not started.
+- Phase 4 — WaveSpeedAI scene generation. 4A and 4B are delivering as milestone
+  PRs (#28 … #34); 4C, 4D and 4E remain.
 
 ## Decision records
 
@@ -236,7 +250,10 @@ and the `create → enqueue → audit` side-effect ordering. ADR-0018 adds the
 immutable generation request snapshot and narrowly amends both ADR-0016 §3 and
 ADR-0017 §10 with dated notes rather than rewrites. ADR-0019 records provider
 capability ownership, the verified OpenVideo contract, and why that model
-receives no `aspect_ratio`, `negative_prompt`, or `camera_motion`.
+receives no `aspect_ratio`, `negative_prompt`, or `camera_motion`; two of its
+sections carry dated Phase 4B-2b amendments rather than rewrites. ADR-0020
+records the prompt renderer's format, what flattening five structured parts into
+one provider field costs, and what would reverse the choice.
 
 ## Phase 4 status
 
@@ -247,13 +264,17 @@ receives no `aspect_ratio`, `negative_prompt`, or `camera_motion`.
 - **Phase 4B-1b** — merged as `c169bd6` (PR #32). `GenerationService.startScene`:
   single-scene admission, reuse precedence, race convergence,
   `create → enqueue → audit`.
-- **Phase 4B-1c** — under review. Immutable generation request snapshot
-  (ADR-0018), closing the reconstruction gap that PR #32's review surfaced.
-- **Phase 4B-2a** — under review. Honest provider contract: ownership-aware
-  capability semantics, the verified OpenVideo descriptor, adapter mapping
-  correction, model-identity unification (ADR-0019).
-- **Phase 4B-2b** — not started. The single prompt renderer, which must satisfy
-  the `PROMPT_RENDERED` camera-motion obligation ADR-0019 records.
-- **Phase 4C** — not started, and **hard-blocked** until Phase 4B-1c is merged
-  and verified on `main`. Seven prerequisites are recorded in
-  `docs/decisions/TODO.md`.
+- **Phase 4B-1c** — merged as `e52d302` (PR #33). Immutable generation request
+  snapshot (ADR-0018), closing the reconstruction gap that PR #32's review
+  surfaced. This unblocks Phase 4C.
+- **Phase 4B-2a** — merged as `be92596` (PR #34). Honest provider contract:
+  ownership-aware capability semantics, the verified OpenVideo descriptor,
+  adapter mapping correction, model-identity unification (ADR-0019). Two P1
+  blockers were found by independent pre-merge review and fixed before merge.
+- **Phase 4B-2b** — under review. The single prompt renderer (ADR-0020), which
+  discharges the `PROMPT_RENDERED` camera-motion obligation ADR-0019 recorded,
+  and removes the two unread fields from `ProviderGenerationInput`.
+- **Phase 4C** — not started. Its Phase 4B-1c prerequisite is now satisfied, but
+  new prerequisites were added by 4B-2b: the rendered prompt is not covered by
+  the request hash, and camera motion reaches the model unmoderated. All
+  prerequisites are recorded in `docs/decisions/TODO.md`.

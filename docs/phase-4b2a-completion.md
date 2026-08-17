@@ -1,6 +1,9 @@
 # Phase 4B-2a — Honest provider contract
 
-Status: **awaiting CTO review. Not merged.**
+Status: **merged.** PR #34, merge commit `be9259681ba3caf179f8ec73aee98943a9672cd8`
+(a merge commit, not a squash — the three-commit sequence is the record). Local tag
+`phase-4b2a-complete`, tag object `2310161d7804388262744a39c344c3bded56e211`; the
+tag is **not published** — see `docs/progress.md` for the blocked-publication record.
 
 Branch: `claude/real-estate-virtual-tour-phase-4b2a-hga252`
 Base: `e52d302d582f947cdb18df3799143dd4013a2ee8` (merged Phase 4B-1c, PR #33)

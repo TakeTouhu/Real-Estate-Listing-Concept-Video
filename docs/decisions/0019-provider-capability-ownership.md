@@ -71,6 +71,12 @@ renderer does not carry camera-motion intent, this declaration is false and must
 become `UNSUPPORTED`. Nothing can submit to a provider before then (§8), so the
 gap admits no paid work in the interim.
 
+> **Amendment, 2026-08-17 (Phase 4B-2b).** The promise is now pinned. `renderPrompt`
+> exists, and `capability.test.ts` asserts the declaration equals `PROMPT_RENDERED`
+> only if the renderer demonstrably carries the motion and omits it when absent.
+> The two paragraphs above stand as the record of the interim state; ADR-0020 §3
+> supersedes them as the current position.
+
 ### 3. The verified OpenVideo descriptor
 
 ```
@@ -136,6 +142,14 @@ workaround. **Phase 4B-2b must satisfy that obligation.** No dedicated
 
 The renderer's textual format is deliberately **not** defined here — Phase 4B-2b
 owns it, and freezing it prematurely would constrain a design not yet written.
+
+> **Amendment, 2026-08-17 (Phase 4B-2b).** The obligation is satisfied: ADR-0020
+> defines the format and `renderPrompt` carries the motion. One claim above is
+> corrected rather than preserved — `sceneFacts.cameraMotion` is **not** a
+> system-derived fact. It is free text the customer types at project creation
+> and is not moderated, so ADR-0020 §5 renders it under a customer heading below
+> the rules rather than as a system fact above them, and the moderation gap is
+> recorded in `docs/decisions/TODO.md`.
 
 ### 9. `preset` remains unresolved
 

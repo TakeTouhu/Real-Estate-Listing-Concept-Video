@@ -14,8 +14,6 @@ const input: ProviderGenerationInput = {
   modelId: "wavespeed-ai/open-video/image-to-video",
   sourceImageUrl: "https://storage.internal/o/org/img?token=x",
   prompt: "bright natural interior",
-  negativePrompt: "no fake windows",
-  cameraMotion: "slow-walkthrough",
   seed: 42,
   durationSeconds: 6,
   aspectRatio: "16:9",

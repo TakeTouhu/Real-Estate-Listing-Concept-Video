@@ -107,6 +107,9 @@ flowchart TB
 | Human review: `approve` / `reject`, immutable per revision | Implemented (Phase 3B) |
 | Human corrections: room override and order priority, separate from the decision | Implemented (Phase 3D, ADR-0015) |
 | Analysis review UI, storyboard UI | Implemented (Phases 3B-3, 3C-6, 3D-4b) |
+| `@app/domain` generation module: state machine, request identity, immutable request snapshot, capability contract, `GenerationService.startScene` | Implemented (Phases 4A, 4B-1; ADR-0016, 0017, 0018) |
+| `@app/domain` `renderPrompt` — the one place a structured `CompiledPrompt` becomes a provider prompt string | Implemented (Phase 4B-2b, ADR-0020); **nothing submits it yet** |
+| `@app/video-providers` verified OpenVideo capability descriptor | Implemented (Phase 4B-2a, ADR-0019) |
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` queue consumer, generation orchestration | **Not implemented** (Phase 4) |
 | `@app/queue` | **Not implemented** (placeholder) |
