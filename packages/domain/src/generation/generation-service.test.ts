@@ -695,6 +695,131 @@ describe("startScene — SUCCEEDED reuse", () => {
   );
 });
 
+/**
+ * Which frozen prompt a caller ends up with, on every path that does *not* take
+ * a fresh render.
+ *
+ * These are the discriminating cases, and they need distinguishable bytes to be
+ * discriminating at all: the seeded rows carry `SEEDED_FROZEN`, which the current
+ * renderer never produces. An implementation that returned locally-rendered
+ * bytes, or re-rendered on a reuse path, passes an equality-free assertion and
+ * fails these.
+ *
+ * The stakes are concrete. On a race the loser has already rendered; if the
+ * caller received *its* bytes while the database kept the winner's row, the
+ * caller would hold a prompt no persisted attempt will ever submit — and Phase
+ * 4C would submit something the caller never saw (ADR-0023 §2, §3).
+ */
+describe("startScene — which frozen prompt survives a race, a retry, and reuse", () => {
+  const SEEDED_FROZEN = "Preservation rules:\n- seeded frozen prompt";
+
+  /** What the current renderer produces for the default fixtures. */
+  const freshFrozen = () => renderPrompt(scene().compiledPrompt!);
+
+  it("the seeded bytes and a fresh render are genuinely different", () => {
+    // Guards every assertion below: if these ever coincided, the tests would
+    // pass while proving nothing.
+    expect(genRow("gen_probe", "QUEUED").requestRenderedPrompt).toBe(SEEDED_FROZEN);
+    expect(freshFrozen()).not.toBe(SEEDED_FROZEN);
+  });
+
+  it("a race returns the WINNER's frozen prompt, not the bytes this call rendered", async () => {
+    const winner = genRow("gen_winner", "SUBMITTING");
+    const h = harness({ generations: new ConflictOnCreateRepo([null, winner], [null]) });
+
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.id).toBe("gen_winner");
+    expect(result.requestRenderedPrompt).toBe(SEEDED_FROZEN);
+    expect(result.requestRenderedPrompt).not.toBe(freshFrozen());
+  });
+
+  it("a race that resolves to a succeeded winner returns that winner's bytes", async () => {
+    const winner = genRow("gen_succeeded_winner", "SUCCEEDED");
+    const h = harness({ generations: new ConflictOnCreateRepo([null, null], [null, winner]) });
+
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.id).toBe("gen_succeeded_winner");
+    expect(result.requestRenderedPrompt).toBe(SEEDED_FROZEN);
+  });
+
+  it("active reuse returns the existing row's bytes and re-renders nothing", async () => {
+    const h = harness();
+    const seeded = await h.generations.create(
+      ORG,
+      genRow("gen_active", "PROCESSING") as NewSceneGeneration,
+    );
+
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.id).toBe(seeded.id);
+    expect(result.requestRenderedPrompt).toBe(SEEDED_FROZEN);
+    expect(h.generations.all()).toHaveLength(1);
+  });
+
+  it("succeeded reuse returns the older bytes — reuse crosses renderer versions", async () => {
+    // ADR-0023 §2 states this as intended, not accidental: the customer approved
+    // the same request, and the video that exists was produced under the older
+    // prompt. Asserting it keeps the semantic visible rather than latent.
+    const h = harness();
+    await h.generations.create(ORG, genRow("gen_ok", "SUCCEEDED") as NewSceneGeneration);
+
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.id).toBe("gen_ok");
+    expect(result.requestRenderedPrompt).toBe(SEEDED_FROZEN);
+    expect(result.requestRenderedPrompt).not.toBe(freshFrozen());
+  });
+
+  it.each(["FAILED_TERMINAL", "CANCELLED"] as const)(
+    "a retry after a %s attempt renders afresh, leaving two rows with one hash and two prompts",
+    async (state: SceneGenerationState) => {
+      // A retry is a re-admission, so the current renderer applies to it — while
+      // the terminal row keeps the bytes it was admitted with. Same
+      // `requestHash`, different frozen prompts, both correct (ADR-0023 §2).
+      const h = harness();
+      const terminal = await h.generations.create(
+        ORG,
+        genRow("gen_terminal", state) as NewSceneGeneration,
+      );
+
+      const retried = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+      expect(retried.id).not.toBe(terminal.id);
+      expect(retried.requestRenderedPrompt).toBe(freshFrozen());
+      expect(retried.requestRenderedPrompt).not.toBe(SEEDED_FROZEN);
+
+      const rows = h.generations.all();
+      expect(rows).toHaveLength(2);
+      // One request identity, two distinct execution artifacts.
+      expect(new Set(rows.map((r) => r.requestHash)).size).toBe(1);
+      expect(new Set(rows.map((r) => r.requestRenderedPrompt)).size).toBe(2);
+      // And the terminal row was not rewritten on the way past it.
+      expect(h.generations.all().find((r) => r.id === terminal.id)!.requestRenderedPrompt).toBe(
+        SEEDED_FROZEN,
+      );
+    },
+  );
+
+  it("a failed enqueue leaves the frozen prompt persisted for the later retry", async () => {
+    // The row is durable before the enqueue is attempted, so a queue outage must
+    // not lose the artifact — the next call returns that same QUEUED row, and
+    // Phase 4C recovery will submit exactly these bytes.
+    const h = harness();
+    h.queue.failNext();
+    await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow();
+
+    const stranded = h.generations.all();
+    expect(stranded).toHaveLength(1);
+    expect(stranded[0]!.requestRenderedPrompt).toBe(freshFrozen());
+
+    const second = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(second.id).toBe(stranded[0]!.id);
+    expect(second.requestRenderedPrompt).toBe(freshFrozen());
+  });
+});
+
 describe("startScene — lookup precedence", () => {
   it("prefers an active attempt over an older succeeded one", async () => {
     const h = harness();
