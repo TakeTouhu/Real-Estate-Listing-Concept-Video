@@ -14,6 +14,11 @@ Under review. Not merged. See `docs/phase-4c0a-completion.md` and ADR-0023.
   fix *what was asked for*, this one fixes *what will be sent*. The worker
   submits it verbatim and never runs the renderer for an admitted attempt, so a
   renderer change applies to new admissions only.
+- **A non-null creation contract.** `NewSceneGeneration` narrows
+  `requestRenderedPrompt` to `string` while the column stays nullable, so an
+  attempt born without a frozen prompt — one the worker could never submit — is a
+  compile error rather than a runtime refusal. Found in pre-merge review, where
+  the first revision inherited `string | null` through `Omit`.
 - **`frozenExecutionPromptFrom`** — reads that artifact and **fails closed** for
   a row that predates the contract. It never re-renders: re-rendering is the
   drift the field exists to prevent.
@@ -44,6 +49,9 @@ Under review. Not merged. See `docs/phase-4c0a-completion.md` and ADR-0023.
 
 ### Known gaps
 
+- A DB test that created a "legacy" row through the admission path now inserts it
+  around the repository via raw Prisma, because the admission path can no longer
+  express that state — which is the point.
 - Three test fixtures had to be rebuilt from the frozen constants, because
   placeholder compiled prompts that were adequate while nothing rendered them are
   now rejected at admission. The strictness is real and reaches tests.

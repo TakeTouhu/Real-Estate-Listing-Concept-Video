@@ -51,6 +51,24 @@ compiled prompt snapshot
 The worker never runs the renderer for an admitted generation. Renderer changes
 therefore apply to **new admissions only**, which is what "frozen" means here.
 
+**The creation contract requires it; the column does not.** `NewSceneGeneration`
+narrows `requestRenderedPrompt` to `string`, while the column stays nullable.
+Those are not in conflict — they answer different questions. The column must
+tolerate rows written before the migration; *creating* an attempt without a frozen
+prompt is not a state the system has, because admission always holds the string.
+
+The first revision of this ADR left `NewSceneGeneration` as a plain
+`Omit<SceneGeneration, "createdAt" | "updatedAt">`, which inherited
+`string | null` and so made a null-prompt attempt **expressible**. An attempt with
+no frozen prompt is born unexecutable: the worker can never submit it, and
+`frozenExecutionPromptFrom` would refuse it forever. Narrowing turns that from a
+runtime refusal discovered by whoever tries to run the row into a compile error at
+the moment someone writes it. Review found this before merge; a `@ts-expect-error`
+guard in the integration suite fails if the narrowing is ever reverted.
+
+A legacy null therefore arrives only from a pre-migration row, never from the
+admission path — which is precisely what the fail-closed read is for.
+
 ### 2. The 8-fact request hash is unchanged
 
 Deliberately. The hash answers *"are these two the same paid request?"*; the

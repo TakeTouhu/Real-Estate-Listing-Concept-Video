@@ -41,6 +41,20 @@ durable: an unrenderable compiled prompt refuses **before** the row, the enqueue
 and the audit. A defect previously discoverable only at submission time is now
 caught at admission.
 
+### The creation contract cannot express a null frozen prompt
+
+`NewSceneGeneration` narrows `requestRenderedPrompt` to `string`; the column stays
+nullable for pre-migration rows. Creating an attempt without a frozen prompt is
+not a state the system has, so it is now a **compile error** rather than a row a
+worker later refuses forever.
+
+Pre-merge review found this: the first revision inherited `string | null` through
+`Omit`, making a null-prompt attempt expressible. The only caller that relied on
+that looseness was a DB test creating a "legacy" row *through the admission path* —
+a state production cannot reach. It now inserts such rows **around** the
+repository, via raw Prisma, which is how a pre-migration row actually exists, and
+a `@ts-expect-error` guard fails if the narrowing is reverted.
+
 ### Fail closed, never re-render
 
 `frozenExecutionPromptFrom` returns the stored bytes verbatim or throws
@@ -72,7 +86,7 @@ and any reference to `requestHash`.
 | `pnpm lint` | clean |
 | `pnpm test` | **1147 passed**, 58 files (baseline 1124 / 56; **+23 tests, +2 files**) |
 | `pnpm build` | clean |
-| `pnpm test:db` | **125 passed**, 6 files (+2) |
+| `pnpm test:db` | **126 passed**, 6 files (+3) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` (exit 0) |
 
 ### Mutation verification
@@ -82,6 +96,7 @@ and any reference to `requestHash`.
 | Admission persists `null` instead of the frozen prompt | **3 fail** |
 | `frozenExecutionPromptFrom` stops failing closed | **4 fail** |
 | The frozen bytes differ from what the renderer produces | **1 fail** |
+| Revert the `NewSceneGeneration` narrowing | **typecheck fails** (unused `@ts-expect-error`) |
 
 Each restored and re-verified green (1147/58).
 
@@ -92,7 +107,9 @@ ran, and the new migration had not been applied to the verify database. Both are
 environment steps, not code defects: the cluster was restarted with
 `pg_ctlcluster 16 main start`, the `revt` role password reset, and
 `prisma migrate deploy` run against the verify database. **No repository file was
-modified**, and the rerun passed 125/125.
+modified**, and the rerun passed. The cluster went down a second time during the
+review-fix pass and was restarted the same way, again changing no repository
+file.
 
 ## Invariants held
 
@@ -126,5 +143,14 @@ recorded in ADR-0023 rather than papered over.
 
 ## Size
 
-See the pull request body for the final measured production/test/docs figures,
-taken from `git diff --numstat 35970da..HEAD` after the final commit exists.
+| Category | Lines changed |
+| --- | --- |
+| Production | 147 |
+| Tests | 367 |
+| Docs | 501 |
+| **Total** | **1,015** across 22 files |
+
+Measured from `git diff --numstat 35970da..HEAD` after the final commit existed,
+and reconciling exactly with the raw diff (`+965 −50 = 1015`). Above the
+~800–950 plan estimate by the review fix; production remains well under the ~500
+reviewability target.

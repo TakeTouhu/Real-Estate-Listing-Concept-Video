@@ -46,8 +46,30 @@ export interface StoryboardReader {
 /**
  * A generation attempt as it is first written. `createdAt` and `updatedAt` are
  * database-managed, matching the convention the other repositories use.
+ *
+ * **`requestRenderedPrompt` is non-null here, though the column is nullable.**
+ * The two are not in conflict: the column must stay nullable so rows admitted
+ * before Phase 4C-0a remain representable, but *creating* an attempt without a
+ * frozen prompt is not a state the system has — admission renders exactly once
+ * and always has the string in hand (ADR-0023 §1).
+ *
+ * Narrowing it here is the difference between "we always pass it" and "it cannot
+ * be omitted". `Omit`-inheriting `string | null` made a null-prompt attempt
+ * expressible, and an attempt with no frozen prompt is one the worker can never
+ * submit — a row that is born unexecutable. That is a compile error now rather
+ * than a runtime refusal discovered by whoever tries to run it.
+ *
+ * A legacy null therefore arrives only from a row written before the migration,
+ * never from this path, which is exactly what `frozenExecutionPromptFrom`'s
+ * fail-closed refusal is for.
  */
-export type NewSceneGeneration = Omit<SceneGeneration, "createdAt" | "updatedAt">;
+export type NewSceneGeneration = Omit<
+  SceneGeneration,
+  "createdAt" | "updatedAt" | "requestRenderedPrompt"
+> & {
+  /** Always present: a new attempt is rendered at admission, never later. */
+  readonly requestRenderedPrompt: string;
+};
 
 /**
  * The fields a caller may change on a generation attempt — and nothing else.
