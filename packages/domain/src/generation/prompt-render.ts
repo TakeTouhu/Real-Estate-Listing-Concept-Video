@@ -1,5 +1,6 @@
 import { AppError } from "@app/shared";
 import { isRoomType } from "../analysis/types";
+import { isCameraMotion, type CameraMotion } from "../storyboard/camera-motion";
 import {
   PRESERVATION_RULES,
   SYSTEM_NEGATIVE_CONSTRAINTS,
@@ -36,22 +37,28 @@ import {
 /**
  * Section headings, fixed and in this order.
  *
- * The order is the design, not formatting. Every system-authored section
- * appears **before** every customer-authored one, so nothing a customer typed
- * is positioned as a preamble that the rules then appear to qualify. The two
- * customer sections carry their attribution in the heading itself, so a human
- * reviewing a generation — which the product requires before publication — can
- * see at a glance which words came from the customer.
+ * The order is the design, not formatting. Preservation rules and system
+ * constraints are structurally **prior** to everything the customer influenced,
+ * so nothing the customer chose or typed is positioned as a preamble the rules
+ * then appear to qualify.
  *
- * The "the rules above take precedence" clause is a **mitigation, not a
- * control**. Once flattened into one field the model is free to ignore it. The
- * control is that customer text is moderated before compilation and can only
- * ever land inside these two delimited regions (ADR-0014, ADR-0020 §4).
+ * The two customer-influenced sections are not equivalent, and the headings say
+ * which is which:
+ *
+ * - **Camera motion** is *customer-selected, system-constrained intent*. The
+ *   customer picked a token from an approved vocabulary; every word emitted
+ *   here is written by us (ADR-0022). It carries no "the rules take precedence"
+ *   caveat because there is no customer text in it to caveat — but it still
+ *   renders after the rules, because the customer chose the intent.
+ * - **Styling** is genuinely customer-authored text, moderated at compilation
+ *   and emitted verbatim. Its caveat is a **mitigation, not a control**: once
+ *   flattened into one field the model is free to ignore it. The control is
+ *   that the text is moderated before compilation and can only ever land inside
+ *   this one delimited region (ADR-0014, ADR-0020 §4).
  */
 const PRESERVATION_HEADING = "Preservation rules:";
 const AVOID_HEADING = "Avoid:";
-const CAMERA_MOTION_HEADING =
-  "Camera motion requested by the customer (the rules above take precedence):";
+const CAMERA_MOTION_HEADING = "Camera motion (customer-selected):";
 const CUSTOMIZATION_HEADING =
   "Styling requested by the customer (the rules above take precedence):";
 
@@ -124,7 +131,9 @@ function parseCompiledPrompt(storedJson: string): CompiledPrompt {
   if (typeof facts.assetId !== "string") reject("its scene facts are malformed");
   if (typeof facts.position !== "number") reject("its scene facts are malformed");
   if (typeof facts.durationSeconds !== "number") reject("its scene facts are malformed");
-  if (!isNullableString(facts.cameraMotion)) reject("its scene facts are malformed");
+  if (facts.cameraMotion !== null && !isCameraMotion(facts.cameraMotion)) {
+    reject("its scene facts name an unapproved camera motion");
+  }
   if (facts.roomType !== null && !isRoomType(facts.roomType)) {
     reject("its scene facts name an unknown room type");
   }
@@ -205,7 +214,7 @@ function assertSafetyContentIntact(compiled: CompiledPrompt): void {
  */
 interface PositivePromptParts {
   readonly roomType: SceneFacts["roomType"];
-  readonly cameraMotion: string | null;
+  readonly cameraMotion: CameraMotion | null;
   readonly preservation: readonly string[];
   readonly systemNegatives: readonly string[];
   readonly userCustomization: string | null;
@@ -230,6 +239,33 @@ function labelled(heading: string, text: string | null): string | null {
 }
 
 /**
+ * The reviewed sentence each approved camera motion becomes.
+ *
+ * This mapping is **prompt-rendering policy**, which is why it lives with the
+ * renderer and not with the vocabulary or the capability descriptor: the set of
+ * intents a customer may choose is a product decision, while the words that
+ * express one to a particular model are a rendering decision. A second model
+ * may phrase the same token differently, or declare `cameraMotion:
+ * PROVIDER_FIELD` and map it to a native parameter, without the vocabulary or
+ * the UI changing (ADR-0022).
+ *
+ * Typed as a total `Record`, so adding a token to `CAMERA_MOTIONS` without
+ * writing its sentence is a **compile error** rather than a token that silently
+ * renders nothing.
+ *
+ * The phrasing is deliberately restrained. A single still photograph cannot
+ * support aggressive movement, and overstating motion invites the model to
+ * invent geometry the source image never showed — the failure the preservation
+ * rules exist to prevent.
+ */
+const CAMERA_MOTION_PROMPT: Record<CameraMotion, string> = {
+  STATIC: "Hold the camera still; no camera movement.",
+  SLOW_DOLLY_FORWARD: "Move the camera slowly forward into the room.",
+  SLOW_PAN_LEFT: "Pan the camera slowly to the left.",
+  SLOW_PAN_RIGHT: "Pan the camera slowly to the right.",
+};
+
+/**
  * `LIVING_ROOM` → `living room`, and `null` → no line at all.
  *
  * An unclassified room stays unsaid. Writing "Room: unclassified" would spend
@@ -246,7 +282,10 @@ function renderParts(parts: PositivePromptParts): string {
     renderRoom(parts.roomType),
     bulleted(PRESERVATION_HEADING, parts.preservation),
     bulleted(AVOID_HEADING, parts.systemNegatives),
-    labelled(CAMERA_MOTION_HEADING, parts.cameraMotion),
+    labelled(
+      CAMERA_MOTION_HEADING,
+      parts.cameraMotion === null ? null : CAMERA_MOTION_PROMPT[parts.cameraMotion],
+    ),
     labelled(CUSTOMIZATION_HEADING, parts.userCustomization),
   ]
     .filter((section): section is string => section !== null)

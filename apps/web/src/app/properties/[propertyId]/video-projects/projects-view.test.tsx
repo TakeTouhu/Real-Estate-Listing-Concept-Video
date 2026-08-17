@@ -36,6 +36,7 @@ function view(projects: VideoProjectDto[], canCreate = true) {
       propertyId={PROPERTY}
       projects={projects}
       canCreate={canCreate}
+      cameraMotionOptions={[{ value: "STATIC", label: "Static (no camera movement)" }]}
     />,
   );
 }

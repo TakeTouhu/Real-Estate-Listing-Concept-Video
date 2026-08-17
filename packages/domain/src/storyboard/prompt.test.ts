@@ -13,7 +13,7 @@ const FACTS: SceneFacts = {
   position: 1,
   roomType: "KITCHEN",
   durationSeconds: 5,
-  cameraMotion: "SLOW_PAN",
+  cameraMotion: "SLOW_PAN_LEFT",
 };
 
 const moderator = createOfflinePromptModerator();

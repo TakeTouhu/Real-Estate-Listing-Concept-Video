@@ -109,6 +109,15 @@ the test does not fail loosely — it demands the descriptor become
 `UNSUPPORTED`. Relaxing the test to preserve the declaration is the one repair
 that is not available. The declaration follows the behaviour, never the reverse.
 
+> **Amendment, 2026-08-17 (Phase 4C-0b).** Camera motion is no longer customer
+> text. ADR-0022 closes it to a four-value vocabulary, and the renderer emits a
+> reviewed sentence per token rather than the stored value. The section keeps its
+> position — safety rules stay structurally prior — and its heading loses the
+> "the rules above take precedence" caveat, because there is no customer text
+> left in it to caveat. The paragraph below described blank-motion handling under
+> the old free-text contract; a blank value is now **refused**, not treated as
+> absent, since `null` already means unspecified.
+
 A **blank** camera motion renders nothing, because whitespace requests nothing.
 This is deliberately *not* the rule `assertSettingsSupported` applies, which
 refuses on `cameraMotion !== null` without trimming, because the raw value is a
@@ -123,6 +132,11 @@ The provider has one prompt field. Whatever structure exists on our side, the
 model receives one string, and inside it the customer's sentences sit in the
 same context window as the preservation rules. **ADR-0014's separation is
 preserved in the system's representation and cannot be preserved in the model's.**
+
+> **Amendment, 2026-08-17 (Phase 4C-0b).** "Two delimited regions" is now one.
+> Camera motion carries no customer text after ADR-0022, so the only
+> customer-authored region left in the rendered prompt is the styling section.
+> The mitigation-not-control point below still stands for that section.
 
 What survives the flattening:
 

@@ -5,6 +5,7 @@ import {
   renderPrompt,
   PRESERVATION_RULES,
   SYSTEM_NEGATIVE_CONSTRAINTS,
+  type CameraMotion,
   type CompiledPrompt,
   type GenerationRequestSettings,
 } from "@app/domain";
@@ -263,14 +264,16 @@ describe("a frozen generation model id survives configuration", () => {
  * these assertions do. They are the completion condition of this milestone.
  */
 describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
-  const MOTION = "slow dolly forward";
+  const MOTION: CameraMotion = "SLOW_DOLLY_FORWARD";
+  /** The reviewed sentence the renderer emits for that token. */
+  const MOTION_TEXT = "Move the camera slowly forward into the room.";
 
   /** The renderer's input is the persisted column, so build that. */
-  function storedWithMotion(cameraMotion: string | null): string {
+  function storedWithMotion(cameraMotion: CameraMotion | null): string {
     return JSON.stringify(compiledWithMotion(cameraMotion));
   }
 
-  function compiledWithMotion(cameraMotion: string | null): CompiledPrompt {
+  function compiledWithMotion(cameraMotion: CameraMotion | null): CompiledPrompt {
     return {
       preservation: [...PRESERVATION_RULES],
       sceneFacts: {
@@ -300,7 +303,7 @@ describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
       },
       "https://api.wavespeed.ai/api/v3",
     );
-    expect(req.body.prompt).toContain(MOTION);
+    expect(req.body.prompt).toContain(MOTION_TEXT);
   });
 
   it("declares cameraMotion to match what the renderer actually does", () => {
@@ -308,8 +311,8 @@ describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
     // demands the descriptor be corrected to UNSUPPORTED. Softening the test
     // to keep the declaration is the one repair that is not available.
     const carried =
-      renderPrompt(storedWithMotion(MOTION)).includes(MOTION) &&
-      !renderPrompt(storedWithMotion(null)).includes(MOTION);
+      renderPrompt(storedWithMotion(MOTION)).includes(MOTION_TEXT) &&
+      !renderPrompt(storedWithMotion(null)).includes(MOTION_TEXT);
     expect(OPEN_VIDEO_CAPABILITY.cameraMotion).toEqual({
       kind: carried ? "PROMPT_RENDERED" : "UNSUPPORTED",
     });

@@ -208,7 +208,8 @@ reserved for a webhook.
 | 4B-1b | `GenerationService.startScene` single-scene admission, queue port, `generation.requested` audit, `StoryboardReader` port, recording queue double | ~360 prod / ~590 test / ~450 docs | **Merged** (PR #32, `c169bd6`) |
 | 4B-1c | Immutable generation request snapshot: five persisted request-hash facts, `generationRequestFactsFrom`, additive migration (ADR-0018) | ~1,040 | **Merged** (PR #33, `e52d302`) |
 | 4B-2a | Ownership-aware capability semantics, verified OpenVideo descriptor, adapter request-body correction, single model identity (ADR-0019) | 1,023 + two P1 review fixes | **Merged** (PR #34, `be92596`) |
-| 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,032 — 220 production + 302 tests + 510 docs | In review |
+| 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,713 — 367 production + 465 tests + 881 docs | **Merged** (PR #35, `cd9d136`) |
+| 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | see `docs/phase-4c0b-completion.md` | In review |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
@@ -253,7 +254,9 @@ capability ownership, the verified OpenVideo contract, and why that model
 receives no `aspect_ratio`, `negative_prompt`, or `camera_motion`; two of its
 sections carry dated Phase 4B-2b amendments rather than rewrites. ADR-0020
 records the prompt renderer's format, what flattening five structured parts into
-one provider field costs, and what would reverse the choice.
+one provider field costs, and what would reverse the choice; two of its sections
+carry dated Phase 4C-0b amendments. ADR-0022 closes camera motion to a reviewed
+vocabulary and records why moderation was rejected as the primary control.
 
 ## Phase 4 status
 
@@ -271,10 +274,14 @@ one provider field costs, and what would reverse the choice.
   ownership-aware capability semantics, the verified OpenVideo descriptor,
   adapter mapping correction, model-identity unification (ADR-0019). Two P1
   blockers were found by independent pre-merge review and fixed before merge.
-- **Phase 4B-2b** — under review. The single prompt renderer (ADR-0020), which
-  discharges the `PROMPT_RENDERED` camera-motion obligation ADR-0019 recorded,
-  and removes the two unread fields from `ProviderGenerationInput`.
-- **Phase 4C** — not started. Its Phase 4B-1c prerequisite is now satisfied, but
-  new prerequisites were added by 4B-2b: the rendered prompt is not covered by
-  the request hash, and camera motion reaches the model unmoderated. All
-  prerequisites are recorded in `docs/decisions/TODO.md`.
+- **Phase 4B-2b** — merged as `cd9d136` (PR #35). The single prompt renderer
+  (ADR-0020), taking the persisted snapshot as its boundary with parsing and
+  fail-closed validation inside it. Three P1 blockers were found by independent
+  pre-merge review and fixed before merge.
+- **Phase 4C-0b** — under review. Camera motion becomes a closed vocabulary
+  enforced in the domain (ADR-0022), closing the first of Phase 4C's two hard
+  prerequisites.
+- **Phase 4C** — not started, and still **hard-blocked**. Of the two
+  prerequisites 4B-2b recorded, camera-motion safety is closed by 4C-0b; the
+  rendered prompt is still not covered by the request hash, and Phase 4C-0a owns
+  that. No provider submission path may exist until it does.

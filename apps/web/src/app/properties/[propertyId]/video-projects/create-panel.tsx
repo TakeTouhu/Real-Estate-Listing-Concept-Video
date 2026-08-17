@@ -7,6 +7,7 @@ import { mapProjectError } from "@/lib/project-errors";
 interface Props {
   readonly organizationId: string;
   readonly propertyId: string;
+  readonly cameraMotionOptions: readonly CameraMotionOption[];
 }
 
 /**
@@ -23,13 +24,20 @@ interface Props {
  * the API keep failing admission honestly rather than having their text
  * silently dropped.
  *
- * Camera motion stays: it has no dedicated request parameter either, but the
- * model's prompt input carries motion intent, so it is genuinely delivered.
+ * Camera motion stays, but is no longer free text. It is chosen from an approved
+ * vocabulary the server enforces; this control offers exactly those values and
+ * re-derives nothing. A customer picks the intent, and the system owns every
+ * word that reaches a model (ADR-0022).
  */
 const OPTIONAL_FIELDS = [
   { key: "prompt", label: "What should the walkthrough feel like? (optional)" },
-  { key: "cameraMotion", label: "Camera motion (optional)" },
 ] as const;
+
+/** One approved camera motion, resolved by the server page. */
+export interface CameraMotionOption {
+  readonly value: string;
+  readonly label: string;
+}
 
 type OptionalKey = (typeof OPTIONAL_FIELDS)[number]["key"];
 
@@ -51,16 +59,18 @@ type OptionalKey = (typeof OPTIONAL_FIELDS)[number]["key"];
  * capability and re-derives no rule. The placeholders show the *shape* of the
  * string, not a claim about what any provider accepts.
  */
-export function CreateProjectPanel({ organizationId, propertyId }: Props) {
+export function CreateProjectPanel({
+  organizationId,
+  propertyId,
+  cameraMotionOptions,
+}: Props) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [duration, setDuration] = useState("");
   const [aspectRatio, setAspectRatio] = useState("");
   const [resolution, setResolution] = useState("");
-  const [optional, setOptional] = useState<Record<OptionalKey, string>>({
-    prompt: "",
-    cameraMotion: "",
-  });
+  const [optional, setOptional] = useState<Record<OptionalKey, string>>({ prompt: "" });
+  const [cameraMotion, setCameraMotion] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -90,6 +100,9 @@ export function CreateProjectPanel({ organizationId, propertyId }: Props) {
       const value = optional[key].trim();
       if (value.length > 0) body[key] = value;
     }
+    // Omitted entirely when unspecified, so the server stores null rather than
+    // an empty string it would then have to interpret.
+    if (cameraMotion.length > 0) body.cameraMotion = cameraMotion;
 
     try {
       const response = await fetch(`/api/properties/${propertyId}/video-projects`, {
@@ -105,7 +118,8 @@ export function CreateProjectPanel({ organizationId, propertyId }: Props) {
         setDuration("");
         setAspectRatio("");
         setResolution("");
-        setOptional({ prompt: "", cameraMotion: "" });
+        setOptional({ prompt: "" });
+        setCameraMotion("");
         router.refresh();
         return;
       }
@@ -157,6 +171,22 @@ export function CreateProjectPanel({ organizationId, propertyId }: Props) {
           onChange={(value) => setOptional((prev) => ({ ...prev, [key]: value }))}
         />
       ))}
+
+      <label className="field">
+        <span className="muted">Camera motion (optional)</span>
+        <select
+          value={cameraMotion}
+          aria-label="Camera motion (optional)"
+          onChange={(event) => setCameraMotion(event.target.value)}
+        >
+          <option value="">Unspecified</option>
+          {cameraMotionOptions.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <button type="button" disabled={!complete || pending} onClick={() => void submit()}>
         Create project

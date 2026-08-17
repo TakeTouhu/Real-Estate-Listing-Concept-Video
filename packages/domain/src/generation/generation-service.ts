@@ -2,6 +2,7 @@ import { AppError } from "@app/shared";
 import { recordAudit } from "../identity/audit";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps, IdGenerator } from "../identity/ports";
+import { assertApprovedCameraMotion } from "../storyboard/camera-motion";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import {
   assertSettingsSupported,
@@ -131,6 +132,13 @@ export class GenerationService {
         "This scene has no compiled prompt; compose the storyboard again before generating",
       );
     }
+
+    // (6a) The scene's camera motion must still be an approved value. A scene
+    // composed before Phase 4C-0b can hold free text, and admitting it would
+    // hash that text into the request identity, freeze it into the snapshot, and
+    // hand it to the renderer. Refused here, before anything durable exists, and
+    // before any capability or spend decision (ADR-0022).
+    assertApprovedCameraMotion(scene.cameraMotion);
 
     // (7) One capability snapshot for the whole request. It supplies the
     // provider/model pair used for validation, the request hash, AND the

@@ -1,5 +1,6 @@
 import { AppError } from "@app/shared";
 import type { RoomType } from "../analysis/types";
+import type { CameraMotion } from "./camera-motion";
 import type { ModerationFinding, PromptModerator } from "./moderation";
 
 /**
@@ -23,14 +24,26 @@ export const SYSTEM_NEGATIVE_CONSTRAINTS: readonly string[] = Object.freeze([
   "text overlays claiming measurements or floor plans",
 ]);
 
-/** What the storyboard knows about the scene. System-derived, never user text. */
+/**
+ * What the storyboard knows about the scene.
+ *
+ * Every field here is either system-derived or **customer-selected from a
+ * system-owned set** — never customer-authored text. Until Phase 4C-0b that was
+ * not true: this comment read "System-derived, never user text" while
+ * `cameraMotion` carried arbitrary text the customer had typed. The vocabulary
+ * in `./camera-motion` is what makes the sentence true rather than aspirational.
+ */
 export interface SceneFacts {
   readonly assetId: string;
   readonly position: number;
   /** Null stays null — an unclassified room is never guessed into a label. */
   readonly roomType: RoomType | null;
   readonly durationSeconds: number;
-  readonly cameraMotion: string | null;
+  /**
+   * Customer-selected, system-constrained intent. The customer picks the token;
+   * the renderer owns every word a model sees. `null` is unspecified.
+   */
+  readonly cameraMotion: CameraMotion | null;
 }
 
 /**

@@ -3,9 +3,64 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4B-2b: the prompt renderer
+## [Unreleased] — Phase 4C-0b: camera motion is a closed vocabulary
 
-Under review. Not merged. See `docs/phase-4b2b-completion.md` and ADR-0020.
+Under review. Not merged. See `docs/phase-4c0b-completion.md` and ADR-0022.
+
+### Added
+
+- **`CAMERA_MOTIONS`** — a closed four-value vocabulary (`STATIC`,
+  `SLOW_DOLLY_FORWARD`, `SLOW_PAN_LEFT`, `SLOW_PAN_RIGHT`), with `isCameraMotion`
+  and `assertApprovedCameraMotion`. `null` remains "unspecified".
+- **Domain enforcement at three moments** — project write, composition, and
+  generation admission. Deliberately not in the HTTP route or the form: the same
+  route serves API callers, so a control the UI hides is not a control.
+- **A reviewed sentence per token**, typed as a total `Record<CameraMotion,
+  string>` in the renderer, so a token added without phrasing is a compile error.
+  The token itself is never emitted.
+
+### Fixed
+
+- **Arbitrary customer text can no longer reach a provider prompt through
+  `cameraMotion`.** It was a free-text field validated only for type and length,
+  stored untrimmed, copied to every scene, hashed into request identity, frozen
+  into the immutable snapshot, and rendered — and it was the one field on that
+  path `compileScenePrompt` never moderated. Placement below the preservation
+  rules was a mitigation, not a boundary.
+- **`SceneFacts` now matches its own documentation.** Its comment claimed
+  "System-derived, never user text" while `cameraMotion` held customer text; the
+  type narrows to `CameraMotion | null` and the comment is corrected.
+
+### Changed
+
+- The create form offers a fixed list instead of a text input. Options are
+  resolved server-side and passed as plain data, keeping domain code out of the
+  browser bundle.
+- The rendered heading becomes `Camera motion (customer-selected):`. The section
+  keeps its position — preservation and system constraints stay structurally
+  prior — and loses its "the rules above take precedence" caveat, because no
+  customer text remains in it.
+
+### Unchanged (deliberately)
+
+- The 8-fact `requestHash` tuple and all five snapshot fields. A token is a
+  string, so historical hashes stay interpretable.
+- **No schema change, no migration.** The column stays `String?`; the vocabulary
+  is a domain constant.
+- No moderation change, no provider submission, no worker, no queue consumer, no
+  multi-model routing.
+
+### Known gaps
+
+- Legacy projects and scenes holding free text can be read but not composed or
+  admitted until the field is set to an approved value. Acceptable because no
+  generation has ever executed.
+- The **rendered prompt is still not covered by the request hash** — Phase 4C-0a
+  owns it, and it remains a hard prerequisite before any provider submission.
+
+## Phase 4B-2b: the prompt renderer
+
+Merged as `cd9d136` (PR #35). See `docs/phase-4b2b-completion.md` and ADR-0020.
 
 ### Added
 
