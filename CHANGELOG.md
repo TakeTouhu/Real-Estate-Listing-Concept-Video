@@ -3,6 +3,66 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4B-2a: honest provider contract
+
+Under review. Not merged. See `docs/phase-4b2a-completion.md` and ADR-0019.
+
+### Added
+
+- **Ownership-aware capability semantics.** `AspectRatioSupport` becomes
+  three-way (`PROVIDER_HONORED` / `COMPOSITION_OWNED` / `UNSUPPORTED`) and
+  `FeatureSupport` becomes `FeatureDelivery` (`PROVIDER_FIELD` /
+  `PROMPT_RENDERED` / `UNSUPPORTED`). Capability now declares **who guarantees
+  delivery**, not merely whether a request field exists.
+- **The verified OpenVideo capability descriptor** (`OPEN_VIDEO_CAPABILITY`) —
+  duration 3–20 integer seconds, resolutions 480p/720p/1080p, aspect ratio
+  `COMPOSITION_OWNED`, negative prompt `UNSUPPORTED`, camera motion
+  `PROMPT_RENDERED`. Every value transcribed from the official documentation.
+- **`WAVESPEED_OPEN_VIDEO_MODEL_ID`** in `@app/shared` — one authoritative model
+  identity feeding both the env schema default and the descriptor.
+
+### Fixed
+
+- **The adapter no longer sends three fields the endpoint does not document.**
+  `aspect_ratio`, `negative_prompt` and `camera_motion` are removed from the
+  OpenVideo request body, and an exact key-set assertion prevents any
+  undocumented field reappearing. The previous tests asserted those fields were
+  sent, freezing a shape nobody had verified against the vendor.
+- **Admission is no longer blocked outright.** With a binary
+  `AspectRatioSupport` and no documented `aspect_ratio`, the only honest value
+  was `UNSUPPORTED`, which refuses unconditionally — and every `VideoProject`
+  carries an aspect ratio, so 100% of admissions would have failed.
+- **Dead model identity removed.** `WaveSpeedConfig.modelId` was never read (the
+  adapter builds submit URLs from `input.modelId`) and let the descriptor and
+  configured default drift apart unnoticed.
+
+### Fixed after review
+
+- **A conflicting `WAVESPEED_VIDEO_MODEL_ID` override no longer splits the
+  system into two model identities.** The variable accepted any non-empty string
+  while the descriptor hard-coded the constant, so self-checks could exercise one
+  model while admission validated against — and froze — another. Configuration
+  resolution now fails closed on any value other than the supported id.
+- **`COMPOSITION_OWNED` no longer admits an arbitrary string as an aspect
+  ratio.** Syntax validation (`width:height`, positive numbers) runs for every
+  ownership kind before the ownership branch; only the provider allowlist is
+  skipped. The value is never rewritten, since it is a request-hash fact.
+
+### Changed
+
+- The project-creation UI no longer offers a negative-prompt control, since the
+  only production model cannot honour it. The HTTP, domain, and database
+  contracts keep the provider-neutral field.
+- `@app/video-providers` now depends on `@app/domain`, matching every other
+  adapter package.
+
+### Unchanged (deliberately)
+
+- The 8-fact `requestHash` tuple, all five Phase 4B-1c snapshot fields, and the
+  database schema. No migration.
+- No prompt renderer (Phase 4B-2b), no `preset`, no provider call, no worker,
+  no queue adapter, no pricing policy.
+
 ## [Unreleased] — Phase 4B-1c: immutable generation request snapshot
 
 Under review. Not merged. See `docs/phase-4b1c-completion.md` and ADR-0018.

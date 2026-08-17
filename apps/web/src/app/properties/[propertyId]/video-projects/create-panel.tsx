@@ -9,10 +9,25 @@ interface Props {
   readonly propertyId: string;
 }
 
-/** The optional fields, in the order they are shown. */
+/**
+ * The optional fields, in the order they are shown.
+ *
+ * There is deliberately no negative-prompt control. The configured production
+ * model documents no `negative_prompt` parameter, so a project carrying one is
+ * refused at generation admission — offering the field here would invite
+ * customers to write a requirement the product cannot honour and then fail them
+ * later, at the point they ask for a video (ADR-0019).
+ *
+ * The HTTP, domain, and database contracts still carry `negativePrompt`: it is
+ * provider-neutral, a future model may honour it, and projects created through
+ * the API keep failing admission honestly rather than having their text
+ * silently dropped.
+ *
+ * Camera motion stays: it has no dedicated request parameter either, but the
+ * model's prompt input carries motion intent, so it is genuinely delivered.
+ */
 const OPTIONAL_FIELDS = [
   { key: "prompt", label: "What should the walkthrough feel like? (optional)" },
-  { key: "negativePrompt", label: "Anything to avoid? (optional)" },
   { key: "cameraMotion", label: "Camera motion (optional)" },
 ] as const;
 
@@ -30,10 +45,11 @@ type OptionalKey = (typeof OPTIONAL_FIELDS)[number]["key"];
  * scenes — because the create endpoint cannot express them and a client must
  * not present a project as already composed.
  *
- * Aspect ratio and resolution are free text: the configured provider's actual
- * supported formats are Phase 4's to establish, and this milestone invents no
- * capability table. The placeholders show the *shape* of the string, not a
- * claim about what any provider accepts.
+ * Aspect ratio and resolution remain free text. The configured model's real
+ * capabilities now exist (ADR-0019) but are enforced at generation admission,
+ * on the server, where the authority belongs — this component fetches no
+ * capability and re-derives no rule. The placeholders show the *shape* of the
+ * string, not a claim about what any provider accepts.
  */
 export function CreateProjectPanel({ organizationId, propertyId }: Props) {
   const router = useRouter();
@@ -43,7 +59,6 @@ export function CreateProjectPanel({ organizationId, propertyId }: Props) {
   const [resolution, setResolution] = useState("");
   const [optional, setOptional] = useState<Record<OptionalKey, string>>({
     prompt: "",
-    negativePrompt: "",
     cameraMotion: "",
   });
   const [pending, setPending] = useState(false);
@@ -90,7 +105,7 @@ export function CreateProjectPanel({ organizationId, propertyId }: Props) {
         setDuration("");
         setAspectRatio("");
         setResolution("");
-        setOptional({ prompt: "", negativePrompt: "", cameraMotion: "" });
+        setOptional({ prompt: "", cameraMotion: "" });
         router.refresh();
         return;
       }

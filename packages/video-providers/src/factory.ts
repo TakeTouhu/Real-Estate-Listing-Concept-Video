@@ -42,7 +42,6 @@ export function createVideoProvider(
       {
         apiKey: env.WAVESPEED_API_KEY,
         baseUrl: env.WAVESPEED_API_BASE_URL,
-        modelId: env.WAVESPEED_VIDEO_MODEL_ID,
         webhookSecret: env.WAVESPEED_WEBHOOK_SECRET,
         poll: {
           initialMs: env.WAVESPEED_POLL_INITIAL_MS,

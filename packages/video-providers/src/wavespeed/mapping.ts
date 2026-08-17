@@ -22,6 +22,31 @@ export function buildSubmitUrl(baseUrl: string, modelId: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/${modelId}`;
 }
 
+/**
+ * Build the OpenVideo submission request.
+ *
+ * The body contains **only** parameters the selected model documents:
+ * `image`, `prompt`, `duration`, `resolution`, and `seed` when a caller supplies
+ * one. Nothing else is sent, and the omissions are the point of this function
+ * rather than an oversight:
+ *
+ * - **`aspect_ratio`** — not a documented parameter. The requested ratio is
+ *   still a durable request fact and part of the request identity; it is
+ *   `COMPOSITION_OWNED`, so Phase 5 normalizes the delivered video to it
+ *   (ADR-0019). Sending an undocumented field would be guessing at the vendor's
+ *   API on the one path that spends money.
+ * - **`negative_prompt`** — not documented. A project carrying user negative
+ *   text is refused at admission instead, and the text is never folded into
+ *   `prompt`, which would invert its meaning.
+ * - **`camera_motion`** — not documented. Motion intent is `PROMPT_RENDERED`:
+ *   Phase 4B-2b expresses it through the documented `prompt` input.
+ * - **`preset`** — appears in a Quick Start example but not in the parameter
+ *   table, so its contract is unresolved. An example is not a specification.
+ *
+ * The submit URL is built from **`input.modelId`**, never from configuration.
+ * That is what lets an already-admitted generation execute against the model it
+ * was admitted under, even if the configured default changes afterwards.
+ */
 export function mapToWaveSpeedRequest(
   input: ProviderGenerationInput,
   baseUrl: string,
@@ -30,11 +55,8 @@ export function mapToWaveSpeedRequest(
     image: input.sourceImageUrl,
     prompt: input.prompt,
     duration: input.durationSeconds,
-    aspect_ratio: input.aspectRatio,
     resolution: input.resolution,
   };
-  if (input.negativePrompt !== undefined) body.negative_prompt = input.negativePrompt;
-  if (input.cameraMotion !== undefined) body.camera_motion = input.cameraMotion;
   if (input.seed !== undefined) body.seed = input.seed;
   return { url: buildSubmitUrl(baseUrl, input.modelId), body };
 }

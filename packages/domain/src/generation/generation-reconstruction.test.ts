@@ -54,9 +54,9 @@ function capability(): VideoModelCapability {
     providerModelId: "fixture/model-v1",
     durationSeconds: { kind: "RANGE", minSeconds: 2, maxSeconds: 20 },
     resolutions: ["480p", "720p", "1080p"],
-    aspectRatios: { kind: "SUPPORTED", ratios: ["16:9", "9:16", "1:1"] },
-    negativePrompt: "SUPPORTED",
-    cameraMotion: "SUPPORTED",
+    aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16", "1:1"] },
+    negativePrompt: { kind: "PROVIDER_FIELD" },
+    cameraMotion: { kind: "PROVIDER_FIELD" },
   };
 }
 

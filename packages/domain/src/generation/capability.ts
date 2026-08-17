@@ -27,25 +27,59 @@ export type DurationPolicy =
   | { readonly kind: "ENUMERATED"; readonly seconds: readonly number[] };
 
 /**
- * Whether the model can honour the product's **aspect-ratio contract**.
+ * **Who guarantees the delivered aspect ratio** — not whether a request field
+ * exists.
  *
- * This is a statement about the delivered video, not about request fields, and
- * the distinction is the whole reason this type exists. "The endpoint documents
- * no `aspect_ratio` parameter" is **not** evidence that a requested ratio is
- * satisfied — it is evidence that we do not know how to ask for one. Treating
- * absence as support would silently ship videos in whatever shape the model
- * happens to produce while the customer believes they chose.
+ * The distinction is the whole reason this type exists, and it is deliberately
+ * three-way rather than two. "The endpoint documents no `aspect_ratio`
+ * parameter" is not evidence that a requested ratio is satisfied; it is only
+ * evidence that the *provider* is not the one satisfying it. Collapsing that
+ * into a boolean forces a false choice between claiming support the provider
+ * does not offer and refusing work the system can still deliver correctly.
  *
- * So `UNSUPPORTED` means: this model cannot be relied on to deliver a requested
- * ratio, and a project that asks for one must be refused rather than quietly
- * served. It never means "ignore the request".
+ * - `PROVIDER_HONORED` — the model accepts a ratio and delivers it. The request
+ *   is validated against the listed values.
+ * - `COMPOSITION_OWNED` — the provider is never asked. The requested ratio
+ *   stays a durable product fact and part of the request identity, and the
+ *   **composition stage** normalizes the delivered video to it. Admission
+ *   accepts without provider-value validation, because the provider's opinion
+ *   is irrelevant to a guarantee it does not make. This is not "ignore the
+ *   request" — it moves the obligation, and ADR-0019 records where it landed.
+ * - `UNSUPPORTED` — nothing in the system can deliver a requested ratio, so a
+ *   project asking for one is refused rather than quietly served an unknown
+ *   shape.
  */
 export type AspectRatioSupport =
-  | { readonly kind: "SUPPORTED"; readonly ratios: readonly string[] }
+  | { readonly kind: "PROVIDER_HONORED"; readonly ratios: readonly string[] }
+  | { readonly kind: "COMPOSITION_OWNED" }
   | { readonly kind: "UNSUPPORTED" };
 
-/** Whether an optional customer-authored input reaches the model meaningfully. */
-export type FeatureSupport = "SUPPORTED" | "UNSUPPORTED";
+/**
+ * **How** an optional customer-authored input reaches the model, if at all.
+ *
+ * A dedicated API parameter is not the only faithful delivery mechanism. A
+ * model whose documentation states that the prompt controls a behaviour can
+ * express that intent through the prompt input — but only if something actually
+ * renders it, which is why the two cases are named apart rather than both
+ * called "supported".
+ *
+ * - `PROVIDER_FIELD` — a documented, dedicated request parameter carries it.
+ * - `PROMPT_RENDERED` — no dedicated parameter exists, and the approved prompt
+ *   renderer expresses the intent faithfully through the documented prompt
+ *   input. **Declaring this is a promise about the renderer**, which the type
+ *   system cannot check — and which, as of Phase 4B-2a, no test checks either,
+ *   because no renderer exists to check against. Pinning it is a completion
+ *   condition of Phase 4B-2b (ADR-0019 §2, §8). Until then the declaration is
+ *   an unverified assertion; a provider whose renderer does not carry the
+ *   intent must declare `UNSUPPORTED` instead.
+ * - `UNSUPPORTED` — the intent cannot be expressed at all, so a request
+ *   carrying it is refused. It is never silently dropped, and never rewritten
+ *   into some other field.
+ */
+export type FeatureDelivery =
+  | { readonly kind: "PROVIDER_FIELD" }
+  | { readonly kind: "PROMPT_RENDERED" }
+  | { readonly kind: "UNSUPPORTED" };
 
 export interface VideoModelCapability {
   readonly providerName: string;
@@ -54,13 +88,17 @@ export interface VideoModelCapability {
   readonly resolutions: readonly string[];
   readonly aspectRatios: AspectRatioSupport;
   /**
-   * Whether the model honours a negative prompt. `UNSUPPORTED` means a project
-   * carrying one must be refused — ADR-0014 keeps system and user negative
-   * constraints structurally distinct, and dropping the user's half silently
-   * would discard a stated customer requirement.
+   * How a **user-authored** negative prompt reaches the model.
+   *
+   * `UNSUPPORTED` means a project carrying one must be refused — ADR-0014 keeps
+   * system and user negative constraints structurally distinct, and dropping
+   * the user's half silently would discard a stated customer requirement.
+   * `PROMPT_RENDERED` is deliberately **not** a licence to fold negative text
+   * into the positive prompt: that inverts its meaning, and no renderer may do
+   * it (ADR-0019).
    */
-  readonly negativePrompt: FeatureSupport;
-  readonly cameraMotion: FeatureSupport;
+  readonly negativePrompt: FeatureDelivery;
+  readonly cameraMotion: FeatureDelivery;
 }
 
 /** The port through which orchestration learns what the configured model can do. */
@@ -100,6 +138,36 @@ export interface GenerationRequestSettings {
  */
 function isProvided(text: string | null): boolean {
   return text !== null && text.trim().length > 0;
+}
+
+/**
+ * `W:H`, where both sides are positive numbers.
+ *
+ * Integers and decimals both occur in real use — `16:9`, `9:16`, `1:1`, `4:3`,
+ * and cinematic ratios like `2.39:1`. A leading sign is not matched at all, so
+ * `-16:9` fails here rather than needing a separate check.
+ */
+const ASPECT_RATIO_SYNTAX = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/;
+
+/**
+ * Whether a string is a usable aspect ratio at all.
+ *
+ * Separate from, and prior to, the question of *who* honours it. Review found
+ * that `COMPOSITION_OWNED` skipped every aspect-ratio check, so `"wide"` or
+ * `"banana"` could be admitted, hashed into the request identity, frozen into
+ * the immutable snapshot, and enqueued as billable work — leaving the
+ * composition stage a value it cannot normalize to. Moving the guarantee off the
+ * provider must not mean nobody checks it.
+ *
+ * Reads only. Nothing here trims, rounds, or rewrites: `16:9` must stay exactly
+ * `16:9`, because the string is a request-hash fact and any normalization would
+ * silently change request identity.
+ */
+function isValidAspectRatioSyntax(value: string): boolean {
+  if (!ASPECT_RATIO_SYNTAX.test(value)) return false;
+  // The pattern admits `0:9` and `16:0`; a zero side is not a ratio.
+  const [width, height] = value.split(":").map(Number);
+  return width! > 0 && height! > 0;
 }
 
 function durationAccepted(seconds: number, policy: DurationPolicy): boolean {
@@ -148,15 +216,36 @@ export function assertSettingsSupported(
     );
   }
 
-  // Absence of a request parameter is not support. A project that asked for a
-  // ratio is refused rather than served an unknown shape.
+  // Syntax first, and for every ownership kind. A value nobody can interpret is
+  // refused before the question of who honours it even arises — otherwise
+  // `COMPOSITION_OWNED` would admit billable work with a ratio the composition
+  // stage cannot normalize to.
+  if (!isValidAspectRatioSyntax(settings.aspectRatio)) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      `"${settings.aspectRatio}" is not a valid aspect ratio; use a width:height ratio such as 16:9`,
+    );
+  }
+
+  // Aspect ratio is decided by WHO guarantees it, not by whether a request
+  // field exists.
+  //
+  // COMPOSITION_OWNED accepts without checking the value against the provider,
+  // because the provider is never asked for it. The requested ratio remains a
+  // durable product fact and part of the request identity; the composition
+  // stage owns delivering it (ADR-0019), and Phase 5 is not complete while a
+  // requested ratio can be silently ignored. UNSUPPORTED still refuses, for the
+  // case where nothing in the system can deliver one.
   if (capability.aspectRatios.kind === "UNSUPPORTED") {
     throw new AppError(
       "VALIDATION_FAILED",
       "This model cannot be relied on to deliver a chosen aspect ratio; the project requests one",
     );
   }
-  if (!capability.aspectRatios.ratios.includes(settings.aspectRatio)) {
+  if (
+    capability.aspectRatios.kind === "PROVIDER_HONORED" &&
+    !capability.aspectRatios.ratios.includes(settings.aspectRatio)
+  ) {
     throw new AppError(
       "VALIDATION_FAILED",
       `This model supports the aspect ratios ${capability.aspectRatios.ratios.join(", ")}; the project asks for ${settings.aspectRatio}`,
@@ -173,13 +262,16 @@ export function assertSettingsSupported(
   // nothing normalizes it downstream, and it reaches the provider as stored.
   // Treating a blank one as absent here would make this rule disagree with what
   // the request actually is, including the request hash.
-  if (isProvided(settings.negativePrompt) && capability.negativePrompt === "UNSUPPORTED") {
+  // Only UNSUPPORTED refuses. PROVIDER_FIELD and PROMPT_RENDERED are both
+  // faithful deliveries — the second still reaches the model, just through the
+  // documented prompt input rather than a dedicated parameter.
+  if (isProvided(settings.negativePrompt) && capability.negativePrompt.kind === "UNSUPPORTED") {
     throw new AppError(
       "VALIDATION_FAILED",
       "This model does not honour a negative prompt; remove it or choose another model",
     );
   }
-  if (settings.cameraMotion !== null && capability.cameraMotion === "UNSUPPORTED") {
+  if (settings.cameraMotion !== null && capability.cameraMotion.kind === "UNSUPPORTED") {
     throw new AppError(
       "VALIDATION_FAILED",
       "This model does not honour a camera motion; remove it or choose another model",

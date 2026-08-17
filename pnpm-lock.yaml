@@ -185,6 +185,9 @@ importers:
 
   packages/video-providers:
     dependencies:
+      '@app/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@app/observability':
         specifier: workspace:*
         version: link:../observability

@@ -45,9 +45,9 @@ function capability(overrides: Partial<VideoModelCapability> = {}): VideoModelCa
     providerModelId: "fixture/model-v1",
     durationSeconds: { kind: "RANGE", minSeconds: 2, maxSeconds: 20 },
     resolutions: ["480p", "720p", "1080p"],
-    aspectRatios: { kind: "SUPPORTED", ratios: ["16:9", "9:16", "1:1"] },
-    negativePrompt: "SUPPORTED",
-    cameraMotion: "SUPPORTED",
+    aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16", "1:1"] },
+    negativePrompt: { kind: "PROVIDER_FIELD" },
+    cameraMotion: { kind: "PROVIDER_FIELD" },
     ...overrides,
   };
 }
@@ -422,7 +422,7 @@ describe("startScene — capability validation", () => {
   it("refuses a non-empty negative prompt the model cannot honour", async () => {
     const h = harness({
       view: { project: project({ negativePrompt: "no people" }), scenes: [scene()], fresh: true },
-      capability: capability({ negativePrompt: "UNSUPPORTED" }),
+      capability: capability({ negativePrompt: { kind: "UNSUPPORTED" } }),
     });
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
     expect(error.code).toBe("VALIDATION_FAILED");
@@ -434,14 +434,14 @@ describe("startScene — capability validation", () => {
     // absent, so an UNSUPPORTED model does not block the request.
     const h = harness({
       view: { project: project({ negativePrompt: "   " }), scenes: [scene()], fresh: true },
-      capability: capability({ negativePrompt: "UNSUPPORTED" }),
+      capability: capability({ negativePrompt: { kind: "UNSUPPORTED" } }),
     });
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(result.state).toBe("QUEUED");
   });
 
   it("refuses a camera motion the model cannot honour", async () => {
-    const h = harness({ capability: capability({ cameraMotion: "UNSUPPORTED" }) });
+    const h = harness({ capability: capability({ cameraMotion: { kind: "UNSUPPORTED" } }) });
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
     expect(error.code).toBe("VALIDATION_FAILED");
     expectRefusedBeforeAdmission(h);

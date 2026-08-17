@@ -10,18 +10,19 @@ import {
  * FIXTURE VALUES ONLY — invented for these tests.
  *
  * They are **not** any real provider's capabilities and must never be copied
- * into configuration. The configured model's real limits are unverified, and
- * populating them is Phase 4B-2's job after the provider contract is checked
- * against an authoritative source.
+ * into configuration. The configured OpenVideo model's verified values live in
+ * `@app/video-providers` (`OPEN_VIDEO_CAPABILITY`) and are asserted there; this
+ * file proves the *rule*, so its fixtures stay deliberately unlike any real
+ * model.
  */
 const FIXTURE: VideoModelCapability = {
   providerName: "fixture-provider",
   providerModelId: "fixture/model-v1",
   durationSeconds: { kind: "RANGE", minSeconds: 4, maxSeconds: 12 },
   resolutions: ["720p", "1080p"],
-  aspectRatios: { kind: "SUPPORTED", ratios: ["16:9", "9:16"] },
-  negativePrompt: "SUPPORTED",
-  cameraMotion: "SUPPORTED",
+  aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16"] },
+  negativePrompt: { kind: "PROVIDER_FIELD" },
+  cameraMotion: { kind: "PROVIDER_FIELD" },
 };
 
 const SETTINGS: GenerationRequestSettings = {
@@ -109,7 +110,7 @@ describe("aspect ratio", () => {
 
 describe("optional customer-authored inputs", () => {
   it("refuses a negative prompt the model does not honour", () => {
-    const cannot = capability({ negativePrompt: "UNSUPPORTED" });
+    const cannot = capability({ negativePrompt: { kind: "UNSUPPORTED" } });
     expect(refusalOf(settings({ negativePrompt: "no people" }), cannot)!.code).toBe(
       "VALIDATION_FAILED",
     );
@@ -126,12 +127,12 @@ describe("optional customer-authored inputs", () => {
     // absent, so such a project compiles to `userNegative: null` and the model
     // never sees it. Refusing here would block work over a field that was never
     // going to be sent.
-    const cannot = capability({ negativePrompt: "UNSUPPORTED" });
+    const cannot = capability({ negativePrompt: { kind: "UNSUPPORTED" } });
     expect(() => assertSettingsSupported(settings({ negativePrompt }), cannot)).not.toThrow();
   });
 
   it("still requires support once the negative prompt has real content", () => {
-    const cannot = capability({ negativePrompt: "UNSUPPORTED" });
+    const cannot = capability({ negativePrompt: { kind: "UNSUPPORTED" } });
     expect(refusalOf(settings({ negativePrompt: "  no people  " }), cannot)!.code).toBe(
       "VALIDATION_FAILED",
     );
@@ -141,7 +142,7 @@ describe("optional customer-authored inputs", () => {
     // Capability *interpretation*, not normalization — the stored project value
     // must survive untouched.
     const s = settings({ negativePrompt: "  no people  " });
-    assertSettingsSupported(s, capability({ negativePrompt: "SUPPORTED" }));
+    assertSettingsSupported(s, capability({ negativePrompt: { kind: "PROVIDER_FIELD" } }));
     expect(s.negativePrompt).toBe("  no people  ");
   });
 
@@ -151,7 +152,7 @@ describe("optional customer-authored inputs", () => {
     // provider as stored — so a blank one IS part of the request, including in
     // the request hash. Treating it as absent here would make this rule
     // disagree with what is actually being asked for.
-    const cannot = capability({ cameraMotion: "UNSUPPORTED" });
+    const cannot = capability({ cameraMotion: { kind: "UNSUPPORTED" } });
     expect(refusalOf(settings({ cameraMotion: "   " }), cannot)!.code).toBe("VALIDATION_FAILED");
     expect(() =>
       assertSettingsSupported(settings({ cameraMotion: null }), cannot),
@@ -159,7 +160,7 @@ describe("optional customer-authored inputs", () => {
   });
 
   it("refuses a camera motion the model does not honour", () => {
-    const cannot = capability({ cameraMotion: "UNSUPPORTED" });
+    const cannot = capability({ cameraMotion: { kind: "UNSUPPORTED" } });
     expect(refusalOf(settings({ cameraMotion: "slow push in" }), cannot)!.code).toBe(
       "VALIDATION_FAILED",
     );
@@ -168,7 +169,7 @@ describe("optional customer-authored inputs", () => {
   it("ignores an unsupported feature the request never asked for", () => {
     // Refusing here would block work for no benefit: the customer did not ask
     // for the thing the model lacks.
-    const cannot = capability({ negativePrompt: "UNSUPPORTED", cameraMotion: "UNSUPPORTED" });
+    const cannot = capability({ negativePrompt: { kind: "UNSUPPORTED" }, cameraMotion: { kind: "UNSUPPORTED" } });
     expect(() =>
       assertSettingsSupported(settings({ negativePrompt: null, cameraMotion: null }), cannot),
     ).not.toThrow();
@@ -204,5 +205,180 @@ describe("as a rule", () => {
   it("checks duration before resolution, so the first refusal is stable", () => {
     const error = refusalOf(settings({ durationSeconds: 99, resolution: "4k" }), FIXTURE);
     expect(error!.message).toContain("seconds");
+  });
+});
+
+/**
+ * Phase 4B-2a: delivery ownership.
+ *
+ * The two type changes exist to stop a boolean forcing a false choice between
+ * claiming support a provider does not offer and refusing work the system can
+ * still deliver. These tests pin each arm of that distinction, including the
+ * one that would otherwise be easy to get wrong — that `COMPOSITION_OWNED`
+ * accepts *without* consulting a provider ratio list, because the provider is
+ * never asked.
+ */
+describe("aspect-ratio ownership", () => {
+  it("validates the value when the provider honours the ratio", () => {
+    const honored = capability({
+      aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16"] },
+    });
+    expect(() => assertSettingsSupported(settings({ aspectRatio: "16:9" }), honored)).not.toThrow();
+    expect(refusalOf(settings({ aspectRatio: "4:3" }), honored)!.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("accepts any requested ratio when composition owns the guarantee", () => {
+    // No provider ratio list is consulted — there is none, and the provider is
+    // not being asked. A ratio the model has never heard of is still a valid
+    // request, because Phase 5 normalizes the delivered video to it.
+    const composed = capability({ aspectRatios: { kind: "COMPOSITION_OWNED" } });
+    for (const aspectRatio of ["16:9", "9:16", "1:1", "4:3", "2.39:1"]) {
+      expect(() =>
+        assertSettingsSupported(settings({ aspectRatio }), composed),
+      ).not.toThrow();
+    }
+  });
+
+  it("still refuses when nothing in the system can deliver a ratio", () => {
+    const impossible = capability({ aspectRatios: { kind: "UNSUPPORTED" } });
+    expect(refusalOf(settings({ aspectRatio: "16:9" }), impossible)!.code).toBe(
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("does not let COMPOSITION_OWNED mask an unrelated failure", () => {
+    // Moving the aspect-ratio guarantee must not weaken the other rules.
+    const composed = capability({
+      aspectRatios: { kind: "COMPOSITION_OWNED" },
+      resolutions: ["1080p"],
+    });
+    expect(refusalOf(settings({ resolution: "480p" }), composed)!.code).toBe("VALIDATION_FAILED");
+  });
+});
+
+describe("optional-input delivery mechanism", () => {
+  it.each([
+    ["PROVIDER_FIELD", { kind: "PROVIDER_FIELD" } as const],
+    ["PROMPT_RENDERED", { kind: "PROMPT_RENDERED" } as const],
+  ])("accepts a camera motion delivered by %s", (_label, cameraMotion) => {
+    // PROMPT_RENDERED is a real delivery, not a euphemism for unsupported: the
+    // intent reaches the model through its documented prompt input.
+    expect(() =>
+      assertSettingsSupported(settings({ cameraMotion: "slow push in" }), capability({ cameraMotion })),
+    ).not.toThrow();
+  });
+
+  it("refuses a camera motion that cannot be delivered at all", () => {
+    expect(
+      refusalOf(
+        settings({ cameraMotion: "slow push in" }),
+        capability({ cameraMotion: { kind: "UNSUPPORTED" } }),
+      )!.code,
+    ).toBe("VALIDATION_FAILED");
+  });
+
+  it("accepts a null camera motion under every delivery mechanism", () => {
+    for (const kind of ["PROVIDER_FIELD", "PROMPT_RENDERED", "UNSUPPORTED"] as const) {
+      expect(() =>
+        assertSettingsSupported(settings({ cameraMotion: null }), capability({ cameraMotion: { kind } })),
+      ).not.toThrow();
+    }
+  });
+
+  it.each([
+    ["PROVIDER_FIELD", { kind: "PROVIDER_FIELD" } as const],
+    ["PROMPT_RENDERED", { kind: "PROMPT_RENDERED" } as const],
+  ])("accepts a negative prompt delivered by %s", (_label, negativePrompt) => {
+    expect(() =>
+      assertSettingsSupported(settings({ negativePrompt: "no people" }), capability({ negativePrompt })),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * Aspect-ratio syntax — the Phase 4B-2a review blocker.
+ *
+ * `COMPOSITION_OWNED` skipped every aspect-ratio check, so an arbitrary
+ * non-empty string passed admission, entered the request hash and the immutable
+ * snapshot, and became billable work the composition stage could never
+ * normalize to. Moving the guarantee off the provider must not mean nobody
+ * validates it.
+ *
+ * These cases fail against the pre-fix implementation.
+ */
+describe("aspect-ratio syntax is required regardless of who owns delivery", () => {
+  const composed = capability({ aspectRatios: { kind: "COMPOSITION_OWNED" } });
+
+  it.each(["16:9", "9:16", "1:1", "4:3", "2.39:1"])(
+    "accepts the valid ratio %s under COMPOSITION_OWNED",
+    (aspectRatio) => {
+      expect(() => assertSettingsSupported(settings({ aspectRatio }), composed)).not.toThrow();
+    },
+  );
+
+  it.each([
+    ["a bare word", "wide"],
+    ["nonsense", "banana"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+    ["a slash separator", "16/9"],
+    ["a missing side", "16:"],
+    ["a leading separator", ":9"],
+    ["non-numeric sides", "a:b"],
+    ["a zero width", "0:9"],
+    ["a zero height", "16:0"],
+    ["both sides zero", "0:0"],
+    ["a negative width", "-16:9"],
+    ["a negative height", "16:-9"],
+    ["a trailing space", "16:9 "],
+    ["three parts", "16:9:1"],
+  ])("refuses %s under COMPOSITION_OWNED", (_label, aspectRatio) => {
+    const error = refusalOf(settings({ aspectRatio }), composed);
+    expect(error).toBeInstanceOf(AppError);
+    expect(error!.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("refuses invalid syntax under PROVIDER_HONORED too, before the allowlist", () => {
+    // The syntax gate runs first, so the refusal is about the value being
+    // unusable rather than about it being absent from the provider's list.
+    const honored = capability({
+      aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
+    });
+    expect(refusalOf(settings({ aspectRatio: "wide" }), honored)!.message).toContain(
+      "not a valid aspect ratio",
+    );
+  });
+
+  it("still applies the allowlist to a syntactically valid ratio", () => {
+    const honored = capability({
+      aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
+    });
+    expect(() => assertSettingsSupported(settings({ aspectRatio: "16:9" }), honored)).not.toThrow();
+    expect(refusalOf(settings({ aspectRatio: "4:3" }), honored)!.message).toContain(
+      "supports the aspect ratios",
+    );
+  });
+
+  it("refuses under UNSUPPORTED even when the ratio is syntactically valid", () => {
+    const impossible = capability({ aspectRatios: { kind: "UNSUPPORTED" } });
+    expect(refusalOf(settings({ aspectRatio: "16:9" }), impossible)!.code).toBe(
+      "VALIDATION_FAILED",
+    );
+  });
+
+  it("does not rewrite or normalize the ratio it validates", () => {
+    // The string is a request-hash fact; normalizing it would silently change
+    // request identity.
+    const s = settings({ aspectRatio: "2.39:1" });
+    assertSettingsSupported(s, composed);
+    expect(s.aspectRatio).toBe("2.39:1");
+  });
+
+  it("still enforces unrelated checks under COMPOSITION_OWNED", () => {
+    const narrow = capability({
+      aspectRatios: { kind: "COMPOSITION_OWNED" },
+      resolutions: ["1080p"],
+    });
+    expect(refusalOf(settings({ resolution: "480p" }), narrow)!.code).toBe("VALIDATION_FAILED");
   });
 });

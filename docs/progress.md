@@ -227,14 +227,16 @@ confirmation rather than inference from marketing copy.
 
 ## Decision records
 
-`docs/decisions/` — ADR-0001…0018, plus `docs/decisions/TODO.md` for open items.
+`docs/decisions/` — ADR-0001…0019, plus `docs/decisions/TODO.md` for open items.
 ADR-0015 is the current authority on review corrections; ADR-0012 and ADR-0013
 each carry a dated partial-supersession note rather than a rewrite. ADR-0016
 covers scene-generation state, local idempotency, and ambiguous provider
 submission; ADR-0017 covers single-scene generation admission, reuse precedence,
 and the `create → enqueue → audit` side-effect ordering. ADR-0018 adds the
 immutable generation request snapshot and narrowly amends both ADR-0016 §3 and
-ADR-0017 §10 with dated notes rather than rewrites.
+ADR-0017 §10 with dated notes rather than rewrites. ADR-0019 records provider
+capability ownership, the verified OpenVideo contract, and why that model
+receives no `aspect_ratio`, `negative_prompt`, or `camera_motion`.
 
 ## Phase 4 status
 
@@ -247,8 +249,11 @@ ADR-0017 §10 with dated notes rather than rewrites.
   `create → enqueue → audit`.
 - **Phase 4B-1c** — under review. Immutable generation request snapshot
   (ADR-0018), closing the reconstruction gap that PR #32's review surfaced.
-- **Phase 4B-2** — not started. Blocked on verified WaveSpeed model
-  capabilities, pricing, and the aspect-ratio product contract.
+- **Phase 4B-2a** — under review. Honest provider contract: ownership-aware
+  capability semantics, the verified OpenVideo descriptor, adapter mapping
+  correction, model-identity unification (ADR-0019).
+- **Phase 4B-2b** — not started. The single prompt renderer, which must satisfy
+  the `PROMPT_RENDERED` camera-motion obligation ADR-0019 records.
 - **Phase 4C** — not started, and **hard-blocked** until Phase 4B-1c is merged
   and verified on `main`. Seven prerequisites are recorded in
   `docs/decisions/TODO.md`.
