@@ -168,6 +168,33 @@ export interface SceneGenerationRequestSnapshot {
   readonly requestAspectRatio: string | null;
   /** Snapshotted because the project's value is mutable after admission. */
   readonly requestResolution: string | null;
+  /**
+   * The exact positive provider prompt string produced at admission.
+   *
+   * The other five fields fix *what was asked for*; this one fixes *what will be
+   * sent*. They are not the same guarantee. `requestCompiledPrompt` is the
+   * hashed structure, but the bytes a provider receives are a function of that
+   * structure **and the renderer's code** — headings, section order, the
+   * camera-motion phrasing, the trimming rule. None of that is in the hash, so
+   * a generation admitted under one renderer and executed after a deploy could
+   * have submitted text the customer's approved request never described, under a
+   * hash that still validated (ADR-0020, *Consequences*).
+   *
+   * Rendering it once, at admission, closes that: the worker submits this string
+   * verbatim and never runs the renderer for an admitted attempt. Renderer
+   * changes therefore apply to new admissions only.
+   *
+   * Contains customer-authored text — it is a projection of
+   * `requestCompiledPrompt`, whose bytes already live on the same row and on
+   * `storyboard_scenes.compiledPrompt`. So it adds no new class of data, and the
+   * same rule applies: never in audit metadata, a queue payload, an error
+   * message, or a log.
+   *
+   * Null means the attempt predates this contract. Consumers **fail closed**
+   * rather than re-rendering, because re-rendering is exactly the drift this
+   * field exists to prevent (see `frozenExecutionPromptFrom`).
+   */
+  readonly requestRenderedPrompt: string | null;
 }
 
 /**

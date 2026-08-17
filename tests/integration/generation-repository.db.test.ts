@@ -44,9 +44,10 @@ function generation(id: string, overrides: Partial<NewSceneGeneration> = {}): Ne
     providerModelId: "fake/image-to-video",
     requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     requestDurationSeconds: 5,
-    requestCameraMotion: "SLOW_PAN",
+    requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
     requestResolution: "1080p",
+    requestRenderedPrompt: "Preservation rules:\n- frozen at admission",
     state: "QUEUED",
     providerPredictionId: null,
     submittedAt: null,
@@ -710,7 +711,7 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
       '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     );
     expect(created.requestDurationSeconds).toBe(5);
-    expect(created.requestCameraMotion).toBe("SLOW_PAN");
+    expect(created.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(created.requestAspectRatio).toBe("16:9");
     expect(created.requestResolution).toBe("1080p");
 
@@ -718,9 +719,28 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     const read = (await repo.findById(ORG_A, "gen_snap"))!;
     expect(read.requestCompiledPrompt).toBe(created.requestCompiledPrompt);
     expect(read.requestDurationSeconds).toBe(5);
-    expect(read.requestCameraMotion).toBe("SLOW_PAN");
+    expect(read.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(read.requestAspectRatio).toBe("16:9");
     expect(read.requestResolution).toBe("1080p");
+  });
+
+  it("round-trips the frozen execution prompt byte-for-byte", async () => {
+    // The bytes are the artifact: the worker submits this verbatim, so a
+    // round trip that altered whitespace or encoding would defeat the freeze
+    // (ADR-0023).
+    const created = await repo.create(ORG_A, generation("gen_frozen"));
+    expect(created.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
+
+    const read = (await repo.findById(ORG_A, "gen_frozen"))!;
+    expect(read.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
+  });
+
+  it("stores a legacy row with a null frozen prompt and never fabricates one", async () => {
+    // The migration backfills nothing, so a row admitted before the freeze stays
+    // null rather than acquiring bytes rendered by today's code.
+    await repo.create(ORG_A, generation("gen_prefreeze", { requestRenderedPrompt: null }));
+    const read = (await repo.findById(ORG_A, "gen_prefreeze"))!;
+    expect(read.requestRenderedPrompt).toBeNull();
   });
 
   it("stores a legacy row with a null snapshot and reads it back as null", async () => {
@@ -735,6 +755,7 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
         requestCameraMotion: null,
         requestAspectRatio: null,
         requestResolution: null,
+        requestRenderedPrompt: null,
       }),
     );
 
@@ -744,6 +765,7 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(read.requestCameraMotion).toBeNull();
     expect(read.requestAspectRatio).toBeNull();
     expect(read.requestResolution).toBeNull();
+    expect(read.requestRenderedPrompt).toBeNull();
   });
 
   it("preserves the snapshot across an execution-field update", async () => {
@@ -762,9 +784,12 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
       '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     );
     expect(updated.requestDurationSeconds).toBe(5);
-    expect(updated.requestCameraMotion).toBe("SLOW_PAN");
+    expect(updated.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(updated.requestAspectRatio).toBe("16:9");
     expect(updated.requestResolution).toBe("1080p");
+    // Including the execution artifact: a worker writing state must not be able
+    // to change what will be submitted.
+    expect(updated.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
   });
 
   it("returns the snapshot from the active and latest-succeeded lookups too", async () => {

@@ -4,6 +4,11 @@ import type { AuditLog } from "../identity/types";
 import type { AuditLogRepository } from "../identity/ports";
 import type { Role } from "../identity/roles";
 import { StoryboardService, type StoryboardView } from "../storyboard/storyboard-service";
+import {
+  PRESERVATION_RULES,
+  SYSTEM_NEGATIVE_CONSTRAINTS,
+  type SceneFacts,
+} from "../storyboard/prompt";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import {
   createTestDeps,
@@ -12,6 +17,7 @@ import {
 } from "../testing/index";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import { GenerationService, type GenerationServiceDeps } from "./generation-service";
+import { renderPrompt } from "./prompt-render";
 import {
   ACTIVE_SCENE_GENERATION_STATES,
   ActiveGenerationConflictError,
@@ -90,7 +96,7 @@ function scene(overrides: Partial<StoryboardScene> = {}): StoryboardScene {
     roomType: "KITCHEN",
     durationSeconds: 5,
     cameraMotion: "SLOW_PAN_LEFT",
-    compiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+    compiledPrompt: compiledPromptFor("KITCHEN", "SLOW_PAN_LEFT"),
     sourceAnalysisRevision: 3,
     createdAt: now,
     updatedAt: now,
@@ -116,6 +122,25 @@ function expectedHash(
   });
 }
 
+/**
+ * A compiled prompt the renderer will actually accept.
+ *
+ * Built from the real frozen constants rather than a placeholder, because since
+ * Phase 4C-0a admission renders the prompt and freezes the result — so a fixture
+ * that is not renderable is a fixture that cannot be admitted (ADR-0023).
+ */
+function compiledPromptFor(
+  roomType: SceneFacts["roomType"],
+  cameraMotion: SceneFacts["cameraMotion"],
+): string {
+  return JSON.stringify({
+    preservation: [...PRESERVATION_RULES],
+    sceneFacts: { assetId: "ast_1", position: 1, roomType, durationSeconds: 5, cameraMotion },
+    userCustomization: null,
+    negativeConstraints: { system: [...SYSTEM_NEGATIVE_CONSTRAINTS], user: null },
+  });
+}
+
 /** A fully-formed persisted attempt, for seeding reuse and race scenarios. */
 function genRow(id: string, state: SceneGenerationState, overrides: Partial<SceneGeneration> = {}): SceneGeneration {
   const now = new Date("2026-08-14T00:00:00.000Z");
@@ -135,6 +160,7 @@ function genRow(id: string, state: SceneGenerationState, overrides: Partial<Scen
     requestCameraMotion: scene().cameraMotion,
     requestAspectRatio: project().aspectRatio,
     requestResolution: project().resolution,
+    requestRenderedPrompt: "Preservation rules:\n- seeded frozen prompt",
     state,
     providerPredictionId: null,
     submittedAt: null,
@@ -429,6 +455,71 @@ describe("startScene — camera motion vocabulary", () => {
     const h = motionHarness(null);
     const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(admitted.requestCameraMotion).toBeNull();
+  });
+});
+
+describe("startScene — the rendered prompt is frozen at admission", () => {
+  it("persists the exact string the renderer produces for the admitted prompt", async () => {
+    const h = harness();
+    const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    // Not "contains something plausible": byte-identical to rendering the
+    // snapshot the row itself carries.
+    expect(admitted.requestRenderedPrompt).toBe(renderPrompt(admitted.requestCompiledPrompt!));
+  });
+
+  it("freezes a prompt that already carries the safety content and the motion", async () => {
+    const h = harness();
+    const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    const frozen = admitted.requestRenderedPrompt!;
+    expect(frozen).toContain("Preservation rules:");
+    expect(frozen).toContain("- text overlays claiming measurements or floor plans");
+    expect(frozen).toContain("Pan the camera slowly to the left.");
+  });
+
+  it("never writes a null frozen prompt for a newly admitted attempt", async () => {
+    const h = harness();
+    const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(admitted.requestRenderedPrompt).not.toBeNull();
+    expect(h.generations.all()[0]!.requestRenderedPrompt).toBe(admitted.requestRenderedPrompt);
+  });
+
+  it("renders exactly once — a reused attempt is returned without re-rendering", async () => {
+    // The reuse paths must not depend on the renderer at all: an existing row
+    // already carries its own frozen prompt, and re-rendering it would be the
+    // drift this milestone removes.
+    const h = harness();
+    const first = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    const second = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(second.id).toBe(first.id);
+    expect(second.requestRenderedPrompt).toBe(first.requestRenderedPrompt);
+    expect(h.generations.all()).toHaveLength(1);
+  });
+
+  it("refuses an unrenderable compiled prompt before creating anything", async () => {
+    // The renderer validates the stored structure, so a corrupt snapshot stops
+    // admission rather than surfacing later at submission time. Nothing is
+    // created, enqueued, or audited.
+    const h = harness({
+      view: {
+        project: project(),
+        scenes: [scene({ compiledPrompt: '{"preservation":[],"sceneFacts":{}}' })],
+        fresh: true,
+      },
+    });
+    await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow(AppError);
+    expect(h.generations.all()).toHaveLength(0);
+    expect(h.queue.count).toBe(0);
+    expect(h.audits()).toHaveLength(0);
+  });
+
+  it("keeps the frozen prompt out of the queue payload and the audit entry", async () => {
+    const h = harness();
+    const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    const frozen = admitted.requestRenderedPrompt!;
+    expect(h.queue.jobs()).toEqual([{ generationId: admitted.id }]);
+    const audited = JSON.stringify(h.audits());
+    expect(audited).not.toContain(frozen);
+    expect(audited).not.toContain("Preservation rules:");
   });
 });
 

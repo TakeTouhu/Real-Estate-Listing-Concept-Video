@@ -5,6 +5,12 @@ Date: 2026-08-15
 
 Amends ADR-0016 §3 and ADR-0017 §10.
 
+> **Amendment, 2026-08-17 (Phase 4C-0a).** A sixth field joins the five below:
+> `requestRenderedPrompt` (ADR-0023). The five fix *what was asked for*; the sixth
+> fixes *what will be sent*, because the submitted bytes depend on the renderer's
+> code as well as the hashed structure. Same shape of decision — additive,
+> nullable, never backfilled, consumers fail closed.
+
 ## Context
 
 Phase 4B-1b shipped `GenerationService.startScene`, which admits one storyboard

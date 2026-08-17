@@ -38,9 +38,10 @@ function generation(id: string, o: Partial<NewSceneGeneration> = {}): NewSceneGe
     providerModelId: "fixture/model-v1",
     requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     requestDurationSeconds: 5,
-    requestCameraMotion: "SLOW_PAN",
+    requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
     requestResolution: "1080p",
+    requestRenderedPrompt: "Preservation rules:\n- frozen at admission",
     state: "QUEUED",
     providerPredictionId: null,
     submittedAt: null,
@@ -242,9 +243,12 @@ describe("update", () => {
       '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     );
     expect(stored.requestDurationSeconds).toBe(5);
-    expect(stored.requestCameraMotion).toBe("SLOW_PAN");
+    expect(stored.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(stored.requestAspectRatio).toBe("16:9");
     expect(stored.requestResolution).toBe("1080p");
+    // The execution artifact rides through create/read like the other five, and
+    // is stored opaque: the double never renders anything (ADR-0023).
+    expect(stored.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
   });
 
   it("cannot mutate the snapshot through an update", async () => {

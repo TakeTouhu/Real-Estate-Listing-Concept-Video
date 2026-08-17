@@ -247,6 +247,15 @@ problem recorded below, resolved here in the safe direction.
 
 ### The rendered string is not covered by the request hash
 
+> **Amendment, 2026-08-17 (Phase 4C-0a).** The *executable* half of this is
+> closed. ADR-0023 renders the prompt once at admission and persists it as
+> `requestRenderedPrompt`; the worker submits that string verbatim and never runs
+> the renderer for an admitted attempt, so a renderer change can no longer alter
+> work already admitted. The hash itself is deliberately **unchanged** — adding
+> rendered bytes to it would break reuse and duplicate paid work — so the
+> statement below remains literally true and no longer has the consequence it
+> describes.
+
 This is the significant one, and it is a gap this milestone creates rather than
 closes.
 

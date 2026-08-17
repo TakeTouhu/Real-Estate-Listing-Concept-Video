@@ -414,6 +414,10 @@ model SceneGeneration {
   requestCameraMotion     String?
   requestAspectRatio      String?
   requestResolution       String?
+  /// The exact provider prompt produced at admission, submitted verbatim.
+  /// Frozen so a renderer change cannot alter an already-admitted attempt.
+  /// Customer-authored text. Never logged, audited, or put on a queue payload.
+  requestRenderedPrompt   String?
   state                   SceneGenerationState @default(QUEUED)
   /// Internal only. Non-null exactly when a provider prediction is known.
   /// Never exposed to a customer (ADR-0016).

@@ -438,3 +438,32 @@ database. Verified for this branch: **`No difference detected.` (exit 0)**.
   survive organization deletion because `audit_logs.organizationId` is
   `ON DELETE SET NULL`.
 - No seed data is committed. Accounts are created through `/api/auth/register`.
+
+## Phase 4C-0a — `00000000000008_phase4c0a_execution_prompt_freeze`
+
+One additive statement:
+
+```sql
+ALTER TABLE "scene_generations" ADD COLUMN "requestRenderedPrompt" TEXT;
+```
+
+**Nullable, and not backfilled.** The column stores the exact provider prompt
+rendered at admission, which the worker later submits verbatim. Backfilling would
+mean rendering historical rows with *today's* renderer — fabricating, for a
+request admitted earlier, precisely the bytes the column exists to pin down. A
+`NULL` therefore means "predates the freeze contract and cannot be submitted", and
+`frozenExecutionPromptFrom` fails closed rather than computing a value.
+
+No index: this is execution payload fetched by primary key through the row a
+queued job names, never a lookup key. No `requestHash` is rewritten, no row
+deleted, and the 8-fact hash tuple is unchanged (ADR-0023).
+
+Forward-only and safe to run against a populated database: adding a nullable
+column takes no table rewrite in PostgreSQL. Rollback is
+`ALTER TABLE "scene_generations" DROP COLUMN "requestRenderedPrompt";`, which
+discards frozen prompts and returns every admitted row to the pre-freeze state —
+so it is only safe while no generation has been submitted.
+
+`tests/schema/execution-prompt-freeze-column.test.ts` parses the migration and
+asserts both the shape and the absence of `UPDATE`/`INSERT`/`DELETE`/`TRUNCATE`,
+any index, and any reference to `requestHash`.

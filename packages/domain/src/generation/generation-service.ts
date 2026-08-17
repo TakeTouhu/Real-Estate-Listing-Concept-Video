@@ -3,6 +3,7 @@ import { recordAudit } from "../identity/audit";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps, IdGenerator } from "../identity/ports";
 import { assertApprovedCameraMotion } from "../storyboard/camera-motion";
+import { renderPrompt } from "./prompt-render";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import {
   assertSettingsSupported,
@@ -214,6 +215,18 @@ export class GenerationService {
     requestHash: string,
     capability: VideoModelCapability,
   ): Promise<SceneGeneration> {
+    // Render the provider prompt exactly once, here, for a genuinely new
+    // attempt — after both reuse lookups, because a reused row already carries
+    // its own frozen prompt and re-rendering for it would be both wasteful and
+    // wrong: a corrupt snapshot must not stop a caller from being handed an
+    // attempt that already exists.
+    //
+    // `renderPrompt` validates the stored structure and fails closed, so a
+    // corrupt or legacy compiled prompt refuses **before** any row exists,
+    // before enqueue, and before audit. From here on the worker submits this
+    // exact string and never runs the renderer again (ADR-0023).
+    const renderedPrompt = renderPrompt(compiledPrompt);
+
     const input: NewSceneGeneration = {
       id: this.deps.ids.generate("gen"),
       // The authoritative project id, from the scoped read — not the raw argument.
@@ -239,6 +252,10 @@ export class GenerationService {
       requestCameraMotion: scene.cameraMotion,
       requestAspectRatio: project.aspectRatio,
       requestResolution: project.resolution,
+      // The execution artifact: what will actually be sent, frozen alongside
+      // what was asked for. Renderer changes after this point apply to new
+      // admissions only (ADR-0023).
+      requestRenderedPrompt: renderedPrompt,
       state: "QUEUED",
       providerPredictionId: null,
       submittedAt: null,
