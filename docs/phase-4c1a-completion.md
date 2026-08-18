@@ -179,6 +179,27 @@ than asserting a state that would expire at merge.
 renderer may exist"* is also closed — satisfied by Phase 4B-2b's `renderPrompt`
 and left unchecked since.
 
+## Review finding — canonical guidance still specifies the removed transport
+
+Automated review on PR #38 raised a P2 that verified true against all three files
+it named: with the transport gone, the repository's own implementation guidance
+would still lead a later milestone to rebuild it.
+
+| Source | What it still says |
+| --- | --- |
+| `CLAUDE.md` | recommended stack lists **"Queue-based workers"**; the mandated workflow reads `Create idempotent job → Enqueue → …` |
+| `docs/SystemArchitecture.md` | **"Queue: Redis/BullMQ, SQS, or Azure Service Bus"** — the three brokers ADR-0024 evaluated and rejected by name — and generation APIs returning after "enqueueing" |
+| `apps/worker/src/bootstrap.ts` | "Later phases attach the queue consumer here" |
+
+**The code comment was corrected here; the two documents were not.** `CLAUDE.md`
+is the governance authority and `SystemArchitecture.md` is source of truth #2.
+Superseding either is a governance decision, and an agent editing the constraints
+it is judged against, to match what it has just built, is the wrong direction of
+authority however reasonable the edit looks. The conflict is recorded in
+`docs/decisions/TODO.md` with suggested wording, flagged as **required before
+Phase 4C-1b begins** — that milestone builds the discovery side against whichever
+description is authoritative.
+
 ## Known limitations
 
 - **A rejected `startScene` no longer means nothing happened.** It never fully
@@ -193,20 +214,20 @@ and left unchecked since.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 152 |
+| Production | 158 |
 | Tests | 193 |
-| Docs | 645 |
-| **Total** | **990** across 45 files |
+| Docs | 692 |
+| **Total** | **1,043** across 46 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+712 −278 = 990`).
+reconciling with the raw diff (`+764 −279 = 1043`).
 
-Against the approved estimate of 680–760, and above it by 230. The first commit
+Against the approved estimate of 680–760, and above it by 283. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 152 lines and 278 of the 990 are deletions.** The code change
+**Production is 158 lines and 279 of the 1,043 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.

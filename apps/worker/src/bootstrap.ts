@@ -36,7 +36,11 @@ function toLogLevel(level: ServerEnv["LOG_LEVEL"]): LogLevel {
 /**
  * Phase 0 worker bootstrap: validate configuration, construct the configured
  * video provider through the adapter boundary, and run an offline self-check
- * (cost estimate — no network). Later phases attach the queue consumer here.
+ * (cost estimate — no network).
+ *
+ * Later phases attach the **execution loop** here — not a queue consumer. There
+ * is no transport to consume from: executable work is discovered by scanning for
+ * `SceneGeneration` rows in `QUEUED` (ADR-0024).
  */
 export async function bootstrapWorker(
   deps: WorkerBootstrapDeps = {},

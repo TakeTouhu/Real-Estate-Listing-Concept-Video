@@ -239,6 +239,32 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       still leaves an executable row with no `generation.requested` entry. That
       is **not** mitigated today — see the next item, which is where the
       mitigation is owed.
+- [ ] **CTO DECISION NEEDED — the canonical guidance still specifies the queue
+      transport ADR-0024 removed.** Phase 4C-1a made the `SceneGeneration` row
+      the durable queue, but two CTO-owned sources still direct an implementer to
+      build the transport, and a later milestone following them faithfully would
+      restore the design this one deleted:
+      - `CLAUDE.md` — the recommended stack lists **"Queue-based workers"**, and
+        the mandated generation workflow still reads
+        `Create idempotent job → Enqueue → Generate scenes through WaveSpeedAI`.
+      - `docs/SystemArchitecture.md` — names **"Queue: Redis/BullMQ, SQS, or
+        Azure Service Bus"** and states that generation APIs return after
+        "idempotent job creation, and enqueueing". ADR-0024 evaluated and
+        rejected all three brokers by name.
+      Raised by automated review on PR #38 and verified against both files.
+      **Not changed unilaterally:** `CLAUDE.md` is the governance authority and
+      `docs/SystemArchitecture.md` is source of truth #2 — superseding either is
+      a governance decision, not an implementation detail, and an agent editing
+      its own governing constraints to match what it just built is exactly the
+      wrong direction of authority. `apps/worker/src/bootstrap.ts` carried the
+      same instruction in a code comment and **was** corrected in 4C-1a, because
+      that comment is implementation, not governance.
+      Suggested resolution: amend the `CLAUDE.md` stack line to "Queue-based or
+      state-driven workers", replace the `→ Enqueue` workflow step with
+      `→ Persist as durable executable work`, and give `SystemArchitecture.md`'s
+      queue section a dated supersession note pointing at ADR-0024.
+      **Required before Phase 4C-1b implementation begins**, since that milestone
+      builds the discovery side against whichever description is authoritative.
 - [ ] **The milestone that adds provider submission MUST audit the paid call
       itself.** Phase 4C-1a made admission `create → audit` and accepted a
       consistency window: if the audit sink fails, the row stays durable,
