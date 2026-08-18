@@ -27,11 +27,10 @@ Start as a modular monolith with independently scalable asynchronous video-gener
 Browser
   ↓
 Next.js Web / BFF
-  ├── PostgreSQL
-  ├── Object Storage
-  └── Job Queue
+  ├── PostgreSQL  (also the durable work queue — ADR-0024)
+  └── Object Storage
           ↓
-Generation Worker / Orchestrator
+Generation Worker / Orchestrator  (discovers work by scanning for QUEUED rows)
   ├── Vision Adapter
   ├── WaveSpeedVideoProvider
   └── FFmpeg Composer

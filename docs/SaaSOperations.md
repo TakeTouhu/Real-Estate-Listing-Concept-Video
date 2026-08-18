@@ -14,7 +14,8 @@ Support subscription plans plus generation credits. Plans define users, storage,
 Billing rules:
 
 - show estimated credits before generation,
-- reserve credits transactionally before enqueueing,
+- reserve credits transactionally before the generation row is created (there is
+  no enqueue step — ADR-0024),
 - settle exactly once after terminal outcome,
 - release or refund according to failure policy,
 - record estimated platform cost, estimated provider cost, and actual provider cost,
@@ -27,9 +28,10 @@ Initial targets:
 
 - API availability: 99.9% future target
 - normal management-page response: p95 under 2 seconds
-- successful job enqueue: p95 under 5 seconds
+- successful generation admission (durable `QUEUED` row): p95 under 5 seconds
 - upload-to-first-preview target: under 10 minutes under normal provider conditions
-- no acknowledged generation job lost
+- no admitted generation lost — a durable `QUEUED` row is the acknowledgement,
+  and it is discovered by state rather than delivered (ADR-0024)
 - RPO and RTO documented per production tier
 
 Provider generation time is tracked separately from platform processing time.

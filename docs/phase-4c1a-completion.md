@@ -49,7 +49,11 @@ holds by construction: there is no wake signal to lose.
 
 Deleted: `SceneGenerationQueue`, `SceneGenerationJob`,
 `RecordingSceneGenerationQueue`, the `queue` dependency on
-`GenerationServiceDeps`, and the enqueue call.
+`GenerationServiceDeps`, and the enqueue call. `@app/queue` keeps its module
+boundary and now says it is **empty by decision, not by omission** — its previous
+self-description still promised "job queue and worker plumbing (enqueue,
+heartbeat, retry, dead-letter), implemented in Phase 4", which is a commitment to
+build the thing this milestone removed.
 
 A no-op adapter was the alternative and was rejected. It would have preserved
 merged call sites at the price of a contract false in both halves — acceptance no
@@ -91,7 +95,7 @@ requirement lives in `docs/decisions/TODO.md`, not in a claim here.
 | --- | --- |
 | `pnpm typecheck` | clean |
 | `pnpm lint` | clean |
-| `pnpm test` | **1157 passed**, 58 files (baseline 1155 / 58) |
+| `pnpm test` | **1158 passed**, 58 files (baseline 1155 / 58) |
 | `pnpm build` | clean |
 | `pnpm test:db` | **126 passed**, 6 files |
 
@@ -118,6 +122,20 @@ and the audit entry` → `…out of the audit entry`. Half its subject retired w
 the transport; the surviving half is now the whole leak surface admission has,
 which makes the assertion stronger than it was, not weaker.
 
+**A type-boundary pin was added, because the runtime checks cannot see the
+regression that matters most.** Both behavioural checks inspect the dependencies
+the harness actually wires, so they are blind to someone re-declaring a transport
+on the *interface*. The dangerous shape is an optional member:
+`readonly queue?: SomeQueue` compiles, breaks no caller, wires nothing, and
+reintroduces the deleted contract with every runtime check still green. A
+compile-time assertion now resolves `Extract<keyof GenerationServiceDeps, …>` to
+`never`, so declaring one stops the build.
+
+Verified by mutation: adding `readonly queue?: { enqueue(job): Promise<void> }`
+to `GenerationServiceDeps` fails typecheck with
+`TS2322: Type 'true' is not assignable to type 'never'` — **while all 90 runtime
+tests still pass**, which is the precise gap the pin closes.
+
 **The exact-dependency-key assertion was replaced.** Asserting
 `Object.keys(serviceDeps)` equals a fixed five-element list fails whenever a
 legitimate dependency is added — a clock, a metrics sink — which trains a
@@ -139,7 +157,7 @@ leaves them green — the brittleness the old assertion had.
 | Admission audits from `input` **before** `create` | **9 fail** |
 
 Both restored, with `git diff --stat` confirming the service file byte-identical
-to `HEAD`, and the full suite re-verified at 1157/58.
+to `HEAD`, and the full suite re-verified at 1158/58.
 
 ## Invariants held
 
@@ -184,7 +202,7 @@ than asserting a state that would expire at merge.
 renderer may exist"* is also closed — satisfied by Phase 4B-2b's `renderPrompt`
 and left unchecked since.
 
-## Review finding — canonical guidance still specifies the removed transport
+## Review finding — canonical guidance still specified the removed transport
 
 Automated review on PR #38 raised a P2 that verified true against all three files
 it named: with the transport gone, the repository's own implementation guidance
@@ -214,6 +232,24 @@ suggested wording, and changed only after explicit authorization.
 
 The `TODO.md` entry is closed rather than deferred to 4C-1b.
 
+**A second, wider sweep was needed.** Independent inspection found the first pass
+had corrected the four sources the reviewer named and stopped there, while the
+same contradiction survived in six more places — including one this ADR claimed
+was already fixed:
+
+| Source | Was | Now |
+| --- | --- | --- |
+| `packages/queue` (module + README) | "job queue and worker plumbing (enqueue, heartbeat, retry, dead-letter), implemented in Phase 4" | empty **by decision**, with a warning against adding a broker client |
+| `docs/SystemArchitecture.md` diagram | `└── Job Queue` as a component | PostgreSQL noted as the durable work queue; the worker discovers by scanning |
+| `docs/SaaSOperations.md` | credits reserved "before enqueueing"; an SLO for "successful job enqueue"; "no acknowledged generation job lost" | reserved before the row is created; the SLO measures durable admission; the durable row *is* the acknowledgement |
+| `docs/WaveSpeedAIIntegration.md` | "Return quickly and enqueue processing" | record the event; the worker picks the generation up by state |
+| `packages/domain` comments (`audit.ts`, `capability.ts`, `types.ts`) | rationale referencing enqueue ordering and a queue payload | rewritten, comments only — zero behaviour change |
+| `docs/progress.md` | the 4C-1a row carried first-commit figures; two narrative lines described `create → enqueue → audit` as current | points at the report; the historical ordering is marked superseded |
+
+The lesson is the same one this milestone keeps re-learning: a reviewer names
+examples, not the full set, and treating the examples as the set leaves the
+defect alive somewhere less visible.
+
 ## Known limitations
 
 - **A rejected `startScene` no longer means nothing happened.** It never fully
@@ -228,20 +264,20 @@ The `TODO.md` entry is closed rather than deferred to 4C-1b.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 158 |
-| Tests | 193 |
-| Docs | 713 |
-| **Total** | **1,064** across 48 files |
+| Production | 192 |
+| Tests | 220 |
+| Docs | 790 |
+| **Total** | **1,202** across 55 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+781 −283 = 1064`).
+reconciling with the raw diff (`+892 −310 = 1202`).
 
-Against the approved estimate of 680–760, and above it by 304. The first commit
+Against the approved estimate of 680–760, and above it by 442. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 158 lines and 283 of the 1,064 are deletions.** The code change
+**Production is 192 lines — all of it comments and the deleted port — and 310 of the 1,202 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.

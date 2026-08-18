@@ -156,7 +156,7 @@ const ASPECT_RATIO_SYNTAX = /^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/;
  * Separate from, and prior to, the question of *who* honours it. Review found
  * that `COMPOSITION_OWNED` skipped every aspect-ratio check, so `"wide"` or
  * `"banana"` could be admitted, hashed into the request identity, frozen into
- * the immutable snapshot, and enqueued as billable work — leaving the
+ * the immutable snapshot, and left durable as billable work — leaving the
  * composition stage a value it cannot normalize to. Moving the guarantee off the
  * provider must not mean nobody checks it.
  *

@@ -211,7 +211,7 @@ reserved for a webhook.
 | 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,713 — 367 production + 465 tests + 881 docs | **Merged** (PR #35, `cd9d136`) |
 | 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | 1,304 — 356 production + 485 tests + 463 docs | **Merged** (PR #36, `35970da`) |
 | 4C-0a | Execution prompt freeze: `requestRenderedPrompt` persisted at admission (ADR-0023) | 1,170 — 147 production + 492 tests + 531 docs | **Merged** (PR #37, `082a596`) |
-| 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | 787 — 146 production + 147 tests + 494 docs | PR #38 — see GitHub for lifecycle |
+| 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | see `docs/phase-4c1a-completion.md` | PR #38 — see GitHub for lifecycle |
 | 4C-1b | System-scoped execution repository: queued-candidate discovery + state-CAS submission claim | — | Not started |
 | 4C-2…5 | Execution input assembly, submission, polling, worker runtime — fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
@@ -250,7 +250,9 @@ ADR-0015 is the current authority on review corrections; ADR-0012 and ADR-0013
 each carry a dated partial-supersession note rather than a rewrite. ADR-0016
 covers scene-generation state, local idempotency, and ambiguous provider
 submission; ADR-0017 covers single-scene generation admission, reuse precedence,
-and the `create → enqueue → audit` side-effect ordering. ADR-0018 adds the
+and the side-effect ordering it shipped, `create → enqueue → audit` — superseded
+by ADR-0024, which removes the transport and makes it `create → audit`. ADR-0018
+adds the
 immutable generation request snapshot and narrowly amends both ADR-0016 §3 and
 ADR-0017 §10 with dated notes rather than rewrites. ADR-0019 records provider
 capability ownership, the verified OpenVideo contract, and why that model
@@ -271,8 +273,8 @@ and ADR-0020.
 - **Phase 4B-1a** — merged. Capability contract and the in-memory generation
   repository. No real provider values.
 - **Phase 4B-1b** — merged as `c169bd6` (PR #32). `GenerationService.startScene`:
-  single-scene admission, reuse precedence, race convergence,
-  `create → enqueue → audit`.
+  single-scene admission, reuse precedence, race convergence, and the
+  `create → enqueue → audit` ordering that Phase 4C-1a later superseded.
 - **Phase 4B-1c** — merged as `e52d302` (PR #33). Immutable generation request
   snapshot (ADR-0018), closing the reconstruction gap that PR #32's review
   surfaced. This unblocks Phase 4C.

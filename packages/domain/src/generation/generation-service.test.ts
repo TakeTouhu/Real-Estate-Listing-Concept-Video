@@ -632,7 +632,7 @@ describe("startScene — request identity", () => {
 
 describe("startScene — active reuse", () => {
   it.each(ACTIVE_SCENE_GENERATION_STATES)(
-    "returns the existing attempt while it is %s, creating/enqueuing/auditing nothing",
+    "returns the existing attempt while it is %s, creating and auditing nothing",
     async (state) => {
       const h = harness();
       const seeded = await h.generations.create(ORG, genRow("gen_seed", state) as NewSceneGeneration);
@@ -656,7 +656,7 @@ describe("startScene — active reuse", () => {
 });
 
 describe("startScene — SUCCEEDED reuse", () => {
-  it("returns the latest succeeded attempt, creating/enqueuing/auditing nothing", async () => {
+  it("returns the latest succeeded attempt, creating and auditing nothing", async () => {
     const h = harness();
     const seeded = await h.generations.create(ORG, genRow("gen_ok", "SUCCEEDED") as NewSceneGeneration);
 
@@ -1173,6 +1173,29 @@ describe("startScene — provider/storage non-interference", () => {
         );
       }
     }
+  });
+
+  /**
+   * The type-level counterpart, and the one the runtime checks cannot provide.
+   *
+   * Both assertions above inspect the dependencies this harness actually wires,
+   * so they are blind to the regression that matters most: someone re-declaring
+   * a transport on the *interface*. An optional member is the dangerous shape —
+   * `readonly queue?: SomeQueue` compiles, breaks no existing caller, wires
+   * nothing in this harness, and reintroduces the contract ADR-0024 deleted,
+   * with every runtime check still green.
+   *
+   * `Extract` resolves to `never` only while no member of `GenerationServiceDeps`
+   * carries a transport name, optional or not. Adding one makes `never` an
+   * unsatisfiable annotation and the file stops compiling — which is the point:
+   * the pin fires at declaration, not at wiring.
+   */
+  it("cannot declare a transport dependency, even optionally (compile-time)", () => {
+    type TransportNames = "queue" | "jobs" | "broker" | "publisher" | "enqueue";
+    type DeclaredTransport = Extract<keyof GenerationServiceDeps, TransportNames>;
+
+    const noTransportDeclared: DeclaredTransport extends never ? true : never = true;
+    expect(noTransportDeclared).toBe(true);
   });
 
   it("wires no dependency named for a job transport", () => {

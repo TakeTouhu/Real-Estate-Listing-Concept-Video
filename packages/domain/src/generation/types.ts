@@ -187,8 +187,9 @@ export interface SceneGenerationRequestSnapshot {
    * Contains customer-authored text — it is a projection of
    * `requestCompiledPrompt`, whose bytes already live on the same row and on
    * `storyboard_scenes.compiledPrompt`. So it adds no new class of data, and the
-   * same rule applies: never in audit metadata, a queue payload, an error
-   * message, or a log.
+   * same rule applies: never in audit metadata, an error message, or a log.
+   * (Until ADR-0024 this list also named a queue payload; there is no longer a
+   * transport for one to travel on.)
    *
    * Null means the attempt predates this contract. Consumers **fail closed**
    * rather than re-rendering, because re-rendering is exactly the drift this

@@ -60,9 +60,14 @@ fields the endpoint does not document (corrected in Phase 4B-2a). A queue call
 that cannot fail and delivers nothing is the same defect in a third place.
 
 Removed: the port, `RecordingSceneGenerationQueue`, the `queue` dependency on
-`GenerationServiceDeps`, and the enqueue call. `@app/queue` keeps its placeholder
-status — it is now honestly empty rather than describing a port nothing
-implements.
+`GenerationServiceDeps`, and the enqueue call.
+
+`@app/queue` keeps its module boundary but its self-description was rewritten,
+because the first draft of this ADR claimed it was "honestly empty" while the
+package still advertised "job queue and worker plumbing (enqueue, heartbeat,
+retry, dead-letter), implemented in Phase 4" — a promise to build precisely what
+this decision rejects. Review caught the gap. It now says it is **empty by
+decision, not by omission**, and warns against filling it with a broker client.
 
 ### 3. Admission is create → audit
 
