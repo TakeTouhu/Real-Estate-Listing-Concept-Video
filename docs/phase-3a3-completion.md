@@ -1,6 +1,7 @@
 # Phase 3A-3 Completion Report — Analysis HTTP endpoints
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3a3-hga252`
 Base: `main` at `e49ae6aa3466fdeaf8d616084c7163a15f9466f5` (merged Phase 3A-2c)
 

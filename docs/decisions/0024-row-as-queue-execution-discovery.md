@@ -83,10 +83,20 @@ failing audit sink into silent cancellation of durable, paid-for customer work.
 An observability failure must not become a correctness failure.
 
 The exposure that leaves — a generation executed with no `generation.requested`
-entry — is closed from the other end. The worker audits the submission itself at
-the moment of the provider call, so the guarantee becomes:
+entry — is **currently inert and not yet mitigated**. Nothing submits, so an
+unaudited row cannot reach a provider: no code path exists that would charge for
+it. That is a property of the system's incompleteness, not a safeguard, and it
+expires the moment execution lands.
 
-> A provider is never charged without an audit entry for that charge.
+The mitigation is therefore stated as a **requirement on the milestone that adds
+provider submission**, recorded in `docs/decisions/TODO.md` rather than claimed
+here:
+
+> The submitting milestone must audit the paid call itself, so that no provider
+> charge is unaudited regardless of whether `generation.requested` was written.
+
+Until that ships, this ADR claims only what is true today: an audit failure
+leaves a durable, executable, unaudited row, and nothing executes.
 
 Closing the requested-side window instead would need the audit write inside the
 same transaction as the row insert. That is the transactional-outbox item already

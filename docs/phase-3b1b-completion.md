@@ -1,6 +1,7 @@
 # Phase 3B-1b Completion Report — Review domain logic
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3b1b-hga252`
 Base: `main` at `0a7818f10371bcf8072b6b8cc2f501c9b5868f97` (merged Phase 3B-1a)
 

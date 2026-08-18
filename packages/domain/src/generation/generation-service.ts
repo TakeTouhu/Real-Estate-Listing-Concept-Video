@@ -291,9 +291,15 @@ export class GenerationService {
     // error propagates while the row stays executable and un-audited. That
     // direction is deliberate. Eligibility is `state`, never audit existence —
     // gating execution on an audit row would turn a failing audit sink into
-    // silent cancellation of durable customer work. The paid call itself is
-    // audited by the worker at submission time, so a provider is never charged
-    // without an audit entry for that charge (ADR-0024 §4).
+    // silent cancellation of durable customer work.
+    //
+    // Nothing executes yet, so the window is currently inert: an unaudited row
+    // cannot reach a provider because no code submits one. Making it acceptable
+    // once execution exists is a **requirement placed on the milestone that
+    // adds submission** — it must audit the paid call itself, so that no
+    // provider charge is unaudited whatever happened here. That requirement is
+    // recorded in `docs/decisions/TODO.md`; it is not a property this code has
+    // today (ADR-0024 §4).
     //
     // Metadata stays an explicit allowlist — never a spread of the entity — so
     // a future field on SceneGeneration cannot leak into the log, and no prompt

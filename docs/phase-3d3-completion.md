@@ -1,6 +1,7 @@
 # Phase 3D-3 Completion Report — Corrections reach composition
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3d3-hga252`
 Base: `main` at `3d5933239959981130d173c82210ecf93d9405f2` (merged Phase 3D-2)
 

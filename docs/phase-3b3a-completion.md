@@ -1,6 +1,7 @@
 # Phase 3B-3a Completion Report — Read-only review surface
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3b3a-hga252`
 Base: `main` at `50c2e4df49e921df4430b2becd0741642e625bee` (merged Phase 3B-2)
 

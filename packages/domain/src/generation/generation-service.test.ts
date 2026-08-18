@@ -10,10 +10,7 @@ import {
   type SceneFacts,
 } from "../storyboard/prompt";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
-import {
-  createTestDeps,
-  InMemorySceneGenerationRepository,
-} from "../testing/index";
+import { createTestDeps, InMemorySceneGenerationRepository } from "../testing/index";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import { GenerationService, type GenerationServiceDeps } from "./generation-service";
 import { renderPrompt } from "./prompt-render";
@@ -33,8 +30,8 @@ import { computeGenerationRequestHash, generationRequestFactsFrom } from "./requ
 /**
  * The single-scene admission service. Every test drives the real
  * {@link GenerationService} against the Phase 4B-1a in-memory repository, a
- * scripted storyboard stub, and a counting capability
- * fixture — no provider and no storage anywhere, which is itself part of what is
+ * scripted storyboard stub, and a counting capability fixture — no provider, no
+ * storage, and no job transport anywhere, which is itself part of what is
  * proven.
  */
 
@@ -1150,19 +1147,42 @@ describe("startScene — audit", () => {
 });
 
 describe("startScene — provider/storage non-interference", () => {
-  it("depends on no provider or storage collaborator", () => {
+  /**
+   * The method surfaces that would betray a forbidden collaborator, whatever it
+   * were named. Checking capabilities rather than a key list is the point: an
+   * exact-key assertion breaks when a legitimate dependency is added — a clock,
+   * a metrics sink — and so trains reviewers to update it reflexively, which is
+   * exactly when it would have caught something.
+   */
+  const FORBIDDEN_SURFACES: Readonly<Record<string, readonly string[]>> = {
+    "video provider": ["createGeneration", "getStatus", "cancelGeneration", "estimateCost"],
+    "object storage": ["createSignedDownloadUrl", "createSignedUploadUrl", "putObject"],
+    "job transport": ["enqueue", "publish", "dispatch"],
+  };
+
+  it("wires no collaborator exposing a provider, storage, or transport surface", () => {
     const h = harness();
-    // The wired dependency set is exactly these five; there is no
-    // VideoGenerationProvider, provider factory, storage port, or queue among
-    // them. `queue` left with the transport it represented (ADR-0024) — this
-    // assertion fails if any of them reappears.
-    expect(Object.keys(h.serviceDeps).sort()).toEqual([
-      "capabilities",
-      "generations",
-      "identity",
-      "ids",
-      "storyboard",
-    ]);
+
+    for (const [collaborator, methods] of Object.entries(FORBIDDEN_SURFACES)) {
+      for (const [key, dep] of Object.entries(h.serviceDeps)) {
+        const present = methods.filter(
+          (m) => typeof (dep as Record<string, unknown>)[m] === "function",
+        );
+        expect(`${collaborator} via ${key}: ${present.join(", ")}`).toBe(
+          `${collaborator} via ${key}: `,
+        );
+      }
+    }
+  });
+
+  it("wires no dependency named for a job transport", () => {
+    // Narrower and deliberately name-based: `queue` left with the transport it
+    // represented (ADR-0024), and a stub reintroducing it might expose no method
+    // at all — so the surface check above would not see it.
+    const h = harness();
+    for (const name of ["queue", "jobs", "broker", "publisher"]) {
+      expect(h.serviceDeps).not.toHaveProperty(name);
+    }
   });
 
   it("makes no provider call and writes no storage on a successful admission", async () => {

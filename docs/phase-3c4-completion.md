@@ -1,6 +1,7 @@
 # Phase 3C-4 Completion Report — Storyboard orchestration
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3c4-hga252`
 Base: `main` at `0b39eb1f4eb98e4d8b4e7e8841c05c1cb31ac1c3` (merged Phase 3C-3)
 

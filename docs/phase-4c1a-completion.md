@@ -4,13 +4,21 @@ Milestone: Phase 4C-1a
 Base: `082a596aae5ea0bbb298e97cf289fe19206e8093` (merged Phase 4C-0a, PR #37)
 Decision record: ADR-0024; dated amendments to ADR-0017 §10 and §13
 
-> **Convention note.** This report carries no review or merge status. A status
-> line inside a file that cannot be updated at merge time is false within
-> minutes of being true, and four such lines had already accumulated across
-> earlier reports. Lifecycle now lives in exactly two places that *are* updated
-> at merge: the pull request, and the milestone table in `docs/progress.md`.
-> Reports state facts that stay true — what shipped, against which base, and
-> what was verified.
+> **Convention note.** This report is an immutable technical snapshot and
+> carries no lifecycle status. A status line inside a file that nothing rewrites
+> at merge is false within minutes of being true, and eight such claims had
+> accumulated across earlier reports and the changelog.
+>
+> **The GitHub pull request is the authoritative lifecycle source.** Checked-in
+> files do not track it, because no mechanism updates them when state changes —
+> the first draft of this convention named `docs/progress.md` as a second
+> lifecycle home "updated at merge", which was the same mistake one level up:
+> nothing updates it either. `docs/progress.md` therefore points at the PR for an
+> in-flight milestone instead of restating its state, and records durable facts
+> (merge commit, PR number) once they exist.
+>
+> Reports state what shipped, against which base, and what was verified — facts
+> that stay true.
 
 ## Why this milestone exists
 
@@ -66,9 +74,11 @@ If `create` succeeds and `audit` throws, the caller gets the error and **the row
 stays executable**. Gating execution on an audit row would let a failing audit
 sink silently cancel durable customer work — an observability failure becoming a
 correctness failure. The exposure this leaves (a generation with no
-`generation.requested`) is closed from the other end by the worker's own
-submission audit in Phase 4C-3: a provider is never charged without an audit
-entry for that charge.
+`generation.requested`) is **not mitigated by this milestone**. It is inert only
+because nothing submits — an incompleteness, not a safeguard — so the mitigation
+is recorded as a requirement on whichever milestone adds provider submission:
+it must audit the paid call itself, so no provider charge is unaudited. That
+requirement lives in `docs/decisions/TODO.md`, not in a claim here.
 
 ## Verification
 
@@ -76,13 +86,14 @@ entry for that charge.
 | --- | --- |
 | `pnpm typecheck` | clean |
 | `pnpm lint` | clean |
-| `pnpm test` | **1156 passed**, 58 files (baseline 1155 / 58) |
+| `pnpm test` | **1157 passed**, 58 files (baseline 1155 / 58) |
 | `pnpm build` | clean |
 | `pnpm test:db` | **126 passed**, 6 files |
 
 ### Test ledger
 
-Four cases retired with their subject, five replaced them, and six were amended.
+Four cases retired with their subject, five replaced them, six were amended, and
+the dependency-shape assertion was replaced by two behavioural ones (below).
 
 | Retired | Why |
 | --- | --- |
@@ -102,6 +113,19 @@ and the audit entry` → `…out of the audit entry`. Half its subject retired w
 the transport; the surviving half is now the whole leak surface admission has,
 which makes the assertion stronger than it was, not weaker.
 
+**The exact-dependency-key assertion was replaced.** Asserting
+`Object.keys(serviceDeps)` equals a fixed five-element list fails whenever a
+legitimate dependency is added — a clock, a metrics sink — which trains a
+reviewer to update it reflexively, precisely when it would otherwise have caught
+something. Two checks replace it, and they test capability rather than shape: no
+wired dependency exposes a video-provider, object-storage, or job-transport
+method surface, and no dependency is *named* for a transport (a stub might expose
+no method at all, so the surface check alone would miss it).
+
+Verified in both directions: wiring a provider-shaped and a `queue`-named
+collaborator fails both checks, while adding a `clock` and a `metrics` dependency
+leaves them green — the brittleness the old assertion had.
+
 ### Mutation verification
 
 | Mutation | Result |
@@ -110,7 +134,7 @@ which makes the assertion stronger than it was, not weaker.
 | Admission audits from `input` **before** `create` | **9 fail** |
 
 Both restored, with `git diff --stat` confirming the service file byte-identical
-to `HEAD`, and the full suite re-verified at 1156/58.
+to `HEAD`, and the full suite re-verified at 1157/58.
 
 ## Invariants held
 
@@ -126,13 +150,30 @@ recovery, no model routing, no WaveSpeedAI call.
 
 ## Documentation backlog corrected
 
-Six lines across five files claimed a review status that stopped being true at
-merge, plus two older reports with the same defect. All are now factual, and the
-convention above prevents the class rather than the instances:
+**Thirty-one claims** of a review status that stopped being true at merge. The
+first pass found eight by grepping for the phrasings this milestone's own reports
+used; a wider sweep found the rest — every Phase 3 completion report carries
+`implemented, awaiting review`, for milestones merged and tagged months ago.
+Fixing eight while leaving twenty-three would have made the convention a claim
+rather than a practice.
+
+The eight found first, across six completion reports, the Phase 2 release notes,
+and three `CHANGELOG.md` entries:
 `docs/phase-3a1-completion.md`, `docs/phase-4b1b-completion.md`,
 `docs/phase-4b1c-completion.md`, `docs/phase-4b2b-completion.md`,
-`docs/phase-4c0a-completion.md`, `docs/phase-4c0b-completion.md`, and two
-`CHANGELOG.md` entries.
+`docs/phase-4c0a-completion.md`, `docs/phase-4c0b-completion.md`,
+`docs/release-notes-phase-2.md` (a merged, tagged release still described as an
+unmerged candidate), and the changelog entries for 4B-1a, 4B-1c, and 4C-0a.
+
+The remaining twenty-three: twenty-two Phase 3 reports carrying
+`Status: **implemented, awaiting review**`, plus `docs/phase-3a2b-completion.md`
+still awaiting a merge approval it received. Each now points at the milestone
+table in `docs/progress.md` for lifecycle facts and declares itself a technical
+snapshot.
+
+All are now factual, and the convention prevents the class rather than the
+instances — including for this milestone, whose own row points at PR #38 rather
+than asserting a state that would expire at merge.
 
 `docs/decisions/TODO.md`'s *"Exactly one `CompiledPrompt` → provider prompt
 renderer may exist"* is also closed — satisfied by Phase 4B-2b's `renderPrompt`
@@ -152,12 +193,20 @@ and left unchecked since.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 146 |
-| Tests | 147 |
-| Docs | 494 |
-| **Total** | **787** across 22 files |
+| Production | 152 |
+| Tests | 193 |
+| Docs | 645 |
+| **Total** | **990** across 45 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+545 −242 = 787`). Against the approved estimate
-of 680–760 — over by 27, carried entirely by the documentation sweep. Deletions
-are 242 of the total: this milestone removes more than it adds in code.
+reconciling with the raw diff (`+712 −278 = 990`).
+
+Against the approved estimate of 680–760, and above it by 230. The first commit
+landed at 787 across 22 files, within 27 of the estimate; the pre-merge
+corrections added the rest, and nearly all of it is the widened documentation
+sweep — twenty-three additional stale status lines across Phase 3 reports, at two
+changed lines each, in twenty-three files that would otherwise not appear in this
+diff at all.
+
+**Production is 152 lines and 278 of the 990 are deletions.** The code change
+this milestone was approved for did not grow; the honesty debt it uncovered did.

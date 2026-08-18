@@ -1,6 +1,7 @@
 # Phase 3D-4b Completion Report — Review-page correction controls
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3d4b-hga252`
 Base: `main` at `cc0d3d525a1647634699d5497a025dbcddb1d4c7` (merged Phase 3D-4a)
 

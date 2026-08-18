@@ -1,6 +1,7 @@
 # Phase 3C-5a Completion Report — Video-project creation path
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3c5a-hga252`
 Base: `main` at `003edaf97dbcc651e7ba66affbc06ac523e1fe8d` (merged Phase 3C-4)
 

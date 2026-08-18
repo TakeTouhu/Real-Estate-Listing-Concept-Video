@@ -1,6 +1,7 @@
 # Phase 3A-2a Completion Report — Analysis persistence and live-PostgreSQL CI
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3a2a-hga252`
 Base: `main` at `a2bbf473512c8f0c0df4121b1111e66b08699dd7` (merged Phase 3A-1)
 

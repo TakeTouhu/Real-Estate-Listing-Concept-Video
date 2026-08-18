@@ -236,9 +236,23 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       index Phase 4A-2a added for exactly this. A row cannot be durable and
       undiscoverable, so no sweep is owed and no stranded state exists. What
       survives is narrower and is recorded in ADR-0024 §4: an audit-sink failure
-      still leaves an executable row with no `generation.requested` entry, closed
-      from the other end by the worker's submission audit rather than by gating
-      execution on audit existence.
+      still leaves an executable row with no `generation.requested` entry. That
+      is **not** mitigated today — see the next item, which is where the
+      mitigation is owed.
+- [ ] **The milestone that adds provider submission MUST audit the paid call
+      itself.** Phase 4C-1a made admission `create → audit` and accepted a
+      consistency window: if the audit sink fails, the row stays durable,
+      `QUEUED`, and therefore executable, with no `generation.requested` entry
+      (ADR-0024 §4). Eligibility is state, never audit existence, and that is
+      deliberate — gating execution on an audit row would let a failing sink
+      silently cancel durable customer work.
+      **The window is currently inert only because nothing submits**, which is a
+      property of the system's incompleteness, not a safeguard, and it expires
+      the moment execution lands. The submitting milestone must therefore emit
+      its own audit entry for the provider call, so that **no provider charge is
+      unaudited** regardless of what happened at admission. Until it does, an
+      unaudited generation is a paid call waiting to be untraceable.
+      **Required before any provider submission ships.**
 - [ ] **Phase 4C MUST define a trusted, system-scoped worker lookup for a
       `generationId`-only queue job.** The Phase 4B-1b queue payload
       (`SceneGenerationJob`) is `{ generationId }` and nothing else — no

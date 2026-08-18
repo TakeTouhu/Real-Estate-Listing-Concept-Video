@@ -5,7 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Phase 4C-1a: row-as-queue admission contract
 
-See `docs/phase-4c1a-completion.md` and ADR-0024.
+PR #38 — see GitHub for lifecycle. Technical detail in
+`docs/phase-4c1a-completion.md` and ADR-0024.
 
 ### Changed
 
@@ -18,12 +19,18 @@ See `docs/phase-4c1a-completion.md` and ADR-0024.
   `create → enqueue → audit`. Eligibility is state, never audit existence: an
   audit-sink failure propagates while leaving the row executable, because gating
   execution on an audit row would turn a failing sink into silent cancellation of
-  durable customer work. The paid call is audited by the worker at submission
-  time (Phase 4C-3).
-- Completion reports no longer carry review/merge status lines. Lifecycle lives
-  in the pull request and the `docs/progress.md` milestone table — the two places
-  that are actually updated at merge. Eight stale claims across six reports and
-  the changelog were corrected.
+  durable customer work. The window is inert only while nothing submits, which is
+  an incompleteness rather than a safeguard: auditing the paid call itself is
+  recorded in `docs/decisions/TODO.md` as a requirement on whichever milestone
+  adds provider submission.
+- Completion reports no longer carry lifecycle status. **The GitHub pull request
+  is the authoritative source** for an in-flight milestone, because no mechanism
+  rewrites a checked-in file when state changes; `docs/progress.md` points at the
+  PR rather than restating its state, and records durable facts (merge commit, PR
+  number) once they exist. **Thirty-one stale claims** were corrected: eight across
+  six reports, the Phase 2 release notes and three changelog entries, plus
+  twenty-three Phase 3 reports still marked `implemented, awaiting review` for
+  milestones merged and tagged months ago.
 
 ### Removed
 
