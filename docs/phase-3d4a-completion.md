@@ -1,6 +1,7 @@
 # Phase 3D-4a Completion Report — Correction HTTP contract
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3d4a-hga252`
 Base: `main` at `1e51453bc94b7ddb309a6f289fb670100936a26c` (merged Phase 3D-3)
 

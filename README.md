@@ -13,10 +13,10 @@ walkthrough-style videos from uploaded property photos.
 >
 > Phase 4 is partly delivered. A scene generation can be **admitted** — authorized,
 > capability-checked against the verified provider model, snapshotted immutably,
-> and enqueued — and the prompt sent to that model is now rendered from the
-> compiled structure. Nothing submits to a provider yet: there is no worker, no
-> queue adapter, and no managed-storage output copy, so **the product does not yet
-> generate a video**. See `docs/Roadmap.md`, `docs/progress.md`, and the per-phase
+> and persisted as durable `QUEUED` work — and the prompt sent to that model is
+> rendered once at admission and frozen on the row. Nothing submits to a provider
+> yet: there is no worker, nothing yet reads that queued work, and no
+> managed-storage output copy, so **the product does not yet generate a video**. See `docs/Roadmap.md`, `docs/progress.md`, and the per-phase
 > completion reports in `docs/`.
 
 ## Design documents
@@ -53,7 +53,7 @@ packages/
 ├── domain/            # identity + property/media domain: entities, RBAC, services, ports
 ├── database/          # Prisma schema, client, org-scoped repositories
 ├── storage/           # object storage, signed URLs, image pipeline, malware hook
-├── queue/             # placeholder (Phase 4)
+├── queue/             # empty by decision — no transport (ADR-0024)
 └── ai-providers/      # placeholder (Phase 3)
 infra/  tests/  docs/
 ```

@@ -1,6 +1,7 @@
 # Release Notes — Phase 2: Properties and Secure Media Upload
 
-Status: **Release candidate under review (PR #3). Not merged, not released.**
+Released as PR #3, merge commit `653372a54d72d8dacc38fb7103ad32f15041cc2f`,
+tagged `phase-2-complete`.
 Date prepared: 2026-07-27
 
 ## What this release adds

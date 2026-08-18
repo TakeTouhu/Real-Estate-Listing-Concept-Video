@@ -19,7 +19,6 @@ import {
   type StoryboardReader,
 } from "./ports";
 import { computeGenerationRequestHash } from "./request-identity";
-import type { SceneGenerationQueue } from "./queue";
 import type { SceneGeneration } from "./types";
 
 export interface GenerationServiceDeps {
@@ -29,7 +28,6 @@ export interface GenerationServiceDeps {
   readonly storyboard: StoryboardReader;
   readonly generations: SceneGenerationRepository;
   readonly capabilities: VideoModelCapabilityProvider;
-  readonly queue: SceneGenerationQueue;
   readonly ids: IdGenerator;
 }
 
@@ -49,7 +47,12 @@ export interface GenerationServiceDeps {
  *
  * No video provider is constructed or called anywhere in this class, and nothing
  * is written to object storage. Generation *execution* is Phase 4C's worker;
- * this service only records the intent and enqueues it.
+ * this service only records the intent durably.
+ *
+ * **There is no queue transport.** The `QUEUED` row *is* the durable handoff: a
+ * worker discovers executable work by its state, not by a message someone sent
+ * it (ADR-0024). Admission therefore has nothing to hand off and nothing that
+ * can fail in transit — it creates the row, audits it, and returns.
  */
 export class GenerationService {
   constructor(private readonly deps: GenerationServiceDeps) {}
@@ -61,8 +64,8 @@ export class GenerationService {
    * The ordering is exact and every early exit is side-effect-free until a row
    * is actually created:
    *
-   * 1. authorize `property:write` — before any read, capability lookup, write,
-   *    enqueue or audit;
+   * 1. authorize `property:write` — before any read, capability lookup, write
+   *    or audit;
    * 2. `assertFresh` — the hard pre-spend gate, keeping its distinct
    *    `NEVER_COMPOSED` / `STALE` messages;
    * 3. `getStoryboard` — for the scoped project and scenes;
@@ -73,7 +76,7 @@ export class GenerationService {
    * 8. compute the request hash;
    * 9. return an existing **active** attempt if one holds this identity;
    * 10. otherwise return the latest **succeeded** attempt if one does;
-   * 11. otherwise `create` (at most once), then `enqueue`, then `audit`.
+   * 11. otherwise `create` (at most once), then `audit`.
    *
    * @throws AppError FORBIDDEN when the actor lacks `property:write`.
    * @throws AppError NOT_FOUND when the project, or the scene within it, is not
@@ -162,9 +165,9 @@ export class GenerationService {
     });
 
     // (9) Active reuse. An attempt already in flight — in ANY active state,
-    // including SUBMISSION_UNKNOWN — is returned as-is. Nothing is created,
-    // enqueued, or audited, and a stranded QUEUED row is emphatically NOT
-    // re-enqueued here: Phase 4C owns that recovery.
+    // including SUBMISSION_UNKNOWN — is returned as-is. Nothing is created and
+    // nothing is audited. A `QUEUED` row returned here is already executable
+    // work by virtue of its state, so there is nothing to re-deliver.
     const active = await this.deps.generations.findActiveByRequestIdentity(
       organizationId,
       videoProjectId,
@@ -198,7 +201,7 @@ export class GenerationService {
   }
 
   /**
-   * Create the row, enqueue it, then audit it — in that order.
+   * Create the row, then audit it.
    *
    * The database partial unique index, not these lookups, is the concurrency
    * authority: two callers can both reach here having found nothing, so `create`
@@ -222,8 +225,8 @@ export class GenerationService {
     // attempt that already exists.
     //
     // `renderPrompt` validates the stored structure and fails closed, so a
-    // corrupt or legacy compiled prompt refuses **before** any row exists,
-    // before enqueue, and before audit. From here on the worker submits this
+    // corrupt or legacy compiled prompt refuses **before** any row exists and
+    // before any audit. From here on the worker submits this
     // exact string and never runs the renderer again (ADR-0023).
     const renderedPrompt = renderPrompt(compiledPrompt);
 
@@ -279,21 +282,29 @@ export class GenerationService {
       throw error;
     }
 
-    // Ordering is fixed: enqueue BEFORE audit. A job that was never accepted by
-    // the queue must not be recorded as requested for execution. If enqueue
-    // throws, the durable QUEUED row is left exactly as it is — not deleted, not
-    // failed, its active identity intact — and nothing is audited. A later
-    // startScene finds that row via the active lookup and returns it without
-    // enqueuing again; Phase 4C's sweep is the recovery mechanism.
-    await this.deps.queue.enqueue({ generationId: created.id });
-
-    // Only now, after a successful enqueue, is the request audited. Metadata is
-    // an explicit allowlist — never a spread of the entity — so a future field
-    // on SceneGeneration cannot leak into the log, and no prompt text, provider
-    // secret, prediction id, temporary URL, or storage key is present. If the
-    // audit sink fails here the error propagates; the row stays and the job
-    // stays enqueued (no rollback, no second enqueue) — a documented consistency
-    // window, per ADR-0017.
+    // The row is now durable in `QUEUED`, which is the whole acceptance
+    // condition: a worker discovers it by state (ADR-0024). Nothing is handed
+    // to a transport, so nothing can be lost between here and execution.
+    //
+    // The audit therefore comes last, and the consistency window it leaves is
+    // narrower than the one it replaces but still real: if this throws, the
+    // error propagates while the row stays executable and un-audited. That
+    // direction is deliberate. Eligibility is `state`, never audit existence —
+    // gating execution on an audit row would turn a failing audit sink into
+    // silent cancellation of durable customer work.
+    //
+    // Nothing executes yet, so the window is currently inert: an unaudited row
+    // cannot reach a provider because no code submits one. Making it acceptable
+    // once execution exists is a **requirement placed on the milestone that
+    // adds submission** — it must audit the paid call itself, so that no
+    // provider charge is unaudited whatever happened here. That requirement is
+    // recorded in `docs/decisions/TODO.md`; it is not a property this code has
+    // today (ADR-0024 §4).
+    //
+    // Metadata stays an explicit allowlist — never a spread of the entity — so
+    // a future field on SceneGeneration cannot leak into the log, and no prompt
+    // text, provider secret, prediction id, temporary URL, or storage key is
+    // present.
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -321,7 +332,7 @@ export class GenerationService {
    *
    * The winner is another attempt for the same identity that landed first. Re-read
    * active, then succeeded; either is returned as the outcome of this request,
-   * and neither is enqueued or audited again by the loser. If neither is found,
+   * and neither is audited again by the loser. If neither is found,
    * the winner reached a terminal-but-not-succeeded state in the gap (or a
    * genuine infrastructure inconsistency occurred). That is not an invalid
    * request, so it is a neutral INTERNAL_ERROR — never VALIDATION_FAILED — with a

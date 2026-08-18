@@ -152,8 +152,8 @@ export interface SceneGenerationRequestSnapshot {
    *
    * Contains customer-authored text. Byte-identical copies already live in
    * `storyboard_scenes.compiledPrompt` and `video_projects.prompt`, so this adds
-   * no new class of data — but it must never reach audit metadata, a queue
-   * payload, an error message, or a log.
+   * no new class of data — but it must never reach audit metadata, an error
+   * message, or a log.
    */
   readonly requestCompiledPrompt: string | null;
   /** The scene's own allocated duration — not the project's total. */
@@ -187,8 +187,9 @@ export interface SceneGenerationRequestSnapshot {
    * Contains customer-authored text — it is a projection of
    * `requestCompiledPrompt`, whose bytes already live on the same row and on
    * `storyboard_scenes.compiledPrompt`. So it adds no new class of data, and the
-   * same rule applies: never in audit metadata, a queue payload, an error
-   * message, or a log.
+   * same rule applies: never in audit metadata, an error message, or a log.
+   * (Until ADR-0024 this list also named a queue payload; there is no longer a
+   * transport for one to travel on.)
    *
    * Null means the attempt predates this contract. Consumers **fail closed**
    * rather than re-rendering, because re-rendering is exactly the drift this

@@ -70,7 +70,8 @@ Unknown states are treated as non-terminal for a short bounded period, then move
 - Reject invalid, expired, or replayed events.
 - Deduplicate using provider event ID or stable payload hash.
 - Do not trust tenant or customer identifiers from webhook payloads; resolve from stored prediction records.
-- Return quickly and enqueue processing.
+- Return quickly; record the event and let the worker pick the affected
+  generation up by state. There is no enqueue step (ADR-0024).
 
 ## Polling fallback
 

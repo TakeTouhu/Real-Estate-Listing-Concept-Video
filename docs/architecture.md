@@ -42,7 +42,7 @@ flowchart TB
   objects[("Object storage<br/>in-process today<br/>S3/Azure planned")]
   wavespeed["WaveSpeedAI API<br/>(adapter only; not called in Phase 2)"]
 
-  worker["apps/worker<br/>bootstrap + self-check<br/>queue consumer (not implemented)"]
+  worker["apps/worker<br/>bootstrap + self-check<br/>execution loop (not implemented)"]
 
   browser --> pages
   browser --> authapi
@@ -111,6 +111,6 @@ flowchart TB
 | `@app/domain` `renderPrompt` — the one place a structured `CompiledPrompt` becomes a provider prompt string | Implemented (Phase 4B-2b, ADR-0020); **nothing submits it yet** |
 | `@app/video-providers` verified OpenVideo capability descriptor | Implemented (Phase 4B-2a, ADR-0019) |
 | `@app/observability` redacting logger | Implemented |
-| `apps/worker` queue consumer, generation orchestration | **Not implemented** (Phase 4) |
-| `@app/queue` | **Not implemented** (placeholder) |
+| `apps/worker` execution loop, generation orchestration | **Not implemented** (Phase 4) |
+| `@app/queue` | **Placeholder.** No transport exists: the `QUEUED` generation row is the durable queue (ADR-0024) |
 | FFmpeg composition, billing, Stripe | **Not implemented** (Phases 5–6) |

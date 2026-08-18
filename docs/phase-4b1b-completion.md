@@ -1,7 +1,6 @@
 # Phase 4B-1b completion report — single-scene generation admission
 
-Status: In review. Not merged. Do not tag until reviewed, CI-green on the exact
-head SHA, and merged into `main`.
+Merged as PR #32.
 
 ## Scope
 

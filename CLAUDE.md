@@ -48,7 +48,10 @@ Recommended stack:
 - PostgreSQL
 - Prisma
 - Object storage
-- Queue-based workers
+- State-driven workers (ADR-0024: the `SceneGeneration` row is itself the
+  durable queue, discovered by `state = 'QUEUED'`. No broker — Redis/BullMQ, SQS
+  and Azure Service Bus were each evaluated and rejected; adding one must
+  supersede that ADR)
 - FFmpeg
 - Stripe
 - OpenTelemetry
@@ -84,7 +87,7 @@ packages/
 ├── domain/
 ├── database/
 ├── storage/
-├── queue/
+├── queue/            # reserved boundary, empty — no transport (ADR-0024)
 ├── ai-providers/
 ├── video-providers/
 ├── observability/
@@ -106,8 +109,9 @@ Authenticate
 → Moderate prompt and images
 → Estimate platform and provider cost
 → Reserve credits
-→ Create idempotent job
-→ Enqueue
+→ Create idempotent generation attempt
+→ Persist the SceneGeneration row as durable executable work
+→ Worker discovers and claims an eligible SceneGeneration row
 → Generate scenes through WaveSpeedAI
 → Copy outputs to managed storage
 → Compose with FFmpeg
@@ -136,7 +140,7 @@ On failure, preserve the reason, retry only retryable errors, prevent duplicate 
 Minimum layers:
 
 - Unit tests for domain and pricing
-- DB/storage/queue/billing integration tests
+- DB/storage/billing integration tests
 - API authorization and tenant-isolation tests
 - Worker idempotency/retry tests
 - WaveSpeedAI request/status mapping tests

@@ -1,6 +1,8 @@
 # Phase 3A-2b Completion Report — AnalysisService orchestration
 
-Status: **approved as a one-time size exception; documentation wording corrected; awaiting final merge approval**
+Merged milestone, approved as a one-time size exception. Lifecycle facts (PR
+number, merge commit) are recorded in the milestone table in
+`docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3a2b-hga252`
 Base: `main` at `8d1bed31e4d3744865d1a09a1fc08feb3da3e16f` (merged Phase 3A-2a)
 

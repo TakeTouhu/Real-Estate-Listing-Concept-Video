@@ -1,6 +1,7 @@
 # Phase 3C-2a Completion Report — Eligible-input selection and fingerprint
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3c2a-hga252`
 Base: `main` at `f7419bcbaf1b96408fd4e5d5700eb6a539594eac` (merged Phase 3C-1)
 

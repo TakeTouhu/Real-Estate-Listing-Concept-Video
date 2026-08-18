@@ -10,7 +10,11 @@ Start as a modular monolith with independently scalable asynchronous video-gener
 - Web/API: TypeScript + Next.js
 - Database: PostgreSQL + Prisma
 - Object storage: S3-compatible or Azure Blob Storage
-- Queue: Redis/BullMQ, SQS, or Azure Service Bus
+- Queue: **none — superseded 2026-08-18 by ADR-0024.** The `scene_generations`
+  row is the durable queue: work is discovered by `state = 'QUEUED'` over the
+  existing index, not delivered by a transport. Redis/BullMQ, SQS and Azure
+  Service Bus were each evaluated and rejected there; adding one later is a
+  decision that must supersede that ADR, not a default to fall back on
 - Worker: containerized process
 - Video composition: FFmpeg
 - Authentication: email and optional Entra ID / Google
@@ -23,11 +27,10 @@ Start as a modular monolith with independently scalable asynchronous video-gener
 Browser
   ↓
 Next.js Web / BFF
-  ├── PostgreSQL
-  ├── Object Storage
-  └── Job Queue
+  ├── PostgreSQL  (also the durable work queue — ADR-0024)
+  └── Object Storage
           ↓
-Generation Worker / Orchestrator
+Generation Worker / Orchestrator  (discovers work by scanning for QUEUED rows)
   ├── Vision Adapter
   ├── WaveSpeedVideoProvider
   └── FFmpeg Composer
@@ -45,18 +48,26 @@ Review / Approval / Download
 - AI Analysis
 - Storyboard
 - Video Project
-- Generation Job
+- Scene Generation Attempt
 - Video Output
 - Billing and Credits
 - Audit and Compliance
 
 ## Multi-tenancy
 
-Every tenant-owned business table contains `organization_id`. Organization scope is resolved from the authenticated session, enforced in the application/data-access layer, and covered by automated isolation tests. Storage keys are organization-prefixed. Signed URLs are short-lived.
+Every tenant-owned aggregate is organization-scoped. **Scope is not always a column.** A table either carries `organizationId` directly, or inherits authoritative scope through a required parent relation — both are first-class, and the second is what several tables actually do.
+
+- `SceneGeneration` → `VideoProject` → `organizationId`. The generation row carries **no** `organizationId` of its own; its tenant is whichever organization owns the parent project, resolved as a join predicate inside every query rather than as an application-side check that could be forgotten.
+- Data-access boundaries enforce tenant scope: tenant-facing repository methods take `organizationId` as an addressing argument, so a read that forgets to scope is a missing predicate rather than a silently unfiltered result.
+- Automated isolation tests cover it.
+
+Organization scope is resolved from the authenticated session. Storage keys are organization-prefixed. Signed URLs are short-lived.
 
 ## Asynchronous generation
 
-Generation APIs return immediately after validation, credit reservation, idempotent job creation, and enqueueing. Workers emit progress and terminal status. Credit settlement is transactional and exact-once.
+Generation APIs return immediately after validation, credit reservation, and durable creation of the generation row. Workers emit progress and terminal status. Credit settlement is transactional and exact-once.
+
+**Superseded 2026-08-18 by ADR-0024:** there is no enqueue step. Admission is `create → audit`, and the durable row in `QUEUED` *is* the acceptance condition — a worker discovers executable work by scanning for that state. Nothing is handed to a transport, so nothing can be lost between admission and execution, and no recovery sweep is owed for work that was persisted but never delivered.
 
 ## Provider abstraction
 
@@ -79,4 +90,4 @@ WaveSpeedAI is the initial implementation, but provider-specific SDKs and payloa
 - staging
 - production
 
-Each environment uses separate identity configuration, database, storage, queues, billing keys, and WaveSpeedAI secrets. Production customer data must not be copied into development.
+Each environment uses separate identity configuration, database, storage, billing keys, and WaveSpeedAI secrets. Production customer data must not be copied into development.

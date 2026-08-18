@@ -1,6 +1,7 @@
 # Phase 3C-3 Completion Report — Prompt compilation and moderation
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3c3-hga252`
 Base: `main` at `d7ede3a3ecd2d4ae0bf13c9ea0d19149f06ca2b9` (merged Phase 3C-2b)
 

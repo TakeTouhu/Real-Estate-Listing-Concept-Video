@@ -3,9 +3,54 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4C-0a: execution prompt freeze
+## [Unreleased] — Phase 4C-1a: row-as-queue admission contract
 
-Under review. Not merged. See `docs/phase-4c0a-completion.md` and ADR-0023.
+PR #38 — see GitHub for lifecycle. Technical detail in
+`docs/phase-4c1a-completion.md` and ADR-0024.
+
+### Changed
+
+- **The `SceneGeneration` row is the durable queue.** `state = 'QUEUED'` is the
+  acceptance condition, discovered by scan over the existing `@@index([state])`.
+  There is no transport, so no wake signal can be lost and no durable row can be
+  undiscoverable. ADR-0017 §13's mandatory stranded-row recovery is satisfied by
+  the design rather than by an added component.
+- **Admission is now `create → audit`**, superseding ADR-0017 §10's
+  `create → enqueue → audit`. Eligibility is state, never audit existence: an
+  audit-sink failure propagates while leaving the row executable, because gating
+  execution on an audit row would turn a failing sink into silent cancellation of
+  durable customer work. The window is inert only while nothing submits, which is
+  an incompleteness rather than a safeguard: auditing the paid call itself is
+  recorded in `docs/decisions/TODO.md` as a requirement on whichever milestone
+  adds provider submission.
+- Completion reports no longer carry lifecycle status. **The GitHub pull request
+  is the authoritative source** for an in-flight milestone, because no mechanism
+  rewrites a checked-in file when state changes; `docs/progress.md` points at the
+  PR rather than restating its state, and records durable facts (merge commit, PR
+  number) once they exist. **Thirty-one stale claims** were corrected: eight across
+  six reports, the Phase 2 release notes and three changelog entries, plus
+  twenty-three Phase 3 reports still marked `implemented, awaiting review` for
+  milestones merged and tagged months ago.
+
+### Removed
+
+- **`SceneGenerationQueue`, `SceneGenerationJob`, and
+  `RecordingSceneGenerationQueue`**, plus the `queue` dependency on
+  `GenerationServiceDeps` and the enqueue call. The port had no production
+  implementation — `@app/queue` is a placeholder — and retaining it as a no-op
+  adapter would have kept a contract that is false in both halves.
+
+### Unchanged
+
+- No schema, no migration, no state-machine change. The 8-fact `requestHash`,
+  the six request-snapshot fields, reuse precedence, race convergence, and the
+  audit metadata allowlist are untouched.
+- No worker, execution repository, asset lookup, signed URL, provider input
+  assembly, provider call, or polling. Phase 4C-1b adds the read side.
+
+## Phase 4C-0a: execution prompt freeze
+
+Merged as PR #37. See `docs/phase-4c0a-completion.md` and ADR-0023.
 
 ### Added
 
@@ -257,9 +302,9 @@ Merged as `be92596` (PR #34). See `docs/phase-4b2a-completion.md` and ADR-0019.
 - No prompt renderer (Phase 4B-2b), no `preset`, no provider call, no worker,
   no queue adapter, no pricing policy.
 
-## [Unreleased] — Phase 4B-1c: immutable generation request snapshot
+## Phase 4B-1c: immutable generation request snapshot
 
-Under review. Not merged. See `docs/phase-4b1c-completion.md` and ADR-0018.
+Merged as PR #33. See `docs/phase-4b1c-completion.md` and ADR-0018.
 
 ### Added
 
@@ -341,9 +386,9 @@ See `docs/phase-4b1b-completion.md`.
   validation error. `create` is attempted at most once — no retry loop.
 - No schema, migration, provider, or storage change. See ADR-0017.
 
-## [Unreleased] — Phase 4B-1a: generation foundations
+## Phase 4B-1a: generation foundations
 
-Under review. Not merged. See `docs/phase-4b1a-completion.md`.
+Merged as PR #31. See `docs/phase-4b1a-completion.md`.
 
 ### Added
 

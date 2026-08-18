@@ -1,6 +1,7 @@
 # Phase 3C-2b Completion Report — Ordering and duration allocation
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3c2b-hga252`
 Base: `main` at `75966994eafa9f6ec58c2243e34f66f89296f3d9` (merged Phase 3C-2a)
 

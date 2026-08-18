@@ -1,6 +1,7 @@
 # Phase 3B-3b Completion Report — Decision interactions
 
-Status: **implemented, awaiting review**
+Merged milestone. Lifecycle facts (PR number, merge commit) are recorded in the
+milestone table in `docs/progress.md`; this report is a technical snapshot.
 Branch: `claude/real-estate-virtual-tour-phase-3b3b-hga252`
 Base: `main` at `c78ecf2588748099012fce6c6a391cd68dc1eaf6` (merged Phase 3B-3a)
 

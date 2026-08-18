@@ -1,8 +1,6 @@
 # Phase 4C-0b — Camera motion safety
 
-Status: **awaiting CTO review. Not merged.**
-
-Branch: `claude/real-estate-virtual-tour-phase-4c0b-hga252`
+Merged as PR #36.
 Base: `cd9d1365682dcf619b07dc184ef335f7d4de65a7` (merged Phase 4B-2b, PR #35)
 
 ## Why this milestone exists
