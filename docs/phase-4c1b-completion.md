@@ -116,11 +116,11 @@ boundary is decided by the database rather than by any interface satisfying it
 | Claim mutates `state`, **advances `updatedAt`**, and touches nothing else | PostgreSQL — row seeded with a known-old `updatedAt`, then compared before/after |
 
 **Not covered by any test, stated rather than hidden:** the three
-`INTERNAL_ERROR` guards after a won claim, and the `assertTransition` call. None
-is reachable — `scene_generations` has no deletion path, its `VideoProject`
-relation is required, and a non-`SUBMITTING` read-back would mean the row lock
-did not hold. Reaching them from a test needs a seam in production code that
-exists only to be mocked, a worse trade on this boundary than an uncovered guard.
+`INTERNAL_ERROR` guards after a won claim. None is reachable —
+`scene_generations` has no deletion path, its `VideoProject` relation is
+required, and a non-`SUBMITTING` read-back would mean the row lock did not hold.
+Reaching them from a test needs a seam in production code that exists only to be
+mocked, a worse trade on this boundary than an uncovered guard.
 
 **Also removed: the claim-versus-cancellation race test.** It could only assert
 that the row ended in *either* state — true whatever the adapter does — while
@@ -138,6 +138,9 @@ in `docs/decisions/TODO.md`.
 | Claim returns a pre-claim (`QUEUED`) view | **1 fail** |
 | Claim writes back the seeded-old `updatedAt` instead of advancing it | **1 fail** |
 | Claim writes `lastPolledAt` before the CAS, leaving `state` intact | **8 fail** — all 7 refusal states, plus the `updatedAt` test |
+| `assertTransition` pointed at an illegal pair (`SUBMITTING → QUEUED`) | **14 fail** — every DB test that invokes the claim |
+| `QUEUED → SUBMITTING` removed from the committed domain table | **14 fail** DB, **5 fail** unit |
+| `assertTransition` call deleted outright | **0 fail** — see below |
 
 Each restored, with `git diff --stat` confirming the adapter unchanged
 afterwards.
@@ -154,6 +157,17 @@ intact, so the old assertion accepted it and the new one rejects it everywhere.
 Both matter downstream: a later abandonment sweep reads `updatedAt` to decide a
 `SUBMITTING` row is stranded, so a claim failing to advance it makes a live claim
 look stale, and a refusal touching it makes idle rows look freshly active.
+
+**The domain-legality dependency is real, and its one gap is stated.** The last
+three mutations answer "is `assertTransition` load-bearing?" separately, because
+it has three answers. An illegal pair fails every claim test, so the call
+genuinely executes rather than sitting dead. Removing `QUEUED → SUBMITTING` from
+the committed `TRANSITIONS` table fails the same 14 — the adapter reads the
+domain's table, not a private copy, which is the entire reason for calling it.
+**Deleting the call outright changes nothing**, the honest limit: nothing pins
+its *presence*, because it guards a future domain change rather than today's
+behaviour, and pinning presence would mean asserting on a mock this boundary
+should not acquire.
 
 ## Invariants held
 
@@ -182,11 +196,11 @@ provider input assembly, `createGeneration` call, polling, output ingestion,
 | --- | --- | --- |
 | Production | 272 | ~220–300 |
 | Tests | 379 | ~300–400 |
-| Docs | 582 | ~180–260 |
-| **Total** | **1,233** across 13 files | est. ≤ ~850–900 · waiver 1,225 |
+| Docs | 596 | ~180–260 |
+| **Total** | **1,247** across 13 files | est. ≤ ~850–900 · waiver 1,225 |
 
 Measured from `git diff --numstat e8dbd01..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1200 −33 = 1,233`).
+reconciling with the raw diff (`+1214 −33 = 1,247`).
 
 **The record is corrected here.** An earlier revision of this report described
 1,305 lines as "inside the applicable estimate", citing a wider band that assumed
@@ -197,18 +211,18 @@ estimate, and this revision does not claim the corrected figure is either.
 
 Production (272) lands inside its band. Tests (379) run over, by the
 `updatedAt` and whole-row-refusal evidence added in the final passes. **Docs
-(582) are the bulk of the overage**: the reasoning is written once in
+(596) are the bulk of the overage**: the reasoning is written once in
 ADR-0025, once here, once in `CHANGELOG.md` and once in the PR body, and each
 round of review-driven correction added an explanation to all four. Collapsing
 the duplication between the ADR and this report recovered 26 lines; cutting the
 remaining ~300 would mean gutting the ADR, which is the durable decision record.
 
 The CTO accepted the overage in principle and set a final reviewability waiver of
-**1,225**. The total is **1,233** — eight lines over it. The last evidence pass
-requiring whole-row preservation across all seven refusal states is what carried
-it past the line; the prose added alongside it was tightened, but no test
-assertion and no part of ADR-0025 was cut to buy the difference. Recorded as it
-stands rather than reduced to fit.
+**1,225**. The total is **1,247** — 22 lines over it. Three successive evidence
+passes landed after that waiver was set (whole-row refusal, then domain-legality
+mutation), and each added lines to the record. The prose accompanying them was
+tightened each time, but no test assertion and no part of ADR-0025 was cut to
+buy the difference. Recorded as it stands rather than reduced to fit.
 
 Only 33 lines are deletions, because this milestone adds a boundary rather
 than removing one.
