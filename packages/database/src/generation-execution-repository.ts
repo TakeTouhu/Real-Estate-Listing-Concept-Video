@@ -4,6 +4,8 @@ import type {
   SceneGenerationExecutionRepository,
   SystemGenerationCandidate,
 } from "@app/domain";
+import { assertTransition } from "@app/domain";
+import { AppError } from "@app/shared";
 import { toGeneration } from "./generation-repositories";
 
 /**
@@ -31,9 +33,16 @@ function toCandidate(row: DbSceneGenerationWithProject): SystemGenerationCandida
  * and lives apart from `createPrismaSceneGenerationRepository`. Every method
  * here *resolves* tenant identity and hands it back; none accepts one.
  *
- * No transaction wraps either method. Neither needs one: discovery writes
- * nothing, and the claim is a single conditional `UPDATE` whose predicate is the
- * concurrency control.
+ * Discovery runs without a transaction because it writes nothing. The claim
+ * runs inside one, and it is worth being exact about what that buys: **the
+ * transaction guarantees only that this method never hands back a row other
+ * than the one it moved to `SUBMITTING` itself.** It does not make every future
+ * writer of this row safe. A writer that starts after this transaction commits
+ * is entirely unaffected by it, and `SceneGenerationRepository.update` carries
+ * no state predicate — so any future competing transition (cancellation above
+ * all) must carry its own expected-state predicate. That requirement is
+ * recorded as a hard prerequisite in `docs/decisions/TODO.md`; it is not
+ * something this adapter can provide on its behalf.
  */
 export function createPrismaSceneGenerationExecutionRepository(
   prisma: PrismaClient,
@@ -52,6 +61,13 @@ export function createPrismaSceneGenerationExecutionRepository(
     },
 
     async claimQueuedForSubmission(generationId: string) {
+      // Legality first, and from the domain rather than restated here. This
+      // adapter decides *who* gets to make the move; whether `QUEUED →
+      // SUBMITTING` is a legal move at all is the state machine's answer, and
+      // asking it is what keeps a hard-coded pair in a persistence file from
+      // quietly becoming a second state machine.
+      assertTransition("QUEUED", "SUBMITTING");
+
       // The update and the re-read share one transaction, and that is
       // load-bearing rather than tidiness.
       //
@@ -67,7 +83,8 @@ export function createPrismaSceneGenerationExecutionRepository(
       //
       // Inside a transaction the `UPDATE` holds a row lock until commit, so that
       // cancellation blocks rather than interleaving, and the `SELECT` sees this
-      // transaction's own write.
+      // transaction's own write. That is the full extent of the guarantee: it
+      // says nothing about a writer that starts after this commit.
       return prisma.$transaction(async (tx) => {
         // The compare-and-swap. `state: "QUEUED"` inside the predicate is what
         // makes this exclusive: two workers issuing this concurrently for the
@@ -89,18 +106,51 @@ export function createPrismaSceneGenerationExecutionRepository(
           include: { videoProject: { select: { organizationId: true } } },
         });
 
-        // Two refusals rather than an assertion, because a claim that is not
-        // demonstrably in `SUBMITTING` must never be granted:
+        // Past this point `null` is no longer available, and that is the whole
+        // point of the distinction. `null` has exactly one meaning to a caller:
+        // *this caller did not win a QUEUED claim*, an ordinary outcome it
+        // handles by moving on to other work. The database has just told us the
+        // opposite — `count === 1`, this caller **did** win — so anything that
+        // goes wrong from here is an invariant failure, not a lost race.
         //
-        // - a missing row cannot happen today (`scene_generations` has no
-        //   deletion path, and its `ON DELETE RESTRICT` parent exists to keep
-        //   paid-attempt history), so this is defensive;
-        // - a row in any other state would mean the lock did not hold, which is
-        //   the failure this transaction exists to prevent. Returning `null`
-        //   reuses the vocabulary the caller already handles — "you did not get
-        //   this one" — rather than inventing an error the domain has not
-        //   defined.
-        if (!row || row.state !== "SUBMITTING") return null;
+        // Reporting it as `null` would launder a broken invariant into a
+        // routine one, and the row would be left in `SUBMITTING` with every
+        // worker believing it belongs to someone else: stalled work that no
+        // alarm ever fires for. Throwing inside the transaction rolls the claim
+        // back instead, so the row returns to `QUEUED` and stays discoverable.
+        //
+        // Neither branch is reachable today. A missing row would need a
+        // deletion path `scene_generations` does not have (its parent is `ON
+        // DELETE RESTRICT`, precisely to keep paid-attempt history); a row in
+        // another state would mean the row lock did not hold. Both are
+        // impossible-by-construction rather than impossible-by-hope, which is
+        // why they are asserted rather than assumed.
+        if (!row) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Claimed scene generation disappeared within its own claim transaction",
+            { details: { generationId } },
+          );
+        }
+        // The tenant is the one thing this method promises to have *resolved*.
+        // The relation is required in the schema, so this is a type-level
+        // impossibility rather than a plausible runtime path — but returning a
+        // claim without an organization would be worse than any of the other
+        // failures here, so it is checked rather than trusted.
+        if (row.videoProject === null || row.videoProject === undefined) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Claimed scene generation has no resolvable owning VideoProject",
+            { details: { generationId } },
+          );
+        }
+        if (row.state !== "SUBMITTING") {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Claimed scene generation was not SUBMITTING after a won claim",
+            { details: { generationId, state: row.state } },
+          );
+        }
         return toCandidate(row) satisfies ClaimedSceneGeneration;
       });
     },

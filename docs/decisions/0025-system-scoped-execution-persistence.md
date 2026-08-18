@@ -101,8 +101,32 @@ money on work someone else had already stopped.
 
 Inside a transaction the `UPDATE` holds a row lock until commit, so that
 cancellation blocks instead of interleaving and the `SELECT` sees this
-transaction's own write. A state check backs it up: a row that is not
-demonstrably `SUBMITTING` yields `null` rather than a claim.
+transaction's own write.
+
+**What the transaction does not do is more important than what it does.** It
+guarantees exactly one thing: this method never hands back a row other than the
+one it moved to `SUBMITTING` itself. It does *not* make every future writer of
+that row safe. A writer that starts after this transaction commits is entirely
+unaffected by it, so an unconditional
+`update(org, id, { state: 'CANCELLED' })` landing a moment later will overwrite
+a live claim — and the state machine says `SUBMITTING → CANCELLED` is not even a
+legal move, so the result is a row in a state nothing could legally have reached.
+No transaction in this adapter can prevent that; the fix has to live with the
+competing writer. `docs/decisions/TODO.md` therefore records it as a **hard
+prerequisite**: any future transition that can compete with the claim must carry
+its own expected-state predicate and treat a zero-row result as "someone else
+moved it".
+
+**`null` means one thing only, and invariant failures are not it.** `null` tells
+a caller *you did not win a QUEUED claim* — an ordinary outcome it handles by
+looking for other work. Once `updateMany` reports `count === 1`, this caller
+**did** win, so a read-back that finds no row, no resolvable `VideoProject`, or a
+state other than `SUBMITTING` is a broken invariant rather than a lost race. The
+adapter throws `INTERNAL_ERROR` from inside the transaction, which rolls the
+claim back and returns the row to `QUEUED` where it stays discoverable. Returning
+`null` there would have laundered a broken invariant into a routine one and left
+the row parked in `SUBMITTING` with every worker believing it belonged to someone
+else — stalled work that no alarm fires for.
 
 The general lesson is worth keeping: "only I can write this row" is an assumption
 about *every* other writer, and it was wrong here because the repository it
@@ -114,8 +138,14 @@ transition and the row can make it only once — so a second mechanism would be 
 second source of truth about who holds the work. `SKIP LOCKED` remains available
 as a contention optimization if measurement ever justifies one.
 
-**Legality stays with the domain.** `assertTransition` answers whether the move
-is legal; this port answers who gets to make it. Both, not either.
+**Legality stays with the domain, and is actually asked.** The adapter calls
+`assertTransition("QUEUED", "SUBMITTING")` before issuing the claim rather than
+merely documenting that the move is legal. The pair is hard-coded because this
+method performs exactly one transition — but hard-coding it *and* not consulting
+the state machine would make a persistence file a second, silent state machine,
+so that if `QUEUED → SUBMITTING` were ever removed from the table the claim would
+keep working. `assertTransition` answers whether the move is legal; this port
+answers who gets to make it. Both, not either.
 
 ### 5. Two methods, and no more
 
@@ -156,12 +186,19 @@ milestone that adds submission, and its shape is already decided by the state
 machine: an abandoned `SUBMITTING` becomes `SUBMISSION_UNKNOWN`, because a
 crashed worker leaves genuine doubt about whether the POST reached the provider.
 
-**Concurrency is proven against PostgreSQL, not asserted in a double.** The
-in-memory implementation is single-threaded and can only show that a second
-*sequential* call is refused. Whether two concurrent callers can both win is a
-question about the database, and it is the question that decides whether a
-provider is paid twice, so the integration suite asks it of the real thing — at
-two callers and at eight.
+**Behaviour is proven against PostgreSQL, and there is no in-memory double.**
+None was written, deliberately. Nothing consumes this port yet, so a double
+would be a test-only implementation built ahead of its first caller — and every
+property worth asserting about the boundary is decided by the database rather
+than by any interface it satisfies. A single-threaded double could only show
+that a second *sequential* call is refused, which is not the question that
+decides whether a provider is paid twice; the integration suite asks the real
+thing, at two callers and at eight. The unit test that remains asserts only what
+the type system can state: the parameter lists, and `SUBMITTING`'s membership of
+`ACTIVE_SCENE_GENERATION_STATES`.
+
+When a consumer exists and needs one, a double can be added alongside it, judged
+against a real caller instead of an imagined one.
 
 **No schema, no migration, no state-machine change.** Everything this design
 needs — `state`, the `(state)` index, the `VideoProject` relation — shipped in

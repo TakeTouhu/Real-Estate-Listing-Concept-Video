@@ -12,82 +12,79 @@ Decision record: ADR-0025
 
 ADR-0024 made the `SceneGeneration` row the durable queue: work is discovered by
 `state = 'QUEUED'`, with no transport and no payload. That closed the delivery
-question and opened the reading one.
-
-Every method on the tenant-facing `SceneGenerationRepository` takes
-`organizationId` as an addressing argument, so a read that forgets to scope is a
-missing predicate rather than an unfiltered result. **Execution cannot satisfy
-that contract**: a worker scanning for queued work has no request, no session,
-and no payload to read a tenant from — only the state of rows it has not seen.
-This milestone supplies the boundary that answers it, and nothing else.
+question and opened the reading one. Every method on the tenant-facing
+`SceneGenerationRepository` takes `organizationId` as an addressing argument, and
+**execution cannot satisfy that contract** — a worker scanning for queued work
+has no request, no session, and no payload to read a tenant from, only the state
+of rows it has not seen. This milestone supplies the boundary that answers it,
+and nothing else.
 
 ## What shipped
-
-### One new port, two methods
 
 ```ts
 findNextQueuedForPreparation(): Promise<SystemGenerationCandidate | null>
 claimQueuedForSubmission(id: string): Promise<ClaimedSceneGeneration | null>
 ```
 
-Both return the `organizationId` they resolved through the generation's owning
-`VideoProject`. **Neither accepts one.** That direction is the security property:
-a worker never chooses a tenant, the claim hands it one, so there is no input a
-caller could get wrong.
+**ADR-0025 carries the reasoning in full.** This report records what was built
+and how it was checked, and deliberately does not restate the argument.
 
-The tenant-facing repository is untouched — no `findByIdSystem`, no optional
-`organizationId`, no trusted flag. A trusted method on that interface would be
-reachable from every service holding it, turning one trusted file into a trusted
-surface at every call site; an *optional* tenant argument would additionally make
-the unscoped call the easier one to write while the isolation tests still passed.
+- **Tenant identity is resolved, never accepted.** Both methods return the
+  `organizationId` they derived through the owning `VideoProject`; neither takes
+  one, so a worker never chooses a tenant — the claim hands it one. The
+  tenant-facing repository is untouched (no `findByIdSystem`, no optional
+  `organizationId`, no trusted flag), and no `organizationId` column was added to
+  `SceneGeneration`.
+- **Discovery, then claim, in that order.** Discovery is read-only and
+  non-exclusive; the claim is the exclusive step, narrowed to sit immediately
+  before the provider call so the `SUBMITTING` window — whose only honest
+  recovery parks work for a human — stays as small as the design allows. This is
+  safe because everything preparation reads is already immutable (ADR-0018,
+  ADR-0023): nothing can drift between the two calls except `state`.
+- **The claim is a compare-and-swap**, `updateMany({ where: { id, state:
+  'QUEUED' }, data: { state: 'SUBMITTING' } })`. No lease columns, no
+  `SKIP LOCKED`, no raw SQL, **no schema or migration change**. Legality is asked
+  of the domain rather than restated: the adapter calls
+  `assertTransition("QUEUED", "SUBMITTING")` before issuing the claim, so a
+  hard-coded pair in a persistence file cannot become a second, silent state
+  machine.
+- **Production-dormant, and pinned that way.** Nothing calls either method
+  outside tests, and the Phase 4C-1a compile-time dependency pin is extended with
+  `execution`, `executions`, and `executionRepository` so `GenerationServiceDeps`
+  cannot declare one even optionally.
 
-**No `organizationId` column was added to `SceneGeneration`.** A duplicated tenant
-id can disagree with its parent, and when it does there is no way to tell which is
-right. The join cannot disagree with itself.
+### What the claim's transaction does, and does not, guarantee
 
-### Discovery and claiming are separate, in that order
+The update and the read-back share one transaction — found by review. `updateMany`
+returns a count, so the row must be read again, and the first revision did that
+outside a transaction on the assumption that a claim holder is the only writer
+able to move the row on. That assumption was false: `QUEUED → CANCELLED` is legal
+and `SceneGenerationRepository.update` deliberately carries no state predicate, so
+a cancellation could commit between the two statements and the method would return
+a `CANCELLED` row typed as a claim.
 
-Discovery is read-only and non-exclusive; the claim is the exclusive step.
-Claiming first would hold the row in `SUBMITTING` across asset resolution, URL
-signing, and input assembly — and `SUBMITTING` is the state whose only honest
-recovery is `SUBMISSION_UNKNOWN`, which parks work for a human. Narrowing the
-claim to the provider call keeps that bucket as small as the design allows.
+**What it guarantees:** this method never hands back a row
+other than the one it moved to `SUBMITTING` itself. That is all. It does not make
+every future writer of the row safe — a writer that starts after the transaction
+commits is entirely unaffected by it, so an unconditional
+`update(org, id, { state: 'CANCELLED' })` landing a moment later still overwrites
+a live claim, into a state the machine says is unreachable from `SUBMITTING`. No
+transaction here can prevent that; the fix belongs to the competing writer, and
+`docs/decisions/TODO.md` now records it as a **hard prerequisite** that any
+transition able to compete with the claim must carry its own expected-state
+predicate.
 
-Prepare-then-claim is safe because everything preparation reads is already
-immutable (ADR-0018, ADR-0023): nothing can drift between the two calls except
-`state`, and the compare-and-swap is precisely a state check.
+### `null` means one thing, and invariant failures are not it
 
-### The claim is a compare-and-swap
-
-`updateMany({ where: { id, state: 'QUEUED' }, data: { state: 'SUBMITTING' } })` —
-the predicate travels with the write, so the database picks the winner. The loser
-gets `null`, not an exception: losing a race is an ordinary outcome, and throwing
-would push callers to wrap a normal path in `try`/`catch`.
-
-No lease columns, no `SKIP LOCKED`, no raw SQL, **no schema or migration change**.
-The state machine already provides the exclusion; a second mechanism would be a
-second source of truth about who holds the work.
-
-**The update and the read-back share one transaction** — found by review, and the
-reasoning is worth keeping. `updateMany` returns a count, so the row must be read
-again, and the first revision did that outside a transaction on the assumption
-that a claim holder is the only writer able to move the row on. That assumption
-was false: `QUEUED → CANCELLED` is legal and `SceneGenerationRepository.update`
-deliberately carries no state predicate, so a cancellation could commit between
-the two statements and the method would return a `CANCELLED` row typed as a
-claim — a licence to submit work someone else had stopped. The transaction makes
-the cancellation block; a state check refuses anything not demonstrably
-`SUBMITTING`. Regression-tested against PostgreSQL by racing a claim with a
-cancellation.
-
-### Production-dormant, and pinned that way
-
-Nothing calls either method outside tests. The Phase 4C-1a compile-time
-dependency pin is extended with `execution`, `executions`, and
-`executionRepository`, so `GenerationServiceDeps` cannot declare one even
-optionally — admission is tenant-facing and always knows its organization, so a
-port that resolves tenants for itself is a trusted surface it has no reason to
-hold.
+`null` tells a caller *you did not win a `QUEUED` claim* — ordinary, handled by
+looking for other work. Once `updateMany` reports `count === 1`, this caller
+**did** win, so a read-back finding no row, no resolvable `VideoProject`, or a
+state other than `SUBMITTING` is a broken invariant, not a lost race. The adapter
+throws `INTERNAL_ERROR` from inside the transaction, rolling the claim back so
+the row returns to `QUEUED` and stays discoverable. Returning `null` there — as
+an earlier revision did — would have laundered a broken invariant into a routine
+one and parked the row in `SUBMITTING` with every worker believing it belonged to
+someone else: stalled work no alarm fires for.
 
 ## Verification
 
@@ -95,36 +92,52 @@ hold.
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1186 passed**, 59 files (baseline 1158 / 58) |
+| `pnpm test` | **1160 passed**, 59 files (baseline 1158 / 58) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **153 passed**, 7 files (baseline 126 / 6) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
 
 ### Where each property is proven
 
-The split is deliberate. The in-memory double is single-threaded, so it can only
-show that a second **sequential** call is refused — it cannot demonstrate that
-PostgreSQL picks one winner among concurrent callers. That is the question that
-decides whether a provider is paid twice, so it is asked of the real database. A
-unit test claiming to prove exclusivity would be the most dangerous kind of green.
+**There is no in-memory double for this port.** An earlier revision of this
+milestone added one, against an explicit instruction not to; it was removed.
+Nothing consumes the port yet, and every property worth asserting about the
+boundary is decided by the database rather than by any interface satisfying it
+(ADR-0025, Consequences).
 
 | Property | Proven by |
 | --- | --- |
-| Ordering, state filtering, tenant resolution, claim semantics | 28 unit tests against the in-memory double |
-| **Concurrent exclusivity** (2 callers, and 8) | PostgreSQL integration suite |
+| Parameter lists take no `organizationId`; `SUBMITTING` is an ACTIVE state | 2 type-level unit tests (all that survives without a double) |
+| Ordering — oldest first, `id` breaking a same-instant tie | PostgreSQL |
+| State filtering — every non-`QUEUED` state refused by both methods | PostgreSQL |
+| Tenant resolution through the `VideoProject` join | PostgreSQL |
+| **Concurrent exclusivity** (2 callers, and 8) | PostgreSQL |
 | Tenant agreement between the two ports | PostgreSQL — the execution port's resolved org can read the row through the tenant-facing port, and the other tenant cannot |
 | Claim mutates `state`/`updatedAt` and nothing else | PostgreSQL row comparison before/after |
-| **A concurrent legal write never yields a claim in another state** | PostgreSQL — claim raced against a cancellation |
+
+**Not covered by any test, stated rather than hidden:** the three
+`INTERNAL_ERROR` guards after a won claim, and the `assertTransition` call. None
+is reachable — `scene_generations` has no deletion path, its `VideoProject`
+relation is required, and a non-`SUBMITTING` read-back would mean the row lock
+did not hold. Reaching them from a test needs a seam in production code that
+exists only to be mocked, a worse trade on this boundary than an uncovered guard.
+
+**Also removed: the claim-versus-cancellation race test.** It could only assert
+that the row ended in *either* state — true whatever the adapter does — while
+implicitly modelling an unconditional write as a safe cancellation. It is not
+one; the requirement belongs to the future writer and is now a hard prerequisite
+in `docs/decisions/TODO.md`.
 
 ### Mutation verification
 
 | Mutation | Result |
 | --- | --- |
-| Claim predicate loses `state: "QUEUED"` | **9 fail** — including both race tests |
+| Claim predicate loses `state: "QUEUED"` | **9 fail** |
 | Discovery ordering reversed to newest-first | **1 fail** |
+| Tie-break reversed to `id: "desc"` | **1 fail** |
 | Claim returns a pre-claim (`QUEUED`) view | **1 fail** |
 
-Each restored, with `git diff --stat` confirming the adapter byte-identical
+Each restored, with `git diff --stat` confirming the adapter unchanged
 afterwards.
 
 ## Invariants held
@@ -150,21 +163,36 @@ provider input assembly, `createGeneration` call, polling, output ingestion,
 
 ## Size
 
-| Category | Lines changed |
-| --- | --- |
-| Production | 311 |
-| Tests | 530 |
-| Docs | 464 |
-| **Total** | **1,305** across 15 files |
+| Category | Lines changed | Applicable estimate |
+| --- | --- | --- |
+| Production | 272 | ~220–300 |
+| Tests | 349 | ~300–400 |
+| Docs | 566 | ~180–260 |
+| **Total** | **1,187** across 13 files | preferably ≤ ~850–900 |
 
 Measured from `git diff --numstat e8dbd01..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1272 −33 = 1305`).
+reconciling with the raw diff (`+1154 −33 = 1,187`).
 
-Against the Phase 4C-0 plan's estimate for this milestone — **~1,020–1,295**
-with the in-memory double included, or ~790–1,065 had it been deferred — this
-lands inside the applicable range. That is the first milestone since 4A-2a to
-finish inside its estimate rather than over it.
+**The record is corrected here.** An earlier revision of this report described
+1,305 lines as "inside the applicable estimate", citing a wider band that assumed
+an in-memory double. That was wrong on both counts: the applicable instruction
+was production ~220–300, tests ~300–400, docs ~180–260, preferably ≤ ~850–900
+total, and it also said not to build the double. 1,305 was not inside that
+estimate, and this revision does not claim the corrected figure is either.
 
-Production is **311** — the port, its adapter, and the double — comfortably under
-the ~500 reviewability target. Only 33 lines are deletions, because this
-milestone adds a boundary rather than removing one.
+Production (272) and tests (349) land inside their bands. **Docs
+(566) do not, and are the entire overage.** The reasoning for this milestone
+is written once in ADR-0025, once here, once in `CHANGELOG.md` and once in the PR
+body, and each round of review-driven correction added an explanation to all
+four. This revision collapsed the duplication between the ADR and this report —
+the report now points at the ADR rather than restating it — which recovered
+26 lines. Cutting the remaining ~300 would mean gutting the ADR, which is
+the durable decision record and the right place for the reasoning to live.
+
+So the total stands at **1,187 against the ~1,050 reviewability waiver** —
+137 over, roughly 13%. That is recorded as an overage, not reframed
+as compliance, and whether it is acceptable is the reviewer's call rather than
+this report's.
+
+Only 33 lines are deletions, because this milestone adds a boundary rather
+than removing one.

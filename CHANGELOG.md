@@ -17,9 +17,17 @@ PR #39 — see GitHub for lifecycle. Technical detail in
   `QUEUED → SUBMITTING`). Both **resolve** `organizationId` through the owning
   `VideoProject` and neither accepts one, so a worker never chooses a tenant —
   the claim hands it one.
-- Its PostgreSQL adapter, an in-memory double, 28 unit tests, and 26 integration
-  tests against live PostgreSQL that prove concurrent exclusivity at two and
-  eight callers — the property a single-threaded double cannot demonstrate.
+- Its PostgreSQL adapter, which calls `assertTransition("QUEUED", "SUBMITTING")`
+  so legality stays the state machine's answer, and runs the conditional update
+  and its read-back in one transaction so a won claim always returns the row it
+  moved. Any post-claim invariant failure throws `INTERNAL_ERROR` and rolls the
+  claim back rather than returning `null`, which means only "you did not win a
+  claim".
+- 27 integration tests against live PostgreSQL — ordering, state filtering,
+  tenant resolution, and concurrent exclusivity at two and eight callers.
+  **No in-memory double**: nothing consumes the port yet, and every property
+  worth asserting about it is decided by the database. The two unit tests that
+  remain assert only what the type system can state.
 
 ### Unchanged
 
@@ -38,6 +46,11 @@ PR #39 — see GitHub for lifecycle. Technical detail in
 - **Production-dormant by design.** Nothing calls either method outside tests,
   and the compile-time dependency pin now also refuses `execution`, `executions`
   and `executionRepository` on `GenerationServiceDeps`.
+- **The claim's transaction is not a general safety net.** It guarantees only
+  that a won claim returns the row this caller moved; a writer starting after it
+  commits is unaffected. `docs/decisions/TODO.md` records as a **hard
+  prerequisite** that any future transition able to compete with the claim —
+  cancellation first — must carry its own expected-state predicate.
 - A crash after claiming strands a row in `SUBMITTING`; recovery is recorded in
   `docs/decisions/TODO.md` as a requirement on the submitting milestone.
 

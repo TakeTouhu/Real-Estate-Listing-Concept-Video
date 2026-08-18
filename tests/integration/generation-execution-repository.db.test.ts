@@ -9,12 +9,14 @@ import { SCENE_GENERATION_STATES, type SceneGenerationState } from "@app/domain"
 /**
  * The system-scoped execution boundary against live PostgreSQL.
  *
- * This is where the claim's exclusivity is actually proven. The in-memory
- * double checks the *contract* — what discovery returns, what a claim does —
- * but it is single-threaded, so it can only demonstrate that a second
- * sequential call is refused. Whether two concurrent callers can both win is a
- * question about the database, and it is the question that decides whether a
- * provider gets paid twice, so it is asked here of the real thing.
+ * This is the *only* behavioural suite for that boundary, by decision. There is
+ * no in-memory double: nothing in production consumes the port yet, and every
+ * property worth asserting about it — ordering, state filtering, tenant
+ * resolution through the `VideoProject` join, and above all whether two
+ * concurrent callers can both win a claim — is decided by the database rather
+ * than by any interface it satisfies. A single-threaded double could only ever
+ * show that a second *sequential* call is refused, which is not the question
+ * that decides whether a provider gets paid twice.
  */
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
@@ -142,6 +144,17 @@ describe.skipIf(!HAS_DB)("findNextQueuedForPreparation against PostgreSQL", () =
     expect(candidate!.organizationId).toBe(ORG_B);
   });
 
+  it("breaks a same-instant tie deterministically by id", async () => {
+    // Two rows written in the same millisecond must still have a defined order,
+    // or repeated scans could keep returning one and starve the other. This is
+    // a property of the `ORDER BY`, so it is asked of the database that runs it.
+    const same = new Date("2026-08-18T01:00:00.000Z");
+    await seedGeneration("gen_ex_tie_b", "QUEUED", PROJECT_A, same);
+    await seedGeneration("gen_ex_tie_a", "QUEUED", PROJECT_A, same);
+
+    expect((await execution.findNextQueuedForPreparation())!.generation.id).toBe("gen_ex_tie_a");
+  });
+
   it.each(SCENE_GENERATION_STATES.filter((s) => s !== "QUEUED"))(
     "never offers a %s row",
     async (state: SceneGenerationState) => {
@@ -251,32 +264,25 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     expect(await tenantFacing.findById(ORG_A, "gen_ex_b")).toBeNull();
   });
 
-  it("never hands back a row that a concurrent legal write moved elsewhere", async () => {
-    // The TOCTOU window review found, exercised against the real database.
-    //
-    // `QUEUED → CANCELLED` is a legal transition and the tenant-facing `update`
-    // carries no state predicate — it persists what it is asked to persist — so
-    // a cancellation that observed `QUEUED` races the claim's re-read. If the
-    // update and the read were not one transaction, the claim could win the CAS
-    // and still return a row in `CANCELLED`, typed as a licence to submit.
-    //
-    // The guarantee asserted here is the one `ClaimedSceneGeneration` makes: a
-    // non-null claim is in `SUBMITTING`. Never a row in some other state.
-    await seedGeneration("gen_ex_toctou", "QUEUED", PROJECT_A);
-
-    const [claimed] = await Promise.all([
-      execution.claimQueuedForSubmission("gen_ex_toctou"),
-      tenantFacing.update(ORG_A, "gen_ex_toctou", { state: "CANCELLED" }),
-    ]);
-
-    if (claimed !== null) expect(claimed.generation.state).toBe("SUBMITTING");
-    // Whoever ran second wins the row's final state; either outcome is
-    // consistent, and neither is a claim granted over cancelled work.
-    const persisted = await prisma.sceneGeneration.findUnique({
-      where: { id: "gen_ex_toctou" },
-    });
-    expect(["SUBMITTING", "CANCELLED"]).toContain(persisted!.state);
-  });
+  // There is deliberately no test here racing a claim against
+  // `tenantFacing.update(..., { state: "CANCELLED" })`.
+  //
+  // An earlier revision had one, and it was removed because it modelled the
+  // wrong thing. `SceneGenerationRepository.update` carries no state predicate
+  // — it persists what it is asked to persist — so it is not a safe
+  // cancellation, and a test that raced against it could only assert that the
+  // row ended in *either* state. That assertion holds no matter what the
+  // adapter does, and worse, it read as though unconditional cancellation were
+  // a supported competitor to the claim. It is not: an unconditional write that
+  // lands after the claim commits will overwrite `SUBMITTING` regardless of any
+  // transaction here.
+  //
+  // The real requirement is on the future writer, not on this adapter, so it is
+  // recorded where a future writer will meet it: `docs/decisions/TODO.md` makes
+  // an expected-state predicate a hard prerequisite for any competing
+  // transition. What this adapter guarantees, and all it guarantees, is proven
+  // above — a won claim returns the row this caller moved to `SUBMITTING`, and
+  // a lost claim returns `null`.
 
   it("leaves other rows alone while claiming one", async () => {
     await seedGeneration("gen_ex_1", "QUEUED", PROJECT_A, new Date("2026-08-18T01:00:00.000Z"));

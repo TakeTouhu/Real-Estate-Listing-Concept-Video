@@ -301,6 +301,30 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       already advances on claim, and nothing else writes a `SUBMITTING` row — and
       a threshold comfortably above the provider HTTP timeout.
       **Required before any provider submission ships.**
+- [ ] **Every future transition that can compete with the claim MUST carry an
+      expected-state predicate.** Phase 4C-1b's claim is a compare-and-swap:
+      `UPDATE ... WHERE id = $1 AND state = 'QUEUED'`. Nothing else in the system
+      writes `state` that way. The tenant-facing
+      `SceneGenerationRepository.update` deliberately carries **no** state
+      predicate — it persists what it is asked to persist, leaving legality to
+      `assertTransition` — which is correct for a caller that has already read
+      and reasoned about the row, and unsafe for a caller competing with a
+      worker.
+      Concretely: a cancellation implemented as
+      `update(org, id, { state: "CANCELLED" })` will overwrite a row a worker has
+      already claimed and may already have submitted, producing a `CANCELLED` row
+      the provider is still billing for and a state the machine says is
+      unreachable from `SUBMITTING`. The claim's transaction does **not** prevent
+      this: it only guarantees the claim never returns a row it did not itself
+      move, and a writer that starts after that transaction commits is entirely
+      unaffected by it.
+      So any milestone adding cancellation, abandonment recovery, retry
+      scheduling, or completion writes must express the move as a conditional
+      update naming the state it expects to replace, and treat a zero-row result
+      as "someone else moved it" rather than as success. A method that cannot
+      state which state it is replacing does not belong on that path.
+      **HARD PREREQUISITE — required before any competing transition ships,
+      cancellation first.**
 - [x] **Phase 4B-1c (immutable generation request snapshot) must be merged
       before Phase 4C implementation begins.** Landed as the follow-up to the
       PR #32 review finding; ADR-0018 records the contract. Phase 4C is a
