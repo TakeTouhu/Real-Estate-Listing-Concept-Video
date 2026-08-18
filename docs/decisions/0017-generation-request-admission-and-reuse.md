@@ -141,6 +141,16 @@ service does not reclassify it.
 
 ### 10. Side-effect ordering is create → enqueue → audit
 
+> **Superseded 2026-08-18 by ADR-0024 (Phase 4C-1a).** There is no queue. The
+> durable `QUEUED` row is itself the acceptance condition, discovered by state,
+> so the ordering is now **create → audit** and the enqueue-failure case below
+> describes a step that no longer exists. What survives unchanged: the row is
+> created before anything else durable happens, reuse still returns an existing
+> attempt without auditing again, and the audit-failure window still leaves an
+> executable row. Eligibility is state, never audit existence — see ADR-0024 §4.
+> The two bullets below are retained as the historical record of the ordering
+> this milestone shipped.
+
 The order is fixed and the reasoning is financial: **audit is emitted only after
 the queue has accepted the job.** A record of "requested for execution" that
 outran a successful enqueue would assert work that a worker will never see.
@@ -192,6 +202,13 @@ the mandatory Phase 4C recovery sweep. No transactional outbox is introduced in
 this milestone.
 
 ### 13. Phase 4C must recover stranded rows and resolve the worker lookup
+
+> **Amended 2026-08-18 by ADR-0024 (Phase 4C-1a).** The first requirement is
+> **satisfied by design rather than by an added component**: with no transport,
+> no row can be durable and undiscoverable, so there is nothing to recover. The
+> second requirement stands unchanged and is Phase 4C-1b's subject. The payload
+> constraint is vacuous — there is no payload — but the properties it protected
+> survive as constraints on what execution reads and emits (ADR-0024 §5).
 
 Two consequences are deferred to Phase 4C as mandatory requirements:
 

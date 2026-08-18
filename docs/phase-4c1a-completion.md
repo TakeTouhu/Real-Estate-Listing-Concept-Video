@@ -1,0 +1,163 @@
+# Phase 4C-1a — Row-as-queue admission contract
+
+Milestone: Phase 4C-1a
+Base: `082a596aae5ea0bbb298e97cf289fe19206e8093` (merged Phase 4C-0a, PR #37)
+Decision record: ADR-0024; dated amendments to ADR-0017 §10 and §13
+
+> **Convention note.** This report carries no review or merge status. A status
+> line inside a file that cannot be updated at merge time is false within
+> minutes of being true, and four such lines had already accumulated across
+> earlier reports. Lifecycle now lives in exactly two places that *are* updated
+> at merge: the pull request, and the milestone table in `docs/progress.md`.
+> Reports state facts that stay true — what shipped, against which base, and
+> what was verified.
+
+## Why this milestone exists
+
+`SceneGenerationQueue` was introduced in Phase 4B-1b with an explicit contract:
+a rejected `enqueue` means the job was not accepted, so admission audits only
+after acceptance (ADR-0017 §10). Two facts accumulated against it.
+
+**Nothing implemented it.** `@app/queue` is a placeholder exporting a package
+name; the only implementation in the repository is a test double. Admission was
+calling a production dependency that did not exist.
+
+**The transport manufactured the failure it was meant to prevent.** ADR-0017 §13
+made a `QUEUED` sweep a mandatory Phase 4C requirement, because a row persisted
+but not enqueued is invisible work. That sweep — a scan for `QUEUED` rows — is a
+complete delivery mechanism on its own. The transport's only unique contribution
+was a way to lose work.
+
+## What shipped
+
+### The row is the queue
+
+`state = 'QUEUED'` is the durable acceptance condition, discovered over the
+`@@index([state])` that shipped in Phase 4A-2a. The invariant the milestone owes —
+*loss of an in-process wake signal must not make durable work unreachable* —
+holds by construction: there is no wake signal to lose.
+
+### The port is removed, not neutered
+
+Deleted: `SceneGenerationQueue`, `SceneGenerationJob`,
+`RecordingSceneGenerationQueue`, the `queue` dependency on
+`GenerationServiceDeps`, and the enqueue call.
+
+A no-op adapter was the alternative and was rejected. It would have preserved
+merged call sites at the price of a contract false in both halves — acceptance no
+longer conferred by the call, and a row nobody enqueued still executable. This
+repository has already paid twice for surface that reads as a capability the
+system has: `ProviderGenerationInput`'s unread `negativePrompt`/`cameraMotion`
+(removed in 4B-2b) and three undocumented fields sent to WaveSpeed (corrected in
+4B-2a).
+
+### Admission is create → audit
+
+```
+render/freeze → create QUEUED row → audit generation.requested → return
+```
+
+`GenerationServiceDeps` now has five keys, and a test asserts exactly that set —
+a provider, storage port, or queue reappearing is a failure, not a diff to skim.
+
+### Eligibility is state, never audit existence
+
+If `create` succeeds and `audit` throws, the caller gets the error and **the row
+stays executable**. Gating execution on an audit row would let a failing audit
+sink silently cancel durable customer work — an observability failure becoming a
+correctness failure. The exposure this leaves (a generation with no
+`generation.requested`) is closed from the other end by the worker's own
+submission audit in Phase 4C-3: a provider is never charged without an audit
+entry for that charge.
+
+## Verification
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | clean |
+| `pnpm lint` | clean |
+| `pnpm test` | **1156 passed**, 58 files (baseline 1155 / 58) |
+| `pnpm build` | clean |
+| `pnpm test:db` | **126 passed**, 6 files |
+
+### Test ledger
+
+Four cases retired with their subject, five replaced them, and six were amended.
+
+| Retired | Why |
+| --- | --- |
+| `enqueues a new attempt exactly once with a generationId-only payload` | No payload exists to inspect |
+| `does not enqueue a reused attempt` | Replaced by "creates no second row for a reused attempt" |
+| `leaves a durable QUEUED row, audits nothing, and propagates` (enqueue failure) | Replaced by the audit-failure equivalent |
+| `returns the stranded QUEUED row on a later call without re-enqueuing` | No row can strand; replaced by the unaudited-row re-entry case |
+
+New in `describe("startScene — row-as-queue admission")`: admission leaves a
+durable `QUEUED` row and nothing else · a reused attempt creates no second row ·
+the row is created **before** the audit is attempted · an audit-sink failure
+leaves an executable row and propagates · a later call returns that same
+unaudited row rather than a second one.
+
+Amended rather than deleted: `keeps the frozen prompt out of the queue payload
+and the audit entry` → `…out of the audit entry`. Half its subject retired with
+the transport; the surviving half is now the whole leak surface admission has,
+which makes the assertion stronger than it was, not weaker.
+
+### Mutation verification
+
+| Mutation | Result |
+| --- | --- |
+| Admission swallows audit-sink failures instead of propagating | **5 fail** |
+| Admission audits from `input` **before** `create` | **9 fail** |
+
+Both restored, with `git diff --stat` confirming the service file byte-identical
+to `HEAD`, and the full suite re-verified at 1156/58.
+
+## Invariants held
+
+8-fact `requestHash` **unchanged** · the frozen prompt is still rendered once at
+admission and never re-rendered · the five Phase 4B-1c snapshot fields and the
+4C-0a sixth are untouched · reuse precedence unchanged (active, then latest
+succeeded) · the partial unique index remains the concurrency authority and
+races still converge by re-reading · audit metadata remains an explicit
+nine-field allowlist · **no schema, no migration, no state-machine change** · no
+worker, no execution repository, no asset lookup, no signed URL, no provider
+input assembly, no `createGeneration` call, no polling, no `SUBMITTING`
+recovery, no model routing, no WaveSpeedAI call.
+
+## Documentation backlog corrected
+
+Six lines across five files claimed a review status that stopped being true at
+merge, plus two older reports with the same defect. All are now factual, and the
+convention above prevents the class rather than the instances:
+`docs/phase-3a1-completion.md`, `docs/phase-4b1b-completion.md`,
+`docs/phase-4b1c-completion.md`, `docs/phase-4b2b-completion.md`,
+`docs/phase-4c0a-completion.md`, `docs/phase-4c0b-completion.md`, and two
+`CHANGELOG.md` entries.
+
+`docs/decisions/TODO.md`'s *"Exactly one `CompiledPrompt` → provider prompt
+renderer may exist"* is also closed — satisfied by Phase 4B-2b's `renderPrompt`
+and left unchecked since.
+
+## Known limitations
+
+- **A rejected `startScene` no longer means nothing happened.** It never fully
+  did, but the surviving case deserves naming: an audit-sink failure returns an
+  error for work that is admitted and will execute.
+- **Nothing consumes `QUEUED` rows yet.** Discovery arrives in Phase 4C-1b and
+  execution after it; until then a `QUEUED` row is durable, correct, and inert.
+- **`startScene` still has no production caller.** The HTTP entry point is Phase
+  4E, unchanged by this milestone.
+
+## Size
+
+| Category | Lines changed |
+| --- | --- |
+| Production | 146 |
+| Tests | 147 |
+| Docs | 494 |
+| **Total** | **787** across 22 files |
+
+Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
+reconciling with the raw diff (`+545 −242 = 787`). Against the approved estimate
+of 680–760 — over by 27, carried entirely by the documentation sweep. Deletions
+are 242 of the total: this milestone removes more than it adds in code.

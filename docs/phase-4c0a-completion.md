@@ -1,8 +1,6 @@
 # Phase 4C-0a — Execution prompt freeze
 
-Status: **awaiting CTO review. Not merged.**
-
-Branch: `claude/real-estate-virtual-tour-phase-4c0a-hga252`
+Merged as PR #37.
 Base: `35970da89996fe34e5c9439b50b4fabd7bba711f` (merged Phase 4C-0b, PR #36)
 
 ## Why this milestone exists

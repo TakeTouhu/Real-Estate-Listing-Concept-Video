@@ -13,7 +13,6 @@ import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import {
   createTestDeps,
   InMemorySceneGenerationRepository,
-  RecordingSceneGenerationQueue,
 } from "../testing/index";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import { GenerationService, type GenerationServiceDeps } from "./generation-service";
@@ -34,7 +33,7 @@ import { computeGenerationRequestHash, generationRequestFactsFrom } from "./requ
 /**
  * The single-scene admission service. Every test drives the real
  * {@link GenerationService} against the Phase 4B-1a in-memory repository, a
- * recording queue double, a scripted storyboard stub, and a counting capability
+ * scripted storyboard stub, and a counting capability
  * fixture — no provider and no storage anywhere, which is itself part of what is
  * proven.
  */
@@ -227,7 +226,6 @@ function harness(config: HarnessConfig = {}) {
   inMemoryGenerations.registerProject(ORG, PROJECT);
   const generations = config.generations ?? inMemoryGenerations;
 
-  const queue = new RecordingSceneGenerationQueue();
   const capabilities = new CountingCapabilityProvider(config.capability ?? capability());
   const view: StoryboardView = config.view ?? {
     project: project(),
@@ -245,7 +243,6 @@ function harness(config: HarnessConfig = {}) {
     storyboard,
     generations,
     capabilities,
-    queue,
     ids: deps.ids,
   };
   const service = new GenerationService(serviceDeps);
@@ -255,7 +252,6 @@ function harness(config: HarnessConfig = {}) {
     serviceDeps,
     deps,
     generations: inMemoryGenerations,
-    queue,
     capabilities,
     storyboard,
     audits: () => deps.repos.auditLogs.all(),
@@ -292,14 +288,13 @@ describe("startScene — authorization", () => {
     expect(error.code).toBe("FORBIDDEN");
   });
 
-  it("performs no read, capability lookup, enqueue, or audit before authorization fails", async () => {
+  it("performs no read, capability lookup, write, or audit before authorization fails", async () => {
     const h = harness({ role: null });
     await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
 
     expect(h.storyboard.calls).toHaveLength(0);
     expect(h.capabilities.calls).toBe(0);
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 });
@@ -343,7 +338,6 @@ describe("startScene — nested integrity", () => {
 describe("startScene — freshness", () => {
   function expectNothingHappened(h: ReturnType<typeof harness>): void {
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   }
 
@@ -401,7 +395,6 @@ describe("startScene — prompt readiness", () => {
 
     expect(error.code).toBe("VALIDATION_FAILED");
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 });
@@ -425,11 +418,10 @@ describe("startScene — camera motion vocabulary", () => {
     await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow(AppError);
   });
 
-  it("creates nothing, enqueues nothing and audits nothing when it refuses", async () => {
+  it("creates nothing and audits nothing when it refuses", async () => {
     const h = motionHarness("slow dolly forward");
     await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow(AppError);
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 
@@ -498,7 +490,7 @@ describe("startScene — the rendered prompt is frozen at admission", () => {
   it("refuses an unrenderable compiled prompt before creating anything", async () => {
     // The renderer validates the stored structure, so a corrupt snapshot stops
     // admission rather than surfacing later at submission time. Nothing is
-    // created, enqueued, or audited.
+    // created and nothing is audited.
     const h = harness({
       view: {
         project: project(),
@@ -508,15 +500,17 @@ describe("startScene — the rendered prompt is frozen at admission", () => {
     });
     await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow(AppError);
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 
-  it("keeps the frozen prompt out of the queue payload and the audit entry", async () => {
+  it("keeps the frozen prompt out of the audit entry", async () => {
+    // The queue payload half of this assertion retired with the transport: an
+    // admitted row is discovered by state, so there is no payload to inspect.
+    // The audit entry is now the only thing admission emits, which makes this
+    // the whole of the leak surface rather than half of it.
     const h = harness();
     const admitted = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     const frozen = admitted.requestRenderedPrompt!;
-    expect(h.queue.jobs()).toEqual([{ generationId: admitted.id }]);
     const audited = JSON.stringify(h.audits());
     expect(audited).not.toContain(frozen);
     expect(audited).not.toContain("Preservation rules:");
@@ -526,7 +520,6 @@ describe("startScene — the rendered prompt is frozen at admission", () => {
 describe("startScene — capability validation", () => {
   function expectRefusedBeforeAdmission(h: ReturnType<typeof harness>): void {
     expect(h.generations.all()).toHaveLength(0);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   }
 
@@ -652,8 +645,7 @@ describe("startScene — active reuse", () => {
       expect(result.id).toBe(seeded.id);
       expect(result.state).toBe(state);
       expect(h.generations.all()).toHaveLength(1);
-      expect(h.queue.count).toBe(0);
-      expect(h.audits()).toHaveLength(0);
+        expect(h.audits()).toHaveLength(0);
     },
   );
 
@@ -675,7 +667,6 @@ describe("startScene — SUCCEEDED reuse", () => {
 
     expect(result.id).toBe(seeded.id);
     expect(h.generations.all()).toHaveLength(1);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 
@@ -690,7 +681,8 @@ describe("startScene — SUCCEEDED reuse", () => {
       expect(result.state).toBe("QUEUED");
       expect(result.id).not.toBe("gen_terminal");
       expect(h.generations.all()).toHaveLength(2);
-      expect(h.queue.count).toBe(1);
+      // The new attempt is executable by state; nothing was handed anywhere.
+      expect(result.state).toBe("QUEUED");
     },
   );
 });
@@ -802,20 +794,22 @@ describe("startScene — which frozen prompt survives a race, a retry, and reuse
     },
   );
 
-  it("a failed enqueue leaves the frozen prompt persisted for the later retry", async () => {
-    // The row is durable before the enqueue is attempted, so a queue outage must
-    // not lose the artifact — the next call returns that same QUEUED row, and
-    // Phase 4C recovery will submit exactly these bytes.
-    const h = harness();
-    h.queue.failNext();
+  it("a failed audit leaves the frozen prompt persisted and the row executable", async () => {
+    // The row is durable before the audit is attempted, and the audit is the
+    // only step left that can fail after it. An audit outage must not lose the
+    // artifact: the row keeps its bytes, keeps its QUEUED state — and therefore
+    // stays executable, because eligibility is state, never audit existence
+    // (ADR-0024 §4).
+    const h = harness({ auditLogs: new FailingAuditLogRepository() });
     await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow();
 
-    const stranded = h.generations.all();
-    expect(stranded).toHaveLength(1);
-    expect(stranded[0]!.requestRenderedPrompt).toBe(freshFrozen());
+    const durable = h.generations.all();
+    expect(durable).toHaveLength(1);
+    expect(durable[0]!.state).toBe("QUEUED");
+    expect(durable[0]!.requestRenderedPrompt).toBe(freshFrozen());
 
     const second = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
-    expect(second.id).toBe(stranded[0]!.id);
+    expect(second.id).toBe(durable[0]!.id);
     expect(second.requestRenderedPrompt).toBe(freshFrozen());
   });
 });
@@ -832,7 +826,6 @@ describe("startScene — lookup precedence", () => {
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
 
     expect(result.id).toBe("gen_active");
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 });
@@ -880,7 +873,6 @@ describe("startScene — race recovery", () => {
 
     expect(result.id).toBe("gen_winner");
     expect(repo.createCalls).toBe(1);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 
@@ -893,7 +885,6 @@ describe("startScene — race recovery", () => {
 
     expect(result.id).toBe("gen_succeeded_winner");
     expect(repo.createCalls).toBe(1);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 
@@ -923,7 +914,6 @@ describe("startScene — race recovery", () => {
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
 
     expect(error).toBeInstanceOf(SceneGenerationNotFoundError);
-    expect(h.queue.count).toBe(0);
     expect(h.audits()).toHaveLength(0);
   });
 });
@@ -1011,57 +1001,76 @@ describe("startScene — new-attempt initialization", () => {
   });
 });
 
-describe("startScene — queue", () => {
-  it("enqueues a new attempt exactly once with a generationId-only payload", async () => {
+/**
+ * The row-as-queue admission contract (ADR-0024).
+ *
+ * These replace the former queue and enqueue-failure suites. Their subject did
+ * not merely change name: there is no transport to accept a job, so "was it
+ * delivered?" is no longer a question the system can ask. What replaces it is
+ * narrower and stronger — the durable row's own state is the acceptance
+ * condition, and admission ends the moment that row exists.
+ */
+describe("startScene — row-as-queue admission", () => {
+  it("admits by leaving a durable QUEUED row and nothing else", async () => {
     const h = harness();
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
 
-    expect(h.queue.count).toBe(1);
-    const [job] = h.queue.jobs();
-    expect(Object.keys(job!)).toEqual(["generationId"]);
-    expect(job!.generationId).toBe(result.id);
+    const rows = h.generations.all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(result.id);
+    // Executable by state. Nothing was handed to anything.
+    expect(rows[0]!.state).toBe("QUEUED");
   });
 
-  it("does not enqueue a reused attempt", async () => {
+  it("creates no second row for a reused attempt", async () => {
     const h = harness();
     await h.generations.create(ORG, genRow("gen_active", "QUEUED") as NewSceneGeneration);
-    await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
-    expect(h.queue.count).toBe(0);
-  });
-});
 
-describe("startScene — enqueue failure", () => {
-  it("leaves a durable QUEUED row, audits nothing, and propagates the error", async () => {
-    const h = harness();
-    h.queue.failNext(new Error("queue down"));
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.id).toBe("gen_active");
+    expect(h.generations.all()).toHaveLength(1);
+  });
+
+  it("creates the row before auditing it", async () => {
+    // Ordering is observable through the failing sink: if the audit ran first,
+    // no row would exist after it threw. The row surviving proves `create`
+    // committed before `recordAudit` was reached.
+    const h = harness({ auditLogs: new FailingAuditLogRepository() });
+    await expect(h.service.startScene(ACTOR, ORG, PROJECT, SCENE)).rejects.toThrow();
+    expect(h.generations.all()).toHaveLength(1);
+  });
+
+  it("leaves an executable row when the audit sink fails, and propagates", async () => {
+    // The consistency window this design accepts, asserted rather than assumed:
+    // durable and executable, but unaudited, and the caller is told. Eligibility
+    // is state — making it audit existence would let a failing sink silently
+    // cancel durable customer work.
+    const h = harness({ auditLogs: new FailingAuditLogRepository() });
 
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
 
-    expect(error.message).toContain("queue down");
+    expect(error.message).toContain("audit sink unavailable");
     const rows = h.generations.all();
     expect(rows).toHaveLength(1);
     expect(rows[0]!.state).toBe("QUEUED");
     expect(h.audits()).toHaveLength(0);
   });
 
-  it("returns the stranded QUEUED row on a later call without re-enqueuing", async () => {
-    const h = harness();
-    h.queue.failNext(new Error("queue down"));
-    const first = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
-    expect(first.message).toContain("queue down");
+  it("returns that same unaudited row on a later call instead of a second one", async () => {
+    const h = harness({ auditLogs: new FailingAuditLogRepository() });
+    await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
+    const durable = h.generations.all()[0]!;
 
-    const stranded = h.generations.all()[0]!;
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
 
-    expect(result.id).toBe(stranded.id);
+    expect(result.id).toBe(durable.id);
     expect(h.generations.all()).toHaveLength(1);
-    expect(h.queue.count).toBe(0); // never successfully enqueued, and not retried by startScene
-    expect(h.audits()).toHaveLength(0);
   });
 });
 
 describe("startScene — audit", () => {
-  it("emits exactly one generation.requested entry after a successful enqueue", async () => {
+  it("emits exactly one generation.requested entry after the row is created", async () => {
     const h = harness();
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
 
@@ -1128,31 +1137,30 @@ describe("startScene — audit", () => {
     expect(h.audits()).toHaveLength(0);
   });
 
-  it("propagates an audit-sink failure without undoing the row or the enqueue", async () => {
+  it("propagates an audit-sink failure without undoing the row", async () => {
     const h = harness({ auditLogs: new FailingAuditLogRepository() });
 
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
 
     expect(error.message).toContain("audit sink unavailable");
-    // The row persists and the job stays enqueued exactly once — no rollback,
-    // no second enqueue.
+    // The row persists, in the state that makes it executable. No rollback.
     expect(h.generations.all()).toHaveLength(1);
     expect(h.generations.all()[0]!.state).toBe("QUEUED");
-    expect(h.queue.count).toBe(1);
   });
 });
 
 describe("startScene — provider/storage non-interference", () => {
   it("depends on no provider or storage collaborator", () => {
     const h = harness();
-    // The wired dependency set is exactly these six; there is no
-    // VideoGenerationProvider, provider factory, or storage port among them.
+    // The wired dependency set is exactly these five; there is no
+    // VideoGenerationProvider, provider factory, storage port, or queue among
+    // them. `queue` left with the transport it represented (ADR-0024) — this
+    // assertion fails if any of them reappears.
     expect(Object.keys(h.serviceDeps).sort()).toEqual([
       "capabilities",
       "generations",
       "identity",
       "ids",
-      "queue",
       "storyboard",
     ]);
   });
@@ -1163,7 +1171,6 @@ describe("startScene — provider/storage non-interference", () => {
     const h = harness();
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(result.state).toBe("QUEUED");
-    expect(h.queue.count).toBe(1);
   });
 });
 

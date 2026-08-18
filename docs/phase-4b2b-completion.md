@@ -1,8 +1,6 @@
 # Phase 4B-2b — The prompt renderer
 
-Status: **awaiting CTO review. Not merged.**
-
-Branch: `claude/real-estate-virtual-tour-phase-4b2b-hga252`
+Merged as PR #35.
 Base: `be9259681ba3caf179f8ec73aee98943a9672cd8` (merged Phase 4B-2a, PR #34)
 
 ## Why this milestone exists

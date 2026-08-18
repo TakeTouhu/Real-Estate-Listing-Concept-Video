@@ -1,8 +1,6 @@
 # Phase 4B-1c — Immutable generation request snapshot
 
-Status: **awaiting CTO review. Not merged.**
-
-Branch: `claude/real-estate-virtual-tour-phase-4b1c-hga252`
+Merged as PR #33.
 Base: `c169bd604543cc973c741f85bcec168562ec742a` (merged Phase 4B-1b, PR #32)
 
 ## Why this milestone exists

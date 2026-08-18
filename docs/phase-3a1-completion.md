@@ -3,8 +3,7 @@
 Version: 1.0
 Date: 2026-07-28
 Milestone: Phase 3A-1 — analysis contracts and deterministic offline provider
-Status: **Review candidate. Not approved, not merged. No phase tag** (a milestone
-PR never receives a `phase-N-complete` tag).
+Merged as a milestone PR. Milestone PRs never receive a `phase-N-complete` tag.
 Governance: `CLAUDE.md` v1.3
 
 ## Milestone context

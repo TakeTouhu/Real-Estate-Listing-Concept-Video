@@ -3,7 +3,7 @@ import { AppError } from "@app/shared";
 import type { StoryboardView } from "../storyboard/storyboard-service";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import { PRESERVATION_RULES, SYSTEM_NEGATIVE_CONSTRAINTS } from "../storyboard/prompt";
-import { createTestDeps, InMemorySceneGenerationRepository, RecordingSceneGenerationQueue } from "../testing/index";
+import { createTestDeps, InMemorySceneGenerationRepository } from "../testing/index";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import { GenerationService } from "./generation-service";
 import type { StoryboardReader } from "./ports";
@@ -160,17 +160,15 @@ function harness() {
   generations.registerProject(ORG, PROJECT);
   const storyboard = new SwappableStoryboard({ project: project(), scenes: [scene()], fresh: true });
   const capabilities: VideoModelCapabilityProvider = { current: () => capability() };
-  const queue = new RecordingSceneGenerationQueue();
 
   const service = new GenerationService({
     identity: deps,
     storyboard,
     generations,
     capabilities,
-    queue,
     ids: deps.ids,
   });
-  return { service, storyboard, generations, queue, deps };
+  return { service, storyboard, generations, deps };
 }
 
 describe("an admitted generation survives recomposition", () => {

@@ -229,20 +229,16 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Phase 4B follow-ups
 
-- [ ] **Phase 4C MUST recover `QUEUED` generations that were never durably
-      enqueued.** Phase 4B-1b creates the `SceneGeneration` row *before* calling
-      `SceneGenerationQueue.enqueue`, because a database transaction cannot span
-      an abstract queue and pretending otherwise would only look atomic. If
-      enqueue fails the row is deliberately left `QUEUED` — it holds the request
-      identity, so a retry reuses it instead of duplicating — but **nothing will
-      process it** until a worker sweeps for `QUEUED` rows with no queue
-      delivery. The `(state)` index added in Phase 4A-2a exists for that scan.
-      This is not optional cleanup: without it, an enqueue failure silently
-      strands customer work. **Required before Phase 4C ships.** As of Phase
-      4B-1b this stranded-`QUEUED` condition is live: `GenerationService.startScene`
-      leaves the row `QUEUED` on enqueue (or audit) failure and a later call
-      returns it without re-enqueuing, so the recovery sweep is now the only
-      thing that will move it forward.
+- [x] **Phase 4C MUST recover `QUEUED` generations that were never durably
+      enqueued.** **Closed in Phase 4C-1a by removing the condition rather than
+      recovering from it** (ADR-0024). There is no enqueue: `state = 'QUEUED'` is
+      itself the acceptance condition, discovered by scan over the `(state)`
+      index Phase 4A-2a added for exactly this. A row cannot be durable and
+      undiscoverable, so no sweep is owed and no stranded state exists. What
+      survives is narrower and is recorded in ADR-0024 §4: an audit-sink failure
+      still leaves an executable row with no `generation.requested` entry, closed
+      from the other end by the worker's submission audit rather than by gating
+      execution on audit existence.
 - [ ] **Phase 4C MUST define a trusted, system-scoped worker lookup for a
       `generationId`-only queue job.** The Phase 4B-1b queue payload
       (`SceneGenerationJob`) is `{ generationId }` and nothing else — no
@@ -252,7 +248,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       4C must add a system-scoped read that resolves a generation from its id
       alone **without** weakening or widening the organization-scoped
       tenant-facing methods, and **without** adding tenant identifiers to the
-      queue payload. **Required before Phase 4C ships.**
+      queue payload. **Required before Phase 4C ships.** *Updated Phase 4C-1a:*
+      the queue payload no longer exists (ADR-0024), so the payload half is
+      vacuous — but the requirement itself is unchanged and is Phase 4C-1b's
+      subject. Tenant identity is resolved through the generation's
+      `VideoProject`, never carried alongside the id.
 - [x] **Phase 4B-1c (immutable generation request snapshot) must be merged
       before Phase 4C implementation begins.** Landed as the follow-up to the
       PR #32 review finding; ADR-0018 records the contract. Phase 4C is a
@@ -282,9 +282,13 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       or `resolution` (both mutable after admission). Reading either could
       submit — and pay for — a request the customer never approved under the
       stored `requestHash` (ADR-0018 §3). **Required before Phase 4C ships.**
-- [ ] **Exactly one `CompiledPrompt` → provider prompt renderer may exist.**
-      None exists today; Phase 4B-1c deliberately did not add one, storing the
-      compiled prompt opaquely instead. The single implementation belongs at the
+- [x] **Exactly one `CompiledPrompt` → provider prompt renderer may exist.**
+      **Closed in Phase 4B-2b**: `renderPrompt` is that single implementation
+      (ADR-0020), and Phase 4C-0a froze its output on the row so execution never
+      re-renders (ADR-0023). Left unchecked until Phase 4C-1a's documentation
+      sweep. The original entry follows.
+      None existed at the time; Phase 4B-1c deliberately did not add one, storing
+      the compiled prompt opaquely instead. The single implementation belongs at the
       provider boundary and must preserve ADR-0014's structural separation of
       preservation rules, system negatives, and user text. A second renderer
       anywhere is a defect. **Required before Phase 4C ships.**
