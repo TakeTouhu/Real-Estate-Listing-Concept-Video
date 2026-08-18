@@ -235,14 +235,19 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
   });
 
   it.each(SCENE_GENERATION_STATES.filter((s) => s !== "QUEUED"))(
-    "refuses a %s row and leaves it untouched",
+    "refuses a %s row and leaves every column of it untouched",
     async (state: SceneGenerationState) => {
+      // Whole-row preservation, not just `state`: a refusal that still wrote
+      // some other column — `updatedAt` above all, which a later abandonment
+      // sweep reads — would make rows nobody is working on look freshly active.
       await seedGeneration("gen_ex_state", state, PROJECT_A);
+      const before = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_state" } });
 
-      expect(await execution.claimQueuedForSubmission("gen_ex_state")).toBeNull();
+      const claimed = await execution.claimQueuedForSubmission("gen_ex_state");
 
-      const persisted = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_state" } });
-      expect(persisted!.state).toBe(state);
+      expect(claimed).toBeNull();
+      const after = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_state" } });
+      expect(after).toEqual(before);
     },
   );
 
