@@ -68,6 +68,18 @@ No lease columns, no `SKIP LOCKED`, no raw SQL, **no schema or migration change*
 The state machine already provides the exclusion; a second mechanism would be a
 second source of truth about who holds the work.
 
+**The update and the read-back share one transaction** — found by review, and the
+reasoning is worth keeping. `updateMany` returns a count, so the row must be read
+again, and the first revision did that outside a transaction on the assumption
+that a claim holder is the only writer able to move the row on. That assumption
+was false: `QUEUED → CANCELLED` is legal and `SceneGenerationRepository.update`
+deliberately carries no state predicate, so a cancellation could commit between
+the two statements and the method would return a `CANCELLED` row typed as a
+claim — a licence to submit work someone else had stopped. The transaction makes
+the cancellation block; a state check refuses anything not demonstrably
+`SUBMITTING`. Regression-tested against PostgreSQL by racing a claim with a
+cancellation.
+
 ### Production-dormant, and pinned that way
 
 Nothing calls either method outside tests. The Phase 4C-1a compile-time
@@ -85,7 +97,7 @@ hold.
 | `pnpm lint` | exit 0 |
 | `pnpm test` | **1186 passed**, 59 files (baseline 1158 / 58) |
 | `pnpm build` | exit 0 |
-| `pnpm test:db` | **152 passed**, 7 files (baseline 126 / 6) |
+| `pnpm test:db` | **153 passed**, 7 files (baseline 126 / 6) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
 
 ### Where each property is proven
@@ -102,6 +114,7 @@ unit test claiming to prove exclusivity would be the most dangerous kind of gree
 | **Concurrent exclusivity** (2 callers, and 8) | PostgreSQL integration suite |
 | Tenant agreement between the two ports | PostgreSQL — the execution port's resolved org can read the row through the tenant-facing port, and the other tenant cannot |
 | Claim mutates `state`/`updatedAt` and nothing else | PostgreSQL row comparison before/after |
+| **A concurrent legal write never yields a claim in another state** | PostgreSQL — claim raced against a cancellation |
 
 ### Mutation verification
 
@@ -139,19 +152,19 @@ provider input assembly, `createGeneration` call, polling, output ingestion,
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 290 |
-| Tests | 503 |
-| Docs | 430 |
-| **Total** | **1,223** across 15 files |
+| Production | 311 |
+| Tests | 530 |
+| Docs | 464 |
+| **Total** | **1,305** across 15 files |
 
 Measured from `git diff --numstat e8dbd01..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1190 −33 = 1223`).
+reconciling with the raw diff (`+1272 −33 = 1305`).
 
 Against the Phase 4C-0 plan's estimate for this milestone — **~1,020–1,295**
 with the in-memory double included, or ~790–1,065 had it been deferred — this
 lands inside the applicable range. That is the first milestone since 4A-2a to
 finish inside its estimate rather than over it.
 
-Production is **290** — the port, its adapter, and the double — comfortably under
+Production is **311** — the port, its adapter, and the double — comfortably under
 the ~500 reviewability target. Only 33 lines are deletions, because this
 milestone adds a boundary rather than removing one.

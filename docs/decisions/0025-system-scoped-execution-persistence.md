@@ -87,6 +87,27 @@ than anything the process observed beforehand. The loser receives `null`, which
 is an ordinary outcome and not an exception: losing a race is not an error, and
 modelling it as one would push callers toward `try`/`catch` around a normal path.
 
+**The update and the read-back share one transaction, and that is load-bearing.**
+`updateMany` returns a count rather than rows, so the claimed row must be read
+again — and the first revision of this adapter did so outside any transaction,
+reasoning that a claim holder is the only writer able to move the row on. Review
+found that false, and it is worth recording why rather than just fixing it:
+`QUEUED → CANCELLED` is a legal transition, and `SceneGenerationRepository.update`
+deliberately carries **no state predicate** — it persists what it is asked to
+persist, leaving legality to `assertTransition`. A cancellation that observed
+`QUEUED` can therefore commit between the two statements, and the method would
+hand back a row in `CANCELLED` while typing it as a claim: a licence to spend
+money on work someone else had already stopped.
+
+Inside a transaction the `UPDATE` holds a row lock until commit, so that
+cancellation blocks instead of interleaving and the `SELECT` sees this
+transaction's own write. A state check backs it up: a row that is not
+demonstrably `SUBMITTING` yields `null` rather than a claim.
+
+The general lesson is worth keeping: "only I can write this row" is an assumption
+about *every* other writer, and it was wrong here because the repository it
+depends on is deliberately unconditional.
+
 No lease columns, no `SKIP LOCKED`, no raw SQL, and no schema change. The state
 machine already provides the exclusion — `QUEUED → SUBMITTING` is a legal
 transition and the row can make it only once — so a second mechanism would be a

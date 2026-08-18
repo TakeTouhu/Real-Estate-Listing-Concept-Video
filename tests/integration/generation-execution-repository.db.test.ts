@@ -251,6 +251,33 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     expect(await tenantFacing.findById(ORG_A, "gen_ex_b")).toBeNull();
   });
 
+  it("never hands back a row that a concurrent legal write moved elsewhere", async () => {
+    // The TOCTOU window review found, exercised against the real database.
+    //
+    // `QUEUED → CANCELLED` is a legal transition and the tenant-facing `update`
+    // carries no state predicate — it persists what it is asked to persist — so
+    // a cancellation that observed `QUEUED` races the claim's re-read. If the
+    // update and the read were not one transaction, the claim could win the CAS
+    // and still return a row in `CANCELLED`, typed as a licence to submit.
+    //
+    // The guarantee asserted here is the one `ClaimedSceneGeneration` makes: a
+    // non-null claim is in `SUBMITTING`. Never a row in some other state.
+    await seedGeneration("gen_ex_toctou", "QUEUED", PROJECT_A);
+
+    const [claimed] = await Promise.all([
+      execution.claimQueuedForSubmission("gen_ex_toctou"),
+      tenantFacing.update(ORG_A, "gen_ex_toctou", { state: "CANCELLED" }),
+    ]);
+
+    if (claimed !== null) expect(claimed.generation.state).toBe("SUBMITTING");
+    // Whoever ran second wins the row's final state; either outcome is
+    // consistent, and neither is a claim granted over cancelled work.
+    const persisted = await prisma.sceneGeneration.findUnique({
+      where: { id: "gen_ex_toctou" },
+    });
+    expect(["SUBMITTING", "CANCELLED"]).toContain(persisted!.state);
+  });
+
   it("leaves other rows alone while claiming one", async () => {
     await seedGeneration("gen_ex_1", "QUEUED", PROJECT_A, new Date("2026-08-18T01:00:00.000Z"));
     await seedGeneration("gen_ex_2", "QUEUED", PROJECT_A, new Date("2026-08-18T02:00:00.000Z"));

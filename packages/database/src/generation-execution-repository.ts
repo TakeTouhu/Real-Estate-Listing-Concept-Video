@@ -52,36 +52,57 @@ export function createPrismaSceneGenerationExecutionRepository(
     },
 
     async claimQueuedForSubmission(generationId: string) {
-      // The compare-and-swap. `state: "QUEUED"` inside the predicate is what
-      // makes this exclusive: two workers issuing this concurrently for the same
-      // id produce one update and one no-op, decided by the database rather than
-      // by anything this process observed beforehand.
+      // The update and the re-read share one transaction, and that is
+      // load-bearing rather than tidiness.
       //
-      // `updateMany` rather than `update` is deliberate — `update` requires a
-      // unique selector and would throw when the predicate does not match, which
-      // would turn "someone else won the race" into an exception. Losing a race
-      // is an ordinary outcome, so it is reported as `null`.
-      const { count } = await prisma.sceneGeneration.updateMany({
-        where: { id: generationId, state: "QUEUED" },
-        data: { state: "SUBMITTING" },
-      });
-      if (count === 0) return null;
+      // `updateMany` returns a count, not rows, so the claimed row must be read
+      // back. Outside a transaction that read is a TOCTOU window, and the window
+      // is reachable: `QUEUED → CANCELLED` is a legal transition, and
+      // `SceneGenerationRepository.update` deliberately carries no state
+      // predicate — it "persists what it is asked to persist", leaving legality
+      // to `assertTransition`. So a cancellation that observed `QUEUED` can
+      // commit between the two statements and this method would hand back a row
+      // in `CANCELLED` while typing it as claimed — a caller's licence to submit,
+      // issued for work someone else already stopped.
+      //
+      // Inside a transaction the `UPDATE` holds a row lock until commit, so that
+      // cancellation blocks rather than interleaving, and the `SELECT` sees this
+      // transaction's own write.
+      return prisma.$transaction(async (tx) => {
+        // The compare-and-swap. `state: "QUEUED"` inside the predicate is what
+        // makes this exclusive: two workers issuing this concurrently for the
+        // same id produce one update and one no-op, decided by the database
+        // rather than by anything this process observed beforehand.
+        //
+        // `updateMany` rather than `update` is also deliberate — `update`
+        // requires a unique selector and would throw when the predicate does not
+        // match, turning "someone else won the race" into an exception. Losing a
+        // race is an ordinary outcome, so it is reported as `null`.
+        const { count } = await tx.sceneGeneration.updateMany({
+          where: { id: generationId, state: "QUEUED" },
+          data: { state: "SUBMITTING" },
+        });
+        if (count === 0) return null;
 
-      // Re-read the row this call just won, with its tenant. A second query is
-      // unavoidable — `updateMany` returns a count, not rows — but it is safe:
-      // this caller holds the only claim, so nothing else may move the row out
-      // of `SUBMITTING` (the state machine gives that transition to whoever
-      // submits, and that is this caller).
-      const row = await prisma.sceneGeneration.findUnique({
-        where: { id: generationId },
-        include: { videoProject: { select: { organizationId: true } } },
+        const row = await tx.sceneGeneration.findUnique({
+          where: { id: generationId },
+          include: { videoProject: { select: { organizationId: true } } },
+        });
+
+        // Two refusals rather than an assertion, because a claim that is not
+        // demonstrably in `SUBMITTING` must never be granted:
+        //
+        // - a missing row cannot happen today (`scene_generations` has no
+        //   deletion path, and its `ON DELETE RESTRICT` parent exists to keep
+        //   paid-attempt history), so this is defensive;
+        // - a row in any other state would mean the lock did not hold, which is
+        //   the failure this transaction exists to prevent. Returning `null`
+        //   reuses the vocabulary the caller already handles — "you did not get
+        //   this one" — rather than inventing an error the domain has not
+        //   defined.
+        if (!row || row.state !== "SUBMITTING") return null;
+        return toCandidate(row) satisfies ClaimedSceneGeneration;
       });
-      // Defensive rather than expected: a row cannot vanish between the update
-      // and this read — `scene_generations` has no deletion path, and its
-      // `ON DELETE RESTRICT` parent relation exists precisely to keep paid
-      // attempt history. Returning `null` rather than asserting keeps the
-      // adapter free of a failure vocabulary the domain has not defined.
-      return row ? ({ ...toCandidate(row) } satisfies ClaimedSceneGeneration) : null;
     },
   };
 }
