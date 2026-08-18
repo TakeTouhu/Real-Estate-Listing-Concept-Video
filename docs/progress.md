@@ -124,7 +124,7 @@ merge was fetched and verified. Publication failed exactly as below.
 | Sequence diagram (Phase 4B-2b) | **Not applicable** — the milestone adds one pure function with no new interaction between components. The admission sequence is unchanged and already recorded for Phase 4B-1b. |
 | API change summary (Phase 4B-2b) | **Not applicable** — no route, request, response, or DTO changed. `CompiledPrompt` and the rendered string are server-side generation data and are not exposed over HTTP. |
 | Release notes | `docs/release-notes-phase-2.md`. **Not applicable to Phases 3 and 4** — no release is cut, because the product still cannot generate video. |
-| Database migration notes | `docs/migration-notes.md`. **Not applicable to Phase 4B-2b** — no migration; `prisma migrate diff` reports `No difference detected.` |
+| Database migration notes | `docs/migration-notes.md` — Phase 4C-0a adds one additive nullable column (`requestRenderedPrompt`), no backfill and no index. **Not applicable to Phases 4B-2b and 4C-0b** — no migration in either. |
 | Phase completion reports | `docs/phase-{0,1,2,3}-completion.md`, plus one report per Phase 3 and Phase 4 milestone — `docs/phase-3*-completion.md`, `docs/phase-4*-completion.md` (listed individually here they only go stale, so use `ls docs/phase-*-completion.md`) |
 
 ## Known deviation
@@ -209,7 +209,8 @@ reserved for a webhook.
 | 4B-1c | Immutable generation request snapshot: five persisted request-hash facts, `generationRequestFactsFrom`, additive migration (ADR-0018) | ~1,040 | **Merged** (PR #33, `e52d302`) |
 | 4B-2a | Ownership-aware capability semantics, verified OpenVideo descriptor, adapter request-body correction, single model identity (ADR-0019) | 1,023 + two P1 review fixes | **Merged** (PR #34, `be92596`) |
 | 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,713 — 367 production + 465 tests + 881 docs | **Merged** (PR #35, `cd9d136`) |
-| 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | see `docs/phase-4c0b-completion.md` | In review |
+| 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | 1,304 — 356 production + 485 tests + 463 docs | **Merged** (PR #36, `35970da`) |
+| 4C-0a | Execution prompt freeze: `requestRenderedPrompt` persisted at admission (ADR-0023) | see `docs/phase-4c0a-completion.md` | In review |
 | 4C | Database-backed queue and worker, provider submission and polling, retries and timeouts, fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
@@ -257,6 +258,9 @@ records the prompt renderer's format, what flattening five structured parts into
 one provider field costs, and what would reverse the choice; two of its sections
 carry dated Phase 4C-0b amendments. ADR-0022 closes camera motion to a reviewed
 vocabulary and records why moderation was rejected as the primary control.
+ADR-0023 freezes the rendered execution prompt at admission and records why the
+8-fact hash is deliberately left alone; it carries dated amendments into ADR-0018
+and ADR-0020.
 
 ## Phase 4 status
 
@@ -278,10 +282,14 @@ vocabulary and records why moderation was rejected as the primary control.
   (ADR-0020), taking the persisted snapshot as its boundary with parsing and
   fail-closed validation inside it. Three P1 blockers were found by independent
   pre-merge review and fixed before merge.
-- **Phase 4C-0b** — under review. Camera motion becomes a closed vocabulary
-  enforced in the domain (ADR-0022), closing the first of Phase 4C's two hard
-  prerequisites.
-- **Phase 4C** — not started, and still **hard-blocked**. Of the two
-  prerequisites 4B-2b recorded, camera-motion safety is closed by 4C-0b; the
-  rendered prompt is still not covered by the request hash, and Phase 4C-0a owns
-  that. No provider submission path may exist until it does.
+- **Phase 4C-0b** — merged as `35970da` (PR #36). Camera motion becomes a closed
+  vocabulary enforced in the domain (ADR-0022), closing the first of Phase 4C's
+  two hard prerequisites.
+- **Phase 4C-0a** — under review. The execution prompt freeze (ADR-0023):
+  `requestRenderedPrompt` is rendered once at admission and submitted verbatim,
+  closing the second and last prerequisite.
+- **Phase 4C** — not started. Both hard prerequisites recorded by 4B-2b are now
+  addressed: camera-motion safety by 4C-0b (merged), and the execution prompt
+  freeze by 4C-0a (in review). Phase 4C proper — worker, queue consumer, provider
+  submission, polling, retries — remains unstarted, and its own prerequisites are
+  recorded in `docs/decisions/TODO.md`.

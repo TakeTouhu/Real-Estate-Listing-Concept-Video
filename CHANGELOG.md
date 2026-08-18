@@ -3,9 +3,65 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4C-0b: camera motion is a closed vocabulary
+## [Unreleased] — Phase 4C-0a: execution prompt freeze
 
-Under review. Not merged. See `docs/phase-4c0b-completion.md` and ADR-0022.
+Under review. Not merged. See `docs/phase-4c0a-completion.md` and ADR-0023.
+
+### Added
+
+- **`SceneGeneration.requestRenderedPrompt`** — the exact positive provider
+  prompt produced at admission. A sixth request-snapshot field: the other five
+  fix *what was asked for*, this one fixes *what will be sent*. The worker
+  submits it verbatim and never runs the renderer for an admitted attempt, so a
+  renderer change applies to new admissions only.
+- **A non-null creation contract.** `NewSceneGeneration` narrows
+  `requestRenderedPrompt` to `string` while the column stays nullable, so an
+  attempt born without a frozen prompt — one the worker could never submit — is a
+  compile error rather than a runtime refusal. Found in pre-merge review, where
+  the first revision inherited `string | null` through `Omit`.
+- **`frozenExecutionPromptFrom`** — reads that artifact and **fails closed** for
+  a row that predates the contract. It never re-renders: re-rendering is the
+  drift the field exists to prevent.
+- One additive migration, `00000000000008_phase4c0a_execution_prompt_freeze`:
+  one nullable `TEXT` column, no backfill, no index, plus a schema test that
+  asserts those absences.
+
+### Changed
+
+- **Admission renders once and freezes the result**, after both reuse lookups and
+  immediately before `create`. A reused attempt already carries its own frozen
+  prompt, so reuse never touches the renderer.
+- **An unrenderable compiled prompt now refuses at admission** rather than at
+  submission time. `renderPrompt`'s validation runs before any row exists, so
+  nothing is created, enqueued, or audited.
+
+### Unchanged (deliberately)
+
+- **The 8-fact `requestHash` tuple.** Adding rendered bytes would break reuse and
+  duplicate paid work for identical requests; ADR-0023 §2 records why pinning
+  beats hashing here, and what it means that two rows may share a hash and carry
+  different frozen prompts.
+- The five existing snapshot fields, the queue payload `{ generationId }`, the
+  audit metadata allowlist, and `SceneGenerationUpdate` — which still cannot name
+  the new field, so a worker writing state cannot alter what will be submitted.
+- No provider submission, worker, queue consumer, polling, retries, or
+  multi-model routing. No WaveSpeedAI call.
+
+### Known gaps
+
+- A DB test that created a "legacy" row through the admission path now inserts it
+  around the repository via raw Prisma, because the admission path can no longer
+  express that state — which is the point.
+- Three test fixtures had to be rebuilt from the frozen constants, because
+  placeholder compiled prompts that were adequate while nothing rendered them are
+  now rejected at admission. The strictness is real and reaches tests.
+- An operator editing `requestRenderedPrompt` directly in the database would
+  change what is submitted without changing any hash. No application path can
+  express it; recorded as a database-access concern.
+
+## Phase 4C-0b: camera motion is a closed vocabulary
+
+Merged as `35970da` (PR #36). See `docs/phase-4c0b-completion.md` and ADR-0022.
 
 ### Added
 

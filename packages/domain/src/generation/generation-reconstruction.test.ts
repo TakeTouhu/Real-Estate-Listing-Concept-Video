@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import type { StoryboardView } from "../storyboard/storyboard-service";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
+import { PRESERVATION_RULES, SYSTEM_NEGATIVE_CONSTRAINTS } from "../storyboard/prompt";
 import { createTestDeps, InMemorySceneGenerationRepository, RecordingSceneGenerationQueue } from "../testing/index";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import { GenerationService } from "./generation-service";
@@ -26,13 +27,36 @@ import type { SceneGeneration } from "./types";
  * snapshot reproduces the original hash exactly.
  */
 
+/**
+ * A compiled prompt the renderer accepts, differing only in the customer text.
+ *
+ * Since Phase 4C-0a admission renders the prompt and freezes the result, so a
+ * fixture that is not renderable cannot be admitted (ADR-0023). The two
+ * variants below stay byte-different, which is what these reconstruction
+ * assertions depend on.
+ */
+function renderablePrompt(customization: string): string {
+  return JSON.stringify({
+    preservation: [...PRESERVATION_RULES],
+    sceneFacts: {
+      assetId: "ast_rc",
+      position: 1,
+      roomType: "KITCHEN",
+      durationSeconds: 5,
+      cameraMotion: "SLOW_PAN_LEFT",
+    },
+    userCustomization: customization,
+    negativeConstraints: { system: [...SYSTEM_NEGATIVE_CONSTRAINTS], user: null },
+  });
+}
+
 const ORG = "org_rc";
 const PROJECT = "vpr_rc";
 const SCENE_A = "scn_rc_a";
 const ACTOR = "usr_rc";
 
 const ADMITTED = {
-  compiledPrompt: '{"preservation":["keep"],"sceneFacts":{"p":1},"userCustomization":"warm light"}',
+  compiledPrompt: renderablePrompt("warm light"),
   durationSeconds: 5,
   cameraMotion: "SLOW_PAN_LEFT",
   aspectRatio: "16:9",
@@ -41,7 +65,7 @@ const ADMITTED = {
 
 /** Deliberately different from ADMITTED in every field. */
 const AFTER_RECOMPOSE = {
-  compiledPrompt: '{"preservation":["keep"],"sceneFacts":{"p":1},"userCustomization":"cool light"}',
+  compiledPrompt: renderablePrompt("cool light"),
   durationSeconds: 9,
   cameraMotion: "SLOW_PAN_RIGHT",
   aspectRatio: "9:16",
@@ -268,6 +292,7 @@ describe("legacy generations without a snapshot", () => {
       requestCameraMotion: null,
       requestAspectRatio: null,
       requestResolution: null,
+      requestRenderedPrompt: null,
       state: "QUEUED",
       providerPredictionId: null,
       submittedAt: null,

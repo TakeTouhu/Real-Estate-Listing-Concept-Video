@@ -44,9 +44,10 @@ function generation(id: string, overrides: Partial<NewSceneGeneration> = {}): Ne
     providerModelId: "fake/image-to-video",
     requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     requestDurationSeconds: 5,
-    requestCameraMotion: "SLOW_PAN",
+    requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
     requestResolution: "1080p",
+    requestRenderedPrompt: "Preservation rules:\n- frozen at admission",
     state: "QUEUED",
     providerPredictionId: null,
     submittedAt: null,
@@ -710,7 +711,7 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
       '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     );
     expect(created.requestDurationSeconds).toBe(5);
-    expect(created.requestCameraMotion).toBe("SLOW_PAN");
+    expect(created.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(created.requestAspectRatio).toBe("16:9");
     expect(created.requestResolution).toBe("1080p");
 
@@ -718,15 +719,63 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     const read = (await repo.findById(ORG_A, "gen_snap"))!;
     expect(read.requestCompiledPrompt).toBe(created.requestCompiledPrompt);
     expect(read.requestDurationSeconds).toBe(5);
-    expect(read.requestCameraMotion).toBe("SLOW_PAN");
+    expect(read.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(read.requestAspectRatio).toBe("16:9");
     expect(read.requestResolution).toBe("1080p");
   });
 
+  it("round-trips the frozen execution prompt byte-for-byte", async () => {
+    // The bytes are the artifact: the worker submits this verbatim, so a
+    // round trip that altered whitespace or encoding would defeat the freeze
+    // (ADR-0023).
+    const created = await repo.create(ORG_A, generation("gen_frozen"));
+    expect(created.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
+
+    const read = (await repo.findById(ORG_A, "gen_frozen"))!;
+    expect(read.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
+  });
+
+  it("cannot create an attempt with no frozen prompt", () => {
+    // Not a runtime assertion — a type-level one, which is the stronger claim.
+    // `NewSceneGeneration` narrows `requestRenderedPrompt` to `string` even
+    // though the column is nullable, so an attempt born unexecutable is a
+    // compile error rather than a row a worker later refuses (ADR-0023 §1).
+    // @ts-expect-error requestRenderedPrompt may not be null on a new attempt
+    void generation("gen_never", { requestRenderedPrompt: null });
+  });
+
+  it("reads a pre-freeze row back as null and never fabricates a prompt", async () => {
+    // Inserted **around** the repository, because that is the only way such a
+    // row exists: it was written before the column did. The admission path can
+    // no longer express it, so going through `create` would have been testing a
+    // state the system does not have.
+    await prisma.sceneGeneration.create({
+      data: {
+        id: "gen_prefreeze",
+        videoProjectId: PROJECT_A,
+        sourceStoryboardSceneId: "scn_itest_gr",
+        assetId: "ast_itest_gr",
+        sourceAnalysisRevision: 1,
+        requestHash: `${HASH}-prefreeze`,
+        providerName: "fake",
+        providerModelId: "fake/image-to-video",
+        state: "QUEUED",
+      },
+    });
+
+    const read = (await repo.findById(ORG_A, "gen_prefreeze"))!;
+    expect(read.requestRenderedPrompt).toBeNull();
+    // And the five Phase 4B-1c columns are null too: the migration that added
+    // each of them backfilled nothing.
+    expect(read.requestCompiledPrompt).toBeNull();
+    expect(read.requestDurationSeconds).toBeNull();
+  });
+
   it("stores a legacy row with a null snapshot and reads it back as null", async () => {
-    // The migration adds nullable columns and backfills nothing, so a row that
-    // predates the contract must remain representable and must NOT acquire
-    // fabricated values.
+    // The five Phase 4B-1c columns are still nullable on the create path — this
+    // milestone narrowed only `requestRenderedPrompt` — so a row that predates
+    // *that* contract must remain representable and must NOT acquire fabricated
+    // values.
     await repo.create(
       ORG_A,
       generation("gen_legacy_db", {
@@ -762,9 +811,12 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
       '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
     );
     expect(updated.requestDurationSeconds).toBe(5);
-    expect(updated.requestCameraMotion).toBe("SLOW_PAN");
+    expect(updated.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(updated.requestAspectRatio).toBe("16:9");
     expect(updated.requestResolution).toBe("1080p");
+    // Including the execution artifact: a worker writing state must not be able
+    // to change what will be submitted.
+    expect(updated.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
   });
 
   it("returns the snapshot from the active and latest-succeeded lookups too", async () => {

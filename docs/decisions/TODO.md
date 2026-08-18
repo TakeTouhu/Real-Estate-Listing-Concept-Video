@@ -360,32 +360,16 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Phase 4B-2b follow-ups
 
-- [ ] **The rendered prompt is not covered by the request hash (Phase 4C
-      prerequisite).** Request identity hashes the compiled prompt *structure*.
-      The string actually submitted is a function of that structure **and the
-      renderer's code** — headings, section order, bullet syntax, the trimming
-      rule — and the renderer version is recorded nowhere on the row. The
-      renderer now validates the stored structure and fails closed, which closes
-      the *corrupt-input* half of this area but not the *drift* half: a valid row
-      still renders differently under a changed renderer. A
-      generation admitted under one renderer version and executed after a deploy
-      that changed a heading would submit text the customer's approved request
-      never described, under a hash that still validates. Nothing detects this
-      today only because nothing submits yet; Phase 4C is the first code that
-      does, and must close it before submitting. Two candidate shapes, both
-      reviewable: pin a renderer version into the request identity, or freeze the
-      rendered string alongside the structure at admission. ADR-0020,
-      *Consequences*.
-- [x] **Camera motion reaches the model as unmoderated customer text.**
-      **Closed in Phase 4C-0b.** `cameraMotion` is now a closed four-value
-      vocabulary (`STATIC`, `SLOW_DOLLY_FORWARD`, `SLOW_PAN_LEFT`,
-      `SLOW_PAN_RIGHT`) enforced in the domain at project write, at composition,
-      and at generation admission — not in the HTTP route or the form, because
-      the same route serves API callers. The renderer maps each token to a
-      reviewed sentence and never emits the token or any stored text. The
-      `SceneFacts` comment is now accurate: the value is customer-selected,
-      system-constrained intent. Moderation was rejected as the primary control;
-      ADR-0022 records why. Mutation-verified at all three enforcement points.
+- [x] **The rendered prompt is not covered by the request hash (Phase 4C
+      prerequisite).** **Closed in Phase 4C-0a**, and closed by pinning rather
+      than by hashing. `requestRenderedPrompt` stores the exact provider prompt
+      produced at admission; the worker submits it verbatim and never runs the
+      renderer for an admitted attempt, so a renderer change applies to new
+      admissions only. The 8-fact hash is deliberately unchanged — adding
+      rendered bytes would break reuse and duplicate paid work (ADR-0023 §2).
+      Nullable, never backfilled: a row predating the contract fails closed via
+      `frozenExecutionPromptFrom` rather than being re-rendered with today's
+      code. Mutation-verified.
 - [ ] **Prompt length is unbounded and unmeasured.** Every generation carries
       roughly 600 characters of preamble before the customer's own words, which
       render last. The vendor publishes no `prompt` length limit, and no paid
