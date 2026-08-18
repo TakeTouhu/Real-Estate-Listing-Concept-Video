@@ -243,9 +243,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       **Closed in Phase 4C-1a**, by CTO authorization on PR #38, after automated
       review found that a later milestone following the guidance faithfully would
       rebuild the transport this one deleted. All four sources now agree:
-      - `CLAUDE.md` — the stack line reads "Queue-based or state-driven workers"
-        and names ADR-0024; the generation workflow step `→ Enqueue` is now
-        `→ Persist as durable executable work`.
+      - `CLAUDE.md` — the stack line reads **"State-driven workers"**: the
+        `SceneGeneration` row *is* the durable work item, there is no current
+        broker, and introducing one later must supersede ADR-0024 rather than
+        fall back to it as a default. The generation workflow now reads
+        `Create idempotent generation attempt → Persist the SceneGeneration row
+        as durable executable work → Worker discovers and claims an eligible
+        SceneGeneration row → Generate scenes through WaveSpeedAI`, so it names
+        both the durable artifact and how work is picked up, without implying a
+        separate job record.
       - `docs/SystemArchitecture.md` — the queue technology line is a dated
         supersession recording that Redis/BullMQ, SQS and Azure Service Bus were
         each evaluated and rejected, so adding one later must supersede ADR-0024

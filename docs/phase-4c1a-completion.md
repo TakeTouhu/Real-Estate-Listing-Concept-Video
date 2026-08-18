@@ -245,14 +245,23 @@ just built, is the wrong direction of authority however reasonable the edit look
 They were raised as a decision the CTO owns, with the exact conflicting lines and
 suggested wording, and changed only after explicit authorization.
 
-| Source | Now reads |
-| --- | --- |
-| `CLAUDE.md` stack | "Queue-based or state-driven workers", naming ADR-0024 |
-| `CLAUDE.md` workflow | `→ Persist as durable executable work` replaces `→ Enqueue` |
-| `docs/SystemArchitecture.md` queue line | a dated supersession: no broker, and the three named ones were evaluated and rejected — adding one later must supersede ADR-0024 rather than default to it |
-| `docs/SystemArchitecture.md` async section | no enqueue step; the durable `QUEUED` row is the acceptance condition |
+That first authorized pass produced intermediate wording — a stack line reading
+"Queue-based **or** state-driven workers" and a workflow step `→ Persist as
+durable executable work` — which later passes replaced. **What the final head
+says is below**, so this report describes one architecture from top to bottom
+rather than a snapshot of a pass:
 
-The `TODO.md` entry is closed rather than deferred to 4C-1b.
+| Source | Final wording on this head |
+| --- | --- |
+| `CLAUDE.md` stack | **"State-driven workers"** — the `SceneGeneration` row *is* the durable work item, no current broker, and adding one must supersede ADR-0024 |
+| `CLAUDE.md` workflow | `Create idempotent generation attempt → Persist the SceneGeneration row as durable executable work → Worker discovers and claims an eligible SceneGeneration row → Generate scenes through WaveSpeedAI` |
+| `docs/SystemArchitecture.md` queue line | a dated supersession: no broker, and Redis/BullMQ, SQS and Azure Service Bus were each evaluated and rejected |
+| `docs/SystemArchitecture.md` async section | no enqueue step; the durable `QUEUED` row is the acceptance condition |
+| `docs/SystemArchitecture.md` domain modules | **Scene Generation Attempt**, not "Generation Job" |
+| `docs/SystemArchitecture.md` multi-tenancy | scope is inherited where it is not a column: **`SceneGeneration` → `VideoProject` → `organizationId`**, no column added |
+
+The `TODO.md` entry is closed rather than deferred to 4C-1b, and its description
+of the aligned sources matches the wording above.
 
 **A second, wider sweep was needed.** Independent inspection found the first pass
 had corrected the four sources the reviewer named and stopped there, while the
@@ -306,18 +315,18 @@ historical records, and one unrelated UI phrase ("review queue").
 | --- | --- |
 | Production | 196 |
 | Tests | 235 |
-| Docs | 893 |
-| **Total** | **1,324** across 55 files |
+| Docs | 908 |
+| **Total** | **1,339** across 55 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+991 −333 = 1324`).
+reconciling with the raw diff (`+1006 −333 = 1339`).
 
-Against the approved estimate of 680–760, and above it by 564. The first commit
+Against the approved estimate of 680–760, and above it by 579. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 196 lines — the deleted port plus comment corrections — and 333 of the 1,324 are deletions.** The code change
+**Production is 196 lines — the deleted port plus comment corrections — and 333 of the 1,339 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.
