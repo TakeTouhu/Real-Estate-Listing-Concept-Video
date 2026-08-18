@@ -65,8 +65,13 @@ system has: `ProviderGenerationInput`'s unread `negativePrompt`/`cameraMotion`
 render/freeze → create QUEUED row → audit generation.requested → return
 ```
 
-`GenerationServiceDeps` now has five keys, and a test asserts exactly that set —
-a provider, storage port, or queue reappearing is a failure, not a diff to skim.
+`GenerationServiceDeps` loses its `queue` key. What pins that is **not** an
+assertion on the key set — that assertion existed in the first commit and was
+removed in the second, because it broke on any legitimate new dependency and so
+trained a reviewer to update it reflexively. Two behavioural checks pin it
+instead: no wired dependency exposes a video-provider, object-storage, or
+job-transport method surface, and none is *named* for a transport. A provider or
+queue collaborator reappearing is a test failure, not a diff to skim.
 
 ### Eligibility is state, never audit existence
 
@@ -191,14 +196,23 @@ would still lead a later milestone to rebuild it.
 | `docs/SystemArchitecture.md` | **"Queue: Redis/BullMQ, SQS, or Azure Service Bus"** — the three brokers ADR-0024 evaluated and rejected by name — and generation APIs returning after "enqueueing" |
 | `apps/worker/src/bootstrap.ts` | "Later phases attach the queue consumer here" |
 
-**The code comment was corrected here; the two documents were not.** `CLAUDE.md`
-is the governance authority and `SystemArchitecture.md` is source of truth #2.
-Superseding either is a governance decision, and an agent editing the constraints
-it is judged against, to match what it has just built, is the wrong direction of
-authority however reasonable the edit looks. The conflict is recorded in
-`docs/decisions/TODO.md` with suggested wording, flagged as **required before
-Phase 4C-1b begins** — that milestone builds the discovery side against whichever
-description is authoritative.
+**All four are now aligned**, but not in one step, and the sequence is the point.
+The code comment and `docs/architecture.md` were corrected immediately, being
+implementation. `CLAUDE.md` and `docs/SystemArchitecture.md` were not: `CLAUDE.md`
+is the governance authority and `SystemArchitecture.md` is source of truth #2, and
+an agent editing the constraints it is judged against, so they match what it has
+just built, is the wrong direction of authority however reasonable the edit looks.
+They were raised as a decision the CTO owns, with the exact conflicting lines and
+suggested wording, and changed only after explicit authorization.
+
+| Source | Now reads |
+| --- | --- |
+| `CLAUDE.md` stack | "Queue-based or state-driven workers", naming ADR-0024 |
+| `CLAUDE.md` workflow | `→ Persist as durable executable work` replaces `→ Enqueue` |
+| `docs/SystemArchitecture.md` queue line | a dated supersession: no broker, and the three named ones were evaluated and rejected — adding one later must supersede ADR-0024 rather than default to it |
+| `docs/SystemArchitecture.md` async section | no enqueue step; the durable `QUEUED` row is the acceptance condition |
+
+The `TODO.md` entry is closed rather than deferred to 4C-1b.
 
 ## Known limitations
 
@@ -216,18 +230,18 @@ description is authoritative.
 | --- | --- |
 | Production | 158 |
 | Tests | 193 |
-| Docs | 692 |
-| **Total** | **1,043** across 46 files |
+| Docs | 713 |
+| **Total** | **1,064** across 48 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+764 −279 = 1043`).
+reconciling with the raw diff (`+781 −283 = 1064`).
 
-Against the approved estimate of 680–760, and above it by 283. The first commit
+Against the approved estimate of 680–760, and above it by 304. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 158 lines and 279 of the 1,043 are deletions.** The code change
+**Production is 158 lines and 283 of the 1,064 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.

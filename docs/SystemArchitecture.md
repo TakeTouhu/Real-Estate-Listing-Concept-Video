@@ -10,7 +10,11 @@ Start as a modular monolith with independently scalable asynchronous video-gener
 - Web/API: TypeScript + Next.js
 - Database: PostgreSQL + Prisma
 - Object storage: S3-compatible or Azure Blob Storage
-- Queue: Redis/BullMQ, SQS, or Azure Service Bus
+- Queue: **none — superseded 2026-08-18 by ADR-0024.** The `scene_generations`
+  row is the durable queue: work is discovered by `state = 'QUEUED'` over the
+  existing index, not delivered by a transport. Redis/BullMQ, SQS and Azure
+  Service Bus were each evaluated and rejected there; adding one later is a
+  decision that must supersede that ADR, not a default to fall back on
 - Worker: containerized process
 - Video composition: FFmpeg
 - Authentication: email and optional Entra ID / Google
@@ -56,7 +60,9 @@ Every tenant-owned business table contains `organization_id`. Organization scope
 
 ## Asynchronous generation
 
-Generation APIs return immediately after validation, credit reservation, idempotent job creation, and enqueueing. Workers emit progress and terminal status. Credit settlement is transactional and exact-once.
+Generation APIs return immediately after validation, credit reservation, and durable creation of the generation row. Workers emit progress and terminal status. Credit settlement is transactional and exact-once.
+
+**Superseded 2026-08-18 by ADR-0024:** there is no enqueue step. Admission is `create → audit`, and the durable row in `QUEUED` *is* the acceptance condition — a worker discovers executable work by scanning for that state. Nothing is handed to a transport, so nothing can be lost between admission and execution, and no recovery sweep is owed for work that was persisted but never delivered.
 
 ## Provider abstraction
 

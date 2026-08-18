@@ -48,7 +48,8 @@ Recommended stack:
 - PostgreSQL
 - Prisma
 - Object storage
-- Queue-based workers
+- Queue-based or state-driven workers (ADR-0024: the `SceneGeneration` row is
+  the durable queue; no external broker)
 - FFmpeg
 - Stripe
 - OpenTelemetry
@@ -107,7 +108,7 @@ Authenticate
 → Estimate platform and provider cost
 → Reserve credits
 → Create idempotent job
-→ Enqueue
+→ Persist as durable executable work
 → Generate scenes through WaveSpeedAI
 → Copy outputs to managed storage
 → Compose with FFmpeg
