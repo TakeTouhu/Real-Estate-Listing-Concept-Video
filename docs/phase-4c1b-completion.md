@@ -113,7 +113,7 @@ boundary is decided by the database rather than by any interface satisfying it
 | Tenant resolution through the `VideoProject` join | PostgreSQL |
 | **Concurrent exclusivity** (2 callers, and 8) | PostgreSQL |
 | Tenant agreement between the two ports | PostgreSQL — the execution port's resolved org can read the row through the tenant-facing port, and the other tenant cannot |
-| Claim mutates `state`/`updatedAt` and nothing else | PostgreSQL row comparison before/after |
+| Claim mutates `state`, **advances `updatedAt`**, and touches nothing else | PostgreSQL — row seeded with a known-old `updatedAt`, then compared before/after |
 
 **Not covered by any test, stated rather than hidden:** the three
 `INTERNAL_ERROR` guards after a won claim, and the `assertTransition` call. None
@@ -136,9 +136,19 @@ in `docs/decisions/TODO.md`.
 | Discovery ordering reversed to newest-first | **1 fail** |
 | Tie-break reversed to `id: "desc"` | **1 fail** |
 | Claim returns a pre-claim (`QUEUED`) view | **1 fail** |
+| Claim writes back the seeded-old `updatedAt` instead of advancing it | **1 fail** |
 
 Each restored, with `git diff --stat` confirming the adapter unchanged
 afterwards.
+
+The last one closed a real gap. That test previously normalized `updatedAt` back
+to its pre-claim value before comparing rows, so it proved only that *nothing
+else* changed — a claim that never advanced `updatedAt` would have passed it.
+The row is now seeded with a fixed 2020 timestamp (Prisma honours an explicit
+value even on `@updatedAt`) and the assertion is strictly greater: deterministic,
+no sleep. It matters beyond tidiness — `updatedAt` is what a later milestone's
+abandonment sweep will read to decide a `SUBMITTING` row is stranded, so a claim
+that failed to advance it would make a live claim look stale.
 
 ## Invariants held
 
@@ -166,12 +176,12 @@ provider input assembly, `createGeneration` call, polling, output ingestion,
 | Category | Lines changed | Applicable estimate |
 | --- | --- | --- |
 | Production | 272 | ~220–300 |
-| Tests | 349 | ~300–400 |
-| Docs | 566 | ~180–260 |
-| **Total** | **1,187** across 13 files | preferably ≤ ~850–900 |
+| Tests | 374 | ~300–400 |
+| Docs | 576 | ~180–260 |
+| **Total** | **1,222** across 13 files | est. ≤ ~850–900 · waiver 1,225 |
 
 Measured from `git diff --numstat e8dbd01..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1154 −33 = 1,187`).
+reconciling with the raw diff (`+1189 −33 = 1,222`).
 
 **The record is corrected here.** An earlier revision of this report described
 1,305 lines as "inside the applicable estimate", citing a wider band that assumed
@@ -180,19 +190,19 @@ was production ~220–300, tests ~300–400, docs ~180–260, preferably ≤ ~85
 total, and it also said not to build the double. 1,305 was not inside that
 estimate, and this revision does not claim the corrected figure is either.
 
-Production (272) and tests (349) land inside their bands. **Docs
-(566) do not, and are the entire overage.** The reasoning for this milestone
-is written once in ADR-0025, once here, once in `CHANGELOG.md` and once in the PR
-body, and each round of review-driven correction added an explanation to all
-four. This revision collapsed the duplication between the ADR and this report —
-the report now points at the ADR rather than restating it — which recovered
-26 lines. Cutting the remaining ~300 would mean gutting the ADR, which is
-the durable decision record and the right place for the reasoning to live.
+Production (272) lands inside its band. Tests (374) run slightly over,
+by the `updatedAt` evidence added in the final pass. **Docs (576) are the
+bulk of the overage**: the reasoning is written once in ADR-0025, once here, once
+in `CHANGELOG.md` and once in the PR body, and each round of review-driven
+correction added an explanation to all four. Collapsing the duplication between
+the ADR and this report recovered 26 lines; cutting the remaining ~300 would mean
+gutting the ADR, which is the durable decision record and the right place for the
+reasoning to live.
 
-So the total stands at **1,187 against the ~1,050 reviewability waiver** —
-137 over, roughly 13%. That is recorded as an overage, not reframed
-as compliance, and whether it is acceptable is the reviewer's call rather than
-this report's.
+The CTO accepted the overage in principle and set a final reviewability waiver of
+**1,225** for this milestone. The total is **1,222**, three lines inside
+it. Recorded as an accepted overage against the original estimate, not as
+compliance with it.
 
 Only 33 lines are deletions, because this milestone adds a boundary rather
 than removing one.

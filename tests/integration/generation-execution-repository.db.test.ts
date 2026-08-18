@@ -31,12 +31,20 @@ const prisma = new PrismaClient();
 const execution = createPrismaSceneGenerationExecutionRepository(prisma);
 const tenantFacing = createPrismaSceneGenerationRepository(prisma);
 
-/** Insert a row directly: admission is not this suite's subject. */
+/**
+ * Insert a row directly: admission is not this suite's subject.
+ *
+ * `updatedAt` is settable because Prisma honours an explicit value even on an
+ * `@updatedAt` field, which lets a test pin a known-old timestamp and then
+ * prove the claim moved it — without a sleep, and without depending on how
+ * fast the seed and the claim happen to land.
+ */
 function seedGeneration(
   id: string,
   state: SceneGenerationState,
   videoProjectId: string,
   createdAt?: Date,
+  updatedAt?: Date,
 ) {
   return prisma.sceneGeneration.create({
     data: {
@@ -56,6 +64,7 @@ function seedGeneration(
       requestRenderedPrompt: `frozen:${id}`,
       state,
       ...(createdAt ? { createdAt } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
     },
   });
 }
@@ -241,17 +250,33 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     expect(await execution.claimQueuedForSubmission("gen_ex_missing")).toBeNull();
   });
 
-  it("mutates state and updatedAt, and nothing else", async () => {
-    // A claim that rewrote a snapshot field would change what a later milestone
-    // submits, under a requestHash that still validated.
-    await seedGeneration("gen_ex_a", "QUEUED", PROJECT_A);
+  it("advances updatedAt, mutates state, and touches nothing else", async () => {
+    // The row is seeded with a known-old `updatedAt` on purpose. Without one,
+    // seed and claim can land inside the same clock tick, so an `updatedAt`
+    // that never moved would still compare equal and the assertion below would
+    // pass while proving nothing. A fixed past timestamp makes it discriminating
+    // and deterministic — no sleep, no dependence on how fast the suite runs.
+    const seededUpdatedAt = new Date("2020-01-01T00:00:00.000Z");
+    await seedGeneration("gen_ex_a", "QUEUED", PROJECT_A, undefined, seededUpdatedAt);
+
     const before = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_a" } }))!;
+    // Guards the guard: if Prisma ever stopped honouring an explicit value on an
+    // `@updatedAt` field, the fixture would silently stop pinning anything and
+    // this test would quietly go back to proving nothing.
+    expect(before.updatedAt).toEqual(seededUpdatedAt);
 
     await execution.claimQueuedForSubmission("gen_ex_a");
 
     const after = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_a" } }))!;
-    expect({ ...after, state: before.state, updatedAt: before.updatedAt }).toEqual(before);
     expect(after.state).toBe("SUBMITTING");
+    // Strictly greater, not merely different: the claim must move the row
+    // forward in time. `updatedAt` is what a later milestone's abandonment
+    // sweep will read to decide a `SUBMITTING` row has been stranded, so a
+    // claim that failed to advance it would make a live claim look stale.
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    // And nothing else moved. A claim that rewrote a snapshot field would change
+    // what a later milestone submits, under a requestHash that still validated.
+    expect({ ...after, state: before.state, updatedAt: before.updatedAt }).toEqual(before);
   });
 
   it("claims a row belonging to whichever tenant owns it", async () => {
