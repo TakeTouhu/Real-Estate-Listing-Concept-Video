@@ -48,14 +48,20 @@ Review / Approval / Download
 - AI Analysis
 - Storyboard
 - Video Project
-- Generation Job
+- Scene Generation Attempt
 - Video Output
 - Billing and Credits
 - Audit and Compliance
 
 ## Multi-tenancy
 
-Every tenant-owned business table contains `organization_id`. Organization scope is resolved from the authenticated session, enforced in the application/data-access layer, and covered by automated isolation tests. Storage keys are organization-prefixed. Signed URLs are short-lived.
+Every tenant-owned aggregate is organization-scoped. **Scope is not always a column.** A table either carries `organizationId` directly, or inherits authoritative scope through a required parent relation — both are first-class, and the second is what several tables actually do.
+
+- `SceneGeneration` → `VideoProject` → `organizationId`. The generation row carries **no** `organizationId` of its own; its tenant is whichever organization owns the parent project, resolved as a join predicate inside every query rather than as an application-side check that could be forgotten.
+- Data-access boundaries enforce tenant scope: tenant-facing repository methods take `organizationId` as an addressing argument, so a read that forgets to scope is a missing predicate rather than a silently unfiltered result.
+- Automated isolation tests cover it.
+
+Organization scope is resolved from the authenticated session. Storage keys are organization-prefixed. Signed URLs are short-lived.
 
 ## Asynchronous generation
 

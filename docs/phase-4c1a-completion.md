@@ -6,8 +6,10 @@ Decision record: ADR-0024; dated amendments to ADR-0017 §10 and §13
 
 > **Convention note.** This report is an immutable technical snapshot and
 > carries no lifecycle status. A status line inside a file that nothing rewrites
-> at merge is false within minutes of being true, and eight such claims had
-> accumulated across earlier reports and the changelog.
+> at merge is false within minutes of being true. **Thirty-one such claims had
+> accumulated** across the completion reports, the Phase 2 release notes, and the
+> changelog — a first narrow pass found eight, and a wider sweep found twenty-three
+> more.
 >
 > **The GitHub pull request is the authoritative lifecycle source.** Checked-in
 > files do not track it, because no mechanism updates them when state changes —
@@ -81,8 +83,11 @@ Three layers replace it, because the first two share a blind spot:
 2. **by name** — no dependency is *named* for a transport, since a stub could
    expose no method at all;
 3. **at the type boundary** — both checks above inspect only what the harness
-   wires, so an optional interface member would slip past them. See the ledger
-   below.
+   wires, so an optional interface member would slip past them. The pin covers
+   every execution collaborator admission must never acquire: **transport** names
+   (`queue`, `jobs`, `broker`, `publisher`, `enqueue`), **provider execution**
+   names (`provider`, `videoProvider`, `videoGenerationProvider`), and **storage
+   execution** names (`storage`, `objectStorage`). See the ledger below.
 
 ### Eligibility is state, never audit existence
 
@@ -139,10 +144,19 @@ reintroduces the deleted contract with every runtime check still green. A
 compile-time assertion now resolves `Extract<keyof GenerationServiceDeps, …>` to
 `never`, so declaring one stops the build.
 
-Verified by mutation: adding `readonly queue?: { enqueue(job): Promise<void> }`
-to `GenerationServiceDeps` fails typecheck with
-`TS2322: Type 'true' is not assignable to type 'never'` — **while all 90 runtime
-tests still pass**, which is the precise gap the pin closes.
+Verified by mutation, one declaration at a time, each restored before the next:
+
+| Added to `GenerationServiceDeps` | `pnpm typecheck` |
+| --- | --- |
+| `readonly queue?: unknown` | **fails** `TS2322` |
+| `readonly videoProvider?: unknown` | **fails** `TS2322` |
+| `readonly objectStorage?: unknown` | **fails** `TS2322` |
+| `readonly clock?: { now(): Date }` | **passes** (exit 0), 90 runtime tests green |
+
+The last row is the control, and it is the reason the exact-key-count assertion
+was not restored: a legitimate new dependency must not trip the pin merely by
+changing the key count. The first three fail **while the runtime checks stay
+green**, which is the precise gap the pin closes.
 
 **The exact-dependency-key assertion was replaced.** Asserting
 `Object.keys(serviceDeps)` equals a fixed five-element list fails whenever a
@@ -291,19 +305,19 @@ historical records, and one unrelated UI phrase ("review queue").
 | Category | Lines changed |
 | --- | --- |
 | Production | 196 |
-| Tests | 220 |
-| Docs | 840 |
-| **Total** | **1,256** across 55 files |
+| Tests | 235 |
+| Docs | 893 |
+| **Total** | **1,324** across 55 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+935 −321 = 1256`).
+reconciling with the raw diff (`+991 −333 = 1324`).
 
-Against the approved estimate of 680–760, and above it by 496. The first commit
+Against the approved estimate of 680–760, and above it by 564. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 196 lines — the deleted port plus comment corrections — and 321 of the 1,256 are deletions.** The code change
+**Production is 196 lines — the deleted port plus comment corrections — and 333 of the 1,324 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.

@@ -271,20 +271,26 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       unaudited** regardless of what happened at admission. Until it does, an
       unaudited generation is a paid call waiting to be untraceable.
       **Required before any provider submission ships.**
-- [ ] **Phase 4C MUST define a trusted, system-scoped worker lookup for a
-      `generationId`-only queue job.** The Phase 4B-1b queue payload
-      (`SceneGenerationJob`) is `{ generationId }` and nothing else — no
-      `organizationId`, by decision (ADR-0017 §13). But every tenant-facing
-      `SceneGenerationRepository` method requires an `organizationId`, so a
-      worker holding only the job payload cannot currently load the row. Phase
-      4C must add a system-scoped read that resolves a generation from its id
-      alone **without** weakening or widening the organization-scoped
-      tenant-facing methods, and **without** adding tenant identifiers to the
-      queue payload. **Required before Phase 4C ships.** *Updated Phase 4C-1a:*
-      the queue payload no longer exists (ADR-0024), so the payload half is
-      vacuous — but the requirement itself is unchanged and is Phase 4C-1b's
-      subject. Tenant identity is resolved through the generation's
-      `VideoProject`, never carried alongside the id.
+- [ ] **Phase 4C-1b MUST define a separate, trusted, system-scoped execution
+      persistence boundary.** There is **no queue job, no execution transport,
+      and no payload**: discovery is database-state-driven (ADR-0024). The
+      boundary must:
+      - discover eligible `QUEUED` `SceneGeneration` rows **directly from
+        persistence**, over the `(state)` index Phase 4A-2a added;
+      - resolve the authoritative `organizationId` **through `VideoProject`**,
+        which is where tenant identity lives;
+      - **never** take `organizationId` from customer or transport input — the
+        claim hands the worker a tenant, the worker never chooses one;
+      - **not** add `organizationId` to `SceneGeneration`;
+      - **not** weaken, widen, or reuse the tenant-facing
+        `SceneGenerationRepository`, whose methods stay organization-addressed so
+        their isolation tests keep their full force.
+      Why a *separate* boundary rather than a new method on the existing
+      repository: every tenant-facing method takes `organizationId` as an
+      addressing argument, and a system-scoped read on that same interface would
+      let any holder bypass scoping. Keeping the system-scoped surface in its own
+      port makes the blast radius one boundary rather than the whole repository.
+      **Required before Phase 4C-1b ships.**
 - [x] **Phase 4B-1c (immutable generation request snapshot) must be merged
       before Phase 4C implementation begins.** Landed as the follow-up to the
       PR #32 review finding; ADR-0018 records the contract. Phase 4C is a

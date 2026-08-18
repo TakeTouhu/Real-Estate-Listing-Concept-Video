@@ -87,7 +87,7 @@ packages/
 ├── domain/
 ├── database/
 ├── storage/
-├── queue/
+├── queue/            # reserved boundary, empty — no transport (ADR-0024)
 ├── ai-providers/
 ├── video-providers/
 ├── observability/
@@ -109,8 +109,9 @@ Authenticate
 → Moderate prompt and images
 → Estimate platform and provider cost
 → Reserve credits
-→ Create idempotent job
-→ Persist as durable executable work
+→ Create idempotent generation attempt
+→ Persist the SceneGeneration row as durable executable work
+→ Worker discovers and claims an eligible SceneGeneration row
 → Generate scenes through WaveSpeedAI
 → Copy outputs to managed storage
 → Compose with FFmpeg

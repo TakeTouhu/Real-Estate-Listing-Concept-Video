@@ -642,7 +642,7 @@ describe("startScene — active reuse", () => {
       expect(result.id).toBe(seeded.id);
       expect(result.state).toBe(state);
       expect(h.generations.all()).toHaveLength(1);
-        expect(h.audits()).toHaveLength(0);
+      expect(h.audits()).toHaveLength(0);
     },
   );
 
@@ -675,11 +675,10 @@ describe("startScene — SUCCEEDED reuse", () => {
 
       const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
 
+      // The new attempt is executable by state; nothing was handed anywhere.
       expect(result.state).toBe("QUEUED");
       expect(result.id).not.toBe("gen_terminal");
       expect(h.generations.all()).toHaveLength(2);
-      // The new attempt is executable by state; nothing was handed anywhere.
-      expect(result.state).toBe("QUEUED");
     },
   );
 });
@@ -1186,16 +1185,34 @@ describe("startScene — provider/storage non-interference", () => {
    * with every runtime check still green.
    *
    * `Extract` resolves to `never` only while no member of `GenerationServiceDeps`
-   * carries a transport name, optional or not. Adding one makes `never` an
+   * carries a forbidden name, optional or not. Adding one makes `never` an
    * unsatisfiable annotation and the file stops compiling — which is the point:
    * the pin fires at declaration, not at wiring.
+   *
+   * The name set covers all three execution collaborators admission must never
+   * acquire — a job transport (removed by ADR-0024), a video provider (Phase
+   * 4C-3's), and object storage (Phase 4C-2's) — because the same optional-member
+   * regression is available for each.
    */
-  it("cannot declare a transport dependency, even optionally (compile-time)", () => {
-    type TransportNames = "queue" | "jobs" | "broker" | "publisher" | "enqueue";
-    type DeclaredTransport = Extract<keyof GenerationServiceDeps, TransportNames>;
+  it("cannot declare a transport, provider, or storage dependency, even optionally (compile-time)", () => {
+    type ForbiddenNames =
+      // transport — removed by ADR-0024
+      | "queue"
+      | "jobs"
+      | "broker"
+      | "publisher"
+      | "enqueue"
+      // provider execution — Phase 4C-3's, never admission's
+      | "provider"
+      | "videoProvider"
+      | "videoGenerationProvider"
+      // storage execution — Phase 4C-2's, never admission's
+      | "storage"
+      | "objectStorage";
+    type DeclaredForbidden = Extract<keyof GenerationServiceDeps, ForbiddenNames>;
 
-    const noTransportDeclared: DeclaredTransport extends never ? true : never = true;
-    expect(noTransportDeclared).toBe(true);
+    const noneDeclared: DeclaredForbidden extends never ? true : never = true;
+    expect(noneDeclared).toBe(true);
   });
 
   it("wires no dependency named for a job transport", () => {
