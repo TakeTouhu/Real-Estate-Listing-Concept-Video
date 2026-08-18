@@ -3,10 +3,48 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4C-1a: row-as-queue admission contract
+## [Unreleased] — Phase 4C-1b: system execution persistence foundation
 
-PR #38 — see GitHub for lifecycle. Technical detail in
-`docs/phase-4c1a-completion.md` and ADR-0024.
+PR #39 — see GitHub for lifecycle. Technical detail in
+`docs/phase-4c1b-completion.md` and ADR-0025.
+
+### Added
+
+- **`SceneGenerationExecutionRepository`** — a separate, system-scoped
+  persistence boundary for generation execution, with exactly two methods:
+  `findNextQueuedForPreparation` (read-only discovery, oldest first) and
+  `claimQueuedForSubmission` (a compare-and-swap moving one row
+  `QUEUED → SUBMITTING`). Both **resolve** `organizationId` through the owning
+  `VideoProject` and neither accepts one, so a worker never chooses a tenant —
+  the claim hands it one.
+- Its PostgreSQL adapter, an in-memory double, 28 unit tests, and 26 integration
+  tests against live PostgreSQL that prove concurrent exclusivity at two and
+  eight callers — the property a single-threaded double cannot demonstrate.
+
+### Unchanged
+
+- The tenant-facing `SceneGenerationRepository` keeps every method
+  organization-addressed. No `findByIdSystem`, no optional `organizationId`, no
+  trusted flag: a system-scoped method there would be reachable from every
+  service holding the repository.
+- No `organizationId` column on `SceneGeneration` — a duplicated tenant id can
+  disagree with its parent, and the join cannot disagree with itself.
+- No schema, no migration, no state-machine change. No worker loop, asset
+  lookup, signed URL, provider input assembly, provider call, polling, output
+  ingestion, `SUBMITTING` recovery, retry scheduling, or model routing.
+
+### Notes
+
+- **Production-dormant by design.** Nothing calls either method outside tests,
+  and the compile-time dependency pin now also refuses `execution`, `executions`
+  and `executionRepository` on `GenerationServiceDeps`.
+- A crash after claiming strands a row in `SUBMITTING`; recovery is recorded in
+  `docs/decisions/TODO.md` as a requirement on the submitting milestone.
+
+## Phase 4C-1a: row-as-queue admission contract
+
+Merged as PR #38. Technical detail in `docs/phase-4c1a-completion.md` and
+ADR-0024.
 
 ### Changed
 

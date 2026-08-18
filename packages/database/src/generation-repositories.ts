@@ -53,7 +53,16 @@ function translateWriteError(error: unknown): unknown {
   return isActiveRequest ? new ActiveGenerationConflictError() : error;
 }
 
-function toGeneration(r: DbSceneGeneration): SceneGeneration {
+/**
+ * The single row → entity mapping for scene generations.
+ *
+ * Exported **within the package** so the system-scoped execution adapter reuses
+ * it rather than declaring a second one. Two mappings over a twenty-field row
+ * would drift, and the field most likely to drift is the one a later milestone
+ * submits to a paid provider. Not re-exported from the package index: nothing
+ * outside `@app/database` should be mapping database rows at all.
+ */
+export function toGeneration(r: DbSceneGeneration): SceneGeneration {
   return {
     id: r.id,
     videoProjectId: r.videoProjectId,

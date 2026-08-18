@@ -277,26 +277,30 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       unaudited** regardless of what happened at admission. Until it does, an
       unaudited generation is a paid call waiting to be untraceable.
       **Required before any provider submission ships.**
-- [ ] **Phase 4C-1b MUST define a separate, trusted, system-scoped execution
-      persistence boundary.** There is **no queue job, no execution transport,
-      and no payload**: discovery is database-state-driven (ADR-0024). The
-      boundary must:
-      - discover eligible `QUEUED` `SceneGeneration` rows **directly from
-        persistence**, over the `(state)` index Phase 4A-2a added;
-      - resolve the authoritative `organizationId` **through `VideoProject`**,
-        which is where tenant identity lives;
-      - **never** take `organizationId` from customer or transport input — the
-        claim hands the worker a tenant, the worker never chooses one;
-      - **not** add `organizationId` to `SceneGeneration`;
-      - **not** weaken, widen, or reuse the tenant-facing
-        `SceneGenerationRepository`, whose methods stay organization-addressed so
-        their isolation tests keep their full force.
-      Why a *separate* boundary rather than a new method on the existing
-      repository: every tenant-facing method takes `organizationId` as an
-      addressing argument, and a system-scoped read on that same interface would
-      let any holder bypass scoping. Keeping the system-scoped surface in its own
-      port makes the blast radius one boundary rather than the whole repository.
-      **Required before Phase 4C-1b ships.**
+- [x] **Phase 4C-1b MUST define a separate, trusted, system-scoped execution
+      persistence boundary.** **Closed in Phase 4C-1b** (ADR-0025).
+      `SceneGenerationExecutionRepository` discovers eligible `QUEUED` rows
+      directly from persistence, resolves `organizationId` through
+      `VideoProject`, never accepts a tenant from any caller, adds no column, and
+      leaves the tenant-facing `SceneGenerationRepository` untouched and
+      organization-addressed. Discovery is read-only; the claim is a
+      compare-and-swap proven against live PostgreSQL at two and eight
+      concurrent callers.
+- [ ] **The milestone that adds submission MUST recover abandoned `SUBMITTING`
+      rows.** Phase 4C-1b's claim moves a row `QUEUED → SUBMITTING` immediately
+      before the provider call, and deliberately adds no lease, heartbeat, or
+      sweep (ADR-0025 §5). A worker that dies after claiming therefore leaves the
+      row in `SUBMITTING` with nothing to move it: durable and visible, but
+      stalled, and holding its request identity so the customer cannot re-admit
+      the same request.
+      The shape of the fix is already decided by the state machine rather than
+      open: an abandoned `SUBMITTING` becomes **`SUBMISSION_UNKNOWN`**, because a
+      crashed worker leaves genuine doubt about whether the POST reached the
+      provider, and re-submitting on doubt risks paying twice. What the
+      submitting milestone must add is the staleness detection — `updatedAt`
+      already advances on claim, and nothing else writes a `SUBMITTING` row — and
+      a threshold comfortably above the provider HTTP timeout.
+      **Required before any provider submission ships.**
 - [x] **Phase 4B-1c (immutable generation request snapshot) must be merged
       before Phase 4C implementation begins.** Landed as the follow-up to the
       PR #32 review finding; ADR-0018 records the contract. Phase 4C is a

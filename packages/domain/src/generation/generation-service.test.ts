@@ -1208,7 +1208,14 @@ describe("startScene — provider/storage non-interference", () => {
       | "videoGenerationProvider"
       // storage execution — Phase 4C-2's, never admission's
       | "storage"
-      | "objectStorage";
+      | "objectStorage"
+      // the system-scoped execution boundary — Phase 4C-1b's, never admission's.
+      // Admission is tenant-facing and always knows its organization; holding a
+      // port that resolves tenants for itself would hand it a trusted surface it
+      // has no reason to have.
+      | "execution"
+      | "executions"
+      | "executionRepository";
     type DeclaredForbidden = Extract<keyof GenerationServiceDeps, ForbiddenNames>;
 
     const noneDeclared: DeclaredForbidden extends never ? true : never = true;
