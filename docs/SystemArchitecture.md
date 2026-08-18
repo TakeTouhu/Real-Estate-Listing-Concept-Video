@@ -84,4 +84,4 @@ WaveSpeedAI is the initial implementation, but provider-specific SDKs and payloa
 - staging
 - production
 
-Each environment uses separate identity configuration, database, storage, queues, billing keys, and WaveSpeedAI secrets. Production customer data must not be copied into development.
+Each environment uses separate identity configuration, database, storage, billing keys, and WaveSpeedAI secrets. Production customer data must not be copied into development.

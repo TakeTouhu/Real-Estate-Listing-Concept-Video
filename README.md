@@ -53,7 +53,7 @@ packages/
 ├── domain/            # identity + property/media domain: entities, RBAC, services, ports
 ├── database/          # Prisma schema, client, org-scoped repositories
 ├── storage/           # object storage, signed URLs, image pipeline, malware hook
-├── queue/             # placeholder (Phase 4)
+├── queue/             # empty by decision — no transport (ADR-0024)
 └── ai-providers/      # placeholder (Phase 3)
 infra/  tests/  docs/
 ```

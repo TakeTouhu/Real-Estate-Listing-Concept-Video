@@ -38,14 +38,14 @@ Provider generation time is tracked separately from platform processing time.
 
 ## Observability
 
-Use structured logs, metrics, traces, and correlation IDs across web, API, queue, worker, WaveSpeedAI adapter, storage, FFmpeg, and billing.
+Use structured logs, metrics, traces, and correlation IDs across web, API, worker, WaveSpeedAI adapter, storage, FFmpeg, and billing.
 
 Key metrics:
 
 - active organizations and users
 - uploads and storage usage
-- queued/running/failed jobs
-- queue wait time
+- queued/running/failed generations
+- time a generation waits in `QUEUED` before a worker claims it
 - provider latency and failure rate by model
 - composition/validation failure rate
 - retry and dead-letter counts
@@ -55,11 +55,15 @@ Key metrics:
 
 Sensitive values and signed URLs are redacted.
 
-## Queue and worker operations
+## Worker operations
+
+There is no queue to operate: work is discovered by scanning for
+`state = 'QUEUED'` (ADR-0024), so the concerns below belong to the worker and to
+the row's own state, not to a transport.
 
 - bounded concurrency by model and account limit
 - exponential backoff with jitter
-- job heartbeat and stale-job recovery
+- stale in-flight recovery driven by the row's state and timestamps
 - dead-letter state with support tooling
 - idempotent scene and composition steps
 - graceful shutdown and lease release
@@ -106,7 +110,7 @@ Support users can search by public request/job ID, view sanitized status history
 
 ## Business continuity
 
-Document backups, restore testing, secret rotation, WaveSpeedAI outage handling, queue recovery, database failure, storage failure, billing webhook backlog, security incident, and customer communication procedures.
+Document backups, restore testing, secret rotation, WaveSpeedAI outage handling, stalled-generation recovery, database failure, storage failure, billing webhook backlog, security incident, and customer communication procedures.
 
 ## Launch checklist
 

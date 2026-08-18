@@ -72,10 +72,17 @@ render/freeze → create QUEUED row → audit generation.requested → return
 `GenerationServiceDeps` loses its `queue` key. What pins that is **not** an
 assertion on the key set — that assertion existed in the first commit and was
 removed in the second, because it broke on any legitimate new dependency and so
-trained a reviewer to update it reflexively. Two behavioural checks pin it
-instead: no wired dependency exposes a video-provider, object-storage, or
-job-transport method surface, and none is *named* for a transport. A provider or
-queue collaborator reappearing is a test failure, not a diff to skim.
+trained a reviewer to update it reflexively.
+
+Three layers replace it, because the first two share a blind spot:
+
+1. **by capability** — no wired dependency exposes a video-provider,
+   object-storage, or job-transport method surface;
+2. **by name** — no dependency is *named* for a transport, since a stub could
+   expose no method at all;
+3. **at the type boundary** — both checks above inspect only what the harness
+   wires, so an optional interface member would slip past them. See the ledger
+   below.
 
 ### Eligibility is state, never audit existence
 
@@ -102,7 +109,8 @@ requirement lives in `docs/decisions/TODO.md`, not in a claim here.
 ### Test ledger
 
 Four cases retired with their subject, five replaced them, six were amended, and
-the dependency-shape assertion was replaced by two behavioural ones (below).
+the dependency-shape assertion was replaced by three checks — two behavioural and
+one at the type boundary (below).
 
 | Retired | Why |
 | --- | --- |
@@ -246,9 +254,27 @@ was already fixed:
 | `packages/domain` comments (`audit.ts`, `capability.ts`, `types.ts`) | rationale referencing enqueue ordering and a queue payload | rewritten, comments only — zero behaviour change |
 | `docs/progress.md` | the 4C-1a row carried first-commit figures; two narrative lines described `create → enqueue → audit` as current | points at the report; the historical ordering is marked superseded |
 
-The lesson is the same one this milestone keeps re-learning: a reviewer names
-examples, not the full set, and treating the examples as the set leaves the
-defect alive somewhere less visible.
+A **third** sweep was then needed, which is the more useful data point. The
+second pass had grepped for `enqueu` and stopped; `docs/SaaSOperations.md` says
+"queue" without ever saying "enqueue", so an entire *"Queue and worker
+operations"* section survived, along with a `queue wait time` metric, `queue
+recovery` in the business-continuity runbook, and a queue component in the
+observability and per-environment lists. `CLAUDE.md` still led its stack line
+with "Queue-based or", still offering a broker as a live option, and still
+required `queue` integration tests; `README.md` still called the package a
+"placeholder (Phase 4)" — a promise to implement it.
+
+| Pass | Found by | Missed because |
+| --- | --- | --- |
+| 1 | the reviewer | took the four named files as the whole set |
+| 2 | independent inspection | grepped `enqueu` only |
+| 3 | independent inspection | — |
+
+The lesson compounds: a reviewer names examples rather than the set, and a
+single-keyword grep is itself a narrower claim than "aligned". The final sweep
+covers `queue|enqueu|broker|dispatch` across every tracked file, and what remains
+is supersession notes naming what was rejected, the pin's own vocabulary,
+historical records, and one unrelated UI phrase ("review queue").
 
 ## Known limitations
 
@@ -264,20 +290,20 @@ defect alive somewhere less visible.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 192 |
+| Production | 196 |
 | Tests | 220 |
-| Docs | 790 |
-| **Total** | **1,202** across 55 files |
+| Docs | 840 |
+| **Total** | **1,256** across 55 files |
 
 Measured from `git diff --numstat 082a596..HEAD` after the final commit existed,
-reconciling with the raw diff (`+892 −310 = 1202`).
+reconciling with the raw diff (`+935 −321 = 1256`).
 
-Against the approved estimate of 680–760, and above it by 442. The first commit
+Against the approved estimate of 680–760, and above it by 496. The first commit
 landed at 787 across 22 files, within 27 of the estimate; the pre-merge
 corrections added the rest, and nearly all of it is the widened documentation
 sweep — twenty-three additional stale status lines across Phase 3 reports, at two
 changed lines each, in twenty-three files that would otherwise not appear in this
 diff at all.
 
-**Production is 192 lines — all of it comments and the deleted port — and 310 of the 1,202 are deletions.** The code change
+**Production is 196 lines — the deleted port plus comment corrections — and 321 of the 1,256 are deletions.** The code change
 this milestone was approved for did not grow; the honesty debt it uncovered did.

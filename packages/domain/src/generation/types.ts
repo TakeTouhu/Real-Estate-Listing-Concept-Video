@@ -152,8 +152,8 @@ export interface SceneGenerationRequestSnapshot {
    *
    * Contains customer-authored text. Byte-identical copies already live in
    * `storyboard_scenes.compiledPrompt` and `video_projects.prompt`, so this adds
-   * no new class of data — but it must never reach audit metadata, a queue
-   * payload, an error message, or a log.
+   * no new class of data — but it must never reach audit metadata, an error
+   * message, or a log.
    */
   readonly requestCompiledPrompt: string | null;
   /** The scene's own allocated duration — not the project's total. */

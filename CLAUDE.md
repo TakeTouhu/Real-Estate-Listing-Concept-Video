@@ -48,8 +48,10 @@ Recommended stack:
 - PostgreSQL
 - Prisma
 - Object storage
-- Queue-based or state-driven workers (ADR-0024: the `SceneGeneration` row is
-  the durable queue; no external broker)
+- State-driven workers (ADR-0024: the `SceneGeneration` row is itself the
+  durable queue, discovered by `state = 'QUEUED'`. No broker — Redis/BullMQ, SQS
+  and Azure Service Bus were each evaluated and rejected; adding one must
+  supersede that ADR)
 - FFmpeg
 - Stripe
 - OpenTelemetry
@@ -137,7 +139,7 @@ On failure, preserve the reason, retry only retryable errors, prevent duplicate 
 Minimum layers:
 
 - Unit tests for domain and pricing
-- DB/storage/queue/billing integration tests
+- DB/storage/billing integration tests
 - API authorization and tenant-isolation tests
 - Worker idempotency/retry tests
 - WaveSpeedAI request/status mapping tests
