@@ -190,39 +190,37 @@ provider input assembly, `createGeneration` call, polling, output ingestion,
 - **Discovery returns one row at a time.** No batching, because no caller needs
   one; a batch API would be speculative surface on the trusted boundary.
 
-## Size
+## Size — above the original estimate, within the final reviewability waiver
 
-| Category | Lines changed | Applicable estimate |
+| Category | Lines changed | Original estimate |
 | --- | --- | --- |
 | Production | 272 | ~220–300 |
 | Tests | 379 | ~300–400 |
-| Docs | 596 | ~180–260 |
-| **Total** | **1,247** across 13 files | est. ≤ ~850–900 · waiver 1,225 |
+| Docs | 594 | ~180–260 |
+| **Total** | **1,245** across 13 files | est. ≤ ~850–900 · **final waiver 1,260** |
 
 Measured from `git diff --numstat e8dbd01..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1214 −33 = 1,247`).
+reconciling with the raw diff (`+1212 −33 = 1,245`).
 
-**The record is corrected here.** An earlier revision of this report described
-1,305 lines as "inside the applicable estimate", citing a wider band that assumed
-an in-memory double. That was wrong on both counts: the applicable instruction
-was production ~220–300, tests ~300–400, docs ~180–260, preferably ≤ ~850–900
-total, and it also said not to build the double. 1,305 was not inside that
-estimate, and this revision does not claim the corrected figure is either.
+**The original preferred estimate was exceeded, and the reasons are specific
+rather than general drift.**
 
-Production (272) lands inside its band. Tests (379) run over, by the
-`updatedAt` and whole-row-refusal evidence added in the final passes. **Docs
-(596) are the bulk of the overage**: the reasoning is written once in
-ADR-0025, once here, once in `CHANGELOG.md` and once in the PR body, and each
-round of review-driven correction added an explanation to all four. Collapsing
-the duplication between the ADR and this report recovered 26 lines; cutting the
-remaining ~300 would mean gutting the ADR, which is the durable decision record.
+- **Production (272) is inside its band.** The speculative in-memory double
+  was removed during review, which is also why the port's only implementation is
+  the PostgreSQL adapter.
+- **Tests (379) grew for safety evidence**, all of it against live
+  PostgreSQL: a successful claim proving `updatedAt` strictly advances, and
+  whole-row preservation across all seven non-`QUEUED` refusal states.
+- **Docs (594) grew for the durable architectural record** — ADR-0025 plus
+  this report. Collapsing the duplication between the two recovered 26 lines;
+  cutting further would mean gutting the ADR, which is the decision record a
+  later milestone will actually read.
 
-The CTO accepted the overage in principle and set a final reviewability waiver of
-**1,225**. The total is **1,247** — 22 lines over it. Three successive evidence
-passes landed after that waiver was set (whole-row refusal, then domain-legality
-mutation), and each added lines to the record. The prose accompanying them was
-tightened each time, but no test assertion and no part of ADR-0025 was cut to
-buy the difference. Recorded as it stands rather than reduced to fit.
+**The CTO granted a final reviewability waiver of 1,260 changed lines** for that
+required safety evidence and durable record. The measured total is **1,245**,
+**within** the waiver. An earlier revision of this report also described 1,305
+lines as "inside the applicable estimate" against a wider band that assumed the
+double; that claim was wrong and does not apply to this figure.
 
 Only 33 lines are deletions, because this milestone adds a boundary rather
 than removing one.
