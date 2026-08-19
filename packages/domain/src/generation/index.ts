@@ -3,6 +3,7 @@ export * from "./state-machine";
 export * from "./request-identity";
 export * from "./execution-input";
 export * from "./ports";
+export * from "./execution-ports";
 export * from "./capability";
 export * from "./prompt-render";
 export * from "./audit";

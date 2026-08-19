@@ -211,8 +211,8 @@ reserved for a webhook.
 | 4B-2b | The prompt renderer, the `PROMPT_RENDERED` pinning test, removal of unread provider input fields (ADR-0020) | 1,713 — 367 production + 465 tests + 881 docs | **Merged** (PR #35, `cd9d136`) |
 | 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | 1,304 — 356 production + 485 tests + 463 docs | **Merged** (PR #36, `35970da`) |
 | 4C-0a | Execution prompt freeze: `requestRenderedPrompt` persisted at admission (ADR-0023) | 1,170 — 147 production + 492 tests + 531 docs | **Merged** (PR #37, `082a596`) |
-| 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | see `docs/phase-4c1a-completion.md` | PR #38 — see GitHub for lifecycle |
-| 4C-1b | System-scoped execution repository: queued-candidate discovery + state-CAS submission claim | — | Not started |
+| 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | 1,339 — 196 production + 235 tests + 908 docs | **Merged** (PR #38, `e8dbd01`) |
+| 4C-1b | System-scoped execution persistence: queued-candidate discovery + state-CAS submission claim (ADR-0025) | see `docs/phase-4c1b-completion.md` | PR #39 — see GitHub for lifecycle |
 | 4C-2…5 | Execution input assembly, submission, polling, worker runtime — fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
@@ -292,12 +292,16 @@ and ADR-0020.
 - **Phase 4C-0a** — merged as `082a596` (PR #37). The execution prompt freeze
   (ADR-0023): `requestRenderedPrompt` is rendered once at admission and submitted
   verbatim, closing the second and last prerequisite.
-- **Phase 4C-1a** — PR #38; see GitHub for its lifecycle. The `SceneGeneration`
-  row becomes the durable queue (ADR-0024): `SceneGenerationQueue` is removed
-  rather than kept as a production no-op, and admission becomes create → audit.
-  Work is discovered by `state = 'QUEUED'`, so ADR-0017 §13's mandatory
-  stranded-row recovery is satisfied by the design rather than by an added
-  sweep.
+- **Phase 4C-1a** — merged as `e8dbd01` (PR #38). The `SceneGeneration` row
+  becomes the durable queue (ADR-0024): `SceneGenerationQueue` is removed rather
+  than kept as a production no-op, and admission becomes create → audit. Work is
+  discovered by `state = 'QUEUED'`, so ADR-0017 §13's mandatory stranded-row
+  recovery is satisfied by the design rather than by an added sweep.
+- **Phase 4C-1b** — PR #39; see GitHub for its lifecycle. The system-scoped
+  execution persistence boundary (ADR-0025): discovery of eligible `QUEUED` rows
+  and a compare-and-swap submission claim, with `organizationId` resolved through
+  `VideoProject` and never accepted from a caller. Production-dormant — nothing
+  invokes it yet.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
