@@ -31,7 +31,7 @@ and how it was checked.
 - **Tenancy proven, not asserted.** The ordinary scoped `MediaAssetRepository` is
   addressed with the `organizationId` ADR-0025 resolved through `VideoProject`.
   No system-scoped asset port was added.
-- **Classified refusals.** Nine reasons in a closed set, each `INTERNAL_ERROR`,
+- **Classified refusals.** Ten reasons in a closed set, each `INTERNAL_ERROR`,
   each carrying `retryable` — which marks what a *future explicit policy* may do,
   never an automatic re-queue.
 
@@ -41,14 +41,14 @@ and how it was checked.
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1197 passed**, 60 files (baseline 1160 / 59) |
+| `pnpm test` | **1198 passed**, 60 files (baseline 1160 / 59) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **153 passed**, 7 files (unchanged — no persistence in this milestone) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
 
 ### Where each property is proven
 
-All 37 new tests are unit tests against the existing
+All 38 new tests are unit tests against the existing
 `InMemoryMediaAssetRepository` and a local storage fake. **No new shared double
 was added** — the fake lives in the test file that needs it, following
 `property.test.ts`, and nothing consumes the preflight function in production
@@ -61,7 +61,8 @@ yet.
 | Preparation mutates nothing | Whole-row comparison of the generation before/after |
 | Stored hash is verified | A row whose hash disagrees with its facts is refused |
 | Provider/model contract still in force | Refused when either differs from the configured capability |
-| All 9 refusal reasons | One test each, including every `MediaAssetStatus` split across not-ready and gone |
+| All 10 refusal reasons | One test each; `retryable` is asserted to partition the whole vocabulary |
+| Every `MediaAssetStatus` is classified | Compile-time `Record<MediaAssetStatus, …>`, so a new status cannot default into a branch |
 | Tenant isolation | An asset in another organization yields `ASSET_NOT_FOUND`, and **nothing is signed** |
 | Secret safety | Storage key, signed URL and prompt appear in no refusal message |
 | Preflight cannot claim or submit | Type-level assertion on `ExecutionPreflightDeps` |
@@ -77,6 +78,8 @@ yet.
 | Storage existence check removed | **2 fail** |
 | Preflight TTL reverted to the human-download 300s | **2 fail** |
 | URL signed before the asset checks | **2 fail** |
+| `FAILED` put back into the unrecoverable bucket (the reviewed defect) | **1 fail** |
+| `ASSET_UPLOAD_FAILED` folded back into `ASSET_NOT_READY` | **1 fail** |
 
 Each restored, `git diff --stat` confirming the file unchanged afterwards.
 
@@ -95,6 +98,20 @@ untouched · `execution-ports.ts` and its adapter untouched · no worker loop,
 claim, state write, asset write, persisted URL, provider call, prediction,
 submission audit, polling, sweep, retry, or output ingestion.
 
+### Corrected in review
+
+`FAILED` was classified as `ASSET_GONE`, non-retryable. That was wrong by this
+milestone's own criterion: `AssetService.retryUpload` accepts a failed asset and
+resets that same id to `PENDING_UPLOAD`, from which it can reach `READY`. A
+future durable mapper would have permanently failed an attempt whose photo was
+one customer action away.
+
+It is now `ASSET_UPLOAD_FAILED` — retryable, and deliberately its own reason
+rather than merged into `ASSET_NOT_READY`, because waiting resolves one and
+never resolves the other. Asset states are consequently split three ways, and a
+compile-time `Record<MediaAssetStatus, …>` now forces any new status to be
+classified rather than falling into whichever branch catches it.
+
 ## Known limitations
 
 - **Nothing calls this yet.** Production-dormant, like Phase 4C-1b.
@@ -111,13 +128,13 @@ submission audit, polling, sweep, retry, or output ingestion.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 360 (of which ~161 are statements; the rest is comment) |
-| Tests | 450 |
-| Docs | 335 |
-| **Total** | **1,145** across 9 files |
+| Production | 398 (of which ~178 are statements; the rest is comment) |
+| Tests | 497 |
+| Docs | 362 |
+| **Total** | **1,257** across 9 files |
 
 Measured from `git diff --numstat 27ba4df..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1141 −4 = 1,145`).
+reconciling with the raw diff (`+1253 −4 = 1,257`).
 
 **This is over the planning estimate and is recorded as over.** The approved
 plan estimated ~210–260 production and ~330–400 tests for the *whole* of Phase

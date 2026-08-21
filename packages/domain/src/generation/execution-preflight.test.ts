@@ -12,6 +12,7 @@ import {
   type ExecutionPreflightDeps,
 } from "./execution-preflight";
 import {
+  PREFLIGHT_REFUSAL_REASONS,
   PreflightRefusalError,
   isRetryablePreflightRefusal,
   type PreflightRefusalReason,
@@ -303,7 +304,7 @@ describe("prepareQueuedGeneration — refusals", () => {
     },
   );
 
-  it.each<MediaAssetStatus>(["QUARANTINED", "REJECTED", "FAILED", "DELETION_PENDING", "DELETED"])(
+  it.each<MediaAssetStatus>(["QUARANTINED", "REJECTED", "DELETION_PENDING", "DELETED"])(
     "treats a %s asset as gone for good",
     async (status) => {
       const { deps } = await fixture({ assetOverrides: { status } });
@@ -313,6 +314,44 @@ describe("prepareQueuedGeneration — refusals", () => {
       expect(refusal.retryable).toBe(false);
     },
   );
+
+  it("treats a FAILED upload as recoverable, because retryUpload accepts it", async () => {
+    // `AssetService.retryUpload` resets a FAILED asset to PENDING_UPLOAD on the
+    // same id, so its source can still arrive. Grouping it with deleted and
+    // quarantined assets would permanently fail an attempt whose photo is one
+    // customer action away — found in review of this milestone.
+    const { deps } = await fixture({ assetOverrides: { status: "FAILED" } });
+
+    const refusal = await refusalFrom(deps, candidateFor(generation()));
+
+    // Its own reason, not ASSET_NOT_READY: waiting will never fix this one, so
+    // a future "retry after a delay" policy must be able to tell them apart.
+    expect(refusal.reason).toBe("ASSET_UPLOAD_FAILED");
+    expect(refusal.retryable).toBe(true);
+  });
+
+  it("classifies every MediaAssetStatus deliberately (compile-time)", () => {
+    // `Record<MediaAssetStatus, …>` does not compile with a status missing, so
+    // adding one to the union forces a decision here rather than letting it
+    // fall into whichever branch happens to catch it. `MediaAssetStatus` is a
+    // pure type union with no runtime array, so this is the only exhaustive
+    // check available that does not add surface to the property module.
+    const bucket: Record<MediaAssetStatus, "ready" | "in-progress" | "upload-failed" | "gone"> = {
+      READY: "ready",
+      PENDING_UPLOAD: "in-progress",
+      UPLOADED: "in-progress",
+      SCANNING: "in-progress",
+      PROCESSING: "in-progress",
+      FAILED: "upload-failed",
+      QUARANTINED: "gone",
+      REJECTED: "gone",
+      DELETION_PENDING: "gone",
+      DELETED: "gone",
+    };
+
+    expect(bucket.FAILED).toBe("upload-failed");
+    expect(bucket.DELETED).toBe("gone");
+  });
 
   it("refuses a READY asset whose deletion the customer has already requested", async () => {
     // Retention can be requested while the row still reads READY. Submitting a
@@ -412,7 +451,12 @@ describe("preflight refusals as a contract", () => {
   it("classifies retryability by whether the world could change", async () => {
     // Not by how the failure felt. A processing asset may become READY and
     // storage may come back; a missing frozen prompt never appears.
-    const retryable: PreflightRefusalReason[] = ["ASSET_NOT_READY", "STORAGE_UNAVAILABLE"];
+    const retryable: PreflightRefusalReason[] = [
+      "ASSET_NOT_READY",
+      // Recoverable only through `AssetService.retryUpload` — a person, not time.
+      "ASSET_UPLOAD_FAILED",
+      "STORAGE_UNAVAILABLE",
+    ];
     const terminal: PreflightRefusalReason[] = [
       "LEGACY_SNAPSHOT_MISSING",
       "LEGACY_PROMPT_MISSING",
@@ -422,6 +466,9 @@ describe("preflight refusals as a contract", () => {
       "ASSET_GONE",
       "SOURCE_OBJECT_MISSING",
     ];
+    // Together these must be the whole vocabulary — a new reason has to be
+    // classified, not silently default to terminal.
+    expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
 
     for (const reason of retryable) expect(isRetryablePreflightRefusal(reason)).toBe(true);
     for (const reason of terminal) expect(isRetryablePreflightRefusal(reason)).toBe(false);

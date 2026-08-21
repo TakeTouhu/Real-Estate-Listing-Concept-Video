@@ -26,7 +26,9 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "ASSET_NOT_FOUND",
   /** The asset exists but is still being uploaded, scanned or processed. */
   "ASSET_NOT_READY",
-  /** The asset is deleted, quarantined, rejected or failed — it is not coming back. */
+  /** The upload failed. Recoverable, but only when the customer retries it. */
+  "ASSET_UPLOAD_FAILED",
+  /** The asset is deleted, quarantined or rejected — it is not coming back. */
   "ASSET_GONE",
   /** The asset row points at a storage key that holds no object. */
   "SOURCE_OBJECT_MISSING",
@@ -49,10 +51,20 @@ export type PreflightRefusalReason = (typeof PREFLIGHT_REFUSAL_REASONS)[number];
  * inventing the policy rather than reading it.
  *
  * The split is by *whether the world could change*, not by how the failure
- * felt. A processing asset may become `READY`; storage may come back. A
- * generation with no frozen prompt never acquires one.
+ * felt. A processing asset may become `READY`; a failed upload can be retried
+ * onto the same asset id; storage may come back. A generation with no frozen
+ * prompt never acquires one.
+ *
+ * Note that "the world could change" includes changes only a person can make.
+ * `ASSET_UPLOAD_FAILED` is retryable because `AssetService.retryUpload` exists,
+ * not because time alone would fix it — which is exactly why it is a separate
+ * reason from `ASSET_NOT_READY` rather than folded into it.
  */
-const RETRYABLE_REASONS: readonly PreflightRefusalReason[] = ["ASSET_NOT_READY", "STORAGE_UNAVAILABLE"];
+const RETRYABLE_REASONS: readonly PreflightRefusalReason[] = [
+  "ASSET_NOT_READY",
+  "ASSET_UPLOAD_FAILED",
+  "STORAGE_UNAVAILABLE",
+];
 
 export function isRetryablePreflightRefusal(reason: PreflightRefusalReason): boolean {
   return RETRYABLE_REASONS.includes(reason);

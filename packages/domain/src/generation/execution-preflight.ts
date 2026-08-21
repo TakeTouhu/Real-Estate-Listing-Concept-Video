@@ -84,13 +84,27 @@ export interface ExecutionPreflightDeps {
  */
 export const PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600;
 
-/** Asset states that will never become `READY` on their own. */
+/**
+ * Asset states from which this asset id can never reach `READY`.
+ *
+ * `FAILED` is deliberately **not** here. `AssetService.retryUpload` accepts a
+ * failed asset and resets that same id to `PENDING_UPLOAD`, so its source can
+ * still arrive — it is recoverable, just not by waiting. The four that remain
+ * are refused by `retryUpload` and have no other route back.
+ */
 const UNRECOVERABLE_ASSET_STATES: readonly MediaAssetStatus[] = [
   "QUARANTINED",
   "REJECTED",
-  "FAILED",
   "DELETION_PENDING",
   "DELETED",
+];
+
+/** Asset states that will reach `READY`, if they reach it, without anyone acting. */
+const IN_PROGRESS_ASSET_STATES: readonly MediaAssetStatus[] = [
+  "PENDING_UPLOAD",
+  "UPLOADED",
+  "SCANNING",
+  "PROCESSING",
 ];
 
 /**
@@ -187,10 +201,22 @@ export async function prepareQueuedGeneration(
       "The source asset for this generation is not available and will not become available",
     );
   }
-  if (asset.status !== "READY") {
+  // Two recoverable cases, kept apart because they need different things to
+  // happen. An in-progress asset resolves itself given time; a failed upload
+  // resolves only when the customer retries it. Collapsing them would let a
+  // future "wait and try again" policy spin forever on an asset that is waiting
+  // for a person, and would tell an operator the wrong thing about why the work
+  // is parked.
+  if (IN_PROGRESS_ASSET_STATES.includes(asset.status)) {
     throw new PreflightRefusalError(
       "ASSET_NOT_READY",
       "The source asset for this generation is still being prepared",
+    );
+  }
+  if (asset.status !== "READY") {
+    throw new PreflightRefusalError(
+      "ASSET_UPLOAD_FAILED",
+      "The source asset for this generation failed to upload and has not been retried",
     );
   }
 

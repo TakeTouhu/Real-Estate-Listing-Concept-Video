@@ -95,6 +95,16 @@ world could change — a processing asset may become `READY`, a missing frozen
 prompt never appears. An automatic loop reading this flag would be inventing the
 policy rather than reading it.
 
+**"The world could change" includes changes only a person can make**, and the
+asset states are split three ways rather than two because of it. Review of this
+milestone found `FAILED` grouped with deleted and quarantined assets, which was
+wrong: `AssetService.retryUpload` accepts a failed asset and resets that same id
+to `PENDING_UPLOAD`, so its source can still arrive. It is now
+`ASSET_UPLOAD_FAILED` — retryable, but deliberately **not** merged into
+`ASSET_NOT_READY`, because waiting fixes one and never fixes the other. A future
+"retry after a delay" policy that could not tell them apart would spin forever
+on an asset waiting for a customer.
+
 ### 6. The source URL has its own TTL
 
 `PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600`, deliberately separate from

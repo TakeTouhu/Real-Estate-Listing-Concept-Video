@@ -18,7 +18,7 @@ and ADR-0026.
   `ProviderGenerationInput` — that type lives in `@app/video-providers`, which
   depends on `@app/domain`, so importing it would invert the dependency.
   `packages/domain` still depends only on `@app/shared`.
-- **`PreflightRefusalError`** with nine closed `PreflightRefusalReason` values,
+- **`PreflightRefusalError`** with ten closed `PreflightRefusalReason` values,
   each `INTERNAL_ERROR` (nothing a customer submits reaches preflight) and each
   carrying `retryable` — which marks what a *future explicit retry policy* may
   do, never an automatic re-queue.
@@ -26,7 +26,7 @@ and ADR-0026.
   human-download TTL because this URL must survive the claim, the submission
   POST and the provider's own fetch. `sourceUrlExpiresAt` is returned so a
   submitter can refuse a stale URL rather than pay for a failed fetch.
-- 37 unit tests, including exhaustive `MediaAssetStatus` coverage, tenant
+- 38 unit tests, including compile-time exhaustive `MediaAssetStatus` coverage, tenant
   isolation, secret-safety, and a type-level assertion that preflight declares
   no way to claim or submit.
 
