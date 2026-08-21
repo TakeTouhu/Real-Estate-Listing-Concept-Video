@@ -22,11 +22,21 @@ for a human. This ADR decides what that preparation actually is.
 `prepareQueuedGeneration` returns while the row is still `QUEUED`. It performs no
 state transition, writes no asset, and persists nothing.
 
-This is structural rather than disciplinary: `ExecutionPreflightDeps` carries an
-asset repository, object storage and a capability provider, and **no generation
-repository at all**. There is no object in scope that could move the row. A
+This is structural rather than disciplinary, in two ways.
+
+**No generation repository is in scope**, so nothing could move the row. A
 compile-time assertion pins that the dependency type declares no `generations`,
 `execution`, `provider` or `queue` key.
+
+**Each remaining dependency is narrowed with `Pick`** to the capability
+preparation actually uses — `assets` to `findById`, `storage` to `exists` and
+`createSignedDownloadUrl`. Holding the whole `MediaAssetRepository` and
+`ObjectStorage` meant only a comment said preflight would not call `update` or
+`deleteObject`, and a comment is not what stops the next milestone reaching for
+them. `createSignedUploadUrl` is excluded deliberately: an upload URL is a write
+credential. `getObject` is excluded too — preflight proves the object exists and
+lets the provider fetch it, rather than pulling image bytes through this
+process. Widening either back fails to compile.
 
 Two workers may prepare the same row concurrently. That is safe and expected —
 one loses the later compare-and-swap, having spent a signed URL and some

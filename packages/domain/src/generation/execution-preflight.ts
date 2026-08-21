@@ -57,19 +57,42 @@ export interface PreparedGeneration {
   readonly requestHash: string;
 }
 
+/**
+ * Exactly the capabilities preparation needs, and not one more.
+ *
+ * Each dependency is narrowed with `Pick` rather than taken whole. Preflight
+ * had no business calling `assets.update` or `storage.deleteObject`, but
+ * holding the full interfaces meant only a comment said so — and a comment is
+ * not what stops the next person, or the next milestone, from reaching for
+ * them. Narrowing moves "preparation changes nothing" from a claim into
+ * something the compiler enforces: the methods that could mutate an asset or
+ * an object are not on these types at all.
+ *
+ * This complements the absent generation repository. Between them, nothing in
+ * scope can move the row, touch the asset, or write to storage.
+ */
 export interface ExecutionPreflightDeps {
   /**
-   * The ordinary tenant-addressed asset repository.
+   * A single tenant-addressed read.
    *
-   * Not a system-scoped one, and that is the point: Phase 4C-1b already
+   * Not a system-scoped port, and that is the point: Phase 4C-1b already
    * resolved `organizationId` through the owning `VideoProject`, so preflight
-   * can address the normal repository with it. Ownership is then *proven* by
+   * can address the ordinary repository with it. Ownership is then *proven* by
    * the scoped read rather than asserted — an asset belonging to another tenant
    * comes back `null`, with no cross-tenant row ever loaded. A second trusted
    * boundary here would repeat exactly what ADR-0025 §1 rejected.
    */
-  readonly assets: MediaAssetRepository;
-  readonly storage: ObjectStorage;
+  readonly assets: Pick<MediaAssetRepository, "findById">;
+  /**
+   * Ask whether the object is there, and mint a short-lived read URL.
+   *
+   * No `putObject`, no `deleteObject`, and no `createSignedUploadUrl` — an
+   * upload URL is a write credential, and preparation has no reason to hold
+   * one. `getObject` is absent too: preflight proves the object exists and
+   * lets the provider fetch it, rather than pulling image bytes through this
+   * process.
+   */
+  readonly storage: Pick<ObjectStorage, "exists" | "createSignedDownloadUrl">;
   readonly capabilities: VideoModelCapabilityProvider;
 }
 

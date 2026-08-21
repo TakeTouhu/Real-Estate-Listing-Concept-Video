@@ -3,7 +3,7 @@ import { AppError } from "@app/shared";
 import { InMemoryMediaAssetRepository } from "../testing/index";
 import { DOWNLOAD_URL_TTL_SECONDS } from "../property/asset-service";
 import type { MediaAsset, MediaAssetStatus } from "../property/types";
-import type { ObjectStorage, SignedUrl } from "../property/ports";
+import type { SignedUrl } from "../property/ports";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
 import type { SystemGenerationCandidate } from "./execution-ports";
 import {
@@ -25,8 +25,20 @@ const OTHER_ORG = "org_pf_other";
 const ASSET = "ast_pf";
 const KEY = "org_pf/assets/ast_pf/normalized.jpg";
 
-/** Records every signing request so a test can assert what was signed, and with what TTL. */
-class FakeStorage implements ObjectStorage {
+/** The narrowed storage capability preflight actually declares. */
+type PreflightStorage = ExecutionPreflightDeps["storage"];
+
+/**
+ * Records every signing request so a test can assert what was signed, and with
+ * what TTL.
+ *
+ * Implements only what `ExecutionPreflightDeps` asks for. An earlier version
+ * implemented the whole `ObjectStorage` and threw from `putObject`,
+ * `deleteObject`, `getObject` and `createSignedUploadUrl` — a runtime guard
+ * against calls the type now makes impossible. Narrowing the dependency made
+ * those four unreachable rather than merely forbidden, so they are gone.
+ */
+class FakeStorage implements PreflightStorage {
   readonly signed: { key: string; ttl: number }[] = [];
   existing = new Set<string>([KEY]);
   failOn: "none" | "exists" | "sign" = "none";
@@ -42,18 +54,6 @@ class FakeStorage implements ObjectStorage {
       url: `download://${key}?sig=secret-token`,
       expiresAt: new Date(Date.UTC(2026, 0, 1, 0, 10, 0)),
     });
-  }
-  createSignedUploadUrl(): Promise<SignedUrl> {
-    throw new Error("preflight must never request an upload URL");
-  }
-  putObject(): Promise<void> {
-    throw new Error("preflight must never write an object");
-  }
-  getObject(): Promise<Uint8Array | null> {
-    throw new Error("preflight must never download the object itself");
-  }
-  deleteObject(): Promise<void> {
-    throw new Error("preflight must never delete an object");
   }
 }
 
@@ -477,5 +477,23 @@ describe("preflight holds no capability it should not", () => {
 
     const noneDeclared: DeclaredForbidden extends never ? true : never = true;
     expect(noneDeclared).toBe(true);
+  });
+
+  it("holds no method that could mutate an asset or an object (compile-time)", () => {
+    // The dependencies are narrowed with `Pick`, so "preparation changes
+    // nothing" is enforced by the compiler rather than asserted in prose. If
+    // either were widened back to the full interface, these stop compiling.
+    type AssetMethods = keyof ExecutionPreflightDeps["assets"];
+    type StorageMethods = keyof ExecutionPreflightDeps["storage"];
+
+    // Exactly one read, and nothing that writes.
+    const assetsReadOnly: AssetMethods extends "findById" ? true : never = true;
+    // No putObject, deleteObject, getObject, or createSignedUploadUrl — an
+    // upload URL is a write credential preparation has no reason to hold.
+    const storageReadOnly: StorageMethods extends "exists" | "createSignedDownloadUrl"
+      ? true
+      : never = true;
+
+    expect(assetsReadOnly && storageReadOnly).toBe(true);
   });
 });
