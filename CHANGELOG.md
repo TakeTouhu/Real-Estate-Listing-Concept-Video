@@ -26,9 +26,17 @@ and ADR-0026.
   human-download TTL because this URL must survive the claim, the submission
   POST and the provider's own fetch. `sourceUrlExpiresAt` is returned so a
   submitter can refuse a stale URL rather than pay for a failed fetch.
-- 38 unit tests, including compile-time exhaustive `MediaAssetStatus` coverage, tenant
-  isolation, secret-safety, and a type-level assertion that preflight declares
-  no way to claim or submit.
+- **One `Record<MediaAssetStatus, AssetExecutability>`** in production classifies
+  every source-asset status against a single criterion: can this same asset
+  identity become an executable `READY` source again without changing the
+  admitted `assetId`? Adding a status fails to compile until it is classified.
+  `PENDING_UPLOAD`…`PROCESSING` are `ASSET_NOT_READY`; `FAILED` is
+  `ASSET_UPLOAD_FAILED` (recoverable via `AssetService.retryUpload`); the
+  quarantined/rejected/deleting/deleted four are `ASSET_UNRECOVERABLE` — named
+  for what it means, since quarantined content still exists and "gone" did not.
+- 37 unit tests covering every status behaviourally, tenant isolation,
+  secret-safety, and a type-level assertion that preflight declares no way to
+  claim or submit.
 
 ### Unchanged
 

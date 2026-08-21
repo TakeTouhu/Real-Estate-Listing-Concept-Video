@@ -41,14 +41,14 @@ and how it was checked.
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1198 passed**, 60 files (baseline 1160 / 59) |
+| `pnpm test` | **1197 passed**, 60 files (baseline 1160 / 59) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **153 passed**, 7 files (unchanged — no persistence in this milestone) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
 
 ### Where each property is proven
 
-All 38 new tests are unit tests against the existing
+All 37 new tests are unit tests against the existing
 `InMemoryMediaAssetRepository` and a local storage fake. **No new shared double
 was added** — the fake lives in the test file that needs it, following
 `property.test.ts`, and nothing consumes the preflight function in production
@@ -62,7 +62,7 @@ yet.
 | Stored hash is verified | A row whose hash disagrees with its facts is refused |
 | Provider/model contract still in force | Refused when either differs from the configured capability |
 | All 10 refusal reasons | One test each; `retryable` is asserted to partition the whole vocabulary |
-| Every `MediaAssetStatus` is classified | Compile-time `Record<MediaAssetStatus, …>`, so a new status cannot default into a branch |
+| Every `MediaAssetStatus` is classified | The single production `Record<MediaAssetStatus, …>` — a new status fails to compile until classified; all ten are also covered behaviourally |
 | Tenant isolation | An asset in another organization yields `ASSET_NOT_FOUND`, and **nothing is signed** |
 | Secret safety | Storage key, signed URL and prompt appear in no refusal message |
 | Preflight cannot claim or submit | Type-level assertion on `ExecutionPreflightDeps` |
@@ -79,6 +79,9 @@ yet.
 | Preflight TTL reverted to the human-download 300s | **2 fail** |
 | URL signed before the asset checks | **2 fail** |
 | `FAILED` put back into the unrecoverable bucket (the reviewed defect) | **1 fail** |
+| A status removed from the production `Record` | **compile error** `TS2741` |
+| `DELETION_PENDING` reclassified as recoverable | **1 fail** |
+| `deletionRequestedAt` override removed | **1 fail** |
 | `ASSET_UPLOAD_FAILED` folded back into `ASSET_NOT_READY` | **1 fail** |
 
 Each restored, `git diff --stat` confirming the file unchanged afterwards.
@@ -100,17 +103,29 @@ submission audit, polling, sweep, retry, or output ingestion.
 
 ### Corrected in review
 
-`FAILED` was classified as `ASSET_GONE`, non-retryable. That was wrong by this
-milestone's own criterion: `AssetService.retryUpload` accepts a failed asset and
-resets that same id to `PENDING_UPLOAD`, from which it can reach `READY`. A
-future durable mapper would have permanently failed an attempt whose photo was
-one customer action away.
+**`FAILED` was terminal, and should not have been.** It was grouped with deleted
+and quarantined assets as `ASSET_GONE`. `AssetService.retryUpload` accepts a
+failed asset and resets that same id to `PENDING_UPLOAD`, from which it can
+reach `READY` — so a future durable mapper would have permanently failed an
+attempt whose photo was one customer action away. It is now
+`ASSET_UPLOAD_FAILED`, retryable, and deliberately its own reason rather than
+merged into `ASSET_NOT_READY`: waiting resolves an in-progress asset and never
+resolves a failed upload.
 
-It is now `ASSET_UPLOAD_FAILED` — retryable, and deliberately its own reason
-rather than merged into `ASSET_NOT_READY`, because waiting resolves one and
-never resolves the other. Asset states are consequently split three ways, and a
-compile-time `Record<MediaAssetStatus, …>` now forces any new status to be
-classified rather than falling into whichever branch catches it.
+**The criterion is now stated exactly**, because the original wording invited
+this mistake. It is not "does this fix itself" but *can this same `MediaAsset`
+identity become an executable `READY` source again, without changing the
+admitted `assetId`?* Nothing recoverable is described as resolving on its own —
+`PENDING_UPLOAD` may be waiting on a customer's client just as `FAILED` waits on
+`retryUpload`.
+
+**`ASSET_GONE` is renamed `ASSET_UNRECOVERABLE`.** Quarantined and rejected
+content still exists; "gone" described the wrong property.
+
+**One `Record<MediaAssetStatus, AssetExecutability>` in production is the whole
+classification.** It is the only exhaustive map of these states anywhere — the
+tests deliberately keep no copy, since a second map could drift from the first
+while both stayed green.
 
 ## Known limitations
 
@@ -128,13 +143,13 @@ classified rather than falling into whichever branch catches it.
 
 | Category | Lines changed |
 | --- | --- |
-| Production | 398 (of which ~178 are statements; the rest is comment) |
-| Tests | 497 |
-| Docs | 362 |
-| **Total** | **1,257** across 9 files |
+| Production | 417 (of which ~181 are statements; the rest is comment) |
+| Tests | 481 |
+| Docs | 414 |
+| **Total** | **1,312** across 9 files |
 
 Measured from `git diff --numstat 27ba4df..HEAD` after the final commit existed,
-reconciling with the raw diff (`+1253 −4 = 1,257`).
+reconciling with the raw diff (`+1308 −4 = 1,312`).
 
 **This is over the planning estimate and is recorded as over.** The approved
 plan estimated ~210–260 production and ~330–400 tests for the *whole* of Phase

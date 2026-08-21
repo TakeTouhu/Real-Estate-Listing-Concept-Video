@@ -95,15 +95,44 @@ world could change — a processing asset may become `READY`, a missing frozen
 prompt never appears. An automatic loop reading this flag would be inventing the
 policy rather than reading it.
 
-**"The world could change" includes changes only a person can make**, and the
-asset states are split three ways rather than two because of it. Review of this
-milestone found `FAILED` grouped with deleted and quarantined assets, which was
-wrong: `AssetService.retryUpload` accepts a failed asset and resets that same id
-to `PENDING_UPLOAD`, so its source can still arrive. It is now
-`ASSET_UPLOAD_FAILED` — retryable, but deliberately **not** merged into
-`ASSET_NOT_READY`, because waiting fixes one and never fixes the other. A future
-"retry after a delay" policy that could not tell them apart would spin forever
-on an asset waiting for a customer.
+### 5a. Source-asset classification
+
+One criterion decides all ten `MediaAssetStatus` values:
+
+> Can this **same** `MediaAsset` identity become an executable `READY`
+> normalized source later, without changing the admitted generation's `assetId`?
+
+It deliberately says nothing about whether that happens on its own, and that
+distinction is where an earlier version of this milestone went wrong.
+
+| Statuses | Reason | Disposition |
+| --- | --- | --- |
+| `READY` | — | executable, subject to the object and signing checks |
+| `PENDING_UPLOAD`, `UPLOADED`, `SCANNING`, `PROCESSING` | `ASSET_NOT_READY` | retryable |
+| `FAILED` | `ASSET_UPLOAD_FAILED` | retryable |
+| `QUARANTINED`, `REJECTED`, `DELETION_PENDING`, `DELETED` | `ASSET_UNRECOVERABLE` | terminal |
+
+**None of the recoverable statuses is described as resolving by itself.**
+`PENDING_UPLOAD` may be waiting on a customer's client to finish uploading;
+`FAILED` moves only when someone calls `AssetService.retryUpload`. Both can
+reach `READY` under the same id, which is the whole test — but a policy that
+assumed either would fix itself given time would be wrong about both. Review of
+this milestone found `FAILED` grouped with deleted and quarantined assets, which
+would have permanently failed an attempt whose photo was one customer action
+away. It is retryable, and deliberately **not** merged into `ASSET_NOT_READY`,
+because the two need different things to happen.
+
+`ASSET_UNRECOVERABLE` is named for what it means rather than for deletion:
+quarantined and rejected content still exists, so "gone" was inaccurate. A
+`READY` row carrying a non-null `deletionRequestedAt` is treated as
+unrecoverable too, defensively — retention can be requested before the status
+catches up.
+
+**One `Record<MediaAssetStatus, AssetExecutability>` in production is the whole
+classification**, and it is the only exhaustive map of these states anywhere.
+Adding a status to the union fails to compile until it is classified; the tests
+deliberately do not keep a copy, because a second map could drift from the first
+while both stayed green.
 
 ### 6. The source URL has its own TTL
 

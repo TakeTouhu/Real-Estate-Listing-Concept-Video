@@ -28,8 +28,12 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "ASSET_NOT_READY",
   /** The upload failed. Recoverable, but only when the customer retries it. */
   "ASSET_UPLOAD_FAILED",
-  /** The asset is deleted, quarantined or rejected — it is not coming back. */
-  "ASSET_GONE",
+  /**
+   * Deleted, quarantined, rejected, or pending deletion. This asset id can
+   * never carry an executable source again — "gone" would be inaccurate for
+   * quarantined or rejected content, which still exists but is unusable.
+   */
+  "ASSET_UNRECOVERABLE",
   /** The asset row points at a storage key that holds no object. */
   "SOURCE_OBJECT_MISSING",
   /** Object storage could not answer. Says nothing about the asset itself. */
@@ -42,23 +46,18 @@ export type PreflightRefusalReason = (typeof PREFLIGHT_REFUSAL_REASONS)[number];
  * Reasons whose durable disposition is `FAILED_RETRYABLE` rather than
  * `FAILED_TERMINAL`.
  *
- * **Retryable does not mean "leave it `QUEUED` and try again in a moment".**
- * Both dispositions park the work: `FAILED_RETRYABLE` records that a later,
- * explicit retry policy *could* legitimately move this row back to `QUEUED`,
- * where `FAILED_TERMINAL` records that nothing ever should. Until that policy
- * exists, the two differ only in what a human or a future milestone is allowed
- * to do with the row — an automatic loop that re-queued on this flag would be
- * inventing the policy rather than reading it.
+ * **Retryable means exactly one thing:** a later *explicit* retry policy could
+ * legitimately try this generation again once the asset has changed. It does
+ * not mean an automatic loop, it does not mean leaving the row `QUEUED`, and it
+ * does not mean retrying after a timer. Both dispositions park the work — Phase
+ * 4C-2B will put a retryable refusal in `FAILED_RETRYABLE`, where it waits.
  *
- * The split is by *whether the world could change*, not by how the failure
- * felt. A processing asset may become `READY`; a failed upload can be retried
- * onto the same asset id; storage may come back. A generation with no frozen
- * prompt never acquires one.
- *
- * Note that "the world could change" includes changes only a person can make.
- * `ASSET_UPLOAD_FAILED` is retryable because `AssetService.retryUpload` exists,
- * not because time alone would fix it — which is exactly why it is a separate
- * reason from `ASSET_NOT_READY` rather than folded into it.
+ * The split follows the asset criterion: can this same identity become an
+ * executable `READY` source again, without changing the admitted `assetId`?
+ * Nothing here claims that happens on its own. `PENDING_UPLOAD` may be waiting
+ * on a customer's client; `ASSET_UPLOAD_FAILED` needs someone to call
+ * `AssetService.retryUpload`. Both are recoverable and neither is automatic,
+ * which is why they are separate reasons rather than one.
  */
 const RETRYABLE_REASONS: readonly PreflightRefusalReason[] = [
   "ASSET_NOT_READY",

@@ -84,28 +84,42 @@ export interface ExecutionPreflightDeps {
  */
 export const PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600;
 
-/**
- * Asset states from which this asset id can never reach `READY`.
- *
- * `FAILED` is deliberately **not** here. `AssetService.retryUpload` accepts a
- * failed asset and resets that same id to `PENDING_UPLOAD`, so its source can
- * still arrive — it is recoverable, just not by waiting. The four that remain
- * are refused by `retryUpload` and have no other route back.
- */
-const UNRECOVERABLE_ASSET_STATES: readonly MediaAssetStatus[] = [
-  "QUARANTINED",
-  "REJECTED",
-  "DELETION_PENDING",
-  "DELETED",
-];
+/** What a source asset's current status means for executing this generation. */
+type AssetExecutability = "READY" | "IN_PROGRESS" | "UPLOAD_FAILED" | "UNRECOVERABLE";
 
-/** Asset states that will reach `READY`, if they reach it, without anyone acting. */
-const IN_PROGRESS_ASSET_STATES: readonly MediaAssetStatus[] = [
-  "PENDING_UPLOAD",
-  "UPLOADED",
-  "SCANNING",
-  "PROCESSING",
-];
+/**
+ * The single classification of every source-asset status, and the one place a
+ * new status has to be thought about.
+ *
+ * A `Record<MediaAssetStatus, …>` does not compile with a member missing, so
+ * adding a status to the union forces a decision here rather than letting it
+ * fall into whichever branch happens to catch it. This is the *only* exhaustive
+ * map of these states; nothing restates it.
+ *
+ * The criterion is narrow and deliberately not about how the failure feels:
+ *
+ * > Can this **same** `MediaAsset` identity become an executable `READY`
+ * > normalized source later, without changing the admitted generation's
+ * > `assetId`?
+ *
+ * It says nothing about whether that happens on its own. `PENDING_UPLOAD` may
+ * be waiting on a customer's client to finish uploading, and `FAILED` needs a
+ * customer to call `AssetService.retryUpload` — both can still reach `READY`
+ * under the same id, which is what makes them recoverable. `QUARANTINED` and
+ * `REJECTED` cannot: `retryUpload` refuses them, and no other route exists.
+ */
+const ASSET_EXECUTABILITY: Record<MediaAssetStatus, AssetExecutability> = {
+  READY: "READY",
+  PENDING_UPLOAD: "IN_PROGRESS",
+  UPLOADED: "IN_PROGRESS",
+  SCANNING: "IN_PROGRESS",
+  PROCESSING: "IN_PROGRESS",
+  FAILED: "UPLOAD_FAILED",
+  QUARANTINED: "UNRECOVERABLE",
+  REJECTED: "UNRECOVERABLE",
+  DELETION_PENDING: "UNRECOVERABLE",
+  DELETED: "UNRECOVERABLE",
+};
 
 /**
  * Prepare one `QUEUED` generation for a later submission, and change nothing.
@@ -192,32 +206,38 @@ export async function prepareQueuedGeneration(
     );
   }
 
-  // `deletionRequestedAt` is checked alongside status because retention can be
-  // requested while the row still reads `READY`. Submitting a photo whose
-  // deletion a customer has already asked for would be worse than refusing.
-  if (UNRECOVERABLE_ASSET_STATES.includes(asset.status) || asset.deletionRequestedAt !== null) {
-    throw new PreflightRefusalError(
-      "ASSET_GONE",
-      "The source asset for this generation is not available and will not become available",
-    );
-  }
-  // Two recoverable cases, kept apart because they need different things to
-  // happen. An in-progress asset resolves itself given time; a failed upload
-  // resolves only when the customer retries it. Collapsing them would let a
-  // future "wait and try again" policy spin forever on an asset that is waiting
-  // for a person, and would tell an operator the wrong thing about why the work
-  // is parked.
-  if (IN_PROGRESS_ASSET_STATES.includes(asset.status)) {
-    throw new PreflightRefusalError(
-      "ASSET_NOT_READY",
-      "The source asset for this generation is still being prepared",
-    );
-  }
-  if (asset.status !== "READY") {
-    throw new PreflightRefusalError(
-      "ASSET_UPLOAD_FAILED",
-      "The source asset for this generation failed to upload and has not been retried",
-    );
+  // `deletionRequestedAt` overrides the status rather than being checked beside
+  // it: retention can be requested while the row still reads `READY`, and
+  // submitting a photo whose deletion a customer has already asked for would be
+  // worse than refusing. Deliberately unconditional.
+  const executability: AssetExecutability =
+    asset.deletionRequestedAt === null ? ASSET_EXECUTABILITY[asset.status] : "UNRECOVERABLE";
+
+  // The three non-ready cases stay separate because a later policy has to treat
+  // them differently. An in-progress asset may complete on its own or may be
+  // waiting on the customer's client; a failed upload moves only when someone
+  // calls `retryUpload`; an unrecoverable one never moves at all under this
+  // identity. Collapsing the first two would let a future "try again after a
+  // delay" policy spin forever on work that is waiting for a person, and would
+  // tell an operator the wrong thing about why the row is parked.
+  switch (executability) {
+    case "READY":
+      break;
+    case "IN_PROGRESS":
+      throw new PreflightRefusalError(
+        "ASSET_NOT_READY",
+        "The source asset for this generation is still being prepared",
+      );
+    case "UPLOAD_FAILED":
+      throw new PreflightRefusalError(
+        "ASSET_UPLOAD_FAILED",
+        "The source asset for this generation failed to upload and has not been retried",
+      );
+    case "UNRECOVERABLE":
+      throw new PreflightRefusalError(
+        "ASSET_UNRECOVERABLE",
+        "The source asset for this generation cannot become usable under its current identity",
+      );
   }
 
   // Existence is asked of storage rather than inferred from the row. A `READY`

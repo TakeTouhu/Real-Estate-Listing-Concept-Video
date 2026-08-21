@@ -310,7 +310,7 @@ describe("prepareQueuedGeneration — refusals", () => {
       const { deps } = await fixture({ assetOverrides: { status } });
       const refusal = await refusalFrom(deps, candidateFor(generation()));
 
-      expect(refusal.reason).toBe("ASSET_GONE");
+      expect(refusal.reason).toBe("ASSET_UNRECOVERABLE");
       expect(refusal.retryable).toBe(false);
     },
   );
@@ -330,28 +330,12 @@ describe("prepareQueuedGeneration — refusals", () => {
     expect(refusal.retryable).toBe(true);
   });
 
-  it("classifies every MediaAssetStatus deliberately (compile-time)", () => {
-    // `Record<MediaAssetStatus, …>` does not compile with a status missing, so
-    // adding one to the union forces a decision here rather than letting it
-    // fall into whichever branch happens to catch it. `MediaAssetStatus` is a
-    // pure type union with no runtime array, so this is the only exhaustive
-    // check available that does not add surface to the property module.
-    const bucket: Record<MediaAssetStatus, "ready" | "in-progress" | "upload-failed" | "gone"> = {
-      READY: "ready",
-      PENDING_UPLOAD: "in-progress",
-      UPLOADED: "in-progress",
-      SCANNING: "in-progress",
-      PROCESSING: "in-progress",
-      FAILED: "upload-failed",
-      QUARANTINED: "gone",
-      REJECTED: "gone",
-      DELETION_PENDING: "gone",
-      DELETED: "gone",
-    };
-
-    expect(bucket.FAILED).toBe("upload-failed");
-    expect(bucket.DELETED).toBe("gone");
-  });
+  // There is deliberately no `Record<MediaAssetStatus, …>` here. Production
+  // carries exactly one, and it is what refuses to compile when a status is
+  // added — a copy in the test would be a second answer that could drift from
+  // the first while both stayed green. Every status is covered behaviourally
+  // instead: four in-progress and four unrecoverable above, `FAILED` below, and
+  // `READY` through the happy path.
 
   it("refuses a READY asset whose deletion the customer has already requested", async () => {
     // Retention can be requested while the row still reads READY. Submitting a
@@ -360,7 +344,7 @@ describe("prepareQueuedGeneration — refusals", () => {
       assetOverrides: { status: "READY", deletionRequestedAt: new Date("2026-01-01T00:00:00Z") },
     });
 
-    expect((await refusalFrom(deps, candidateFor(generation()))).reason).toBe("ASSET_GONE");
+    expect((await refusalFrom(deps, candidateFor(generation()))).reason).toBe("ASSET_UNRECOVERABLE");
   });
 
   it("refuses when the asset row points at an object storage does not have", async () => {
@@ -463,7 +447,7 @@ describe("preflight refusals as a contract", () => {
       "REQUEST_HASH_MISMATCH",
       "PROVIDER_CONTRACT_CHANGED",
       "ASSET_NOT_FOUND",
-      "ASSET_GONE",
+      "ASSET_UNRECOVERABLE",
       "SOURCE_OBJECT_MISSING",
     ];
     // Together these must be the whole vocabulary — a new reason has to be
