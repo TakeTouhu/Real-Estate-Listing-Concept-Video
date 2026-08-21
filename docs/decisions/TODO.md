@@ -336,13 +336,31 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       storyboard or project. Phase 4C decides the normalized failure state and
       reason code for such a row — this milestone deliberately does not, because
       the state machine's failure vocabulary is the worker's contract.
+      **Partially addressed in Phase 4C-2A**: preflight classifies such a row as
+      `LEGACY_SNAPSHOT_MISSING` / `LEGACY_PROMPT_MISSING`, non-retryable, and
+      never reconstructs from current state. The **durable** failure state is
+      still open and belongs to Phase 4C-2B.
       **Required before Phase 4C ships.**
 - [ ] **Phase 4C worker must derive a fresh signed source-image URL from durable
       asset identity.** `SceneGeneration.assetId` is the reference; no temporary
       URL, signed URL, or storage credential is ever persisted on a generation
       (ADR-0018 §6). The worker resolves `assetId` → `MediaAsset.storageKey` →
       `ObjectStorage.createSignedDownloadUrl` at execution time.
+      **Closed in Phase 4C-2A** (ADR-0026 §3): `prepareQueuedGeneration` resolves
+      exactly that chain, returns the URL on an ephemeral artifact, and persists
+      nothing.
       **Required before Phase 4C ships.**
+- [ ] **Capability re-validation at execution is identity-only.** Phase 4C-2A
+      verifies the deployment still serves the admitted `providerName` and
+      `providerModelId`, but cannot re-run `assertSettingsSupported`: that needs
+      a discrete `negativePrompt`, and the snapshot stores only the opaque
+      compiled prompt. A capability table edited under an **unchanged** model id
+      — a resolution withdrawn, a duration range narrowed — would therefore not
+      be noticed before submission, and the provider would refuse the request
+      after being asked. Closing this needs either a discrete negative-prompt
+      snapshot field or a capability-revision fact inside the request identity;
+      both change an admitted-request contract, so neither belongs in a
+      preflight milestone. **Required before real provider spending ships.**
 - [ ] **Phase 4C worker must fail closed when the source asset is missing or
       deleted.** `assetId` has no foreign key and assets may be removed under
       retention policy. A generation whose photo is gone is genuinely

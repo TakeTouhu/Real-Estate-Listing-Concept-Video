@@ -212,8 +212,9 @@ reserved for a webhook.
 | 4C-0b | Camera motion becomes a closed, server-enforced vocabulary (ADR-0022) | 1,304 — 356 production + 485 tests + 463 docs | **Merged** (PR #36, `35970da`) |
 | 4C-0a | Execution prompt freeze: `requestRenderedPrompt` persisted at admission (ADR-0023) | 1,170 — 147 production + 492 tests + 531 docs | **Merged** (PR #37, `082a596`) |
 | 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | 1,339 — 196 production + 235 tests + 908 docs | **Merged** (PR #38, `e8dbd01`) |
-| 4C-1b | System-scoped execution persistence: queued-candidate discovery + state-CAS submission claim (ADR-0025) | see `docs/phase-4c1b-completion.md` | PR #39 — see GitHub for lifecycle |
-| 4C-2…5 | Execution input assembly, submission, polling, worker runtime — fake provider first | — | Not started |
+| 4C-1b | System-scoped execution persistence: queued-candidate discovery + state-CAS submission claim (ADR-0025) | 1,245 — 272 production + 379 tests + 594 docs | **Merged** (PR #39, `27ba4df`) |
+| 4C-2A | Immutable execution preflight: snapshot reconstruction, scoped asset resolution, signed source URL, classified refusals (ADR-0026) | see `docs/phase-4c2a-completion.md` | See GitHub for lifecycle |
+| 4C-2B…5 | Durable refusal disposition, submission, polling, worker runtime — fake provider first | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
 

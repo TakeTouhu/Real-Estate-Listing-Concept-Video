@@ -3,9 +3,49 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4C-1b: system execution persistence foundation
+## [Unreleased] — Phase 4C-2A: immutable execution preflight
 
-PR #39 — see GitHub for lifecycle. Technical detail in
+See GitHub for lifecycle. Technical detail in `docs/phase-4c2a-completion.md`
+and ADR-0026.
+
+### Added
+
+- **`prepareQueuedGeneration`** — prepares one `QUEUED` generation for a later
+  submission and **changes nothing**: no claim, no state write, no asset write,
+  no persisted URL, no provider call. The row is still `QUEUED` on return, and
+  `ExecutionPreflightDeps` carries no generation repository that could move it.
+- **`PreparedGeneration`**, a domain-owned artifact. Deliberately not
+  `ProviderGenerationInput` — that type lives in `@app/video-providers`, which
+  depends on `@app/domain`, so importing it would invert the dependency.
+  `packages/domain` still depends only on `@app/shared`.
+- **`PreflightRefusalError`** with nine closed `PreflightRefusalReason` values,
+  each `INTERNAL_ERROR` (nothing a customer submits reaches preflight) and each
+  carrying `retryable` — which marks what a *future explicit retry policy* may
+  do, never an automatic re-queue.
+- **`PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600`**, separate from the 300s
+  human-download TTL because this URL must survive the claim, the submission
+  POST and the provider's own fetch. `sourceUrlExpiresAt` is returned so a
+  submitter can refuse a stale URL rather than pay for a failed fetch.
+- 37 unit tests, including exhaustive `MediaAssetStatus` coverage, tenant
+  isolation, secret-safety, and a type-level assertion that preflight declares
+  no way to claim or submit.
+
+### Unchanged
+
+- Schema, migrations, state machine, `requestHash` contract, the six frozen
+  request artifacts, the tenant-facing repository, `generation-service.ts`, and
+  the Phase 4C-1b execution port and adapter.
+
+### Notes
+
+- **Production-dormant.** Nothing calls it yet, by design.
+- Capability re-validation is **identity-only** — `assertSettingsSupported`
+  cannot be re-run from the snapshot, which stores no discrete `negativePrompt`.
+  Recorded in `docs/decisions/TODO.md`.
+
+## Phase 4C-1b: system execution persistence foundation
+
+Merged as PR #39 (`27ba4df`). Technical detail in
 `docs/phase-4c1b-completion.md` and ADR-0025.
 
 ### Added
