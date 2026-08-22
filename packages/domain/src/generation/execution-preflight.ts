@@ -1,6 +1,6 @@
 import { AppError } from "@app/shared";
-import type { MediaAssetRepository, ObjectStorage } from "../property/ports";
-import type { MediaAssetStatus } from "../property/types";
+import type { MediaAssetRepository, ObjectStorage, SignedUrl } from "../property/ports";
+import type { MediaAsset, MediaAssetStatus } from "../property/types";
 import type { VideoModelCapabilityProvider } from "./capability";
 import { frozenExecutionPromptFrom } from "./execution-input";
 import type { SystemGenerationCandidate } from "./execution-ports";
@@ -41,12 +41,13 @@ export interface PreparedGeneration {
    */
   readonly sourceImageUrl: string;
   /**
-   * When {@link sourceImageUrl} stops working.
+   * When {@link sourceImageUrl} stops working, exactly as storage reported it.
    *
+   * Never computed here, so it cannot drift from what storage actually issued.
    * Returned rather than kept private because the gap between preparing and
-   * submitting is the caller's to manage: a submitter that finds this in the
-   * past should refuse rather than spend money on a request whose image the
-   * provider cannot fetch.
+   * submitting is the caller's to manage — but preflight does **not** check it
+   * against the current time. Freshness belongs immediately before the paid
+   * POST, where the answer is still true when it matters (Phase 4C-3).
    */
   readonly sourceUrlExpiresAt: Date;
 
@@ -73,7 +74,8 @@ export interface PreparedGeneration {
  */
 export interface ExecutionPreflightDeps {
   /**
-   * A single tenant-addressed read.
+   * A single tenant-addressed read, called twice — once before signing and once
+   * after (see {@link prepareQueuedGeneration}).
    *
    * Not a system-scoped port, and that is the point: Phase 4C-1b already
    * resolved `organizationId` through the owning `VideoProject`, so preflight
@@ -104,8 +106,24 @@ export interface ExecutionPreflightDeps {
  * claim, the submission POST, and the provider's own fetch of the image — a
  * machine-to-machine window that is shorter in the happy case and much less
  * forgiving when it is not.
+ *
+ * **Provisional.** 600 seconds is a considered guess about a pipeline nothing
+ * has yet run end to end; Phase 4C-3's paid-call review is where it gets
+ * measured against a real submission.
  */
 export const PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600;
+
+/**
+ * The only source format execution accepts.
+ *
+ * The media pipeline normalizes every accepted upload to JPEG, so a `READY`
+ * asset that is not one is not the normalized master — it is something else,
+ * and submitting it would send the provider an image the customer never had
+ * normalized. Thumbnails are excluded for the same reason plus a worse one:
+ * `thumbnailKey` is a downscaled derivative, and paying to animate it would be
+ * a silent quality substitution.
+ */
+const NORMALIZED_SOURCE_MIME_TYPE = "image/jpeg";
 
 /** What a source asset's current status means for executing this generation. */
 type AssetExecutability = "READY" | "IN_PROGRESS" | "UPLOAD_FAILED" | "UNRECOVERABLE";
@@ -117,7 +135,7 @@ type AssetExecutability = "READY" | "IN_PROGRESS" | "UPLOAD_FAILED" | "UNRECOVER
  * A `Record<MediaAssetStatus, …>` does not compile with a member missing, so
  * adding a status to the union forces a decision here rather than letting it
  * fall into whichever branch happens to catch it. This is the *only* exhaustive
- * map of these states; nothing restates it.
+ * map of these states; nothing restates it, including the tests.
  *
  * The criterion is narrow and deliberately not about how the failure feels:
  *
@@ -145,6 +163,39 @@ const ASSET_EXECUTABILITY: Record<MediaAssetStatus, AssetExecutability> = {
 };
 
 /**
+ * The classification above, plus the one override that outranks status.
+ *
+ * `deletionRequestedAt` is applied here rather than beside each call site
+ * because retention can be requested while the row still reads `READY`, and
+ * both asset observations have to agree about that. Submitting a photo whose
+ * deletion a customer has already asked for would be worse than refusing.
+ */
+function executabilityOf(asset: MediaAsset): AssetExecutability {
+  return asset.deletionRequestedAt === null ? ASSET_EXECUTABILITY[asset.status] : "UNRECOVERABLE";
+}
+
+/** Refuse a non-`READY` observation, using the reason its bucket implies. */
+function refuseNotReady(executability: Exclude<AssetExecutability, "READY">): never {
+  switch (executability) {
+    case "IN_PROGRESS":
+      throw new PreflightRefusalError(
+        "ASSET_NOT_READY",
+        "The source asset for this generation is still being prepared",
+      );
+    case "UPLOAD_FAILED":
+      throw new PreflightRefusalError(
+        "ASSET_UPLOAD_FAILED",
+        "The source asset for this generation failed to upload and has not been retried",
+      );
+    case "UNRECOVERABLE":
+      throw new PreflightRefusalError(
+        "ASSET_UNRECOVERABLE",
+        "The source asset for this generation cannot become usable under its current identity",
+      );
+  }
+}
+
+/**
  * Prepare one `QUEUED` generation for a later submission, and change nothing.
  *
  * The row is still `QUEUED` when this returns. There is no claim here, no state
@@ -154,13 +205,30 @@ const ASSET_EXECUTABILITY: Record<MediaAssetStatus, AssetExecutability> = {
  * URL signing as well (ADR-0025 §3). `SUBMITTING` is the state whose only
  * honest recovery parks work for a human, so it is worth keeping small.
  *
+ * The order is load-bearing, and reads:
+ *
+ * 1. the row is `QUEUED`;
+ * 2. reconstruct the immutable request facts;
+ * 3. read the frozen rendered prompt;
+ * 4. recompute and verify `requestHash`;
+ * 5. read the configured capability **once**;
+ * 6. verify provider and model identity;
+ * 7. first tenant-scoped asset read;
+ * 8. classify it, and require `READY`;
+ * 9. require a normalized JPEG and a non-blank storage key;
+ * 10. ask storage whether that exact object exists;
+ * 11. sign that exact key;
+ * 12. validate the signed URL and its expiry;
+ * 13. **second** tenant-scoped asset read, and require it to still describe the
+ *     source that was signed;
+ * 14. return.
+ *
+ * Nothing is signed for an asset already known to be unusable, and nothing is
+ * returned for an asset that stopped being usable while it was being signed.
+ *
  * Two workers may prepare the same row concurrently. That is safe and expected:
  * only one wins the later compare-and-swap, and the loser has spent a signed
  * URL and some assembly, neither of which is billable.
- *
- * Every failure is a {@link PreflightRefusalError} carrying a machine-readable
- * reason. None of them can mean the provider was charged, because preflight
- * never reaches a provider.
  *
  * @throws PreflightRefusalError when the generation cannot be prepared.
  * @throws AppError INTERNAL_ERROR when handed a generation that is not `QUEUED`.
@@ -185,10 +253,10 @@ export async function prepareQueuedGeneration(
   // existed; preflight only has to classify that refusal rather than re-decide
   // it. Reconstructing either from the current storyboard or the project's
   // present settings would forge a request the customer never approved.
-  const facts = refuseOnThrow("LEGACY_SNAPSHOT_MISSING", () =>
+  const facts = refuseOnDomainRefusal("LEGACY_SNAPSHOT_MISSING", () =>
     generationRequestFactsFrom(generation),
   );
-  const prompt = refuseOnThrow("LEGACY_PROMPT_MISSING", () =>
+  const prompt = refuseOnDomainRefusal("LEGACY_PROMPT_MISSING", () =>
     frozenExecutionPromptFrom(generation),
   );
 
@@ -196,7 +264,8 @@ export async function prepareQueuedGeneration(
   // trusted. They are written together at admission and nothing may edit them
   // afterwards, so disagreement means the row was altered — and the hash is the
   // idempotency identity that stops a provider being paid twice for the same
-  // request. A mismatch is the one signal that identity has already been lost.
+  // request. It is verified, never repaired: a row whose identity has already
+  // been lost must not have a new one written over it.
   if (computeGenerationRequestHash(facts) !== generation.requestHash) {
     throw new PreflightRefusalError(
       "REQUEST_HASH_MISMATCH",
@@ -204,79 +273,104 @@ export async function prepareQueuedGeneration(
     );
   }
 
-  // The admitted request names a provider and model. If the deployment has been
-  // repointed since, this attempt was approved against a contract that is no
-  // longer in force — a different model has a different price and a different
-  // result, which is why both are inside the request hash.
+  // Read once, and compare identity only. If the deployment has been repointed
+  // since admission, this attempt was approved against a contract no longer in
+  // force — a different model has a different price and a different result,
+  // which is why both are inside the request hash.
+  //
+  // This is NOT a re-validation of the capability table. `assertSettingsSupported`
+  // needs a discrete negative prompt the snapshot does not store, and inventing
+  // one would silently skip a check admission actually made. A capability edited
+  // under an unchanged provider and model therefore passes here; that gap is a
+  // hard prerequisite before real provider spending (docs/decisions/TODO.md).
   const capability = deps.capabilities.current();
   if (
     capability.providerName !== generation.providerName ||
     capability.providerModelId !== generation.providerModelId
   ) {
     throw new PreflightRefusalError(
-      "PROVIDER_CONTRACT_CHANGED",
+      "PROVIDER_IDENTITY_MISMATCH",
       "This attempt was admitted for a provider or model the deployment no longer serves",
     );
   }
 
-  // Tenant-scoped by construction. `assetId` carries no foreign key, so this is
-  // also the check that the asset still exists at all.
-  const asset = await deps.assets.findById(organizationId, generation.assetId);
-  if (asset === null) {
+  // --- First observation -----------------------------------------------------
+  // Tenant-scoped by construction, and addressed by the *frozen* asset id.
+  // `assetId` carries no foreign key, so this is also the check that the asset
+  // still exists at all.
+  const first = await deps.assets.findById(organizationId, facts.assetId);
+  if (first === null) {
     throw new PreflightRefusalError(
       "ASSET_NOT_FOUND",
       "The source asset for this generation no longer exists in its organization",
     );
   }
 
-  // `deletionRequestedAt` overrides the status rather than being checked beside
-  // it: retention can be requested while the row still reads `READY`, and
-  // submitting a photo whose deletion a customer has already asked for would be
-  // worse than refusing. Deliberately unconditional.
-  const executability: AssetExecutability =
-    asset.deletionRequestedAt === null ? ASSET_EXECUTABILITY[asset.status] : "UNRECOVERABLE";
+  const firstExecutability = executabilityOf(first);
+  if (firstExecutability !== "READY") refuseNotReady(firstExecutability);
 
-  // The three non-ready cases stay separate because a later policy has to treat
-  // them differently. An in-progress asset may complete on its own or may be
-  // waiting on the customer's client; a failed upload moves only when someone
-  // calls `retryUpload`; an unrecoverable one never moves at all under this
-  // identity. Collapsing the first two would let a future "try again after a
-  // delay" policy spin forever on work that is waiting for a person, and would
-  // tell an operator the wrong thing about why the row is parked.
-  switch (executability) {
-    case "READY":
-      break;
-    case "IN_PROGRESS":
-      throw new PreflightRefusalError(
-        "ASSET_NOT_READY",
-        "The source asset for this generation is still being prepared",
-      );
-    case "UPLOAD_FAILED":
-      throw new PreflightRefusalError(
-        "ASSET_UPLOAD_FAILED",
-        "The source asset for this generation failed to upload and has not been retried",
-      );
-    case "UNRECOVERABLE":
-      throw new PreflightRefusalError(
-        "ASSET_UNRECOVERABLE",
-        "The source asset for this generation cannot become usable under its current identity",
-      );
+  // Ready is not the same as usable. The normalized master is a JPEG at a
+  // non-blank key; anything else is either not the normalized source or not
+  // addressable, and both would be discovered by the provider after the money
+  // was spent.
+  const storageKey = first.storageKey.trim();
+  if (first.mimeType !== NORMALIZED_SOURCE_MIME_TYPE || storageKey.length === 0) {
+    throw new PreflightRefusalError(
+      "ASSET_FORMAT_UNSUPPORTED",
+      "The source asset for this generation is not a usable normalized JPEG source",
+    );
   }
 
   // Existence is asked of storage rather than inferred from the row. A `READY`
   // asset whose object is gone is exactly the case that would otherwise be
-  // discovered by the provider, after the money was spent.
-  const objectExists = await storageCall(() => deps.storage.exists(asset.storageKey));
+  // found by the provider, after the charge.
+  const objectExists = await storageCall(() => deps.storage.exists(first.storageKey));
   if (!objectExists) {
     throw new PreflightRefusalError(
-      "SOURCE_OBJECT_MISSING",
+      "ASSET_OBJECT_MISSING",
       "The source asset record points at an object that is not in storage",
     );
   }
 
   const signed = await storageCall(() =>
-    deps.storage.createSignedDownloadUrl(asset.storageKey, PREFLIGHT_SOURCE_URL_TTL_SECONDS),
+    deps.storage.createSignedDownloadUrl(first.storageKey, PREFLIGHT_SOURCE_URL_TTL_SECONDS),
   );
+  assertUsableSignedUrl(signed);
+
+  // --- Second observation ----------------------------------------------------
+  // Signing takes time, and an asset can change during it. Returning
+  // immediately after signing would hand a caller a credential for a source
+  // that had already been deleted or replaced — so the last thing preparation
+  // does is look again, with the same authoritative organization and the same
+  // frozen asset id.
+  //
+  // This narrows the window; it does not close it. See the residual race in
+  // ADR-0026.
+  const second = await deps.assets.findById(organizationId, facts.assetId);
+  if (second === null) {
+    throw new PreflightRefusalError(
+      "ASSET_NOT_FOUND",
+      "The source asset for this generation no longer exists in its organization",
+    );
+  }
+
+  const secondExecutability = executabilityOf(second);
+  if (secondExecutability !== "READY") refuseNotReady(secondExecutability);
+
+  // Still ready, but is it still the *same* source? A key or MIME change means
+  // the bytes behind the admitted asset id were replaced while this ran, and
+  // the URL just signed points at whatever the old key held. Terminal rather
+  // than retryable: the admitted request named a source that no longer exists
+  // in the form it was approved in.
+  if (second.storageKey !== first.storageKey || second.mimeType !== first.mimeType) {
+    throw new PreflightRefusalError(
+      "ASSET_SOURCE_CHANGED",
+      "The source asset changed while this generation was being prepared",
+    );
+  }
+
+  // The signed URL is simply discarded on every refusal above. There is nothing
+  // to revoke — it was never persisted, never logged, and expires on its own.
 
   // Built from the snapshot, field by field. Nothing here reads the asset's
   // current dimensions, the project's current settings, or the storyboard —
@@ -298,25 +392,68 @@ export async function prepareQueuedGeneration(
 }
 
 /**
- * Run a reconstruction helper, converting its refusal into a classified one.
+ * Refuse a signed result a provider could not actually use.
  *
- * The original error becomes `cause` rather than being re-messaged, so the
- * reason a row is unexecutable survives into logs without preflight restating
- * a message it does not own.
+ * Storage is trusted to sign, not to be correct. A URL the runtime cannot parse,
+ * one that is not `https:`, one with no host, or an expiry that is not a real
+ * instant would each be found by the provider — after the request was paid for.
+ *
+ * `RETRYABLE`, because a malformed answer is a property of the call rather than
+ * of the generation: the same request signed again may well be fine.
+ *
+ * **No freshness check here.** Whether the URL is still valid *now* is only
+ * meaningful immediately before the paid POST, and that is Phase 4C-3's to ask.
  */
-function refuseOnThrow<T>(
+function assertUsableSignedUrl(signed: SignedUrl): void {
+  const refuse = (): never => {
+    throw new PreflightRefusalError(
+      "SIGNED_SOURCE_URL_UNUSABLE",
+      "Object storage returned a source URL or expiry that cannot be submitted",
+    );
+  };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(signed.url);
+  } catch {
+    // The message names nothing: the value being refused is a credential.
+    return refuse();
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.length === 0) return refuse();
+
+  const { expiresAt } = signed;
+  if (!(expiresAt instanceof Date) || !Number.isFinite(expiresAt.getTime())) return refuse();
+}
+
+/**
+ * Run a reconstruction helper, converting **only its fail-closed refusal** into
+ * a classified one.
+ *
+ * `generationRequestFactsFrom` and `frozenExecutionPromptFrom` refuse legacy
+ * rows by throwing `AppError` with `INTERNAL_ERROR`, and that is the single
+ * shape worth translating. Anything else — a `TypeError`, a `RangeError`, a
+ * programmer bug — escapes unchanged, because relabelling it
+ * `LEGACY_SNAPSHOT_MISSING` would tell a future durable mapper to permanently
+ * fail customer work over a defect in this code. The original error is not
+ * attached: it propagates on its own when it is not ours to classify, and the
+ * refusal that replaces it carries fixed text instead.
+ *
+ * Detection is by type and code, never by matching message text, which would
+ * change meaning under a reworded string.
+ */
+function refuseOnDomainRefusal<T>(
   reason: "LEGACY_SNAPSHOT_MISSING" | "LEGACY_PROMPT_MISSING",
   read: () => T,
 ): T {
   try {
     return read();
   } catch (error) {
+    if (!(error instanceof AppError) || error.code !== "INTERNAL_ERROR") throw error;
     throw new PreflightRefusalError(
       reason,
       reason === "LEGACY_PROMPT_MISSING"
         ? "This generation predates the execution prompt freeze and cannot be submitted"
         : "This generation predates the request snapshot and cannot be reconstructed",
-      { cause: error },
     );
   }
 }
@@ -327,17 +464,20 @@ function refuseOnThrow<T>(
  *
  * Storage being unreachable says nothing about the asset, which is why it is a
  * separate reason from a missing object: the world may change, so a later
- * explicit retry policy could legitimately re-queue this attempt, where a
+ * explicit policy could legitimately try this generation again, where a
  * genuinely absent object never becomes present.
+ *
+ * **The raw error is deliberately dropped.** Infrastructure errors routinely
+ * carry request URLs, keys and credentials in their message, and this refusal
+ * is meant to be safe to log whole.
  */
 async function storageCall<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
-  } catch (error) {
+  } catch {
     throw new PreflightRefusalError(
       "STORAGE_UNAVAILABLE",
       "Object storage could not be reached while preparing this generation",
-      { cause: error },
     );
   }
 }

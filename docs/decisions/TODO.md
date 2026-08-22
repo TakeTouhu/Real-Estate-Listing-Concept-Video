@@ -350,6 +350,29 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       exactly that chain, returns the URL on an ephemeral artifact, and persists
       nothing.
       **Required before Phase 4C ships.**
+- [ ] **Phase 4C-2B must map preflight refusals to durable parked states.**
+      `preflightDispositionFor` is the canonical answer and Phase 4C-2A holds no
+      generation-state authority. `RETRYABLE` becomes `QUEUED -> FAILED_RETRYABLE`;
+      `TERMINAL` becomes `QUEUED -> FAILED_TERMINAL`. **Both are parked.** There is
+      deliberately no automatic `FAILED_RETRYABLE -> QUEUED`: a retryable
+      disposition records that a later *explicit* policy could legitimately
+      re-queue the row once the world has changed, not that anything should do so
+      on a timer. Both transitions must use expected-state CAS (see the hard
+      prerequisite above). **Required before Phase 4C-2B ships.**
+- [ ] **Phase 4C-3 must complete this sequence before any paid provider POST.**
+      In order: (1) check the prepared source URL is still fresh — Phase 4C-2A
+      deliberately does not, because freshness is only meaningful immediately
+      before the charge; (2) review the residual deletion race, since preflight
+      guarantees only that the source was still the signed one at its final
+      observation, and deletion can be requested after `PreparedGeneration`
+      returns; (3) the paid-call gate; (4) `QUEUED -> SUBMITTING` CAS; (5) a
+      durable `generation.submission_started` audit; (6) the provider POST.
+      **Required before any provider charge is possible.**
+- [ ] **The 600-second preflight source URL TTL is provisional.**
+      `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
+      run end to end. It must cover preparation, the claim, the POST and the
+      provider's own fetch. Confirm or change it against a real submission during
+      the Phase 4C-3 paid-call review. **Required before real provider spending.**
 - [ ] **Capability re-validation at execution is identity-only.** Phase 4C-2A
       verifies the deployment still serves the admitted `providerName` and
       `providerModelId`, but cannot re-run `assertSettingsSupported`: that needs
@@ -360,7 +383,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       after being asked. Closing this needs either a discrete negative-prompt
       snapshot field or a capability-revision fact inside the request identity;
       both change an admitted-request contract, so neither belongs in a
-      preflight milestone. **Required before real provider spending ships.**
+      preflight milestone. Phase 4C-2A compares `providerName` and
+      `providerModelId` only, and says so rather than claiming the table was
+      revalidated. **Required before real provider spending ships.**
 - [ ] **Phase 4C worker must fail closed when the source asset is missing or
       deleted.** `assetId` has no foreign key and assets may be removed under
       retention policy. A generation whose photo is gone is genuinely

@@ -3,10 +3,10 @@ import { AppError } from "@app/shared";
 /**
  * Why a queued generation could not be prepared for submission.
  *
- * A closed vocabulary, deliberately separate from the message text. Phase 4C-2B
- * maps these to durable states and Phase 4C-3 decides what a worker does next;
- * both need something stable to switch on, and matching on prose is how a
- * refusal quietly changes meaning under a reworded string.
+ * A closed vocabulary of thirteen, deliberately separate from the message text.
+ * Phase 4C-2B maps these to durable states and Phase 4C-3 decides what a worker
+ * does next; both need something stable to switch on, and matching on prose is
+ * how a refusal quietly changes meaning under a reworded string.
  *
  * Nothing here describes a provider outcome. Preflight never contacts a
  * provider, so no reason in this list can mean "we may have been charged" —
@@ -20,8 +20,8 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "LEGACY_PROMPT_MISSING",
   /** The stored hash disagrees with the facts stored beside it. */
   "REQUEST_HASH_MISMATCH",
-  /** The deployment now points at a different provider or model. */
-  "PROVIDER_CONTRACT_CHANGED",
+  /** The deployment now serves a different provider or model than was admitted. */
+  "PROVIDER_IDENTITY_MISMATCH",
   /** No asset with that id inside the generation's own organization. */
   "ASSET_NOT_FOUND",
   /** The asset exists but is still being uploaded, scanned or processed. */
@@ -34,39 +34,63 @@ export const PREFLIGHT_REFUSAL_REASONS = [
    * quarantined or rejected content, which still exists but is unusable.
    */
   "ASSET_UNRECOVERABLE",
+  /** Ready, but not a normalized JPEG source, or its storage key is blank. */
+  "ASSET_FORMAT_UNSUPPORTED",
+  /** The asset changed underneath preparation, after the URL was signed. */
+  "ASSET_SOURCE_CHANGED",
   /** The asset row points at a storage key that holds no object. */
-  "SOURCE_OBJECT_MISSING",
+  "ASSET_OBJECT_MISSING",
   /** Object storage could not answer. Says nothing about the asset itself. */
   "STORAGE_UNAVAILABLE",
+  /** Storage returned a URL or expiry a provider could not use. */
+  "SIGNED_SOURCE_URL_UNUSABLE",
 ] as const;
 
 export type PreflightRefusalReason = (typeof PREFLIGHT_REFUSAL_REASONS)[number];
 
 /**
- * Reasons whose durable disposition is `FAILED_RETRYABLE` rather than
- * `FAILED_TERMINAL`.
+ * What a later milestone may do with a refused generation.
  *
- * **Retryable means exactly one thing:** a later *explicit* retry policy could
- * legitimately try this generation again once the asset has changed. It does
- * not mean an automatic loop, it does not mean leaving the row `QUEUED`, and it
- * does not mean retrying after a timer. Both dispositions park the work — Phase
- * 4C-2B will put a retryable refusal in `FAILED_RETRYABLE`, where it waits.
- *
- * The split follows the asset criterion: can this same identity become an
- * executable `READY` source again, without changing the admitted `assetId`?
- * Nothing here claims that happens on its own. `PENDING_UPLOAD` may be waiting
- * on a customer's client; `ASSET_UPLOAD_FAILED` needs someone to call
- * `AssetService.retryUpload`. Both are recoverable and neither is automatic,
- * which is why they are separate reasons rather than one.
+ * Two values, and neither is "try again now". Phase 4C-2B parks a `RETRYABLE`
+ * refusal in `FAILED_RETRYABLE` and a `TERMINAL` one in `FAILED_TERMINAL`;
+ * **both are parked**. The difference is only whether a later *explicit* policy
+ * could legitimately return the row to `QUEUED` once the world has changed.
+ * There is no automatic loop, no timer, and no leaving the row `QUEUED`.
  */
-const RETRYABLE_REASONS: readonly PreflightRefusalReason[] = [
-  "ASSET_NOT_READY",
-  "ASSET_UPLOAD_FAILED",
-  "STORAGE_UNAVAILABLE",
-];
+export type PreflightDisposition = "TERMINAL" | "RETRYABLE";
 
-export function isRetryablePreflightRefusal(reason: PreflightRefusalReason): boolean {
-  return RETRYABLE_REASONS.includes(reason);
+/**
+ * The one canonical answer for every reason.
+ *
+ * A `Record` keyed by the reason union, so a new reason fails to compile until
+ * its disposition is decided. There is deliberately no second list of retryable
+ * reasons and no second list of terminal ones — two sources would disagree
+ * eventually, and the one that decides whether customer work is permanently
+ * failed is the wrong place to find that out.
+ *
+ * `RETRYABLE` follows the same-identity criterion: the source may still become
+ * usable under the admitted `assetId`, or the infrastructure that refused may
+ * simply answer next time.
+ */
+const REASON_DISPOSITION: Record<PreflightRefusalReason, PreflightDisposition> = {
+  LEGACY_SNAPSHOT_MISSING: "TERMINAL",
+  LEGACY_PROMPT_MISSING: "TERMINAL",
+  REQUEST_HASH_MISMATCH: "TERMINAL",
+  PROVIDER_IDENTITY_MISMATCH: "TERMINAL",
+  ASSET_NOT_FOUND: "TERMINAL",
+  ASSET_NOT_READY: "RETRYABLE",
+  ASSET_UPLOAD_FAILED: "RETRYABLE",
+  ASSET_UNRECOVERABLE: "TERMINAL",
+  ASSET_FORMAT_UNSUPPORTED: "TERMINAL",
+  ASSET_SOURCE_CHANGED: "TERMINAL",
+  ASSET_OBJECT_MISSING: "TERMINAL",
+  STORAGE_UNAVAILABLE: "RETRYABLE",
+  SIGNED_SOURCE_URL_UNUSABLE: "RETRYABLE",
+};
+
+/** The disposition of a refusal reason. Pure, and the only source of the answer. */
+export function preflightDispositionFor(reason: PreflightRefusalReason): PreflightDisposition {
+  return REASON_DISPOSITION[reason];
 }
 
 /**
@@ -78,18 +102,23 @@ export function isRetryablePreflightRefusal(reason: PreflightRefusalReason): boo
  * mistake it was, the same argument `assertTransition` already makes. The
  * discrimination customers never see lives in {@link reason}.
  *
- * The message names no prompt, tenant, storage key, signed URL or asset
- * content. Several of those are customer-authored and one is a credential.
+ * **This object is safe to log whole.** It accepts no cause, so a raw
+ * infrastructure error can never ride along inside it, and every message is
+ * fixed text chosen at the throw site. It carries no signed URL, storage key,
+ * credential, prompt, compiled prompt, request hash, organization id, asset id
+ * or provider payload — several of those are customer-authored and one is a
+ * credential. The only detail is the reason, which is already public
+ * vocabulary.
  */
 export class PreflightRefusalError extends AppError {
   readonly reason: PreflightRefusalReason;
-  /** Whether a later explicit retry policy could legitimately re-queue this. */
-  readonly retryable: boolean;
+  /** Always derived from {@link preflightDispositionFor}; never passed in. */
+  readonly disposition: PreflightDisposition;
 
-  constructor(reason: PreflightRefusalReason, message: string, options: { cause?: unknown } = {}) {
-    super("INTERNAL_ERROR", message, { details: { reason }, cause: options.cause });
+  constructor(reason: PreflightRefusalReason, message: string) {
+    super("INTERNAL_ERROR", message, { details: { reason } });
     this.name = "PreflightRefusalError";
     this.reason = reason;
-    this.retryable = isRetryablePreflightRefusal(reason);
+    this.disposition = preflightDispositionFor(reason);
   }
 }

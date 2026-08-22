@@ -18,25 +18,40 @@ and ADR-0026.
   `ProviderGenerationInput` — that type lives in `@app/video-providers`, which
   depends on `@app/domain`, so importing it would invert the dependency.
   `packages/domain` still depends only on `@app/shared`.
-- **`PreflightRefusalError`** with ten closed `PreflightRefusalReason` values,
-  each `INTERNAL_ERROR` (nothing a customer submits reaches preflight) and each
-  carrying `retryable` — which marks what a *future explicit retry policy* may
-  do, never an automatic re-queue.
-- **`PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600`**, separate from the 300s
-  human-download TTL because this URL must survive the claim, the submission
-  POST and the provider's own fetch. `sourceUrlExpiresAt` is returned so a
-  submitter can refuse a stale URL rather than pay for a failed fetch.
+- **`PreflightRefusalError`** with **thirteen** closed `PreflightRefusalReason`
+  values, each `INTERNAL_ERROR` (nothing a customer submits reaches preflight).
+  Disposition is **derived**, never supplied: one exhaustive
+  `Record<PreflightRefusalReason, PreflightDisposition>` exposed through
+  `preflightDispositionFor`, with no `retryable` boolean and no second list.
+  `RETRYABLE` means a later *explicit* policy could try again once the world has
+  changed — Phase 4C-2B parks it in `FAILED_RETRYABLE`; both dispositions park.
+- **The refusal is safe to log whole.** It accepts no cause, so a raw storage
+  error carrying a key or credential cannot ride along; every message is fixed
+  text. Only the fail-closed `AppError`/`INTERNAL_ERROR` shape from the legacy
+  helpers is translated, detected by type and code — a `TypeError` escapes
+  rather than being relabelled as a legacy row.
+- **A `READY` asset must also be usable**: exactly `image/jpeg`, a non-blank
+  `storageKey`, and an object `storage.exists` confirms — never the original
+  upload, never `thumbnailKey`. Failure is `ASSET_FORMAT_UNSUPPORTED`, before
+  storage is touched.
+- **The signed URL is validated** — parses, `https:`, non-empty host, and a
+  finite `expiresAt` — otherwise `SIGNED_SOURCE_URL_UNUSABLE`. `expiresAt` is
+  propagated exactly as storage returned it. Freshness is deliberately *not*
+  checked here; Phase 4C-3 owns it immediately before the paid POST.
+- **Sign, then read the asset again.** A second tenant-scoped read by the frozen
+  `assetId` must still show the same `READY` source with the same key and MIME,
+  or the attempt is refused (`ASSET_SOURCE_CHANGED` when the source was
+  replaced). This narrows the deletion window; it does not close it, and
+  ADR-0026 says so.
 - **One `Record<MediaAssetStatus, AssetExecutability>`** in production classifies
   every source-asset status against a single criterion: can this same asset
   identity become an executable `READY` source again without changing the
   admitted `assetId`? Adding a status fails to compile until it is classified.
-  `PENDING_UPLOAD`…`PROCESSING` are `ASSET_NOT_READY`; `FAILED` is
-  `ASSET_UPLOAD_FAILED` (recoverable via `AssetService.retryUpload`); the
-  quarantined/rejected/deleting/deleted four are `ASSET_UNRECOVERABLE` — named
-  for what it means, since quarantined content still exists and "gone" did not.
-- 37 unit tests covering every status behaviourally, tenant isolation,
-  secret-safety, and a type-level assertion that preflight declares no way to
-  claim or submit.
+  `FAILED` is `ASSET_UPLOAD_FAILED` (recoverable via `AssetService.retryUpload`);
+  the quarantined/rejected/deleting/deleted four are `ASSET_UNRECOVERABLE`.
+- 59 unit tests and **one** PostgreSQL test proving a real `QUEUED` row is
+  byte-for-byte identical — `updatedAt` included — after a successful
+  preparation.
 
 ### Unchanged
 

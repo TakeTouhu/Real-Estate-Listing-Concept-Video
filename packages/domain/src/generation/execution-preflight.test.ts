@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
-import { InMemoryMediaAssetRepository } from "../testing/index";
 import { DOWNLOAD_URL_TTL_SECONDS } from "../property/asset-service";
 import type { MediaAsset, MediaAssetStatus } from "../property/types";
 import type { SignedUrl } from "../property/ports";
@@ -10,11 +9,13 @@ import {
   PREFLIGHT_SOURCE_URL_TTL_SECONDS,
   prepareQueuedGeneration,
   type ExecutionPreflightDeps,
+  type PreparedGeneration,
 } from "./execution-preflight";
 import {
   PREFLIGHT_REFUSAL_REASONS,
   PreflightRefusalError,
-  isRetryablePreflightRefusal,
+  preflightDispositionFor,
+  type PreflightDisposition,
   type PreflightRefusalReason,
 } from "./execution-preflight-errors";
 import { computeGenerationRequestHash } from "./request-identity";
@@ -24,36 +25,63 @@ const ORG = "org_pf";
 const OTHER_ORG = "org_pf_other";
 const ASSET = "ast_pf";
 const KEY = "org_pf/assets/ast_pf/normalized.jpg";
+const OTHER_KEY = "org_pf/assets/ast_pf/normalized-v2.jpg";
+const SIGNED_URL = `https://storage.example.test/${KEY}?sig=secret-token`;
+const EXPIRES_AT = new Date(Date.UTC(2026, 0, 1, 0, 10, 0));
 
-/** The narrowed storage capability preflight actually declares. */
+/** The narrowed capabilities preflight actually declares. */
 type PreflightStorage = ExecutionPreflightDeps["storage"];
+type PreflightAssets = ExecutionPreflightDeps["assets"];
 
 /**
- * Records every signing request so a test can assert what was signed, and with
- * what TTL.
+ * Records every call so a test can assert what was asked, and with what.
  *
- * Implements only what `ExecutionPreflightDeps` asks for. An earlier version
- * implemented the whole `ObjectStorage` and threw from `putObject`,
- * `deleteObject`, `getObject` and `createSignedUploadUrl` — a runtime guard
- * against calls the type now makes impossible. Narrowing the dependency made
- * those four unreachable rather than merely forbidden, so they are gone.
+ * Implements only what `ExecutionPreflightDeps` asks for — an earlier version
+ * implemented the whole `ObjectStorage` and threw from the four write methods,
+ * a runtime guard against calls the narrowed type now makes impossible.
  */
 class FakeStorage implements PreflightStorage {
   readonly signed: { key: string; ttl: number }[] = [];
-  existing = new Set<string>([KEY]);
+  readonly existsCalls: string[] = [];
+  existing = new Set<string>([KEY, OTHER_KEY]);
   failOn: "none" | "exists" | "sign" = "none";
+  /** What a successful signing returns. Overridden by the signed-URL tests. */
+  result: SignedUrl = { url: SIGNED_URL, expiresAt: EXPIRES_AT };
 
   exists(key: string): Promise<boolean> {
-    if (this.failOn === "exists") return Promise.reject(new Error("storage down"));
+    this.existsCalls.push(key);
+    if (this.failOn === "exists") return Promise.reject(new Error(SECRET_BEARING_MESSAGE));
     return Promise.resolve(this.existing.has(key));
   }
   createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-    if (this.failOn === "sign") return Promise.reject(new Error("storage down"));
+    if (this.failOn === "sign") return Promise.reject(new Error(SECRET_BEARING_MESSAGE));
     this.signed.push({ key, ttl: ttlSeconds });
-    return Promise.resolve({
-      url: `download://${key}?sig=secret-token`,
-      expiresAt: new Date(Date.UTC(2026, 0, 1, 0, 10, 0)),
-    });
+    return Promise.resolve(this.result);
+  }
+}
+
+/** A storage error of the shape real SDKs throw: it names the key and a token. */
+const SECRET_BEARING_MESSAGE = `PUT ${KEY} failed: signature=secret-token host=storage.example.test`;
+
+/**
+ * Hands out a different asset observation per read, in order.
+ *
+ * Implements `findById` alone — the narrowed dependency is the whole contract,
+ * so there is nothing else to satisfy and no shared production abstraction to
+ * add. It records the arguments of every read so a test can prove both used the
+ * authoritative organization and the frozen asset id.
+ */
+class SequentialAssets implements PreflightAssets {
+  readonly reads: { organizationId: string; assetId: string }[] = [];
+  private index = 0;
+
+  constructor(private readonly observations: readonly (MediaAsset | null)[]) {}
+
+  findById(organizationId: string, id: string): Promise<MediaAsset | null> {
+    this.reads.push({ organizationId, assetId: id });
+    const observation = this.observations[Math.min(this.index, this.observations.length - 1)];
+    this.index += 1;
+    return Promise.resolve(organizationId === ORG ? (observation ?? null) : null);
   }
 }
 
@@ -71,7 +99,8 @@ function capabilities(overrides: Partial<VideoModelCapability> = {}): VideoModel
   return { current: () => ({ ...CAPABILITY, ...overrides }) };
 }
 
-function asset(overrides: Partial<MediaAsset> = {}): Omit<MediaAsset, "createdAt" | "updatedAt"> {
+function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
+  const now = new Date("2026-01-01T00:00:00.000Z");
   return {
     id: ASSET,
     organizationId: ORG,
@@ -86,10 +115,12 @@ function asset(overrides: Partial<MediaAsset> = {}): Omit<MediaAsset, "createdAt
     perceptualHash: null,
     status: "READY",
     failureReason: null,
-    thumbnailKey: null,
+    thumbnailKey: "org_pf/assets/ast_pf/thumb.webp",
     createdBy: "usr_pf",
     deletionRequestedAt: null,
     retentionExpiresAt: null,
+    createdAt: now,
+    updatedAt: now,
     ...overrides,
   };
 }
@@ -106,7 +137,8 @@ function generation(overrides: Partial<SceneGeneration> = {}): SceneGeneration {
     requestHash: "placeholder",
     providerName: "fake",
     providerModelId: "fake/image-to-video",
-    requestCompiledPrompt: '{"preservation":["keep the window"],"sceneFacts":{},"userCustomization":null}',
+    requestCompiledPrompt:
+      '{"preservation":["keep the window"],"sceneFacts":{},"userCustomization":null}',
     requestDurationSeconds: 5,
     requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
@@ -145,25 +177,25 @@ function candidateFor(gen: SceneGeneration, organizationId = ORG): SystemGenerat
   return { organizationId, generation: gen };
 }
 
-async function fixture(
-  opts: {
-    readonly assetOverrides?: Partial<MediaAsset>;
-    readonly capability?: Partial<VideoModelCapability>;
-    readonly seedAsset?: boolean;
-  } = {},
-): Promise<{ deps: ExecutionPreflightDeps; storage: FakeStorage }> {
-  const assets = new InMemoryMediaAssetRepository({ now: () => new Date("2026-01-01T00:00:00Z") });
-  if (opts.seedAsset !== false) await assets.create(asset(opts.assetOverrides));
-  const storage = new FakeStorage();
-  return { deps: { assets, storage, capabilities: capabilities(opts.capability) }, storage };
+interface Fixture {
+  readonly deps: ExecutionPreflightDeps;
+  readonly storage: FakeStorage;
+  readonly assets: SequentialAssets;
 }
 
-async function refusalFrom(
-  deps: ExecutionPreflightDeps,
-  candidate: SystemGenerationCandidate,
-): Promise<PreflightRefusalError> {
+/** `observations` is read in order: the first for the pre-sign read, then the post-sign one. */
+function fixture(
+  observations: readonly (MediaAsset | null)[] = [asset()],
+  capabilityOverrides: Partial<VideoModelCapability> = {},
+): Fixture {
+  const assets = new SequentialAssets(observations);
+  const storage = new FakeStorage();
+  return { deps: { assets, storage, capabilities: capabilities(capabilityOverrides) }, storage, assets };
+}
+
+async function refusalFrom(f: Fixture, candidate: SystemGenerationCandidate) {
   try {
-    await prepareQueuedGeneration(deps, candidate);
+    await prepareQueuedGeneration(f.deps, candidate);
   } catch (error) {
     if (error instanceof PreflightRefusalError) return error;
     throw error;
@@ -173,51 +205,38 @@ async function refusalFrom(
 
 describe("prepareQueuedGeneration — the prepared artifact", () => {
   it("builds every field from the frozen snapshot and a freshly signed URL", async () => {
-    const { deps, storage } = await fixture();
+    const f = fixture();
     const gen = generation();
 
-    const prepared = await prepareQueuedGeneration(deps, candidateFor(gen));
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(gen));
 
     expect(prepared).toEqual({
       generationId: "gen_pf",
       organizationId: ORG,
       providerName: "fake",
       providerModelId: "fake/image-to-video",
-      sourceImageUrl: `download://${KEY}?sig=secret-token`,
-      sourceUrlExpiresAt: new Date(Date.UTC(2026, 0, 1, 0, 10, 0)),
+      sourceImageUrl: SIGNED_URL,
+      sourceUrlExpiresAt: EXPIRES_AT,
       prompt: "Preservation rules:\n- keep the window",
       durationSeconds: 5,
       aspectRatio: "16:9",
       resolution: "1080p",
       requestHash: gen.requestHash,
-    });
-    expect(storage.signed).toEqual([{ key: KEY, ttl: 600 }]);
-  });
-
-  it("signs for longer than a human download, which is why the constant is its own", async () => {
-    // Asserting the literal above would pass whatever the constant said if both
-    // moved together. The property that actually matters is the relationship:
-    // this URL has to survive preparation, the claim, the submission POST and
-    // the provider's own fetch — not one browser click.
-    expect(PREFLIGHT_SOURCE_URL_TTL_SECONDS).toBeGreaterThan(DOWNLOAD_URL_TTL_SECONDS);
+    } satisfies PreparedGeneration);
   });
 
   it("submits the admitted settings, not whatever the row's neighbours now say", async () => {
-    // The defect this guards is invisible at runtime: reading the project's
-    // current aspect ratio or the asset's real dimensions would still produce a
-    // plausible request, under a requestHash that still validated — for work
-    // the customer never approved (ADR-0018 §3).
     // The asset is 4:3 and the deployment's model advertises only 16:9 / 1080p.
     // The snapshot says 9:16 / 720p, so every other source of these values
     // disagrees with it — and the snapshot is the one that must win.
-    const { deps } = await fixture({ assetOverrides: { width: 640, height: 480 } });
+    const f = fixture([asset({ width: 640, height: 480 })]);
     const gen = generation({
       requestAspectRatio: "9:16",
       requestResolution: "720p",
       requestDurationSeconds: 3,
     });
 
-    const prepared = await prepareQueuedGeneration(deps, candidateFor(gen));
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(gen));
 
     expect(prepared.aspectRatio).toBe("9:16");
     expect(prepared.resolution).toBe("720p");
@@ -225,13 +244,11 @@ describe("prepareQueuedGeneration — the prepared artifact", () => {
   });
 
   it("never re-renders the prompt", async () => {
-    // The stored bytes are submitted verbatim, whatever a renderer would
-    // produce today (ADR-0023).
-    const { deps } = await fixture();
+    const f = fixture();
     const frozen = "text a current renderer would never produce";
 
     const prepared = await prepareQueuedGeneration(
-      deps,
+      f.deps,
       candidateFor(generation({ requestRenderedPrompt: frozen })),
     );
 
@@ -239,79 +256,160 @@ describe("prepareQueuedGeneration — the prepared artifact", () => {
   });
 
   it("leaves the generation exactly as it found it", async () => {
-    // Preparation is read-only by construction — there is no repository on the
-    // deps that could write a generation — so this asserts the whole row.
-    const { deps } = await fixture();
+    const f = fixture();
     const gen = generation();
     const before = { ...gen };
 
-    await prepareQueuedGeneration(deps, candidateFor(gen));
+    await prepareQueuedGeneration(f.deps, candidateFor(gen));
 
     expect(gen).toEqual(before);
     expect(gen.state).toBe("QUEUED");
   });
+
+  it("reads the asset twice, both scoped and both by the frozen id", async () => {
+    const f = fixture([asset(), asset()]);
+
+    await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(f.assets.reads).toEqual([
+      { organizationId: ORG, assetId: ASSET },
+      { organizationId: ORG, assetId: ASSET },
+    ]);
+  });
 });
 
-describe("prepareQueuedGeneration — refusals", () => {
+describe("the source URL", () => {
+  it("signs the validated key for exactly the preflight TTL", async () => {
+    const f = fixture();
+
+    await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(f.storage.signed).toEqual([{ key: KEY, ttl: 600 }]);
+  });
+
+  it("declares that TTL as the literal 600", () => {
+    expect(PREFLIGHT_SOURCE_URL_TTL_SECONDS).toBe(600);
+  });
+
+  it("signs for longer than a human download, which is why the constant is its own", () => {
+    // Asserting the literal alone would pass whatever the constant said if both
+    // moved together. The property that matters is the relationship: this URL
+    // has to survive the claim, the submission POST and the provider's fetch.
+    expect(PREFLIGHT_SOURCE_URL_TTL_SECONDS).toBeGreaterThan(DOWNLOAD_URL_TTL_SECONDS);
+  });
+
+  it("propagates the signer's expiry exactly, rather than computing one", async () => {
+    // A locally computed expiry would drift from what storage actually issued,
+    // and the caller would refuse or submit on the wrong answer.
+    const f = fixture();
+    const storageExpiry = new Date(Date.UTC(2030, 5, 5, 5, 5, 5));
+    f.storage.result = { url: SIGNED_URL, expiresAt: storageExpiry };
+
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(prepared.sourceUrlExpiresAt).toBe(storageExpiry);
+  });
+
+  it.each([
+    ["a URL the runtime cannot parse", { url: "not a url at all", expiresAt: EXPIRES_AT }],
+    ["a plain-HTTP URL", { url: `http://storage.example.test/${KEY}`, expiresAt: EXPIRES_AT }],
+    ["an expiry that is not a real instant", { url: SIGNED_URL, expiresAt: new Date(NaN) }],
+  ])("refuses %s", async (_label, result) => {
+    // Each would be discovered by the provider — after the request was paid for.
+    const f = fixture();
+    f.storage.result = result as SignedUrl;
+
+    const refusal = await refusalFrom(f, candidateFor(generation()));
+
+    expect(refusal.reason).toBe("SIGNED_SOURCE_URL_UNUSABLE");
+    expect(refusal.disposition).toBe("RETRYABLE");
+  });
+
+  // There is deliberately no "no host" case. Under the WHATWG parser every
+  // string that yields protocol `https:` also yields a non-empty hostname, so a
+  // constructed example would be testing the parser rather than this code. The
+  // guard stays because it is cheap and the invariant is worth stating.
+});
+
+describe("the normalized source format", () => {
+  it.each<[string, Partial<MediaAsset>]>([
+    ["a non-JPEG normalized source", { mimeType: "image/webp" }],
+    ["an empty storage key", { storageKey: "" }],
+    ["a whitespace-only storage key", { storageKey: "   " }],
+  ])("refuses %s, before touching storage", async (_label, overrides) => {
+    // The media pipeline normalizes every accepted upload to JPEG, so a READY
+    // asset that is not one is not the normalized master. A blank key is not
+    // addressable at all.
+    const f = fixture([asset(overrides)]);
+
+    const refusal = await refusalFrom(f, candidateFor(generation()));
+
+    expect(refusal.reason).toBe("ASSET_FORMAT_UNSUPPORTED");
+    expect(refusal.disposition).toBe("TERMINAL");
+    expect(f.storage.existsCalls).toHaveLength(0);
+    expect(f.storage.signed).toHaveLength(0);
+  });
+
+  it("never reaches for the thumbnail", async () => {
+    // `thumbnailKey` is a downscaled derivative; paying to animate it would be
+    // a silent quality substitution.
+    const f = fixture();
+
+    await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(f.storage.signed.map((s) => s.key)).toEqual([KEY]);
+    expect(f.storage.existsCalls).toEqual([KEY]);
+  });
+});
+
+describe("refusals before signing", () => {
   it("refuses a row admitted before the request snapshot existed", async () => {
-    const { deps } = await fixture();
+    const f = fixture();
     const legacy = generation({ requestCompiledPrompt: null, requestHash: "sha256:legacy" });
 
-    expect((await refusalFrom(deps, candidateFor(legacy))).reason).toBe("LEGACY_SNAPSHOT_MISSING");
+    expect((await refusalFrom(f, candidateFor(legacy))).reason).toBe("LEGACY_SNAPSHOT_MISSING");
   });
 
   it("refuses a row admitted before the prompt freeze", async () => {
-    const { deps } = await fixture();
-    const legacy = generation({ requestRenderedPrompt: null });
+    const f = fixture();
 
-    expect((await refusalFrom(deps, candidateFor(legacy))).reason).toBe("LEGACY_PROMPT_MISSING");
+    expect(
+      (await refusalFrom(f, candidateFor(generation({ requestRenderedPrompt: null })))).reason,
+    ).toBe("LEGACY_PROMPT_MISSING");
   });
 
   it("refuses when the stored hash disagrees with the stored facts", async () => {
-    // Identity is what stops a provider being paid twice for one request. A row
-    // whose hash no longer matches its facts has already lost it.
-    const { deps } = await fixture();
-    const tampered = generation({ requestHash: "sha256:not-the-real-digest" });
+    const f = fixture();
 
-    expect((await refusalFrom(deps, candidateFor(tampered))).reason).toBe("REQUEST_HASH_MISMATCH");
+    expect(
+      (await refusalFrom(f, candidateFor(generation({ requestHash: "sha256:wrong" })))).reason,
+    ).toBe("REQUEST_HASH_MISMATCH");
   });
 
   it.each([
     ["provider", { providerName: "wavespeed" }],
     ["model", { providerModelId: "fake/some-other-model" }],
-  ])("refuses when the deployment's %s no longer matches the admitted one", async (_label, cap) => {
-    const { deps } = await fixture({ capability: cap });
+  ])("refuses when the deployment's %s no longer matches the admitted one", async (_l, cap) => {
+    const f = fixture([asset()], cap);
 
-    expect((await refusalFrom(deps, candidateFor(generation()))).reason).toBe(
-      "PROVIDER_CONTRACT_CHANGED",
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe(
+      "PROVIDER_IDENTITY_MISMATCH",
     );
   });
 
   it("refuses when the asset no longer exists", async () => {
-    const { deps } = await fixture({ seedAsset: false });
+    const f = fixture([null]);
 
-    expect((await refusalFrom(deps, candidateFor(generation()))).reason).toBe("ASSET_NOT_FOUND");
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe("ASSET_NOT_FOUND");
   });
 
   it.each<MediaAssetStatus>(["PENDING_UPLOAD", "UPLOADED", "SCANNING", "PROCESSING"])(
     "treats a %s asset as not ready yet",
     async (status) => {
-      const { deps } = await fixture({ assetOverrides: { status } });
-      const refusal = await refusalFrom(deps, candidateFor(generation()));
+      const refusal = await refusalFrom(fixture([asset({ status })]), candidateFor(generation()));
 
       expect(refusal.reason).toBe("ASSET_NOT_READY");
-      expect(refusal.retryable).toBe(true);
-    },
-  );
-
-  it.each<MediaAssetStatus>(["QUARANTINED", "REJECTED", "DELETION_PENDING", "DELETED"])(
-    "treats a %s asset as gone for good",
-    async (status) => {
-      const { deps } = await fixture({ assetOverrides: { status } });
-      const refusal = await refusalFrom(deps, candidateFor(generation()));
-
-      expect(refusal.reason).toBe("ASSET_UNRECOVERABLE");
-      expect(refusal.retryable).toBe(false);
+      expect(refusal.disposition).toBe("RETRYABLE");
     },
   );
 
@@ -320,150 +418,243 @@ describe("prepareQueuedGeneration — refusals", () => {
     // same id, so its source can still arrive. Grouping it with deleted and
     // quarantined assets would permanently fail an attempt whose photo is one
     // customer action away — found in review of this milestone.
-    const { deps } = await fixture({ assetOverrides: { status: "FAILED" } });
+    const refusal = await refusalFrom(
+      fixture([asset({ status: "FAILED" })]),
+      candidateFor(generation()),
+    );
 
-    const refusal = await refusalFrom(deps, candidateFor(generation()));
-
-    // Its own reason, not ASSET_NOT_READY: waiting will never fix this one, so
-    // a future "retry after a delay" policy must be able to tell them apart.
     expect(refusal.reason).toBe("ASSET_UPLOAD_FAILED");
-    expect(refusal.retryable).toBe(true);
+    expect(refusal.disposition).toBe("RETRYABLE");
   });
 
-  // There is deliberately no `Record<MediaAssetStatus, …>` here. Production
-  // carries exactly one, and it is what refuses to compile when a status is
-  // added — a copy in the test would be a second answer that could drift from
-  // the first while both stayed green. Every status is covered behaviourally
-  // instead: four in-progress and four unrecoverable above, `FAILED` below, and
-  // `READY` through the happy path.
+  it.each<MediaAssetStatus>(["QUARANTINED", "REJECTED", "DELETION_PENDING", "DELETED"])(
+    "treats a %s asset as unrecoverable",
+    async (status) => {
+      const refusal = await refusalFrom(fixture([asset({ status })]), candidateFor(generation()));
+
+      expect(refusal.reason).toBe("ASSET_UNRECOVERABLE");
+      expect(refusal.disposition).toBe("TERMINAL");
+    },
+  );
 
   it("refuses a READY asset whose deletion the customer has already requested", async () => {
-    // Retention can be requested while the row still reads READY. Submitting a
-    // photo someone has asked to delete would be worse than refusing.
-    const { deps } = await fixture({
-      assetOverrides: { status: "READY", deletionRequestedAt: new Date("2026-01-01T00:00:00Z") },
-    });
+    const f = fixture([asset({ deletionRequestedAt: new Date("2026-01-01T00:00:00Z") })]);
 
-    expect((await refusalFrom(deps, candidateFor(generation()))).reason).toBe("ASSET_UNRECOVERABLE");
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe("ASSET_UNRECOVERABLE");
   });
 
   it("refuses when the asset row points at an object storage does not have", async () => {
-    const { deps, storage } = await fixture();
-    storage.existing.clear();
+    const f = fixture();
+    f.storage.existing.clear();
 
-    const refusal = await refusalFrom(deps, candidateFor(generation()));
+    const refusal = await refusalFrom(f, candidateFor(generation()));
 
-    expect(refusal.reason).toBe("SOURCE_OBJECT_MISSING");
-    expect(refusal.retryable).toBe(false);
-    expect(storage.signed).toHaveLength(0);
+    expect(refusal.reason).toBe("ASSET_OBJECT_MISSING");
+    expect(refusal.disposition).toBe("TERMINAL");
+    expect(f.storage.signed).toHaveLength(0);
   });
 
   it.each(["exists", "sign"] as const)(
     "classifies a storage failure during %s as unavailable rather than absent",
     async (failOn) => {
-      const { deps, storage } = await fixture();
-      storage.failOn = failOn;
+      const f = fixture();
+      f.storage.failOn = failOn;
 
-      const refusal = await refusalFrom(deps, candidateFor(generation()));
+      const refusal = await refusalFrom(f, candidateFor(generation()));
 
       expect(refusal.reason).toBe("STORAGE_UNAVAILABLE");
-      expect(refusal.retryable).toBe(true);
+      expect(refusal.disposition).toBe("RETRYABLE");
     },
   );
 
   it.each(SCENE_GENERATION_STATES.filter((s) => s !== "QUEUED"))(
     "rejects a %s generation as a caller error, not a refusal",
     async (state: SceneGenerationState) => {
-      // No refusal reason, because Phase 4C-2B maps refusals *out of* QUEUED and
-      // this row has already left it. Someone else owns it.
-      const { deps } = await fixture();
+      const f = fixture();
+      const candidate = candidateFor(generation({ state }));
 
-      await expect(
-        prepareQueuedGeneration(deps, candidateFor(generation({ state }))),
-      ).rejects.toBeInstanceOf(AppError);
-      await expect(
-        prepareQueuedGeneration(deps, candidateFor(generation({ state }))),
-      ).rejects.not.toBeInstanceOf(PreflightRefusalError);
+      await expect(prepareQueuedGeneration(f.deps, candidate)).rejects.toBeInstanceOf(AppError);
+      await expect(prepareQueuedGeneration(f.deps, candidate)).rejects.not.toBeInstanceOf(
+        PreflightRefusalError,
+      );
     },
   );
 });
 
-describe("prepareQueuedGeneration — tenant isolation", () => {
+describe("the asset can change while the URL is being signed", () => {
+  // Each case signs successfully, then finds a different world on the second
+  // read. None may return a PreparedGeneration: the caller would be holding a
+  // credential for a source that is no longer the admitted one.
+  it.each<[string, MediaAsset | null, PreflightRefusalReason, PreflightDisposition]>([
+    ["disappears", null, "ASSET_NOT_FOUND", "TERMINAL"],
+    [
+      "is marked for deletion",
+      asset({ status: "DELETION_PENDING" }),
+      "ASSET_UNRECOVERABLE",
+      "TERMINAL",
+    ],
+    ["goes back to processing", asset({ status: "PROCESSING" }), "ASSET_NOT_READY", "RETRYABLE"],
+    ["fails", asset({ status: "FAILED" }), "ASSET_UPLOAD_FAILED", "RETRYABLE"],
+    ["is repointed at another key", asset({ storageKey: OTHER_KEY }), "ASSET_SOURCE_CHANGED", "TERMINAL"],
+    ["changes format", asset({ mimeType: "image/png" }), "ASSET_SOURCE_CHANGED", "TERMINAL"],
+  ])("refuses when the asset %s after signing", async (_label, second, reason, disposition) => {
+    const f = fixture([asset(), second]);
+
+    const refusal = await refusalFrom(f, candidateFor(generation()));
+
+    expect(refusal.reason).toBe(reason);
+    expect(refusal.disposition).toBe(disposition);
+    // Signing already happened — that is the point of checking again after it.
+    expect(f.storage.signed).toEqual([{ key: KEY, ttl: 600 }]);
+    // And the signed URL went nowhere: nothing is returned and nothing stored.
+    expect(f.assets.reads).toHaveLength(2);
+  });
+
+  it("uses the same authoritative organization and frozen asset id for both reads", async () => {
+    const f = fixture([asset(), asset({ storageKey: OTHER_KEY })]);
+
+    await refusalFrom(f, candidateFor(generation()));
+
+    expect(f.assets.reads).toEqual([
+      { organizationId: ORG, assetId: ASSET },
+      { organizationId: ORG, assetId: ASSET },
+    ]);
+  });
+});
+
+describe("tenant isolation", () => {
   it("cannot reach an asset belonging to another organization", async () => {
     // The candidate's organizationId was resolved through VideoProject, so a
     // mismatch means the asset is somebody else's. The scoped read returns null
     // and no cross-tenant row is ever loaded.
-    const { deps } = await fixture();
+    const f = fixture();
 
-    const refusal = await refusalFrom(deps, candidateFor(generation(), OTHER_ORG));
+    const refusal = await refusalFrom(f, candidateFor(generation(), OTHER_ORG));
 
     expect(refusal.reason).toBe("ASSET_NOT_FOUND");
-  });
-
-  it("signs nothing when the asset is not the caller's", async () => {
-    const { deps, storage } = await fixture();
-
-    await refusalFrom(deps, candidateFor(generation(), OTHER_ORG));
-
-    expect(storage.signed).toHaveLength(0);
+    expect(refusal.disposition).toBe("TERMINAL");
+    expect(f.assets.reads).toEqual([{ organizationId: OTHER_ORG, assetId: ASSET }]);
+    expect(f.storage.existsCalls).toHaveLength(0);
+    expect(f.storage.signed).toHaveLength(0);
   });
 });
 
-describe("preflight refusals as a contract", () => {
-  it("never leaks the signed URL, the storage key, or the prompt into a message", async () => {
-    // Two of those are customer-authored and one is a credential. A refusal is
-    // logged; the message is the part that travels.
-    const { deps, storage } = await fixture();
-    storage.existing.clear();
-
-    const refusal = await refusalFrom(deps, candidateFor(generation()));
-
-    expect(refusal.message).not.toContain(KEY);
-    expect(refusal.message).not.toContain("secret-token");
-    expect(refusal.message).not.toContain("keep the window");
-  });
-
-  it("carries INTERNAL_ERROR, because none of this is the customer's mistake", async () => {
-    const { deps } = await fixture({ seedAsset: false });
-
-    const refusal = await refusalFrom(deps, candidateFor(generation()));
-
-    expect(refusal.code).toBe("INTERNAL_ERROR");
-    expect(refusal.details).toEqual({ reason: "ASSET_NOT_FOUND" });
-  });
-
-  it("classifies retryability by whether the world could change", async () => {
-    // Not by how the failure felt. A processing asset may become READY and
-    // storage may come back; a missing frozen prompt never appears.
+describe("the refusal contract", () => {
+  it("maps every reason to a disposition, and nothing else does", () => {
+    // One exhaustive Record is the canonical answer. There is no second
+    // retryable list and no terminal list — two sources would disagree
+    // eventually, and this is the wrong place to find that out.
     const retryable: PreflightRefusalReason[] = [
       "ASSET_NOT_READY",
-      // Recoverable only through `AssetService.retryUpload` — a person, not time.
       "ASSET_UPLOAD_FAILED",
       "STORAGE_UNAVAILABLE",
+      "SIGNED_SOURCE_URL_UNUSABLE",
     ];
     const terminal: PreflightRefusalReason[] = [
       "LEGACY_SNAPSHOT_MISSING",
       "LEGACY_PROMPT_MISSING",
       "REQUEST_HASH_MISMATCH",
-      "PROVIDER_CONTRACT_CHANGED",
+      "PROVIDER_IDENTITY_MISMATCH",
       "ASSET_NOT_FOUND",
       "ASSET_UNRECOVERABLE",
-      "SOURCE_OBJECT_MISSING",
+      "ASSET_FORMAT_UNSUPPORTED",
+      "ASSET_SOURCE_CHANGED",
+      "ASSET_OBJECT_MISSING",
     ];
-    // Together these must be the whole vocabulary — a new reason has to be
-    // classified, not silently default to terminal.
-    expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
 
-    for (const reason of retryable) expect(isRetryablePreflightRefusal(reason)).toBe(true);
-    for (const reason of terminal) expect(isRetryablePreflightRefusal(reason)).toBe(false);
+    for (const reason of retryable) expect(preflightDispositionFor(reason)).toBe("RETRYABLE");
+    for (const reason of terminal) expect(preflightDispositionFor(reason)).toBe("TERMINAL");
+    expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
+  });
+
+  it("has exactly thirteen reasons", () => {
+    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(13);
+    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(13);
+  });
+
+  it("derives disposition from the reason rather than accepting one", () => {
+    const refusal = new PreflightRefusalError("ASSET_NOT_READY", "fixed text");
+
+    expect(refusal.disposition).toBe(preflightDispositionFor("ASSET_NOT_READY"));
+    expect(refusal.code).toBe("INTERNAL_ERROR");
+    expect(refusal.details).toEqual({ reason: "ASSET_NOT_READY" });
+  });
+
+  it("lets a programmer error escape instead of relabelling it as legacy", async () => {
+    // Converting every throw would tell a future durable mapper to permanently
+    // fail customer work over a defect in this code. Only the fail-closed
+    // INTERNAL_ERROR shape is translated, detected by type and code rather than
+    // by matching message text.
+    const f = fixture();
+    const boom = new TypeError("reading 'x' of undefined");
+    const brokenGeneration = new Proxy(generation(), {
+      get(target, property, receiver) {
+        if (property === "requestCompiledPrompt") throw boom;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    await expect(
+      prepareQueuedGeneration(f.deps, candidateFor(brokenGeneration)),
+    ).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+describe("a refusal is safe to log whole", () => {
+  const forbidden = [
+    "secret-token",
+    KEY,
+    "storage.example.test",
+    "keep the window",
+    "Preservation rules",
+  ];
+
+  function assertNothingLeaked(refusal: PreflightRefusalError, gen: SceneGeneration): void {
+    // Only the public surface — that is what a structured logger serializes.
+    const exposed = JSON.stringify({
+      message: refusal.message,
+      details: refusal.details,
+      reason: refusal.reason,
+      disposition: refusal.disposition,
+    });
+    for (const secret of forbidden) expect(exposed).not.toContain(secret);
+    expect(exposed).not.toContain(ORG);
+    expect(exposed).not.toContain(ASSET);
+    expect(exposed).not.toContain(gen.requestHash);
+  }
+
+  it("drops a storage error that names the key and a credential", async () => {
+    // The thrown dependency error deliberately carries both. Before the raw
+    // cause was removed, attaching it would have carried them into the refusal.
+    const f = fixture();
+    f.storage.failOn = "exists";
+    const gen = generation();
+
+    const refusal = await refusalFrom(f, candidateFor(gen));
+
+    expect(refusal.reason).toBe("STORAGE_UNAVAILABLE");
+    expect(refusal.cause).toBeUndefined();
+    assertNothingLeaked(refusal, gen);
+  });
+
+  it("names nothing when the signed URL itself is unusable", async () => {
+    const f = fixture();
+    f.storage.result = { url: `http://storage.example.test/${KEY}?sig=secret-token`, expiresAt: EXPIRES_AT };
+    const gen = generation();
+
+    assertNothingLeaked(await refusalFrom(f, candidateFor(gen)), gen);
+  });
+
+  it("names nothing when the asset is refused", async () => {
+    const f = fixture([asset({ status: "QUARANTINED" })]);
+    const gen = generation();
+
+    assertNothingLeaked(await refusalFrom(f, candidateFor(gen)), gen);
   });
 });
 
 describe("preflight holds no capability it should not", () => {
   it("declares no way to claim, submit, or write (compile-time)", () => {
-    // Preparation must stay separable from claiming, and must never acquire a
-    // provider: the whole reason the SUBMITTING window is narrow is that the
-    // expensive step happens somewhere else.
     type ForbiddenNames =
       | "generations"
       | "execution"
@@ -486,10 +677,7 @@ describe("preflight holds no capability it should not", () => {
     type AssetMethods = keyof ExecutionPreflightDeps["assets"];
     type StorageMethods = keyof ExecutionPreflightDeps["storage"];
 
-    // Exactly one read, and nothing that writes.
     const assetsReadOnly: AssetMethods extends "findById" ? true : never = true;
-    // No putObject, deleteObject, getObject, or createSignedUploadUrl — an
-    // upload URL is a write credential preparation has no reason to hold.
     const storageReadOnly: StorageMethods extends "exists" | "createSignedDownloadUrl"
       ? true
       : never = true;
