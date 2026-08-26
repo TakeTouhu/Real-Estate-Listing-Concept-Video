@@ -1,3 +1,4 @@
+import type { PreflightRefusalReason } from "./execution-preflight-errors";
 import type { SceneGeneration } from "./types";
 
 /**
@@ -59,7 +60,24 @@ export interface ClaimedSceneGeneration {
 }
 
 /**
- * Two methods, and no more than execution actually needs today.
+ * A row this caller — and only this caller — parked as a preflight failure.
+ *
+ * Deliberately a **separate type from {@link ClaimedSceneGeneration}**, despite
+ * the identical shape. That type's meaning is "the licence to spend money on
+ * this generation exactly once"; this one's is the opposite — the record that
+ * no money will be spent on it. Sharing a type would let a value that means
+ * *stop* be passed where a value meaning *go* is expected, and the compiler
+ * would have nothing to say about it.
+ */
+export interface FailedSceneGeneration {
+  /** Resolved through the owning `VideoProject`; never taken from input. */
+  readonly organizationId: string;
+  /** The row **as it now stands**, already parked, not the pre-write value. */
+  readonly generation: SceneGeneration;
+}
+
+/**
+ * Three methods, and no more than execution actually needs today.
  *
  * There is no `findById`, no listing, no lease renewal, no completion write, and
  * no abandonment sweep. Each of those belongs to a milestone that does not exist
@@ -98,4 +116,35 @@ export interface SceneGenerationExecutionRepository {
    * make it. Both, not either.
    */
   claimQueuedForSubmission(generationId: string): Promise<ClaimedSceneGeneration | null>;
+
+  /**
+   * Park exactly one `QUEUED` row as a preflight failure, or return `null`.
+   *
+   * The same compare-and-swap as the claim, competing on the same predicate:
+   * `id = $1 AND state = 'QUEUED'`. That is what makes the two mutually
+   * exclusive. If the claim wins, this returns `null` and can never overwrite a
+   * `SUBMITTING` row — a row someone may already be paying for. If this wins,
+   * the claim returns `null` and no submission licence for that row can exist.
+   *
+   * **The target state is derived, never supplied.** The caller names the
+   * refusal; `preflightFailureStateFor` decides where it parks. There is no
+   * state parameter, so `ASSET_NOT_FOUND` cannot be filed as `FAILED_RETRYABLE`
+   * — the disagreement is unspeakable rather than merely discouraged. The
+   * `reason` is also what lands in `normalizedErrorCode`, so the durable code
+   * and the durable state cannot describe different failures.
+   *
+   * **`null` means exactly one thing:** *this caller did not win a `QUEUED`
+   * preflight-failure transition.* Unknown id, already claimed, already
+   * cancelled, already failed, or simply lost the race — all identical, because
+   * the caller's next action is identical in every one of them. When two
+   * refusals race, the first database writer wins; there is no reason priority,
+   * because with two refusals both true of one row either is a correct record.
+   *
+   * Takes no `organizationId` — like the other two, it *resolves* the tenant
+   * from the owning `VideoProject` and hands it back.
+   */
+  failQueuedPreflight(
+    generationId: string,
+    reason: PreflightRefusalReason,
+  ): Promise<FailedSceneGeneration | null>;
 }

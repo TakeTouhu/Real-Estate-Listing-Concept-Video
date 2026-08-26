@@ -94,6 +94,43 @@ export function preflightDispositionFor(reason: PreflightRefusalReason): Preflig
 }
 
 /**
+ * The durable state a refused generation is parked in.
+ *
+ * The union is two states wide on purpose. Widening it to
+ * `SceneGenerationState` would let a future edit return `SUBMITTING` — a
+ * licence to spend money — from a helper whose entire job is to describe work
+ * that will **not** be submitted. Here that is a compile error.
+ */
+export type PreflightFailureState = "FAILED_RETRYABLE" | "FAILED_TERMINAL";
+
+/**
+ * Disposition to durable state. Two entries, because there are two dispositions.
+ *
+ * Deliberately **not** a second thirteen-reason table. {@link REASON_DISPOSITION}
+ * already answers "what may be done about this reason", and re-deciding that per
+ * reason here would create two places where a reason's fate is written down —
+ * the classic way a `TERMINAL` reason acquires a `FAILED_RETRYABLE` parking spot
+ * in one file and not the other. Reasons reach a state only *through* their
+ * disposition.
+ */
+const DISPOSITION_FAILURE_STATE: Record<PreflightDisposition, PreflightFailureState> = {
+  RETRYABLE: "FAILED_RETRYABLE",
+  TERMINAL: "FAILED_TERMINAL",
+};
+
+/**
+ * Where a refusal parks. Pure, total over the reason vocabulary, and derived.
+ *
+ * **Both outcomes are parked.** `FAILED_RETRYABLE` does not mean anything will
+ * try again — it means a later *explicit* policy could legitimately return the
+ * row to `QUEUED` once the world has changed. Nothing performs that move today
+ * (see `state-machine.ts`), and this helper introduces no actor.
+ */
+export function preflightFailureStateFor(reason: PreflightRefusalReason): PreflightFailureState {
+  return DISPOSITION_FAILURE_STATE[preflightDispositionFor(reason)];
+}
+
+/**
  * A refusal to prepare, carrying its machine-readable reason.
  *
  * `INTERNAL_ERROR` for every reason, and that is not laziness. Nothing a
