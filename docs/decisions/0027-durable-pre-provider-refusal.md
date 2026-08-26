@@ -112,11 +112,19 @@ on the other two methods), a changes object, a target state, and any `Error`
 parameter. Passing a `PreflightRefusalError` was rejected: it invites persisting
 `.message`, and widens what a persistence adapter can reach into.
 
-`FailedSceneGeneration` is its own type despite sharing a shape with
-`ClaimedSceneGeneration`. That type means *the licence to spend money on this
-generation exactly once*; this one means the opposite. Sharing a type would let a
-value meaning **stop** be passed where a value meaning **go** is expected, with
-nothing for the compiler to say about it.
+`FailedSceneGeneration` is its own type, and structurally distinct from
+`ClaimedSceneGeneration` rather than only nominally so. That type means *the
+licence to spend money on this generation exactly once*; this one means the
+opposite, so a value meaning **stop** must not pass where a value meaning **go**
+is expected.
+
+Two interfaces carrying identical members would not achieve that. TypeScript is
+structural: they would be freely interchangeable however they were named or
+documented. The distinction is therefore carried by `generation.state`, narrowed
+to `"SUBMITTING"` on the claim and to `PreflightFailureState` on the park. Those
+cannot overlap, so neither type is assignable to the other, and the compiler
+rejects the substitution. This states no more than both adapters already prove at
+runtime before returning.
 
 ### 5. Expected-state compare-and-swap
 

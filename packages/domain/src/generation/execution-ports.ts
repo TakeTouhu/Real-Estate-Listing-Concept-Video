@@ -1,4 +1,4 @@
-import type { PreflightRefusalReason } from "./execution-preflight-errors";
+import type { PreflightFailureState, PreflightRefusalReason } from "./execution-preflight-errors";
 import type { SceneGeneration } from "./types";
 
 /**
@@ -48,6 +48,19 @@ export interface SystemGenerationCandidate {
 }
 
 /**
+ * A `SceneGeneration` known to be in one particular state.
+ *
+ * The state each execution result carries is not incidental — it is the whole
+ * difference between them — so it is expressed in the type rather than only
+ * asserted at runtime. `Omit` and re-add rather than a widened field: this must
+ * *narrow* `SceneGeneration["state"]`, and an intersection alone would leave the
+ * original union in place.
+ */
+type SceneGenerationInState<S extends SceneGeneration["state"]> = Omit<SceneGeneration, "state"> & {
+  readonly state: S;
+};
+
+/**
  * A row this caller — and only this caller — moved into `SUBMITTING`.
  *
  * Holding one is the licence to spend money on that generation exactly once.
@@ -56,24 +69,31 @@ export interface ClaimedSceneGeneration {
   /** Resolved through the owning `VideoProject`; never taken from input. */
   readonly organizationId: string;
   /** The row **as it now stands**, in `SUBMITTING`, not the pre-claim value. */
-  readonly generation: SceneGeneration;
+  readonly generation: SceneGenerationInState<"SUBMITTING">;
 }
 
 /**
  * A row this caller — and only this caller — parked as a preflight failure.
  *
- * Deliberately a **separate type from {@link ClaimedSceneGeneration}**, despite
- * the identical shape. That type's meaning is "the licence to spend money on
- * this generation exactly once"; this one's is the opposite — the record that
- * no money will be spent on it. Sharing a type would let a value that means
- * *stop* be passed where a value meaning *go* is expected, and the compiler
- * would have nothing to say about it.
+ * A **separate type from {@link ClaimedSceneGeneration}**, and separate in a way
+ * the compiler enforces. That type means "the licence to spend money on this
+ * generation exactly once"; this one means the opposite — the record that no
+ * money will be spent on it.
+ *
+ * What makes them distinct is `generation.state`: `SUBMITTING` there, one of the
+ * two failure states here, and those are mutually exclusive. TypeScript is
+ * structural, so two interfaces that merely *meant* different things while
+ * carrying the same members would be freely interchangeable — a parked row would
+ * pass anywhere a submission licence was expected, with nothing for the compiler
+ * to say about it. Narrowing the state is what turns the intended distinction
+ * into a real one, and it costs nothing to state: both adapters already prove
+ * exactly this at runtime before returning.
  */
 export interface FailedSceneGeneration {
   /** Resolved through the owning `VideoProject`; never taken from input. */
   readonly organizationId: string;
   /** The row **as it now stands**, already parked, not the pre-write value. */
-  readonly generation: SceneGeneration;
+  readonly generation: SceneGenerationInState<PreflightFailureState>;
 }
 
 /**

@@ -34,14 +34,14 @@ re-read inside the transaction; the exact reason is persisted with an explicit
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1246 passed**, 61 files (baseline 1219 / 60) |
+| `pnpm test` | **1247 passed**, 61 files (baseline 1219 / 60) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **184 passed**, 8 files (baseline 154 / 8) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
 
 ### Where each property is proven
 
-27 new unit tests and 30 new PostgreSQL tests. No new test file on the database
+28 new unit tests and 30 new PostgreSQL tests. No new test file on the database
 side: the failure CAS extends the suite that already owns this port, because it
 competes with the claim and the two must be raced against each other in one
 place.
@@ -79,6 +79,7 @@ licence was issued.
 | **M4** — explicit `normalizedErrorMessage: null` omitted | **2 DB fail** |
 | **M5** — pre-write row returned instead of the authoritative re-read | **21 DB fail** |
 | **M6** — the two `QUEUED` edges removed, adapter untouched | **30 DB fail**, throwing `Illegal scene-generation transition QUEUED -> FAILED_*` |
+| **M7** — `generation.state` narrowing removed from both result types | **6 type-level assertions fail** (`TS2322`) |
 
 Every mutated file restored byte-identically, confirmed by `diff` against
 pre-mutation copies. No mutation-only code is committed.
@@ -87,6 +88,12 @@ pre-mutation copies. No mutation-only code is committed.
 with a pre-existing message — which is precisely what makes those fixtures
 discriminating: seeded from the default admission path, where the column is
 already null, an adapter that omitted the write would pass.
+
+**M7 exists because the first attempt got this wrong.** The two result types were
+introduced with identical members and a comment claiming that made them distinct.
+It did not, and review caught it (ADR-0027 §4). Both assignability directions are
+now asserted — a one-way check would survive one side being widened, since a
+narrow type stays assignable to a wide one — and the mutation fails all six.
 
 **M6 is the `assertTransition` evidence**, and it is a real discriminator rather
 than a manufactured one. Reverting the domain table while leaving the adapter

@@ -29,9 +29,11 @@ and ADR-0027.
   `ASSET_NOT_FOUND` filed as `FAILED_RETRYABLE` is unspeakable rather than
   merely discouraged. No `organizationId` input — tenant identity is resolved
   through `VideoProject` and handed back, as on the other two methods.
-  `FailedSceneGeneration` is its own type despite sharing a shape with
-  `ClaimedSceneGeneration`: that one means *the licence to spend money*, this
-  one means the opposite.
+  `FailedSceneGeneration` means the opposite of `ClaimedSceneGeneration` — no
+  money will be spent — and is **structurally** distinct from it: `generation.state`
+  narrows to `"SUBMITTING"` on the claim and `PreflightFailureState` on the park,
+  which cannot overlap. Identically-shaped interfaces would have stayed
+  interchangeable whatever their names said (ADR-0027 §4).
 - **The PostgreSQL CAS**, on the identical `id = $1 AND state = 'QUEUED'`
   predicate the claim uses — which is what makes park and claim mutually
   exclusive. Transactional, with an authoritative re-read inside the same

@@ -3,6 +3,7 @@ import type {
   ClaimedSceneGeneration,
   FailedSceneGeneration,
   PreflightRefusalReason,
+  SceneGeneration,
   SceneGenerationExecutionRepository,
   SystemGenerationCandidate,
 } from "@app/domain";
@@ -24,6 +25,23 @@ type DbSceneGenerationWithProject = DbSceneGeneration & {
 
 function toCandidate(row: DbSceneGenerationWithProject): SystemGenerationCandidate {
   return { organizationId: row.videoProject.organizationId, generation: toGeneration(row) };
+}
+
+/**
+ * Rebuild the mapped row with its state narrowed to one the caller has already
+ * proved.
+ *
+ * `state` is passed separately rather than read back off the row, so the value
+ * in the returned object is the one the invariant check above it tested — not a
+ * second read that a cast would have to assume still agrees. Nothing is
+ * asserted away: `toGeneration` produces the row, and only the field whose value
+ * has just been verified is replaced, with the same value.
+ */
+function inState<S extends SceneGeneration["state"]>(
+  row: DbSceneGenerationWithProject,
+  state: S,
+): Omit<SceneGeneration, "state"> & { readonly state: S } {
+  return { ...toGeneration(row), state };
 }
 
 /**
@@ -153,7 +171,12 @@ export function createPrismaSceneGenerationExecutionRepository(
             { details: { generationId, state: row.state } },
           );
         }
-        return toCandidate(row) satisfies ClaimedSceneGeneration;
+        return {
+          organizationId: row.videoProject.organizationId,
+          // `SUBMITTING` is not asserted here — it was just proved, two lines
+          // up, against the row this transaction wrote and locked.
+          generation: inState(row, "SUBMITTING"),
+        } satisfies ClaimedSceneGeneration;
       });
     },
 
@@ -247,7 +270,12 @@ export function createPrismaSceneGenerationExecutionRepository(
             { details: { generationId } },
           );
         }
-        return toCandidate(row) satisfies FailedSceneGeneration;
+        return {
+          organizationId: row.videoProject.organizationId,
+          // Likewise `target`: the check above compared it against the row, so
+          // this narrows to a value already verified rather than a claim.
+          generation: inState(row, target),
+        } satisfies FailedSceneGeneration;
       });
     },
   };
