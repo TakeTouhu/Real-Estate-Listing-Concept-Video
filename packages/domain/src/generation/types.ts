@@ -239,9 +239,23 @@ export interface SceneGeneration
   readonly providerPredictionId: string | null;
   readonly submittedAt: Date | null;
   readonly lastPolledAt: Date | null;
-  /** Normalized provider error code. Internal diagnostics, never a customer message. */
+  /**
+   * Normalized **execution** error code. Internal diagnostics, never a customer
+   * message.
+   *
+   * Not provider-only: a generation can fail before any provider is contacted,
+   * and a preflight refusal is persisted here as its exact
+   * `PreflightRefusalReason` (ADR-0027).
+   */
   readonly normalizedErrorCode: string | null;
-  /** Sanitized provider error message. Internal diagnostics. */
+  /**
+   * Sanitized **execution** error message. Internal diagnostics.
+   *
+   * A preflight refusal deliberately writes `null` here rather than its message
+   * text: the reason code is already a closed machine-readable vocabulary, and
+   * a stale message left beside a fresh code would describe a different failure
+   * (ADR-0027).
+   */
   readonly normalizedErrorMessage: string | null;
   /** Managed-storage key for the copied output. Null until Phase 4D. */
   readonly outputStorageKey: string | null;

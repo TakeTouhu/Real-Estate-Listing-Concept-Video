@@ -1,10 +1,13 @@
 import type { SceneGeneration as DbSceneGeneration, PrismaClient } from "@prisma/client";
 import type {
   ClaimedSceneGeneration,
+  FailedSceneGeneration,
+  PreflightRefusalReason,
+  SceneGeneration,
   SceneGenerationExecutionRepository,
   SystemGenerationCandidate,
 } from "@app/domain";
-import { assertTransition } from "@app/domain";
+import { assertTransition, preflightFailureStateFor } from "@app/domain";
 import { AppError } from "@app/shared";
 import { toGeneration } from "./generation-repositories";
 
@@ -25,19 +28,36 @@ function toCandidate(row: DbSceneGenerationWithProject): SystemGenerationCandida
 }
 
 /**
+ * Rebuild the mapped row with its state narrowed to one the caller has already
+ * proved.
+ *
+ * `state` is passed separately rather than read back off the row, so the value
+ * in the returned object is the one the invariant check above it tested — not a
+ * second read that a cast would have to assume still agrees. Nothing is
+ * asserted away: `toGeneration` produces the row, and only the field whose value
+ * has just been verified is replaced, with the same value.
+ */
+function inState<S extends SceneGeneration["state"]>(
+  row: DbSceneGenerationWithProject,
+  state: S,
+): Omit<SceneGeneration, "state"> & { readonly state: S } {
+  return { ...toGeneration(row), state };
+}
+
+/**
  * The system-scoped execution boundary, backed by PostgreSQL.
  *
  * **This adapter is trusted, and its trust is bounded by its surface.** It is
  * the only place in the system where a `SceneGeneration` is reachable without
- * naming its organization first, which is exactly why it is two methods long
+ * naming its organization first, which is exactly why it is three methods long
  * and lives apart from `createPrismaSceneGenerationRepository`. Every method
  * here *resolves* tenant identity and hands it back; none accepts one.
  *
- * Discovery runs without a transaction because it writes nothing. The claim
- * runs inside one, and it is worth being exact about what that buys: **the
- * transaction guarantees only that this method never hands back a row other
- * than the one it moved to `SUBMITTING` itself.** It does not make every future
- * writer of this row safe. A writer that starts after this transaction commits
+ * Discovery runs without a transaction because it writes nothing. The claim and
+ * the preflight-failure park each run inside one, and it is worth being exact
+ * about what that buys: **the transaction guarantees only that the method never
+ * hands back a row other than the one it moved itself.** It does not make every
+ * future writer of this row safe. A writer that starts after that transaction commits
  * is entirely unaffected by it, and `SceneGenerationRepository.update` carries
  * no state predicate — so any future competing transition (cancellation above
  * all) must carry its own expected-state predicate. That requirement is
@@ -151,7 +171,111 @@ export function createPrismaSceneGenerationExecutionRepository(
             { details: { generationId, state: row.state } },
           );
         }
-        return toCandidate(row) satisfies ClaimedSceneGeneration;
+        return {
+          organizationId: row.videoProject.organizationId,
+          // `SUBMITTING` is not asserted here — it was just proved, two lines
+          // up, against the row this transaction wrote and locked.
+          generation: inState(row, "SUBMITTING"),
+        } satisfies ClaimedSceneGeneration;
+      });
+    },
+
+    async failQueuedPreflight(generationId: string, reason: PreflightRefusalReason) {
+      // The target is derived from the refusal, not chosen here and not accepted
+      // from a caller. `preflightFailureStateFor` routes the reason through its
+      // disposition, so this adapter has no opinion about which refusals are
+      // recoverable — restating that opinion in a persistence file is how the
+      // durable record starts disagreeing with the domain.
+      const target = preflightFailureStateFor(reason);
+
+      // Legality from the domain, exactly as the claim does it. Both new edges
+      // are legal only because nothing has been sent yet; asking the state
+      // machine rather than assuming is what keeps this file from becoming a
+      // second transition table.
+      assertTransition("QUEUED", target);
+
+      // Same transaction shape as the claim, for the same reason: `updateMany`
+      // returns a count rather than rows, so the parked row must be read back,
+      // and outside a transaction that read is a TOCTOU window a legal
+      // `QUEUED -> CANCELLED` can commit inside. Within the transaction the
+      // `UPDATE` holds the row lock until commit, so the `SELECT` sees this
+      // transaction's own write and nothing else's.
+      return prisma.$transaction(async (tx) => {
+        // The compare-and-swap, competing on the identical predicate the claim
+        // uses. That shared predicate is the whole safety argument for R1: two
+        // writers, one row, one `state = 'QUEUED'` — the database picks one, and
+        // a preflight failure can therefore never overwrite a row that has
+        // already been claimed and may already have been paid for.
+        //
+        // `normalizedErrorMessage: null` is written **explicitly**, not omitted.
+        // Omitting it would leave whatever message the column already held, and
+        // a future explicit requeue policy can bring a row back to `QUEUED` with
+        // a message from an earlier failure still on it. The durable code would
+        // then describe this refusal while the durable message described the
+        // previous one — a diagnostic that is worse than none, because it reads
+        // as authoritative.
+        const { count } = await tx.sceneGeneration.updateMany({
+          where: { id: generationId, state: "QUEUED" },
+          data: { state: target, normalizedErrorCode: reason, normalizedErrorMessage: null },
+        });
+        if (count === 0) return null;
+
+        const row = await tx.sceneGeneration.findUnique({
+          where: { id: generationId },
+          include: { videoProject: { select: { organizationId: true } } },
+        });
+
+        // Past here `null` is unavailable, for the reason it is unavailable in
+        // the claim: `null` means *this caller did not win*, and the database
+        // has just said the opposite. Reporting an invariant failure as a lost
+        // race would leave a row parked in a failure state that no caller
+        // believes it wrote. Throwing inside the transaction rolls the write
+        // back, so the row stays `QUEUED` and stays discoverable — which is the
+        // safe direction here precisely because nothing was submitted.
+        if (!row) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Failed scene generation disappeared within its own preflight-failure transaction",
+            { details: { generationId } },
+          );
+        }
+        if (row.videoProject === null || row.videoProject === undefined) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Failed scene generation has no resolvable owning VideoProject",
+            { details: { generationId } },
+          );
+        }
+        if (row.state !== target) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Scene generation was not in its derived failure state after a won preflight failure",
+            { details: { generationId, state: row.state, expected: target } },
+          );
+        }
+        // The diagnostics are checked, not assumed, because they are the whole
+        // product of this method: a parked row whose code did not persist is
+        // indistinguishable from one parked for some other reason entirely.
+        if (row.normalizedErrorCode !== reason) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Scene generation did not carry its refusal reason after a won preflight failure",
+            { details: { generationId, reason } },
+          );
+        }
+        if (row.normalizedErrorMessage !== null) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Scene generation retained a stale diagnostic message after a won preflight failure",
+            { details: { generationId } },
+          );
+        }
+        return {
+          organizationId: row.videoProject.organizationId,
+          // Likewise `target`: the check above compared it against the row, so
+          // this narrows to a value already verified rather than a claim.
+          generation: inState(row, target),
+        } satisfies FailedSceneGeneration;
       });
     },
   };

@@ -3,6 +3,74 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-2B: durable pre-provider refusal parking
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c2b-completion.md`
+and ADR-0027.
+
+### Added
+
+- **Two legal transitions out of `QUEUED`** — `QUEUED -> FAILED_RETRYABLE` and
+  `QUEUED -> FAILED_TERMINAL`. Safe precisely because they leave `QUEUED`:
+  nothing has been submitted, so neither can describe an attempt a provider was
+  paid for — which is why the equivalent edges out of `SUBMITTING` need
+  `SUBMISSION_UNKNOWN` beside them and these do not. No other row of the
+  transition table changed.
+- **`preflightFailureStateFor(reason)`**, returning exactly
+  `"FAILED_RETRYABLE" | "FAILED_TERMINAL"`. Derived from the existing
+  `preflightDispositionFor` through a two-entry
+  `Record<PreflightDisposition, PreflightFailureState>` — deliberately **not** a
+  second thirteen-reason table, so a reason's fate is written down in one place.
+  The narrow return type makes returning `SUBMITTING` — a licence to spend money
+  — a compile error in a helper about work that will not be submitted.
+- **`SceneGenerationExecutionRepository.failQueuedPreflight(generationId, reason)`**
+  and its `FailedSceneGeneration` result. One method, taking only an id and a
+  typed reason: the target state is **derived internally**, so
+  `ASSET_NOT_FOUND` filed as `FAILED_RETRYABLE` is unspeakable rather than
+  merely discouraged. No `organizationId` input — tenant identity is resolved
+  through `VideoProject` and handed back, as on the other two methods.
+  `FailedSceneGeneration` means the opposite of `ClaimedSceneGeneration` — no
+  money will be spent — and is **structurally** distinct from it: `generation.state`
+  narrows to `"SUBMITTING"` on the claim and `PreflightFailureState` on the park,
+  which cannot overlap. Identically-shaped interfaces would have stayed
+  interchangeable whatever their names said (ADR-0027 §4).
+- **The PostgreSQL CAS**, on the identical `id = $1 AND state = 'QUEUED'`
+  predicate the claim uses — which is what makes park and claim mutually
+  exclusive. Transactional, with an authoritative re-read inside the same
+  transaction and five post-write invariants that throw `INTERNAL_ERROR` rather
+  than laundering a broken invariant into a lost race.
+
+### Changed
+
+- **`normalizedErrorCode` / `normalizedErrorMessage` are execution diagnostics,
+  not provider diagnostics.** A generation can now fail before any provider is
+  contacted. A parked refusal persists the **exact** `PreflightRefusalReason` as
+  the code — unprefixed, untransformed — with the message explicitly set to
+  `null`. The null write is deliberate rather than an omission: a future
+  explicit requeue policy can return a row to `QUEUED` still carrying an older
+  message, and a fresh code beside a stale message describes two different
+  failures while reading as authoritative. Comment-only change in
+  `schema.prisma`; no migration, parity still `No difference detected.`
+- **State-machine comments no longer describe legality as evidence of
+  execution.** "Legal automatic move" became "legal move"; the `PROCESSING`
+  explanation no longer reads as though a retryable provider failure walks
+  itself back to `QUEUED`; and the `FAILED_RETRYABLE` entry now states outright
+  that **no actor performs `FAILED_RETRYABLE -> QUEUED` today**, that the edge
+  exists for a future *explicit* retry policy, and that any such policy must use
+  an expected-state CAS. No retry actor was added.
+
+### Notes
+
+- **Production-dormant.** Nothing calls `failQueuedPreflight`, and production
+  callers of `prepareQueuedGeneration`, `findNextQueuedForPreparation` and
+  `claimQueuedForSubmission` remain zero.
+- **First database writer wins** a contested park. There is no reason priority:
+  with two refusals both true of one row, either is a correct record.
+- **A failed park is not `SUBMISSION_UNKNOWN`.** Nothing was sent, so the row
+  stays `QUEUED` and is simply preflighted again.
+- **No audit event.** There is no provider POST here, and audit I/O does not
+  belong inside the transaction that decides whether work is parked.
+
 ## [Unreleased] — Phase 4C-2A: immutable execution preflight
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c2a-completion.md`

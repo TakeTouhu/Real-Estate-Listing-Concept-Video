@@ -18,8 +18,15 @@ import type { SceneGenerationState } from "./types";
  * go from `PROCESSING`.
  */
 const TRANSITIONS: Readonly<Record<SceneGenerationState, readonly SceneGenerationState[]>> = {
-  // Nothing has been sent yet, so cancelling costs nothing and risks nothing.
-  QUEUED: ["SUBMITTING", "CANCELLED"],
+  // Nothing has been sent yet, so cancelling costs nothing and risks nothing —
+  // and for the same reason, the two failure edges here are safe in a way the
+  // ones out of `SUBMITTING` are not. A generation can fail **before** any
+  // provider is contacted: preflight can find the request unreconstructable, the
+  // source asset unusable, or storage unreachable (ADR-0026). Parking those in
+  // `FAILED_RETRYABLE` / `FAILED_TERMINAL` cannot describe a paid attempt,
+  // because no attempt was made. Which of the two a given refusal warrants is
+  // `preflightFailureStateFor`'s answer, not this table's (ADR-0027).
+  QUEUED: ["SUBMITTING", "CANCELLED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
 
   // The four ways a submission POST can end. The split between the last three
   // is the whole point of this design: a failure is only `FAILED_RETRYABLE`
@@ -39,13 +46,27 @@ const TRANSITIONS: Readonly<Record<SceneGenerationState, readonly SceneGeneratio
   // - **The status GET succeeds and reports a failure.** Now we have learned
   //   something: the known prediction failed. The provider port already
   //   normalizes that verdict into `FAILED_RETRYABLE` or `FAILED_TERMINAL`
-  //   (`ProviderGenerationState`), so both are reachable from here. A retryable
-  //   prediction failure then follows the one approved route back —
-  //   `FAILED_RETRYABLE -> QUEUED -> SUBMITTING` — which is why
-  //   `PROCESSING -> QUEUED` is still absent.
+  //   (`ProviderGenerationState`), so both are reachable from here. The only
+  //   route back to a submission is `FAILED_RETRYABLE -> QUEUED -> SUBMITTING`,
+  //   which is why `PROCESSING -> QUEUED` is absent. Reaching
+  //   `FAILED_RETRYABLE` does **not** start that route: nothing follows the edge
+  //   on its own (see below).
   PROCESSING: ["SUCCEEDED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
 
-  // Demonstrably safe to try again — back to the start of the submission path.
+  // The one edge back to the start of the submission path.
+  //
+  // **Legal is not automatic, and this entry is the clearest place that
+  // distinction bites.** No actor in the system performs this move today: there
+  // is no scheduler, no timer, no retry loop, and no worker. The edge exists so
+  // that a future *explicit* retry policy has somewhere legal to go — a decision
+  // someone makes, not one the machine takes because a row is sitting here.
+  //
+  // Whatever implements it later must express the move as an expected-state
+  // compare-and-swap naming `FAILED_RETRYABLE` as the state it replaces, and
+  // treat zero rows updated as "someone else moved it" rather than as success.
+  // A row here can be competed for — a future cancellation above all — and an
+  // unconditional write would silently overwrite whichever writer lost
+  // (docs/decisions/TODO.md).
   FAILED_RETRYABLE: ["QUEUED"],
 
   // Deliberately empty. The provider may already have accepted and billed this
@@ -103,12 +124,17 @@ export const TERMINAL_SCENE_GENERATION_STATES: readonly SceneGenerationState[] =
   "CANCELLED",
 ];
 
-/** Whether `to` is a legal automatic move from `from`. */
+/**
+ * Whether `to` is a legal move from `from`.
+ *
+ * Legality only says the move is *allowed*. It is not evidence that anything
+ * performs it — `FAILED_RETRYABLE -> QUEUED` is legal and has no actor at all.
+ */
 export function canTransition(from: SceneGenerationState, to: SceneGenerationState): boolean {
   return TRANSITIONS[from].includes(to);
 }
 
-/** The legal automatic moves out of `from`. Empty for terminal states — and for `SUBMISSION_UNKNOWN`. */
+/** The legal moves out of `from`. Empty for terminal states — and for `SUBMISSION_UNKNOWN`. */
 export function allowedTransitionsFrom(
   from: SceneGenerationState,
 ): readonly SceneGenerationState[] {

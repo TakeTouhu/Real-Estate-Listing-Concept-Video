@@ -424,7 +424,9 @@ model SceneGeneration {
   providerPredictionId    String?
   submittedAt             DateTime?
   lastPolledAt            DateTime?
-  /// Normalized provider diagnostics. Internal only; never a customer message.
+  /// Normalized execution diagnostics. Internal only; never a customer message.
+  /// Not provider-only: a pre-provider preflight refusal is persisted as its
+  /// exact reason code with a null message (ADR-0027).
   normalizedErrorCode     String?
   normalizedErrorMessage  String?
   /// Managed-storage key for the copied output. Null until Phase 4D. A

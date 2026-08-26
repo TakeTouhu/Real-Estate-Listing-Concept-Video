@@ -336,10 +336,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       storyboard or project. Phase 4C decides the normalized failure state and
       reason code for such a row — this milestone deliberately does not, because
       the state machine's failure vocabulary is the worker's contract.
-      **Partially addressed in Phase 4C-2A**: preflight classifies such a row as
-      `LEGACY_SNAPSHOT_MISSING` / `LEGACY_PROMPT_MISSING`, non-retryable, and
-      never reconstructs from current state. The **durable** failure state is
-      still open and belongs to Phase 4C-2B.
+      **Closed across Phase 4C-2A and 4C-2B**: preflight classifies such a row as
+      `LEGACY_SNAPSHOT_MISSING` / `LEGACY_PROMPT_MISSING` and never reconstructs
+      from current state (ADR-0026); both are `TERMINAL`, so
+      `failQueuedPreflight` parks them durably in `FAILED_TERMINAL` with the
+      exact reason as `normalizedErrorCode` (ADR-0027). What remains is only the
+      orchestration that calls the two, which is Phase 4C-3.
       **Required before Phase 4C ships.**
 - [ ] **Phase 4C worker must derive a fresh signed source-image URL from durable
       asset identity.** `SceneGeneration.assetId` is the reference; no temporary
@@ -350,15 +352,24 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       exactly that chain, returns the URL on an ephemeral artifact, and persists
       nothing.
       **Required before Phase 4C ships.**
-- [ ] **Phase 4C-2B must map preflight refusals to durable parked states.**
-      `preflightDispositionFor` is the canonical answer and Phase 4C-2A holds no
-      generation-state authority. `RETRYABLE` becomes `QUEUED -> FAILED_RETRYABLE`;
-      `TERMINAL` becomes `QUEUED -> FAILED_TERMINAL`. **Both are parked.** There is
-      deliberately no automatic `FAILED_RETRYABLE -> QUEUED`: a retryable
-      disposition records that a later *explicit* policy could legitimately
-      re-queue the row once the world has changed, not that anything should do so
-      on a timer. Both transitions must use expected-state CAS (see the hard
-      prerequisite above). **Required before Phase 4C-2B ships.**
+- [x] **Phase 4C-2B must map preflight refusals to durable parked states.**
+      **Closed in Phase 4C-2B** (ADR-0027). `preflightFailureStateFor` derives the
+      durable state from `preflightDispositionFor` — `RETRYABLE` parks in
+      `FAILED_RETRYABLE`, `TERMINAL` in `FAILED_TERMINAL`, both via
+      `failQueuedPreflight`'s expected-state CAS on `state = 'QUEUED'`. **Both are
+      parked.** The exact reason is persisted as `normalizedErrorCode` with
+      `normalizedErrorMessage` explicitly `null`.
+- [ ] **No actor performs `FAILED_RETRYABLE -> QUEUED`, and none may be added
+      implicitly.** The edge is legal and deliberately unperformed: there is no
+      scheduler, no timer, no retry loop, and Phase 4C-2B added none. A
+      `FAILED_RETRYABLE` park records that a later *explicit* policy could
+      legitimately re-queue the row once the world has changed — not that
+      anything should do so on a timer, and not that the row may be left `QUEUED`.
+      Any future retry or requeue implementation must express the move as an
+      expected-state CAS naming `FAILED_RETRYABLE` as the state it replaces, and
+      treat zero rows updated as "someone else moved it" rather than as success
+      (see the hard prerequisite above). Legality is not evidence of an actor.
+      **Required before any retry or requeue policy ships.**
 - [ ] **Phase 4C-3 must complete this sequence before any paid provider POST.**
       In order: (1) check the prepared source URL is still fresh — Phase 4C-2A
       deliberately does not, because freshness is only meaningful immediately
@@ -367,7 +378,19 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       observation, and deletion can be requested after `PreparedGeneration`
       returns; (3) the paid-call gate; (4) `QUEUED -> SUBMITTING` CAS; (5) a
       durable `generation.submission_started` audit; (6) the provider POST.
+      Phase 4C-2B added no orchestration: it supplies `failQueuedPreflight` for
+      the refusal branch, and nothing calls it. Phase 4C-3 also owns submission
+      ambiguity (`SUBMISSION_UNKNOWN`), which pre-provider persistence failure is
+      explicitly **not** — a failed park leaves the row `QUEUED` to be
+      rediscovered, because no request was ever sent (ADR-0027).
       **Required before any provider charge is possible.**
+- [ ] **A preflight-failure audit event, if wanted, belongs to orchestration.**
+      Phase 4C-2B deliberately emits none: there is no provider POST in it, and
+      coupling audit I/O into the persistence CAS would put a second failure mode
+      inside the transaction that decides whether work is parked. The paid-call
+      invariant is unchanged — a durable `generation.submission_started` audit
+      must succeed **before** the provider POST. Decide during Phase 4C-3 whether
+      a parked refusal also warrants an audit entry.
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the

@@ -4,7 +4,12 @@ import {
   createPrismaSceneGenerationExecutionRepository,
   createPrismaSceneGenerationRepository,
 } from "@app/database";
-import { SCENE_GENERATION_STATES, type SceneGenerationState } from "@app/domain";
+import {
+  PREFLIGHT_REFUSAL_REASONS,
+  SCENE_GENERATION_STATES,
+  type SceneGenerationState,
+  preflightFailureStateFor,
+} from "@app/domain";
 
 /**
  * The system-scoped execution boundary against live PostgreSQL.
@@ -45,10 +50,28 @@ function seedGeneration(
   videoProjectId: string,
   createdAt?: Date,
   updatedAt?: Date,
+  /**
+   * Execution-history columns, for preservation tests.
+   *
+   * The first attempt at a generation has all of these null, so a preservation
+   * test seeded from the default path would pass even if the adapter cleared
+   * them — null compares equal to null. A future explicit requeue policy can
+   * bring a row back to `QUEUED` carrying real history, and that is the row
+   * whose fields must survive.
+   */
+  history?: {
+    providerPredictionId?: string;
+    submittedAt?: Date;
+    lastPolledAt?: Date;
+    outputStorageKey?: string;
+    normalizedErrorCode?: string;
+    normalizedErrorMessage?: string;
+  },
 ) {
   return prisma.sceneGeneration.create({
     data: {
       id,
+      ...history,
       videoProjectId,
       sourceStoryboardSceneId: "scn_itest_ex",
       assetId: "ast_itest_ex",
@@ -324,5 +347,245 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     expect(other!.state).toBe("QUEUED");
     // The next scan offers the remaining one, so a claim advances the queue.
     expect((await execution.findNextQueuedForPreparation())!.generation.id).toBe("gen_ex_2");
+  });
+});
+
+describe.skipIf(!HAS_DB)("failQueuedPreflight against PostgreSQL", () => {
+  it("parks a retryable refusal in FAILED_RETRYABLE with its exact reason", async () => {
+    await seedGeneration("gen_ex_fr", "QUEUED", PROJECT_A);
+
+    const failed = await execution.failQueuedPreflight("gen_ex_fr", "ASSET_NOT_READY");
+
+    expect(failed!.generation.state).toBe("FAILED_RETRYABLE");
+    expect(failed!.organizationId).toBe(ORG_A);
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_fr" } }))!;
+    expect(persisted.state).toBe("FAILED_RETRYABLE");
+    // The exact reason, unprefixed and untransformed: the durable code is the
+    // same closed vocabulary the domain switches on, so a later reader does not
+    // need a translation table to interpret it.
+    expect(persisted.normalizedErrorCode).toBe("ASSET_NOT_READY");
+    expect(persisted.normalizedErrorMessage).toBeNull();
+  });
+
+  it("parks a terminal refusal in FAILED_TERMINAL with its exact reason", async () => {
+    await seedGeneration("gen_ex_ft", "QUEUED", PROJECT_A);
+
+    const failed = await execution.failQueuedPreflight("gen_ex_ft", "ASSET_UNRECOVERABLE");
+
+    expect(failed!.generation.state).toBe("FAILED_TERMINAL");
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_ft" } }))!;
+    expect(persisted.state).toBe("FAILED_TERMINAL");
+    expect(persisted.normalizedErrorCode).toBe("ASSET_UNRECOVERABLE");
+    expect(persisted.normalizedErrorMessage).toBeNull();
+  });
+
+  it.each(PREFLIGHT_REFUSAL_REASONS)(
+    "parks %s in the state the domain derives for it",
+    async (reason) => {
+      // All thirteen against the real database, not just one of each kind. The
+      // adapter derives the target internally, so this is the only place the
+      // full reason-to-column mapping is observable end to end.
+      await seedGeneration("gen_ex_all", "QUEUED", PROJECT_A);
+
+      const failed = await execution.failQueuedPreflight("gen_ex_all", reason);
+
+      expect(failed!.generation.state).toBe(preflightFailureStateFor(reason));
+      const persisted = (await prisma.sceneGeneration.findUnique({
+        where: { id: "gen_ex_all" },
+      }))!;
+      expect(persisted.state).toBe(preflightFailureStateFor(reason));
+      expect(persisted.normalizedErrorCode).toBe(reason);
+    },
+  );
+
+  it("clears a stale diagnostic message rather than leaving it beside a fresh code", async () => {
+    // Representation A, proven rather than inherited from admission defaults.
+    // The row is seeded *with* a message, as a row returned to QUEUED by a
+    // future explicit requeue policy would carry. Omitting the null write would
+    // leave that message next to this refusal's code, and the pair would
+    // describe two different failures while reading as authoritative.
+    await seedGeneration("gen_ex_stale", "QUEUED", PROJECT_A, undefined, undefined, {
+      normalizedErrorCode: "PROVIDER",
+      normalizedErrorMessage: "the provider reported a transient failure",
+    });
+
+    const failed = await execution.failQueuedPreflight("gen_ex_stale", "STORAGE_UNAVAILABLE");
+
+    expect(failed!.generation.normalizedErrorMessage).toBeNull();
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_stale" } }))!;
+    expect(persisted.normalizedErrorCode).toBe("STORAGE_UNAVAILABLE");
+    expect(persisted.normalizedErrorMessage).toBeNull();
+  });
+
+  it("advances updatedAt, and changes only the three fields it owns", async () => {
+    // Same known-old-timestamp fixture as the claim, for the same reason: seed
+    // and write can land in one clock tick, and an `updatedAt` that never moved
+    // would still compare equal.
+    //
+    // The row carries real execution history on purpose. A first attempt has
+    // every one of those columns null, so a seed from the default path would
+    // let an adapter that cleared them pass — null equals null.
+    const seededUpdatedAt = new Date("2020-01-01T00:00:00.000Z");
+    await seedGeneration("gen_ex_pres", "QUEUED", PROJECT_A, undefined, seededUpdatedAt, {
+      providerPredictionId: "pred_prior_attempt",
+      submittedAt: new Date("2020-01-01T00:00:00.000Z"),
+      lastPolledAt: new Date("2020-01-01T00:05:00.000Z"),
+      outputStorageKey: "generations/prior-output.mp4",
+      normalizedErrorMessage: "an earlier failure",
+    });
+
+    const before = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_pres" } }))!;
+    // Guards the guard, exactly as the claim's test does.
+    expect(before.updatedAt).toEqual(seededUpdatedAt);
+
+    await execution.failQueuedPreflight("gen_ex_pres", "SIGNED_SOURCE_URL_UNUSABLE");
+
+    const after = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_pres" } }))!;
+    expect(after.state).toBe("FAILED_RETRYABLE");
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+
+    // Everything the park does *not* own, still exactly as it was. The prior
+    // prediction id and submittedAt matter most: they record what a provider
+    // was actually paid for, and clearing them as a side effect of parking
+    // would erase the evidence of a charge.
+    expect(after.providerPredictionId).toBe("pred_prior_attempt");
+    expect(after.submittedAt).toEqual(before.submittedAt);
+    expect(after.lastPolledAt).toEqual(before.lastPolledAt);
+    expect(after.outputStorageKey).toBe("generations/prior-output.mp4");
+    expect(after.requestHash).toBe(before.requestHash);
+    expect(after.requestRenderedPrompt).toBe(before.requestRenderedPrompt);
+    expect(after.createdAt).toEqual(before.createdAt);
+
+    // And the whole row, normalized only on the four fields a successful park
+    // is allowed to move.
+    expect({
+      ...after,
+      state: before.state,
+      normalizedErrorCode: before.normalizedErrorCode,
+      normalizedErrorMessage: before.normalizedErrorMessage,
+      updatedAt: before.updatedAt,
+    }).toEqual(before);
+  });
+
+  it.each(SCENE_GENERATION_STATES.filter((s) => s !== "QUEUED"))(
+    "refuses a %s row and leaves every column of it untouched",
+    async (state: SceneGenerationState) => {
+      // The same whole-row standard the claim is held to, and for a sharper
+      // reason here: a park that overwrote a SUBMITTING or PROCESSING row would
+      // mark work a provider is currently billing for as never submitted.
+      await seedGeneration("gen_ex_fstate", state, PROJECT_A, undefined, undefined, {
+        providerPredictionId: "pred_untouchable",
+        submittedAt: new Date("2020-02-02T00:00:00.000Z"),
+      });
+      const before = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_fstate" } });
+
+      const failed = await execution.failQueuedPreflight("gen_ex_fstate", "ASSET_NOT_FOUND");
+
+      expect(failed).toBeNull();
+      const after = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_fstate" } });
+      expect(after).toEqual(before);
+    },
+  );
+
+  it("returns null for an id that does not exist", async () => {
+    // No preliminary existence read: the CAS predicate matches nothing and the
+    // caller gets the ordinary lost result, indistinguishable from a lost race.
+    expect(await execution.failQueuedPreflight("gen_ex_missing", "ASSET_NOT_FOUND")).toBeNull();
+  });
+
+  it("gives exactly one winner when two different refusals race", async () => {
+    // First database writer wins. There is deliberately no reason priority:
+    // with two refusals both true of one row, either is a correct record, and
+    // inventing an order would mean the durable reason depended on a rule
+    // nothing else in the system knows about.
+    await seedGeneration("gen_ex_frace", "QUEUED", PROJECT_A);
+
+    const results = await Promise.all([
+      execution.failQueuedPreflight("gen_ex_frace", "ASSET_NOT_READY"),
+      execution.failQueuedPreflight("gen_ex_frace", "ASSET_UNRECOVERABLE"),
+    ]);
+
+    const winners = results.filter((r) => r !== null);
+    expect(winners).toHaveLength(1);
+    expect(results.filter((r) => r === null)).toHaveLength(1);
+
+    // The durable row agrees with whichever caller was told it won — the
+    // property that makes a returned result trustworthy at all.
+    const winner = winners[0]!;
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_frace" } }))!;
+    expect(persisted.state).toBe(winner.generation.state);
+    expect(persisted.normalizedErrorCode).toBe(winner.generation.normalizedErrorCode);
+    // The two reasons park in different states, so this also proves the loser's
+    // write did not land underneath the winner's.
+    expect(persisted.normalizedErrorCode).toBe(
+      persisted.state === "FAILED_RETRYABLE" ? "ASSET_NOT_READY" : "ASSET_UNRECOVERABLE",
+    );
+  });
+
+  it("gives exactly one winner under wider contention", async () => {
+    await seedGeneration("gen_ex_frace8", "QUEUED", PROJECT_A);
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        execution.failQueuedPreflight("gen_ex_frace8", "STORAGE_UNAVAILABLE"),
+      ),
+    );
+
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+  });
+
+  it("gives exactly one winner when a park races a claim", async () => {
+    // R1, and the reason both methods carry the identical `state = 'QUEUED'`
+    // predicate. The two outcomes are not symmetric in consequence: if the
+    // claim wins, a licence to spend money exists and the park must not be able
+    // to overwrite it; if the park wins, no licence exists at all.
+    await seedGeneration("gen_ex_mixed", "QUEUED", PROJECT_A);
+
+    const [claimed, failed] = await Promise.all([
+      execution.claimQueuedForSubmission("gen_ex_mixed"),
+      execution.failQueuedPreflight("gen_ex_mixed", "ASSET_NOT_READY"),
+    ]);
+
+    expect([claimed, failed].filter((r) => r !== null)).toHaveLength(1);
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_mixed" } }))!;
+
+    if (claimed !== null) {
+      expect(failed).toBeNull();
+      expect(persisted.state).toBe("SUBMITTING");
+      // No refusal was recorded against a row someone may now be paying for.
+      expect(persisted.normalizedErrorCode).toBeNull();
+    } else {
+      expect(failed).not.toBeNull();
+      expect(persisted.state).toBe("FAILED_RETRYABLE");
+      expect(persisted.normalizedErrorCode).toBe("ASSET_NOT_READY");
+      // And no submission licence was issued for it.
+      expect(persisted.submittedAt).toBeNull();
+      expect(persisted.providerPredictionId).toBeNull();
+    }
+  });
+
+  it("resolves organizationId through the VideoProject join, with no tenant input", async () => {
+    await seedGeneration("gen_ex_ftenant", "QUEUED", PROJECT_B);
+
+    const failed = await execution.failQueuedPreflight("gen_ex_ftenant", "ASSET_NOT_FOUND");
+
+    expect(failed!.organizationId).toBe(ORG_B);
+    // The method never named an organization, and the row stays invisible to
+    // the other tenant's scoped reads.
+    expect(await tenantFacing.findById(ORG_A, "gen_ex_ftenant")).toBeNull();
+    expect((await tenantFacing.findById(ORG_B, "gen_ex_ftenant"))!.state).toBe("FAILED_TERMINAL");
+  });
+
+  it("leaves other rows alone while parking one", async () => {
+    await seedGeneration("gen_ex_f1", "QUEUED", PROJECT_A, new Date("2026-08-18T01:00:00.000Z"));
+    await seedGeneration("gen_ex_f2", "QUEUED", PROJECT_A, new Date("2026-08-18T02:00:00.000Z"));
+
+    await execution.failQueuedPreflight("gen_ex_f1", "ASSET_OBJECT_MISSING");
+
+    const other = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_f2" } }))!;
+    expect(other.state).toBe("QUEUED");
+    expect(other.normalizedErrorCode).toBeNull();
+    // A parked row leaves the queue, so the scan moves on to the next one.
+    expect((await execution.findNextQueuedForPreparation())!.generation.id).toBe("gen_ex_f2");
   });
 });

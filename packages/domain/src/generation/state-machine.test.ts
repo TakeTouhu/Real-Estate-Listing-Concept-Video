@@ -18,7 +18,7 @@ import { SCENE_GENERATION_STATES, type SceneGenerationState } from "./types";
  * made here too — deliberately, not by accident.
  */
 const EXPECTED: Readonly<Record<SceneGenerationState, readonly SceneGenerationState[]>> = {
-  QUEUED: ["SUBMITTING", "CANCELLED"],
+  QUEUED: ["SUBMITTING", "CANCELLED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
   SUBMITTING: ["PROCESSING", "FAILED_RETRYABLE", "FAILED_TERMINAL", "SUBMISSION_UNKNOWN"],
   PROCESSING: ["SUCCEEDED", "FAILED_RETRYABLE", "FAILED_TERMINAL"],
   FAILED_RETRYABLE: ["QUEUED"],
@@ -68,6 +68,43 @@ describe("the transition contract", () => {
     expect(canTransition("FAILED_RETRYABLE", "SUBMITTING")).toBe(false);
   });
 
+  it("lets a generation fail before anything has been sent", () => {
+    // Phase 4C-2B. Both are safe exactly because they leave QUEUED: nothing has
+    // been submitted, so neither can describe an attempt a provider was paid
+    // for. The equivalent edges out of SUBMITTING carry that risk, which is why
+    // SUBMISSION_UNKNOWN exists alongside them and does not exist here.
+    expect(canTransition("QUEUED", "FAILED_RETRYABLE")).toBe(true);
+    expect(canTransition("QUEUED", "FAILED_TERMINAL")).toBe(true);
+  });
+
+  it("keeps QUEUED's other moves exactly as they were", () => {
+    // Guards against the amendment widening more than the two approved edges.
+    expect(canTransition("QUEUED", "SUBMITTING")).toBe(true);
+    expect(canTransition("QUEUED", "CANCELLED")).toBe(true);
+    expect([...allowedTransitionsFrom("QUEUED")].sort()).toEqual([
+      "CANCELLED",
+      "FAILED_RETRYABLE",
+      "FAILED_TERMINAL",
+      "SUBMITTING",
+    ]);
+    // Pre-provider failure must not have opened a route into a POST or a
+    // resurrection of a finished attempt.
+    expect(canTransition("QUEUED", "PROCESSING")).toBe(false);
+    expect(canTransition("QUEUED", "SUCCEEDED")).toBe(false);
+    expect(canTransition("QUEUED", "SUBMISSION_UNKNOWN")).toBe(false);
+    expect(canTransition("QUEUED", "QUEUED")).toBe(false);
+  });
+
+  it("adds no outbound edge to any state other than QUEUED", () => {
+    // The amendment is scoped to one row of the table. Every other row is
+    // pinned against the independent EXPECTED map, which itself changed only
+    // for QUEUED.
+    for (const from of SCENE_GENERATION_STATES) {
+      if (from === "QUEUED") continue;
+      expect([...allowedTransitionsFrom(from)].sort()).toEqual([...EXPECTED[from]].sort());
+    }
+  });
+
   it("can represent every verdict the provider port normalizes about a known prediction", () => {
     // `ProviderGenerationState` in @app/video-providers already distinguishes a
     // retryable prediction failure from a terminal one. A successful poll can
@@ -111,6 +148,17 @@ describe("the transition contract", () => {
     for (const to of SCENE_GENERATION_STATES) {
       expect(canTransition(state, to)).toBe(false);
     }
+  });
+
+  it("offers FAILED_RETRYABLE -> QUEUED as a legal move with no actor behind it", () => {
+    // Characterization, deliberately. The edge is legal and stays legal — a
+    // future *explicit* retry policy needs somewhere legal to go — but nothing
+    // in the system performs it: no scheduler, no timer, no worker loop, and
+    // Phase 4C-2B adds none. `canTransition` answers "is this allowed", never
+    // "does this happen", and reading it as the latter is what would turn a
+    // parked row into an unintended re-submission.
+    expect(canTransition("FAILED_RETRYABLE", "QUEUED")).toBe(true);
+    expect(allowedTransitionsFrom("FAILED_RETRYABLE")).toEqual(["QUEUED"]);
   });
 
   it("does not let a terminal job be revived instead of regenerated", () => {
@@ -190,6 +238,24 @@ describe("active and terminal sets", () => {
     expect(isActiveGenerationState("FAILED_RETRYABLE")).toBe(true);
     expect(isTerminalGenerationState("FAILED_RETRYABLE")).toBe(false);
     expect(canTransition("FAILED_RETRYABLE", "QUEUED")).toBe(true);
+  });
+
+  it("keeps both memberships exactly as Phase 4C-2B found them", () => {
+    // The transition amendment must not have moved a state between the sets:
+    // FAILED_RETRYABLE parks and holds the identity, FAILED_TERMINAL releases
+    // it. Pinned as literals so a change has to be made here on purpose.
+    expect([...ACTIVE_SCENE_GENERATION_STATES].sort()).toEqual([
+      "FAILED_RETRYABLE",
+      "PROCESSING",
+      "QUEUED",
+      "SUBMISSION_UNKNOWN",
+      "SUBMITTING",
+    ]);
+    expect([...TERMINAL_SCENE_GENERATION_STATES].sort()).toEqual([
+      "CANCELLED",
+      "FAILED_TERMINAL",
+      "SUCCEEDED",
+    ]);
   });
 
   it("releases the identity only when the attempt is genuinely over", () => {
