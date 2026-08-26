@@ -3,9 +3,72 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 4C-1b: system execution persistence foundation
+## [Unreleased] — Phase 4C-2A: immutable execution preflight
 
-PR #39 — see GitHub for lifecycle. Technical detail in
+See GitHub for lifecycle. Technical detail in `docs/phase-4c2a-completion.md`
+and ADR-0026.
+
+### Added
+
+- **`prepareQueuedGeneration`** — prepares one `QUEUED` generation for a later
+  submission and **changes nothing**: no claim, no state write, no asset write,
+  no persisted URL, no provider call. The row is still `QUEUED` on return, and
+  `ExecutionPreflightDeps` carries no generation repository that could move it.
+- **`PreparedGeneration`**, a domain-owned artifact. Deliberately not
+  `ProviderGenerationInput` — that type lives in `@app/video-providers`, which
+  depends on `@app/domain`, so importing it would invert the dependency.
+  `packages/domain` still depends only on `@app/shared`.
+- **`PreflightRefusalError`** with **thirteen** closed `PreflightRefusalReason`
+  values, each `INTERNAL_ERROR` (nothing a customer submits reaches preflight).
+  Disposition is **derived**, never supplied: one exhaustive
+  `Record<PreflightRefusalReason, PreflightDisposition>` exposed through
+  `preflightDispositionFor`, with no `retryable` boolean and no second list.
+  `RETRYABLE` means a later *explicit* policy could try again once the world has
+  changed — Phase 4C-2B parks it in `FAILED_RETRYABLE`; both dispositions park.
+- **The refusal is safe to log whole.** It accepts no cause, so a raw storage
+  error carrying a key or credential cannot ride along; every message is fixed
+  text. Only the fail-closed `AppError`/`INTERNAL_ERROR` shape from the legacy
+  helpers is translated, detected by type and code — a `TypeError` escapes
+  rather than being relabelled as a legacy row.
+- **A `READY` asset must also be usable**: exactly `image/jpeg`, a non-blank
+  `storageKey`, and an object `storage.exists` confirms — never the original
+  upload, never `thumbnailKey`. Failure is `ASSET_FORMAT_UNSUPPORTED`, before
+  storage is touched.
+- **The signed URL is validated** — parses, `https:`, non-empty host, and a
+  finite `expiresAt` — otherwise `SIGNED_SOURCE_URL_UNUSABLE`. `expiresAt` is
+  propagated exactly as storage returned it. Freshness is deliberately *not*
+  checked here; Phase 4C-3 owns it immediately before the paid POST.
+- **Sign, then read the asset again.** A second tenant-scoped read by the frozen
+  `assetId` must still show the same `READY` source with the same key and MIME,
+  or the attempt is refused (`ASSET_SOURCE_CHANGED` when the source was
+  replaced). This narrows the deletion window; it does not close it, and
+  ADR-0026 says so.
+- **One `Record<MediaAssetStatus, AssetExecutability>`** in production classifies
+  every source-asset status against a single criterion: can this same asset
+  identity become an executable `READY` source again without changing the
+  admitted `assetId`? Adding a status fails to compile until it is classified.
+  `FAILED` is `ASSET_UPLOAD_FAILED` (recoverable via `AssetService.retryUpload`);
+  the quarantined/rejected/deleting/deleted four are `ASSET_UNRECOVERABLE`.
+- 59 unit tests and **one** PostgreSQL test proving a real `QUEUED` row is
+  byte-for-byte identical — `updatedAt` included — after a successful
+  preparation.
+
+### Unchanged
+
+- Schema, migrations, state machine, `requestHash` contract, the six frozen
+  request artifacts, the tenant-facing repository, `generation-service.ts`, and
+  the Phase 4C-1b execution port and adapter.
+
+### Notes
+
+- **Production-dormant.** Nothing calls it yet, by design.
+- Capability re-validation is **identity-only** — `assertSettingsSupported`
+  cannot be re-run from the snapshot, which stores no discrete `negativePrompt`.
+  Recorded in `docs/decisions/TODO.md`.
+
+## Phase 4C-1b: system execution persistence foundation
+
+Merged as PR #39 (`27ba4df`). Technical detail in
 `docs/phase-4c1b-completion.md` and ADR-0025.
 
 ### Added
