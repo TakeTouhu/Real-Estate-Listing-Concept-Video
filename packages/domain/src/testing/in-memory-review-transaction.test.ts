@@ -79,7 +79,7 @@ describe("InMemoryReviewTransaction", () => {
       const analysis = (await a.findById(ORG, "ana_1"))!;
       await a.update({ ...analysis, reviewStatus: "REJECTED", reviewNote: "blurry" });
       const asset = (await m.findById(ORG, "ast_1"))!;
-      await m.update({ ...asset, status: "REJECTED" });
+      await m.updateIfCurrent({ ...asset, status: "REJECTED" }, asset.status);
     });
 
     expect((await analyses.findById(ORG, "ana_1"))?.reviewStatus).toBe("REJECTED");
@@ -92,7 +92,7 @@ describe("InMemoryReviewTransaction", () => {
         const analysis = (await a.findById(ORG, "ana_1"))!;
         await a.update({ ...analysis, reviewStatus: "REJECTED", reviewNote: "blurry" });
         const asset = (await m.findById(ORG, "ast_1"))!;
-        await m.update({ ...asset, status: "REJECTED" });
+        await m.updateIfCurrent({ ...asset, status: "REJECTED" }, asset.status);
         throw new Error("asset write failed");
       }),
     ).rejects.toThrow(/asset write failed/);

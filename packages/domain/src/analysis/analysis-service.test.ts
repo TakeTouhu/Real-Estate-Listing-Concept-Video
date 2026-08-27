@@ -226,11 +226,8 @@ describe("analyzeAsset", () => {
   });
 
   it("merges provider flags with platform-derived quality flags", async () => {
-    await fx.assets.update({
-      ...(await fx.assets.findById(fx.orgId, fx.assetId))!,
-      width: 320,
-      height: 240,
-    });
+    const sized = (await fx.assets.findById(fx.orgId, fx.assetId))!;
+    await fx.assets.updateIfCurrent({ ...sized, width: 320, height: 240 }, sized.status);
     const analysis = await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     expect(analysis.safetyFlags.map((f) => f.code)).toContain("LOW_RESOLUTION");
   });
@@ -970,16 +967,35 @@ describe("reject", () => {
     expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
   });
 
+  it("rolls the whole review back when deletion won the asset first", async () => {
+    // Not a stubbed `null`: a real deletion request, committed before the
+    // review runs. Rejecting the analysis while the asset write lost would
+    // record a decision against an asset already on its way out — and would
+    // leave the analysis REJECTED with the asset untouched.
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    await fx.assets.requestDeletion(fx.orgId, fx.assetId, new Date());
+
+    await expect(
+      fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "Too blurry" }),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
+    const asset = (await fx.assets.findById(fx.orgId, fx.assetId))!;
+    expect(asset.status).toBe("DELETION_PENDING");
+    expect(asset.deletionRequestedAt).not.toBeNull();
+    expect(actions(fx)).not.toContain("analysis.rejected");
+  });
+
   it("applies neither write when the transaction fails part-way", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    const original = fx.assets.update.bind(fx.assets);
-    fx.assets.update = () => Promise.reject(new Error("asset write failed"));
+    const original = fx.assets.updateIfCurrent.bind(fx.assets);
+    fx.assets.updateIfCurrent = () => Promise.reject(new Error("asset write failed"));
 
     await expect(
       fx.service.reject(fx.ownerId, fx.orgId, fx.assetId, { reason: "Too blurry" }),
     ).rejects.toThrow(/asset write failed/);
 
-    fx.assets.update = original;
+    fx.assets.updateIfCurrent = original;
     expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("UNREVIEWED");
     expect((await fx.assets.findById(fx.orgId, fx.assetId))?.status).toBe("READY");
     expect(actions(fx)).not.toContain("analysis.rejected");

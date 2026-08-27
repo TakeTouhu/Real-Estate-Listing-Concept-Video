@@ -3,6 +3,57 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3A-1: MediaAsset deletion-intent monotonicity
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3a1-completion.md`
+and ADR-0028.
+
+### Changed
+
+- **`MediaAssetRepository.update` is replaced by `updateIfCurrent(asset, expectedStatus)`.**
+  The old method addressed rows by `id` alone and wrote **every** column from the
+  caller's snapshot, `deletionRequestedAt` included. Nine of eleven production
+  writers could therefore erase a deletion request, and `completeUpload` — which
+  reads once, then scans, processes an image and writes two storage objects
+  before its final write — could bring a deleted asset back as **`READY` under a
+  fresh storage key**. The new predicate is `id` + `organizationId` +
+  `status = expectedStatus` + `deletionRequestedAt IS NULL`, and
+  `deletionRequestedAt` is **not among the written columns at all**, so no path
+  can set or clear intent through ordinary lifecycle work. `null` means the
+  durable row moved on.
+- **Deletion intent is established only by the new
+  `requestDeletion(organizationId, assetId, requestedAt)`**, guarded on intent
+  not already existing and on the row not being `DELETED`, writing exactly the
+  two deletion-owned columns. Two concurrent requests produce one winner.
+- **Both compile to a single conditional `UPDATE`** whose `WHERE` decides the
+  winner and which returns the row — verified against PostgreSQL with query
+  logging, not assumed. `updateMany` plus a re-read was rejected: it reopens the
+  TOCTOU window and changes the returned-row concurrency contract. No raw SQL,
+  and no nested transaction (the same repository is constructed on a
+  `TransactionClient` inside `ReviewTransaction`).
+- **Services stop when they lose.** Every `AssetService` lifecycle path throws
+  `VALIDATION_FAILED` on a lost guard rather than continuing to scan, process,
+  write storage or mint an upload URL for an asset it no longer controls.
+  `retryUpload` is guarded before the URL is minted.
+- **Direct deletion converges idempotently.** A lost CAS re-reads once; if intent
+  is now established the call returns the current row and emits **no second
+  audit entry**, because one decision must not be recorded as two.
+- **`PropertyService.remove` uses the dedicated deletion method** and treats
+  `null` as convergent — another writer already moved the asset the way removal
+  wanted.
+- **`AnalysisService.reject` rolls the whole review back** when the guarded asset
+  write loses, rather than recording a decision against an asset that never
+  received it.
+
+### Notes
+
+- **No schema change and no migration.** `deletionRequestedAt` already existed;
+  only who may write it changed.
+- This is the prerequisite for Phase 4C-3A-2's locked submission claim. A
+  compare-and-swap on deletion plus an ordinary read in the claim transaction
+  does **not** linearize the two — ADR-0028 records the interleaving that proves
+  it.
+
 ## [Unreleased] — Phase 4C-2B: durable pre-provider refusal parking
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c2b-completion.md`

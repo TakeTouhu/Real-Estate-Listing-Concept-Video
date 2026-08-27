@@ -51,8 +51,11 @@ class FakeStorage implements ObjectStorage {
 }
 
 class FakeScanner implements MalwareScanner {
+  /** How many times a scan actually ran — proves a lost guard stopped earlier. */
+  scanned = 0;
   constructor(public verdict: ScanVerdict = "CLEAN") {}
   scan() {
+    this.scanned += 1;
     return Promise.resolve({ verdict: this.verdict });
   }
 }
@@ -65,7 +68,12 @@ class FakeImageProcessor implements ImageProcessor {
     public hash = "0f0f0f0f0f0f0f0f",
     public shouldThrow = false,
   ) {}
-  process(): Promise<ProcessedImage> {
+  /** Count of real invocations, and a hook for interleaving a competing write. */
+  processed = 0;
+  onProcess?: () => Promise<void>;
+  async process(): Promise<ProcessedImage> {
+    this.processed += 1;
+    if (this.onProcess) await this.onProcess();
     if (this.shouldThrow) return Promise.reject(new Error("corrupt image"));
     return Promise.resolve({
       normalized: new Uint8Array([1, 2, 3, 4]),
@@ -83,6 +91,8 @@ interface Ctx {
   deps: TestDeps;
   properties: PropertyService;
   assets: AssetService;
+  /** The repository itself, so a test can interleave a real deletion. */
+  assetRepo: InMemoryMediaAssetRepository;
   storage: FakeStorage;
   scanner: FakeScanner;
   images: FakeImageProcessor;
@@ -105,6 +115,7 @@ async function setup(): Promise<Ctx> {
 
   return {
     deps,
+    assetRepo,
     storage,
     scanner,
     images,
@@ -563,3 +574,134 @@ describe("tenant isolation for properties and assets", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
+
+/**
+ * Deletion intent is monotonic, and lifecycle work stops when it loses.
+ *
+ * These interleave a **real** deletion against a real in-flight operation
+ * rather than stubbing a repository to return `null`. The window that matters
+ * is `completeUpload`'s: it reads the asset once, then scans, processes an
+ * image and writes two storage objects before its final write, and every one of
+ * those stages runs on a snapshot taken before them.
+ */
+describe("deletion-intent monotonicity", () => {
+  let ctx: Ctx;
+  let propertyId: string;
+  beforeEach(async () => {
+    ctx = await setup();
+    propertyId = (
+      await ctx.properties.create(ctx.ownerId, {
+        organizationId: ctx.orgId,
+        name: "Listing",
+        propertyType: "APARTMENT",
+        rightsConfirmed: true,
+      })
+    ).id;
+  });
+
+  async function pendingAsset() {
+    const { asset } = await ctx.assets.requestUpload(ctx.ownerId, {
+      organizationId: ctx.orgId,
+      propertyId,
+      originalFilename: "photo.jpg",
+      declaredSizeBytes: 2048,
+    });
+    await ctx.storage.putObject(asset.storageKey, jpegBytes());
+    return asset;
+  }
+
+  it("stops completeUpload before scanning when deletion wins first", async () => {
+    const asset = await pendingAsset();
+    await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    // The very first guarded write lost, so nothing downstream ran at all.
+    expect(ctx.scanner.scanned).toBe(0);
+    expect(ctx.images.processed).toBe(0);
+  });
+
+  it("stops completeUpload at a later stage and never reaches READY", async () => {
+    const asset = await pendingAsset();
+    // Deletion lands *during* image processing — the longest stretch, and the
+    // one the pre-4C-3A-1 code would have finished by resurrecting the asset.
+    ctx.images.onProcess = async () => {
+      await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    };
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const after = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+    expect(after.status).toBe("DELETION_PENDING");
+    expect(after.deletionRequestedAt).not.toBeNull();
+    // The resurrection this milestone exists to prevent.
+    expect(after.status).not.toBe("READY");
+  });
+
+  it("does not mint a fresh upload URL when retryUpload loses the guard", async () => {
+    const asset = await pendingAsset();
+    await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    const signedBefore = ctx.storage.signed.length;
+
+    await expect(
+      ctx.assets.retryUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    // An upload credential for an asset being deleted is worse than a refusal.
+    expect(ctx.storage.signed.length).toBe(signedBefore);
+  });
+
+  it("converges on a repeated deletion request without a duplicate audit", async () => {
+    const asset = await pendingAsset();
+    const first = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    const auditsAfterFirst = deletionAudits(ctx);
+
+    const second = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+
+    expect(second.status).toBe("DELETION_PENDING");
+    // Same durable request, not a second one: the timestamp is the winner's.
+    expect(second.deletionRequestedAt).toEqual(first.deletionRequestedAt);
+    expect(deletionAudits(ctx)).toBe(auditsAfterFirst);
+  });
+
+  it("still reports a missing asset as NOT_FOUND", async () => {
+    await expect(
+      ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, "ast_missing"),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("removes a property even when one asset is already deletion-pending", async () => {
+    const a = await pendingAsset();
+    const b = await pendingAsset();
+    await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, a.id);
+
+    // A concurrent deletion already moved `a` the way removal wants it to go;
+    // refusing removal over that would fail the request for having partly
+    // succeeded already.
+    await expect(
+      ctx.properties.remove(ctx.ownerId, ctx.orgId, propertyId),
+    ).resolves.toBeUndefined();
+
+    // Both the status **and** the recorded intent. Status alone would be
+    // satisfied by an ordinary lifecycle write, which cannot set
+    // `deletionRequestedAt` at all — leaving a row that looks deletion-pending
+    // but carries no record that deletion was ever requested, and so no
+    // timestamp for a retention window to start from.
+    for (const id of [a.id, b.id]) {
+      const asset = (await ctx.assetRepo.findById(ctx.orgId, id))!;
+      expect(asset.status).toBe("DELETION_PENDING");
+      expect(asset.deletionRequestedAt).not.toBeNull();
+    }
+  });
+});
+
+/** Deletion audit entries recorded so far, for duplicate-emission checks. */
+function deletionAudits(ctx: Ctx): number {
+  return ctx.deps.repos.auditLogs
+    .all()
+    .filter((entry) => entry.action === "asset.deletion_requested").length;
+}

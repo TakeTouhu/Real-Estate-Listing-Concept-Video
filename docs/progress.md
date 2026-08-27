@@ -69,6 +69,12 @@ merge was fetched and verified. Publication failed exactly as below.
 (`27ba4df` then `da9b0e5`), created on `main` after the merge and its CI were
 verified. Local only; no remote push was attempted, per the block recorded below.
 
+`phase-4c2b-complete` is the milestone tag for PR #41: annotated, tag object
+`b4347bc11593c11d4d5bf83fe227218add62d1bd`, target
+`cf701bab2fb171c27dba1922df0b891529472d86` — a true two-parent merge commit
+(`70e3313` then `b27a2c2`), created on `main` after the merge and its CI were
+verified. Local only; no remote push was attempted.
+
 A further caveat worth stating plainly: this development environment is
 re-provisioned from a fresh clone, and **local-only tags do not survive that**.
 The tags listed here are a record of what was created, not a guarantee of what
@@ -225,8 +231,9 @@ reserved for a webhook.
 | 4C-1a | Row-as-queue admission: `SceneGenerationQueue` removed, admission becomes create → audit (ADR-0024) | 1,339 — 196 production + 235 tests + 908 docs | **Merged** (PR #38, `e8dbd01`) |
 | 4C-1b | System-scoped execution persistence: queued-candidate discovery + state-CAS submission claim (ADR-0025) | 1,245 — 272 production + 379 tests + 594 docs | **Merged** (PR #39, `27ba4df`) |
 | 4C-2A | Immutable execution preflight: snapshot authority, identity-only capability check, scoped asset resolution, JPEG source invariant, validated signed URL, post-sign re-read, 13 classified refusals (ADR-0026) | 2,006 — 609 production + 862 tests + 535 docs | **Merged** (PR #40, `70e3313`) |
-| 4C-2B | Durable pre-provider refusal parking: two legal `QUEUED` failure edges, derived reason→state mapping, one narrow execution-port CAS, exact reason persisted with an explicit null message (ADR-0027) | see `docs/phase-4c2b-completion.md` | PR — see GitHub for lifecycle |
-| 4C-3…5 | Orchestration, paid-call gate, submission, polling, worker runtime — fake provider first | — | Not started |
+| 4C-2B | Durable pre-provider refusal parking: two legal `QUEUED` failure edges, derived reason→state mapping, one narrow execution-port CAS, exact reason persisted with an explicit null message (ADR-0027) | 1,425 — 316 production + 528 tests + 581 docs | **Merged** (PR #41, `cf701ba`) |
+| 4C-3A-1 | MediaAsset deletion-intent monotonicity: guarded lifecycle CAS, dedicated deletion CAS, stale writers can no longer erase intent or resurrect READY (ADR-0028) | see `docs/phase-4c3a1-completion.md` | PR — see GitHub for lifecycle |
+| 4C-3A-2…3E | Locked submission claim, provider hardening, submission persistence, orchestrator, stale sweeper | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
 

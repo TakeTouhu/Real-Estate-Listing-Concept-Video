@@ -227,6 +227,40 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       product/finance decision, not a schema tweak. **Revisit before Phase 7, and
       before any project-deletion feature.**
 
+## Phase 4C-3A-1 follow-ups
+
+- [ ] **A physical deletion worker must not remove a source object a provider may
+      still depend on.** None exists today: `ObjectStorage.deleteObject` has zero
+      production callers, nothing writes `status = DELETED`, and
+      `retentionExpiresAt` is only ever set to null — so `DELETION_PENDING` is a
+      marker with no storage effect, and Phase 4C-3's "a deletion requested after
+      a successful claim does not revoke the licence" is safe as things stand.
+      When such a worker is built it must protect assets referenced by a
+      generation in **`SUBMITTING`, `PROCESSING` or `SUBMISSION_UNKNOWN`**. The
+      third is the one that is easy to miss and most expensive to get wrong:
+      `SUBMISSION_UNKNOWN` may represent a request the provider accepted and
+      billed even though acceptance cannot be proven locally, so deleting its
+      source destroys the recovery path. `MediaAsset` has no relation to
+      `SceneGeneration` — `assetId` is deliberately un-foreign-keyed — so the
+      worker must check generation state explicitly; the database will not stop
+      it. **Required before any physical deletion ships.**
+- [ ] **Derivative objects written before a lost `READY` write are unreferenced.**
+      `completeUpload` writes the normalized image and thumbnail to storage
+      before its final guarded database write. If deletion wins in between, those
+      objects exist with no row pointing at them. This is storage housekeeping,
+      not a correctness or security defect — the objects are tenant-scoped,
+      unreferenced and unreachable through any signed URL — and Phase 4C-3A-1
+      deliberately did not add cleanup logic for it rather than expand into
+      storage-lifecycle redesign. Fold into the future retention worker.
+- [ ] **Phase 4C-3A-2 source identity must include `sha256`.**
+      `buildAssetStorageKey` is deterministic from organization, property, asset,
+      variant and extension, so a re-processed normalized JPEG for the **same**
+      asset reuses the **same** `normalized.jpg` key with different bytes. Key +
+      MIME equality would pass over a genuinely different source. Compare
+      `storageKey`, `mimeType` **and** `sha256` against the locked observation,
+      and fail closed in preflight when a supposedly executable `READY` source
+      carries no usable content hash. **Required before the locked claim ships.**
+
 ## Phase 4B follow-ups
 
 - [x] **Phase 4C MUST recover `QUEUED` generations that were never durably

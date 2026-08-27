@@ -162,12 +162,12 @@ export class AssetService {
       throw new AppError("VALIDATION_FAILED", "Uploaded object was not found in storage");
     }
     const now = this.deps.clock.now();
-    let current: MediaAsset = await this.deps.assets.update({
-      ...asset,
-      status: "UPLOADED",
-      sizeBytes: data.byteLength,
-      updatedAt: now,
-    });
+    let current: MediaAsset = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        { ...asset, status: "UPLOADED", sizeBytes: data.byteLength, updatedAt: now },
+        asset.status,
+      ),
+    );
 
     // Size limit re-checked against the actual bytes, not the client's claim.
     if (data.byteLength > this.limits.maxFileSizeBytes) {
@@ -184,12 +184,12 @@ export class AssetService {
     }
 
     // Malware scan hook → quarantine on detection.
-    current = await this.deps.assets.update({
-      ...current,
-      status: "SCANNING",
-      mimeType: sniffed,
-      updatedAt: this.deps.clock.now(),
-    });
+    current = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        { ...current, status: "SCANNING", mimeType: sniffed, updatedAt: this.deps.clock.now() },
+        "UPLOADED",
+      ),
+    );
     const scan = await this.deps.scanner.scan(data);
     if (scan.verdict === "INFECTED") {
       return { asset: await this.quarantine(actorUserId, current), duplicateOf: [] };
@@ -202,11 +202,12 @@ export class AssetService {
     }
 
     // Normalize: strip EXIF/GPS, correct orientation, build thumbnail + pHash.
-    current = await this.deps.assets.update({
-      ...current,
-      status: "PROCESSING",
-      updatedAt: this.deps.clock.now(),
-    });
+    current = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        { ...current, status: "PROCESSING", updatedAt: this.deps.clock.now() },
+        "SCANNING",
+      ),
+    );
     let processed;
     try {
       processed = await this.deps.images.process(data);
@@ -257,20 +258,30 @@ export class AssetService {
     const sha256 = sha256Hex(Buffer.from(processed.normalized).toString("base64"));
     const duplicateOf = await this.findDuplicates(organizationId, current.id, processed.perceptualHash);
 
-    const ready = await this.deps.assets.update({
-      ...current,
-      storageKey: normalizedKey,
-      thumbnailKey,
-      mimeType: processed.normalizedMimeType,
-      sizeBytes: processed.normalized.byteLength,
-      width: processed.width,
-      height: processed.height,
-      sha256,
-      perceptualHash: processed.perceptualHash,
-      status: "READY",
-      failureReason: null,
-      updatedAt: this.deps.clock.now(),
-    });
+    // The write this milestone exists for. Everything between the `PROCESSING`
+    // claim and here — scanning, image processing, two storage writes — runs on
+    // a snapshot taken before any of it. Without the predicate, a deletion
+    // committed during that stretch would be erased and the asset resurrected
+    // as `READY` under a fresh key.
+    const ready = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        {
+          ...current,
+          storageKey: normalizedKey,
+          thumbnailKey,
+          mimeType: processed.normalizedMimeType,
+          sizeBytes: processed.normalized.byteLength,
+          width: processed.width,
+          height: processed.height,
+          sha256,
+          perceptualHash: processed.perceptualHash,
+          status: "READY",
+          failureReason: null,
+          updatedAt: this.deps.clock.now(),
+        },
+        "PROCESSING",
+      ),
+    );
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -345,13 +356,20 @@ export class AssetService {
       variant: "original",
       extension: "bin",
     });
-    const reset = await this.deps.assets.update({
-      ...asset,
-      storageKey: originalKey,
-      status: "PENDING_UPLOAD",
-      failureReason: null,
-      updatedAt: this.deps.clock.now(),
-    });
+    // Guarded before the upload URL is minted: an upload credential for an
+    // asset this call no longer owns is worse than a refusal.
+    const reset = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        {
+          ...asset,
+          storageKey: originalKey,
+          status: "PENDING_UPLOAD",
+          failureReason: null,
+          updatedAt: this.deps.clock.now(),
+        },
+        asset.status,
+      ),
+    );
     const upload = await this.deps.storage.createSignedUploadUrl(originalKey, UPLOAD_URL_TTL_SECONDS);
     await recordAudit(this.deps.identity, {
       organizationId,
@@ -373,12 +391,28 @@ export class AssetService {
     await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
     const asset = await this.requireAsset(organizationId, assetId);
     const now = this.deps.clock.now();
-    const updated = await this.deps.assets.update({
-      ...asset,
-      status: "DELETION_PENDING",
-      deletionRequestedAt: now,
-      updatedAt: now,
-    });
+    const updated = await this.deps.assets.requestDeletion(organizationId, asset.id, now);
+    if (updated === null) {
+      // Losing the CAS is not an error here. Deletion is idempotent by nature:
+      // a caller asking for something that has already happened has got what it
+      // asked for. One authoritative re-read decides which of the two
+      // non-winning worlds this is.
+      const current = await this.requireAsset(organizationId, assetId);
+      if (current.status === "DELETION_PENDING" || current.deletionRequestedAt !== null) {
+        // Converged. Deliberately **no second audit entry** — the deletion was
+        // requested once, and a duplicate would misrepresent one decision as
+        // two in the record that exists to reconstruct decisions.
+        return current;
+      }
+      // The predicate refused, yet the row is an ordinary non-deleting asset.
+      // Nothing the service can explain: reporting it as success would claim a
+      // deletion that did not happen, and retrying would loop against a
+      // condition that has already disagreed with itself once.
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "Asset deletion request did not converge to a deletion-pending state",
+      );
+    }
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -411,6 +445,33 @@ export class AssetService {
       .map((a) => a.id);
   }
 
+  /**
+   * Insist that this operation still owns the asset's lifecycle.
+   *
+   * `updateIfCurrent` returns `null` when the durable row moved on — deletion
+   * won, or another writer changed the status. Every customer-facing path here
+   * must **stop** at that point rather than continue: the stages that follow
+   * (scanning, image processing, storage writes, minting an upload URL) all act
+   * on an asset this call no longer controls, and the worst of them would end
+   * by resurrecting a deleted asset as `READY`.
+   *
+   * `VALIDATION_FAILED` rather than `INTERNAL_ERROR`: nothing is broken. The
+   * customer asked for something that stopped being possible while it ran, and
+   * a 5xx would blame the system for a legitimate concurrent decision. The
+   * message is fixed text naming neither the winning writer nor the row's
+   * current state — which of the two happened is not the caller's business, and
+   * saying would leak another actor's action.
+   */
+  private mustOwnLifecycle(updated: MediaAsset | null): MediaAsset {
+    if (updated === null) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "This asset changed or deletion was requested while the operation was in progress",
+      );
+    }
+    return updated;
+  }
+
   private async requireAsset(organizationId: string, assetId: string): Promise<MediaAsset> {
     const asset = await this.deps.assets.findById(organizationId, assetId);
     if (!asset || asset.status === "DELETED") {
@@ -420,12 +481,17 @@ export class AssetService {
   }
 
   private async reject(actorUserId: string, asset: MediaAsset, reason: string): Promise<MediaAsset> {
-    const updated = await this.deps.assets.update({
-      ...asset,
-      status: "REJECTED",
-      failureReason: reason,
-      updatedAt: this.deps.clock.now(),
-    });
+    const updated = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        {
+          ...asset,
+          status: "REJECTED",
+          failureReason: reason,
+          updatedAt: this.deps.clock.now(),
+        },
+        asset.status,
+      ),
+    );
     await recordAudit(this.deps.identity, {
       organizationId: asset.organizationId,
       actorUserId,
@@ -438,12 +504,17 @@ export class AssetService {
   }
 
   private async quarantine(actorUserId: string, asset: MediaAsset): Promise<MediaAsset> {
-    const updated = await this.deps.assets.update({
-      ...asset,
-      status: "QUARANTINED",
-      failureReason: "Malware scan flagged this file",
-      updatedAt: this.deps.clock.now(),
-    });
+    const updated = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        {
+          ...asset,
+          status: "QUARANTINED",
+          failureReason: "Malware scan flagged this file",
+          updatedAt: this.deps.clock.now(),
+        },
+        asset.status,
+      ),
+    );
     await recordAudit(this.deps.identity, {
       organizationId: asset.organizationId,
       actorUserId,
@@ -455,12 +526,17 @@ export class AssetService {
   }
 
   private async fail(actorUserId: string, asset: MediaAsset, reason: string): Promise<MediaAsset> {
-    const updated = await this.deps.assets.update({
-      ...asset,
-      status: "FAILED",
-      failureReason: reason,
-      updatedAt: this.deps.clock.now(),
-    });
+    const updated = this.mustOwnLifecycle(
+      await this.deps.assets.updateIfCurrent(
+        {
+          ...asset,
+          status: "FAILED",
+          failureReason: reason,
+          updatedAt: this.deps.clock.now(),
+        },
+        asset.status,
+      ),
+    );
     await recordAudit(this.deps.identity, {
       organizationId: asset.organizationId,
       actorUserId,

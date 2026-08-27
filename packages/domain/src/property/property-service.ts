@@ -146,12 +146,13 @@ export class PropertyService {
     await this.deps.properties.update({ ...existing, status: "DELETED", updatedAt: now });
     for (const asset of await this.deps.assets.listByProperty(organizationId, propertyId)) {
       if (asset.status === "DELETED" || asset.status === "DELETION_PENDING") continue;
-      await this.deps.assets.update({
-        ...asset,
-        status: "DELETION_PENDING",
-        deletionRequestedAt: now,
-        updatedAt: now,
-      });
+      // Deliberately not checked for `null`. Removal's requirement is that the
+      // asset stops being an ordinary active one, and a `null` here means some
+      // other writer already moved it in exactly that direction — a concurrent
+      // deletion request, or one that landed between the list and this call.
+      // Failing property removal over that would refuse the customer's request
+      // because it had already partly come true.
+      await this.deps.assets.requestDeletion(organizationId, asset.id, now);
     }
     await recordAudit(this.deps.identity, {
       organizationId,
