@@ -65,7 +65,7 @@ preflightFailureStateFor(reason: PreflightRefusalReason): PreflightFailureState
 
 where `PreflightFailureState` is exactly `"FAILED_RETRYABLE" | "FAILED_TERMINAL"`.
 
-There is deliberately **no second thirteen-reason table**. `REASON_DISPOSITION`
+There is deliberately **no second per-reason table**. `REASON_DISPOSITION`
 already answers "what may be done about this reason"; re-deciding that per reason
 would create two places where a reason's fate is written down, and the classic
 failure is a `TERMINAL` reason acquiring a `FAILED_RETRYABLE` parking spot in one
@@ -291,7 +291,7 @@ defensible only by a runtime cross-check duplicating the mapping.
 invites persisting its message.
 
 **Persisting a canonical message alongside the code.** Would require adding a
-thirteen-entry message map purely to make persistence safe — new surface for a
+a per-reason message map purely to make persistence safe — new surface for a
 string that adds nothing the reason code does not already carry.
 
 **A prefixed code vocabulary.** Needs its own drift test against the reason list;

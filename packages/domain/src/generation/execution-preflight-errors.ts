@@ -3,10 +3,13 @@ import { AppError } from "@app/shared";
 /**
  * Why a queued generation could not be prepared for submission.
  *
- * A closed vocabulary of thirteen, deliberately separate from the message text.
+ * A closed vocabulary of fourteen, deliberately separate from the message text.
  * Phase 4C-2B maps these to durable states and Phase 4C-3 decides what a worker
  * does next; both need something stable to switch on, and matching on prose is
  * how a refusal quietly changes meaning under a reworded string.
+ *
+ * Thirteen through Phase 4C-2B; `ASSET_SOURCE_UNIDENTIFIABLE` was added by
+ * Phase 4C-3A-2a (ADR-0029).
  *
  * Nothing here describes a provider outcome. Preflight never contacts a
  * provider, so no reason in this list can mean "we may have been charged" —
@@ -36,6 +39,18 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "ASSET_UNRECOVERABLE",
   /** Ready, but not a normalized JPEG source, or its storage key is blank. */
   "ASSET_FORMAT_UNSUPPORTED",
+  /**
+   * Ready and correctly formatted, but the normalized content digest that names
+   * the exact bytes is missing or not the canonical form this pipeline writes.
+   *
+   * A distinct reason from `ASSET_FORMAT_UNSUPPORTED` and `ASSET_UNRECOVERABLE`
+   * on purpose (ADR-0029). It is not a MIME or key defect, and it is not a
+   * content-policy or lifecycle state: it is a `READY` row whose own metadata
+   * cannot identify the source, which is a defect in this pipeline rather than
+   * anything the customer did. Filing it under either neighbour would put a
+   * durable code on the row that sends an operator to the wrong question.
+   */
+  "ASSET_SOURCE_UNIDENTIFIABLE",
   /** The asset changed underneath preparation, after the URL was signed. */
   "ASSET_SOURCE_CHANGED",
   /** The asset row points at a storage key that holds no object. */
@@ -82,6 +97,10 @@ const REASON_DISPOSITION: Record<PreflightRefusalReason, PreflightDisposition> =
   ASSET_UPLOAD_FAILED: "RETRYABLE",
   ASSET_UNRECOVERABLE: "TERMINAL",
   ASSET_FORMAT_UNSUPPORTED: "TERMINAL",
+  // Terminal because nothing brings the digest back. A `READY` asset has no
+  // production route into re-processing (ADR-0029), so the row that lacks a
+  // canonical digest will still lack one on every later attempt.
+  ASSET_SOURCE_UNIDENTIFIABLE: "TERMINAL",
   ASSET_SOURCE_CHANGED: "TERMINAL",
   ASSET_OBJECT_MISSING: "TERMINAL",
   STORAGE_UNAVAILABLE: "RETRYABLE",
@@ -106,7 +125,7 @@ export type PreflightFailureState = "FAILED_RETRYABLE" | "FAILED_TERMINAL";
 /**
  * Disposition to durable state. Two entries, because there are two dispositions.
  *
- * Deliberately **not** a second thirteen-reason table. {@link REASON_DISPOSITION}
+ * Deliberately **not** a second per-reason table. {@link REASON_DISPOSITION}
  * already answers "what may be done about this reason", and re-deciding that per
  * reason here would create two places where a reason's fate is written down —
  * the classic way a `TERMINAL` reason acquires a `FAILED_RETRYABLE` parking spot

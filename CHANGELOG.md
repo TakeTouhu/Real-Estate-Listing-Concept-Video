@@ -3,6 +3,79 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3A-2a: Prepared source identity and fail-closed content hash
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3a2a-completion.md`
+and ADR-0029.
+
+### Added
+
+- **`PreparedSourceIdentity` — `storageKey`, `mimeType`, `sha256`, and nothing
+  else.** A new pure domain module, `generation/execution-source.ts`, owns it.
+  `storageKey` and `mimeType` cannot tell two images apart: `buildAssetStorageKey`
+  is deterministic, so every normalized JPEG for one asset lands on the same key
+  with the same MIME type, and a re-processed source agrees with its predecessor
+  on both. The digest is the field that separates them. The identity carries no
+  signed URL, no expiry, no `assetId`, no `organizationId` and no `requestHash` —
+  the frozen asset id lives on the `SceneGeneration` row, so a future validator
+  reads it authoritatively rather than accepting it from a caller.
+- **`ASSET_SOURCE_UNIDENTIFIABLE`, a fourteenth refusal reason (`TERMINAL`).** A
+  `READY` asset whose normalized digest is missing or not the canonical form this
+  pipeline writes. Deliberately not `ASSET_FORMAT_UNSUPPORTED` (the MIME type and
+  key are fine) and not `ASSET_UNRECOVERABLE` (that code is indistinguishable
+  from quarantined or rejected customer content, and this is a defect in our own
+  pipeline). The single exhaustive reason→disposition `Record` is preserved and
+  the disposition→state `Record` is untouched, so the new reason reaches
+  `FAILED_TERMINAL` by derivation. The retryable set is unchanged at four.
+- **`classifyExecutionSource`, the one canonical source decision.** The
+  exhaustive `Record<MediaAssetStatus, AssetExecutability>` moved into the new
+  module unchanged and is still the only one in the system. Its observation
+  surface is five fields rather than a whole `MediaAsset`, because Phase
+  4C-3A-2b will classify a row returned by a locking `SELECT`.
+- **A test-only regression guard for post-claim byte stability.** A `READY` asset
+  must be refused by both `completeUpload` and `retryUpload`, with no scan, no
+  image processing, no rewrite of the normalized object and no upload credential
+  minted. `AssetService` production code is unchanged.
+
+### Changed
+
+- **Preflight validates the content digest, and does it before touching
+  storage.** A `READY` row with a missing or malformed digest now refuses
+  outright: no `exists` call, no signing call, no second observation, no
+  `PreparedGeneration`. It is a durable source-integrity refusal, and minting a
+  credential for a source that cannot be identified is exactly what it prevents.
+- **The second observation is classified on its own terms, then compared on all
+  three fields.** A row that became deletion-pending, went back into processing
+  or lost its digest during signing refuses with *that* reason rather than being
+  flattened into "changed". Only an independently usable row is compared, and
+  **same key + same MIME + different valid digest** is now `ASSET_SOURCE_CHANGED`
+  — the case the previous two-field check passed straight over.
+- **`PreparedGeneration` carries `sourceIdentity`** from the **first**
+  observation, never rebuilt from the second: that is the source the URL was
+  signed for. `sourceImageUrl` and `sourceUrlExpiresAt` remain separate fields,
+  so a validator can be handed the identity without being handed the credential.
+  The identity is never persisted, logged, audited, or put in an error.
+- **One behaviour change, named.** A second observation that is a valid non-JPEG
+  previously refused as `ASSET_SOURCE_CHANGED` and now refuses as
+  `ASSET_FORMAT_UNSUPPORTED`. Both are `TERMINAL`, so where the row parks is
+  unchanged; only the durable reason is more precise.
+
+### Notes
+
+- **No schema change and no migration.** `sha256` already existed on
+  `MediaAsset`; only who reads it and how strictly changed.
+- **`requestHash` is unchanged** — the same eight facts, and `sha256` is
+  deliberately not a ninth. The two answer different questions: `requestHash`
+  asks which request this is, and folding the digest in would make every
+  re-upload a new billable request. Source identity is execution-time proof, not
+  admission identity.
+- **The digest detects change; it does not prevent it.** Post-claim byte
+  stability comes from the lifecycle and storage-writer inventory recorded in
+  ADR-0029 §6, which is a property of today's code and can be invalidated by a
+  future in-place reprocessing feature.
+- Still production-dormant: no claim change, no lock, no raw SQL, no paid gate,
+  no provider call.
+
 ## [Unreleased] — Phase 4C-3A-1: MediaAsset deletion-intent monotonicity
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3a1-completion.md`

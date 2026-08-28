@@ -1,10 +1,16 @@
 import { AppError } from "@app/shared";
 import type { MediaAssetRepository, ObjectStorage, SignedUrl } from "../property/ports";
-import type { MediaAsset, MediaAssetStatus } from "../property/types";
+import type { MediaAsset } from "../property/types";
 import type { VideoModelCapabilityProvider } from "./capability";
 import { frozenExecutionPromptFrom } from "./execution-input";
 import type { SystemGenerationCandidate } from "./execution-ports";
 import { PreflightRefusalError } from "./execution-preflight-errors";
+import {
+  classifyExecutionSource,
+  sameSourceIdentity,
+  type ExecutionSourceRefusalReason,
+  type PreparedSourceIdentity,
+} from "./execution-source";
 import { computeGenerationRequestHash, generationRequestFactsFrom } from "./request-identity";
 
 /**
@@ -50,6 +56,21 @@ export interface PreparedGeneration {
    * POST, where the answer is still true when it matters (Phase 4C-3).
    */
   readonly sourceUrlExpiresAt: Date;
+  /**
+   * What {@link sourceImageUrl} points at, as the durable row described it at
+   * the moment the URL was signed.
+   *
+   * A **description**, not a credential — deliberately a separate nested field
+   * rather than three loose top-level ones, so it can be handed to a validator
+   * without handing over the URL beside it. Phase 4C-3A-2b passes exactly this
+   * into the locked claim, which re-reads the asset row under a lock and refuses
+   * to spend money unless the locked row still says the same three things.
+   *
+   * Taken from the **first** of preflight's two observations, because that is
+   * the one the URL was minted against. Never persisted, never logged, never in
+   * an error or an audit entry.
+   */
+  readonly sourceIdentity: PreparedSourceIdentity;
 
   readonly prompt: string;
   readonly durationSeconds: number;
@@ -114,85 +135,39 @@ export interface ExecutionPreflightDeps {
 export const PREFLIGHT_SOURCE_URL_TTL_SECONDS = 600;
 
 /**
- * The only source format execution accepts.
+ * Fixed, sanitized text for every reason the canonical classifier can return.
  *
- * The media pipeline normalizes every accepted upload to JPEG, so a `READY`
- * asset that is not one is not the normalized master — it is something else,
- * and submitting it would send the provider an image the customer never had
- * normalized. Thumbnails are excluded for the same reason plus a worse one:
- * `thumbnailKey` is a downscaled derivative, and paying to animate it would be
- * a silent quality substitution.
+ * A `Record` over that closed subset, so a new source refusal cannot be
+ * introduced without a message being written for it. Every string is chosen
+ * here rather than composed: none names a storage key, a digest, an asset id, an
+ * organization id or a signed URL, and the `ASSET_SOURCE_UNIDENTIFIABLE` one is
+ * deliberately vague about *what* was wrong with the digest — the value being
+ * refused describes customer content.
  */
-const NORMALIZED_SOURCE_MIME_TYPE = "image/jpeg";
-
-/** What a source asset's current status means for executing this generation. */
-type AssetExecutability = "READY" | "IN_PROGRESS" | "UPLOAD_FAILED" | "UNRECOVERABLE";
-
-/**
- * The single classification of every source-asset status, and the one place a
- * new status has to be thought about.
- *
- * A `Record<MediaAssetStatus, …>` does not compile with a member missing, so
- * adding a status to the union forces a decision here rather than letting it
- * fall into whichever branch happens to catch it. This is the *only* exhaustive
- * map of these states; nothing restates it, including the tests.
- *
- * The criterion is narrow and deliberately not about how the failure feels:
- *
- * > Can this **same** `MediaAsset` identity become an executable `READY`
- * > normalized source later, without changing the admitted generation's
- * > `assetId`?
- *
- * It says nothing about whether that happens on its own. `PENDING_UPLOAD` may
- * be waiting on a customer's client to finish uploading, and `FAILED` needs a
- * customer to call `AssetService.retryUpload` — both can still reach `READY`
- * under the same id, which is what makes them recoverable. `QUARANTINED` and
- * `REJECTED` cannot: `retryUpload` refuses them, and no other route exists.
- */
-const ASSET_EXECUTABILITY: Record<MediaAssetStatus, AssetExecutability> = {
-  READY: "READY",
-  PENDING_UPLOAD: "IN_PROGRESS",
-  UPLOADED: "IN_PROGRESS",
-  SCANNING: "IN_PROGRESS",
-  PROCESSING: "IN_PROGRESS",
-  FAILED: "UPLOAD_FAILED",
-  QUARANTINED: "UNRECOVERABLE",
-  REJECTED: "UNRECOVERABLE",
-  DELETION_PENDING: "UNRECOVERABLE",
-  DELETED: "UNRECOVERABLE",
+const SOURCE_REFUSAL_MESSAGES: Record<ExecutionSourceRefusalReason, string> = {
+  ASSET_NOT_READY: "The source asset for this generation is still being prepared",
+  ASSET_UPLOAD_FAILED:
+    "The source asset for this generation failed to upload and has not been retried",
+  ASSET_UNRECOVERABLE:
+    "The source asset for this generation cannot become usable under its current identity",
+  ASSET_FORMAT_UNSUPPORTED:
+    "The source asset for this generation is not a usable normalized JPEG source",
+  ASSET_SOURCE_UNIDENTIFIABLE:
+    "The source asset for this generation cannot be identified from its recorded content digest",
 };
 
 /**
- * The classification above, plus the one override that outranks status.
+ * Classify one observation, or refuse with its canonical reason.
  *
- * `deletionRequestedAt` is applied here rather than beside each call site
- * because retention can be requested while the row still reads `READY`, and
- * both asset observations have to agree about that. Submitting a photo whose
- * deletion a customer has already asked for would be worse than refusing.
+ * The classifier is pure and returns a union; preflight's control flow is
+ * exceptions, so this is the single place the two meet. Both observations go
+ * through it, which is what keeps them agreeing.
  */
-function executabilityOf(asset: MediaAsset): AssetExecutability {
-  return asset.deletionRequestedAt === null ? ASSET_EXECUTABILITY[asset.status] : "UNRECOVERABLE";
-}
-
-/** Refuse a non-`READY` observation, using the reason its bucket implies. */
-function refuseNotReady(executability: Exclude<AssetExecutability, "READY">): never {
-  switch (executability) {
-    case "IN_PROGRESS":
-      throw new PreflightRefusalError(
-        "ASSET_NOT_READY",
-        "The source asset for this generation is still being prepared",
-      );
-    case "UPLOAD_FAILED":
-      throw new PreflightRefusalError(
-        "ASSET_UPLOAD_FAILED",
-        "The source asset for this generation failed to upload and has not been retried",
-      );
-    case "UNRECOVERABLE":
-      throw new PreflightRefusalError(
-        "ASSET_UNRECOVERABLE",
-        "The source asset for this generation cannot become usable under its current identity",
-      );
-  }
+function identityOrRefuse(asset: MediaAsset): PreparedSourceIdentity {
+  const classified = classifyExecutionSource(asset);
+  if (classified.kind === "USABLE") return classified.identity;
+  const { reason } = classified;
+  throw new PreflightRefusalError(reason, SOURCE_REFUSAL_MESSAGES[reason]);
 }
 
 /**
@@ -214,17 +189,19 @@ function refuseNotReady(executability: Exclude<AssetExecutability, "READY">): ne
  * 5. read the configured capability **once**;
  * 6. verify provider and model identity;
  * 7. first tenant-scoped asset read;
- * 8. classify it, and require `READY`;
- * 9. require a normalized JPEG and a non-blank storage key;
- * 10. ask storage whether that exact object exists;
- * 11. sign that exact key;
- * 12. validate the signed URL and its expiry;
- * 13. **second** tenant-scoped asset read, and require it to still describe the
- *     source that was signed;
- * 14. return.
+ * 8. classify it — status, deletion intent, JPEG, non-blank key and a canonical
+ *    content digest — and keep the resulting source identity;
+ * 9. ask storage whether that exact object exists;
+ * 10. sign that exact key;
+ * 11. validate the signed URL and its expiry;
+ * 12. **second** tenant-scoped asset read, classified the same way;
+ * 13. require its identity to equal the first in all three fields;
+ * 14. return, carrying the **first** identity.
  *
- * Nothing is signed for an asset already known to be unusable, and nothing is
- * returned for an asset that stopped being usable while it was being signed.
+ * Nothing is signed for an asset already known to be unusable — including one
+ * whose digest cannot identify it — and nothing is returned for an asset that
+ * stopped being usable, or stopped being the same source, while it was being
+ * signed.
  *
  * Two workers may prepare the same row concurrently. That is safe and expected:
  * only one wins the later compare-and-swap, and the loser has spent a signed
@@ -306,20 +283,16 @@ export async function prepareQueuedGeneration(
     );
   }
 
-  const firstExecutability = executabilityOf(first);
-  if (firstExecutability !== "READY") refuseNotReady(firstExecutability);
-
-  // Ready is not the same as usable. The normalized master is a JPEG at a
-  // non-blank key; anything else is either not the normalized source or not
-  // addressable, and both would be discovered by the provider after the money
-  // was spent.
-  const storageKey = first.storageKey.trim();
-  if (first.mimeType !== NORMALIZED_SOURCE_MIME_TYPE || storageKey.length === 0) {
-    throw new PreflightRefusalError(
-      "ASSET_FORMAT_UNSUPPORTED",
-      "The source asset for this generation is not a usable normalized JPEG source",
-    );
-  }
+  // Status, deletion intent, format and digest usability, all in one canonical
+  // decision — and all of it **before** storage is touched. A `READY` row whose
+  // digest is missing or malformed is a durable source-integrity refusal, not a
+  // storage problem, so it must not cause an existence check or mint a
+  // credential on the way to being refused.
+  //
+  // The identity this returns belongs to the *first* observation, and is the one
+  // that will be returned to the caller: it names the exact source the URL below
+  // is signed for.
+  const identity = identityOrRefuse(first);
 
   // Existence is asked of storage rather than inferred from the row. A `READY`
   // asset whose object is gone is exactly the case that would otherwise be
@@ -354,15 +327,21 @@ export async function prepareQueuedGeneration(
     );
   }
 
-  const secondExecutability = executabilityOf(second);
-  if (secondExecutability !== "READY") refuseNotReady(secondExecutability);
+  // The same canonical classification, so a row that became deletion-pending,
+  // went back into processing, or lost its digest during signing is refused with
+  // that reason rather than being flattened into "changed". Only a row that is
+  // independently usable gets as far as being compared.
+  const secondIdentity = identityOrRefuse(second);
 
-  // Still ready, but is it still the *same* source? A key or MIME change means
-  // the bytes behind the admitted asset id were replaced while this ran, and
-  // the URL just signed points at whatever the old key held. Terminal rather
-  // than retryable: the admitted request named a source that no longer exists
-  // in the form it was approved in.
-  if (second.storageKey !== first.storageKey || second.mimeType !== first.mimeType) {
+  // Still usable, but is it still the *same* source? All three fields, and the
+  // third is the one that matters: `buildAssetStorageKey` is deterministic, so a
+  // re-processed normalized JPEG for this asset reuses the same key with the
+  // same MIME and different bytes. Key and MIME equality alone would pass over
+  // exactly that, and the URL just signed points at whatever now sits there.
+  //
+  // Terminal rather than retryable: the admitted request named a source that no
+  // longer exists in the form it was approved in.
+  if (!sameSourceIdentity(identity, secondIdentity)) {
     throw new PreflightRefusalError(
       "ASSET_SOURCE_CHANGED",
       "The source asset changed while this generation was being prepared",
@@ -383,6 +362,12 @@ export async function prepareQueuedGeneration(
     providerModelId: generation.providerModelId,
     sourceImageUrl: signed.url,
     sourceUrlExpiresAt: signed.expiresAt,
+    // The **first** observation's identity, deliberately not rebuilt from the
+    // second. The equality check above proved the two agree, so both carry the
+    // same values — but the one that belongs here is the one the URL was minted
+    // against, and returning the later object would make that a coincidence
+    // rather than the contract.
+    sourceIdentity: identity,
     prompt,
     durationSeconds: facts.durationSeconds,
     aspectRatio: facts.aspectRatio,

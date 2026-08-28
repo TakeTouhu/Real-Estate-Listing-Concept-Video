@@ -27,6 +27,14 @@ const ASSET = "ast_pf";
 const KEY = "org_pf/assets/ast_pf/normalized.jpg";
 const OTHER_KEY = "org_pf/assets/ast_pf/normalized-v2.jpg";
 const SIGNED_URL = `https://storage.example.test/${KEY}?sig=secret-token`;
+/**
+ * Canonical digests: 64 lowercase hex, the exact shape `sha256Hex` emits.
+ *
+ * Two of them, because the case this milestone exists for is two *valid*
+ * digests that differ — same key, same MIME, different bytes.
+ */
+const DIGEST_A = "a".repeat(64);
+const DIGEST_B = `b${"a".repeat(63)}`;
 const EXPIRES_AT = new Date(Date.UTC(2026, 0, 1, 0, 10, 0));
 
 /** The narrowed capabilities preflight actually declares. */
@@ -111,7 +119,7 @@ function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
     sizeBytes: 2048,
     width: 1920,
     height: 1080,
-    sha256: "abc",
+    sha256: DIGEST_A,
     perceptualHash: null,
     status: "READY",
     failureReason: null,
@@ -222,6 +230,7 @@ describe("prepareQueuedGeneration — the prepared artifact", () => {
       aspectRatio: "16:9",
       resolution: "1080p",
       requestHash: gen.requestHash,
+      sourceIdentity: { storageKey: KEY, mimeType: "image/jpeg", sha256: DIGEST_A },
     } satisfies PreparedGeneration);
   });
 
@@ -362,6 +371,107 @@ describe("the normalized source format", () => {
   });
 });
 
+describe("the source content digest", () => {
+  it.each<[string, string | null]>([
+    ["missing", null],
+    ["empty", ""],
+    ["one character short", "a".repeat(63)],
+    ["one character long", "a".repeat(65)],
+    ["uppercase", "A".repeat(64)],
+    ["prefixed like a requestHash", `sha256:${"a".repeat(64)}`],
+    ["not hexadecimal", "z".repeat(64)],
+  ])(
+    "refuses a READY source whose digest is %s, before touching storage",
+    async (_label, sha256) => {
+      // A durable source-integrity refusal, not a storage one. The pipeline
+      // writes this column in the same statement that sets READY, so a READY
+      // row without a canonical digest is one this system should never have
+      // produced — and nothing about it becomes clearer by asking storage.
+      //
+      // Above all, no credential is minted for a source that cannot be
+      // identified: the signed URL would name bytes nothing can later prove are
+      // the ones preparation saw.
+      const f = fixture([asset({ sha256 })]);
+
+      const refusal = await refusalFrom(f, candidateFor(generation()));
+
+      expect(refusal.reason).toBe("ASSET_SOURCE_UNIDENTIFIABLE");
+      expect(refusal.disposition).toBe("TERMINAL");
+      expect(f.storage.existsCalls).toHaveLength(0);
+      expect(f.storage.signed).toHaveLength(0);
+      // One read, and no second observation: the refusal is decided outright.
+      expect(f.assets.reads).toHaveLength(1);
+    },
+  );
+
+  it("returns the first observation's identity, field for field", async () => {
+    const f = fixture();
+
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(prepared.sourceIdentity).toEqual({
+      storageKey: KEY,
+      mimeType: "image/jpeg",
+      sha256: DIGEST_A,
+    });
+    // The identity names the key that was actually signed. If those two ever
+    // disagreed, the caller would hold a credential for one source and a
+    // description of another.
+    expect(f.storage.signed).toEqual([{ key: prepared.sourceIdentity.storageKey, ttl: 600 }]);
+  });
+
+  it("carries the identity beside the credential, never inside it", async () => {
+    const f = fixture();
+
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(generation()));
+
+    expect(Object.keys(prepared.sourceIdentity).sort()).toEqual([
+      "mimeType",
+      "sha256",
+      "storageKey",
+    ]);
+    // Still separate fields on the artifact, so a validator can be handed the
+    // identity without being handed the URL.
+    expect(prepared.sourceImageUrl).toBe(SIGNED_URL);
+    expect(prepared.sourceUrlExpiresAt).toBe(EXPIRES_AT);
+  });
+
+  it("refuses when the digest changes under an unchanged key and MIME type", async () => {
+    // **The case this milestone exists for.** `buildAssetStorageKey` is
+    // deterministic in (organization, property, asset, variant, extension), so a
+    // re-processed normalized JPEG for this asset lands on the *same* key with
+    // the *same* MIME type and different bytes. Key and MIME equality — the
+    // whole check before this milestone — passes straight over it, and the URL
+    // already signed now points at the replacement.
+    const f = fixture([asset({ sha256: DIGEST_A }), asset({ sha256: DIGEST_B })]);
+
+    const refusal = await refusalFrom(f, candidateFor(generation()));
+
+    expect(refusal.reason).toBe("ASSET_SOURCE_CHANGED");
+    expect(refusal.disposition).toBe("TERMINAL");
+    // Both observations were valid sources on their own; what differs is which
+    // bytes they name.
+    expect(f.assets.reads).toHaveLength(2);
+    expect(f.storage.signed).toEqual([{ key: KEY, ttl: 600 }]);
+  });
+
+  it.each<[string, string | null]>([
+    ["loses its digest", null],
+    ["acquires a malformed digest", "not-a-digest"],
+  ])("refuses when the asset %s after signing", async (_label, sha256) => {
+    // Classified on its own terms rather than flattened into "changed": the
+    // second row is not a different identifiable source, it is one that cannot
+    // be identified at all.
+    const f = fixture([asset(), asset({ sha256 })]);
+
+    const refusal = await refusalFrom(f, candidateFor(generation()));
+
+    expect(refusal.reason).toBe("ASSET_SOURCE_UNIDENTIFIABLE");
+    expect(refusal.disposition).toBe("TERMINAL");
+    expect(f.storage.signed).toEqual([{ key: KEY, ttl: 600 }]);
+  });
+});
+
 describe("refusals before signing", () => {
   it("refuses a row admitted before the request snapshot existed", async () => {
     const f = fixture();
@@ -496,7 +606,12 @@ describe("the asset can change while the URL is being signed", () => {
     ["goes back to processing", asset({ status: "PROCESSING" }), "ASSET_NOT_READY", "RETRYABLE"],
     ["fails", asset({ status: "FAILED" }), "ASSET_UPLOAD_FAILED", "RETRYABLE"],
     ["is repointed at another key", asset({ storageKey: OTHER_KEY }), "ASSET_SOURCE_CHANGED", "TERMINAL"],
-    ["changes format", asset({ mimeType: "image/png" }), "ASSET_SOURCE_CHANGED", "TERMINAL"],
+    // Not ASSET_SOURCE_CHANGED any more, and deliberately so (ADR-0029). The
+    // second observation is now classified on its own terms first, and a PNG is
+    // independently unusable — it is not a different *usable* source, it is not
+    // a submittable source at all. Both refusals are TERMINAL, so where the row
+    // parks is unchanged; only the durable reason is more precise.
+    ["changes format", asset({ mimeType: "image/png" }), "ASSET_FORMAT_UNSUPPORTED", "TERMINAL"],
   ])("refuses when the asset %s after signing", async (_label, second, reason, disposition) => {
     const f = fixture([asset(), second]);
 
@@ -558,6 +673,7 @@ describe("the refusal contract", () => {
       "ASSET_NOT_FOUND",
       "ASSET_UNRECOVERABLE",
       "ASSET_FORMAT_UNSUPPORTED",
+      "ASSET_SOURCE_UNIDENTIFIABLE",
       "ASSET_SOURCE_CHANGED",
       "ASSET_OBJECT_MISSING",
     ];
@@ -567,9 +683,9 @@ describe("the refusal contract", () => {
     expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
   });
 
-  it("has exactly thirteen reasons", () => {
-    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(13);
-    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(13);
+  it("has exactly fourteen reasons", () => {
+    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(14);
+    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(14);
   });
 
   it("derives disposition from the reason rather than accepting one", () => {

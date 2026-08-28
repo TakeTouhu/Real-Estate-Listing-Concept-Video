@@ -382,9 +382,11 @@ describe.skipIf(!HAS_DB)("failQueuedPreflight against PostgreSQL", () => {
   it.each(PREFLIGHT_REFUSAL_REASONS)(
     "parks %s in the state the domain derives for it",
     async (reason) => {
-      // All thirteen against the real database, not just one of each kind. The
-      // adapter derives the target internally, so this is the only place the
-      // full reason-to-column mapping is observable end to end.
+      // Every reason against the real database, not just one of each kind, and
+      // driven by the vocabulary itself — so Phase 4C-3A-2a's fourteenth reason
+      // is covered here without a case being added for it. The adapter derives
+      // the target internally, so this is the only place the full
+      // reason-to-column mapping is observable end to end.
       await seedGeneration("gen_ex_all", "QUEUED", PROJECT_A);
 
       const failed = await execution.failQueuedPreflight("gen_ex_all", reason);

@@ -266,6 +266,24 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       tenant-scoped and unreachable through any signed URL — but do not assume
       the retention worker covers it, and do not close this by making inline
       cleanup unconditional again.
+- [ ] **A future in-place reprocessing feature invalidates the A-2 byte-stability proof.**
+      ADR-0029 §6 proves that a `READY` asset's normalized object cannot be
+      rewritten or removed by any currently implemented production path: the
+      object is written by one statement inside `completeUpload`, both entry
+      points accept only `PENDING_UPLOAD` and `FAILED`, the only exits from
+      `READY` are `REJECTED` and `DELETION_PENDING`, upload credentials target
+      the `original` variant, and the sole `deleteObject` caller is unreachable
+      from `READY`. That is a statement about **today's code**, not a schema
+      theorem, and only the two entry guards are pinned by a test.
+      Any future feature that, for the **same** `MediaAsset` identity, permits
+      `READY -> upload/retry/reprocess`, replaces normalized content in place,
+      overwrites the deterministic normalized key, or physically deletes source
+      content while a generation may still need it **must re-review paid
+      submission safety before shipping**. Possible remedies at that point:
+      versioned or content-addressed normalized keys, stronger retention
+      ownership, or an explicit source lease. Do not implement any of them
+      speculatively — the digest detects a changed source, it does not prevent
+      one.
 - [ ] **Phase 4C-3A-2 source identity must include `sha256`.**
       `buildAssetStorageKey` is deterministic from organization, property, asset,
       variant and extension, so a re-processed normalized JPEG for the **same**
