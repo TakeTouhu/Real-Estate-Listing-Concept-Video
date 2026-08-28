@@ -9,6 +9,7 @@ import {
 } from "../testing/in-memory-property";
 import { PropertyService } from "./property-service";
 import { AssetService } from "./asset-service";
+import { buildAssetStorageKey } from "./media";
 import type { ImageProcessor, MalwareScanner, ObjectStorage, ProcessedImage } from "./ports";
 import type { ScanVerdict } from "./ports";
 
@@ -41,7 +42,12 @@ class FakeStorage implements ObjectStorage {
   getObject(key: string) {
     return Promise.resolve(this.objects.get(key) ?? null);
   }
+  /** Keys this fake was asked to delete, and an optional injected failure. */
+  readonly deleted: string[] = [];
+  failDeleteFor?: (key: string) => boolean;
   deleteObject(key: string) {
+    this.deleted.push(key);
+    if (this.failDeleteFor?.(key)) return Promise.reject(new Error(`storage down for ${key}`));
     this.objects.delete(key);
     return Promise.resolve();
   }
@@ -655,23 +661,138 @@ describe("deletion-intent monotonicity", () => {
     expect(ctx.storage.signed.length).toBe(signedBefore);
   });
 
-  it("converges on a repeated deletion request without a duplicate audit", async () => {
+  it("audits every successful deletion request, including a convergent one", async () => {
+    // `AssetDeletionRequested` records a successful *invocation*, not the first
+    // durable transition. Two API calls means two people asked, and the log
+    // says so. An earlier revision suppressed the second entry, which is what
+    // made a missing audit unrepairable.
     const asset = await pendingAsset();
     const first = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
-    const auditsAfterFirst = deletionAudits(ctx);
+    expect(deletionAudits(ctx)).toBe(1);
 
     const second = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
 
     expect(second.status).toBe("DELETION_PENDING");
-    // Same durable request, not a second one: the timestamp is the winner's.
+    // One durable request — the timestamp is still the winner's — but two
+    // audited invocations.
     expect(second.deletionRequestedAt).toEqual(first.deletionRequestedAt);
-    expect(deletionAudits(ctx)).toBe(auditsAfterFirst);
+    expect(deletionAudits(ctx)).toBe(2);
+  });
+
+  it("fails the call when its audit write fails, and lets a retry repair it", async () => {
+    // The gap review found. The CAS commits, the audit throws, and the call
+    // fails — leaving deletion intent durable and unrecorded. What matters is
+    // that the *next* call can still write the missing entry.
+    const asset = await pendingAsset();
+    const audits = ctx.deps.repos.auditLogs;
+    const realAppend = audits.append.bind(audits);
+    audits.append = () => Promise.reject(new Error("audit unavailable"));
+
+    await expect(
+      ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toThrow(/audit unavailable/);
+
+    // Durable and unaudited: the honest intermediate state, not rolled back.
+    const afterFailure = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+    expect(afterFailure.status).toBe("DELETION_PENDING");
+    expect(afterFailure.deletionRequestedAt).not.toBeNull();
+    audits.append = realAppend;
+    expect(deletionAudits(ctx)).toBe(0);
+
+    // The retry converges on the existing intent and writes the entry that was
+    // missing. Under the old suppression branch this returned success and left
+    // the count at zero forever.
+    const repaired = await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+
+    expect(repaired.status).toBe("DELETION_PENDING");
+    expect(repaired.deletionRequestedAt).toEqual(afterFailure.deletionRequestedAt);
+    expect(deletionAudits(ctx)).toBe(1);
   });
 
   it("still reports a missing asset as NOT_FOUND", async () => {
     await expect(
       ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, "ast_missing"),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("deletes the derivatives it wrote when the final READY write loses", async () => {
+    // The compensation. Both objects are already in storage when the guarded
+    // write loses, and the durable row names neither — so nothing that walks
+    // asset rows could ever find them.
+    const asset = await pendingAsset();
+    ctx.images.onProcess = async () => {
+      await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    };
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const derivatives = [...ctx.storage.objects.keys()].filter(
+      (k) => k.includes("normalized") || k.includes("thumbnail"),
+    );
+    expect(derivatives).toEqual([]);
+    expect((await ctx.assetRepo.findById(ctx.orgId, asset.id))?.status).toBe("DELETION_PENDING");
+    // And no success audit for work that did not succeed.
+    expect(auditActions(ctx)).not.toContain("asset.upload_completed");
+  });
+
+  it("never deletes a derivative the durable row now references", async () => {
+    // Future-proofing, and the reason cleanup re-reads rather than deleting
+    // blindly. If another winner has taken ownership of these exact keys —
+    // `buildAssetStorageKey` is deterministic, so a concurrent re-process of
+    // the same asset produces the same normalized key — removing them would
+    // turn a lost race into data loss.
+    const asset = await pendingAsset();
+    let normalizedKey = "";
+    ctx.images.onProcess = async () => {
+      // Drive the row to a READY state that owns the keys this operation is
+      // about to write, then lose the race for it.
+      const inFlight = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+      // The real key builder, so the row references exactly what the service is
+      // about to write — the whole point of the guard.
+      normalizedKey = buildAssetStorageKey({
+        organizationId: ctx.orgId,
+        propertyId: inFlight.propertyId,
+        assetId: asset.id,
+        variant: "normalized",
+        extension: "jpg",
+      });
+      await ctx.assetRepo.updateIfCurrent(
+        { ...inFlight, status: "READY", storageKey: normalizedKey, thumbnailKey: null },
+        inFlight.status,
+      );
+    };
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    // The referenced key survives; this invocation still lost ownership.
+    expect(ctx.storage.objects.has(normalizedKey)).toBe(true);
+    expect((await ctx.assetRepo.findById(ctx.orgId, asset.id))?.storageKey).toBe(normalizedKey);
+  });
+
+  it("surfaces a sanitized failure when cleanup cannot complete", async () => {
+    const asset = await pendingAsset();
+    ctx.images.onProcess = async () => {
+      await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
+    };
+    ctx.storage.failDeleteFor = (key) => key.includes("normalized");
+
+    const error = await ctx.assets
+      .completeUpload(ctx.ownerId, ctx.orgId, asset.id)
+      .then(() => null)
+      .catch((e: unknown) => e as { code: string; message: string; details?: unknown });
+
+    expect(error!.code).toBe("INTERNAL_ERROR");
+    // Both keys attempted even though the first threw, so one storage error
+    // cannot strand the other object.
+    expect(ctx.storage.deleted.filter((k) => k.includes("thumbnail"))).toHaveLength(1);
+    // No storage key reaches the customer.
+    expect(JSON.stringify(error)).not.toContain(asset.id);
+    expect(error!.message).not.toContain("normalized");
+    expect((await ctx.assetRepo.findById(ctx.orgId, asset.id))?.deletionRequestedAt).not.toBeNull();
   });
 
   it("removes a property even when one asset is already deletion-pending", async () => {
@@ -704,4 +825,9 @@ function deletionAudits(ctx: Ctx): number {
   return ctx.deps.repos.auditLogs
     .all()
     .filter((entry) => entry.action === "asset.deletion_requested").length;
+}
+
+/** All audit actions recorded so far. */
+function auditActions(ctx: Ctx): string[] {
+  return ctx.deps.repos.auditLogs.all().map((entry) => entry.action);
 }

@@ -24,7 +24,7 @@ submission against deletion — the correction that produced this milestone.
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1254 passed**, 61 files (baseline 1247 / 61) |
+| `pnpm test` | **1258 passed**, 61 files (baseline 1247 / 61) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **197 passed**, 9 files (baseline 184 / 8) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
@@ -47,7 +47,7 @@ re-read, no raw SQL, no nested transaction.
 
 ## Where each property is proven
 
-13 new PostgreSQL tests and 7 new service tests. The PostgreSQL ones interleave
+13 new PostgreSQL tests and 11 new service tests. The PostgreSQL ones interleave
 **real** competing writes; the service ones interleave a **real** deletion
 request against a real in-flight `completeUpload`, rather than stubbing a
 repository to return `null`.
@@ -66,7 +66,11 @@ repository to return `null`.
 | Lifecycle stops early | Deletion first → `completeUpload` throws with **0 scans and 0 image processes** |
 | Lifecycle stops late | Deletion injected *during* image processing → throws, row stays `DELETION_PENDING`, never `READY` |
 | No credential for a doomed asset | `retryUpload` mints no signed URL after losing the guard |
-| Deletion is idempotent | Second request returns the same durable timestamp and emits **no second audit entry** |
+| Deletion converges and still audits | Second request returns the same durable timestamp and records a **second** entry — one per successful invocation |
+| A missing audit is repairable | First call's audit throws → call fails, intent durable and unaudited; retry converges and writes the entry |
+| Lost final write compensates | Deletion wins during processing → both derivatives gone from storage, no `asset.upload_completed` audit |
+| Referenced keys are protected | Authoritative re-read shows a `READY` row owning the normalized key → that object survives, invocation still fails |
+| Cleanup failure is surfaced | One delete throws → both keys attempted, sanitized `INTERNAL_ERROR`, no key in the error |
 | Removal converges | Property removal succeeds with one asset already deletion-pending; both end with intent recorded |
 | Review rolls back | Deletion wins, rejection throws inside `ReviewTransaction`, analysis stays `UNREVIEWED` — proven in-memory **and** against PostgreSQL |
 
@@ -81,6 +85,9 @@ repository to return `null`.
 | **M5** — `deletionRequestedAt IS NULL` dropped from `requestDeletion` | **1 DB fail** |
 | **M6** — `PropertyService.remove` back to ordinary update for deletion | **1 unit fail** |
 | **M7** — `AnalysisService.reject` ignores a `null` guarded result | **1 unit fail** |
+| **M8** — audit suppression restored on convergence | **2 unit fail** |
+| **M9** — post-`READY`-CAS derivative cleanup removed | **2 unit fail** |
+| **M10** — referenced-key protection removed from cleanup | **1 unit fail** |
 
 Every mutated file restored byte-identically, confirmed by `diff`. No
 mutation-only code is committed.
@@ -121,11 +128,16 @@ WaveSpeedAI call · no paid gate · no orchestrator · no worker loop · no A-2 
 
 - **Callers must now handle `null`.** That is the intended cost; the previous
   signature made the failure invisible.
-- **Derivative storage objects can be orphaned.** `completeUpload` writes the
-  normalized image and thumbnail before its final guarded write, so a deletion
-  landing in between leaves unreferenced objects. Tenant-scoped, unreachable
-  through any signed URL, and deliberately not addressed here rather than
-  expanding into storage-lifecycle redesign. Recorded in `docs/decisions/TODO.md`.
+- **Deletion and its audit are not atomic.** They share no transaction and the
+  mutation commits first, so a durable deletion can briefly exist unaudited. The
+  guarantee is only that **no invocation returns success unless its own audit
+  write succeeded**, and that a later retry can write the missing entry. No
+  outbox, no uniqueness migration, no idempotency key.
+- **A failed derivative cleanup still leaves an orphan.** The losing final write
+  now deletes what it created, but if a required delete throws, the object
+  remains — and since the asset row does not name it, row-walking retention
+  cannot find it. Recovery needs storage-prefix reconciliation. Recorded in
+  `docs/decisions/TODO.md`.
 - **Expected-status is not a version counter.** It discriminates only when the
   winner changes the status; two same-status → same-status writers are not
   ordered by it, and no test claims otherwise.

@@ -35,9 +35,27 @@ and ADR-0028.
   `VALIDATION_FAILED` on a lost guard rather than continuing to scan, process,
   write storage or mint an upload URL for an asset it no longer controls.
   `retryUpload` is guarded before the URL is minted.
-- **Direct deletion converges idempotently.** A lost CAS re-reads once; if intent
-  is now established the call returns the current row and emits **no second
-  audit entry**, because one decision must not be recorded as two.
+- **Direct deletion converges, and every successful invocation audits.** A lost
+  CAS re-reads once; if intent is now established the call records
+  `AssetDeletionRequested` **for that invocation** and returns only after the
+  audit write succeeds. The event audits a successful request invocation, not
+  the first durable transition — two API calls legitimately produce two entries.
+  An earlier revision suppressed the convergent entry, which made a missing
+  audit unrepairable: the mutation commits before the audit and they share no
+  transaction, so a first call whose audit failed left a durable deletion with
+  no record and every retry refused to write one. The guarantee is now **no
+  invocation returns success unless its own audit write succeeded** — not that
+  every durable deletion has a row. No outbox, no uniqueness migration, no
+  idempotency key.
+- **A lost final `READY` write compensates the derivatives it created.**
+  `completeUpload` writes the normalized image and thumbnail before that guarded
+  write; when it loses, the durable row names neither, so nothing walking asset
+  rows could find them. The losing path now deletes them — skipping any key the
+  authoritative re-read shows the row now references, because removing a
+  referenced object would turn a lost race into data loss. Both keys are
+  attempted even if one throws, and a failed delete raises a sanitized
+  `INTERNAL_ERROR` rather than a claim that cleanup succeeded. A cleanup failure
+  still leaves an object that row-walking retention cannot discover.
 - **`PropertyService.remove` uses the dedicated deletion method** and treats
   `null` as convergent — another writer already moved the asset the way removal
   wanted.

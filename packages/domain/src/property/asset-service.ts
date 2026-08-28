@@ -263,25 +263,39 @@ export class AssetService {
     // a snapshot taken before any of it. Without the predicate, a deletion
     // committed during that stretch would be erased and the asset resurrected
     // as `READY` under a fresh key.
-    const ready = this.mustOwnLifecycle(
-      await this.deps.assets.updateIfCurrent(
-        {
-          ...current,
-          storageKey: normalizedKey,
-          thumbnailKey,
-          mimeType: processed.normalizedMimeType,
-          sizeBytes: processed.normalized.byteLength,
-          width: processed.width,
-          height: processed.height,
-          sha256,
-          perceptualHash: processed.perceptualHash,
-          status: "READY",
-          failureReason: null,
-          updatedAt: this.deps.clock.now(),
-        },
-        "PROCESSING",
-      ),
+    const readyOrLost = await this.deps.assets.updateIfCurrent(
+      {
+        ...current,
+        storageKey: normalizedKey,
+        thumbnailKey,
+        mimeType: processed.normalizedMimeType,
+        sizeBytes: processed.normalized.byteLength,
+        width: processed.width,
+        height: processed.height,
+        sha256,
+        perceptualHash: processed.perceptualHash,
+        status: "READY",
+        failureReason: null,
+        updatedAt: this.deps.clock.now(),
+      },
+      "PROCESSING",
     );
+    if (readyOrLost === null) {
+      // The two derivatives are already in storage, and the write that would
+      // have named them is the one that just lost. Nothing in the durable row
+      // points at them, so a retention worker walking asset rows could never
+      // find them — they would be unreferenced *and* unreachable, and they are
+      // derivatives of an asset someone has asked to delete.
+      await this.discardUnreferencedDerivatives(organizationId, assetId, [
+        normalizedKey,
+        thumbnailKey,
+      ]);
+      // Only then the ordinary lost-lifecycle refusal. Compensating first means
+      // the caller's error still describes what happened to *them*, while the
+      // storage this operation created does not outlive it.
+      this.lostLifecycle();
+    }
+    const ready = readyOrLost;
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -399,9 +413,20 @@ export class AssetService {
       // non-winning worlds this is.
       const current = await this.requireAsset(organizationId, assetId);
       if (current.status === "DELETION_PENDING" || current.deletionRequestedAt !== null) {
-        // Converged. Deliberately **no second audit entry** — the deletion was
-        // requested once, and a duplicate would misrepresent one decision as
-        // two in the record that exists to reconstruct decisions.
+        // Converged — and this invocation still audits.
+        //
+        // An earlier revision suppressed the entry here, reasoning that one
+        // decision must not be recorded twice. That was wrong in a way review
+        // caught: the rule cannot tell "already audited" from "never audited",
+        // so a first call whose CAS committed and whose audit then failed left
+        // a durable deletion with no record, and every retry silently refused
+        // to write one. The gap became unrepairable.
+        //
+        // `AssetDeletionRequested` is therefore an audit of a **successful
+        // request invocation**, not of the first durable state transition. Two
+        // API calls legitimately produce two entries: two people asked. That is
+        // not duplication — it is what happened.
+        await this.recordDeletionRequested(actorUserId, organizationId, assetId);
         return current;
       }
       // The predicate refused, yet the row is an ordinary non-deleting asset.
@@ -413,6 +438,33 @@ export class AssetService {
         "Asset deletion request did not converge to a deletion-pending state",
       );
     }
+    await this.recordDeletionRequested(actorUserId, organizationId, assetId);
+    return updated;
+  }
+
+  /**
+   * Audit one deletion-request invocation, before it may report success.
+   *
+   * Both paths that return success go through here, and both `await` it: the
+   * guarantee this milestone can honestly make is **"no
+   * `requestDeletion` invocation returns success unless its own audit write
+   * succeeded"**, and nothing stronger.
+   *
+   * It is deliberately *not* "every durable deletion has an audit row". The
+   * mutation commits before this runs and they share no transaction, so an
+   * audit failure leaves deletion intent durable and unrecorded — and the call
+   * fails, which is the point. The intent is not rolled back, because it is
+   * true: the deletion *was* requested. What a later retry gets is the chance
+   * to converge on that intent and write the entry that is missing.
+   *
+   * No outbox, no audit uniqueness constraint, no idempotency key. Repairability
+   * comes from the retry path, not from infrastructure.
+   */
+  private async recordDeletionRequested(
+    actorUserId: string,
+    organizationId: string,
+    assetId: string,
+  ): Promise<void> {
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -420,7 +472,6 @@ export class AssetService {
       resourceType: "media_asset",
       resourceId: assetId,
     });
-    return updated;
   }
 
   /** Count assets occupying a per-property slot (used by the UI and limits). */
@@ -463,13 +514,73 @@ export class AssetService {
    * saying would leak another actor's action.
    */
   private mustOwnLifecycle(updated: MediaAsset | null): MediaAsset {
-    if (updated === null) {
+    if (updated === null) this.lostLifecycle();
+    return updated;
+  }
+
+  /** The refusal itself, callable where a `MediaAsset` is not the return type. */
+  private lostLifecycle(): never {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "This asset changed or deletion was requested while the operation was in progress",
+    );
+  }
+
+  /**
+   * Remove derivatives this operation wrote, once its final write has lost.
+   *
+   * Scoped deliberately narrowly: only the post-storage, final-`READY` losing
+   * path calls this. Earlier lifecycle losses happen before anything is
+   * written, and a successful transition owns what it wrote.
+   *
+   * **A key the durable row now points at is never deleted.** One authoritative
+   * re-read decides that. With today's writer inventory another winner
+   * referencing these exact keys is unlikely — `buildAssetStorageKey` is
+   * deterministic, so a concurrent re-processing of the same asset would
+   * produce the same normalized key — but "unlikely" is the wrong basis for a
+   * delete. Deleting a referenced object would turn a lost race into data loss,
+   * which is far worse than the orphan it was trying to avoid.
+   *
+   * Finding the row referenced is **not** success for this invocation: it lost
+   * ownership either way, and the caller still gets the lost-lifecycle refusal.
+   *
+   * Both keys are attempted even if the first fails, so one storage error
+   * cannot strand the other object.
+   */
+  private async discardUnreferencedDerivatives(
+    organizationId: string,
+    assetId: string,
+    keys: readonly string[],
+  ): Promise<void> {
+    const current = await this.deps.assets.findById(organizationId, assetId);
+    const referenced = new Set(
+      current === null ? [] : [current.storageKey, current.thumbnailKey].filter((k) => k !== null),
+    );
+
+    let failed = false;
+    for (const key of keys) {
+      if (referenced.has(key)) continue;
+      try {
+        await this.deps.storage.deleteObject(key);
+      } catch {
+        // Swallowed only so the remaining key is still attempted; the failure
+        // is not swallowed as an outcome — it is reported below. The caught
+        // value is dropped rather than wrapped: a storage error can carry a
+        // key or a credential, and this one reaches a customer.
+        failed = true;
+      }
+    }
+
+    if (failed) {
+      // Not reported as the ordinary lost-lifecycle refusal, because something
+      // beyond a lost race went wrong and the residue is real: an unreferenced
+      // object that the asset row does not name, so no row-walking cleanup can
+      // ever discover it. Recovering it needs storage-side reconciliation.
       throw new AppError(
-        "VALIDATION_FAILED",
-        "This asset changed or deletion was requested while the operation was in progress",
+        "INTERNAL_ERROR",
+        "Processed image derivatives could not be cleaned up after the asset changed",
       );
     }
-    return updated;
   }
 
   private async requireAsset(organizationId: string, assetId: string): Promise<MediaAsset> {

@@ -244,14 +244,22 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       `SceneGeneration` — `assetId` is deliberately un-foreign-keyed — so the
       worker must check generation state explicitly; the database will not stop
       it. **Required before any physical deletion ships.**
-- [ ] **Derivative objects written before a lost `READY` write are unreferenced.**
-      `completeUpload` writes the normalized image and thumbnail to storage
-      before its final guarded database write. If deletion wins in between, those
-      objects exist with no row pointing at them. This is storage housekeeping,
-      not a correctness or security defect — the objects are tenant-scoped,
-      unreferenced and unreachable through any signed URL — and Phase 4C-3A-1
-      deliberately did not add cleanup logic for it rather than expand into
-      storage-lifecycle redesign. Fold into the future retention worker.
+- [ ] **A failed derivative cleanup still needs storage-side reconciliation.**
+      **Mostly closed in Phase 4C-3A-1** (ADR-0028 §8): when the final
+      `PROCESSING -> READY` write loses, `completeUpload` now deletes the
+      normalized image and thumbnail it wrote, skipping any key the
+      authoritative row now references, and raises a sanitized `INTERNAL_ERROR`
+      if a required delete fails.
+      What remains is that failure case. The object is unreferenced **and the
+      asset row does not name it** — the write that would have named it is the
+      one that lost — so **row-walking retention cannot discover it**, and an
+      earlier version of this entry was wrong to say the future retention worker
+      would find it. Recovery requires storage-side reconciliation: a
+      deterministic asset-prefix enumeration (`buildAssetStorageKey` makes the
+      candidate keys derivable from the row even though the row does not carry
+      them), or another durable cleanup mechanism. Not urgent — the objects are
+      tenant-scoped and unreachable through any signed URL — but do not assume
+      the retention worker covers it.
 - [ ] **Phase 4C-3A-2 source identity must include `sha256`.**
       `buildAssetStorageKey` is deterministic from organization, property, asset,
       variant and extension, so a re-processed normalized JPEG for the **same**
