@@ -5,6 +5,7 @@ export * from "./execution-input";
 export * from "./ports";
 export * from "./execution-ports";
 export * from "./execution-preflight-errors";
+export * from "./execution-source";
 export * from "./execution-preflight";
 export * from "./capability";
 export * from "./prompt-render";
