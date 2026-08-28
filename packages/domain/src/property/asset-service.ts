@@ -533,16 +533,17 @@ export class AssetService {
    * path calls this. Earlier lifecycle losses happen before anything is
    * written, and a successful transition owns what it wrote.
    *
-   * **A key the durable row now points at is never deleted.** One authoritative
-   * re-read decides that. With today's writer inventory another winner
-   * referencing these exact keys is unlikely — `buildAssetStorageKey` is
-   * deterministic, so a concurrent re-processing of the same asset would
-   * produce the same normalized key — but "unlikely" is the wrong basis for a
-   * delete. Deleting a referenced object would turn a lost race into data loss,
-   * which is far worse than the orphan it was trying to avoid.
+   * **Authority comes from durable deletion intent, not from the reference
+   * check.** See the reasoning inline below: a key that is unreferenced *now*
+   * can be legitimately claimed later, because the keys are deterministic.
    *
-   * Finding the row referenced is **not** success for this invocation: it lost
-   * ownership either way, and the caller still gets the lost-lifecycle refusal.
+   * **A key the durable row points at is still never deleted.** That check
+   * remains as defence in depth — it stops this path removing an object the
+   * deletion-pending row itself names — but it grants nothing.
+   *
+   * Finding the row referenced, or finding no deletion intent, is **not**
+   * success for this invocation: it lost ownership either way, and the caller
+   * still gets the lost-lifecycle refusal.
    *
    * Both keys are attempted even if the first fails, so one storage error
    * cannot strand the other object.
@@ -553,8 +554,29 @@ export class AssetService {
     keys: readonly string[],
   ): Promise<void> {
     const current = await this.deps.assets.findById(organizationId, assetId);
+
+    // **Durable deletion intent is what authorizes deleting anything**, and an
+    // earlier revision got this wrong by treating "unreferenced right now" as
+    // sufficient. It is not. `buildAssetStorageKey` is deterministic, so the
+    // normalized and thumbnail keys for an asset are the same every time it is
+    // processed. On a loss that is *not* a deletion, this could happen:
+    //
+    //   1. this loser re-reads and sees the key unreferenced
+    //   2. a later legitimate lifecycle run writes that same deterministic key
+    //   3. this loser deletes it
+    //
+    // A one-time read cannot order a deletion against a *future* owner, and no
+    // second read would fix that — the window reopens after every read.
+    //
+    // `deletionRequestedAt !== null` closes it, and does so using the invariant
+    // this milestone establishes rather than a new mechanism: once intent is
+    // durable, `updateIfCurrent` refuses **every** ordinary lifecycle mutation
+    // for that asset, permanently. No future writer can legitimately take
+    // ownership of these keys, so there is no later owner to steal from.
+    if (current === null || current.deletionRequestedAt === null) return;
+
     const referenced = new Set(
-      current === null ? [] : [current.storageKey, current.thumbnailKey].filter((k) => k !== null),
+      [current.storageKey, current.thumbnailKey].filter((k) => k !== null),
     );
 
     let failed = false;

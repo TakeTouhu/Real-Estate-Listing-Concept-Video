@@ -47,15 +47,21 @@ and ADR-0028.
   invocation returns success unless its own audit write succeeded** — not that
   every durable deletion has a row. No outbox, no uniqueness migration, no
   idempotency key.
-- **A lost final `READY` write compensates the derivatives it created.**
-  `completeUpload` writes the normalized image and thumbnail before that guarded
-  write; when it loses, the durable row names neither, so nothing walking asset
-  rows could find them. The losing path now deletes them — skipping any key the
-  authoritative re-read shows the row now references, because removing a
-  referenced object would turn a lost race into data loss. Both keys are
-  attempted even if one throws, and a failed delete raises a sanitized
-  `INTERNAL_ERROR` rather than a claim that cleanup succeeded. A cleanup failure
-  still leaves an object that row-walking retention cannot discover.
+- **Durable deletion intent authorizes inline derivative cleanup — nothing else
+  does.** `completeUpload` writes the normalized image and thumbnail before the
+  guarded `PROCESSING -> READY` write; when that write loses, the durable row
+  names neither, so nothing walking asset rows could find them. The losing path
+  deletes them **only when the authoritative re-read shows `deletionRequestedAt`
+  is non-null**. It is not the case that every losing final write cleans up: a
+  loss for any other reason deletes nothing, because `buildAssetStorageKey` is
+  deterministic and a one-time re-read cannot order a delete against a *future*
+  legitimate owner of the same key — monotonic deletion intent can, since once it
+  is durable no ordinary lifecycle mutation for that asset succeeds again.
+  Skipping any key the row currently references is retained as defence in depth
+  and grants no authority by itself. Both keys are attempted even if one
+  throws, and a failed delete raises a sanitized `INTERNAL_ERROR` rather than a
+  claim that cleanup succeeded. Non-deletion losses and failed deletes both leave
+  objects that row-walking retention cannot discover.
 - **`PropertyService.remove` uses the dedicated deletion method** and treats
   `null` as convergent — another writer already moved the asset the way removal
   wanted.

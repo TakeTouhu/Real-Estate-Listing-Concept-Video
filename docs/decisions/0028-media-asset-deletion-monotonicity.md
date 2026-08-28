@@ -181,28 +181,59 @@ would refuse the customer's request for having already partly come true. Its
 existing `PropertyDeleted` audit behaviour is unchanged and no per-asset audit
 was added.
 
-### 8. A lost final write compensates the derivatives it created
+### 8. Durable deletion intent — and only that — authorizes inline cleanup
 
 `completeUpload` writes the normalized image and thumbnail to storage *before*
 the guarded `PROCESSING -> READY` write. When that write loses, the durable row
 names neither object — the write that would have named them is the one that
 lost — so they are unreferenced **and unreachable from the data model**. Nothing
-walking asset rows could ever find them, and they are derivatives of an asset
-someone has asked to delete.
+walking asset rows could ever find them.
 
-The losing path therefore deletes them, and only them. Scoped narrowly: earlier
-lifecycle losses happen before anything is written, and a successful transition
-owns what it wrote. No general storage-cleanup infrastructure, no change to key
-generation, no retention worker.
+An earlier revision concluded from that alone that the losing path should delete
+them, and gated the delete on one authoritative re-read showing the keys
+unreferenced. **That scope is wrong**, and the reason is the determinism this
+ADR already relies on elsewhere. `buildAssetStorageKey` derives the key from
+organization, property, asset, variant and extension, so every processing run
+for the same asset produces the *same* normalized and thumbnail keys. On a loss
+that is **not** a deletion:
 
-**A key the durable row now points at is never deleted.** One authoritative
-re-read decides that. With today's writer inventory another winner referencing
-these exact keys is unlikely — `buildAssetStorageKey` is deterministic, so a
-concurrent re-process of the same asset produces the same normalized key — but
-"unlikely" is the wrong basis for a delete: removing a referenced object would
-turn a lost race into data loss, which is worse than the orphan it avoids.
-Finding the row referenced is **not** success for the losing invocation; it lost
-ownership either way and still gets the lost-lifecycle refusal.
+```
+1. the loser re-reads and sees the key unreferenced
+2. a later legitimate lifecycle run writes that same deterministic key
+3. the loser deletes it
+```
+
+A one-time read cannot order a deletion against a **future** owner. A second
+read does not help — the window reopens after every read — and the fix is not
+another read, a row lock, or versioned keys, none of which belong in this
+milestone.
+
+**The permission is `deletionRequestedAt !== null` on the authoritative
+re-read.** That uses the invariant this milestone establishes rather than adding
+a mechanism: once deletion intent is durable it is monotonic, and
+`updateIfCurrent` therefore refuses **every** ordinary lifecycle mutation for
+that asset, permanently. There is no future legitimate owner of those keys to
+steal from, so step 2 above cannot occur.
+
+The precise contract:
+
+- A final-write loss **with** durable deletion intent deletes the derivatives
+  this invocation created, and only those.
+- A final-write loss for **any other** reason — another writer moved the status,
+  the row vanished — deletes **nothing**. It leaves an unreferenced object
+  rather than risk removing a future owner's.
+- Earlier lifecycle losses happen before anything is written, and a successful
+  transition owns what it wrote. Neither is touched.
+
+No general storage-cleanup infrastructure, no change to key generation, no
+retention worker.
+
+**A key the deletion-pending row itself names is still never deleted.** That
+referenced-key check remains as defence in depth — the row can name a key
+because a `READY` transition committed before deletion was requested — but it is
+**not what grants cleanup authority**; deletion intent is. Finding the row
+referenced is also **not** success for the losing invocation: it lost ownership
+either way and still gets the lost-lifecycle refusal.
 
 Both keys are attempted even if the first delete throws, so one storage error
 cannot strand the other object. If any required delete fails, a fixed sanitized
@@ -211,11 +242,14 @@ succeeded, and never a restored lifecycle state. The caught storage error is
 dropped rather than wrapped, because it can carry a key or a credential and this
 error reaches a customer.
 
-**The residual is honest:** a transient cleanup failure still leaves an
-unreferenced object, and because the asset row does not name it, **row-walking
-retention cannot discover it**. Recovering it needs storage-side reconciliation
-— a deterministic asset-prefix enumeration, or another durable cleanup
-mechanism. The future retention worker does not solve this by itself.
+**The residual is honest, and now larger than the first revision claimed:**
+every non-deletion final-write loss leaves an unreferenced object, as does a
+transient cleanup failure on the deletion path. Because the asset row names none
+of them, **row-walking retention cannot discover them**. Recovering them needs
+storage-side reconciliation — a deterministic asset-prefix enumeration, or
+another durable cleanup mechanism. The future retention worker does not solve
+this by itself. Accepting a bounded orphan is the correct trade against deleting
+an object a legitimate later writer owns.
 
 ### 9. Review rejection rolls back
 

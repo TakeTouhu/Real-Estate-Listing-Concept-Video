@@ -68,8 +68,9 @@ repository to return `null`.
 | No credential for a doomed asset | `retryUpload` mints no signed URL after losing the guard |
 | Deletion converges and still audits | Second request returns the same durable timestamp and records a **second** entry — one per successful invocation |
 | A missing audit is repairable | First call's audit throws → call fails, intent durable and unaudited; retry converges and writes the entry |
-| Lost final write compensates | Deletion wins during processing → both derivatives gone from storage, no `asset.upload_completed` audit |
-| Referenced keys are protected | Authoritative re-read shows a `READY` row owning the normalized key → that object survives, invocation still fails |
+| Deletion intent authorizes cleanup | Deletion wins during processing → both derivatives gone from storage, no `asset.upload_completed` audit |
+| Nothing else authorizes cleanup | Final write lost to a competing `FAILED` transition, no deletion intent → **zero** storage deletes |
+| Referenced keys are protected | A `READY` row owns the normalized key, deletion is then requested → that object survives, the thumbnail is removed, invocation still fails |
 | Cleanup failure is surfaced | One delete throws → both keys attempted, sanitized `INTERNAL_ERROR`, no key in the error |
 | Removal converges | Property removal succeeds with one asset already deletion-pending; both end with intent recorded |
 | Review rolls back | Deletion wins, rejection throws inside `ReviewTransaction`, analysis stays `UNREVIEWED` — proven in-memory **and** against PostgreSQL |
@@ -86,8 +87,9 @@ repository to return `null`.
 | **M6** — `PropertyService.remove` back to ordinary update for deletion | **1 unit fail** |
 | **M7** — `AnalysisService.reject` ignores a `null` guarded result | **1 unit fail** |
 | **M8** — audit suppression restored on convergence | **2 unit fail** |
-| **M9** — post-`READY`-CAS derivative cleanup removed | **2 unit fail** |
+| **M9** — post-`READY`-CAS derivative cleanup removed | **3 unit fail** |
 | **M10** — referenced-key protection removed from cleanup | **1 unit fail** |
+| **M11** — `deletionRequestedAt !== null` gate removed from cleanup | **1 unit fail** |
 
 Every mutated file restored byte-identically, confirmed by `diff`. No
 mutation-only code is committed.
@@ -133,10 +135,13 @@ WaveSpeedAI call · no paid gate · no orchestrator · no worker loop · no A-2 
   guarantee is only that **no invocation returns success unless its own audit
   write succeeded**, and that a later retry can write the missing entry. No
   outbox, no uniqueness migration, no idempotency key.
-- **A failed derivative cleanup still leaves an orphan.** The losing final write
-  now deletes what it created, but if a required delete throws, the object
-  remains — and since the asset row does not name it, row-walking retention
-  cannot find it. Recovery needs storage-prefix reconciliation. Recorded in
+- **Inline cleanup is deliberately narrow, so orphans remain.** It is *not*
+  true that every losing final write deletes its derivatives — only a loss with
+  durable deletion intent may delete (ADR-0028 §8; referenced-key protection is
+  defence in depth and grants no authority). A loss for any other reason deletes
+  nothing, and a delete that throws on the deletion path leaves the object.
+  Since the asset row names none of them, row-walking retention cannot find
+  them; recovery needs storage-prefix reconciliation. Recorded in
   `docs/decisions/TODO.md`.
 - **Expected-status is not a version counter.** It discriminates only when the
   winner changes the status; two same-status → same-status writers are not

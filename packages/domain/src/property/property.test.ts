@@ -737,6 +737,32 @@ describe("deletion-intent monotonicity", () => {
     expect(auditActions(ctx)).not.toContain("asset.upload_completed");
   });
 
+  it("deletes nothing when the final write loses for a reason other than deletion", async () => {
+    // Authority to delete comes from durable deletion intent, not from finding
+    // a key unreferenced. The keys are deterministic, so an object that is
+    // unreferenced at this instant can be legitimately claimed by a later
+    // lifecycle run — and deleting it then would destroy that owner's content.
+    const asset = await pendingAsset();
+    ctx.images.onProcess = async () => {
+      // A competing lifecycle winner that establishes no deletion intent.
+      const inFlight = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+      await ctx.assetRepo.updateIfCurrent(
+        { ...inFlight, status: "FAILED", failureReason: "beaten to it" },
+        inFlight.status,
+      );
+    };
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const after = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+    expect(after.deletionRequestedAt).toBeNull();
+    // Nothing was deleted — not "nothing was missing", nothing was attempted.
+    expect(ctx.storage.deleted).toEqual([]);
+    expect(auditActions(ctx)).not.toContain("asset.upload_completed");
+  });
+
   it("never deletes a derivative the durable row now references", async () => {
     // Future-proofing, and the reason cleanup re-reads rather than deleting
     // blindly. If another winner has taken ownership of these exact keys —
@@ -746,8 +772,6 @@ describe("deletion-intent monotonicity", () => {
     const asset = await pendingAsset();
     let normalizedKey = "";
     ctx.images.onProcess = async () => {
-      // Drive the row to a READY state that owns the keys this operation is
-      // about to write, then lose the race for it.
       const inFlight = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
       // The real key builder, so the row references exactly what the service is
       // about to write — the whole point of the guard.
@@ -758,19 +782,28 @@ describe("deletion-intent monotonicity", () => {
         variant: "normalized",
         extension: "jpg",
       });
+      // A completed asset owning that key, which is *then* asked to be deleted.
+      // Both parts matter: the deletion intent is what authorizes cleanup at
+      // all, and the reference is what must survive it.
       await ctx.assetRepo.updateIfCurrent(
         { ...inFlight, status: "READY", storageKey: normalizedKey, thumbnailKey: null },
         inFlight.status,
       );
+      await ctx.assets.requestDeletion(ctx.ownerId, ctx.orgId, asset.id);
     };
 
     await expect(
       ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id),
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
 
-    // The referenced key survives; this invocation still lost ownership.
+    // Cleanup was authorized — intent is durable — and it still spared the
+    // referenced key while removing the unreferenced thumbnail.
     expect(ctx.storage.objects.has(normalizedKey)).toBe(true);
-    expect((await ctx.assetRepo.findById(ctx.orgId, asset.id))?.storageKey).toBe(normalizedKey);
+    expect(ctx.storage.deleted.some((k) => k.includes("thumbnail"))).toBe(true);
+    expect(ctx.storage.deleted).not.toContain(normalizedKey);
+    const after = (await ctx.assetRepo.findById(ctx.orgId, asset.id))!;
+    expect(after.storageKey).toBe(normalizedKey);
+    expect(after.deletionRequestedAt).not.toBeNull();
   });
 
   it("surfaces a sanitized failure when cleanup cannot complete", async () => {
