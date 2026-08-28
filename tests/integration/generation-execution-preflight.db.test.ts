@@ -33,6 +33,8 @@ const PROJECT = "vpr_itest_pf";
 const ASSET = "ast_itest_pf";
 const GENERATION = "gen_itest_pf";
 const KEY = `${ORG}/assets/${ASSET}/normalized.jpg`;
+/** The canonical digest shape: 64 lowercase hex, exactly what `sha256Hex` emits. */
+const DIGEST = "a".repeat(64);
 const SIGNED = {
   url: `https://storage.itest.example/${KEY}?sig=itest-token`,
   expiresAt: new Date(Date.UTC(2030, 0, 1)),
@@ -53,9 +55,13 @@ const CAPABILITY: VideoModelCapability = {
 };
 
 /** Only the two narrowed capabilities preflight declares. */
-const storage: ExecutionPreflightDeps["storage"] = {
+const storage: ExecutionPreflightDeps["storage"] & { readonly signed: string[] } = {
+  signed: [],
   exists: (key) => Promise.resolve(key === KEY),
-  createSignedDownloadUrl: () => Promise.resolve(SIGNED),
+  createSignedDownloadUrl: (key) => {
+    storage.signed.push(key);
+    return Promise.resolve(SIGNED);
+  },
 };
 
 const COMPILED_PROMPT = '{"preservation":["keep the window"],"sceneFacts":{},"userCustomization":null}';
@@ -93,6 +99,10 @@ beforeEach(async () => {
       sizeBytes: 2048,
       width: 1920,
       height: 1080,
+      // The canonical digest shape `sha256Hex` emits. Seeded explicitly because
+      // Phase 4C-3A-2a made it load-bearing: this fixture previously left the
+      // column null, and a READY row with no digest is now refused outright.
+      sha256: DIGEST,
       status: "READY",
       createdBy: "usr_itest_pf",
     },
@@ -165,11 +175,42 @@ describe.skipIf(!HAS_DB)("prepareQueuedGeneration against PostgreSQL", () => {
     expect(prepared.organizationId).toBe(ORG);
     expect(prepared.sourceImageUrl).toBe(SIGNED.url);
     expect(prepared.sourceUrlExpiresAt).toEqual(SIGNED.expiresAt);
+    // The identity is read from the durable row, not reconstructed.
+    expect(prepared.sourceIdentity).toEqual({
+      storageKey: KEY,
+      mimeType: "image/jpeg",
+      sha256: DIGEST,
+    });
 
     // The whole row, `updatedAt` included — nothing in this process controls
     // that column, so it is the one that would catch a stray write.
     const after = await prisma.sceneGeneration.findUnique({ where: { id: GENERATION } });
     expect(after).toEqual(before);
     expect(after!.state).toBe("QUEUED");
+  });
+
+  it("refuses a real READY row whose content digest is missing, and signs nothing", async () => {
+    // Against the database rather than a fake, because the column is nullable in
+    // the real schema: this is the exact row shape a `READY` asset can have if
+    // anything ever writes one without a digest, and before this milestone it
+    // would have been prepared and submitted unverified.
+    await prisma.mediaAsset.update({ where: { id: ASSET }, data: { sha256: null } });
+    const candidate = await execution.findNextQueuedForPreparation();
+    const signedBefore = storage.signed.length;
+
+    await expect(
+      prepareQueuedGeneration(
+        { assets, storage, capabilities: { current: () => CAPABILITY } },
+        candidate!,
+      ),
+    ).rejects.toMatchObject({ reason: "ASSET_SOURCE_UNIDENTIFIABLE", disposition: "TERMINAL" });
+
+    // No credential minted for a source that cannot be identified.
+    expect(storage.signed).toHaveLength(signedBefore);
+    expect((await prisma.sceneGeneration.findUnique({ where: { id: GENERATION } }))!.state).toBe(
+      "QUEUED",
+    );
+
+    await prisma.mediaAsset.update({ where: { id: ASSET }, data: { sha256: DIGEST } });
   });
 });

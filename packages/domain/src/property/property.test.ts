@@ -860,6 +860,98 @@ function deletionAudits(ctx: Ctx): number {
     .filter((entry) => entry.action === "asset.deletion_requested").length;
 }
 
+/**
+ * The lifecycle fact Phase 4C-3A-2's paid-submission safety rests on.
+ *
+ * Once a claim commits against a `READY` asset, the provider fetches the
+ * normalized object at that key some time later. That is only safe if nothing
+ * can put different bytes there in the meantime — and what actually supplies
+ * that today is the writer inventory, **not** the SHA-256 digest. The digest
+ * lets preflight and the future locked claim *detect* that a source changed; it
+ * does nothing to stop bytes changing.
+ *
+ * The normalized object is written by exactly one production statement, inside
+ * `completeUpload`, and both entry points into that pipeline accept only
+ * `PENDING_UPLOAD` and `FAILED`. A `READY` asset has no production route back
+ * into either. These tests pin that: widening either guard to admit `READY`
+ * would re-open in-place replacement of a source a generation may already have
+ * been claimed against, and would invalidate the ADR-0029 stability argument
+ * silently. Here it fails instead.
+ */
+describe("a READY asset cannot re-enter the upload pipeline", () => {
+  let ctx: Ctx;
+  let propertyId: string;
+
+  beforeEach(async () => {
+    ctx = await setup();
+    propertyId = (
+      await ctx.properties.create(ctx.ownerId, {
+        organizationId: ctx.orgId,
+        name: "Stability",
+        propertyType: "HOUSE",
+        rightsConfirmed: true,
+      })
+    ).id;
+  });
+
+  async function readyAsset() {
+    const { asset } = await ctx.assets.requestUpload(ctx.ownerId, {
+      organizationId: ctx.orgId,
+      propertyId,
+      originalFilename: "stable.jpg",
+      declaredSizeBytes: 2048,
+    });
+    await ctx.storage.putObject(asset.storageKey, jpegBytes());
+    const { asset: ready } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
+    expect(ready.status).toBe("READY");
+    return ready;
+  }
+
+  it("refuses completeUpload, without scanning or reprocessing anything", async () => {
+    const ready = await readyAsset();
+    const normalizedBefore = ctx.storage.objects.get(ready.storageKey);
+    const scansBefore = ctx.scanner.scanned;
+    const processesBefore = ctx.images.processed;
+
+    await expect(
+      ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, ready.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    // Refused at the entry guard, so nothing downstream ran: no scan, no image
+    // processing, and above all no second write to the normalized key.
+    expect(ctx.scanner.scanned).toBe(scansBefore);
+    expect(ctx.images.processed).toBe(processesBefore);
+    expect(ctx.storage.objects.get(ready.storageKey)).toBe(normalizedBefore);
+  });
+
+  it("refuses retryUpload, and mints no upload credential", async () => {
+    const ready = await readyAsset();
+    const signedBefore = ctx.storage.signed.length;
+
+    await expect(
+      ctx.assets.retryUpload(ctx.ownerId, ctx.orgId, ready.id),
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    // An upload URL is a write credential for a storage key. Handing one out
+    // for a READY asset is the shape of the failure this guards against, even
+    // though the key it targets is the `original` variant rather than the
+    // normalized one.
+    expect(ctx.storage.signed).toHaveLength(signedBefore);
+  });
+
+  it("leaves the durable row READY and pointing at the same source", async () => {
+    const ready = await readyAsset();
+
+    await expect(ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, ready.id)).rejects.toThrow();
+    await expect(ctx.assets.retryUpload(ctx.ownerId, ctx.orgId, ready.id)).rejects.toThrow();
+
+    const after = await ctx.assetRepo.findById(ctx.orgId, ready.id);
+    expect(after?.status).toBe("READY");
+    expect(after?.storageKey).toBe(ready.storageKey);
+    expect(after?.sha256).toBe(ready.sha256);
+  });
+});
+
 /** All audit actions recorded so far. */
 function auditActions(ctx: Ctx): string[] {
   return ctx.deps.repos.auditLogs.all().map((entry) => entry.action);
