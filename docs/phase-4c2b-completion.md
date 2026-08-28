@@ -20,6 +20,13 @@ failQueuedPreflight(
 ): Promise<FailedSceneGeneration | null>
 ```
 
+> **Later evolution.** The counts below are what this milestone shipped. Phase
+> 4C-3A-2a added a fourteenth reason, `ASSET_SOURCE_UNIDENTIFIABLE`
+> (`TERMINAL`), taking the vocabulary to fourteen and the terminal side to ten;
+> the retryable set is unchanged at four. See ADR-0029. Nothing else here was
+> superseded — the derivation chain, the port and the persistence contract are
+> as described.
+
 **ADR-0027 carries the reasoning in full.** In one line each: `QUEUED` gains
 exactly two legal failure edges, safe because nothing has been submitted; the
 target is derived from the existing disposition rather than a second

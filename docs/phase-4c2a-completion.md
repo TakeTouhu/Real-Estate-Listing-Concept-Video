@@ -50,7 +50,7 @@ and nothing consumes preflight in production yet.
 | Preparation mutates nothing | Whole-row comparison in-process, **and against PostgreSQL** |
 | Stored hash is verified | A row whose hash disagrees with its facts is refused |
 | Provider/model identity still in force | Refused when either differs from the configured capability |
-| All 13 refusal reasons | One test each; the disposition map is asserted to partition the whole vocabulary |
+| All 13 refusal reasons | One test each; the disposition map is asserted to partition the whole vocabulary. **The vocabulary was thirteen at this milestone; Phase 4C-3A-2a made it fourteen (ADR-0029).** |
 | Every `MediaAssetStatus` is classified | The single production `Record` — a new status fails to compile until classified; all ten also covered behaviourally |
 | Normalized-source invariant | WebP, empty key and whitespace-only key each refuse **before** storage is touched |
 | Signed URL is usable | Unparseable, plain-HTTP and non-finite expiry each refuse |

@@ -233,7 +233,8 @@ reserved for a webhook.
 | 4C-2A | Immutable execution preflight: snapshot authority, identity-only capability check, scoped asset resolution, JPEG source invariant, validated signed URL, post-sign re-read, 13 classified refusals (ADR-0026) | 2,006 — 609 production + 862 tests + 535 docs | **Merged** (PR #40, `70e3313`) |
 | 4C-2B | Durable pre-provider refusal parking: two legal `QUEUED` failure edges, derived reason→state mapping, one narrow execution-port CAS, exact reason persisted with an explicit null message (ADR-0027) | 1,425 — 316 production + 528 tests + 581 docs | **Merged** (PR #41, `cf701ba`) |
 | 4C-3A-1 | MediaAsset deletion-intent monotonicity: guarded lifecycle CAS, dedicated deletion CAS, stale writers can no longer erase intent or resurrect READY (ADR-0028) | see `docs/phase-4c3a1-completion.md` | PR — see GitHub for lifecycle |
-| 4C-3A-2…3E | Locked submission claim, provider hardening, submission persistence, orchestrator, stale sweeper | — | Not started |
+| 4C-3A-2a | Prepared source identity and fail-closed content digest: `PreparedSourceIdentity`, one canonical source classifier, a fourteenth terminal refusal, digest compared across both preflight observations (ADR-0029) | see `docs/phase-4c3a2a-completion.md` | PR — see GitHub for lifecycle |
+| 4C-3A-2b…3E | Locked submission claim, provider hardening, submission persistence, orchestrator, stale sweeper | — | Not started |
 | 4D | WaveSpeedAI model integration, managed-storage output copy, real-provider contract verification once the commercial gate clears | — | Not started |
 | 4E | Minimum HTTP/UI to start one scene generation and observe normalized status | — | Not started |
 
