@@ -10,6 +10,21 @@ import type {
   PropertyRepository,
 } from "@app/domain";
 
+/**
+ * Whether a thrown value is Prisma's "no record matched the filter".
+ *
+ * Duck-typed on `code`, matching how `P2002` is already recognized elsewhere in
+ * this package: importing Prisma's error class would tie every call site to a
+ * runtime import for a check that is one string comparison.
+ *
+ * For a conditional update this is the **ordinary** outcome — the predicate did
+ * not match — so it becomes `null` rather than an exception. Every other error
+ * propagates: a connection failure must not be reported as a lost race.
+ */
+function isRecordNotFound(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === "P2025";
+}
+
 const ACTIVE_STATUSES = [
   "PENDING_UPLOAD",
   "UPLOADED",
@@ -149,26 +164,80 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
         })
       ).map(toAsset);
     },
-    async update(asset) {
-      return toAsset(
-        await prisma.mediaAsset.update({
-          where: { id: asset.id },
-          data: {
-            storageKey: asset.storageKey,
-            mimeType: asset.mimeType,
-            sizeBytes: asset.sizeBytes,
-            width: asset.width,
-            height: asset.height,
-            sha256: asset.sha256,
-            perceptualHash: asset.perceptualHash,
-            status: asset.status,
-            failureReason: asset.failureReason,
-            thumbnailKey: asset.thumbnailKey,
-            deletionRequestedAt: asset.deletionRequestedAt,
-            retentionExpiresAt: asset.retentionExpiresAt,
-          },
-        }),
-      );
+    async updateIfCurrent(asset, expectedStatus) {
+      // One conditional UPDATE decides the winner and returns the row.
+      //
+      // Prisma 5.22 accepts non-unique filters beside the unique one in
+      // `where`, and compiles this to a single
+      // `UPDATE ... WHERE id AND organizationId AND status AND
+      // deletionRequestedAt IS NULL` — verified against PostgreSQL rather than
+      // assumed. A read-then-write, or `updateMany` followed by a re-read
+      // outside the statement, would reopen the TOCTOU window this method
+      // exists to close: the losing writer could still observe a row it had
+      // already failed to claim.
+      //
+      // `deletionRequestedAt` is absent from `data` deliberately. The predicate
+      // rejects a stale writer, and the omission means that even a future edit
+      // that weakened the predicate could not clear deletion intent by
+      // accident.
+      //
+      // `P2025` is Prisma's "no record matched" — the ordinary lost-race
+      // outcome here, not an error. Anything else is a real failure and
+      // propagates.
+      try {
+        return toAsset(
+          await prisma.mediaAsset.update({
+            where: {
+              id: asset.id,
+              organizationId: asset.organizationId,
+              status: expectedStatus,
+              deletionRequestedAt: null,
+            },
+            data: {
+              storageKey: asset.storageKey,
+              mimeType: asset.mimeType,
+              sizeBytes: asset.sizeBytes,
+              width: asset.width,
+              height: asset.height,
+              sha256: asset.sha256,
+              perceptualHash: asset.perceptualHash,
+              status: asset.status,
+              failureReason: asset.failureReason,
+              thumbnailKey: asset.thumbnailKey,
+              retentionExpiresAt: asset.retentionExpiresAt,
+            },
+          }),
+        );
+      } catch (error) {
+        if (isRecordNotFound(error)) return null;
+        throw error;
+      }
+    },
+    async requestDeletion(organizationId, assetId, requestedAt) {
+      // Same single-statement compare-and-swap, with the predicate that makes
+      // deletion intent establishable exactly once: `deletionRequestedAt` must
+      // still be null, and a `DELETED` row cannot be revived into
+      // `DELETION_PENDING`.
+      //
+      // Only the two deletion-owned columns are written. A deletion request
+      // must not disturb the storage key, hashes or dimensions that an
+      // in-flight lifecycle writer may still be reading.
+      try {
+        return toAsset(
+          await prisma.mediaAsset.update({
+            where: {
+              id: assetId,
+              organizationId,
+              deletionRequestedAt: null,
+              status: { not: "DELETED" },
+            },
+            data: { status: "DELETION_PENDING", deletionRequestedAt: requestedAt },
+          }),
+        );
+      } catch (error) {
+        if (isRecordNotFound(error)) return null;
+        throw error;
+      }
     },
     async countActiveByProperty(organizationId, propertyId) {
       return prisma.mediaAsset.count({

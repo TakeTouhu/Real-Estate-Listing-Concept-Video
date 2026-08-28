@@ -1,6 +1,6 @@
 import type { Clock } from "../identity/ports";
 import type { MediaAssetRepository, PropertyRepository } from "../property/ports";
-import type { MediaAsset, Property } from "../property/types";
+import type { MediaAsset, MediaAssetStatus, Property } from "../property/types";
 
 const ACTIVE_STATUSES: readonly MediaAsset["status"][] = [
   "PENDING_UPLOAD",
@@ -77,10 +77,49 @@ export class InMemoryMediaAssetRepository implements MediaAssetRepository {
     );
   }
 
-  update(asset: MediaAsset): Promise<MediaAsset> {
-    if (!this.byId.has(asset.id)) throw new Error("asset not found");
-    this.byId.set(asset.id, asset);
-    return Promise.resolve(asset);
+  /**
+   * Mirrors the production predicate, and mirrors what it refuses to write.
+   *
+   * The durable row decides — not the caller's snapshot. `deletionRequestedAt`
+   * is carried over from the stored row rather than the argument, which is the
+   * in-memory equivalent of leaving that column out of the SQL `data`: a stale
+   * caller cannot clear deletion intent even by passing `null`.
+   */
+  updateIfCurrent(asset: MediaAsset, expectedStatus: MediaAssetStatus): Promise<MediaAsset | null> {
+    const current = this.byId.get(asset.id);
+    if (!current) return Promise.resolve(null);
+    if (current.organizationId !== asset.organizationId) return Promise.resolve(null);
+    if (current.status !== expectedStatus) return Promise.resolve(null);
+    if (current.deletionRequestedAt !== null) return Promise.resolve(null);
+
+    const updated: MediaAsset = {
+      ...asset,
+      deletionRequestedAt: current.deletionRequestedAt,
+      updatedAt: this.clock.now(),
+    };
+    this.byId.set(updated.id, updated);
+    return Promise.resolve(updated);
+  }
+
+  requestDeletion(
+    organizationId: string,
+    assetId: string,
+    requestedAt: Date,
+  ): Promise<MediaAsset | null> {
+    const current = this.byId.get(assetId);
+    if (!current) return Promise.resolve(null);
+    if (current.organizationId !== organizationId) return Promise.resolve(null);
+    if (current.deletionRequestedAt !== null) return Promise.resolve(null);
+    if (current.status === "DELETED") return Promise.resolve(null);
+
+    const updated: MediaAsset = {
+      ...current,
+      status: "DELETION_PENDING",
+      deletionRequestedAt: requestedAt,
+      updatedAt: this.clock.now(),
+    };
+    this.byId.set(updated.id, updated);
+    return Promise.resolve(updated);
   }
 
   countActiveByProperty(organizationId: string, propertyId: string): Promise<number> {

@@ -227,6 +227,54 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       product/finance decision, not a schema tweak. **Revisit before Phase 7, and
       before any project-deletion feature.**
 
+## Phase 4C-3A-1 follow-ups
+
+- [ ] **A physical deletion worker must not remove a source object a provider may
+      still depend on.** None exists today: `ObjectStorage.deleteObject` has zero
+      production callers, nothing writes `status = DELETED`, and
+      `retentionExpiresAt` is only ever set to null — so `DELETION_PENDING` is a
+      marker with no storage effect, and Phase 4C-3's "a deletion requested after
+      a successful claim does not revoke the licence" is safe as things stand.
+      When such a worker is built it must protect assets referenced by a
+      generation in **`SUBMITTING`, `PROCESSING` or `SUBMISSION_UNKNOWN`**. The
+      third is the one that is easy to miss and most expensive to get wrong:
+      `SUBMISSION_UNKNOWN` may represent a request the provider accepted and
+      billed even though acceptance cannot be proven locally, so deleting its
+      source destroys the recovery path. `MediaAsset` has no relation to
+      `SceneGeneration` — `assetId` is deliberately un-foreign-keyed — so the
+      worker must check generation state explicitly; the database will not stop
+      it. **Required before any physical deletion ships.**
+- [ ] **Unreferenced derivatives still need storage-side reconciliation.**
+      **Partly closed in Phase 4C-3A-1** (ADR-0028 §8): when the final
+      `PROCESSING -> READY` write loses **and the authoritative re-read shows
+      durable deletion intent**, `completeUpload` deletes the normalized image
+      and thumbnail it wrote, skipping any key that row references, and raises a
+      sanitized `INTERNAL_ERROR` if a required delete fails.
+      Two cases remain open. **A final-write loss without deletion intent
+      deliberately deletes nothing** — ADR-0028 §8 has the reasoning: a one-time
+      re-read cannot order a delete against a *future* owner of a deterministic
+      key, and only monotonic deletion intent closes that. The second is a delete
+      that throws on the deletion path.
+      In both, the object is unreferenced **and the asset row does not name it**
+      — the write that would have named it is the one that lost — so
+      **row-walking retention cannot discover it**, and an earlier version of
+      this entry was wrong to say the future retention worker would find it.
+      Recovery requires storage-side reconciliation: a deterministic
+      asset-prefix enumeration (`buildAssetStorageKey` makes the candidate keys
+      derivable from the row even though the row does not carry them), or
+      another durable cleanup mechanism. Not urgent — the objects are
+      tenant-scoped and unreachable through any signed URL — but do not assume
+      the retention worker covers it, and do not close this by making inline
+      cleanup unconditional again.
+- [ ] **Phase 4C-3A-2 source identity must include `sha256`.**
+      `buildAssetStorageKey` is deterministic from organization, property, asset,
+      variant and extension, so a re-processed normalized JPEG for the **same**
+      asset reuses the **same** `normalized.jpg` key with different bytes. Key +
+      MIME equality would pass over a genuinely different source. Compare
+      `storageKey`, `mimeType` **and** `sha256` against the locked observation,
+      and fail closed in preflight when a supposedly executable `READY` source
+      carries no usable content hash. **Required before the locked claim ships.**
+
 ## Phase 4B follow-ups
 
 - [x] **Phase 4C MUST recover `QUEUED` generations that were never durably

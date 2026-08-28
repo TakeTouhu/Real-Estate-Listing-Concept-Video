@@ -399,7 +399,21 @@ export class AnalysisService {
         reviewedAt: now,
         updatedAt: now,
       });
-      await assets.update({ ...asset, status: "REJECTED", updatedAt: now });
+      const rejectedAsset = await assets.updateIfCurrent(
+        { ...asset, status: "REJECTED", updatedAt: now },
+        asset.status,
+      );
+      // Throwing **inside** the transaction is the point: it rolls the analysis
+      // decision back too. Committing the rejection while the asset write lost
+      // would leave a decision recorded against an asset that never received
+      // it — and if deletion is what won, a rejection recorded against an asset
+      // already on its way out.
+      if (rejectedAsset === null) {
+        throw new AppError(
+          "VALIDATION_FAILED",
+          "This asset changed or deletion was requested while the review was in progress",
+        );
+      }
       return updated;
     });
 

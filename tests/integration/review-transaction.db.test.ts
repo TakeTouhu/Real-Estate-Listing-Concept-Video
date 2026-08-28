@@ -174,7 +174,7 @@ describe("review transaction", () => {
       const analysis = (await analyses.findById(ORG_A, created.id))!;
       await analyses.update({ ...analysis, reviewStatus: "REJECTED", reviewNote: "blurry" });
       const asset = (await assets.findById(ORG_A, "ast_rv_1"))!;
-      await assets.update({ ...asset, status: "REJECTED" });
+      await assets.updateIfCurrent({ ...asset, status: "REJECTED" }, asset.status);
     });
 
     expect((await repo.findById(ORG_A, created.id))?.reviewStatus).toBe("REJECTED");
@@ -191,7 +191,7 @@ describe("review transaction", () => {
         const analysis = (await analyses.findById(ORG_A, created.id))!;
         await analyses.update({ ...analysis, reviewStatus: "REJECTED", reviewNote: "blurry" });
         const asset = (await assets.findById(ORG_A, "ast_rv_1"))!;
-        await assets.update({ ...asset, status: "REJECTED" });
+        await assets.updateIfCurrent({ ...asset, status: "REJECTED" }, asset.status);
         throw new Error("second write failed");
       }),
     ).rejects.toThrow(/second write failed/);
