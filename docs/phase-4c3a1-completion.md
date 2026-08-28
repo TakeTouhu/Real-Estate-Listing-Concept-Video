@@ -24,7 +24,7 @@ submission against deletion — the correction that produced this milestone.
 | --- | --- |
 | `pnpm typecheck` | exit 0 |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1258 passed**, 61 files (baseline 1247 / 61) |
+| `pnpm test` | **1259 passed**, 61 files (baseline 1247 / 61) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **197 passed**, 9 files (baseline 184 / 8) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` exit 0 |
@@ -47,7 +47,7 @@ re-read, no raw SQL, no nested transaction.
 
 ## Where each property is proven
 
-13 new PostgreSQL tests and 11 new service tests. The PostgreSQL ones interleave
+13 new PostgreSQL tests and 12 new service tests. The PostgreSQL ones interleave
 **real** competing writes; the service ones interleave a **real** deletion
 request against a real in-flight `completeUpload`, rather than stubbing a
 repository to return `null`.
