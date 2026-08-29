@@ -129,11 +129,11 @@ describe("extractOutputUrl", () => {
 
 describe("error normalization", () => {
   it("maps http status codes to kinds and retryability", () => {
-    expect(normalizeHttpStatusError(401, "").kind).toBe("AUTH");
-    expect(normalizeHttpStatusError(422, "").kind).toBe("INVALID_INPUT");
-    expect(normalizeHttpStatusError(429, "").retryable).toBe(true);
-    expect(normalizeHttpStatusError(503, "").retryable).toBe(true);
-    expect(normalizeHttpStatusError(418, "teapot").retryable).toBe(false);
+    expect(normalizeHttpStatusError(401).kind).toBe("AUTH");
+    expect(normalizeHttpStatusError(422).kind).toBe("INVALID_INPUT");
+    expect(normalizeHttpStatusError(429).retryable).toBe(true);
+    expect(normalizeHttpStatusError(503).retryable).toBe(true);
+    expect(normalizeHttpStatusError(418).retryable).toBe(false);
   });
 
   it("classifies abort as timeout and other throwables as network", () => {
@@ -143,8 +143,14 @@ describe("error normalization", () => {
     expect(normalizeWaveSpeedError(new Error("boom")).kind).toBe("NETWORK");
   });
 
-  it("passes through already-normalized provider errors", () => {
-    const normalized = normalizeHttpStatusError(429, "");
-    expect(normalizeWaveSpeedError(normalized)).toBe(normalized);
+  /**
+   * `toEqual`, not `toBe`, and the change is deliberate. An already-normalized
+   * error is now **rebuilt** field by field rather than returned by reference,
+   * so that no unvalidated extra property on a look-alike object can survive
+   * normalization. Value stability is the contract; object identity never was.
+   */
+  it("passes an already-normalized provider error through unchanged by value", () => {
+    const normalized = normalizeHttpStatusError(429);
+    expect(normalizeWaveSpeedError(normalized)).toEqual(normalized);
   });
 });
