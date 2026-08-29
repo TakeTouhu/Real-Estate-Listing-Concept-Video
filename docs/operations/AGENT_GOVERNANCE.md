@@ -177,26 +177,40 @@ Customer Support は**一次分類と草案作成まで**を担い、顧客へ�
 - **force push は禁止**（すべてのブランチで。共有ブランチの履歴を書き換えない）。
 - ブランチを削除する場合はマージ済みのもののみ。
 - コミットとタグは、指示された場合にのみ作成する。
-- Git 操作を行ってよいのは **Developer と、明示的に許可された DevOps / SRE のみ**。他の役割は git コマンドを実行しない。
+- **原則: Git 操作は閲覧系（read-only inspection）と状態変更系を分離して扱う。** レビュー役割は職務に必要な閲覧系を実施できる。**Git 履歴・branch・worktree・remote を変更する操作は Developer / DevOps に限定する。**
+- **読み取り専用の git 操作（fetch / log / show / diff / status / merge-base）は全役割が実行してよい。** レビュー役割が差分を確認できなければ、レビューも QA ゲート判定も成立しない。
+- **履歴・ref を変更する git 操作（commit / push / branch 作成・削除 / merge / tag / rebase / reset / stash）を実行してよいのは、Developer と、明示的に許可された DevOps / SRE のみ。**
+- **merge の実行は人間（CTO）の明示承認後に限る。** 方式は **true merge commit のみ**とし、squash / rebase merge / cherry-pick merge / manual fast-forward を用いない。
+- **各エージェントは自分の git worktree の中だけで作業する。** 他 worktree のブランチを checkout しない。
+- **`git stash` / `git stash pop` は、共有リポジトリ / worktree 構成では事故要因となるため、エージェントによる使用を原則禁止とする。** stash stack は全 worktree で共有されるため、他エージェントの変更を失う。作業の退避は自分のブランチ上の一時コミットで行う。
 - リリースタグ（フェーズ完了タグ）は、レビュー承認・CI 成功・`main` へのマージ・マージコミットの検証がすべて済んだ後にのみ作成する。既存タグを移動・上書き・再利用しない。
+- **タグ push は本環境では HTTP 403 で失敗する。** 失敗しても再試行せず、remote tag が存在するとは主張しない。ローカルの annotated tag 作成までを行い、remote への反映が必要な場合は手動コマンドを添えて人間へ引き渡す。
 
 ### 5.2 フロー
 
 ```text
-ブランチ作成
+ブランチ作成（exact origin/main から）
   ↓ 実装（1 PR = 最小のレビュー可能な縦割りマイルストーン）
-セルフチェック（ビルド・型・テスト）
+セルフチェック（PRODUCT_SPEC 16.4 の必須チェック一式）
   ↓
-レビュー（Tech Lead）
+push → PR 作成
   ↓
-PR 作成
+exact-head CI
   ↓
-CI
+レビュー（Tech Lead / 該当時 Legal・Security）
   ↓
 QA ゲート（§5.3）
   ↓ 合格
-マージ
+人間（CTO）の merge 承認
+  ↓
+true merge commit（squash / rebase merge / cherry-pick / manual FF は禁止）
+  ↓
+merge commit SHA に対する CI 再実行
+  ↓
+ローカル annotated completion tag（§5.1 / PRODUCT_SPEC 17.5）
 ```
+
+> **レビューは PR 作成の後である。** マイルストーン PR を開いたら、そこで停止してレビューを待つ。レビュー待ちの間に同フェーズの後続マイルストーンを実装しない。
 
 - 1 PR は目安として変更 500 行以内（ロックファイル・生成マイグレーション・機械生成物を除く）。
 - 超える場合は**実装が育つ前に**マイルストーンへ分割する。
@@ -219,7 +233,7 @@ QA Reviewer は以下をすべて確認し、**1 つでも欠ければマージ�
 | 7 | 冪等性・リトライの挙動が検証されている（ワーカー変更の場合） | 条件付き必須 |
 | 8 | 文書が実装済みの挙動を記述している（計画を完了として書いていない） | 必須 |
 | 9 | シークレット・署名 URL・認可ヘッダ・生プロバイダ応答をログに出していない | 必須 |
-| 10 | 本番ビルドが通る | 必須 |
+| 10 | PRODUCT_SPEC 16.4 の必須チェックがすべて通る（typecheck / lint / test / build / test:db / `prisma migrate diff` = No difference detected） | 必須 |
 
 - QA の差し戻しは Orchestrator の判断で覆せない。覆すには人間の承認を要する。
 - QA は実装を自分で書き換えない。差し戻して Developer に修正させる。
@@ -413,4 +427,5 @@ Product Manager も Orchestrator も、仕様を独断で確定してはなら�
 |---|---|---|---|
 | 0.1 | 2026-08-29 | 初版起草（Product Manager / Product Owner Agent） | 草案・未承認 |
 | 0.2 | 2026-08-29 | §8 柱書を「エージェント自身が実行してはならない／承認後に実行するのは人間または人間が許可した実行経路」に差し替え。§8 に STOP LIST の改定要件を追加。§7 冒頭に §8 との関係を示す相互参照を追加（Orchestrator 裁定 1・2 による） | 草案・未承認 |
+| 0.4 | 2026-08-29 | Tech Lead レビュー指摘 T-01・T-02・T-03・T-07・T-08 を反映。§5.2 のフローを実態（レビューは PR 作成の後）に合わせ、merge 承認・true merge commit・merge 後の CI 再実行・completion tag まで延長。§5.1 の git 権限を「読み取りは全役割可／履歴・ref を変える操作は Developer と許可された DevOps・SRE のみ」へ分離し、merge の実行者と方式、worktree 運用、stash 禁止、タグ push の現況を追記。§5.3 QA ゲート #10 を PRODUCT_SPEC 16.4 の必須チェック一式へ拡張。あわせて CTO 追加方針により、Git 操作の閲覧系／状態変更系の分離を原則として明文化し、`git stash` を原則禁止と位置づけた | 草案・未承認 |
 | 0.3 | 2026-08-29 | Legal レビュー指摘 GOV-01〜06 を反映。§8 に 19（第三者規約・ライセンス・契約条項への同意）と 20（公表目的外の個人データ利用・第三者提供）を追加。§7.1 に 8（個人データの収集開始・利用目的追加・第三者提供・国外移転）を追加し §7.2〜7.4 を 9〜24 へ採番し直し。§3.7 に法的申立ての経路を追加。§6.1 に 8（第三者ライセンス）と 9（アウトバウンド送信・法域・チャネル・データソース）を追加。§2 責務境界の原則に Legal 差し戻しの及ぶ範囲を追記。§12 の相互参照を §7.4-23 へ修正 | 草案・未承認 |

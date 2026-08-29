@@ -101,7 +101,7 @@ packages/
 ├── video-providers/
 ├── observability/
 └── shared/
-prisma/
+prisma/            # README.md only; actual schema/migrations live in packages/database/prisma/
 docs/
 tests/
 infra/
@@ -211,7 +211,11 @@ Diagrams may use Mermaid inside Markdown. Documentation must describe implemente
 
 ## Implementation sequence
 
-Implement one phase at a time from `docs/Roadmap.md`. Before each phase: inspect, write a gap analysis, split the phase into the smallest reviewable milestones, implement one milestone, run checks, update required documentation, commit, push, and open a PR.
+Implement one milestone at a time. The phase-level roadmap is `docs/Roadmap.md`;
+the authoritative sub-milestone breakdown and current position are `PRODUCT_SPEC.md`
+section 9 and `docs/decisions/TODO.md`. Where they differ, the latter two govern.
+
+Before each phase: inspect, write a gap analysis, split the phase into the smallest reviewable milestones, implement one milestone, run checks, update required documentation, commit, push, and open a PR.
 
 After opening a milestone PR, stop and wait for review unless explicitly instructed to continue. Do not implement all remaining milestones of the phase while an earlier milestone is awaiting review.
 
