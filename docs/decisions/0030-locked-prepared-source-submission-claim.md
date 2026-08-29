@@ -104,6 +104,12 @@ row another actor already moved.
 Step 4 is not redundant with step 8's compare-and-swap. The CAS closes the
 window *after* step 5, and returns `NOT_CLAIMABLE` when it loses; but without
 step 4 the method would return `SOURCE_INVALID` **before ever reaching the CAS**.
+Proving that requires the test to know the claim is blocked on *this* asset
+lock, so the harness correlates the waiter to the current database, to the
+holder's backend pid through `pg_blocking_pids`, and to the claim's own
+`media_assets` / `FOR NO KEY UPDATE` statement — an uncorrelated "some backend
+is waiting" observation would let the generation be parked before the claim's
+initial read and pass with step 4 removed.
 
 A plain read suffices at step 4 *because* this runs at **READ COMMITTED**, where
 each statement sees the latest committed data. Prisma configures no isolation

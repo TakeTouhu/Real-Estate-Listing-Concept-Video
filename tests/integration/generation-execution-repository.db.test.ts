@@ -704,24 +704,47 @@ describe.skipIf(!HAS_DB)("the asset row lock serializes the claim", () => {
   });
 
   /**
-   * Block until some backend is actually waiting on a lock.
+   * Block until **this claim** is provably waiting behind **that holder**.
    *
-   * A sleep would only be a guess about scheduling; this asks PostgreSQL. The
-   * claim is known to have reached its locking statement when a session appears
-   * with `wait_event_type = 'Lock'`, which is the state this test needs before
-   * it may move the generation underneath.
+   * An earlier version asked only `SELECT count(*) FROM pg_locks WHERE NOT
+   * granted`, which review correctly rejected: it is server-wide and
+   * uncorrelated, so any unrelated waiter — another database on a shared
+   * PostgreSQL server, a leftover session from another suite — satisfies it
+   * immediately. The test would then park the generation *before* the claimant
+   * had even completed its initial read, and the claim would answer
+   * `NOT_CLAIMABLE` from that first check. It would pass with the post-lock
+   * re-read removed, which is the one thing it exists to prove.
+   *
+   * The condition is now correlated on three axes at once:
+   *
+   * - `datname = current_database()`, so another database cannot satisfy it;
+   * - the holder's own backend pid appears in `pg_blocking_pids(waiter)`, so it
+   *   must be *this* holder the waiter is behind;
+   * - the waiter's current query is the claim's asset lock — matched on
+   *   `media_assets` and `FOR NO KEY UPDATE` rather than on exact text, because
+   *   the statement is multi-line and whitespace is not a contract.
+   *
+   * Polling is only the mechanism for re-asking; the condition decides when the
+   * test proceeds, and the attempt limit makes a broken harness fail rather than
+   * hang.
    */
-  async function waitUntilBlockedOnLock(observer: PrismaClient): Promise<void> {
+  async function waitUntilClaimBlockedBy(observer: PrismaClient, holderPid: number): Promise<void> {
     // The observer must be its own client. Asking through a pool that a blocked
     // transaction is already holding a connection from can queue behind it, and
     // the poll would then wait on the very thing it is trying to observe.
     for (let attempt = 0; attempt < 200; attempt += 1) {
-      const ungranted = await observer.$queryRaw<{ n: bigint }[]>`
-        SELECT count(*) AS n FROM pg_locks WHERE NOT granted`;
-      if (Number(ungranted[0]!.n) > 0) return;
+      const blocked = await observer.$queryRaw<{ pid: number }[]>`
+        SELECT a.pid
+          FROM pg_stat_activity AS a
+         WHERE a.datname = current_database()
+           AND a.wait_event_type = 'Lock'
+           AND ${holderPid}::int = ANY(pg_blocking_pids(a.pid))
+           AND a.query LIKE '%media_assets%'
+           AND a.query LIKE '%FOR NO KEY UPDATE%'`;
+      if (blocked.length > 0) return;
       await new Promise((r) => setTimeout(r, 25));
     }
-    throw new Error("no backend ever blocked on a lock");
+    throw new Error("the claim never blocked on the holder's MediaAsset lock");
   }
 
   it("answers NOT_CLAIMABLE, not a stale source verdict, when the generation moves while it waits", async () => {
@@ -742,9 +765,11 @@ describe.skipIf(!HAS_DB)("the asset row lock serializes the claim", () => {
     // Its acquisition is awaited rather than assumed: starting both and hoping
     // the holder wins would make this test decide the wrong thing at random.
     const holder = client();
-    let acquired!: () => void;
+    let acquired!: (pid: number) => void;
     let releaseHold!: () => void;
-    const hasLock = new Promise<void>((r) => {
+    // The holder's backend pid, read on the same connection that holds the lock
+    // so it identifies exactly the transaction the claimant must wait behind.
+    const holderPid = new Promise<number>((r) => {
       acquired = r;
     });
     const held = new Promise<void>((r) => {
@@ -756,18 +781,20 @@ describe.skipIf(!HAS_DB)("the asset row lock serializes the claim", () => {
           SELECT "id" FROM "media_assets"
            WHERE "id" = ${ASSET} AND "organizationId" = ${ORG_A}
            FOR NO KEY UPDATE`;
-        acquired();
+        const [self] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+        acquired(self!.pid);
         await held;
       },
       { timeout: 20000 },
     );
-    await hasLock;
+    const blockingPid = await holderPid;
 
-    // Now the claim: it reads QUEUED, then blocks on the lock above. Waiting
-    // for PostgreSQL to report a blocked backend is what makes the interleaving
-    // deterministic.
+    // Now the claim: it reads QUEUED, then blocks on the lock above. Proceeding
+    // only once PostgreSQL reports *this* claim blocked behind *that* holder is
+    // what makes the interleaving deterministic — and what makes the post-lock
+    // re-read the thing actually under test.
     const claiming = execution.claimPreparedForSubmission("gen_ex_prec", IDENTITY);
-    await waitUntilBlockedOnLock(client());
+    await waitUntilClaimBlockedBy(client(), blockingPid);
 
     // Move the generation with a real execution transition. It writes only
     // `scene_generations`, so it does not contend for the asset row.

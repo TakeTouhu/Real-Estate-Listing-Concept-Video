@@ -63,9 +63,21 @@ The barrier is entirely test-owned. The repository factory already takes a
 `sceneGeneration.updateMany` interceptor waits on a promise the test controls.
 Reaching that interceptor *is* the proof the lock is held.
 
-Where the claim must instead be observed **blocked**, the test polls
-`pg_locks WHERE NOT granted` from its **own** connection — not a sleep, and not
+Where the claim must instead be observed **blocked**, the test waits on a
+**correlated** condition, from its **own** connection — not a sleep, and not
 through the pool the blocked transaction is already holding a connection from.
+The condition requires all three of: `datname = current_database()`; the
+holder's own backend pid (read inside the holding transaction) present in
+`pg_blocking_pids(waiter)`; and the waiter's current query matching the claim's
+asset lock on `media_assets` and `FOR NO KEY UPDATE`.
+
+An earlier revision asked only `SELECT count(*) FROM pg_locks WHERE NOT
+granted`, which review correctly rejected as uncorrelated: server-wide, so any
+unrelated waiter satisfies it immediately, and the test would then park the
+generation *before* the claimant finished its initial read. The claim would
+answer `NOT_CLAIMABLE` from that first check and the test would pass with the
+post-lock re-read removed — the one thing it exists to prove. Correlating the
+waiter is what makes **M2** genuinely discriminating.
 
 ## Where each property is proven
 
@@ -95,7 +107,7 @@ through the pool the blocked transaction is already holding a connection from.
 | Mutation | Result |
 | --- | --- |
 | **M1** — `FOR NO KEY UPDATE` removed | **2 DB fail** |
-| **M2** — post-lock generation recheck removed | **1 DB fail** |
+| **M2** — post-lock generation recheck removed | **1 DB fail** — `SOURCE_INVALID` where `NOT_CLAIMABLE` is required |
 | **M3** — classifier's deletion input forced to `null` | **1 DB fail** |
 | **M4** — `storageKey` equality removed | **1 DB fail** |
 | **M5** — `mimeType` equality removed | **0 DB fail**, **1 unit fail** — see below |
