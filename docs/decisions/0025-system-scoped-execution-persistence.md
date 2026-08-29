@@ -3,6 +3,11 @@
 Status: Accepted (Phase 4C-1b)
 Date: 2026-08-18
 
+> **Superseded in part by ADR-0030.** `claimQueuedForSubmission` no longer
+> exists: Phase 4C-3A-2b replaced it with `claimPreparedForSubmission`, which
+> takes a `PreparedSourceIdentity` and locks the asset row. References below are
+> the historical record of this milestone, not the current API.
+
 ## Context
 
 ADR-0024 made the `SceneGeneration` row the durable queue: work is discovered by

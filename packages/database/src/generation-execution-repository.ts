@@ -1,13 +1,22 @@
 import type { SceneGeneration as DbSceneGeneration, PrismaClient } from "@prisma/client";
 import type {
   ClaimedSceneGeneration,
+  ExecutionSourceObservation,
   FailedSceneGeneration,
   PreflightRefusalReason,
+  PreparedSourceIdentity,
   SceneGeneration,
   SceneGenerationExecutionRepository,
+  SubmissionClaimOutcome,
   SystemGenerationCandidate,
 } from "@app/domain";
-import { assertTransition, preflightFailureStateFor } from "@app/domain";
+import {
+  assertTransition,
+  classifyExecutionSource,
+  isMediaAssetStatus,
+  preflightFailureStateFor,
+  sameSourceIdentity,
+} from "@app/domain";
 import { AppError } from "@app/shared";
 import { toGeneration } from "./generation-repositories";
 
@@ -42,6 +51,79 @@ function inState<S extends SceneGeneration["state"]>(
   state: S,
 ): Omit<SceneGeneration, "state"> & { readonly state: S } {
   return { ...toGeneration(row), state };
+}
+
+const NOT_CLAIMABLE: SubmissionClaimOutcome = { kind: "NOT_CLAIMABLE" };
+
+function sourceInvalid(reason: PreflightRefusalReason): SubmissionClaimOutcome {
+  return { kind: "SOURCE_INVALID", reason };
+}
+
+/**
+ * The columns the locking read asks for, as they actually arrive.
+ *
+ * Every field is typed as it is *before* validation, which is the point:
+ * `$queryRaw` bypasses Prisma's model mapping, so its type parameter is an
+ * assertion, not a check. `status` comes back as a plain `string` rather than
+ * the generated enum — verified against PostgreSQL, not assumed — and
+ * `deletionRequestedAt` as `Date | null` from `TIMESTAMP(3)`. Nothing here may
+ * be handed to the domain until {@link toExecutionSourceObservation} has looked
+ * at it.
+ */
+interface RawLockedAssetRow {
+  readonly id: unknown;
+  readonly organizationId: unknown;
+  readonly status: unknown;
+  readonly storageKey: unknown;
+  readonly mimeType: unknown;
+  readonly sha256: unknown;
+  readonly deletionRequestedAt: unknown;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isNullableInstant(value: unknown): value is Date | null {
+  return value === null || (value instanceof Date && Number.isFinite(value.getTime()));
+}
+
+/**
+ * Turn one raw locked row into the five-field observation the domain classifies.
+ *
+ * Validates rather than casts. `raw.status as MediaAssetStatus` would launder an
+ * arbitrary database value into `classifyExecutionSource`, where the exhaustive
+ * status map would yield `undefined` and fall through every branch — a source of
+ * unknown lifecycle treated as though it had been classified.
+ *
+ * A row that fails these checks is an **invariant failure, not a refusal**. The
+ * column set is constrained by the schema, so a value outside it means the
+ * database and this process disagree about what `media_assets` contains;
+ * reporting that as a `PreflightRefusalReason` would file a system defect as a
+ * verdict about the customer's photo, and would durably park their work for it.
+ *
+ * The thrown error names nothing: no key, digest, MIME type or id. It is raised
+ * inside the claim transaction, so the claim rolls back.
+ */
+function toExecutionSourceObservation(raw: RawLockedAssetRow): ExecutionSourceObservation {
+  if (
+    typeof raw.id !== "string" ||
+    typeof raw.organizationId !== "string" ||
+    !isMediaAssetStatus(raw.status) ||
+    typeof raw.storageKey !== "string" ||
+    !isNullableString(raw.mimeType) ||
+    !isNullableString(raw.sha256) ||
+    !isNullableInstant(raw.deletionRequestedAt)
+  ) {
+    throw new AppError("INTERNAL_ERROR", "The locked source asset row could not be read");
+  }
+  return {
+    status: raw.status,
+    deletionRequestedAt: raw.deletionRequestedAt,
+    storageKey: raw.storageKey,
+    mimeType: raw.mimeType,
+    sha256: raw.sha256,
+  };
 }
 
 /**
@@ -80,7 +162,10 @@ export function createPrismaSceneGenerationExecutionRepository(
       return row ? toCandidate(row) : null;
     },
 
-    async claimQueuedForSubmission(generationId: string) {
+    async claimPreparedForSubmission(
+      generationId: string,
+      sourceIdentity: PreparedSourceIdentity,
+    ) {
       // Legality first, and from the domain rather than restated here. This
       // adapter decides *who* gets to make the move; whether `QUEUED →
       // SUBMITTING` is a legal move at all is the state machine's answer, and
@@ -88,95 +173,181 @@ export function createPrismaSceneGenerationExecutionRepository(
       // quietly becoming a second state machine.
       assertTransition("QUEUED", "SUBMITTING");
 
-      // The update and the re-read share one transaction, and that is
-      // load-bearing rather than tidiness.
-      //
-      // `updateMany` returns a count, not rows, so the claimed row must be read
-      // back. Outside a transaction that read is a TOCTOU window, and the window
-      // is reachable: `QUEUED → CANCELLED` is a legal transition, and
-      // `SceneGenerationRepository.update` deliberately carries no state
-      // predicate — it "persists what it is asked to persist", leaving legality
-      // to `assertTransition`. So a cancellation that observed `QUEUED` can
-      // commit between the two statements and this method would hand back a row
-      // in `CANCELLED` while typing it as claimed — a caller's licence to submit,
-      // issued for work someone else already stopped.
-      //
-      // Inside a transaction the `UPDATE` holds a row lock until commit, so that
-      // cancellation blocks rather than interleaving, and the `SELECT` sees this
-      // transaction's own write. That is the full extent of the guarantee: it
-      // says nothing about a writer that starts after this commit.
-      return prisma.$transaction(async (tx) => {
-        // The compare-and-swap. `state: "QUEUED"` inside the predicate is what
-        // makes this exclusive: two workers issuing this concurrently for the
-        // same id produce one update and one no-op, decided by the database
-        // rather than by anything this process observed beforehand.
+      return prisma.$transaction(async (tx): Promise<SubmissionClaimOutcome> => {
+        // --- 1. Non-locking authoritative read -----------------------------
+        // Deliberately does not lock `scene_generations`: the frozen order is
+        // MediaAsset first, and taking a conflicting generation lock here would
+        // invert it. Everything this claim addresses is *resolved* from the row
+        // and its parent — the asset id it was admitted against and the owning
+        // organization — never accepted from the caller.
+        const before = await tx.sceneGeneration.findUnique({
+          where: { id: generationId },
+          include: { videoProject: { select: { organizationId: true } } },
+        });
+        if (!before?.videoProject || before.state !== "QUEUED") return NOT_CLAIMABLE;
+
+        const organizationId = before.videoProject.organizationId;
+        const { assetId, videoProjectId } = before;
+
+        // --- 2. The serialization barrier -----------------------------------
+        // Prisma 5.22 exposes no fluent row lock, so this is the repository's
+        // only raw statement, and it stays private to this file: no generic raw
+        // helper, no lock helper, no exported transaction primitive.
         //
-        // `updateMany` rather than `update` is also deliberate — `update`
-        // requires a unique selector and would throw when the predicate does not
-        // match, turning "someone else won the race" into an exception. Losing a
-        // race is an ordinary outcome, so it is reported as `null`.
+        // A tagged template, so both values are bound parameters rather than
+        // interpolated text. `FOR NO KEY UPDATE` rather than `FOR UPDATE`
+        // because the claim must conflict with asset *writers* — `requestDeletion`
+        // and every `updateIfCurrent` — while `storyboard_scenes` holds
+        // `FOR KEY SHARE` on this same row for referential integrity, and
+        // blocking ordinary storyboard composition for the length of a claim
+        // buys nothing. Both halves verified against PostgreSQL (ADR-0030).
+        const locked = await tx.$queryRaw<RawLockedAssetRow[]>`
+          SELECT "id",
+                 "organizationId",
+                 "status",
+                 "storageKey",
+                 "mimeType",
+                 "sha256",
+                 "deletionRequestedAt"
+            FROM "media_assets"
+           WHERE "id" = ${assetId}
+             AND "organizationId" = ${organizationId}
+           FOR NO KEY UPDATE
+        `;
+
+        // --- 3. Re-read the generation, after the lock wait ------------------
+        // Load-bearing, and not redundant with the compare-and-swap below.
+        //
+        // Acquiring the asset lock can block for as long as another writer holds
+        // it, and in that time the generation may be claimed, cancelled or
+        // parked by someone else. Without this read, a claimant that waited and
+        // then found the source invalid would answer `SOURCE_INVALID` — a stale
+        // verdict about the source of work that is no longer anyone's to do.
+        // `NOT_CLAIMABLE` is the truthful answer, and it must win.
+        //
+        // A plain read suffices *because* PostgreSQL runs this at READ
+        // COMMITTED: each statement sees the latest committed data, so a
+        // transition that committed during the wait is visible here. Under
+        // REPEATABLE READ it would not be, and this check would silently stop
+        // working — which is why the isolation level is stated rather than
+        // assumed (ADR-0030).
+        const during = await tx.sceneGeneration.findUnique({
+          where: { id: generationId },
+          include: { videoProject: { select: { organizationId: true } } },
+        });
+        if (!during?.videoProject || during.state !== "QUEUED") return NOT_CLAIMABLE;
+
+        // Still `QUEUED`, so the addressing facts this claim already used must
+        // still hold. They are immutable by construction — nothing writes
+        // `assetId` or `videoProjectId` after admission — so disagreement means
+        // the row was altered underneath, and the lock just taken is on the
+        // wrong asset. Refusing to validate a source this claim did not lock.
+        if (
+          during.assetId !== assetId ||
+          during.videoProjectId !== videoProjectId ||
+          during.videoProject.organizationId !== organizationId
+        ) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "The generation changed its source or owner during its own claim",
+          );
+        }
+
+        // --- 4. Only now may a source verdict be returned --------------------
+        // Zero rows is indistinguishable from an asset in another organization,
+        // and that is the tenant guarantee: `organizationId` is in the `WHERE`,
+        // so a foreign row is never loaded and never described.
+        if (locked.length === 0) return sourceInvalid("ASSET_NOT_FOUND");
+        if (locked.length !== 1) {
+          throw new AppError("INTERNAL_ERROR", "The locked source asset row could not be read");
+        }
+
+        const classified = classifyExecutionSource(toExecutionSourceObservation(locked[0]!));
+        if (classified.kind === "REFUSED") return sourceInvalid(classified.reason);
+
+        // Two independently usable sources, so the only question left is whether
+        // they are the *same* one. All three fields, compared exactly — no
+        // trimming, no normalization, no re-hashing. `storageKey` and `mimeType`
+        // agree across every re-processed JPEG for an asset, so the digest is
+        // what actually decides this (ADR-0029).
+        if (!sameSourceIdentity(classified.identity, sourceIdentity)) {
+          return sourceInvalid("ASSET_SOURCE_CHANGED");
+        }
+
+        // --- 5. The compare-and-swap, still holding the asset lock ------------
+        // `updateMany` rather than `update`: `update` requires a unique selector
+        // and throws when the predicate does not match, turning "someone else
+        // won" into an exception. Losing is ordinary, and is reported as
+        // `NOT_CLAIMABLE` — never as a source verdict, because the source was
+        // fine and something else moved the row.
+        //
+        // Only `state` is written. `updatedAt` is the database's. Nothing else
+        // is touched: a future explicit requeue policy may legitimately return a
+        // row to `QUEUED` still carrying diagnostics from an earlier attempt,
+        // and silently clearing them here would erase that history.
         const { count } = await tx.sceneGeneration.updateMany({
           where: { id: generationId, state: "QUEUED" },
           data: { state: "SUBMITTING" },
         });
-        if (count === 0) return null;
+        if (count === 0) return NOT_CLAIMABLE;
 
-        const row = await tx.sceneGeneration.findUnique({
+        // --- 6. Past here a licence was won, so nothing may be reported lost --
+        // `NOT_CLAIMABLE` has exactly one meaning to a caller: *you did not win*.
+        // The database has just said the opposite. Reporting an invariant
+        // failure as a lost race would leave a row in `SUBMITTING` that every
+        // worker believes belongs to someone else — stalled work no alarm fires
+        // for. Throwing inside the transaction rolls the claim back instead, so
+        // the row returns to `QUEUED` and stays discoverable.
+        const after = await tx.sceneGeneration.findUnique({
           where: { id: generationId },
           include: { videoProject: { select: { organizationId: true } } },
         });
-
-        // Past this point `null` is no longer available, and that is the whole
-        // point of the distinction. `null` has exactly one meaning to a caller:
-        // *this caller did not win a QUEUED claim*, an ordinary outcome it
-        // handles by moving on to other work. The database has just told us the
-        // opposite — `count === 1`, this caller **did** win — so anything that
-        // goes wrong from here is an invariant failure, not a lost race.
-        //
-        // Reporting it as `null` would launder a broken invariant into a
-        // routine one, and the row would be left in `SUBMITTING` with every
-        // worker believing it belongs to someone else: stalled work that no
-        // alarm ever fires for. Throwing inside the transaction rolls the claim
-        // back instead, so the row returns to `QUEUED` and stays discoverable.
-        //
-        // Neither branch is reachable today. A missing row would need a
-        // deletion path `scene_generations` does not have (its parent is `ON
-        // DELETE RESTRICT`, precisely to keep paid-attempt history); a row in
-        // another state would mean the row lock did not hold. Both are
-        // impossible-by-construction rather than impossible-by-hope, which is
-        // why they are asserted rather than assumed.
-        if (!row) {
+        if (!after) {
           throw new AppError(
             "INTERNAL_ERROR",
             "Claimed scene generation disappeared within its own claim transaction",
             { details: { generationId } },
           );
         }
-        // The tenant is the one thing this method promises to have *resolved*.
-        // The relation is required in the schema, so this is a type-level
-        // impossibility rather than a plausible runtime path — but returning a
-        // claim without an organization would be worse than any of the other
-        // failures here, so it is checked rather than trusted.
-        if (row.videoProject === null || row.videoProject === undefined) {
+        if (after.videoProject === null || after.videoProject === undefined) {
           throw new AppError(
             "INTERNAL_ERROR",
             "Claimed scene generation has no resolvable owning VideoProject",
             { details: { generationId } },
           );
         }
-        if (row.state !== "SUBMITTING") {
+        if (after.state !== "SUBMITTING") {
           throw new AppError(
             "INTERNAL_ERROR",
             "Claimed scene generation was not SUBMITTING after a won claim",
-            { details: { generationId, state: row.state } },
+            { details: { generationId, state: after.state } },
           );
         }
+        // The licence must name the same source and the same tenant the lock and
+        // the validation were performed against. Checked rather than trusted:
+        // returning a claim whose asset or organization drifted would be worse
+        // than any other failure here, because it is the one nobody would notice.
+        if (
+          after.assetId !== assetId ||
+          after.videoProjectId !== videoProjectId ||
+          after.videoProject.organizationId !== organizationId
+        ) {
+          throw new AppError(
+            "INTERNAL_ERROR",
+            "Claimed scene generation no longer names the source it was claimed against",
+            { details: { generationId } },
+          );
+        }
+
         return {
-          organizationId: row.videoProject.organizationId,
-          // `SUBMITTING` is not asserted here — it was just proved, two lines
-          // up, against the row this transaction wrote and locked.
-          generation: inState(row, "SUBMITTING"),
-        } satisfies ClaimedSceneGeneration;
+          kind: "CLAIMED",
+          claim: {
+            organizationId: after.videoProject.organizationId,
+            // `SUBMITTING` is not asserted here — it was proved a few lines up,
+            // against the row this transaction wrote and locked.
+            generation: inState(after, "SUBMITTING"),
+          } satisfies ClaimedSceneGeneration,
+        };
       });
     },
 

@@ -3,6 +3,11 @@
 Status: Accepted (Phase 4C-3A-2a)
 Date: 2026-08-28
 
+> **Superseded in part by ADR-0030.** `claimQueuedForSubmission` no longer
+> exists: Phase 4C-3A-2b replaced it with `claimPreparedForSubmission`, which
+> takes a `PreparedSourceIdentity` and locks the asset row. References below are
+> the historical record of this milestone, not the current API.
+
 ## Context
 
 Phase 4C-3A-2 needs a submission to prove that the bytes a provider will fetch

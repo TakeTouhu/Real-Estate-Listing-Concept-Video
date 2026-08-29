@@ -1,4 +1,5 @@
 import type { PreflightFailureState, PreflightRefusalReason } from "./execution-preflight-errors";
+import type { PreparedSourceIdentity } from "./execution-source";
 import type { SceneGeneration } from "./types";
 
 /**
@@ -29,7 +30,7 @@ import type { SceneGeneration } from "./types";
  *
  * Discovery is deliberately **read-only and non-exclusive**. Two workers may see
  * the same candidate, and that is safe because nothing is claimed here: the
- * exclusive step is {@link SceneGenerationExecutionRepository.claimQueuedForSubmission},
+ * exclusive step is {@link SceneGenerationExecutionRepository.claimPreparedForSubmission},
  * and the loser of that race simply moves on.
  *
  * The order matters and is the reason preparation and claiming are two calls.
@@ -97,6 +98,52 @@ export interface FailedSceneGeneration {
 }
 
 /**
+ * Why a prepared claim did not produce a submission licence, or that it did.
+ *
+ * Three arms, discriminated by a top-level `kind`. That discriminant is right
+ * here for a reason the A-1 result types did not have: `ClaimedSceneGeneration`
+ * and {@link FailedSceneGeneration} are told apart by their narrowed
+ * `generation.state`, but two of the three arms below carry **no generation at
+ * all**, so there is no shared field to discriminate on. A bare
+ * `ClaimedSceneGeneration | null` was rejected for the same reason it was
+ * rejected in preflight: it collapses two outcomes a caller must treat
+ * differently.
+ *
+ * The difference that matters:
+ *
+ * - `SOURCE_INVALID` means *this still-claimable `QUEUED` work cannot receive a
+ *   licence, because the prepared source is no longer what preflight approved.*
+ *   A future orchestrator may act on that — discard the `PreparedGeneration`
+ *   and attempt `failQueuedPreflight(id, reason)`.
+ * - `NOT_CLAIMABLE` means *this caller did not obtain the `QUEUED` licence*, and
+ *   asserts nothing at all about the source. Unknown id, already claimed,
+ *   cancelled, parked, or simply lost the race — identical, because the
+ *   caller's next action is identical, and because naming the winner would leak
+ *   another actor's progress.
+ *
+ * Nothing here carries a generic `details` bag: a payload nobody has a use for
+ * is how a storage key or a digest eventually ends up in a log.
+ */
+export type SubmissionClaimOutcome =
+  | {
+      readonly kind: "CLAIMED";
+      /** The licence. Its `generation.state` is statically `SUBMITTING`. */
+      readonly claim: ClaimedSceneGeneration;
+    }
+  | {
+      readonly kind: "SOURCE_INVALID";
+      /**
+       * The single closed-vocabulary reason, and the only thing this arm says.
+       *
+       * No storage key, digest, MIME type, asset id, organization id or URL —
+       * the values that were compared describe customer content, and this
+       * result is meant to be safe to log whole.
+       */
+      readonly reason: PreflightRefusalReason;
+    }
+  | { readonly kind: "NOT_CLAIMABLE" };
+
+/**
  * Three methods, and no more than execution actually needs today.
  *
  * There is no `findById`, no listing, no lease renewal, no completion write, and
@@ -121,21 +168,40 @@ export interface SceneGenerationExecutionRepository {
   findNextQueuedForPreparation(): Promise<SystemGenerationCandidate | null>;
 
   /**
-   * Move exactly one `QUEUED` row to `SUBMITTING`, or return `null`.
+   * Move exactly one `QUEUED` row to `SUBMITTING` **against a proven source**,
+   * or explain which of the two ways it did not happen.
    *
-   * This is a compare-and-swap, not a read followed by a write: the update
-   * carries `state = 'QUEUED'` in its own predicate, so when two workers race
-   * for the same candidate the database picks the winner and the loser gets
-   * `null` rather than a second licence to submit. A row that has moved on for
-   * any other reason — already claimed, cancelled, terminal — is refused by the
-   * same predicate, and `null` does not distinguish between those cases because
-   * the caller's next action is identical in all of them: try something else.
+   * Replaces `claimQueuedForSubmission`, which is deleted rather than kept as an
+   * overload (ADR-0030). That method could hand out `SUBMITTING` — the licence
+   * to spend money — with no statement about the bytes being submitted, and a
+   * deprecated one-argument path would have left that route open for the next
+   * caller to find.
    *
-   * Legality is still the domain's question. `assertTransition` says whether
-   * `QUEUED → SUBMITTING` is a legal move; this method decides **who** gets to
-   * make it. Both, not either.
+   * Still a compare-and-swap on `state = 'QUEUED'`, so two workers racing for
+   * one row produce exactly one winner, decided by the database. What is new is
+   * everything around it:
+   *
+   * - the transaction locks the authoritative `MediaAsset` row with
+   *   `FOR NO KEY UPDATE` **before** the swap, which is what orders this claim
+   *   against `requestDeletion` and every other asset writer;
+   * - the locked row is classified by the same canonical domain classifier
+   *   preflight uses, then compared field-for-field against `sourceIdentity`;
+   * - the licence exists only when the whole transaction **commits**. Holding
+   *   the lock is not a claim, and an uncommitted `SUBMITTING` row is not one
+   *   either.
+   *
+   * `sourceIdentity` is a description, never a credential: no signed URL, no
+   * expiry, no prompt. The asset id and the organization are **resolved** from
+   * the generation row and its `VideoProject`, never accepted here — a caller
+   * cannot point this at an asset the admitted request did not name.
+   *
+   * Legality is still the domain's question: `assertTransition` says whether
+   * `QUEUED → SUBMITTING` is legal, this method decides **who** may make it.
    */
-  claimQueuedForSubmission(generationId: string): Promise<ClaimedSceneGeneration | null>;
+  claimPreparedForSubmission(
+    generationId: string,
+    sourceIdentity: PreparedSourceIdentity,
+  ): Promise<SubmissionClaimOutcome>;
 
   /**
    * Park exactly one `QUEUED` row as a preflight failure, or return `null`.

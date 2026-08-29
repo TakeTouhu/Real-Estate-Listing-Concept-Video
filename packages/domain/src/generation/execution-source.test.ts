@@ -3,6 +3,7 @@ import type { MediaAssetStatus } from "../property/types";
 import type { PreparedGeneration } from "./execution-preflight";
 import {
   classifyExecutionSource,
+  isMediaAssetStatus,
   isUsableSourceDigest,
   sameSourceIdentity,
   type ExecutionSourceObservation,
@@ -68,6 +69,37 @@ describe("isUsableSourceDigest", () => {
   it("accepts the canonical form", () => {
     expect(isUsableSourceDigest(DIGEST)).toBe(true);
     expect(isUsableSourceDigest("0123456789abcdef".repeat(4))).toBe(true);
+  });
+});
+
+describe("isMediaAssetStatus", () => {
+  // The guard exists because Phase 4C-3A-2b reads the asset row with
+  // `$queryRaw`, which bypasses Prisma's model mapping: `status` arrives as a
+  // plain string, so the raw query's type parameter is an assertion rather than
+  // a check. Without this, an arbitrary value would reach the exhaustive status
+  // map, yield `undefined`, and fall through every branch.
+  it.each(ALL_STATUSES)("accepts %s", (status) => {
+    expect(isMediaAssetStatus(status)).toBe(true);
+  });
+
+  it.each([
+    ["an arbitrary string", "NOT_A_STATUS"],
+    ["the empty string", ""],
+    ["lowercase", "ready"],
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 1],
+    ["an object", {}],
+    ["an array", []],
+    // The reason membership is tested with `hasOwnProperty` rather than `in`:
+    // `"toString" in ASSET_EXECUTABILITY` is true through the prototype chain,
+    // so `in` would classify an inherited method name as a lifecycle status.
+    ["toString", "toString"],
+    ["constructor", "constructor"],
+    ["__proto__", "__proto__"],
+    ["hasOwnProperty", "hasOwnProperty"],
+  ])("refuses %s", (_label, value) => {
+    expect(isMediaAssetStatus(value)).toBe(false);
   });
 });
 

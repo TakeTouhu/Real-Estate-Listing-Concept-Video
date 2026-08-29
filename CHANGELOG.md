@@ -3,6 +3,76 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3A-2b: Locked prepared-source submission claim
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3a2b-completion.md`
+and ADR-0030.
+
+### Changed
+
+- **`claimQueuedForSubmission` is replaced by
+  `claimPreparedForSubmission(generationId, sourceIdentity)`, and deleted.** The
+  old method moved a row to `SUBMITTING` — the licence to spend money exactly
+  once — while saying nothing about the bytes being submitted; it took one
+  argument, so it could not. It is removed rather than deprecated: with zero
+  production callers there was no migration cost to avoid, and a one-argument
+  alias kept "for tests" is the route the next caller finds. There is now no
+  public way to reach `SUBMITTING` without stating which source is being sent.
+- **The claim locks the authoritative `MediaAsset` row before it swaps state.**
+  `SELECT … FOR NO KEY UPDATE`, inside the same transaction, is the
+  serialization barrier that orders this claim against `requestDeletion` and
+  every other asset writer — two writes to two different rows cannot otherwise
+  see each other. The lock mode was measured, not argued: it blocks the real
+  deletion write, and unlike `FOR UPDATE` it does not block the `FOR KEY SHARE`
+  that a storyboard-scene insert takes through its foreign key.
+- **The licence linearizes at commit.** Holding the lock is not a claim, and an
+  uncommitted `SUBMITTING` row is not one either.
+
+### Added
+
+- **`SubmissionClaimOutcome`, a three-arm discriminated union.** `CLAIMED`
+  carries the state-narrowed licence; `SOURCE_INVALID` carries one closed
+  refusal reason and nothing else — no key, digest, MIME type, asset id,
+  organization id or URL; `NOT_CLAIMABLE` carries nothing and asserts no source
+  verdict. A top-level `kind` discriminant, unlike the A-1 result types, because
+  two arms carry no generation to discriminate on.
+- **`NOT_CLAIMABLE` outranks a stale source verdict.** The generation is re-read
+  *after* the asset-lock wait, before any source verdict may be returned: a
+  claimant that waited while another actor parked or claimed the row must not
+  report on the source of work that is no longer anyone's to do. The plain
+  re-read is sufficient because this runs at READ COMMITTED — stated in ADR-0030
+  rather than assumed, since raising the isolation level would silently disable
+  it.
+- **`isMediaAssetStatus`, a runtime guard over the existing exhaustive map.**
+  `$queryRaw` bypasses Prisma's model mapping, so `status` arrives as a plain
+  string and the query's type parameter is an assertion rather than a check.
+  Deliberately **not** a second status list: membership is tested against the own
+  keys of `ASSET_EXECUTABILITY`, via `Object.prototype.hasOwnProperty` rather
+  than `in`, which would accept `"toString"`. A row that fails validation is a
+  fixed `INTERNAL_ERROR` invariant failure, never a refusal reason — filing a
+  system defect as a verdict about the customer's photo would durably park their
+  work for it.
+
+### Notes
+
+- **No schema change and no migration.** The first production raw SQL in the
+  repository, bounded to one private parameterized statement inside the
+  execution adapter.
+- **`SOURCE_INVALID` writes nothing** — every source verdict precedes any
+  `scene_generations` write, proven by whole-row equality including `updatedAt`.
+  The claim does not park the row; that is a separate decision with its own CAS.
+- **A successful claim writes only `state`.** Execution history a future explicit
+  requeue policy may have left on the row is preserved, and the tests seed it
+  non-null so the assertion is discriminating.
+- **Lock order is `MediaAsset` then `SceneGeneration`**, re-audited across every
+  production transaction: no path takes them in the opposite order, and
+  `SceneGeneration` has no foreign key to `MediaAsset`.
+- ADR-0029 remains the authority on post-claim byte stability; A-2b orders the
+  claim against concurrent writers and changes nothing about what may happen to
+  the object afterwards.
+- Still production-dormant: zero production callers, no worker loop, no paid
+  gate, no provider call.
+
 ## [Unreleased] — Phase 4C-3A-2a: Prepared source identity and fail-closed content hash
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3a2a-completion.md`
