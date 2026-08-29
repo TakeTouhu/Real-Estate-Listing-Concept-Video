@@ -4,6 +4,11 @@ Milestone: Phase 4C-1b
 Base: `e8dbd016c68466a1862d15e33e8aee750de649e9` (merged Phase 4C-1a, PR #38)
 Decision record: ADR-0025
 
+> **Superseded in part by ADR-0030.** `claimQueuedForSubmission` no longer
+> exists: Phase 4C-3A-2b replaced it with `claimPreparedForSubmission`, which
+> takes a `PreparedSourceIdentity` and locks the asset row. References below are
+> the historical record of this milestone, not the current API.
+
 > This report is an immutable technical snapshot and carries no lifecycle
 > status. The GitHub pull request is the authoritative lifecycle source, and
 > `docs/progress.md` points at it (Phase 4C-1a convention).
