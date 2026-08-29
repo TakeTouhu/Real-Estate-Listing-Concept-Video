@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createPrismaSceneGenerationExecutionRepository,
   createPrismaSceneGenerationRepository,
@@ -7,6 +7,8 @@ import {
 import {
   PREFLIGHT_REFUSAL_REASONS,
   SCENE_GENERATION_STATES,
+  type MediaAssetStatus,
+  type PreparedSourceIdentity,
   type SceneGenerationState,
   preflightFailureStateFor,
 } from "@app/domain";
@@ -31,6 +33,20 @@ const PROP_A = "prp_itest_ex_a";
 const PROP_B = "prp_itest_ex_b";
 const PROJECT_A = "vpr_itest_ex_a";
 const PROJECT_B = "vpr_itest_ex_b";
+/** Every seeded generation names this asset; the claim resolves it from the row. */
+const ASSET = "ast_itest_ex";
+const ASSET_B = "ast_itest_ex_b";
+const KEY = `org/${ORG_A}/a/${ASSET}/normalized.jpg`;
+/** Canonical digests: 64 lowercase hex, the shape `sha256Hex` emits. */
+const DIGEST = "a".repeat(64);
+const OTHER_DIGEST = `b${"a".repeat(63)}`;
+
+/** What preflight would have handed the claim for a healthy seeded asset. */
+const IDENTITY: PreparedSourceIdentity = {
+  storageKey: KEY,
+  mimeType: "image/jpeg",
+  sha256: DIGEST,
+};
 
 const prisma = new PrismaClient();
 const execution = createPrismaSceneGenerationExecutionRepository(prisma);
@@ -119,9 +135,46 @@ async function seedTenant(organizationId: string, propertyId: string, projectId:
   });
 }
 
+/**
+ * The source asset every seeded generation points at.
+ *
+ * Phase 4C-3A-2b is the first milestone where this row has to exist:
+ * `SceneGeneration.assetId` carries no foreign key, so earlier suites could name
+ * an asset that was never created. The claim now locks and classifies it, so an
+ * absent row is `ASSET_NOT_FOUND` rather than an incidental detail.
+ */
+function seedAsset(
+  id: string,
+  organizationId: string,
+  propertyId: string,
+  overrides: {
+    status?: MediaAssetStatus;
+    storageKey?: string;
+    mimeType?: string | null;
+    sha256?: string | null;
+    deletionRequestedAt?: Date | null;
+  } = {},
+) {
+  return prisma.mediaAsset.create({
+    data: {
+      id,
+      organizationId,
+      propertyId,
+      storageKey: overrides.storageKey ?? `org/${organizationId}/a/${id}/normalized.jpg`,
+      originalFilename: "kitchen.jpg",
+      mimeType: overrides.mimeType === undefined ? "image/jpeg" : overrides.mimeType,
+      sha256: overrides.sha256 === undefined ? DIGEST : overrides.sha256,
+      status: overrides.status ?? "READY",
+      deletionRequestedAt: overrides.deletionRequestedAt ?? null,
+      createdBy: "usr_itest_ex",
+    },
+  });
+}
+
 async function cleanup(): Promise<void> {
   const organizationId = { in: [ORG_A, ORG_B] };
   await prisma.sceneGeneration.deleteMany({ where: { videoProject: { organizationId } } });
+  await prisma.mediaAsset.deleteMany({ where: { organizationId } });
   await prisma.videoProject.deleteMany({ where: { organizationId } });
   await prisma.property.deleteMany({ where: { organizationId } });
   await prisma.organization.deleteMany({ where: { id: organizationId } });
@@ -132,6 +185,7 @@ beforeEach(async () => {
   await cleanup();
   await seedTenant(ORG_A, PROP_A, PROJECT_A);
   await seedTenant(ORG_B, PROP_B, PROJECT_B);
+  await seedAsset(ASSET, ORG_A, PROP_A, { storageKey: KEY });
 });
 
 afterAll(async () => {
@@ -217,14 +271,16 @@ describe.skipIf(!HAS_DB)("findNextQueuedForPreparation against PostgreSQL", () =
   });
 });
 
-describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
-  it("moves QUEUED to SUBMITTING and returns the post-claim row", async () => {
+describe.skipIf(!HAS_DB)("claimPreparedForSubmission against PostgreSQL", () => {
+  it("moves QUEUED to SUBMITTING against a matching source", async () => {
     await seedGeneration("gen_ex_a", "QUEUED", PROJECT_A);
 
-    const claimed = await execution.claimQueuedForSubmission("gen_ex_a");
+    const outcome = await execution.claimPreparedForSubmission("gen_ex_a", IDENTITY);
 
-    expect(claimed!.generation.state).toBe("SUBMITTING");
-    expect(claimed!.organizationId).toBe(ORG_A);
+    expect(outcome.kind).toBe("CLAIMED");
+    if (outcome.kind !== "CLAIMED") return;
+    expect(outcome.claim.generation.state).toBe("SUBMITTING");
+    expect(outcome.claim.organizationId).toBe(ORG_A);
     const persisted = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_a" } });
     expect(persisted!.state).toBe("SUBMITTING");
   });
@@ -235,12 +291,14 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     await seedGeneration("gen_ex_race", "QUEUED", PROJECT_A);
 
     const results = await Promise.all([
-      execution.claimQueuedForSubmission("gen_ex_race"),
-      execution.claimQueuedForSubmission("gen_ex_race"),
+      execution.claimPreparedForSubmission("gen_ex_race", IDENTITY),
+      execution.claimPreparedForSubmission("gen_ex_race", IDENTITY),
     ]);
 
-    expect(results.filter((r) => r !== null)).toHaveLength(1);
-    expect(results.filter((r) => r === null)).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "CLAIMED")).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "NOT_CLAIMABLE")).toHaveLength(1);
+    // And the loser said nothing about the source, which was fine throughout.
+    expect(results.filter((r) => r.kind === "SOURCE_INVALID")).toHaveLength(0);
     const persisted = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_race" } });
     expect(persisted!.state).toBe("SUBMITTING");
   });
@@ -251,14 +309,36 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     await seedGeneration("gen_ex_race8", "QUEUED", PROJECT_A);
 
     const results = await Promise.all(
-      Array.from({ length: 8 }, () => execution.claimQueuedForSubmission("gen_ex_race8")),
+      Array.from({ length: 8 }, () =>
+        execution.claimPreparedForSubmission("gen_ex_race8", IDENTITY),
+      ),
     );
 
-    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "CLAIMED")).toHaveLength(1);
+    expect(results.filter((r) => r.kind === "NOT_CLAIMABLE")).toHaveLength(7);
+  });
+
+  it("serializes two generations sharing one asset, and both may claim", async () => {
+    // They contend on the same `media_assets` row and nothing else, so the lock
+    // orders them without either being refused: two independently QUEUED rows
+    // are two independent licences. A deadlock here would surface as a failure
+    // rather than a hang, because PostgreSQL detects and aborts one side.
+    await seedGeneration("gen_ex_sh1", "QUEUED", PROJECT_A);
+    await seedGeneration("gen_ex_sh2", "QUEUED", PROJECT_A);
+
+    const results = await Promise.all([
+      execution.claimPreparedForSubmission("gen_ex_sh1", IDENTITY),
+      execution.claimPreparedForSubmission("gen_ex_sh2", IDENTITY),
+    ]);
+
+    expect(results.filter((r) => r.kind === "CLAIMED")).toHaveLength(2);
+    for (const id of ["gen_ex_sh1", "gen_ex_sh2"]) {
+      expect((await prisma.sceneGeneration.findUnique({ where: { id } }))!.state).toBe("SUBMITTING");
+    }
   });
 
   it.each(SCENE_GENERATION_STATES.filter((s) => s !== "QUEUED"))(
-    "refuses a %s row and leaves every column of it untouched",
+    "refuses a %s row as NOT_CLAIMABLE and leaves every column untouched",
     async (state: SceneGenerationState) => {
       // Whole-row preservation, not just `state`: a refusal that still wrote
       // some other column — `updatedAt` above all, which a later abandonment
@@ -266,16 +346,20 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
       await seedGeneration("gen_ex_state", state, PROJECT_A);
       const before = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_state" } });
 
-      const claimed = await execution.claimQueuedForSubmission("gen_ex_state");
+      const outcome = await execution.claimPreparedForSubmission("gen_ex_state", IDENTITY);
 
-      expect(claimed).toBeNull();
+      // NOT_CLAIMABLE, never a source verdict: the row is not this caller's to
+      // judge, and the source was never even looked at.
+      expect(outcome).toEqual({ kind: "NOT_CLAIMABLE" });
       const after = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_state" } });
       expect(after).toEqual(before);
     },
   );
 
-  it("returns null for an id that does not exist", async () => {
-    expect(await execution.claimQueuedForSubmission("gen_ex_missing")).toBeNull();
+  it("returns NOT_CLAIMABLE for an id that does not exist", async () => {
+    expect(await execution.claimPreparedForSubmission("gen_ex_missing", IDENTITY)).toEqual({
+      kind: "NOT_CLAIMABLE",
+    });
   });
 
   it("advances updatedAt, mutates state, and touches nothing else", async () => {
@@ -284,16 +368,28 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     // that never moved would still compare equal and the assertion below would
     // pass while proving nothing. A fixed past timestamp makes it discriminating
     // and deterministic — no sleep, no dependence on how fast the suite runs.
+    //
+    // The history columns are seeded non-null for the same reason: null
+    // compares equal to null, so a claim that cleared them would pass against a
+    // default-seeded row.
     const seededUpdatedAt = new Date("2020-01-01T00:00:00.000Z");
-    await seedGeneration("gen_ex_a", "QUEUED", PROJECT_A, undefined, seededUpdatedAt);
+    await seedGeneration("gen_ex_a", "QUEUED", PROJECT_A, undefined, seededUpdatedAt, {
+      providerPredictionId: "prd_history",
+      submittedAt: new Date("2020-01-01T00:00:00.000Z"),
+      lastPolledAt: new Date("2020-01-02T00:00:00.000Z"),
+      outputStorageKey: "org/out/history.mp4",
+      normalizedErrorCode: "ASSET_NOT_READY",
+      normalizedErrorMessage: "historical diagnostic",
+    });
 
     const before = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_a" } }))!;
     // Guards the guard: if Prisma ever stopped honouring an explicit value on an
     // `@updatedAt` field, the fixture would silently stop pinning anything and
     // this test would quietly go back to proving nothing.
     expect(before.updatedAt).toEqual(seededUpdatedAt);
+    expect(before.normalizedErrorCode).toBe("ASSET_NOT_READY");
 
-    await execution.claimQueuedForSubmission("gen_ex_a");
+    await execution.claimPreparedForSubmission("gen_ex_a", IDENTITY);
 
     const after = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_a" } }))!;
     expect(after.state).toBe("SUBMITTING");
@@ -302,17 +398,42 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
     // sweep will read to decide a `SUBMITTING` row has been stranded, so a
     // claim that failed to advance it would make a live claim look stale.
     expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
-    // And nothing else moved. A claim that rewrote a snapshot field would change
-    // what a later milestone submits, under a requestHash that still validated.
+    // And nothing else moved — including the execution history a future
+    // explicit requeue policy may legitimately have left on the row.
     expect({ ...after, state: before.state, updatedAt: before.updatedAt }).toEqual(before);
   });
 
   it("claims a row belonging to whichever tenant owns it", async () => {
-    await seedGeneration("gen_ex_b", "QUEUED", PROJECT_B);
+    await seedAsset(ASSET_B, ORG_B, PROP_B);
+    await prisma.sceneGeneration.create({
+      data: {
+        id: "gen_ex_b",
+        videoProjectId: PROJECT_B,
+        sourceStoryboardSceneId: "scn_itest_ex",
+        assetId: ASSET_B,
+        sourceAnalysisRevision: 1,
+        requestHash: "sha256:gen_ex_b",
+        providerName: "fake",
+        providerModelId: "fake/image-to-video",
+        requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+        requestDurationSeconds: 5,
+        requestCameraMotion: "SLOW_PAN_LEFT",
+        requestAspectRatio: "16:9",
+        requestResolution: "1080p",
+        requestRenderedPrompt: "frozen:gen_ex_b",
+        state: "QUEUED",
+      },
+    });
 
-    const claimed = await execution.claimQueuedForSubmission("gen_ex_b");
+    const outcome = await execution.claimPreparedForSubmission("gen_ex_b", {
+      storageKey: `org/${ORG_B}/a/${ASSET_B}/normalized.jpg`,
+      mimeType: "image/jpeg",
+      sha256: DIGEST,
+    });
 
-    expect(claimed!.organizationId).toBe(ORG_B);
+    expect(outcome.kind).toBe("CLAIMED");
+    if (outcome.kind !== "CLAIMED") return;
+    expect(outcome.claim.organizationId).toBe(ORG_B);
     // And nothing leaked into the other tenant's view.
     expect(await tenantFacing.findById(ORG_A, "gen_ex_b")).toBeNull();
   });
@@ -334,19 +455,335 @@ describe.skipIf(!HAS_DB)("claimQueuedForSubmission against PostgreSQL", () => {
   // recorded where a future writer will meet it: `docs/decisions/TODO.md` makes
   // an expected-state predicate a hard prerequisite for any competing
   // transition. What this adapter guarantees, and all it guarantees, is proven
-  // above — a won claim returns the row this caller moved to `SUBMITTING`, and
-  // a lost claim returns `null`.
+  // above and below.
 
   it("leaves other rows alone while claiming one", async () => {
     await seedGeneration("gen_ex_1", "QUEUED", PROJECT_A, new Date("2026-08-18T01:00:00.000Z"));
     await seedGeneration("gen_ex_2", "QUEUED", PROJECT_A, new Date("2026-08-18T02:00:00.000Z"));
 
-    await execution.claimQueuedForSubmission("gen_ex_1");
+    await execution.claimPreparedForSubmission("gen_ex_1", IDENTITY);
 
     const other = await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_2" } });
     expect(other!.state).toBe("QUEUED");
     // The next scan offers the remaining one, so a claim advances the queue.
     expect((await execution.findNextQueuedForPreparation())!.generation.id).toBe("gen_ex_2");
+  });
+
+});
+
+describe.skipIf(!HAS_DB)("the locked source decides SOURCE_INVALID", () => {
+  /** Run a claim against an asset mutated into some unusable shape. */
+  async function claimWithAsset(
+    id: string,
+    assetOverrides: Parameters<typeof seedAsset>[3],
+    identity: PreparedSourceIdentity = IDENTITY,
+  ) {
+    await prisma.mediaAsset.update({
+      where: { id: ASSET },
+      data: { ...assetOverrides, storageKey: assetOverrides?.storageKey ?? KEY },
+    });
+    await seedGeneration(id, "QUEUED", PROJECT_A);
+    const before = (await prisma.sceneGeneration.findUnique({ where: { id } }))!;
+    const outcome = await execution.claimPreparedForSubmission(id, identity);
+    const after = (await prisma.sceneGeneration.findUnique({ where: { id } }))!;
+    // Every refusal below is read-only. Whole-row equality including
+    // `updatedAt`: SOURCE_INVALID happens before any generation write, and
+    // parking the row is a separate decision this method does not make.
+    expect(after).toEqual(before);
+    return outcome;
+  }
+
+  it("refuses an asset whose deletion has been requested", async () => {
+    const outcome = await claimWithAsset("gen_ex_del", {
+      deletionRequestedAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_UNRECOVERABLE" });
+  });
+
+  it.each<[MediaAssetStatus, string]>([
+    ["PROCESSING", "ASSET_NOT_READY"],
+    ["FAILED", "ASSET_UPLOAD_FAILED"],
+    ["QUARANTINED", "ASSET_UNRECOVERABLE"],
+  ])("maps a locked %s row to %s", async (status, reason) => {
+    // Representative of each bucket rather than all ten: the exhaustive status
+    // mapping is a pure domain property already proven in
+    // `execution-source.test.ts`, and repeating it here would only re-test the
+    // classifier through a slower boundary.
+    const outcome = await claimWithAsset(`gen_ex_st_${status}`, { status });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason });
+  });
+
+  it("refuses when the durable key no longer matches the prepared one", async () => {
+    const outcome = await claimWithAsset("gen_ex_key", {
+      storageKey: `org/${ORG_A}/a/${ASSET}/normalized-v2.jpg`,
+    });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_SOURCE_CHANGED" });
+  });
+
+  it("refuses when only the digest differs, under an unchanged key and MIME", async () => {
+    // The case the whole prepared-source contract exists for.
+    // `buildAssetStorageKey` is deterministic, so a re-processed JPEG reuses the
+    // same key with the same MIME type and different bytes: key and MIME
+    // equality passes straight over it, and only the digest sees the change.
+    const outcome = await claimWithAsset("gen_ex_hash", { sha256: OTHER_DIGEST });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_SOURCE_CHANGED" });
+  });
+
+  it.each([
+    ["missing", null],
+    ["malformed", "not-a-canonical-digest"],
+  ])("refuses a READY row whose digest is %s", async (label, sha256) => {
+    // Classified on its own terms, not flattened into "changed": the locked row
+    // is not a *different* identifiable source, it is one that cannot be
+    // identified at all.
+    const outcome = await claimWithAsset(`gen_ex_dig_${label}`, { sha256 });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_SOURCE_UNIDENTIFIABLE" });
+  });
+
+  it("refuses a non-JPEG on its own terms rather than as a source change", async () => {
+    // Only two independently *usable* identities ever reach equality, so a MIME
+    // change that makes the locked row unusable is owned by the classifier
+    // (ADR-0029 ordering) and never forced into ASSET_SOURCE_CHANGED.
+    const outcome = await claimWithAsset("gen_ex_mime", { mimeType: "image/png" });
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_FORMAT_UNSUPPORTED" });
+  });
+
+  it("cannot see an asset belonging to another organization", async () => {
+    // `organizationId` is in the locking predicate, so a foreign row is never
+    // loaded — and absent and foreign are therefore indistinguishable, which is
+    // the tenant guarantee rather than a limitation of the message.
+    await seedAsset(ASSET_B, ORG_B, PROP_B);
+    await prisma.sceneGeneration.create({
+      data: {
+        id: "gen_ex_foreign",
+        videoProjectId: PROJECT_A,
+        sourceStoryboardSceneId: "scn_itest_ex",
+        assetId: ASSET_B,
+        sourceAnalysisRevision: 1,
+        requestHash: "sha256:gen_ex_foreign",
+        providerName: "fake",
+        providerModelId: "fake/image-to-video",
+        requestCompiledPrompt: '{"preservation":[],"sceneFacts":{},"userCustomization":null}',
+        requestDurationSeconds: 5,
+        requestCameraMotion: "SLOW_PAN_LEFT",
+        requestAspectRatio: "16:9",
+        requestResolution: "1080p",
+        requestRenderedPrompt: "frozen:gen_ex_foreign",
+        state: "QUEUED",
+      },
+    });
+
+    const outcome = await execution.claimPreparedForSubmission("gen_ex_foreign", IDENTITY);
+
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_FOUND" });
+    // The foreign asset is untouched and undescribed.
+    expect((await prisma.mediaAsset.findUnique({ where: { id: ASSET_B } }))!.status).toBe("READY");
+  });
+
+  it("refuses when the generation names an asset that does not exist", async () => {
+    await prisma.mediaAsset.delete({ where: { id: ASSET } });
+    await seedGeneration("gen_ex_noasset", "QUEUED", PROJECT_A);
+
+    const outcome = await execution.claimPreparedForSubmission("gen_ex_noasset", IDENTITY);
+
+    expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_FOUND" });
+  });
+});
+
+/**
+ * The two properties the asset row lock exists for, proven deterministically.
+ *
+ * Both need the claim held open at an exact point: after it has taken the
+ * `FOR NO KEY UPDATE` lock, before it commits. There is no production hook for
+ * that, and there must not be — a pause seam on the one method that issues
+ * licences to spend money is worse than a weaker test.
+ *
+ * Instead the barrier is entirely test-owned. `createPrismaSceneGenerationExecutionRepository`
+ * already takes a `PrismaClient`, so a test can hand it an **extended** client
+ * whose `sceneGeneration.updateMany` interceptor waits on a promise this file
+ * controls. That interception point is reached only after the lock statement has
+ * returned, so arriving there *is* the proof that the lock is held — no sleeping
+ * and hoping.
+ *
+ * Prisma 5.22's `$extends` query interceptors were verified to fire for calls
+ * made on the interactive-transaction client before this harness was written;
+ * if they did not, the barrier would silently never engage and these tests would
+ * pass without proving anything.
+ */
+describe.skipIf(!HAS_DB)("the asset row lock serializes the claim", () => {
+  /** Clients created per test, disconnected in `afterEach` whatever happens. */
+  let extra: PrismaClient[] = [];
+
+  function client(): PrismaClient {
+    const created = new PrismaClient();
+    extra.push(created);
+    return created;
+  }
+
+  afterEach(async () => {
+    await Promise.all(extra.map((c) => c.$disconnect()));
+    extra = [];
+  });
+
+  /**
+   * A claim whose generation compare-and-swap pauses until the returned
+   * `release` is called. Reaching `atBarrier` proves the asset lock is held.
+   */
+  function pausableClaim(generationId: string, identity: PreparedSourceIdentity) {
+    let release!: () => void;
+    let arrive!: () => void;
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    const atBarrier = new Promise<void>((r) => {
+      arrive = r;
+    });
+
+    const extended = client().$extends({
+      query: {
+        sceneGeneration: {
+          async updateMany({ args, query }) {
+            arrive();
+            await released;
+            return query(args);
+          },
+        },
+      },
+    }) as unknown as PrismaClient;
+
+    const outcome = createPrismaSceneGenerationExecutionRepository(
+      extended,
+    ).claimPreparedForSubmission(generationId, identity);
+
+    return { outcome, atBarrier, release };
+  }
+
+  it("blocks a real deletion request while the claim holds the lock", async () => {
+    await seedGeneration("gen_ex_lock", "QUEUED", PROJECT_A);
+    const { outcome, atBarrier, release } = pausableClaim("gen_ex_lock", IDENTITY);
+    await atBarrier;
+
+    // The genuine `requestDeletion` write shape, on its own connection, with a
+    // short lock timeout so a real conflict surfaces as an error rather than a
+    // hang. 55P03 is `lock_not_available`.
+    const deleter = client();
+    let deletionFailure: { code?: string } | null = null;
+    try {
+      await deleter.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '400ms'`);
+        await tx.mediaAsset.update({
+          where: { id: ASSET, organizationId: ORG_A, deletionRequestedAt: null },
+          data: { status: "DELETION_PENDING", deletionRequestedAt: new Date() },
+        });
+      });
+    } catch (error) {
+      deletionFailure = error as { code?: string };
+    }
+
+    // The whole point: deletion could not proceed while the claim held the row.
+    expect(deletionFailure).not.toBeNull();
+    expect(String(deletionFailure)).toMatch(/lock timeout|55P03|canceling statement/i);
+
+    release();
+    const claimed = await outcome;
+    expect(claimed.kind).toBe("CLAIMED");
+
+    // And once the claim has committed, deletion proceeds normally — the lock
+    // ordered the two, it did not forbid the second.
+    const after = await deleter.mediaAsset.update({
+      where: { id: ASSET, organizationId: ORG_A, deletionRequestedAt: null },
+      data: { status: "DELETION_PENDING", deletionRequestedAt: new Date() },
+    });
+    expect(after.status).toBe("DELETION_PENDING");
+
+    // A deletion landing after the licence was issued does not revoke it.
+    // There is no post-claim cancellation, by design.
+    expect((await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_lock" } }))!.state).toBe(
+      "SUBMITTING",
+    );
+  });
+
+  /**
+   * Block until some backend is actually waiting on a lock.
+   *
+   * A sleep would only be a guess about scheduling; this asks PostgreSQL. The
+   * claim is known to have reached its locking statement when a session appears
+   * with `wait_event_type = 'Lock'`, which is the state this test needs before
+   * it may move the generation underneath.
+   */
+  async function waitUntilBlockedOnLock(observer: PrismaClient): Promise<void> {
+    // The observer must be its own client. Asking through a pool that a blocked
+    // transaction is already holding a connection from can queue behind it, and
+    // the poll would then wait on the very thing it is trying to observe.
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const ungranted = await observer.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*) AS n FROM pg_locks WHERE NOT granted`;
+      if (Number(ungranted[0]!.n) > 0) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error("no backend ever blocked on a lock");
+  }
+
+  it("answers NOT_CLAIMABLE, not a stale source verdict, when the generation moves while it waits", async () => {
+    // The precedence property. This claimant observes `QUEUED`, then blocks on
+    // the asset lock. While it waits, a **real** execution transition parks the
+    // row, and the source is simultaneously made invalid. Without the post-lock
+    // re-read the claimant would report `SOURCE_INVALID` — a verdict about the
+    // source of work that is no longer anyone's to do.
+    await seedGeneration("gen_ex_prec", "QUEUED", PROJECT_A);
+    // Break the source up front, before anything holds the row. It has to be
+    // broken *before* the holder takes the lock: an update afterwards would
+    // block on that same row, and the test would wait on itself. The claim's
+    // initial read never looks at the asset, so this changes nothing it sees
+    // until after the lock — which is exactly the interleaving under test.
+    await prisma.mediaAsset.update({ where: { id: ASSET }, data: { sha256: OTHER_DIGEST } });
+
+    // A separate transaction takes the asset row first, so the claim must wait.
+    // Its acquisition is awaited rather than assumed: starting both and hoping
+    // the holder wins would make this test decide the wrong thing at random.
+    const holder = client();
+    let acquired!: () => void;
+    let releaseHold!: () => void;
+    const hasLock = new Promise<void>((r) => {
+      acquired = r;
+    });
+    const held = new Promise<void>((r) => {
+      releaseHold = r;
+    });
+    const holding = holder.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT "id" FROM "media_assets"
+           WHERE "id" = ${ASSET} AND "organizationId" = ${ORG_A}
+           FOR NO KEY UPDATE`;
+        acquired();
+        await held;
+      },
+      { timeout: 20000 },
+    );
+    await hasLock;
+
+    // Now the claim: it reads QUEUED, then blocks on the lock above. Waiting
+    // for PostgreSQL to report a blocked backend is what makes the interleaving
+    // deterministic.
+    const claiming = execution.claimPreparedForSubmission("gen_ex_prec", IDENTITY);
+    await waitUntilBlockedOnLock(client());
+
+    // Move the generation with a real execution transition. It writes only
+    // `scene_generations`, so it does not contend for the asset row.
+    const parked = await execution.failQueuedPreflight("gen_ex_prec", "ASSET_NOT_READY");
+    expect(parked).not.toBeNull();
+
+    releaseHold();
+    await holding;
+
+    // NOT_CLAIMABLE wins. The source genuinely is invalid — a stale evaluation
+    // would answer SOURCE_INVALID / ASSET_SOURCE_CHANGED here — but saying so
+    // would be reporting on work another actor already finished with.
+    expect(await claiming).toEqual({ kind: "NOT_CLAIMABLE" });
+    const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_prec" } }))!;
+    expect(persisted.state).toBe("FAILED_RETRYABLE");
+    expect(persisted.normalizedErrorCode).toBe("ASSET_NOT_READY");
   });
 });
 
@@ -544,19 +981,22 @@ describe.skipIf(!HAS_DB)("failQueuedPreflight against PostgreSQL", () => {
     await seedGeneration("gen_ex_mixed", "QUEUED", PROJECT_A);
 
     const [claimed, failed] = await Promise.all([
-      execution.claimQueuedForSubmission("gen_ex_mixed"),
+      execution.claimPreparedForSubmission("gen_ex_mixed", IDENTITY),
       execution.failQueuedPreflight("gen_ex_mixed", "ASSET_NOT_READY"),
     ]);
 
-    expect([claimed, failed].filter((r) => r !== null)).toHaveLength(1);
+    expect([claimed.kind === "CLAIMED", failed !== null].filter(Boolean)).toHaveLength(1);
     const persisted = (await prisma.sceneGeneration.findUnique({ where: { id: "gen_ex_mixed" } }))!;
 
-    if (claimed !== null) {
+    if (claimed.kind === "CLAIMED") {
       expect(failed).toBeNull();
       expect(persisted.state).toBe("SUBMITTING");
       // No refusal was recorded against a row someone may now be paying for.
       expect(persisted.normalizedErrorCode).toBeNull();
     } else {
+      // The loser says NOT_CLAIMABLE, never a source verdict: the source was
+      // usable, and what it lost to was a competing transition.
+      expect(claimed).toEqual({ kind: "NOT_CLAIMABLE" });
       expect(failed).not.toBeNull();
       expect(persisted.state).toBe("FAILED_RETRYABLE");
       expect(persisted.normalizedErrorCode).toBe("ASSET_NOT_READY");

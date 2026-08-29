@@ -7,7 +7,9 @@ import type {
   ClaimedSceneGeneration,
   FailedSceneGeneration,
   SceneGenerationExecutionRepository,
+  SubmissionClaimOutcome,
 } from "./execution-ports";
+import type { PreparedSourceIdentity } from "./execution-source";
 import type {
   PreflightFailureState,
   PreflightRefusalReason,
@@ -36,15 +38,100 @@ describe("the execution port is separate from the tenant-facing one", () => {
     // assert a tenant instead of resolving it, which is the whole difference
     // between this port and `SceneGenerationRepository`.
     type Discovery = Parameters<SceneGenerationExecutionRepository["findNextQueuedForPreparation"]>;
-    type Claim = Parameters<SceneGenerationExecutionRepository["claimQueuedForSubmission"]>;
+    type Claim = Parameters<SceneGenerationExecutionRepository["claimPreparedForSubmission"]>;
     type Fail = Parameters<SceneGenerationExecutionRepository["failQueuedPreflight"]>;
 
     const discoveryTakesNothing: Discovery extends [] ? true : never = true;
-    const claimTakesOnlyAnId: Claim extends [string] ? true : never = true;
+    const claimTakesOnlyAnId: Claim extends [string, PreparedSourceIdentity] ? true : never = true;
     const failTakesAnIdAndAReason: Fail extends [string, PreflightRefusalReason] ? true : never =
       true;
 
     expect(discoveryTakesNothing && claimTakesOnlyAnId && failTakesAnIdAndAReason).toBe(true);
+  });
+
+  it("has no unprepared claim path at all (compile-time)", () => {
+    // The property that makes A-2b's guarantee structural rather than
+    // conventional: there is no way to reach `SUBMITTING` — a licence to spend
+    // money — without stating which bytes are being submitted. A deprecated
+    // one-argument alias would have left exactly that route open.
+    type Methods = keyof SceneGenerationExecutionRepository;
+
+    const oldClaimIsGone: "claimQueuedForSubmission" extends Methods ? never : true = true;
+    const newClaimExists: "claimPreparedForSubmission" extends Methods ? true : never = true;
+    // Exactly three methods, so a fourth cannot appear unremarked on the one
+    // boundary that decides whether a provider gets paid.
+    const exactlyThree: Methods extends
+      | "findNextQueuedForPreparation"
+      | "claimPreparedForSubmission"
+      | "failQueuedPreflight"
+      ? true
+      : never = true;
+
+    expect(oldClaimIsGone && newClaimExists && exactlyThree).toBe(true);
+  });
+
+  it("takes a source description, never a credential (compile-time)", () => {
+    type Identity = Parameters<
+      SceneGenerationExecutionRepository["claimPreparedForSubmission"]
+    >[1];
+
+    // The second argument is the three-field identity and nothing wider. A bare
+    // `string` would let a key be passed as a hash; an object carrying a URL
+    // would put a credential into persistence.
+    const isTheIdentity: Identity extends PreparedSourceIdentity ? true : never = true;
+    const notAnOpenString: string extends Identity ? never : true = true;
+    const noSignedUrl: "sourceImageUrl" extends keyof Identity ? never : true = true;
+    const noExpiry: "sourceUrlExpiresAt" extends keyof Identity ? never : true = true;
+    const noPrompt: "prompt" extends keyof Identity ? never : true = true;
+    const noOrganizationId: "organizationId" extends keyof Identity ? never : true = true;
+    const noAssetId: "assetId" extends keyof Identity ? never : true = true;
+
+    expect(
+      isTheIdentity &&
+        notAnOpenString &&
+        noSignedUrl &&
+        noExpiry &&
+        noPrompt &&
+        noOrganizationId &&
+        noAssetId,
+    ).toBe(true);
+  });
+
+  it("keeps the three claim outcomes mutually unusable (compile-time)", () => {
+    // `SOURCE_INVALID` and `NOT_CLAIMABLE` are refusals; only `CLAIMED` carries
+    // a licence. Structural typing would happily interchange them if they
+    // merely *meant* different things, so the discriminant plus the narrowed
+    // state is what makes the distinction real.
+    type Claimed = Extract<SubmissionClaimOutcome, { kind: "CLAIMED" }>;
+    type Invalid = Extract<SubmissionClaimOutcome, { kind: "SOURCE_INVALID" }>;
+    type NotClaimable = Extract<SubmissionClaimOutcome, { kind: "NOT_CLAIMABLE" }>;
+
+    const claimedCarriesALicence: Claimed["claim"] extends ClaimedSceneGeneration ? true : never =
+      true;
+    const claimedIsSubmitting: Claimed["claim"]["generation"]["state"] extends "SUBMITTING"
+      ? true
+      : never = true;
+    const invalidIsNotALicence: Invalid extends ClaimedSceneGeneration ? never : true = true;
+    const notClaimableIsNotALicence: NotClaimable extends ClaimedSceneGeneration ? never : true =
+      true;
+    // A refusal carries no generation at all, so it cannot be mistaken for one.
+    const invalidHasNoGeneration: "claim" extends keyof Invalid ? never : true = true;
+    const notClaimableHasNoGeneration: "claim" extends keyof NotClaimable ? never : true = true;
+    // And no source verdict rides on NOT_CLAIMABLE.
+    const notClaimableHasNoReason: "reason" extends keyof NotClaimable ? never : true = true;
+    // SOURCE_INVALID exposes the closed vocabulary only — no key, hash or id.
+    const invalidSurface: keyof Invalid extends "kind" | "reason" ? true : never = true;
+
+    expect(
+      claimedCarriesALicence &&
+        claimedIsSubmitting &&
+        invalidIsNotALicence &&
+        notClaimableIsNotALicence &&
+        invalidHasNoGeneration &&
+        notClaimableHasNoGeneration &&
+        notClaimableHasNoReason &&
+        invalidSurface,
+    ).toBe(true);
   });
 
   it("cannot be told which failure state to write (compile-time)", () => {
