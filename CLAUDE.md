@@ -8,8 +8,12 @@ Implement a commercial multi-tenant SaaS that generates real-estate interior wal
 
 ## Source of truth
 
+製品仕様の最上位文書は `PRODUCT_SPEC.md`（製品ビジョン・事業要件・凍結仕様・
+実装状況・次フェーズ）である。実装再開時は最初にこれを読む。
+
 Read before implementation:
 
+0. `PRODUCT_SPEC.md`
 1. `docs/ProductRequirements.md`
 2. `docs/SystemArchitecture.md`
 3. `docs/AIVideoPipeline.md`
@@ -21,7 +25,12 @@ Read before implementation:
 9. `docs/SaaSOperations.md`
 10. `docs/Roadmap.md`
 
-Priority: explicit user instruction > security/compliance > product requirements > WaveSpeedAI integration > architecture/API > existing implementation.
+Priority: explicit owner / CTO instruction > security/compliance > product requirements
+> current accepted ADR > WaveSpeedAI integration contract > architecture/API docs
+> existing implementation.
+
+ただし docs が stale の場合は、merged source + later ADR / completion report を
+優先して現状を確定する。完全な定義は `PRODUCT_SPEC.md` 16.1 を参照。
 
 Do not invent missing business rules. Record unresolved items in `docs/decisions/TODO.md`.
 
@@ -208,16 +217,7 @@ After opening a milestone PR, stop and wait for review unless explicitly instruc
 
 ## First assignment
 
-Implement Phase 0 only:
-
-1. `docs/gap-analysis.md`
-2. repository structure
-3. ADRs and technology decisions
-4. local setup
-5. CI pipeline
-6. minimal authenticated health-check application
-7. testing foundation
-8. `docs/phase-0-completion.md`
-9. ADR confirming WaveSpeedAI, adapter boundary, server-side secrets, asynchronous processing, managed-storage copying, and provider replacement strategy
-
-Do not begin Phase 1 until Phase 0 completion criteria pass.
+Phase 0 から Phase 4C-3A-2b までは完了・マージ済みである。
+現在地と次に着手すべきマイルストーンは `PRODUCT_SPEC.md` 9 章および
+`docs/decisions/TODO.md` を参照して確定すること。
+過去フェーズを再実装してはならない。
