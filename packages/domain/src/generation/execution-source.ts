@@ -118,6 +118,32 @@ const ASSET_EXECUTABILITY: Record<MediaAssetStatus, AssetExecutability> = {
 };
 
 /**
+ * Whether an unvalidated value is one of the ten `MediaAssetStatus` members.
+ *
+ * Exists because Phase 4C-3A-2b reads the asset row with `$queryRaw`, which
+ * bypasses Prisma's model mapping: the `status` column arrives as a **plain
+ * string**, not the generated enum, so the type parameter on a raw query is an
+ * assertion rather than a check. `raw.status as MediaAssetStatus` would launder
+ * an arbitrary database value straight into {@link classifyExecutionSource} and
+ * out through `ASSET_EXECUTABILITY[…]` as `undefined`, which no branch handles.
+ *
+ * **Deliberately not a second list.** The membership test reads the keys of
+ * `ASSET_EXECUTABILITY`, which is already `Record<MediaAssetStatus, …>` and
+ * therefore already fails to compile when a status is added. A parallel array
+ * would be a second vocabulary that could silently disagree with it — exactly
+ * what the exhaustive map exists to prevent.
+ *
+ * `hasOwnProperty` via `Object.prototype`, not `in` and not a direct method
+ * call: `"toString" in ASSET_EXECUTABILITY` is `true` through the prototype
+ * chain, and an object literal's own `hasOwnProperty` could itself be shadowed.
+ */
+export function isMediaAssetStatus(value: unknown): value is MediaAssetStatus {
+  return (
+    typeof value === "string" && Object.prototype.hasOwnProperty.call(ASSET_EXECUTABILITY, value)
+  );
+}
+
+/**
  * Exactly what classifying a source needs, and nothing that would tie it to one
  * way of reading the row.
  *
