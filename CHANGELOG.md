@@ -35,9 +35,15 @@ and ADR-0031.
 - **One runtime vocabulary for provider error kinds.** Two partial `Set`s listed
   eight of nine kinds between them and neither could answer "is this a kind?";
   they are replaced by one exhaustive `Record`, read with `hasOwnProperty`.
-- **`asProviderError` replaces the `kind` + `retryable` duck cast.** It validates
-  every public field and returns a *fresh* object built from exactly those five,
-  so a look-alike carrying a `rawBody` cannot smuggle it through.
+- **Trust in an already-normalized error is nominal, never structural.** The
+  `kind` + `retryable` duck cast is gone, and so is the shape validator that
+  briefly replaced it: `code` and `messageSanitized` are themselves public
+  fields, so an object with every field of the right type could still put an API
+  token in one and a signed URL in the other. Arbitrary values are now dropped
+  and reclassified; the only pass-through is
+  `WaveSpeedVideoProvider.normalizeError`'s `instanceof ProviderErrorException`,
+  which is provenance rather than shape. External input can influence only which
+  closed classification the application picks, never the text.
 - **`requestHash`'s comment is corrected.** It claimed use for provider
   idempotency; no such contract exists and nothing sends an `Idempotency-Key`.
   Comment only — value, computation, persistence and request body unchanged.

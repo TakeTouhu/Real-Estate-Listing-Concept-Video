@@ -27,17 +27,6 @@ const KIND_DEFAULT_RETRYABLE: Record<ProviderErrorKind, boolean> = {
   UNKNOWN: false,
 };
 
-/**
- * Prototype-safe membership over the map above — `hasOwnProperty` rather than
- * `in`, so `"toString"` and `"__proto__"` are not kinds.
- */
-export function isProviderErrorKind(value: unknown): value is ProviderErrorKind {
-  return (
-    typeof value === "string" &&
-    Object.prototype.hasOwnProperty.call(KIND_DEFAULT_RETRYABLE, value)
-  );
-}
-
 /** Whether a value is an integer HTTP status, and therefore safe to interpolate. */
 export function isHttpStatus(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599;
@@ -63,46 +52,22 @@ export function providerError(init: ProviderErrorInit): ProviderError {
 }
 
 /**
- * Validate an arbitrary value as a normalized provider error and return a
- * **fresh, clean** one — or `null`.
- *
- * Rebuilding rather than returning the input is the point. The predicate this
- * replaces asked only `"kind" in error && "retryable" in error` and then cast,
- * so any object carrying those two keys was admitted whole: unvalidated `code`
- * and `messageSanitized`, a non-boolean `retryable`, and — the real hazard —
- * every *other* property it happened to carry, straight into something that
- * gets stringified, logged and persisted. Copying exactly the five public
- * fields means no extra property can ride along, whatever the source.
- */
-export function asProviderError(value: unknown): ProviderError | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const candidate = value as Record<string, unknown>;
-  if (!isProviderErrorKind(candidate.kind)) return null;
-  if (typeof candidate.retryable !== "boolean") return null;
-  if (typeof candidate.code !== "string") return null;
-  if (typeof candidate.messageSanitized !== "string") return null;
-  if (candidate.providerStatus !== undefined && !isHttpStatus(candidate.providerStatus)) {
-    return null;
-  }
-  return {
-    kind: candidate.kind,
-    retryable: candidate.retryable,
-    code: candidate.code,
-    messageSanitized: candidate.messageSanitized,
-    ...(candidate.providerStatus === undefined
-      ? {}
-      : { providerStatus: candidate.providerStatus as number }),
-  };
-}
-
-/**
  * Throwable wrapper so provider methods can reject with a normalized error.
+ *
+ * It is also the **only** trust boundary for an already-normalized error. That
+ * check is nominal — `instanceof` — and it has to be. An earlier revision of
+ * this milestone validated an arbitrary object's field *types* and rebuilt it,
+ * which dropped extra properties but still let the object choose `code` and
+ * `messageSanitized`: a hostile value with a valid `kind`, a boolean
+ * `retryable` and a signed URL in `messageSanitized` satisfied every check.
+ * Structural validation proves a shape, never provenance, and every field of a
+ * `ProviderError` must be application-owned (ADR-0031 §4).
  *
  * The `Error` half carries **only** the sanitized message. It deliberately does
  * not chain an external cause: `new Error(msg, { cause })` is what makes
  * `console.error(err)` print a fetch failure's host, port and address, and the
  * default rendering of a thrown value is the one place unsafe content escapes
- * without anyone choosing to log it (ADR-0031).
+ * without anyone choosing to log it.
  */
 export class ProviderErrorException extends Error {
   readonly error: ProviderError;

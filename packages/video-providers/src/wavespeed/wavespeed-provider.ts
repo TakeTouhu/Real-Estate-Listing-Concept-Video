@@ -132,6 +132,14 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
     );
   }
 
+  /**
+   * The **only** place an already-normalized error is trusted, and the check is
+   * nominal on purpose. `instanceof ProviderErrorException` is provenance: this
+   * application built that object. Recognising one by shape instead would let
+   * an arbitrary thrown value with the right field types choose `code` and
+   * `messageSanitized` outright (ADR-0031 §4). Everything else falls through to
+   * a fixed classification.
+   */
   normalizeError(error: unknown): ProviderError {
     if (error instanceof ProviderErrorException) return error.error;
     return normalizeWaveSpeedError(error);

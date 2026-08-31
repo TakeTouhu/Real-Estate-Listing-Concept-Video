@@ -19,8 +19,7 @@ interface ProviderError {
 }                            // `cause` removed
 
 normalizeHttpStatusError(status: number): ProviderError   // body argument removed
-asProviderError(value: unknown): ProviderError | null     // replaces the duck cast
-isProviderErrorKind / isHttpStatus                        // one runtime authority
+isHttpStatus(value: unknown): value is number             // guards the one interpolation
 ```
 
 `summarize` is deleted. `ProviderErrorException` no longer chains a cause. The
@@ -56,10 +55,11 @@ control characters, and provider error text. A failure names which class escaped
 | Network errors retain nothing | An `Error` whose message, `stack`, `cause`, `errno` and `hostname` all carry sentinels |
 | Abort stays a timeout, still clean | Same hostile error renamed `AbortError` |
 | A hostile plain object leaks nothing | Non-`Error` throw path |
-| Impostors are refused | 8 objects that pass the old `kind` + `retryable` test: bad `code`, non-boolean `retryable`, `kind: "toString"`, unknown kind, object `messageSanitized`, out-of-range `providerStatus`, an array wearing the keys, `null` |
-| A *valid* look-alike is stripped | Passes validation but carries `rawBody` and an `Authorization` header — both dropped by rebuilding |
-| Real errors survive by value | All 7 statuses round-trip equal |
-| The kind vocabulary is one list | All 9 accepted; `toString`/`constructor`/`__proto__`/`hasOwnProperty`/wrong-casing/empty/`null`/`undefined`/number/object/array refused |
+| A **fully valid** hostile look-alike is refused | Real `kind`, boolean `retryable`, string `code`, string `messageSanitized`, valid `providerStatus` — every type correct, and still normalized to the fixed network diagnostic |
+| Impostors are refused | 8 further objects that pass the old `kind` + `retryable` test: bad `code`, non-boolean `retryable`, `kind: "toString"`, unknown kind, object `messageSanitized`, out-of-range `providerStatus`, an array wearing the keys, `null` |
+| A look-alike smuggling `rawBody` + `Authorization` is refused | Whole object dropped, not filtered |
+| Application-built errors survive | All 7 statuses round-trip equal through `provider.normalizeError(new ProviderErrorException(...))` — the nominal boundary |
+| Every kind resolves a declared default | Independent expectation table over all 9 kinds |
 | `isHttpStatus` is exact | 100/200/418/503/599 accepted; 99, 600, 200.5, NaN, Infinity, `"200"`, `null`, `undefined` refused |
 | A bogus `providerStatus` is dropped | `providerError({ providerStatus: 42 })` emits no such key |
 | The fake obeys the contract | Hostile `Error` and hostile non-`Error` both yield the fixed diagnostic |
@@ -75,7 +75,7 @@ control characters, and provider error text. A failure names which class escaped
 | **M2** — `ProviderError.cause` restored and the raw network error attached | **4 TS errors + 11 runtime fail** |
 | **M3** — `new Error(msg, { cause })` restored in the exception | **45 fail** |
 | **M4** — fake provider `error.message` passthrough restored | **2 fail** |
-| **M5** — weak `kind` + `retryable` duck cast restored | **8 fail** |
+| **M5** — structural plain-object pass-through restored for a full-shape look-alike | **see below** |
 | **M6** — `providerStatus` dropped from HTTP-status errors | **28 fail** |
 | **M7** — provider body text placed into `code` | **4 fail** |
 
@@ -92,16 +92,30 @@ compile error against the `never` pin (4 errors) *and* a runtime leak (11
 failures) — unlike Phase 4C-3A-2a's M5 and 4C-3A-2b's M7, which were compile-only
 because Vitest strips types. It is reported as both rather than as one.
 
-## One deliberate behaviour change
+## The correction that closed the last hole
 
-An already-normalized `ProviderError` passed to `normalizeWaveSpeedError` is now
-returned **value-equal** rather than reference-equal, because it is rebuilt from
-its five validated fields. The existing test asserted `toBe`; it now asserts
-`toEqual`, with the reason recorded inline. Rebuilding is what drops a smuggled
-`rawBody` from an object that is otherwise valid.
+An earlier revision of this milestone replaced the duck cast with
+`asProviderError`, which validated every public field's type and rebuilt a clean
+object. CTO review found that insufficient, correctly: `code` and
+`messageSanitized` are two of the five fields copied, so a hostile object with a
+real `kind`, a boolean `retryable`, an API token in `code` and a signed URL in
+`messageSanitized` passed every check and chose both public diagnostic strings.
+
+Structural validation proves a shape and never provenance. `asProviderError` is
+**deleted** rather than tightened, along with the now-callerless
+`isProviderErrorKind`. The only already-normalized pass-through is nominal —
+`WaveSpeedVideoProvider.normalizeError`'s `instanceof ProviderErrorException`
+branch, unchanged from before this milestone. Arbitrary input may now influence
+only which closed classification the application picks, never the text.
+
+Consequently `normalizeWaveSpeedError` no longer recognizes a `ProviderError`
+*value* at all; the existing pass-through test asserts the refusal instead.
 
 ## Honest limitations
 
+- **`normalizeWaveSpeedError` will refuse a genuine `ProviderError` value** if
+  one is ever passed to it directly. That is the intended fail-closed shape:
+  callers hold the exception, not the bare value. No production caller does.
 - **`ProviderErrorException` still has a `cause` key in its *type*.** The `Error`
   interface declares `cause?: unknown` (ES2022), so a `never` pin over its keys
   can never pass and the key cannot be removed while the class is an `Error`.

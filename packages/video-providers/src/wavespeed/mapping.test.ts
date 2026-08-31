@@ -144,13 +144,16 @@ describe("error normalization", () => {
   });
 
   /**
-   * `toEqual`, not `toBe`, and the change is deliberate. An already-normalized
-   * error is now **rebuilt** field by field rather than returned by reference,
-   * so that no unvalidated extra property on a look-alike object can survive
-   * normalization. Value stability is the contract; object identity never was.
+   * There is deliberately **no** pass-through here for a plain object that
+   * merely looks normalized — not even one whose every field has the right
+   * type. Shape is not provenance. The nominal boundary lives one level up, on
+   * `ProviderErrorException`, and is covered in `sanitization.test.ts`.
    */
-  it("passes an already-normalized provider error through unchanged by value", () => {
-    const normalized = normalizeHttpStatusError(429);
-    expect(normalizeWaveSpeedError(normalized)).toEqual(normalized);
+  it("does not trust a plain object that looks like a normalized error", () => {
+    const looksNormalized = normalizeHttpStatusError(429);
+    expect(normalizeWaveSpeedError(looksNormalized)).toMatchObject({
+      kind: "NETWORK",
+      code: "WAVESPEED_NETWORK_ERROR",
+    });
   });
 });

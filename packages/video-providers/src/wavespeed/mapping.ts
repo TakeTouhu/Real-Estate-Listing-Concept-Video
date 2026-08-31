@@ -1,4 +1,4 @@
-import { ProviderErrorException, asProviderError, isHttpStatus, providerError } from "../errors";
+import { ProviderErrorException, isHttpStatus, providerError } from "../errors";
 import type {
   ProviderError,
   ProviderGenerationInput,
@@ -205,14 +205,22 @@ export function normalizeHttpStatusError(status: number): ProviderError {
  * drops arbitrary external diagnostic content outright rather than trying to
  * filter it; richer telemetry would need its own closed schema first.
  *
- * It does not trust a shape. The pass-through for an already-normalized error
- * goes through {@link asProviderError}, which validates every public field and
- * returns a fresh object, instead of admitting anything carrying `kind` and
- * `retryable` and casting it (ADR-0031).
+ * It has **no pass-through for a plain object that looks normalized**, and that
+ * absence is the correction that closed the last hole. Recognising an
+ * already-normalized error by its shape — even validating every field's type
+ * and rebuilding a clean object — proves only that a value has the right form.
+ * It cannot prove the value came from this application, so a hostile object
+ * with a valid `kind`, a boolean `retryable`, and a signed URL sitting in
+ * `messageSanitized` passed straight through and chose both public diagnostic
+ * strings. Arbitrary input may influence only the **classification** this
+ * module picks, never the text.
+ *
+ * The one legitimate pass-through is nominal and lives one level up:
+ * `WaveSpeedVideoProvider.normalizeError` returns `error.error` for an
+ * `instanceof ProviderErrorException`, which this application constructed
+ * (ADR-0031 §4).
  */
 export function normalizeWaveSpeedError(error: unknown): ProviderError {
-  const alreadyNormalized = asProviderError(error);
-  if (alreadyNormalized !== null) return alreadyNormalized;
   const name = error instanceof Error ? error.name : "";
   if (name === "AbortError") {
     return providerError({

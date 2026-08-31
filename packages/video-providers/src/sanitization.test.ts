@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WAVESPEED_OPEN_VIDEO_MODEL_ID } from "@app/shared";
-import {
-  ProviderErrorException,
-  asProviderError,
-  isHttpStatus,
-  isProviderErrorKind,
-  providerError,
-} from "./errors";
+import { ProviderErrorException, isHttpStatus, providerError } from "./errors";
 import { FakeVideoProvider } from "./fake/fake-provider";
 import { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
 import { normalizeHttpStatusError, normalizeWaveSpeedError } from "./wavespeed/mapping";
@@ -235,8 +229,47 @@ describe("network and abort diagnostics retain nothing external", () => {
   });
 });
 
-describe("only a genuinely valid ProviderError passes through normalization", () => {
-  /** Every one of these satisfies the old `kind` + `retryable` duck test. */
+describe("no external value is promoted to a normalized error by its shape", () => {
+  /**
+   * The case that closed the last hole, and the reason shape validation was
+   * abandoned rather than tightened.
+   *
+   * Every field here has exactly the right type: a real `ProviderErrorKind`, a
+   * boolean `retryable`, string `code` and `messageSanitized`, a valid HTTP
+   * status. A structural validator — including one that rebuilds a clean object
+   * from those five fields — accepts it, and the attacker has then chosen both
+   * public diagnostic strings. Only provenance can refuse it.
+   */
+  it("refuses a fully structurally valid hostile look-alike", () => {
+    const lookAlike = {
+      kind: "AUTH",
+      retryable: false,
+      code: SENTINELS.apiToken,
+      messageSanitized: SENTINELS.signedUrl,
+      providerStatus: 401,
+    };
+    const error = normalizeWaveSpeedError(lookAlike);
+    expect(error.kind).toBe("NETWORK");
+    expect(error.code).toBe("WAVESPEED_NETWORK_ERROR");
+    expect(error.messageSanitized).toBe("Network error contacting WaveSpeedAI");
+    expect(error.providerStatus).toBeUndefined();
+    expectNoSentinels(error);
+  });
+
+  /**
+   * The nominal boundary that survives, exercised where it actually lives.
+   * `WaveSpeedVideoProvider.normalizeError` trusts an `instanceof`, never a
+   * shape, so an error this application constructed comes back intact.
+   */
+  it("preserves an error this application constructed, via instanceof", () => {
+    const provider = new WaveSpeedVideoProvider(config, { http: clientReturning({ status: 200, body: "{}" }) });
+    for (const { status } of STATUS_CASES) {
+      const original = normalizeHttpStatusError(status);
+      expect(provider.normalizeError(new ProviderErrorException(original))).toEqual(original);
+    }
+  });
+
+  /** Every one of these also satisfies the old `kind` + `retryable` duck test. */
   const IMPOSTORS: readonly { name: string; value: unknown }[] = [
     {
       name: "non-string code",
@@ -291,83 +324,55 @@ describe("only a genuinely valid ProviderError passes through normalization", ()
   ];
 
   it.each(IMPOSTORS)("rejects $name", ({ value }) => {
-    expect(asProviderError(value)).toBeNull();
     const error = normalizeWaveSpeedError(value);
     expect(error.kind).toBe("NETWORK");
     expect(error.code).toBe("WAVESPEED_NETWORK_ERROR");
     expectNoSentinels(error);
   });
 
-  /**
-   * The dangerous impostor: it *is* valid, so it passes — but it also carries a
-   * raw body. Rebuilding from the five public fields is what drops it.
-   */
-  it("strips extra properties from an otherwise valid provider error", () => {
-    const smuggled = {
-      kind: "PROVIDER" as const,
+  it("refuses a look-alike smuggling a raw body and an Authorization header", () => {
+    const error = normalizeWaveSpeedError({
+      kind: "PROVIDER",
       retryable: false,
       code: "WAVESPEED_SERVER_ERROR",
       messageSanitized: "WaveSpeedAI returned a server error",
       providerStatus: 503,
       rawBody: HOSTILE_BODY,
       request: { headers: { Authorization: `Bearer ${SENTINELS.apiToken}` } },
-    };
-    const error = normalizeWaveSpeedError(smuggled);
-    expect(error).toEqual({
-      kind: "PROVIDER",
-      retryable: false,
-      code: "WAVESPEED_SERVER_ERROR",
-      messageSanitized: "WaveSpeedAI returned a server error",
-      providerStatus: 503,
     });
+    expect(error.kind).toBe("NETWORK");
     expectNoSentinels(error);
-  });
-
-  it("leaves a real normalized error equal to itself", () => {
-    for (const { status } of STATUS_CASES) {
-      const original = normalizeHttpStatusError(status);
-      expect(normalizeWaveSpeedError(original)).toEqual(original);
-    }
   });
 });
 
 describe("the error vocabulary has exactly one runtime authority", () => {
-  it("accepts every declared kind", () => {
-    const kinds = [
-      "NETWORK",
-      "RATE_LIMITED",
-      "TIMEOUT",
-      "AUTH",
-      "INVALID_INPUT",
-      "MODERATION",
-      "UNSUPPORTED",
-      "PROVIDER",
-      "UNKNOWN",
-    ] as const;
-    for (const kind of kinds) {
-      expect(`${kind}:${isProviderErrorKind(kind)}`).toBe(`${kind}:true`);
-      // The declared default must also be reachable without an explicit flag.
-      expect(typeof providerError({ kind, code: "c", messageSanitized: "m" }).retryable).toBe(
-        "boolean",
-      );
-    }
-  });
-
-  it("refuses inherited names, wrong casings, and non-strings", () => {
-    for (const value of [
-      "toString",
-      "constructor",
-      "__proto__",
-      "hasOwnProperty",
-      "network",
-      "",
-      null,
-      undefined,
-      7,
-      {},
-      [],
-    ]) {
-      expect(`${String(value)}:${isProviderErrorKind(value)}`).toBe(`${String(value)}:false`);
+  /**
+   * Every kind resolves a declared default without an explicit `retryable`.
+   * The map is `Record<ProviderErrorKind, boolean>`, so omitting a key fails
+   * `tsc`; this asserts the runtime half — that no kind falls through to an
+   * accidental value. The previous revision also exported a `isProviderErrorKind`
+   * guard; it went with `asProviderError`, because a shape predicate with no
+   * caller is the seed of the next shape-trust bypass.
+   */
+  it("resolves a declared default for every kind", () => {
+    const expected: Record<ProviderError["kind"], boolean> = {
+      NETWORK: true,
+      RATE_LIMITED: true,
+      TIMEOUT: true,
+      AUTH: false,
+      INVALID_INPUT: false,
+      MODERATION: false,
+      UNSUPPORTED: false,
+      PROVIDER: false,
+      UNKNOWN: false,
+    };
+    for (const [kind, retryable] of Object.entries(expected)) {
+      const error = providerError({
+        kind: kind as ProviderError["kind"],
+        code: "c",
+        messageSanitized: "m",
+      });
+      expect(`${kind}:${error.retryable}`).toBe(`${kind}:${retryable}`);
     }
   });
 

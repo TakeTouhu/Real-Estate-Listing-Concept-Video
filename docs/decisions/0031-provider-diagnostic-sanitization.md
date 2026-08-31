@@ -62,20 +62,39 @@ replacement log was added: preserving the same content through `redact()` would
 re-create the leak with an extra step. Richer external telemetry needs its own
 closed, redacted schema, decided separately.
 
-### 4. One runtime vocabulary, and real validation
+### 4. Trust is nominal, never structural
 
-The two partial `Set`s (`RETRYABLE_KINDS`, `NON_RETRYABLE_KINDS`) listed eight of
-nine kinds between them — `PROVIDER` was in neither and fell through a
-`? false : false` ternary — and neither could answer "is this string a kind?".
-They are replaced by one exhaustive `Record<ProviderErrorKind, boolean>`:
-omitting a key fails `tsc`, and its own keys are the membership test, read with
-`hasOwnProperty` so `"toString"` is not a kind. Same shape as ADR-0029's
-`ASSET_EXECUTABILITY`, for the same reason — two parallel lists drift.
+The original defect was `normalizeWaveSpeedError` admitting anything carrying
+`kind` and `retryable` and casting it. The first correction attempted here was
+**also wrong, and is recorded because the reasoning matters**: it validated every
+public field's type and rebuilt a clean object from exactly those five. That
+does drop extra properties — but `code` and `messageSanitized` are among the
+five, so a hostile value with a real `kind`, a boolean `retryable`, an API token
+in `code` and a signed URL in `messageSanitized` satisfied every check and chose
+both public diagnostic strings outright.
 
-`asProviderError` replaces the duck cast. It validates every public field and
-returns a **fresh** object built from exactly those five. Rebuilding rather than
-returning the input is the point: a look-alike that passes validation can still
-carry a `rawBody`, and copying only known fields drops it.
+**Structural validation proves a shape; it can never prove provenance.** The rule
+is therefore:
+
+- `ProviderError` fields are **application-owned**, always;
+- an arbitrary external object is **never** promoted to a `ProviderError` by its
+  shape, however completely it matches;
+- the only already-normalized pass-through is **nominal** —
+  `WaveSpeedVideoProvider.normalizeError` returns `error.error` for an
+  `instanceof ProviderErrorException`, an object this application constructed;
+- everything else is dropped and replaced by a fixed classification.
+
+External input may influence only which closed classification the application
+picks. It may never supply text. `asProviderError` is deleted rather than
+tightened, and the `isProviderErrorKind` guard went with it: a shape predicate
+with no caller is the seed of the next shape-trust bypass.
+
+One runtime vocabulary survives, for a different purpose. The two partial `Set`s
+(`RETRYABLE_KINDS`, `NON_RETRYABLE_KINDS`) listed eight of nine kinds between
+them — `PROVIDER` was in neither and fell through a `? false : false` ternary.
+They are replaced by one exhaustive `Record<ProviderErrorKind, boolean>` holding
+each kind's default retryability: omitting a key fails `tsc`. Same shape as
+ADR-0029's `ASSET_EXECUTABILITY`, for the same reason — two parallel lists drift.
 
 ### 5. The fake provider obeys the same contract
 
@@ -137,8 +156,10 @@ land before anything calls `createGeneration`.
 - Diagnostics are less specific. An unexpected status now says only which status,
   and a network failure says only that one occurred. That is the trade: the body
   and the cause were the specific part, and they were the unsafe part.
-- `normalizeWaveSpeedError` returns a value-equal, not reference-equal, error for
-  an already-normalized input. Value stability is the contract; identity was not.
+- `normalizeWaveSpeedError` no longer recognizes an already-normalized error at
+  all. Passing a `ProviderError` *value* to it now yields the fixed network
+  diagnostic; the pass-through moved to the nominal `instanceof` check one level
+  up. Nothing in production relied on the value form.
 - `ProviderErrorException` still *has* a `cause` key in its type, inherited from
   the `Error` interface (ES2022). It cannot be removed without ceasing to be an
   `Error`, so it is pinned at runtime — never populated — and the class's own
