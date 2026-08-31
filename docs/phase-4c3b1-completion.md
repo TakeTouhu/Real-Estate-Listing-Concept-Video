@@ -72,8 +72,6 @@ control characters, and provider error text. A failure names which class escaped
 
 ## Mutation ledger
 
-| Mutation | Result |
-| --- | --- |
 Re-run **in full** after the trust-boundary correction below. `errors.ts`,
 `mapping.ts` and both test files changed, so every count here is measured
 against the final code; carrying forward the pre-correction numbers would have
