@@ -16,17 +16,20 @@ describe("FakeVideoProvider", () => {
   const now = () => new Date("2026-01-01T00:00:00.000Z");
   const provider = new FakeVideoProvider({ now });
 
-  it("is deterministic and performs no network I/O", async () => {
+  it("is deterministic, accepts by default, and performs no network I/O", async () => {
     const a = await provider.createGeneration(input);
     const b = await provider.createGeneration(input);
     expect(a).toEqual(b);
-    expect(a.predictionId).toBe("fake_abc123");
-    expect(a.provider).toBe("fake");
+    expect(a.kind).toBe("ACCEPTED");
+    if (a.kind !== "ACCEPTED") throw new Error("unreachable");
+    expect(a.ref.predictionId).toBe("fake_abc123");
+    expect(a.ref.provider).toBe("fake");
   });
 
   it("reports SUCCEEDED with a temporary output url and expiry", async () => {
-    const ref = await provider.createGeneration(input);
-    const status = await provider.getStatus(ref);
+    const accepted = await provider.createGeneration(input);
+    if (accepted.kind !== "ACCEPTED") throw new Error("expected ACCEPTED");
+    const status = await provider.getStatus(accepted.ref);
     expect(status.state).toBe("SUCCEEDED");
     expect(status.progressPercent).toBe(100);
     expect(status.temporaryOutputUrl).toContain("fake_abc123");
@@ -39,7 +42,8 @@ describe("FakeVideoProvider", () => {
   });
 
   it("cancel resolves without error", async () => {
-    const ref = await provider.createGeneration(input);
-    await expect(provider.cancelGeneration(ref)).resolves.toBeUndefined();
+    const accepted = await provider.createGeneration(input);
+    if (accepted.kind !== "ACCEPTED") throw new Error("expected ACCEPTED");
+    await expect(provider.cancelGeneration(accepted.ref)).resolves.toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ import {
   normalizeHttpStatusError,
   normalizeWaveSpeedError,
   normalizeWaveSpeedState,
-  parsePredictionId,
+  findUsablePredictionId,
 } from "./mapping";
 import type { ProviderGenerationInput } from "../types";
 
@@ -61,12 +61,15 @@ describe("request mapping", () => {
   });
 
   it.each(["aspect_ratio", "negative_prompt", "camera_motion", "preset"])(
-    "never sends %s, which this model does not document",
+    "never sends %s",
     (field) => {
       // Present on the normalized input, absent from the wire. Aspect ratio is
       // COMPOSITION_OWNED (Phase 5 normalizes the output); the negative prompt
-      // is refused at admission; camera motion travels in the prompt; `preset`
-      // has an unresolved contract.
+      // is refused at admission; camera motion travels in the prompt. `preset`
+      // is different from the other three: it *is* a documented optional
+      // parameter now, and is still withheld because the provider defaults it
+      // and nothing here selects one — sending an unchosen value would change
+      // paid output on the vendor's terms.
       const req = mapToWaveSpeedRequest(
         { ...input, seed: 42 },
         "https://api.wavespeed.ai/api/v3",
@@ -86,14 +89,39 @@ describe("request mapping", () => {
   });
 });
 
-describe("parsePredictionId", () => {
-  it("reads data.id and top-level id", () => {
-    expect(parsePredictionId({ data: { id: "pred_1" } })).toBe("pred_1");
-    expect(parsePredictionId({ id: "pred_2" })).toBe("pred_2");
+describe("findUsablePredictionId", () => {
+  it("reads data.id, and a top-level id as the legacy compatibility path", () => {
+    expect(findUsablePredictionId({ data: { id: "pred_1" } })).toBe("pred_1");
+    expect(findUsablePredictionId({ id: "pred_2" })).toBe("pred_2");
   });
 
-  it("throws a normalized provider error when missing", () => {
-    expect(() => parsePredictionId({})).toThrowError(/WaveSpeedAI response/);
+  it("prefers data.id over a top-level id", () => {
+    expect(findUsablePredictionId({ data: { id: "pred_1" }, id: "pred_2" })).toBe("pred_1");
+  });
+
+  /**
+   * Returns `undefined` rather than throwing. After a 2xx, an unreadable id is
+   * an ambiguous *submission*, not a local fault, and the caller answers
+   * SUBMISSION_UNKNOWN (ADR-0032).
+   */
+  it("returns undefined for every unusable form, and never trims", () => {
+    for (const payload of [
+      {},
+      { data: {} },
+      { id: "" },
+      { id: "   " },
+      { id: " pred_1" },
+      { id: "pred_1 " },
+      { id: "\tpred_1" },
+      { id: 7 },
+      { id: null },
+      { data: { id: "" } },
+      { data: { id: " pred_1" } },
+    ]) {
+      expect(`${JSON.stringify(payload)}:${String(findUsablePredictionId(payload))}`).toBe(
+        `${JSON.stringify(payload)}:undefined`,
+      );
+    }
   });
 });
 

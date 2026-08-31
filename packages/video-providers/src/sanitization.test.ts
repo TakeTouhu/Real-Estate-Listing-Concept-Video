@@ -108,6 +108,17 @@ function clientThrowing(value: unknown): HttpClient {
   return { request: () => Promise.reject(value) };
 }
 
+/**
+ * The `ProviderError` from a submission that did not succeed, whichever
+ * certainty arm it landed in. Fails loudly on ACCEPTED so a test that stops
+ * exercising the failure path cannot pass silently.
+ */
+async function submissionErrorOf(provider: WaveSpeedVideoProvider): Promise<ProviderError> {
+  const outcome = await provider.createGeneration(input);
+  if (outcome.kind === "ACCEPTED") throw new Error("expected a failed submission outcome");
+  return outcome.error;
+}
+
 async function caught(op: () => Promise<unknown>): Promise<ProviderErrorException> {
   try {
     await op();
@@ -121,10 +132,11 @@ async function caught(op: () => Promise<unknown>): Promise<ProviderErrorExceptio
 /**
  * Statuses the adapter distinguishes today, plus one it does not.
  *
- * Retryability and kind are asserted **as they currently stand**. Whether a
- * status proves the provider did not accept a paid submission is Phase
- * 4C-3B-2's question; this milestone only proves the diagnostics are safe, and
- * pinning current behaviour here is what keeps that later change deliberate.
+ * Retryability and kind are the **diagnostic** classification, and stay exactly
+ * as they were. Whether a status proves the provider did not accept a paid
+ * submission is a separate question, answered by `isDefinitiveRejectionStatus`
+ * and covered in `submission-certainty.test.ts` — 429 and 500 appear below as
+ * `retryable: true` and are nonetheless `SUBMISSION_UNKNOWN` (ADR-0032).
  */
 const STATUS_CASES: readonly {
   status: number;
@@ -163,22 +175,32 @@ describe("HTTP status diagnostics are sanitized", () => {
   /**
    * The end-to-end form, and the one that fails if the body summary returns.
    * The stub answers every operation with a body full of sentinels.
+   *
+   * `createGeneration` now *returns* its failure rather than throwing
+   * (ADR-0032), so its error is read off the outcome; the two idempotent
+   * operations still throw. The sanitization assertion is identical either way
+   * — which is the point, since the error object is the same type.
    */
-  const operations: readonly { name: string; run: (p: WaveSpeedVideoProvider) => Promise<unknown> }[] =
-    [
-      { name: "createGeneration", run: (p) => p.createGeneration(input) },
-      { name: "getStatus", run: (p) => p.getStatus(ref) },
-      { name: "cancelGeneration", run: (p) => p.cancelGeneration(ref) },
-    ];
+  const operations: readonly {
+    name: string;
+    errorOf: (p: WaveSpeedVideoProvider) => Promise<ProviderError>;
+  }[] = [
+    { name: "createGeneration", errorOf: (p) => submissionErrorOf(p) },
+    { name: "getStatus", errorOf: async (p) => (await caught(() => p.getStatus(ref))).error },
+    {
+      name: "cancelGeneration",
+      errorOf: async (p) => (await caught(() => p.cancelGeneration(ref))).error,
+    },
+  ];
 
-  for (const { name, run } of operations) {
+  for (const { name, errorOf } of operations) {
     it.each(STATUS_CASES)(`${name} discards a hostile $status body`, async ({ status }) => {
       const provider = new WaveSpeedVideoProvider(config, {
         http: clientReturning({ status, body: HOSTILE_BODY }),
       });
-      const exception = await caught(() => run(provider));
-      expectNoSentinels(exception.error);
-      expect(exception.error.providerStatus).toBe(status);
+      const error = await errorOf(provider);
+      expectNoSentinels(error);
+      expect(error.providerStatus).toBe(status);
     });
   }
 
@@ -186,9 +208,9 @@ describe("HTTP status diagnostics are sanitized", () => {
     const provider = new WaveSpeedVideoProvider(config, {
       http: clientReturning({ status: 200, body: HOSTILE_BODY }),
     });
-    const exception = await caught(() => provider.createGeneration(input));
-    expect(exception.error.code).toBe("WAVESPEED_MISSING_PREDICTION_ID");
-    expectNoSentinels(exception.error);
+    const error = await submissionErrorOf(provider);
+    expect(error.code).toBe("WAVESPEED_MISSING_PREDICTION_ID");
+    expectNoSentinels(error);
   });
 });
 
@@ -223,9 +245,9 @@ describe("network and abort diagnostics retain nothing external", () => {
 
   it("carries nothing external out of a rejected request, end to end", async () => {
     const provider = new WaveSpeedVideoProvider(config, { http: clientThrowing(hostileError()) });
-    const exception = await caught(() => provider.createGeneration(input));
-    expect(exception.error.kind).toBe("NETWORK");
-    expectNoSentinels(exception.error);
+    const error = await submissionErrorOf(provider);
+    expect(error.kind).toBe("NETWORK");
+    expectNoSentinels(error);
   });
 });
 
