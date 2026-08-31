@@ -30,3 +30,9 @@ pnpm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Munder Difflin hive runtime (independent git repo / machine-generated state)
+/hive/
+/worktrees/
+/roster.json
+/roster-backups/
