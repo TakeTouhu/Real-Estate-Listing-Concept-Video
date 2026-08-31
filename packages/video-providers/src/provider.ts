@@ -5,6 +5,7 @@ import type {
   ProviderGenerationStatus,
   ProviderName,
   ProviderError,
+  ProviderSubmissionOutcome,
 } from "./types";
 
 /**
@@ -15,8 +16,22 @@ import type {
 export interface VideoGenerationProvider {
   readonly name: ProviderName;
 
-  /** Submit an asynchronous prediction and return an internal reference. */
-  createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef>;
+  /**
+   * Submit an asynchronous prediction and report **what is known** about the
+   * provider's state afterwards.
+   *
+   * It returns rather than throws for anything that happens once the paid
+   * invocation has begun, because a thrown value cannot carry the distinction
+   * that matters: `catch` treats "the provider rejected this" and "a prediction
+   * may already be running and billed" identically, and the natural handler for
+   * the first is a retry.
+   *
+   * It may throw a sanitized `ProviderErrorException` **only** for a failure
+   * proven to occur strictly before invocation — request construction and
+   * serialization. From the moment the HTTP call is entered, every outcome is a
+   * `ProviderSubmissionOutcome` (ADR-0032).
+   */
+  createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome>;
 
   /** Query and normalize the current status of a submitted prediction. */
   getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus>;

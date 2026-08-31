@@ -1,23 +1,36 @@
 import { money, type Money } from "@app/shared";
 import type { VideoGenerationProvider } from "../provider";
-import { ProviderErrorException } from "../errors";
+import { ProviderErrorException, providerError } from "../errors";
 import type {
   ProviderError,
   ProviderGenerationInput,
   ProviderGenerationRef,
   ProviderGenerationStatus,
+  ProviderSubmissionOutcome,
 } from "../types";
 import type { WaveSpeedConfig } from "./config";
-import type { HttpClient } from "./http";
+import type { HttpClient, HttpResponse } from "./http";
 import {
   buildSubmitUrl,
   extractOutputUrl,
+  findUsablePredictionId,
+  isDefinitiveRejectionStatus,
   mapToWaveSpeedRequest,
   normalizeHttpStatusError,
   normalizeWaveSpeedError,
   normalizeWaveSpeedState,
-  parsePredictionId,
 } from "./mapping";
+
+/**
+ * The submission-only timeout, in milliseconds.
+ *
+ * Longer than the client's 30 s default, and deliberately so: aborting a paid
+ * POST does not stop the provider, it only destroys our evidence, so a short
+ * budget manufactures `SUBMISSION_UNKNOWN` rows a human must reconcile. 60 s
+ * matches WaveSpeedAI's own documented submission examples. Status reads and
+ * cancellation keep the ordinary default (ADR-0032).
+ */
+const SUBMIT_TIMEOUT_MS = 60_000;
 
 export interface WaveSpeedProviderDeps {
   readonly http: HttpClient;
@@ -63,28 +76,72 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
     };
   }
 
-  async createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef> {
+  /**
+   * The one paid call, and the only method that reports certainty rather than
+   * throwing.
+   *
+   * The structure is the contract. Everything above the `http.request` line is
+   * **pre-invocation**: no request exists yet, a failure there is provably not
+   * a charge, and it may throw. Everything from that line onward is
+   * post-invocation, where the honest default is "we do not know" — including
+   * the `catch`, because an injected client can reject before a byte leaves the
+   * process and the boundary cannot tell that apart from a reset mid-flight.
+   * Guessing in that direction is what pays twice, so it fails closed.
+   *
+   * `submittedAt` is read **before** the call for the same reason: every value
+   * needed to describe an acceptance is in hand before acceptance can happen,
+   * so no avoidable local throw can occur while holding a prediction id we
+   * would then lose. Exactly one `http.request` is issued, on every path
+   * (ADR-0032).
+   */
+  async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+    // --- pre-invocation: may throw, cannot have spent money -----------------
+    const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
+    const body = JSON.stringify(req.body);
+    const headers = this.authHeaders();
+    const submittedAt = this.now().toISOString();
+
+    // --- invocation: from here, every exit is a ProviderSubmissionOutcome ---
+    let res: HttpResponse;
     try {
-      const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
-      const res = await this.http.request({
+      res = await this.http.request({
         method: "POST",
         url: req.url,
-        headers: this.authHeaders(),
-        body: JSON.stringify(req.body),
+        headers,
+        body,
+        redirect: "manual",
+        timeoutMs: SUBMIT_TIMEOUT_MS,
       });
-      if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
-      }
-      const predictionId = parsePredictionId(safeJsonParse(res.body));
-      return {
-        provider: this.name,
-        modelId: input.modelId,
-        predictionId,
-        submittedAt: this.now().toISOString(),
-      };
     } catch (error) {
-      throw new ProviderErrorException(this.normalizeError(error));
+      return { kind: "SUBMISSION_UNKNOWN", error: this.normalizeError(error) };
     }
+
+    if (res.status < 200 || res.status >= 300) {
+      const error = normalizeHttpStatusError(res.status);
+      return isDefinitiveRejectionStatus(res.status)
+        ? { kind: "DEFINITIVELY_REJECTED", error }
+        : { kind: "SUBMISSION_UNKNOWN", error };
+    }
+
+    // A 2xx is not proof of acceptance on its own — the prediction id is.
+    const predictionId = findUsablePredictionId(safeJsonParse(res.body));
+    if (predictionId === undefined) {
+      return {
+        kind: "SUBMISSION_UNKNOWN",
+        error: providerError({
+          kind: "PROVIDER",
+          code: "WAVESPEED_MISSING_PREDICTION_ID",
+          messageSanitized: "WaveSpeedAI accepted response carried no usable prediction id",
+          retryable: false,
+          providerStatus: res.status,
+        }),
+      };
+    }
+
+    return {
+      kind: "ACCEPTED",
+      ref: { provider: this.name, modelId: input.modelId, predictionId, submittedAt },
+    };
   }
 
   async getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus> {

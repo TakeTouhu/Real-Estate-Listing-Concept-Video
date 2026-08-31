@@ -6,6 +6,7 @@ import type {
   ProviderGenerationInput,
   ProviderGenerationRef,
   ProviderGenerationStatus,
+  ProviderSubmissionOutcome,
   VideoModelPricing,
 } from "../types";
 
@@ -14,6 +15,12 @@ export interface FakeVideoProviderOptions {
   readonly now?: () => Date;
   /** Base for the synthetic temporary output URL (never a real endpoint). */
   readonly outputUrlBase?: string;
+  /**
+   * Which submission outcome to produce. Defaults to `ACCEPTED`.
+   *
+   * A discriminant, never diagnostic content — see `createGeneration`.
+   */
+  readonly submissionOutcome?: ProviderSubmissionOutcome["kind"];
 }
 
 const DEFAULT_PRICING: VideoModelPricing = { currency: "USD", costPerSecondMinor: 5 };
@@ -29,19 +36,56 @@ export class FakeVideoProvider implements VideoGenerationProvider {
   private readonly pricing: VideoModelPricing;
   private readonly now: () => Date;
   private readonly outputUrlBase: string;
+  private readonly submissionOutcome: ProviderSubmissionOutcome["kind"];
 
   constructor(options: FakeVideoProviderOptions = {}) {
     this.pricing = options.pricing ?? DEFAULT_PRICING;
     this.now = options.now ?? (() => new Date());
     this.outputUrlBase = options.outputUrlBase ?? "https://fake-provider.internal/outputs";
+    this.submissionOutcome = options.submissionOutcome ?? "ACCEPTED";
   }
 
-  createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef> {
+  /**
+   * Deterministically `ACCEPTED` unless configured otherwise.
+   *
+   * The two failure modes exist so a later orchestrator can be tested against
+   * an ambiguous submission — the outcome with no automatic exit — without
+   * standing up a WaveSpeed stub. What the configuration selects is the
+   * **discriminant only**: the errors are built here from fixed application
+   * text, and no message, code, cause, body or details bag can be supplied by a
+   * caller. A test double that lets a caller choose diagnostic strings is a
+   * hole in the same contract ADR-0031 closed for the real adapter.
+   */
+  createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+    if (this.submissionOutcome === "DEFINITIVELY_REJECTED") {
+      return Promise.resolve({
+        kind: "DEFINITIVELY_REJECTED",
+        error: providerError({
+          kind: "INVALID_INPUT",
+          code: "FAKE_SUBMISSION_REJECTED",
+          messageSanitized: "Fake provider rejected the submission",
+        }),
+      });
+    }
+    if (this.submissionOutcome === "SUBMISSION_UNKNOWN") {
+      return Promise.resolve({
+        kind: "SUBMISSION_UNKNOWN",
+        error: providerError({
+          kind: "NETWORK",
+          code: "FAKE_SUBMISSION_UNKNOWN",
+          messageSanitized: "Fake provider submission outcome is unknown",
+          retryable: false,
+        }),
+      });
+    }
     return Promise.resolve({
-      provider: this.name,
-      modelId: input.modelId,
-      predictionId: `fake_${input.requestHash}`,
-      submittedAt: this.now().toISOString(),
+      kind: "ACCEPTED",
+      ref: {
+        provider: this.name,
+        modelId: input.modelId,
+        predictionId: `fake_${input.requestHash}`,
+        submittedAt: this.now().toISOString(),
+      },
     });
   }
 

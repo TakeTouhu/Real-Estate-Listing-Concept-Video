@@ -1,4 +1,4 @@
-import { ProviderErrorException, isHttpStatus, providerError } from "../errors";
+import { isHttpStatus, providerError } from "../errors";
 import type {
   ProviderError,
   ProviderGenerationInput,
@@ -40,8 +40,13 @@ export function buildSubmitUrl(baseUrl: string, modelId: string): string {
  *   `prompt`, which would invert its meaning.
  * - **`camera_motion`** — not documented. Motion intent is `PROMPT_RENDERED`:
  *   Phase 4B-2b expresses it through the documented `prompt` input.
- * - **`preset`** — appears in a Quick Start example but not in the parameter
- *   table, so its contract is unresolved. An example is not a specification.
+ * - **`preset`** — **is** now a documented optional parameter (the earlier
+ *   comment here said it appeared only in a Quick Start example; that wording
+ *   is stale as of 2026-08-31). It is still not sent, for a different reason:
+ *   the provider defines a default, nothing in this system chooses a preset,
+ *   and sending a value no caller selected would change paid output on the
+ *   provider's terms rather than ours. Exposing it is a request-mapping
+ *   decision for its own milestone, not a side effect of this one.
  *
  * The submit URL is built from **`input.modelId`**, never from configuration.
  * That is what lets an already-admitted generation execute against the model it
@@ -72,20 +77,58 @@ interface WaveSpeedEnvelope {
   readonly status?: string;
 }
 
-export function parsePredictionId(payload: unknown): string {
+/**
+ * The acceptance token, extracted without throwing.
+ *
+ * This used to throw when no id was present, and on the money path that was the
+ * wrong control flow: a 2xx whose body we cannot read an id from is not a local
+ * programming fault, it is an **ambiguous submission** — the provider may well
+ * have created and billed a prediction we simply cannot name. An exception
+ * forces that into the same channel as a rejection. Returning `undefined` lets
+ * the caller answer `SUBMISSION_UNKNOWN` (ADR-0032).
+ *
+ * Usability is strict and deliberately does not trim. A value that changes
+ * under `trim()` is not the id the provider meant; accepting the trimmed form
+ * would invent an identifier the provider never sent, and a prediction id is
+ * the one string later polling and reconciliation depend on being exact.
+ *
+ * Resolution order is `data.id`, then a top-level `id`. The official response
+ * uses `data.id`; the top-level form is retained as a legacy compatibility path
+ * that existing tests pin. No third location is consulted — an id is never
+ * recovered from message text.
+ */
+export function findUsablePredictionId(payload: unknown): string | undefined {
   const env = payload as WaveSpeedEnvelope;
   const id = env.data?.id ?? env.id;
-  if (typeof id !== "string" || id.length === 0) {
-    throw new ProviderErrorException(
-      providerError({
-        kind: "PROVIDER",
-        code: "WAVESPEED_MISSING_PREDICTION_ID",
-        messageSanitized: "WaveSpeedAI response did not contain a prediction id",
-        retryable: false,
-      }),
-    );
-  }
+  if (typeof id !== "string") return undefined;
+  if (id.length === 0 || id.trim() !== id) return undefined;
   return id;
+}
+
+/**
+ * Whether a non-success HTTP status is **proof** the provider did not accept
+ * the submission.
+ *
+ * The allowlist is three statuses and lives here, once. Everything absent from
+ * it — every 1xx, every 3xx, 402, 404, 408, 409, 413, 415, **422**, **429**,
+ * every 5xx, and any status nobody has thought about — is `SUBMISSION_UNKNOWN`.
+ *
+ * An allowlist rather than a blocklist, because the failure mode is asymmetric:
+ * wrongly calling something ambiguous costs a human reconciliation, wrongly
+ * calling something definitive costs a duplicate charge. A status is only safe
+ * once someone has deliberately written it down.
+ *
+ * 400, 401 and 403 qualify because WaveSpeedAI documents them as submission
+ * rejections and each is decided before the request could create work. **422 is
+ * not on the list**, even though `normalizeHttpStatusError` still maps it to
+ * `INVALID_INPUT` for diagnostics — diagnostic category and submission
+ * certainty are different questions, and the older mapping is not evidence
+ * about billing (ADR-0032).
+ */
+const DEFINITIVELY_REJECTED_STATUSES: ReadonlySet<number> = new Set([400, 401, 403]);
+
+export function isDefinitiveRejectionStatus(status: number): boolean {
+  return DEFINITIVELY_REJECTED_STATUSES.has(status);
 }
 
 /**

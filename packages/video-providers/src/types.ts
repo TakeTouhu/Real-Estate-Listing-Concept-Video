@@ -64,6 +64,51 @@ export interface ProviderGenerationRef {
   readonly submittedAt: string; // ISO 8601
 }
 
+/**
+ * What a submission attempt is known to have done to the **provider's** state,
+ * as distinct from whether the client's request went well.
+ *
+ * The initial generation POST is the one call that spends money, and there are
+ * three materially different things that can be true afterwards. Two of them
+ * look identical from the outside — a 429 and a connection reset both "failed"
+ * — but one may already have created a billed prediction. Collapsing them is
+ * how a system pays twice.
+ *
+ * Certainty is deliberately **not** derivable from anything else the boundary
+ * returns. Not from `ProviderError.kind`, not from `retryable`, not from the
+ * HTTP status, and not from whether something was thrown. `retryable` answers
+ * "would this request plausibly succeed if repeated"; this union answers "is it
+ * safe to repeat it at all", and for a paid POST those are different questions
+ * with different answers. A 429 is `retryable: true` and
+ * `SUBMISSION_UNKNOWN` at the same time (ADR-0032).
+ *
+ * The arms are structurally disjoint on purpose: only `ACCEPTED` carries a
+ * `ref`, so a caller cannot reach a prediction id without having discriminated
+ * first, and the compiler enforces that rather than a convention.
+ */
+export type ProviderSubmissionOutcome =
+  | {
+      readonly kind: "ACCEPTED";
+      /** Proof of acceptance: a usable prediction id the provider returned. */
+      readonly ref: ProviderGenerationRef;
+    }
+  | {
+      /**
+       * Positive evidence the provider did **not** accept the request, so no
+       * charge can exist and nothing needs reconciling.
+       */
+      readonly kind: "DEFINITIVELY_REJECTED";
+      readonly error: ProviderError;
+    }
+  | {
+      /**
+       * Acceptance is unproven **in either direction**. A prediction may exist
+       * and may be billed. Never re-submit on this outcome.
+       */
+      readonly kind: "SUBMISSION_UNKNOWN";
+      readonly error: ProviderError;
+    };
+
 export type ProviderGenerationState =
   | "QUEUED"
   | "PROCESSING"
