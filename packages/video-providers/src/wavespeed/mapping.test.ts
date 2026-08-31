@@ -129,11 +129,11 @@ describe("extractOutputUrl", () => {
 
 describe("error normalization", () => {
   it("maps http status codes to kinds and retryability", () => {
-    expect(normalizeHttpStatusError(401, "").kind).toBe("AUTH");
-    expect(normalizeHttpStatusError(422, "").kind).toBe("INVALID_INPUT");
-    expect(normalizeHttpStatusError(429, "").retryable).toBe(true);
-    expect(normalizeHttpStatusError(503, "").retryable).toBe(true);
-    expect(normalizeHttpStatusError(418, "teapot").retryable).toBe(false);
+    expect(normalizeHttpStatusError(401).kind).toBe("AUTH");
+    expect(normalizeHttpStatusError(422).kind).toBe("INVALID_INPUT");
+    expect(normalizeHttpStatusError(429).retryable).toBe(true);
+    expect(normalizeHttpStatusError(503).retryable).toBe(true);
+    expect(normalizeHttpStatusError(418).retryable).toBe(false);
   });
 
   it("classifies abort as timeout and other throwables as network", () => {
@@ -143,8 +143,17 @@ describe("error normalization", () => {
     expect(normalizeWaveSpeedError(new Error("boom")).kind).toBe("NETWORK");
   });
 
-  it("passes through already-normalized provider errors", () => {
-    const normalized = normalizeHttpStatusError(429, "");
-    expect(normalizeWaveSpeedError(normalized)).toBe(normalized);
+  /**
+   * There is deliberately **no** pass-through here for a plain object that
+   * merely looks normalized — not even one whose every field has the right
+   * type. Shape is not provenance. The nominal boundary lives one level up, on
+   * `ProviderErrorException`, and is covered in `sanitization.test.ts`.
+   */
+  it("does not trust a plain object that looks like a normalized error", () => {
+    const looksNormalized = normalizeHttpStatusError(429);
+    expect(normalizeWaveSpeedError(looksNormalized)).toMatchObject({
+      kind: "NETWORK",
+      code: "WAVESPEED_NETWORK_ERROR",
+    });
   });
 });

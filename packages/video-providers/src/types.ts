@@ -36,7 +36,19 @@ export interface ProviderGenerationInput {
   readonly aspectRatio: string;
   readonly resolution: string;
   readonly seed?: number;
-  /** Stable request hash used for idempotency and provider-charge dedup. */
+  /**
+   * Stable **internal** request identity.
+   *
+   * It is this application's own coordination key — admission, reuse and
+   * accounting all key off it. It is **not** a provider idempotency token: the
+   * current official WaveSpeedAI documentation establishes no idempotency-key
+   * support for the create endpoint, and nothing sends this value as an
+   * `Idempotency-Key` header or in the request body. An earlier comment here
+   * claimed "idempotency and provider-charge dedup", which overstated the
+   * provider contract — no provider-side deduplication exists to rely on, so
+   * duplicate-charge safety comes from not re-POSTing, never from this hash
+   * (ADR-0031).
+   */
   readonly requestHash: string;
 }
 
@@ -98,15 +110,34 @@ export type ProviderErrorKind =
   | "UNKNOWN";
 
 /**
- * Normalized provider error. `messageSanitized` is safe for support and logs;
- * it must not contain secrets, signed URLs, or raw provider payloads.
+ * Normalized provider error — **safe structured data**, in the strong sense:
+ * every field is application-owned, so the whole object may be stringified,
+ * logged, and persisted without further filtering (ADR-0031).
+ *
+ * That guarantee is structural, not a convention. There is deliberately no
+ * `cause`, no `rawBody`, no `response`, no `headers`, and no free-form details
+ * bag: a field able to hold an arbitrary external value is a field that will
+ * eventually hold a signed source URL, a bearer token, or a customer prompt,
+ * and `normalizedErrorMessage` is a persisted column. `messageSanitized` is
+ * chosen from fixed application text — it is never built from provider bytes.
+ *
+ * The only value ever interpolated into a message is `providerStatus`, and only
+ * after it is proven to be an integer HTTP status.
  */
 export interface ProviderError {
   readonly kind: ProviderErrorKind;
   readonly retryable: boolean;
   readonly code: string;
   readonly messageSanitized: string;
-  readonly cause?: unknown;
+  /**
+   * The HTTP status actually received from the provider, when one was.
+   *
+   * Present only for errors derived from a provider **response**; absent for
+   * network, abort, and locally-raised errors, where no status exists and
+   * inventing one would assert contact that never happened. Constrained to an
+   * integer in 100–599, which is what makes it safe to interpolate.
+   */
+  readonly providerStatus?: number;
 }
 
 /** Model capability + pricing, treated as configuration data, not constants. */

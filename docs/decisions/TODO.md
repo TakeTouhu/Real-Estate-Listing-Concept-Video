@@ -17,6 +17,26 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
+- [ ] **Phase 4C-3B-2 is required before any paid submission.** 4C-3B-1 shipped
+      diagnostic sanitization only (ADR-0031). Still outstanding: the
+      `ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN` result union;
+      the definitive-rejection HTTP allowlist, approved as **exactly 400, 401,
+      403** — 422's current definitive treatment must **not** be carried forward,
+      and 429, every 5xx and every unlisted status default to
+      `SUBMISSION_UNKNOWN`; malformed-2xx semantics; manual redirect handling for
+      the paid create POST only; a request-specific 60 s submission timeout;
+      exactly-one-POST evidence; fake-provider submission outcomes. Until it
+      lands, 429 and 5xx still report `retryable: true`, so a retry policy
+      reading that flag would re-POST an ambiguous submission.
+      **Required before any provider charge is possible.**
+- [ ] **The paid gate may not be enabled until the WaveSpeedAI pricing contract
+      is resolution-aware and verified.** Official pricing (2026-08-29) is
+      resolution-dependent — 480p $0.02/s, 720p $0.04/s, 1080p $0.06/s, billed to
+      a maximum of 20 seconds. The current `costPerSecondMinor` placeholder is
+      one-dimensional and cannot represent it, so every reserved credit amount
+      derived from `estimateCost` is wrong for 480p and 1080p. No `verified`
+      boolean was added: a flag does not make the contract correct.
+      **Required before gate enablement.**
 - [x] Implement `WaveSpeedVideoProvider` submission/status/cancel/estimate +
       error normalization behind the adapter boundary (Phase 1, injected HTTP
       client, offline tests). Webhook handler + polling worker remain Phase 4.

@@ -66,12 +66,21 @@ export class FakeVideoProvider implements VideoGenerationProvider {
     );
   }
 
-  normalizeError(error: unknown): ProviderError {
+  /**
+   * The fake obeys the **same** secrecy contract as the real adapter.
+   *
+   * It used to copy `error.message` into `messageSanitized` and retain the
+   * thrown value as `cause`. Being offline does not make that safe: this is the
+   * provider every test and every local run wires, so it is where a habit of
+   * "the message is probably fine" would form, and the `ProviderError` it
+   * returns is the same type the domain persists. The parameter is accepted and
+   * deliberately unused (ADR-0031).
+   */
+  normalizeError(_error: unknown): ProviderError {
     return providerError({
       kind: "UNKNOWN",
       code: "FAKE_PROVIDER_ERROR",
-      messageSanitized: error instanceof Error ? error.message : "Unknown fake provider error",
-      cause: error,
+      messageSanitized: "Fake provider error",
     });
   }
 }

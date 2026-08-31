@@ -38,6 +38,11 @@ function safeJsonParse(body: string): unknown {
  * in the Authorization header and is never logged. The factory only constructs
  * this with a real fetch client when VIDEO_PROVIDER=wavespeed, so Phase 0's
  * default (fake) configuration performs no real API calls.
+ *
+ * A **non-2xx response body is read and discarded**, on every operation. Only
+ * the status reaches error normalization. The body is untrusted external input
+ * with no schema, and the previous code passed a 120-byte slice of it into a
+ * field documented as carrying no raw provider payload (ADR-0031).
  */
 export class WaveSpeedVideoProvider implements VideoGenerationProvider {
   readonly name = "wavespeed" as const;
@@ -68,9 +73,7 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
         body: JSON.stringify(req.body),
       });
       if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(
-          normalizeHttpStatusError(res.status, summarize(res.body)),
-        );
+        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
       }
       const predictionId = parsePredictionId(safeJsonParse(res.body));
       return {
@@ -93,9 +96,7 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
         headers: this.authHeaders(),
       });
       if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(
-          normalizeHttpStatusError(res.status, summarize(res.body)),
-        );
+        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
       }
       const payload = safeJsonParse(res.body) as { data?: { status?: string } };
       const state = normalizeWaveSpeedState(payload.data?.status);
@@ -115,9 +116,7 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
       const url = `${buildSubmitUrl(this.config.baseUrl, "predictions")}/${ref.predictionId}/cancel`;
       const res = await this.http.request({ method: "POST", url, headers: this.authHeaders() });
       if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(
-          normalizeHttpStatusError(res.status, summarize(res.body)),
-        );
+        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
       }
     } catch (error) {
       throw new ProviderErrorException(this.normalizeError(error));
@@ -133,12 +132,16 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
     );
   }
 
+  /**
+   * The **only** place an already-normalized error is trusted, and the check is
+   * nominal on purpose. `instanceof ProviderErrorException` is provenance: this
+   * application built that object. Recognising one by shape instead would let
+   * an arbitrary thrown value with the right field types choose `code` and
+   * `messageSanitized` outright (ADR-0031 §4). Everything else falls through to
+   * a fixed classification.
+   */
   normalizeError(error: unknown): ProviderError {
     if (error instanceof ProviderErrorException) return error.error;
     return normalizeWaveSpeedError(error);
   }
-}
-
-function summarize(body: string): string {
-  return body.length > 120 ? `${body.slice(0, 120)}…` : body;
 }

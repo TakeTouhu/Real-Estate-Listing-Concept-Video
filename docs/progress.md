@@ -324,6 +324,12 @@ and ADR-0020.
   and a compare-and-swap submission claim, with `organizationId` resolved through
   `VideoProject` and never accepted from a caller. Production-dormant — nothing
   invokes it yet.
+- **Phase 4C-3B-1** — see GitHub for its lifecycle. Provider diagnostics become
+  safe structured data (ADR-0031): raw response bodies and raw thrown causes are
+  dropped rather than filtered, messages are fixed application text, and
+  `providerStatus` is the one machine field added. Submission certainty, redirect
+  handling and timeouts are **not** in it — Phase 4C-3B-2 owns those and remains
+  required before any paid submission.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

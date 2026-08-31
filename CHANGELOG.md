@@ -3,6 +3,58 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-1: Provider diagnostic sanitization
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b1-completion.md`
+and ADR-0031.
+
+### Security
+
+- **Raw provider response bytes can no longer reach a diagnostic.**
+  `normalizeHttpStatusError` interpolated a 120-byte slice of the provider's
+  response body into `messageSanitized` for any unlisted status. The adapter
+  sends the customer's **signed source image URL** as `image`, so a provider
+  echoing the parameter it rejected would have written that URL into the
+  persisted `normalizedErrorMessage` column and every log line carrying the
+  error. The body is now read for transport and discarded; the function no
+  longer takes one, and `summarize` is deleted.
+- **`ProviderError.cause` is removed, and the exception no longer chains one.**
+  `new Error(msg, { cause })` is what makes an unguarded `console.error(err)`
+  print a fetch failure's hostname, address and port. External diagnostic
+  content is dropped at the boundary rather than filtered; no replacement log
+  was added, because preserving the same content through `redact()` would
+  re-create the leak with an extra step.
+- **The fake provider obeys the same contract** — one fixed diagnostic, no
+  `error.message` passthrough, no cause.
+
+### Changed
+
+- **`providerStatus?: number`** is the one field added: the HTTP status actually
+  received, constrained to an integer in 100–599, absent for network, abort and
+  locally-raised errors. It is the only value ever interpolated into a message.
+- **One runtime vocabulary for provider error kinds.** Two partial `Set`s listed
+  eight of nine kinds between them and neither could answer "is this a kind?";
+  they are replaced by one exhaustive `Record`, read with `hasOwnProperty`.
+- **Trust in an already-normalized error is nominal, never structural.** The
+  `kind` + `retryable` duck cast is gone, and so is the shape validator that
+  briefly replaced it: `code` and `messageSanitized` are themselves public
+  fields, so an object with every field of the right type could still put an API
+  token in one and a signed URL in the other. Arbitrary values are now dropped
+  and reclassified; the only pass-through is
+  `WaveSpeedVideoProvider.normalizeError`'s `instanceof ProviderErrorException`,
+  which is provenance rather than shape. External input can influence only which
+  closed classification the application picks, never the text.
+- **`requestHash`'s comment is corrected.** It claimed use for provider
+  idempotency; no such contract exists and nothing sends an `Idempotency-Key`.
+  Comment only — value, computation, persistence and request body unchanged.
+
+### Not in this milestone
+
+Submission certainty (`ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN`),
+HTTP status classification, redirect handling, timeouts, env vars, pricing and
+fake submission outcomes are all Phase 4C-3B-2, which remains **required before
+any paid submission**. Retry semantics are untouched here.
+
 ## [Unreleased] — Phase 4C-3A-2b: Locked prepared-source submission claim
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3a2b-completion.md`
