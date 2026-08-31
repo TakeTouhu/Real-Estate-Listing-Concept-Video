@@ -1,7 +1,10 @@
 # Phase 4C-3B-1 — Provider diagnostic sanitization foundation
 
 Milestone: Phase 4C-3B-1
-Base: `2dddb3beb391667f6f400e5a20a7a5793a11eef1` (merged Phase 4C-3A-2b, PR #44)
+Implementation base: `2dddb3beb391667f6f400e5a20a7a5793a11eef1` (merged Phase 4C-3A-2b, PR #44)
+PR base: `b744802813e745e19e901be32836cff96793b250` — `main` advanced during review
+by PR #45, a `.gitignore`-only change (+6 / −0), merged in without rewriting the
+implementation commits.
 Decision record: ADR-0031
 
 > This report is an immutable technical snapshot and carries no lifecycle
@@ -71,16 +74,30 @@ control characters, and provider error text. A failure names which class escaped
 
 | Mutation | Result |
 | --- | --- |
+Re-run **in full** after the trust-boundary correction below. `errors.ts`,
+`mapping.ts` and both test files changed, so every count here is measured
+against the final code; carrying forward the pre-correction numbers would have
+described a tree that no longer exists.
+
+| Mutation | Result |
+| --- | --- |
 | **M1** — raw body summary restored into the unexpected-status message | **4 fail** |
-| **M2** — `ProviderError.cause` restored and the raw network error attached | **4 TS errors + 11 runtime fail** |
-| **M3** — `new Error(msg, { cause })` restored in the exception | **45 fail** |
+| **M2** — `ProviderError.cause` restored and the raw network error attached | **4 TS errors + 13 runtime fail** |
+| **M3** — `new Error(msg, { cause })` restored in the exception | **46 fail** |
 | **M4** — fake provider `error.message` passthrough restored | **2 fail** |
-| **M5** — structural plain-object pass-through restored for a full-shape look-alike | **see below** |
+| **M5** — structural plain-object pass-through restored for a full-shape look-alike | **3 fail** |
 | **M6** — `providerStatus` dropped from HTTP-status errors | **28 fail** |
 | **M7** — provider body text placed into `code` | **4 fail** |
 
 Every mutated file restored byte-identically, confirmed by `diff` against
 pre-mutation copies. No mutation-only code is committed.
+
+**M5 is the one that discriminates the final property.** Its earlier form
+restored only the weak `kind` + `retryable` duck cast, which the corrected code
+no longer has anywhere to regress to. Rewritten, it restores the *structural*
+plain-object pass-through — the validator this milestone deleted — and the
+fully-valid hostile look-alike test then fails, which is the whole point of that
+test's existence.
 
 **M6's first run applied nothing** — the anchor expected five occurrences and the
 file had a sixth indentation, so the edit aborted and the suite passed
@@ -88,7 +105,7 @@ untouched. Recorded because a mutation that never applied looks exactly like a
 mutation that was not caught; re-run against a correct anchor it fails 28 tests.
 
 **M2 is the only mutation caught at both levels.** Restoring the field is a
-compile error against the `never` pin (4 errors) *and* a runtime leak (11
+compile error against the `never` pin (4 errors) *and* a runtime leak (13
 failures) — unlike Phase 4C-3A-2a's M5 and 4C-3A-2b's M7, which were compile-only
 because Vitest strips types. It is reported as both rather than as one.
 
