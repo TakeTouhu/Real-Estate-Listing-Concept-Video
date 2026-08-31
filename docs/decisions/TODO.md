@@ -17,17 +17,20 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
-- [ ] **Phase 4C-3B-2 is required before any paid submission.** 4C-3B-1 shipped
-      diagnostic sanitization only (ADR-0031). Still outstanding: the
-      `ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN` result union;
-      the definitive-rejection HTTP allowlist, approved as **exactly 400, 401,
-      403** — 422's current definitive treatment must **not** be carried forward,
-      and 429, every 5xx and every unlisted status default to
-      `SUBMISSION_UNKNOWN`; malformed-2xx semantics; manual redirect handling for
-      the paid create POST only; a request-specific 60 s submission timeout;
-      exactly-one-POST evidence; fake-provider submission outcomes. Until it
-      lands, 429 and 5xx still report `retryable: true`, so a retry policy
-      reading that flag would re-POST an ambiguous submission.
+- [x] **Phase 4C-3B-2 — paid submission certainty and transport hardening.**
+      Done (ADR-0032): the `ACCEPTED` / `DEFINITIVELY_REJECTED` /
+      `SUBMISSION_UNKNOWN` union; the definitive allowlist at exactly 400, 401,
+      403, with 422, 429, every 5xx and every unlisted status defaulting to
+      `SUBMISSION_UNKNOWN`; malformed-2xx semantics; manual redirects and a 60 s
+      timeout on the paid create POST only; exactly-one-POST evidence;
+      fake-provider submission outcomes.
+- [ ] **An orchestration milestone must persist the submission outcome.** The
+      provider now *reports* certainty and deliberately does not store it, so
+      nothing yet maps `ACCEPTED` → `PROCESSING`, `DEFINITIVELY_REJECTED` →
+      `FAILED_RETRYABLE`/`FAILED_TERMINAL`, or `SUBMISSION_UNKNOWN` →
+      `SUBMISSION_UNKNOWN`. Whatever implements it must read the outcome
+      discriminant and must never infer certainty from `ProviderError.retryable`
+      — a 429 is `retryable: true` and ambiguous at the same time.
       **Required before any provider charge is possible.**
 - [ ] **The paid gate may not be enabled until the WaveSpeedAI pricing contract
       is resolution-aware and verified.** Official pricing (2026-08-29) is

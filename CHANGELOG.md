@@ -3,6 +3,63 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2: Paid submission certainty
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2-completion.md`
+and ADR-0032.
+
+### Added
+
+- **`ProviderSubmissionOutcome`** — `ACCEPTED` / `DEFINITIVELY_REJECTED` /
+  `SUBMISSION_UNKNOWN`, returned by `createGeneration` in place of a bare
+  `ProviderGenerationRef`. The initial POST is the call that spends money, and a
+  rate limit, a 5xx and a socket reset used to arrive in the same channel as a
+  validation rejection — with `retryable: true` attached, which is exactly the
+  wrong instruction when a prediction may already exist and be billed. Only the
+  accepted arm carries a `ref`, so a caller cannot reach a prediction id without
+  discriminating first.
+
+### Changed
+
+- **The definitive-rejection allowlist is exactly 400, 401 and 403.** Everything
+  else — every 1xx, every 3xx, 402, 404–431, 451, **422**, **429**, every 5xx,
+  and any unlisted status — is `SUBMISSION_UNKNOWN`. An allowlist, because
+  wrongly calling something ambiguous costs a reconciliation while wrongly
+  calling it definitive costs a duplicate charge. 422 is **not** carried forward
+  from its `INVALID_INPUT` diagnostic mapping: a diagnostic category is not
+  evidence about billing. A test walks every status from 100 to 599 to prove no
+  fourth one joins.
+- **Acceptance is a usable prediction id, not a 2xx.** `data.id`, then a legacy
+  top-level `id`. The id must be non-empty and unchanged by `trim()` — padding
+  is refused rather than trimmed, because the trimmed form is an identifier the
+  provider never sent. Unparseable JSON, an empty body, a missing or malformed
+  id and a truncated response are all ambiguous, not failures.
+- **The create POST alone gets manual redirects and a 60-second budget.**
+  `fetch` follows redirects itself, and a 307/308 replays method *and body* to
+  the `Location` host — the only automatic re-POST vector in the system. The
+  longer timeout is deliberate: aborting does not stop the provider, it only
+  destroys our evidence, so a short budget manufactures ambiguity. `getStatus`
+  and `cancelGeneration` are untouched, and no environment variable was added.
+- **Exactly one POST, on every path** — no retry on network failure, timeout,
+  429, 5xx or redirect. Asserted by call count at the provider seam and against
+  a mocked `fetch` at the transport seam.
+- `parsePredictionId` becomes the non-throwing `findUsablePredictionId`: after a
+  2xx, an unreadable id is an ambiguous submission, not a local fault.
+
+### Fixed
+
+- The comment calling `preset` undocumented is stale — it is now a documented
+  optional OpenVideo parameter. Wording corrected; **the request mapping is
+  unchanged** and `preset` is still not sent, because the provider defaults it
+  and nothing here selects one.
+
+### Not in this milestone
+
+No orchestration, no paid gate, no submission audit, no worker loop, no state
+transition, no pricing change, no environment variable. The provider *reports*
+certainty and does not persist it; `createGeneration` still has zero production
+callers. Pricing remains a hard prerequisite before the paid gate can be enabled.
+
 ## [Unreleased] — Phase 4C-3B-1: Provider diagnostic sanitization
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b1-completion.md`

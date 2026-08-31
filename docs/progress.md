@@ -330,6 +330,12 @@ and ADR-0020.
   `providerStatus` is the one machine field added. Submission certainty, redirect
   handling and timeouts are **not** in it — Phase 4C-3B-2 owns those and remains
   required before any paid submission.
+- **Phase 4C-3B-2** — see GitHub for its lifecycle. Paid submission certainty
+  becomes explicit (ADR-0032): `createGeneration` returns
+  `ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN` instead of
+  throwing, the definitive allowlist is exactly 400/401/403, and the create POST
+  alone gets manual redirects and a 60-second budget. Still production-dormant —
+  nothing persists the outcome yet.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
