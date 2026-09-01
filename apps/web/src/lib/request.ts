@@ -72,6 +72,36 @@ export function requiredString(body: Record<string, unknown>, key: string): stri
   return value;
 }
 
+/**
+ * A required field whose value must be one of a closed set.
+ *
+ * Still shape-only in the sense the rest of this module means it — the set is
+ * supplied by the caller from a domain constant, and nothing here decides what
+ * belongs in it. What it adds is that the returned value is *typed* as a member,
+ * so a route cannot hand untrusted JSON to a service that declares a union and
+ * have the two agree only by convention.
+ *
+ * The message lists the accepted values. They are a public product vocabulary,
+ * not configuration or a secret, and a client that sent the wrong one cannot
+ * fix it from "invalid".
+ */
+export function requiredMember<T extends string>(
+  body: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+): T {
+  // `find` rather than `includes`, so the member comes back already typed as
+  // one. `includes` would leave a cast as the only way to express the narrowing
+  // it just proved, and a cast is the same syntax whether or not the check
+  // above it is still there.
+  const value = body[key];
+  const member = allowed.find((candidate) => candidate === value);
+  if (member === undefined) {
+    throw new AppError("VALIDATION_FAILED", `${key} must be one of: ${allowed.join(", ")}`);
+  }
+  return member;
+}
+
 /** Shape-only: a whole number above zero. Achievability is the domain's call. */
 export function requiredPositiveInteger(body: Record<string, unknown>, key: string): number {
   const value = body[key];

@@ -1,8 +1,13 @@
 import { AppError } from "@app/shared";
 import type { MediaAssetRepository, ObjectStorage, SignedUrl } from "../property/ports";
 import type { MediaAsset } from "../property/types";
-import type { VideoModelCapabilityProvider } from "./capability";
 import { frozenExecutionPromptFrom } from "./execution-input";
+import {
+  isSelectableModel,
+  type ResolutionNormalization,
+  type TargetOutputResolution,
+  type VideoModelCatalog,
+} from "./model-catalog";
 import type { SystemGenerationCandidate } from "./execution-ports";
 import { PreflightRefusalError } from "./execution-preflight-errors";
 import {
@@ -75,7 +80,21 @@ export interface PreparedGeneration {
   readonly prompt: string;
   readonly durationSeconds: number;
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /**
+   * The frozen delivery plan, carried whole rather than collapsed back into one
+   * string.
+   *
+   * Only {@link nativeGenerationResolution} is a provider input; the other three
+   * are product facts the submission boundary must **not** invent for itself.
+   * They travel together because the pair "what was promised" and "what will be
+   * generated" is exactly what a single `resolution` field could not express,
+   * and re-deriving either from today's catalog at execution time would reopen
+   * the drift the snapshot exists to close (ADR-0034).
+   */
+  readonly targetOutputResolution: TargetOutputResolution;
+  readonly nativeGenerationResolution: string;
+  readonly resolutionNormalization: ResolutionNormalization;
+  readonly nativeMeetsTarget: boolean;
   readonly requestHash: string;
 }
 
@@ -116,7 +135,22 @@ export interface ExecutionPreflightDeps {
    * process.
    */
   readonly storage: Pick<ObjectStorage, "exists" | "createSignedDownloadUrl">;
-  readonly capabilities: VideoModelCapabilityProvider;
+  /**
+   * The model table, consulted by the attempt's **own frozen key**.
+   *
+   * It replaces the single-model capability provider this took until ADR-0033.
+   * That port could only answer "what is configured now", which was the same
+   * question for every row while one model existed and is the wrong question the
+   * moment two do: a row admitted on OpenVideo must be checked against
+   * OpenVideo's entry, not against whichever model the deployment currently
+   * defaults to.
+   *
+   * `find` only. Preflight has no business calling `default()` — falling back to
+   * the default model for an attempt admitted on another one is precisely the
+   * substitution this check exists to prevent, and it cannot happen if the
+   * method is not on the type.
+   */
+  readonly models: Pick<VideoModelCatalog, "find">;
 }
 
 /**
@@ -186,8 +220,9 @@ function identityOrRefuse(asset: MediaAsset): PreparedSourceIdentity {
  * 2. reconstruct the immutable request facts;
  * 3. read the frozen rendered prompt;
  * 4. recompute and verify `requestHash`;
- * 5. read the configured capability **once**;
- * 6. verify provider and model identity;
+ * 5. resolve the catalog entry by the attempt's **own frozen model key**, and
+ *    refuse if it is absent or no longer selectable;
+ * 6. verify provider and model identity against that entry;
  * 7. first tenant-scoped asset read;
  * 8. classify it — status, deletion intent, JPEG, non-blank key and a canonical
  *    content digest — and keep the resulting source identity;
@@ -250,20 +285,41 @@ export async function prepareQueuedGeneration(
     );
   }
 
-  // Read once, and compare identity only. If the deployment has been repointed
-  // since admission, this attempt was approved against a contract no longer in
-  // force — a different model has a different price and a different result,
-  // which is why both are inside the request hash.
+  // Resolve the catalog by the attempt's **own** frozen key, never by the
+  // deployment's current default. The key is a hash fact, so this is a lookup of
+  // the entry the customer was admitted against rather than a question about
+  // what the product would choose today.
+  //
+  // An absent or de-verified entry is refused before anything else is touched:
+  // there is no contract left to check the row against, and "not in the catalog"
+  // must never degrade into "use the default one".
+  const entry = deps.models.find(facts.modelKey);
+  if (entry === undefined || !isSelectableModel(entry)) {
+    throw new PreflightRefusalError(
+      "MODEL_UNAVAILABLE",
+      "The model this attempt was admitted under is not currently available for generation",
+    );
+  }
+
+  // The entry resolves; does it still describe the same executable request? If
+  // the catalog has been re-pointed since admission, this attempt was approved
+  // against a contract no longer in force — a different model has a different
+  // price and a different result, which is why all three of the key, the
+  // provider and the model id are inside the request hash.
   //
   // This is NOT a re-validation of the capability table. `assertSettingsSupported`
   // needs a discrete negative prompt the snapshot does not store, and inventing
   // one would silently skip a check admission actually made. A capability edited
   // under an unchanged provider and model therefore passes here; that gap is a
   // hard prerequisite before real provider spending (docs/decisions/TODO.md).
-  const capability = deps.capabilities.current();
+  //
+  // The frozen delivery plan is deliberately **not** re-derived from the entry
+  // either. A corrected `nativeGeneration` policy must not silently change what
+  // an admitted attempt generates at; the snapshot wins, and the hash check
+  // above already proved it is the one the identity was formed over.
   if (
-    capability.providerName !== generation.providerName ||
-    capability.providerModelId !== generation.providerModelId
+    entry.providerName !== generation.providerName ||
+    entry.providerModelId !== generation.providerModelId
   ) {
     throw new PreflightRefusalError(
       "PROVIDER_IDENTITY_MISMATCH",
@@ -371,7 +427,10 @@ export async function prepareQueuedGeneration(
     prompt,
     durationSeconds: facts.durationSeconds,
     aspectRatio: facts.aspectRatio,
-    resolution: facts.resolution,
+    targetOutputResolution: facts.targetOutputResolution,
+    nativeGenerationResolution: facts.nativeGenerationResolution,
+    resolutionNormalization: facts.resolutionNormalization,
+    nativeMeetsTarget: facts.nativeMeetsTarget,
     requestHash: generation.requestHash,
   };
 }

@@ -21,7 +21,7 @@ const ORG_B = "org_b";
 const PROJECT_A = "vpr_a";
 const PROJECT_A2 = "vpr_a2";
 const PROJECT_B = "vpr_b";
-const HASH = "sha256:aaaa";
+const HASH = "sha256:v2:aaaa";
 
 let deps: ReturnType<typeof createTestDeps>;
 let repo: InMemorySceneGenerationRepository;
@@ -40,7 +40,12 @@ function generation(id: string, o: Partial<NewSceneGeneration> = {}): NewSceneGe
     requestDurationSeconds: 5,
     requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
-    requestResolution: "1080p",
+    requestResolution: null,
+    requestModelKey: "fixture-model",
+    requestTargetOutputResolution: "1080p",
+    requestNativeGenerationResolution: "1080p",
+    requestResolutionNormalization: "NONE",
+    requestNativeMeetsTarget: true,
     requestRenderedPrompt: "Preservation rules:\n- frozen at admission",
     state: "QUEUED",
     providerPredictionId: null,
@@ -245,7 +250,13 @@ describe("update", () => {
     expect(stored.requestDurationSeconds).toBe(5);
     expect(stored.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(stored.requestAspectRatio).toBe("16:9");
-    expect(stored.requestResolution).toBe("1080p");
+    // V2: the ambiguous column stays null and the delivery snapshot carries it.
+    expect(stored.requestResolution).toBeNull();
+    expect(stored.requestModelKey).toBe("fixture-model");
+    expect(stored.requestTargetOutputResolution).toBe("1080p");
+    expect(stored.requestNativeGenerationResolution).toBe("1080p");
+    expect(stored.requestResolutionNormalization).toBe("NONE");
+    expect(stored.requestNativeMeetsTarget).toBe(true);
     // The execution artifact rides through create/read like the other five, and
     // is stored opaque: the double never renders anything (ADR-0023).
     expect(stored.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");

@@ -17,7 +17,7 @@ const input: ProviderGenerationInput = {
   seed: 42,
   durationSeconds: 6,
   aspectRatio: "16:9",
-  resolution: "1080p",
+  nativeGenerationResolution: "1080p",
   requestHash: "abc123",
 };
 

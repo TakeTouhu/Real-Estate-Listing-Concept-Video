@@ -89,7 +89,7 @@ const input: ProviderGenerationInput = {
   prompt: SENTINELS.prompt,
   durationSeconds: 5,
   aspectRatio: "16:9",
-  resolution: "1080p",
+  nativeGenerationResolution: "1080p",
   requestHash: "hash1",
 };
 

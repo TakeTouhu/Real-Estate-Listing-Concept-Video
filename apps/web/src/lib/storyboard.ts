@@ -4,6 +4,7 @@ import {
   StoryboardService,
   type StoryboardScene,
   type StoryboardView,
+  type TargetOutputResolution,
   type VideoProject,
 } from "@app/domain";
 import {
@@ -58,7 +59,13 @@ export interface VideoProjectDto {
   readonly status: VideoProject["status"];
   readonly durationSeconds: number;
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /**
+   * The product deliverable, in the closed product vocabulary. Renamed from
+   * `resolution` in Phase 4C-3B-2B: the old key is gone rather than kept as an
+   * alias, because a client still reading `resolution` is a client that has not
+   * been told the value never meant what it now means (ADR-0034).
+   */
+  readonly targetOutputResolution: TargetOutputResolution;
   readonly cameraMotion: string | null;
   /** The customer's own text, returned so they can see what they submitted. */
   readonly prompt: string | null;
@@ -75,7 +82,7 @@ export function toVideoProjectDto(project: VideoProject): VideoProjectDto {
     status: project.status,
     durationSeconds: project.durationSeconds,
     aspectRatio: project.aspectRatio,
-    resolution: project.resolution,
+    targetOutputResolution: project.targetOutputResolution,
     cameraMotion: project.cameraMotion,
     prompt: project.prompt,
     negativePrompt: project.negativePrompt,

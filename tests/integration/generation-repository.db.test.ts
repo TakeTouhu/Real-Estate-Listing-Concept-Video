@@ -27,7 +27,7 @@ const PROP_B = "prp_itest_gr_b";
 const PROJECT_A = "vpr_itest_gr_a";
 const PROJECT_A2 = "vpr_itest_gr_a2";
 const PROJECT_B = "vpr_itest_gr_b";
-const HASH = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const HASH = "sha256:v2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const prisma = new PrismaClient();
 const repo = createPrismaSceneGenerationRepository(prisma);
@@ -46,7 +46,15 @@ function generation(id: string, overrides: Partial<NewSceneGeneration> = {}): Ne
     requestDurationSeconds: 5,
     requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
-    requestResolution: "1080p",
+    // A V2 row: the ambiguous column is null and the delivery snapshot is
+    // complete, which is also what the database's version constraint requires
+    // of any row whose hash is `sha256:v2:`.
+    requestResolution: null,
+    requestModelKey: "fixture-model",
+    requestTargetOutputResolution: "1080p",
+    requestNativeGenerationResolution: "1080p",
+    requestResolutionNormalization: "NONE",
+    requestNativeMeetsTarget: true,
     requestRenderedPrompt: "Preservation rules:\n- frozen at admission",
     state: "QUEUED",
     providerPredictionId: null,
@@ -68,7 +76,7 @@ function seedProject(organizationId: string, propertyId: string, projectId: stri
       name: "Walkthrough",
       durationSeconds: 12,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
       createdBy: "usr_itest_gr",
     },
   });
@@ -95,7 +103,7 @@ async function seedTenant(organizationId: string, propertyId: string, projectId:
       name: "Walkthrough",
       durationSeconds: 12,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
       createdBy: "usr_itest_gr",
     },
   });
@@ -645,7 +653,10 @@ describe.skipIf(!HAS_DB)("errors that must NOT be translated", () => {
     // thing.
     await repo.create(ORG_A, generation("gen_dup"));
     const error = (await rejectionOf(
-      repo.create(ORG_A, generation("gen_dup", { requestHash: "sha256:different" })),
+      // A V2 hash, matching the fixture's V2 delivery snapshot: a V1 prefix
+      // here would trip the identity-version constraint first and this test
+      // would stop exercising the duplicate-primary-key path at all.
+      repo.create(ORG_A, generation("gen_dup", { requestHash: "sha256:v2:different" })),
     )) as { code?: string };
 
     expect(error).not.toBeInstanceOf(ActiveGenerationConflictError);
@@ -704,7 +715,7 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
   // No local hooks: the file-level beforeEach already cleans and re-seeds the
   // tenants, and adding another cleanup here would run after it and delete them.
 
-  it("round-trips all five snapshot fields through create and read", async () => {
+  it("round-trips every snapshot field through create and read", async () => {
     const created = await repo.create(ORG_A, generation("gen_snap"));
 
     expect(created.requestCompiledPrompt).toBe(
@@ -713,7 +724,14 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(created.requestDurationSeconds).toBe(5);
     expect(created.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(created.requestAspectRatio).toBe("16:9");
-    expect(created.requestResolution).toBe("1080p");
+    // V2: the ambiguous V1 column stays null, and the delivery snapshot carries
+    // the meaning. The database rejects a row holding both (ADR-0034).
+    expect(created.requestResolution).toBeNull();
+    expect(created.requestModelKey).toBe("fixture-model");
+    expect(created.requestTargetOutputResolution).toBe("1080p");
+    expect(created.requestNativeGenerationResolution).toBe("1080p");
+    expect(created.requestResolutionNormalization).toBe("NONE");
+    expect(created.requestNativeMeetsTarget).toBe(true);
 
     // And the same values come back on a fresh read, not just from the insert.
     const read = (await repo.findById(ORG_A, "gen_snap"))!;
@@ -721,7 +739,105 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(read.requestDurationSeconds).toBe(5);
     expect(read.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(read.requestAspectRatio).toBe("16:9");
-    expect(read.requestResolution).toBe("1080p");
+    expect(read.requestResolution).toBeNull();
+    expect(read.requestModelKey).toBe("fixture-model");
+    expect(read.requestTargetOutputResolution).toBe("1080p");
+    expect(read.requestNativeGenerationResolution).toBe("1080p");
+    expect(read.requestResolutionNormalization).toBe("NONE");
+    // Booleans specifically: a null here would look like a legacy row, and a
+    // string "false" would be truthy at every call site that reads it.
+    expect(read.requestNativeMeetsTarget).toBe(true);
+  });
+
+  it("stores a native generation that does NOT meet the target, as false", async () => {
+    // The load-bearing value of this whole milestone. If it round-tripped as
+    // null or true, an upscaled deliverable would be recorded as native.
+    const created = await repo.create(
+      ORG_A,
+      generation("gen_upscaled", {
+        requestHash: `${HASH}-upscaled`,
+        requestModelKey: "minimax-h3-max",
+        requestNativeGenerationResolution: "768P",
+        requestResolutionNormalization: "UPSCALE",
+        requestNativeMeetsTarget: false,
+      }),
+    );
+    expect(created.requestNativeMeetsTarget).toBe(false);
+
+    const read = (await repo.findById(ORG_A, "gen_upscaled"))!;
+    expect(read.requestNativeMeetsTarget).toBe(false);
+    expect(read.requestResolutionNormalization).toBe("UPSCALE");
+    expect(read.requestNativeGenerationResolution).toBe("768P");
+  });
+
+  it("refuses a row carrying both request-identity vocabularies", async () => {
+    // The domain refuses to reconstruct such a row; this proves the database
+    // will not hold one in the first place, including against a writer that is
+    // not this application.
+    await expect(
+      prisma.sceneGeneration.create({
+        data: {
+          id: "gen_both",
+          videoProjectId: PROJECT_A,
+          sourceStoryboardSceneId: "scn_itest_gr",
+          assetId: "ast_itest_gr",
+          sourceAnalysisRevision: 1,
+          requestHash: `${HASH}-both`,
+          providerName: "fake",
+          providerModelId: "fake/image-to-video",
+          requestResolution: "1080p",
+          requestModelKey: "fixture-model",
+          requestTargetOutputResolution: "1080p",
+          requestNativeGenerationResolution: "1080p",
+          requestResolutionNormalization: "NONE",
+          requestNativeMeetsTarget: true,
+          state: "QUEUED",
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses a partially populated V2 delivery snapshot", async () => {
+    await expect(
+      prisma.sceneGeneration.create({
+        data: {
+          id: "gen_partial",
+          videoProjectId: PROJECT_A,
+          sourceStoryboardSceneId: "scn_itest_gr",
+          assetId: "ast_itest_gr",
+          sourceAnalysisRevision: 1,
+          requestHash: `${HASH}-partial`,
+          providerName: "fake",
+          providerModelId: "fake/image-to-video",
+          requestModelKey: "fixture-model",
+          requestTargetOutputResolution: "1080p",
+          state: "QUEUED",
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses an output resolution outside the product vocabulary", async () => {
+    await expect(
+      prisma.sceneGeneration.create({
+        data: {
+          id: "gen_8k",
+          videoProjectId: PROJECT_A,
+          sourceStoryboardSceneId: "scn_itest_gr",
+          assetId: "ast_itest_gr",
+          sourceAnalysisRevision: 1,
+          requestHash: `${HASH}-8k`,
+          providerName: "fake",
+          providerModelId: "fake/image-to-video",
+          requestModelKey: "fixture-model",
+          requestTargetOutputResolution: "8k",
+          requestNativeGenerationResolution: "8k",
+          requestResolutionNormalization: "NONE",
+          requestNativeMeetsTarget: true,
+          state: "QUEUED",
+        },
+      }),
+    ).rejects.toThrow();
   });
 
   it("round-trips the frozen execution prompt byte-for-byte", async () => {
@@ -756,7 +872,9 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
         sourceStoryboardSceneId: "scn_itest_gr",
         assetId: "ast_itest_gr",
         sourceAnalysisRevision: 1,
-        requestHash: `${HASH}-prefreeze`,
+        // A V1 hash, which is what makes the all-null snapshot legal: the
+        // version constraint keys off the prefix the row itself carries.
+        requestHash: "sha256:prefreeze",
         providerName: "fake",
         providerModelId: "fake/image-to-video",
         state: "QUEUED",
@@ -765,25 +883,40 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
 
     const read = (await repo.findById(ORG_A, "gen_prefreeze"))!;
     expect(read.requestRenderedPrompt).toBeNull();
-    // And the five Phase 4B-1c columns are null too: the migration that added
-    // each of them backfilled nothing.
+    // And the snapshot columns are null too: every migration that added one
+    // backfilled nothing, V2's five included.
     expect(read.requestCompiledPrompt).toBeNull();
     expect(read.requestDurationSeconds).toBeNull();
+    expect(read.requestModelKey).toBeNull();
+    expect(read.requestTargetOutputResolution).toBeNull();
+    expect(read.requestNativeGenerationResolution).toBeNull();
+    expect(read.requestResolutionNormalization).toBeNull();
+    expect(read.requestNativeMeetsTarget).toBeNull();
   });
 
   it("stores a legacy row with a null snapshot and reads it back as null", async () => {
-    // The five Phase 4B-1c columns are still nullable on the create path — this
+    // The snapshot columns are still nullable on the create path — this
     // milestone narrowed only `requestRenderedPrompt` — so a row that predates
     // *that* contract must remain representable and must NOT acquire fabricated
     // values.
+    //
+    // Written under a V1 hash, because that is what such a row actually has.
+    // The version constraint then requires the V2 delivery columns to be null
+    // as well, which is the same statement in the other vocabulary.
     await repo.create(
       ORG_A,
       generation("gen_legacy_db", {
+        requestHash: "sha256:legacyrow",
         requestCompiledPrompt: null,
         requestDurationSeconds: null,
         requestCameraMotion: null,
         requestAspectRatio: null,
         requestResolution: null,
+        requestModelKey: null,
+        requestTargetOutputResolution: null,
+        requestNativeGenerationResolution: null,
+        requestResolutionNormalization: null,
+        requestNativeMeetsTarget: null,
       }),
     );
 
@@ -793,6 +926,8 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(read.requestCameraMotion).toBeNull();
     expect(read.requestAspectRatio).toBeNull();
     expect(read.requestResolution).toBeNull();
+    expect(read.requestModelKey).toBeNull();
+    expect(read.requestNativeMeetsTarget).toBeNull();
   });
 
   it("preserves the snapshot across an execution-field update", async () => {
@@ -813,7 +948,12 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(updated.requestDurationSeconds).toBe(5);
     expect(updated.requestCameraMotion).toBe("SLOW_PAN_LEFT");
     expect(updated.requestAspectRatio).toBe("16:9");
-    expect(updated.requestResolution).toBe("1080p");
+    expect(updated.requestResolution).toBeNull();
+    expect(updated.requestModelKey).toBe("fixture-model");
+    expect(updated.requestTargetOutputResolution).toBe("1080p");
+    expect(updated.requestNativeGenerationResolution).toBe("1080p");
+    expect(updated.requestResolutionNormalization).toBe("NONE");
+    expect(updated.requestNativeMeetsTarget).toBe(true);
     // Including the execution artifact: a worker writing state must not be able
     // to change what will be submitted.
     expect(updated.requestRenderedPrompt).toBe("Preservation rules:\n- frozen at admission");
@@ -829,7 +969,8 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     await repo.update(ORG_A, "gen_active_snap", { state: "SUCCEEDED" });
     const succeeded = (await repo.findLatestSucceededByRequestIdentity(ORG_A, PROJECT_A, HASH))!;
     expect(succeeded.requestCompiledPrompt).toBe(active.requestCompiledPrompt);
-    expect(succeeded.requestResolution).toBe("1080p");
+    expect(succeeded.requestTargetOutputResolution).toBe("1080p");
+    expect(succeeded.requestNativeMeetsTarget).toBe(true);
   });
 
   it("keeps an integer duration an integer, not a string", async () => {

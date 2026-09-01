@@ -1,3 +1,4 @@
+import type { TargetOutputResolution } from "../generation/model-catalog";
 import type { StoryboardScene, VideoProject, VideoProjectStatus } from "./types";
 
 /**
@@ -20,7 +21,12 @@ export interface VideoProjectUpdate {
   readonly status?: VideoProjectStatus;
   readonly durationSeconds?: number;
   readonly aspectRatio?: string;
-  readonly resolution?: string;
+  /**
+   * There is deliberately no `resolution` alias beside this. Leaving the old
+   * name writable would let a caller that was never updated keep setting the
+   * ambiguous value, which is the exact drift ADR-0034 removes.
+   */
+  readonly targetOutputResolution?: TargetOutputResolution;
   readonly stylePreset?: string | null;
   readonly cameraMotion?: string | null;
   readonly prompt?: string | null;

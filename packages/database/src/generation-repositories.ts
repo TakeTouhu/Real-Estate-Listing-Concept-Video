@@ -8,6 +8,8 @@ import type {
 import {
   ACTIVE_SCENE_GENERATION_STATES,
   ActiveGenerationConflictError,
+  isResolutionNormalization,
+  isTargetOutputResolution,
   SceneGenerationNotFoundError,
 } from "@app/domain";
 
@@ -80,6 +82,26 @@ export function toGeneration(r: DbSceneGeneration): SceneGeneration {
     requestCameraMotion: r.requestCameraMotion,
     requestAspectRatio: r.requestAspectRatio,
     requestResolution: r.requestResolution,
+    // The V2 delivery snapshot (ADR-0034). The two closed vocabularies are
+    // narrowed rather than asserted: the column type is TEXT, and a cast would
+    // let a value no code in this system can produce be handed to the domain as
+    // though it were a member.
+    //
+    // A non-member maps to `null`, which is not a silent repair — it makes the
+    // V2 snapshot incomplete, and an incomplete snapshot is exactly what
+    // `generationRequestFactsFrom` refuses. So an impossible stored value fails
+    // the attempt closed instead of executing it under a resolution semantic
+    // nothing recognises. Impossible in practice: the migration's CHECK
+    // constraints reject both.
+    requestModelKey: r.requestModelKey,
+    requestTargetOutputResolution: isTargetOutputResolution(r.requestTargetOutputResolution)
+      ? r.requestTargetOutputResolution
+      : null,
+    requestNativeGenerationResolution: r.requestNativeGenerationResolution,
+    requestResolutionNormalization: isResolutionNormalization(r.requestResolutionNormalization)
+      ? r.requestResolutionNormalization
+      : null,
+    requestNativeMeetsTarget: r.requestNativeMeetsTarget,
     requestRenderedPrompt: r.requestRenderedPrompt,
     state: r.state,
     providerPredictionId: r.providerPredictionId,
@@ -158,6 +180,11 @@ export function createPrismaSceneGenerationRepository(
             requestCameraMotion: input.requestCameraMotion,
             requestAspectRatio: input.requestAspectRatio,
             requestResolution: input.requestResolution,
+            requestModelKey: input.requestModelKey,
+            requestTargetOutputResolution: input.requestTargetOutputResolution,
+            requestNativeGenerationResolution: input.requestNativeGenerationResolution,
+            requestResolutionNormalization: input.requestResolutionNormalization,
+            requestNativeMeetsTarget: input.requestNativeMeetsTarget,
             requestRenderedPrompt: input.requestRenderedPrompt,
             state: input.state,
             providerPredictionId: input.providerPredictionId,

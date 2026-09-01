@@ -24,6 +24,7 @@ const EXPECTED: Record<PreflightRefusalReason, PreflightFailureState> = {
   LEGACY_PROMPT_MISSING: "FAILED_TERMINAL",
   REQUEST_HASH_MISMATCH: "FAILED_TERMINAL",
   PROVIDER_IDENTITY_MISMATCH: "FAILED_TERMINAL",
+  MODEL_UNAVAILABLE: "FAILED_RETRYABLE",
   ASSET_NOT_FOUND: "FAILED_TERMINAL",
   ASSET_NOT_READY: "FAILED_RETRYABLE",
   ASSET_UPLOAD_FAILED: "FAILED_RETRYABLE",
@@ -43,10 +44,10 @@ describe("preflightFailureStateFor", () => {
 
   it("covers the whole reason vocabulary and nothing else", () => {
     // Guards the table above against silently drifting out of step with the
-    // vocabulary: a fifteenth reason would make this fail rather than quietly
+    // vocabulary: a sixteenth reason would make this fail rather than quietly
     // going untested.
     expect(Object.keys(EXPECTED).sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
-    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(14);
+    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(15);
   });
 
   it("returns only the two failure states, for every reason", () => {
@@ -59,7 +60,7 @@ describe("preflightFailureStateFor", () => {
 
   it("agrees with the disposition it derives from", () => {
     // The derivation itself: RETRYABLE parks retryable, TERMINAL parks terminal.
-    // Asserted as a property over all fourteen rather than as two hand-picked
+    // Asserted as a property over all fifteen rather than as two hand-picked
     // examples, so an inverted mapping cannot survive by luck.
     for (const reason of PREFLIGHT_REFUSAL_REASONS) {
       const expected =
@@ -69,14 +70,15 @@ describe("preflightFailureStateFor", () => {
   });
 
   it("partitions the vocabulary — neither state is unreachable", () => {
-    // A mapping that sent all fourteen to one state would pass every assertion
+    // A mapping that sent all fifteen to one state would pass every assertion
     // above that did not name a specific reason.
     const states = PREFLIGHT_REFUSAL_REASONS.map(preflightFailureStateFor);
     expect(states).toContain("FAILED_RETRYABLE");
     expect(states).toContain("FAILED_TERMINAL");
-    // The retryable set is unchanged by Phase 4C-3A-2a and stays at four;
-    // ASSET_SOURCE_UNIDENTIFIABLE joined the terminal side, taking it to ten.
-    expect(states.filter((s) => s === "FAILED_RETRYABLE")).toHaveLength(4);
+    // ASSET_SOURCE_UNIDENTIFIABLE joined the terminal side in Phase 4C-3A-2a,
+    // taking it to ten; MODEL_UNAVAILABLE joined the retryable side in Phase
+    // 4C-3B-2B, taking that to five.
+    expect(states.filter((s) => s === "FAILED_RETRYABLE")).toHaveLength(5);
     expect(states.filter((s) => s === "FAILED_TERMINAL")).toHaveLength(10);
   });
 

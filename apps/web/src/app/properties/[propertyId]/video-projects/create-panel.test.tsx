@@ -38,6 +38,7 @@ function panel() {
       organizationId={ORG}
       propertyId={PROPERTY}
       cameraMotionOptions={CAMERA_MOTION_OPTIONS}
+      targetOutputResolutionOptions={["720p", "1080p"]}
     />,
   );
 }
@@ -58,7 +59,7 @@ async function fillRequired(duration = "30"): Promise<void> {
   await userEvent.type(screen.getByLabelText("Project name"), "Walkthrough");
   await userEvent.type(screen.getByLabelText("Target length in seconds"), duration);
   await userEvent.type(screen.getByLabelText("Aspect ratio"), "16:9");
-  await userEvent.type(screen.getByLabelText("Resolution"), "1080p");
+  await userEvent.selectOptions(screen.getByLabelText("Output resolution"), "1080p");
 }
 
 function lastRequest(): { url: string; body: Record<string, unknown> } {
@@ -77,7 +78,7 @@ describe("required input gates submission", () => {
     expect(createButton().disabled).toBe(true);
     await userEvent.type(screen.getByLabelText("Aspect ratio"), "16:9");
     expect(createButton().disabled).toBe(true);
-    await userEvent.type(screen.getByLabelText("Resolution"), "1080p");
+    await userEvent.selectOptions(screen.getByLabelText("Output resolution"), "1080p");
     expect(createButton().disabled).toBe(false);
   });
 
@@ -104,7 +105,7 @@ describe("required input gates submission", () => {
     await userEvent.type(screen.getByLabelText("Project name"), "   ");
     await userEvent.type(screen.getByLabelText("Target length in seconds"), "30");
     await userEvent.type(screen.getByLabelText("Aspect ratio"), "16:9");
-    await userEvent.type(screen.getByLabelText("Resolution"), "1080p");
+    await userEvent.selectOptions(screen.getByLabelText("Output resolution"), "1080p");
     expect(createButton().disabled).toBe(true);
   });
 });
@@ -123,7 +124,7 @@ describe("request", () => {
       name: "Walkthrough",
       durationSeconds: 30,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
     });
     expect(typeof body.durationSeconds).toBe("number");
   });
@@ -203,7 +204,7 @@ describe("outcome", () => {
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect((screen.getByLabelText("Project name") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("Resolution") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Output resolution") as HTMLSelectElement).value).toBe("");
   });
 
   it("does not refresh when the request fails", async () => {
@@ -232,13 +233,13 @@ describe("outcome", () => {
 
   it("renders the API's own message for a 422", async () => {
     fetchMock.mockResolvedValue(
-      respond(422, { error: { message: "Aspect ratio and resolution are required" } }),
+      respond(422, { error: { message: "An aspect ratio is required" } }),
     );
     panel();
     await fillRequired();
     await userEvent.click(createButton());
 
-    expect(screen.getByText("Aspect ratio and resolution are required")).toBeTruthy();
+    expect(screen.getByText("An aspect ratio is required")).toBeTruthy();
   });
 
   it("renders the generic message when the request never completes", async () => {
@@ -295,7 +296,7 @@ describe("unsupported provider features are not offered", () => {
     panel();
     expect(screen.getByLabelText("Aspect ratio")).toBeTruthy();
     expect(screen.getByLabelText("Camera motion (optional)")).toBeTruthy();
-    expect(screen.getByLabelText("Resolution")).toBeTruthy();
+    expect(screen.getByLabelText("Output resolution")).toBeTruthy();
   });
 
   it("cannot send negativePrompt even with every visible field filled", async () => {
@@ -321,7 +322,7 @@ describe("unsupported provider features are not offered", () => {
         "name",
         "durationSeconds",
         "aspectRatio",
-        "resolution",
+        "targetOutputResolution",
         "prompt",
         "cameraMotion",
       ].sort(),

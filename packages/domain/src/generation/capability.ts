@@ -86,7 +86,14 @@ export interface VideoModelCapability {
   readonly providerName: string;
   readonly providerModelId: string;
   readonly durationSeconds: DurationPolicy;
-  readonly resolutions: readonly string[];
+  /**
+   * The provider's own native generation tokens — `480P`, `768P`, `720p`.
+   *
+   * **Not** product output targets. The old name `resolutions` could be read
+   * either way, and for OpenVideo the two lists coincided, which is exactly how
+   * a product target came to be validated against a native list (ADR-0034).
+   */
+  readonly nativeGenerationResolutions: readonly string[];
   readonly aspectRatios: AspectRatioSupport;
   /**
    * How a **user-authored** negative prompt reaches the model.
@@ -118,7 +125,11 @@ export interface VideoModelCapabilityProvider {
  */
 export interface GenerationRequestSettings {
   readonly durationSeconds: number;
-  readonly resolution: string;
+  /**
+   * The native token that will actually be sent, from the model's frozen
+   * delivery plan — never the product target the customer asked for.
+   */
+  readonly nativeGenerationResolution: string;
   readonly aspectRatio: string;
   readonly cameraMotion: string | null;
   readonly negativePrompt: string | null;
@@ -210,10 +221,13 @@ export function assertSettingsSupported(
     );
   }
 
-  if (!capability.resolutions.includes(settings.resolution)) {
+  // Native against native. Comparing a product target to this list is the
+  // conflation ADR-0034 removed: whether a model can serve a *target* is
+  // `planGenerationResolution`'s answer, not this one's.
+  if (!capability.nativeGenerationResolutions.includes(settings.nativeGenerationResolution)) {
     throw new AppError(
       "VALIDATION_FAILED",
-      `This model supports the resolutions ${capability.resolutions.join(", ")}; the project asks for ${settings.resolution}`,
+      `This model generates at ${capability.nativeGenerationResolutions.join(", ")}; the request asks for ${settings.nativeGenerationResolution}`,
     );
   }
 

@@ -22,6 +22,7 @@ interface Props {
   readonly canCreate: boolean;
   /** Approved camera motions, resolved server-side and passed as plain data. */
   readonly cameraMotionOptions: readonly CameraMotionOption[];
+  readonly targetOutputResolutionOptions: readonly string[];
 }
 
 /**
@@ -41,6 +42,7 @@ export function ProjectsView({
   projects,
   canCreate,
   cameraMotionOptions,
+  targetOutputResolutionOptions,
 }: Props) {
   return (
     <>
@@ -49,6 +51,7 @@ export function ProjectsView({
           organizationId={organizationId}
           propertyId={propertyId}
           cameraMotionOptions={cameraMotionOptions}
+          targetOutputResolutionOptions={targetOutputResolutionOptions}
         />
       ) : (
         <p className="card muted">
@@ -105,8 +108,8 @@ function ProjectRow({
         <dd>{project.durationSeconds} seconds</dd>
         <dt>Aspect ratio</dt>
         <dd>{project.aspectRatio}</dd>
-        <dt>Resolution</dt>
-        <dd>{project.resolution}</dd>
+        <dt>Output resolution</dt>
+        <dd>{project.targetOutputResolution}</dd>
         {motion ? (
           <>
             <dt>Camera motion</dt>

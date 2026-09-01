@@ -40,7 +40,9 @@ describe("bootstrapWorker", () => {
     if (duration.kind !== "RANGE") throw new Error("unreachable");
     expect(input.durationSeconds).toBeGreaterThanOrEqual(duration.minSeconds);
     expect(input.durationSeconds).toBeLessThanOrEqual(duration.maxSeconds);
-    expect(OPEN_VIDEO_CAPABILITY.resolutions).toContain(input.resolution);
+    expect(OPEN_VIDEO_CAPABILITY.nativeGenerationResolutions).toContain(
+      input.nativeGenerationResolution,
+    );
   });
 
   it("propagates provider self-check failures", async () => {

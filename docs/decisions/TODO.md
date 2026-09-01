@@ -29,20 +29,38 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       lands, 429 and 5xx still report `retryable: true`, so a retry policy
       reading that flag would re-POST an ambiguous submission.
       **Required before any provider charge is possible.**
-- [ ] **Phase 4C-3B-2B — the resolution migration.** 3B-2A introduced the
-      `TargetOutputResolution` / native-generation vocabulary and the model
-      catalog but deliberately changed no persisted meaning. Still outstanding:
-      constrain `VideoProject.resolution` to the product target at the API, UI
-      and service boundary; add a native-generation snapshot column to
-      `SceneGeneration`; carry both facts in `GenerationRequestFacts` and the
-      request hash (an identity-semantics change to document and test
-      explicitly); fail closed in `generationRequestFactsFrom` for a legacy row
-      whose native resolution cannot be proven, rather than deriving it from
-      today's catalog; validate the native value against `capability.resolutions`
-      and the target against `targetOutputResolutions`; and feed
-      `ProviderGenerationInput.resolution` from `planGenerationResolution`. Needs
-      a Prisma migration. The full semantic ledger is in
-      `docs/phase-4c3b2a-completion.md`.
+- [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
+      identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying
+      both resolutions plus the frozen delivery plan and the model key;
+      `SceneGeneration` gained five all-or-none V2 snapshot columns that are
+      never backfilled; `VideoProject.targetOutputResolution` is constrained to
+      the product vocabulary at the API, UI, service and database boundaries,
+      with the migration failing closed rather than rewriting a legacy value;
+      `generationRequestFactsFrom` refuses a V1 row, a partial snapshot, a row
+      carrying both vocabularies, and a snapshot disagreeing with its own hash
+      version; `startScene` takes an optional `modelKey` with no fallback;
+      preflight resolves the catalog by the attempt's own frozen key and refuses
+      `MODEL_UNAVAILABLE` before signing; and the provider boundary carries
+      `nativeGenerationResolution`. Follow-ups it did **not** do are listed
+      below.
+- [ ] **Nothing normalizes a delivered video to its target yet.** ADR-0034
+      records `UPSCALE` / `DOWNSCALE` and performs neither, so an H3 Max 1080p
+      deliverable would be a 768P generation at 768P. Phase 5 owns composition,
+      and until it lands the product must not describe any `nativeMeetsTarget:
+      false` output as native — the flag is persisted and audited so that claim
+      is checkable, not so it can be ignored.
+- [ ] **No customer-facing surface exposes `nativeMeetsTarget`.** It is on the
+      row and in the audit log, but nothing shows a customer that the 1080p they
+      asked for will be upscaled on the model they picked. Deciding where that
+      disclosure belongs is a product question, and it is a prerequisite for
+      offering model selection in the UI (there is no model selector yet — the
+      argument exists on the service and has no HTTP or UI caller).
+- [ ] **A V2 row can still be admitted whose delivery plan the current catalog
+      no longer states.** Preflight verifies the model key, provider and model
+      id, but deliberately does not re-derive the delivery plan — the snapshot
+      wins. That is correct for identity, and it means an operator has no report
+      of attempts whose frozen plan disagrees with today's catalog. Worth a
+      read-only reconciliation check before paid execution.
 - [ ] **Verify MiniMax H3 and Veo 3.1 before either can be selected.** Both are
       in the catalog as `UNVERIFIED` with their missing items listed. H3 in
       particular is the model the product would want when native 1080p detail

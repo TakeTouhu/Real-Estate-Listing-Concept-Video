@@ -338,6 +338,19 @@ and ADR-0020.
   identity, API and UI change; the resolution migration is proposed as 3B-2B.
   `fal` is a catalog identity only — no adapter, and `VIDEO_PROVIDER` still
   refuses it.
+- **Phase 4C-3B-2B** — see GitHub for its lifecycle. Completes what 3B-2A left
+  undone (ADR-0034): request identity is versioned to `sha256:v2:` over a
+  twelve-element tuple carrying both resolutions, the frozen delivery plan and
+  the model key; `scene_generations` gains five all-or-none V2 snapshot columns
+  that are never backfilled; `VideoProject.targetOutputResolution` is a closed
+  product vocabulary at every boundary including the database; and
+  `startScene` takes an optional `modelKey` with no fallback. The migration
+  **fails closed** on a legacy project holding an off-vocabulary resolution
+  rather than rewriting a customer's stated request. Every V1 attempt is now
+  permanently unexecutable, which is the intended outcome. Still no fal adapter,
+  no paid execution, no model selector in the UI, and no normalization — an
+  upscaled 1080p deliverable is recorded as upscaled and must not be described
+  as native until Phase 5 composition exists.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

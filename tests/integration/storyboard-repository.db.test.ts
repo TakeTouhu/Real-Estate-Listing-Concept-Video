@@ -34,7 +34,7 @@ function project(id: string, organizationId: string, propertyId: string) {
     status: "DRAFT" as const,
     durationSeconds: 30,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p" as const,
     stylePreset: null,
     cameraMotion: null,
     prompt: null,

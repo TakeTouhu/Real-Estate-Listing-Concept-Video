@@ -1,5 +1,10 @@
 import { redirect } from "next/navigation";
-import { CAMERA_MOTIONS, hasPermission, humanizeCameraMotion } from "@app/domain";
+import {
+  CAMERA_MOTIONS,
+  hasPermission,
+  humanizeCameraMotion,
+  TARGET_OUTPUT_RESOLUTIONS,
+} from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
@@ -75,6 +80,7 @@ export default async function VideoProjectsPage({
           projects={projects.map(toVideoProjectDto)}
           canCreate={hasPermission(role, "property:write")}
           cameraMotionOptions={CAMERA_MOTION_OPTIONS}
+          targetOutputResolutionOptions={TARGET_OUTPUT_RESOLUTIONS}
         />
       </section>
     );

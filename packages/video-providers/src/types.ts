@@ -44,7 +44,16 @@ export interface ProviderGenerationInput {
    * guarantees it, and under `COMPOSITION_OWNED` composition does (ADR-0019).
    */
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /**
+   * The **native** token the model is asked to generate at — never the product
+   * target the customer asked for.
+   *
+   * Named explicitly because the two were one field until ADR-0034, and the
+   * only wired model made them look identical. Nothing here carries the target,
+   * the normalization, or whether the native generation meets it: those are
+   * product facts, and a provider request is not where they belong.
+   */
+  readonly nativeGenerationResolution: string;
   readonly seed?: number;
   /**
    * Stable **internal** request identity.

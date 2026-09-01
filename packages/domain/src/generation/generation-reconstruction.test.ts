@@ -4,7 +4,8 @@ import type { StoryboardView } from "../storyboard/storyboard-service";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import { PRESERVATION_RULES, SYSTEM_NEGATIVE_CONSTRAINTS } from "../storyboard/prompt";
 import { createTestDeps, InMemorySceneGenerationRepository } from "../testing/index";
-import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
+import type { VideoModelCapability } from "./capability";
+import type { VerifiedModelEntry, VideoModelCatalog } from "./model-catalog";
 import { GenerationService } from "./generation-service";
 import type { StoryboardReader } from "./ports";
 import { computeGenerationRequestHash, generationRequestFactsFrom } from "./request-identity";
@@ -54,13 +55,15 @@ const ORG = "org_rc";
 const PROJECT = "vpr_rc";
 const SCENE_A = "scn_rc_a";
 const ACTOR = "usr_rc";
+const MODEL_KEY = "fixture-model";
 
 const ADMITTED = {
   compiledPrompt: renderablePrompt("warm light"),
   durationSeconds: 5,
   cameraMotion: "SLOW_PAN_LEFT",
   aspectRatio: "16:9",
-  resolution: "1080p",
+  targetOutputResolution: "1080p",
+  nativeGenerationResolution: "1080p",
 } as const;
 
 /** Deliberately different from ADMITTED in every field. */
@@ -69,7 +72,8 @@ const AFTER_RECOMPOSE = {
   durationSeconds: 9,
   cameraMotion: "SLOW_PAN_RIGHT",
   aspectRatio: "9:16",
-  resolution: "720p",
+  targetOutputResolution: "720p",
+  nativeGenerationResolution: "720p",
 } as const;
 
 function capability(): VideoModelCapability {
@@ -77,7 +81,7 @@ function capability(): VideoModelCapability {
     providerName: "fixture-provider",
     providerModelId: "fixture/model-v1",
     durationSeconds: { kind: "RANGE", minSeconds: 2, maxSeconds: 20 },
-    resolutions: ["480p", "720p", "1080p"],
+    nativeGenerationResolutions: ["480p", "720p", "1080p"],
     aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16", "1:1"] },
     negativePrompt: { kind: "PROVIDER_FIELD" },
     cameraMotion: { kind: "PROVIDER_FIELD" },
@@ -95,7 +99,7 @@ function project(o: Partial<VideoProject> = {}): VideoProject {
     status: "STORYBOARD_READY",
     durationSeconds: 12,
     aspectRatio: ADMITTED.aspectRatio,
-    resolution: ADMITTED.resolution,
+    targetOutputResolution: ADMITTED.targetOutputResolution,
     stylePreset: null,
     cameraMotion: ADMITTED.cameraMotion,
     prompt: null,
@@ -159,13 +163,45 @@ function harness() {
   const generations = new InMemorySceneGenerationRepository(deps.clock);
   generations.registerProject(ORG, PROJECT);
   const storyboard = new SwappableStoryboard({ project: project(), scenes: [scene()], fresh: true });
-  const capabilities: VideoModelCapabilityProvider = { current: () => capability() };
+  // Both product targets are served natively, so recomposition changing the
+  // project's target changes what would be generated — which is the point of
+  // the test below.
+  const entry: VerifiedModelEntry = {
+    key: MODEL_KEY,
+    providerName: "fixture-provider",
+    providerModelId: "fixture/model-v1",
+    displayName: "Fixture model",
+    tier: "RECOMMENDED",
+    recommended: true,
+    availability: { kind: "SELECTABLE" },
+    capability: capability(),
+    nativeGeneration: {
+      byTarget: {
+        "720p": {
+          nativeGenerationResolution: { providerValue: "720p" },
+          normalization: "NONE",
+          nativeMeetsTarget: true,
+        },
+        "1080p": {
+          nativeGenerationResolution: { providerValue: "1080p" },
+          normalization: "NONE",
+          nativeMeetsTarget: true,
+        },
+      },
+    },
+    pricing: null,
+  };
+  const models: VideoModelCatalog = {
+    list: () => [entry],
+    default: () => entry,
+    find: (key: string) => (key === entry.key ? entry : undefined),
+  };
 
   const service = new GenerationService({
     identity: deps,
     storyboard,
     generations,
-    capabilities,
+    models,
     ids: deps.ids,
   });
   return { service, storyboard, generations, deps };
@@ -184,14 +220,16 @@ describe("an admitted generation survives recomposition", () => {
     expect(admitted.requestDurationSeconds).toBe(ADMITTED.durationSeconds);
     expect(admitted.requestCameraMotion).toBe(ADMITTED.cameraMotion);
     expect(admitted.requestAspectRatio).toBe(ADMITTED.aspectRatio);
-    expect(admitted.requestResolution).toBe(ADMITTED.resolution);
+    expect(admitted.requestResolution).toBeNull();
+    expect(admitted.requestTargetOutputResolution).toBe(ADMITTED.targetOutputResolution);
+    expect(admitted.requestNativeGenerationResolution).toBe(ADMITTED.nativeGenerationResolution);
 
     // (3) Recompose: scene A is gone, replaced by a scene with a new id and
     // DIFFERENT values, and the project's request settings are edited.
     h.storyboard.view = {
       project: project({
         aspectRatio: AFTER_RECOMPOSE.aspectRatio,
-        resolution: AFTER_RECOMPOSE.resolution,
+        targetOutputResolution: AFTER_RECOMPOSE.targetOutputResolution,
         cameraMotion: AFTER_RECOMPOSE.cameraMotion,
       }),
       scenes: [
@@ -217,7 +255,9 @@ describe("an admitted generation survives recomposition", () => {
     expect(facts.durationSeconds).toBe(ADMITTED.durationSeconds);
     expect(facts.cameraMotion).toBe(ADMITTED.cameraMotion);
     expect(facts.aspectRatio).toBe(ADMITTED.aspectRatio);
-    expect(facts.resolution).toBe(ADMITTED.resolution);
+    expect(facts.targetOutputResolution).toBe(ADMITTED.targetOutputResolution);
+    expect(facts.nativeGenerationResolution).toBe(ADMITTED.nativeGenerationResolution);
+    expect(facts.modelKey).toBe(MODEL_KEY);
     expect(facts.assetId).toBe("ast_rc");
     expect(facts.providerName).toBe("fixture-provider");
     expect(facts.providerModelId).toBe("fixture/model-v1");
@@ -225,7 +265,7 @@ describe("an admitted generation survives recomposition", () => {
     // ...and emphatically NOT the current storyboard/project values.
     expect(facts.compiledPrompt).not.toBe(AFTER_RECOMPOSE.compiledPrompt);
     expect(facts.aspectRatio).not.toBe(AFTER_RECOMPOSE.aspectRatio);
-    expect(facts.resolution).not.toBe(AFTER_RECOMPOSE.resolution);
+    expect(facts.targetOutputResolution).not.toBe(AFTER_RECOMPOSE.targetOutputResolution);
 
     // (7)(8) Recomputing the hash from the snapshot reproduces the stored one.
     expect(computeGenerationRequestHash(facts)).toBe(stored.requestHash);
@@ -245,7 +285,11 @@ describe("an admitted generation survives recomposition", () => {
       durationSeconds: AFTER_RECOMPOSE.durationSeconds,
       cameraMotion: AFTER_RECOMPOSE.cameraMotion,
       aspectRatio: AFTER_RECOMPOSE.aspectRatio,
-      resolution: AFTER_RECOMPOSE.resolution,
+      targetOutputResolution: AFTER_RECOMPOSE.targetOutputResolution,
+      nativeGenerationResolution: AFTER_RECOMPOSE.nativeGenerationResolution,
+      resolutionNormalization: "NONE",
+      nativeMeetsTarget: true,
+      modelKey: MODEL_KEY,
       providerName: "fixture-provider",
       providerModelId: "fixture/model-v1",
     });
@@ -290,6 +334,11 @@ describe("legacy generations without a snapshot", () => {
       requestCameraMotion: null,
       requestAspectRatio: null,
       requestResolution: null,
+      requestModelKey: null,
+      requestTargetOutputResolution: null,
+      requestNativeGenerationResolution: null,
+      requestResolutionNormalization: null,
+      requestNativeMeetsTarget: null,
       requestRenderedPrompt: null,
       state: "QUEUED",
       providerPredictionId: null,
@@ -321,38 +370,66 @@ describe("legacy generations without a snapshot", () => {
 
     expect(thrown).toBeInstanceOf(AppError);
     expect(thrown!.code).toBe("INTERNAL_ERROR");
-    // Neutral: no id, hash, prompt, tenant, or provider detail.
+    // Neutral: no id, hash, prompt, tenant, model key, or provider detail —
+    // and deliberately silent about WHICH way the row is unusable, since
+    // "legacy" and "corrupt" are not different things for the caller to do.
     expect(thrown!.message).toBe(
-      "This generation predates the request snapshot and cannot be reconstructed",
+      "This generation cannot be reconstructed under the current request identity",
     );
   });
+
+  /** Everything a V2 row must carry, so each case can remove exactly one thing. */
+  function completeV2Row(): SceneGeneration {
+    return {
+      ...legacyRow(),
+      requestHash: "sha256:v2:complete",
+      requestCompiledPrompt: ADMITTED.compiledPrompt,
+      requestDurationSeconds: ADMITTED.durationSeconds,
+      requestCameraMotion: ADMITTED.cameraMotion,
+      requestAspectRatio: ADMITTED.aspectRatio,
+      requestResolution: null,
+      requestModelKey: MODEL_KEY,
+      requestTargetOutputResolution: ADMITTED.targetOutputResolution,
+      requestNativeGenerationResolution: ADMITTED.nativeGenerationResolution,
+      requestResolutionNormalization: "NONE",
+      requestNativeMeetsTarget: true,
+    };
+  }
 
   it.each([
     ["requestCompiledPrompt", { requestCompiledPrompt: null }],
     ["requestDurationSeconds", { requestDurationSeconds: null }],
     ["requestAspectRatio", { requestAspectRatio: null }],
-    ["requestResolution", { requestResolution: null }],
+    // The five V2 columns are all-or-none. A partially populated snapshot is
+    // corruption rather than a legacy record, and both are equally unexecutable.
+    ["requestModelKey", { requestModelKey: null }],
+    ["requestTargetOutputResolution", { requestTargetOutputResolution: null }],
+    ["requestNativeGenerationResolution", { requestNativeGenerationResolution: null }],
+    ["requestResolutionNormalization", { requestResolutionNormalization: null }],
+    ["requestNativeMeetsTarget", { requestNativeMeetsTarget: null }],
   ])("refuses when only %s is missing", (_name, missing) => {
-    const complete: SceneGeneration = {
-      ...legacyRow(),
-      requestCompiledPrompt: ADMITTED.compiledPrompt,
-      requestDurationSeconds: ADMITTED.durationSeconds,
-      requestCameraMotion: ADMITTED.cameraMotion,
-      requestAspectRatio: ADMITTED.aspectRatio,
-      requestResolution: ADMITTED.resolution,
-    };
-    expect(() => generationRequestFactsFrom({ ...complete, ...missing })).toThrow(AppError);
+    expect(() => generationRequestFactsFrom({ ...completeV2Row(), ...missing })).toThrow(AppError);
+  });
+
+  it("refuses a row carrying both request-identity vocabularies", () => {
+    // A V2 row that also holds the ambiguous V1 column cannot say which one it
+    // was admitted under. The database rejects it too; this is the domain half.
+    expect(() =>
+      generationRequestFactsFrom({ ...completeV2Row(), requestResolution: "1080p" }),
+    ).toThrow(AppError);
+  });
+
+  it("refuses a complete V2 snapshot stored under a V1 hash", () => {
+    // The hash prefix is the row's own statement of which tuple produced it.
+    // Reconstructing V2 facts for a `sha256:` hash would compute an identity
+    // that never matches, so it is refused as unreconstructable instead.
+    expect(() =>
+      generationRequestFactsFrom({ ...completeV2Row(), requestHash: "sha256:legacy" }),
+    ).toThrow(AppError);
   });
 
   it("accepts a null camera motion, which is a real request value", () => {
-    const noMotion: SceneGeneration = {
-      ...legacyRow(),
-      requestCompiledPrompt: ADMITTED.compiledPrompt,
-      requestDurationSeconds: ADMITTED.durationSeconds,
-      requestCameraMotion: null,
-      requestAspectRatio: ADMITTED.aspectRatio,
-      requestResolution: ADMITTED.resolution,
-    };
+    const noMotion: SceneGeneration = { ...completeV2Row(), requestCameraMotion: null };
     expect(generationRequestFactsFrom(noMotion).cameraMotion).toBeNull();
   });
 });

@@ -3,11 +3,36 @@ import type {
   StoryboardScene as DbScene,
   VideoProject as DbProject,
 } from "@prisma/client";
+import { AppError } from "@app/shared";
 import type {
   StoryboardRepositories,
   StoryboardScene,
+  TargetOutputResolution,
   VideoProject,
 } from "@app/domain";
+import { isTargetOutputResolution } from "@app/domain";
+
+/**
+ * Narrow the stored output target, or refuse the row.
+ *
+ * The column is TEXT — Postgres has no product enum here, only the CHECK
+ * constraint added in Phase 4C-3B-2B — so this is the boundary where a stored
+ * string becomes a domain member. It is a narrowing, never a cast: the domain
+ * field is non-nullable, and asserting membership would let a value that
+ * predates or evades the constraint travel as though the product had promised
+ * it, which is the whole class of bug ADR-0034 exists to remove.
+ *
+ * There is no repair and no default. Choosing `720p` for an unrecognised value
+ * would silently rewrite a customer's stated request, and choosing `1080p`
+ * would promise detail nobody agreed to produce. The message names neither the
+ * value nor the project.
+ */
+function toTargetOutputResolution(value: string): TargetOutputResolution {
+  if (!isTargetOutputResolution(value)) {
+    throw new AppError("INTERNAL_ERROR", "This project records an unrecognised output resolution");
+  }
+  return value;
+}
 
 function toProject(r: DbProject): VideoProject {
   return {
@@ -18,7 +43,7 @@ function toProject(r: DbProject): VideoProject {
     status: r.status,
     durationSeconds: r.durationSeconds,
     aspectRatio: r.aspectRatio,
-    resolution: r.resolution,
+    targetOutputResolution: toTargetOutputResolution(r.targetOutputResolution),
     stylePreset: r.stylePreset,
     cameraMotion: r.cameraMotion,
     prompt: r.prompt,
@@ -96,7 +121,7 @@ export function createPrismaStoryboardRepositories(
             status: changes.status,
             durationSeconds: changes.durationSeconds,
             aspectRatio: changes.aspectRatio,
-            resolution: changes.resolution,
+            targetOutputResolution: changes.targetOutputResolution,
             stylePreset: changes.stylePreset,
             cameraMotion: changes.cameraMotion,
             prompt: changes.prompt,

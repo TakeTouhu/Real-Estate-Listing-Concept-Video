@@ -19,7 +19,10 @@ const FIXTURE: VideoModelCapability = {
   providerName: "fixture-provider",
   providerModelId: "fixture/model-v1",
   durationSeconds: { kind: "RANGE", minSeconds: 4, maxSeconds: 12 },
-  resolutions: ["720p", "1080p"],
+  // Native generation tokens, deliberately NOT the product's `720p`/`1080p`.
+  // The rule under test compares native to native; fixtures that look like
+  // product targets are how a target came to be validated against this list.
+  nativeGenerationResolutions: ["FIXTURE_LOW", "FIXTURE_HIGH"],
   aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16"] },
   negativePrompt: { kind: "PROVIDER_FIELD" },
   cameraMotion: { kind: "PROVIDER_FIELD" },
@@ -27,7 +30,7 @@ const FIXTURE: VideoModelCapability = {
 
 const SETTINGS: GenerationRequestSettings = {
   durationSeconds: 6,
-  resolution: "1080p",
+  nativeGenerationResolution: "FIXTURE_HIGH",
   aspectRatio: "16:9",
   cameraMotion: null,
   negativePrompt: null,
@@ -75,13 +78,13 @@ describe("duration", () => {
   });
 });
 
-describe("resolution", () => {
-  it("accepts a supported resolution", () => {
-    expect(() => assertSettingsSupported(settings({ resolution: "720p" }), FIXTURE)).not.toThrow();
+describe("native generation resolution", () => {
+  it("accepts a token the model generates at", () => {
+    expect(() => assertSettingsSupported(settings({ nativeGenerationResolution: "FIXTURE_LOW" }), FIXTURE)).not.toThrow();
   });
 
   it("refuses one the model does not list", () => {
-    const error = refusalOf(settings({ resolution: "4k" }), FIXTURE);
+    const error = refusalOf(settings({ nativeGenerationResolution: "4k" }), FIXTURE);
     expect(error!.code).toBe("VALIDATION_FAILED");
     expect(error!.message).toContain("4k");
   });
@@ -187,13 +190,13 @@ describe("as a rule", () => {
   });
 
   it("is deterministic", () => {
-    expect(refusalOf(settings({ resolution: "4k" }), FIXTURE)!.message).toBe(
-      refusalOf(settings({ resolution: "4k" }), FIXTURE)!.message,
+    expect(refusalOf(settings({ nativeGenerationResolution: "4k" }), FIXTURE)!.message).toBe(
+      refusalOf(settings({ nativeGenerationResolution: "4k" }), FIXTURE)!.message,
     );
   });
 
   it("mutates neither argument", () => {
-    const s = settings({ resolution: "4k" });
+    const s = settings({ nativeGenerationResolution: "4k" });
     const c = capability();
     const beforeSettings = JSON.stringify(s);
     const beforeCapability = JSON.stringify(c);
@@ -203,7 +206,7 @@ describe("as a rule", () => {
   });
 
   it("checks duration before resolution, so the first refusal is stable", () => {
-    const error = refusalOf(settings({ durationSeconds: 99, resolution: "4k" }), FIXTURE);
+    const error = refusalOf(settings({ durationSeconds: 99, nativeGenerationResolution: "4k" }), FIXTURE);
     expect(error!.message).toContain("seconds");
   });
 });
@@ -250,9 +253,9 @@ describe("aspect-ratio ownership", () => {
     // Moving the aspect-ratio guarantee must not weaken the other rules.
     const composed = capability({
       aspectRatios: { kind: "COMPOSITION_OWNED" },
-      resolutions: ["1080p"],
+      nativeGenerationResolutions: ["FIXTURE_HIGH"],
     });
-    expect(refusalOf(settings({ resolution: "480p" }), composed)!.code).toBe("VALIDATION_FAILED");
+    expect(refusalOf(settings({ nativeGenerationResolution: "FIXTURE_LOW" }), composed)!.code).toBe("VALIDATION_FAILED");
   });
 });
 
@@ -377,8 +380,8 @@ describe("aspect-ratio syntax is required regardless of who owns delivery", () =
   it("still enforces unrelated checks under COMPOSITION_OWNED", () => {
     const narrow = capability({
       aspectRatios: { kind: "COMPOSITION_OWNED" },
-      resolutions: ["1080p"],
+      nativeGenerationResolutions: ["FIXTURE_HIGH"],
     });
-    expect(refusalOf(settings({ resolution: "480p" }), narrow)!.code).toBe("VALIDATION_FAILED");
+    expect(refusalOf(settings({ nativeGenerationResolution: "FIXTURE_LOW" }), narrow)!.code).toBe("VALIDATION_FAILED");
   });
 });

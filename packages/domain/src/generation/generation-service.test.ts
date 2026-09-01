@@ -11,7 +11,13 @@ import {
 } from "../storyboard/prompt";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import { createTestDeps, InMemorySceneGenerationRepository } from "../testing/index";
-import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
+import type { VideoModelCapability } from "./capability";
+import {
+  planGenerationResolution,
+  type VerifiedModelEntry,
+  type VideoModelCatalog,
+  type VideoModelEntry,
+} from "./model-catalog";
 import { GenerationService, type GenerationServiceDeps } from "./generation-service";
 import { renderPrompt } from "./prompt-render";
 import {
@@ -47,10 +53,48 @@ function capability(overrides: Partial<VideoModelCapability> = {}): VideoModelCa
     providerName: "fixture-provider",
     providerModelId: "fixture/model-v1",
     durationSeconds: { kind: "RANGE", minSeconds: 2, maxSeconds: 20 },
-    resolutions: ["480p", "720p", "1080p"],
+    nativeGenerationResolutions: ["480p", "720p", "1080p"],
     aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9", "9:16", "1:1"] },
     negativePrompt: { kind: "PROVIDER_FIELD" },
     cameraMotion: { kind: "PROVIDER_FIELD" },
+    ...overrides,
+  };
+}
+
+const MODEL_KEY = "fixture-model";
+
+/**
+ * A verified catalog entry wrapping the capability fixture.
+ *
+ * Its delivery policy serves both product targets natively, so the default
+ * fixtures exercise the ordinary path; the tests that care about upscaling
+ * override `nativeGeneration` explicitly rather than having it inferred.
+ */
+function modelEntry(overrides: Partial<VerifiedModelEntry> = {}): VerifiedModelEntry {
+  return {
+    key: MODEL_KEY,
+    providerName: "fixture-provider",
+    providerModelId: "fixture/model-v1",
+    displayName: "Fixture model",
+    tier: "RECOMMENDED",
+    recommended: true,
+    availability: { kind: "SELECTABLE" },
+    capability: capability(),
+    nativeGeneration: {
+      byTarget: {
+        "720p": {
+          nativeGenerationResolution: { providerValue: "720p" },
+          normalization: "NONE",
+          nativeMeetsTarget: true,
+        },
+        "1080p": {
+          nativeGenerationResolution: { providerValue: "1080p" },
+          normalization: "NONE",
+          nativeMeetsTarget: true,
+        },
+      },
+    },
+    pricing: null,
     ...overrides,
   };
 }
@@ -65,7 +109,7 @@ function project(overrides: Partial<VideoProject> = {}): VideoProject {
     status: "STORYBOARD_READY",
     durationSeconds: 12,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
     stylePreset: null,
     cameraMotion: "SLOW_PAN_LEFT",
     prompt: null,
@@ -104,17 +148,22 @@ function scene(overrides: Partial<StoryboardScene> = {}): StoryboardScene {
 function expectedHash(
   s: StoryboardScene = scene(),
   p: VideoProject = project(),
-  cap: VideoModelCapability = capability(),
+  entry: VerifiedModelEntry = modelEntry(),
 ): string {
+  const delivery = planGenerationResolution(entry, p.targetOutputResolution);
   return computeGenerationRequestHash({
     assetId: s.assetId,
     compiledPrompt: s.compiledPrompt!,
     durationSeconds: s.durationSeconds,
     cameraMotion: s.cameraMotion,
     aspectRatio: p.aspectRatio,
-    resolution: p.resolution,
-    providerName: cap.providerName,
-    providerModelId: cap.providerModelId,
+    targetOutputResolution: p.targetOutputResolution,
+    nativeGenerationResolution: delivery.nativeGenerationResolution.providerValue,
+    resolutionNormalization: delivery.normalization,
+    nativeMeetsTarget: delivery.nativeMeetsTarget,
+    modelKey: entry.key,
+    providerName: entry.providerName,
+    providerModelId: entry.providerModelId,
   });
 }
 
@@ -155,7 +204,12 @@ function genRow(id: string, state: SceneGenerationState, overrides: Partial<Scen
     requestDurationSeconds: scene().durationSeconds,
     requestCameraMotion: scene().cameraMotion,
     requestAspectRatio: project().aspectRatio,
-    requestResolution: project().resolution,
+    requestResolution: null,
+    requestModelKey: MODEL_KEY,
+    requestTargetOutputResolution: project().targetOutputResolution,
+    requestNativeGenerationResolution: "1080p",
+    requestResolutionNormalization: "NONE",
+    requestNativeMeetsTarget: true,
     requestRenderedPrompt: "Preservation rules:\n- seeded frozen prompt",
     state,
     providerPredictionId: null,
@@ -186,12 +240,31 @@ class StubStoryboard implements StoryboardReader {
 }
 
 /** Snapshots the capability once and counts how often it was asked. */
-class CountingCapabilityProvider implements VideoModelCapabilityProvider {
-  calls = 0;
-  constructor(private readonly cap: VideoModelCapability) {}
-  current(): VideoModelCapability {
-    this.calls += 1;
-    return this.cap;
+/**
+ * A catalog that records how it was consulted.
+ *
+ * `defaultCalls` is asserted, not incidental: reading the default twice in one
+ * admission would let a catalog change between the two reads hash one model and
+ * persist another, so "exactly once" is a property of the service worth pinning
+ * rather than a detail of this stub.
+ */
+class CountingCatalog implements VideoModelCatalog {
+  defaultCalls = 0;
+  readonly findCalls: string[] = [];
+  constructor(
+    private readonly entries: readonly VideoModelEntry[],
+    private readonly defaultEntry: VerifiedModelEntry,
+  ) {}
+  list(): readonly VideoModelEntry[] {
+    return this.entries;
+  }
+  default(): VerifiedModelEntry {
+    this.defaultCalls += 1;
+    return this.defaultEntry;
+  }
+  find(key: string): VideoModelEntry | undefined {
+    this.findCalls.push(key);
+    return this.entries.find((entry) => entry.key === key);
   }
 }
 
@@ -210,6 +283,10 @@ interface HarnessConfig {
   readonly view?: StoryboardView;
   readonly fresh?: boolean;
   readonly capability?: VideoModelCapability;
+  /** Extra catalog entries beyond the default one, for selection tests. */
+  readonly entries?: readonly VideoModelEntry[];
+  /** Overrides applied to the default entry itself. */
+  readonly entry?: Partial<VerifiedModelEntry>;
   readonly generations?: SceneGenerationRepository;
   readonly auditLogs?: AuditLogRepository;
 }
@@ -223,7 +300,11 @@ function harness(config: HarnessConfig = {}) {
   inMemoryGenerations.registerProject(ORG, PROJECT);
   const generations = config.generations ?? inMemoryGenerations;
 
-  const capabilities = new CountingCapabilityProvider(config.capability ?? capability());
+  const defaultEntry = modelEntry({
+    capability: config.capability ?? capability(),
+    ...config.entry,
+  });
+  const models = new CountingCatalog([defaultEntry, ...(config.entries ?? [])], defaultEntry);
   const view: StoryboardView = config.view ?? {
     project: project(),
     scenes: [scene()],
@@ -239,7 +320,7 @@ function harness(config: HarnessConfig = {}) {
     identity,
     storyboard,
     generations,
-    capabilities,
+    models,
     ids: deps.ids,
   };
   const service = new GenerationService(serviceDeps);
@@ -249,7 +330,8 @@ function harness(config: HarnessConfig = {}) {
     serviceDeps,
     deps,
     generations: inMemoryGenerations,
-    capabilities,
+    models,
+    defaultEntry,
     storyboard,
     audits: () => deps.repos.auditLogs.all(),
   };
@@ -285,12 +367,13 @@ describe("startScene — authorization", () => {
     expect(error.code).toBe("FORBIDDEN");
   });
 
-  it("performs no read, capability lookup, write, or audit before authorization fails", async () => {
+  it("performs no read, model lookup, write, or audit before authorization fails", async () => {
     const h = harness({ role: null });
     await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
 
     expect(h.storyboard.calls).toHaveLength(0);
-    expect(h.capabilities.calls).toBe(0);
+    expect(h.models.defaultCalls).toBe(0);
+    expect(h.models.findCalls).toHaveLength(0);
     expect(h.generations.all()).toHaveLength(0);
     expect(h.audits()).toHaveLength(0);
   });
@@ -529,7 +612,7 @@ describe("startScene — capability validation", () => {
   it("reads the capability snapshot exactly once", async () => {
     const h = harness();
     await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
-    expect(h.capabilities.calls).toBe(1);
+    expect(h.models.defaultCalls).toBe(1);
   });
 
   it("refuses an unsupported duration", async () => {
@@ -539,8 +622,8 @@ describe("startScene — capability validation", () => {
     expectRefusedBeforeAdmission(h);
   });
 
-  it("refuses an unsupported resolution", async () => {
-    const h = harness({ capability: capability({ resolutions: ["720p"] }) });
+  it("refuses a native generation resolution the model does not offer", async () => {
+    const h = harness({ capability: capability({ nativeGenerationResolutions: ["720p"] }) });
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
     expect(error.code).toBe("VALIDATION_FAILED");
     expectRefusedBeforeAdmission(h);
@@ -582,6 +665,201 @@ describe("startScene — capability validation", () => {
   });
 });
 
+describe("startScene — model selection", () => {
+  /** A second verified model, so "the default" and "a choice" are distinguishable. */
+  const alternative = modelEntry({
+    key: "alternative-model",
+    providerModelId: "fixture/alternative-v1",
+    displayName: "Alternative",
+    tier: "PREMIUM",
+    recommended: false,
+  });
+
+  /** An entry whose contract has not been verified. It cannot hold one. */
+  const unverified: VideoModelEntry = {
+    key: "unverified-model",
+    providerName: "fixture-provider",
+    displayName: "Unverified",
+    tier: "HIGH_RESOLUTION",
+    recommended: false,
+    availability: { kind: "UNVERIFIED", missing: ["a verified capability contract"] },
+  };
+
+  function expectNothingAdmitted(h: ReturnType<typeof harness>): void {
+    expect(h.generations.all()).toHaveLength(0);
+    expect(h.audits()).toHaveLength(0);
+  }
+
+  it("uses the catalog default when no model is named", async () => {
+    const h = harness({ entries: [alternative] });
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+
+    expect(result.requestModelKey).toBe(MODEL_KEY);
+    expect(h.models.defaultCalls).toBe(1);
+    // The default is never looked up by key as well: one resolution, one entry.
+    expect(h.models.findCalls).toHaveLength(0);
+  });
+
+  it("uses the named model instead, and never reads the default", async () => {
+    const h = harness({ entries: [alternative] });
+    const result = await h.service.startScene(
+      ACTOR,
+      ORG,
+      PROJECT,
+      SCENE,
+      "alternative-model",
+    );
+
+    expect(result.requestModelKey).toBe("alternative-model");
+    expect(result.providerModelId).toBe("fixture/alternative-v1");
+    // The load-bearing half: a named model must not also consult the default,
+    // because that is how a fallback gets added later without anyone noticing.
+    expect(h.models.defaultCalls).toBe(0);
+  });
+
+  it("gives the same request on two models two identities", async () => {
+    const a = harness({ entries: [alternative] });
+    const b = harness({ entries: [alternative] });
+
+    const onDefault = await a.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    const onAlternative = await b.service.startScene(
+      ACTOR,
+      ORG,
+      PROJECT,
+      SCENE,
+      "alternative-model",
+    );
+
+    expect(onDefault.requestHash).not.toBe(onAlternative.requestHash);
+  });
+
+  it("refuses an unknown model key rather than falling back", async () => {
+    const h = harness();
+    const error = await rejectionOf(
+      h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "no-such-model"),
+    );
+
+    expect(error.code).toBe("VALIDATION_FAILED");
+    // Falling back to the default would generate on a model the caller did not
+    // ask for and charge them for it.
+    expect(h.models.defaultCalls).toBe(0);
+    expectNothingAdmitted(h);
+  });
+
+  it("refuses an unverified model rather than falling back", async () => {
+    const h = harness({ entries: [unverified] });
+    const error = await rejectionOf(
+      h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "unverified-model"),
+    );
+
+    expect(error.code).toBe("VALIDATION_FAILED");
+    expect(h.models.defaultCalls).toBe(0);
+    expectNothingAdmitted(h);
+  });
+
+  it("refuses a model that does not serve the project's output target", async () => {
+    // Not a capability failure — the model may be perfectly healthy. It simply
+    // has no stated plan for this deliverable, and inventing one is what the
+    // stated policy exists to prevent.
+    const only720 = modelEntry({
+      key: "only-720p",
+      nativeGeneration: {
+        byTarget: {
+          "720p": {
+            nativeGenerationResolution: { providerValue: "720p" },
+            normalization: "NONE",
+            nativeMeetsTarget: true,
+          },
+        },
+      },
+    });
+    const h = harness({ entries: [only720] });
+
+    const error = await rejectionOf(
+      h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "only-720p"),
+    );
+
+    expect(error.code).toBe("VALIDATION_FAILED");
+    expectNothingAdmitted(h);
+  });
+
+  it("freezes an upscaled delivery as upscaled, and hashes it that way", async () => {
+    // The case the whole two-resolution split exists for: the customer asked
+    // for 1080p, the model generates 768P, and the row must say so rather than
+    // recording a native 1080p deliverable.
+    const upscaling = modelEntry({
+      key: "upscaling-model",
+      nativeGeneration: {
+        byTarget: {
+          "1080p": {
+            nativeGenerationResolution: { providerValue: "768P" },
+            normalization: "UPSCALE",
+            nativeMeetsTarget: false,
+          },
+        },
+      },
+      capability: capability({ nativeGenerationResolutions: ["768P"] }),
+    });
+    const h = harness({ entries: [upscaling] });
+
+    const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "upscaling-model");
+
+    expect(result.requestTargetOutputResolution).toBe("1080p");
+    expect(result.requestNativeGenerationResolution).toBe("768P");
+    expect(result.requestResolutionNormalization).toBe("UPSCALE");
+    expect(result.requestNativeMeetsTarget).toBe(false);
+    expect(result.requestHash).toBe(expectedHash(scene(), project(), upscaling));
+  });
+
+  it("validates capability against the native token, not the product target", async () => {
+    // A model generating only at 768P must be admitted for a 1080p target when
+    // its policy says 768P serves it. Comparing the target to the native list
+    // is the conflation ADR-0034 removed, and it would refuse this outright.
+    const native768 = modelEntry({
+      key: "native-768",
+      capability: capability({ nativeGenerationResolutions: ["768P"] }),
+      nativeGeneration: {
+        byTarget: {
+          "1080p": {
+            nativeGenerationResolution: { providerValue: "768P" },
+            normalization: "UPSCALE",
+            nativeMeetsTarget: false,
+          },
+        },
+      },
+    });
+    const h = harness({ entries: [native768] });
+
+    await expect(
+      h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "native-768"),
+    ).resolves.toBeDefined();
+  });
+
+  it("reuses an existing attempt only for the same model", async () => {
+    const h = harness({ entries: [alternative] });
+
+    const first = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    const again = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
+    expect(again.id).toBe(first.id);
+
+    const other = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "alternative-model");
+    expect(other.id).not.toBe(first.id);
+    expect(h.generations.all()).toHaveLength(2);
+  });
+
+  it("refuses before authorizing nothing — the model is resolved after the actor", async () => {
+    // Ordering: an unknown model key must not be a way to learn anything about
+    // a project the caller cannot write to.
+    const h = harness({ role: null });
+    const error = await rejectionOf(
+      h.service.startScene(ACTOR, ORG, PROJECT, SCENE, "no-such-model"),
+    );
+
+    expect(error.code).toBe("FORBIDDEN");
+    expect(h.models.findCalls).toHaveLength(0);
+  });
+});
+
 describe("startScene — request identity", () => {
   it("hashes exactly the authoritative facts", async () => {
     const h = harness();
@@ -614,8 +892,10 @@ describe("startScene — request identity", () => {
   });
 
   it("changes when providerName changes", async () => {
+    // Overridden on the catalog ENTRY, not on the capability: the entry is what
+    // the request is addressed to, and identity follows the address.
     const a = harness();
-    const b = harness({ capability: capability({ providerName: "other-provider" }) });
+    const b = harness({ entry: { providerName: "other-provider" } });
     const ra = await a.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     const rb = await b.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(ra.requestHash).not.toBe(rb.requestHash);
@@ -623,7 +903,7 @@ describe("startScene — request identity", () => {
 
   it("changes when providerModelId changes", async () => {
     const a = harness();
-    const b = harness({ capability: capability({ providerModelId: "fixture/model-v2" }) });
+    const b = harness({ entry: { providerModelId: "fixture/model-v2" } });
     const ra = await a.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     const rb = await b.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(ra.requestHash).not.toBe(rb.requestHash);
@@ -945,7 +1225,15 @@ describe("startScene — new-attempt initialization", () => {
     expect(result.requestDurationSeconds).toBe(scene().durationSeconds);
     expect(result.requestCameraMotion).toBe(scene().cameraMotion);
     expect(result.requestAspectRatio).toBe(project().aspectRatio);
-    expect(result.requestResolution).toBe(project().resolution);
+
+    // The V2 delivery snapshot, and the V1 column left null. A row carrying
+    // both vocabularies is what the database now refuses outright.
+    expect(result.requestResolution).toBeNull();
+    expect(result.requestModelKey).toBe(MODEL_KEY);
+    expect(result.requestTargetOutputResolution).toBe(project().targetOutputResolution);
+    expect(result.requestNativeGenerationResolution).toBe("1080p");
+    expect(result.requestResolutionNormalization).toBe("NONE");
+    expect(result.requestNativeMeetsTarget).toBe(true);
   });
 
   it("never writes a null snapshot for a newly admitted attempt", async () => {
@@ -956,7 +1244,13 @@ describe("startScene — new-attempt initialization", () => {
     expect(result.requestCompiledPrompt).not.toBeNull();
     expect(result.requestDurationSeconds).not.toBeNull();
     expect(result.requestAspectRatio).not.toBeNull();
-    expect(result.requestResolution).not.toBeNull();
+    // requestResolution is excluded in the other direction: on a V2 row it MUST
+    // be null, and the five delivery columns carry the meaning instead.
+    expect(result.requestModelKey).not.toBeNull();
+    expect(result.requestTargetOutputResolution).not.toBeNull();
+    expect(result.requestNativeGenerationResolution).not.toBeNull();
+    expect(result.requestResolutionNormalization).not.toBeNull();
+    expect(result.requestNativeMeetsTarget).not.toBeNull();
   });
 
   it("snapshots the scene duration rather than the project total", async () => {
@@ -988,12 +1282,17 @@ describe("startScene — new-attempt initialization", () => {
     );
   });
 
-  it("freezes provider and model from the single capability snapshot", async () => {
-    const h = harness({ capability: capability({ providerName: "frozen-provider", providerModelId: "frozen/model" }) });
+  it("freezes provider, model and key from the single resolved entry", async () => {
+    const h = harness({
+      entry: { providerName: "frozen-provider", providerModelId: "frozen/model" },
+    });
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(result.providerName).toBe("frozen-provider");
     expect(result.providerModelId).toBe("frozen/model");
-    expect(h.capabilities.calls).toBe(1);
+    expect(result.requestModelKey).toBe(MODEL_KEY);
+    // Exactly once. Reading the default twice would let a catalog change between
+    // the two reads hash one model and persist another.
+    expect(h.models.defaultCalls).toBe(1);
   });
 });
 
@@ -1089,15 +1388,23 @@ describe("startScene — audit", () => {
       [
         "assetId",
         "durationSeconds",
+        "modelKey",
+        "nativeMeetsTarget",
         "providerModelId",
         "providerName",
         "requestHash",
         "sourceAnalysisRevision",
         "sourceStoryboardSceneId",
         "state",
+        "targetOutputResolution",
         "videoProjectId",
       ].sort(),
     );
+    // The audited delivery facts are the row's own frozen ones. Nothing here
+    // is re-derived from the catalog, and none of it is customer content.
+    expect(metadata.modelKey).toBe(MODEL_KEY);
+    expect(metadata.targetOutputResolution).toBe("1080p");
+    expect(metadata.nativeMeetsTarget).toBe(true);
     for (const forbidden of [
       "compiledPrompt",
       "prompt",

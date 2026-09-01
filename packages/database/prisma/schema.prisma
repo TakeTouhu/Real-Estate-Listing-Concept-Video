@@ -301,7 +301,12 @@ model VideoProject {
   status                 VideoProjectStatus @default(DRAFT)
   durationSeconds        Int
   aspectRatio            String
-  resolution             String
+  /// The product deliverable the customer asked for — a quality class, not a
+  /// raster size and not a provider token (ADR-0034). Renamed in the Prisma
+  /// model only: the physical column stays `resolution` via @map, so the
+  /// migration renames nothing and no data moves. A CHECK constraint added by
+  /// raw SQL restricts it to the closed product vocabulary.
+  targetOutputResolution String             @map("resolution")
   stylePreset            String?
   cameraMotion           String?
   prompt                 String?
@@ -402,7 +407,7 @@ model SceneGeneration {
   /// Everything needed to rebuild the exact admitted provider request without
   /// dereferencing the storyboard scene (recomposition deletes it) or reading
   /// mutable project settings. With assetId + providerName + providerModelId
-  /// above, these complete all eight requestHash facts, so a row can recompute
+  /// above, these complete every requestHash fact, so a row can recompute
   /// its own hash. Nullable ONLY for rows admitted before this contract existed;
   /// those are never backfilled, because fabricating a snapshot from today's
   /// storyboard would forge a request that was never admitted.
@@ -413,7 +418,26 @@ model SceneGeneration {
   /// Null is a legitimate request value here, not only a legacy marker.
   requestCameraMotion     String?
   requestAspectRatio      String?
+  /// --- V1 identity, never written again (ADR-0034) ---------------------------
+  /// The ambiguous single `resolution` used before the request identity was
+  /// versioned. Retained, not dropped: the rows carrying it were hashed over it,
+  /// so removing the column would destroy the only record of what a V1 attempt
+  /// was admitted for, and rewriting it into the V2 columns would be a guess
+  /// about which of its two meanings applied. A CHECK constraint requires it to
+  /// be null on every V2 row, so no row can carry both vocabularies.
   requestResolution       String?
+  /// --- V2 delivery snapshot (ADR-0034) ---------------------------------------
+  /// Which model was selected, what the customer was promised, what the provider
+  /// is asked to generate, and how the two are reconciled. All-or-none, enforced
+  /// by a CHECK constraint; all null means the attempt predates V2 and is
+  /// deliberately NOT backfilled. requestNativeMeetsTarget is frozen rather than
+  /// re-derived so a later catalog correction cannot restate what an approved
+  /// attempt promised.
+  requestModelKey                  String?
+  requestTargetOutputResolution    String?
+  requestNativeGenerationResolution String?
+  requestResolutionNormalization   String?
+  requestNativeMeetsTarget         Boolean?
   /// The exact provider prompt produced at admission, submitted verbatim.
   /// Frozen so a renderer change cannot alter an already-admitted attempt.
   /// Customer-authored text. Never logged, audited, or put on a queue payload.

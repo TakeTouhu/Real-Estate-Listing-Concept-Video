@@ -13,7 +13,11 @@ const BASE: GenerationRequestFacts = {
   durationSeconds: 4,
   cameraMotion: "slow push in",
   aspectRatio: "16:9",
-  resolution: "1080p",
+  targetOutputResolution: "1080p",
+  nativeGenerationResolution: "1080p",
+  resolutionNormalization: "NONE",
+  nativeMeetsTarget: true,
+  modelKey: "wavespeed-open-video",
   providerName: "wavespeed",
   providerModelId: "wavespeed-ai/open-video/image-to-video",
 };
@@ -23,7 +27,10 @@ const hash = (overrides: Partial<GenerationRequestFacts> = {}): string =>
 
 describe("computeGenerationRequestHash", () => {
   it("returns a stable, self-describing digest", () => {
-    expect(hash()).toMatch(/^sha256:[0-9a-f]{64}$/);
+    // `v2` is part of the contract, not decoration: a V1 row and a V2 row must
+    // stay distinguishable in stored data forever, because the same request
+    // hashes differently under the two tuples (ADR-0034).
+    expect(hash()).toMatch(/^sha256:v2:[0-9a-f]{64}$/);
   });
 
   it("gives the same digest for the same request", () => {
@@ -36,7 +43,11 @@ describe("computeGenerationRequestHash", () => {
     // reach the digest.
     const reordered: GenerationRequestFacts = {
       providerModelId: BASE.providerModelId,
-      resolution: BASE.resolution,
+      nativeMeetsTarget: BASE.nativeMeetsTarget,
+      resolutionNormalization: BASE.resolutionNormalization,
+      nativeGenerationResolution: BASE.nativeGenerationResolution,
+      targetOutputResolution: BASE.targetOutputResolution,
+      modelKey: BASE.modelKey,
       providerName: BASE.providerName,
       aspectRatio: BASE.aspectRatio,
       cameraMotion: BASE.cameraMotion,
@@ -55,7 +66,14 @@ describe("what changes the request", () => {
     ["the duration", { durationSeconds: 5 }],
     ["the camera motion", { cameraMotion: "slow pull out" }],
     ["the aspect ratio", { aspectRatio: "9:16" }],
-    ["the resolution", { resolution: "720p" }],
+    ["the output the customer asked for", { targetOutputResolution: "720p" }],
+    ["what the model is asked to generate", { nativeGenerationResolution: "768P" }],
+    // Both of these are derivable from today's catalog, and both are still
+    // identity. A catalog correction to how a model reaches 1080p must not make
+    // a new request compare equal to one admitted under the old plan.
+    ["how the target is reached", { resolutionNormalization: "UPSCALE" }],
+    ["whether the native generation meets the target", { nativeMeetsTarget: false }],
+    ["the selected model", { modelKey: "minimax-h3-max" }],
     ["the provider", { providerName: "fake" }],
     ["the model", { providerModelId: "some-other/model" }],
   ] as const)("a different %s is a different request", (_label, overrides) => {
@@ -115,6 +133,44 @@ describe("what does not change the request", () => {
   });
 });
 
+describe("the V2 tuple is pinned", () => {
+  /**
+   * A literal digest, deliberately.
+   *
+   * Every other test here is relative — it proves two hashes differ, which
+   * stays true under a reordered tuple, a renamed field, or an accidentally
+   * dropped one, as long as the change is applied to both sides. This one
+   * cannot: it fails the moment the tuple's order or membership changes at all.
+   *
+   * That matters because `requestHash` is stored. A silent change to how it is
+   * computed does not corrupt anything visibly — it makes every already-admitted
+   * attempt fail its own self-verification, and makes every in-flight request
+   * look new, which is a duplicate provider charge rather than an error.
+   *
+   * If this test fails, the correct response is almost never to update the
+   * expected value. It is to bump the identity version, as ADR-0034 did, so old
+   * rows stay distinguishable instead of being reinterpreted.
+   */
+  it("produces a known digest for a known request", () => {
+    expect(
+      computeGenerationRequestHash({
+        assetId: "ast_pin",
+        compiledPrompt: '{"preservation":["keep the window"]}',
+        durationSeconds: 5,
+        cameraMotion: "SLOW_PAN_LEFT",
+        aspectRatio: "16:9",
+        targetOutputResolution: "1080p",
+        nativeGenerationResolution: "768P",
+        resolutionNormalization: "UPSCALE",
+        nativeMeetsTarget: false,
+        modelKey: "minimax-h3-max",
+        providerName: "fal",
+        providerModelId: "minimax/h3-max/image-to-video",
+      }),
+    ).toBe("sha256:v2:b9d40169fa977c730c3dd8014fbeac0211fe706f1d7d59ed448243f88c23f617");
+  });
+});
+
 describe("encoding", () => {
   it("cannot be collided by a value containing a delimiter", () => {
     // Structure, not concatenation: no choice of separator can merge two
@@ -125,12 +181,12 @@ describe("encoding", () => {
   });
 
   it("is not the composition fingerprint", () => {
-    // Both are `sha256:<hex>` and both are canonical, but they answer different
+    // Both are canonical sha256 digests, but they answer different
     // questions and must never be interchanged: one identifies an approved
     // input set, this one identifies a single paid provider request.
-    expect(hash()).toMatch(/^sha256:/);
+    expect(hash()).toMatch(/^sha256:v2:/);
     expect(hash()).not.toBe(
-      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sha256:v2:0000000000000000000000000000000000000000000000000000000000000000",
     );
   });
 });

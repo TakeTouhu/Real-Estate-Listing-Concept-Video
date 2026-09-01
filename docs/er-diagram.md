@@ -148,7 +148,7 @@ erDiagram
     enum   status "DRAFT|STORYBOARD_READY|STORYBOARD_STALE"
     int    durationSeconds "requested; provider validation is Phase 4"
     string aspectRatio "provider-neutral"
-    string resolution "provider-neutral"
+    string targetOutputResolution "column `resolution`; CHECK 720p|1080p"
     string stylePreset "nullable"
     string cameraMotion "nullable"
     string prompt "nullable, untrusted user text"
@@ -183,9 +183,15 @@ erDiagram
     string sourceStoryboardSceneId "provenance, NO FK"
     string assetId "provenance, NO FK"
     int    sourceAnalysisRevision "provenance"
-    string requestHash "active-UK with videoProjectId"
+    string requestHash "active-UK with videoProjectId; sha256:v2: since 4C-3B-2B"
     string providerName "internal"
     string providerModelId "internal"
+    string requestResolution "nullable; V1 only, never written again"
+    string requestModelKey "nullable; V2 snapshot, all-or-none"
+    string requestTargetOutputResolution "nullable; CHECK 720p|1080p"
+    string requestNativeGenerationResolution "nullable; provider token, opaque"
+    string requestResolutionNormalization "nullable; CHECK NONE|DOWNSCALE|UPSCALE"
+    boolean requestNativeMeetsTarget "nullable; false = upscaled, not native"
     enum   state "8 values, default QUEUED"
     string providerPredictionId "nullable, internal only"
     datetime submittedAt "nullable"
@@ -282,6 +288,33 @@ erDiagram
   fail-closed on purpose — no physical deletion path exists today, and a future
   one must resolve retention policy for paid-attempt history deliberately rather
   than inheriting a cascade.
+
+### Request-identity versioning (Phase 4C-3B-2B, ADR-0034)
+
+Three CHECK constraints, added by raw SQL because Prisma cannot express them:
+
+- `video_projects_resolution_target_check` — the project's product target is
+  `720p` or `1080p`. Applied to the existing physical `resolution` column, which
+  the Prisma model now maps as `targetOutputResolution`. **The migration fails
+  closed** on any pre-existing value outside that set rather than rewriting a
+  customer's stated request.
+- `scene_generations_request_identity_version_check` — one request-identity
+  vocabulary per row, keyed off the version the `requestHash` itself states. A
+  `sha256:v2:` row carries all five V2 delivery columns and no
+  `requestResolution`; any other row carries none of the five. This forbids both
+  a partially populated V2 snapshot (which would look reconstructable and hash
+  to something else) and a row holding both vocabularies at once.
+- `scene_generations_target_output_resolution_check` and
+  `scene_generations_resolution_normalization_check` — the two closed
+  vocabularies, checked only when a value is present so legacy rows stay valid.
+
+None of the V2 columns is indexed: they are reconstruction payload, and identity
+lookups still use the `(videoProjectId, requestHash)` partial unique index.
+
+`requestResolution` is **retained and never written again**. V1 rows were hashed
+over it, so it is the only surviving record of what those attempts were admitted
+for; the V2 columns are never backfilled from it, because deciding which of its
+two meanings applied is exactly the ambiguity ADR-0034 removes.
 
 ## Deliberately not stored
 

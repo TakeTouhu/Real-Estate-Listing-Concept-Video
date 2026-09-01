@@ -57,7 +57,10 @@ export async function bootstrapWorker(
     // describes a request the model would reject is not a check of the wiring.
     durationSeconds: 5,
     aspectRatio: "16:9",
-    resolution: "720p",
+    // A native OpenVideo token, which for this model coincides with a product
+    // target. Written as the native field it is, so the self-check keeps
+    // describing a request the model would actually accept.
+    nativeGenerationResolution: "720p",
     requestHash: "bootstrap-self-check",
   };
   await provider.estimateCost(selfCheckInput);

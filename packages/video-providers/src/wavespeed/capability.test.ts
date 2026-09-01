@@ -29,7 +29,7 @@ import { mapToWaveSpeedRequest } from "./mapping";
 
 const settings = (o: Partial<GenerationRequestSettings> = {}): GenerationRequestSettings => ({
   durationSeconds: 5,
-  resolution: "1080p",
+  nativeGenerationResolution: "1080p",
   aspectRatio: "16:9",
   cameraMotion: null,
   negativePrompt: null,
@@ -51,7 +51,7 @@ describe("OpenVideo capability descriptor", () => {
   });
 
   it("declares exactly the documented resolutions", () => {
-    expect([...OPEN_VIDEO_CAPABILITY.resolutions]).toEqual(["480p", "720p", "1080p"]);
+    expect([...OPEN_VIDEO_CAPABILITY.nativeGenerationResolutions]).toEqual(["480p", "720p", "1080p"]);
   });
 
   it("declares aspect ratio as composition-owned, not provider-honoured", () => {
@@ -95,14 +95,17 @@ describe("admission against the real descriptor", () => {
     ).toThrow();
   });
 
-  it.each(["480p", "720p", "1080p"])("admits resolution %s", (resolution) => {
-    expect(() =>
-      assertSettingsSupported(settings({ resolution }), OPEN_VIDEO_CAPABILITY),
-    ).not.toThrow();
-  });
+  it.each(["480p", "720p", "1080p"])(
+    "admits native generation resolution %s",
+    (nativeGenerationResolution) => {
+      expect(() =>
+        assertSettingsSupported(settings({ nativeGenerationResolution }), OPEN_VIDEO_CAPABILITY),
+      ).not.toThrow();
+    },
+  );
 
-  it("refuses an undocumented resolution", () => {
-    expect(() => assertSettingsSupported(settings({ resolution: "4k" }), OPEN_VIDEO_CAPABILITY)).toThrow();
+  it("refuses an undocumented native generation resolution", () => {
+    expect(() => assertSettingsSupported(settings({ nativeGenerationResolution: "4k" }), OPEN_VIDEO_CAPABILITY)).toThrow();
   });
 
   it("admits any aspect ratio, because composition owns the guarantee", () => {
@@ -244,7 +247,7 @@ describe("a frozen generation model id survives configuration", () => {
         prompt: "p",
         durationSeconds: 5,
         aspectRatio: "16:9",
-        resolution: "1080p",
+        nativeGenerationResolution: "1080p",
         requestHash: "h",
       },
       "https://api.wavespeed.ai/api/v3",
@@ -298,7 +301,7 @@ describe("the PROMPT_RENDERED promise, now that a renderer exists", () => {
         prompt: renderPrompt(storedWithMotion(MOTION)),
         durationSeconds: 6,
         aspectRatio: "16:9",
-        resolution: "1080p",
+        nativeGenerationResolution: "1080p",
         requestHash: "h",
       },
       "https://api.wavespeed.ai/api/v3",

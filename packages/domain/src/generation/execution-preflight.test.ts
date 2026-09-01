@@ -3,7 +3,8 @@ import { AppError } from "@app/shared";
 import { DOWNLOAD_URL_TTL_SECONDS } from "../property/asset-service";
 import type { MediaAsset, MediaAssetStatus } from "../property/types";
 import type { SignedUrl } from "../property/ports";
-import type { VideoModelCapability, VideoModelCapabilityProvider } from "./capability";
+import type { VideoModelCapability } from "./capability";
+import type { VerifiedModelEntry, VideoModelCatalog, VideoModelEntry } from "./model-catalog";
 import type { SystemGenerationCandidate } from "./execution-ports";
 import {
   PREFLIGHT_SOURCE_URL_TTL_SECONDS,
@@ -93,18 +94,53 @@ class SequentialAssets implements PreflightAssets {
   }
 }
 
+const MODEL_KEY = "fixture-model";
+
 const CAPABILITY: VideoModelCapability = {
   providerName: "fake",
   providerModelId: "fake/image-to-video",
   durationSeconds: { kind: "RANGE", minSeconds: 1, maxSeconds: 10 },
-  resolutions: ["1080p"],
+  nativeGenerationResolutions: ["1080p"],
   aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
   negativePrompt: { kind: "UNSUPPORTED" },
   cameraMotion: { kind: "PROMPT_RENDERED" },
 };
 
-function capabilities(overrides: Partial<VideoModelCapability> = {}): VideoModelCapabilityProvider {
-  return { current: () => ({ ...CAPABILITY, ...overrides }) };
+const ENTRY: VerifiedModelEntry = {
+  key: MODEL_KEY,
+  providerName: "fake",
+  providerModelId: "fake/image-to-video",
+  displayName: "Fixture model",
+  tier: "RECOMMENDED",
+  recommended: true,
+  availability: { kind: "SELECTABLE" },
+  capability: CAPABILITY,
+  nativeGeneration: {
+    byTarget: {
+      "1080p": {
+        nativeGenerationResolution: { providerValue: "1080p" },
+        normalization: "NONE",
+        nativeMeetsTarget: true,
+      },
+    },
+  },
+  pricing: null,
+};
+
+/**
+ * A catalog holding exactly one entry, addressed the way preflight addresses
+ * it: by key.
+ *
+ * `find` is the only method, matching the narrowed dependency. A fixture that
+ * also offered `default()` would let a future edit reach for it and pass, which
+ * is the substitution the narrowing exists to make impossible.
+ */
+// `null` means "the catalog holds nothing", written as null rather than
+// undefined because an explicitly-passed `undefined` silently takes a default
+// parameter's value — which would have made the absent-model tests pass against
+// the present model.
+function catalog(entry: VideoModelEntry | null = ENTRY): Pick<VideoModelCatalog, "find"> {
+  return { find: (key: string) => (entry !== null && key === entry.key ? entry : undefined) };
 }
 
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
@@ -150,7 +186,12 @@ function generation(overrides: Partial<SceneGeneration> = {}): SceneGeneration {
     requestDurationSeconds: 5,
     requestCameraMotion: "SLOW_PAN_LEFT",
     requestAspectRatio: "16:9",
-    requestResolution: "1080p",
+    requestResolution: null,
+    requestModelKey: MODEL_KEY,
+    requestTargetOutputResolution: "1080p",
+    requestNativeGenerationResolution: "1080p",
+    requestResolutionNormalization: "NONE",
+    requestNativeMeetsTarget: true,
     requestRenderedPrompt: "Preservation rules:\n- keep the window",
     state: "QUEUED",
     providerPredictionId: null,
@@ -174,7 +215,11 @@ function generation(overrides: Partial<SceneGeneration> = {}): SceneGeneration {
       durationSeconds: base.requestDurationSeconds!,
       cameraMotion: base.requestCameraMotion,
       aspectRatio: base.requestAspectRatio!,
-      resolution: base.requestResolution!,
+      targetOutputResolution: base.requestTargetOutputResolution!,
+      nativeGenerationResolution: base.requestNativeGenerationResolution!,
+      resolutionNormalization: base.requestResolutionNormalization!,
+      nativeMeetsTarget: base.requestNativeMeetsTarget!,
+      modelKey: base.requestModelKey!,
       providerName: base.providerName,
       providerModelId: base.providerModelId,
     }),
@@ -194,11 +239,11 @@ interface Fixture {
 /** `observations` is read in order: the first for the pre-sign read, then the post-sign one. */
 function fixture(
   observations: readonly (MediaAsset | null)[] = [asset()],
-  capabilityOverrides: Partial<VideoModelCapability> = {},
+  entry: VideoModelEntry | null = ENTRY,
 ): Fixture {
   const assets = new SequentialAssets(observations);
   const storage = new FakeStorage();
-  return { deps: { assets, storage, capabilities: capabilities(capabilityOverrides) }, storage, assets };
+  return { deps: { assets, storage, models: catalog(entry) }, storage, assets };
 }
 
 async function refusalFrom(f: Fixture, candidate: SystemGenerationCandidate) {
@@ -228,27 +273,41 @@ describe("prepareQueuedGeneration — the prepared artifact", () => {
       prompt: "Preservation rules:\n- keep the window",
       durationSeconds: 5,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
+      nativeGenerationResolution: "1080p",
+      resolutionNormalization: "NONE",
+      nativeMeetsTarget: true,
       requestHash: gen.requestHash,
       sourceIdentity: { storageKey: KEY, mimeType: "image/jpeg", sha256: DIGEST_A },
     } satisfies PreparedGeneration);
   });
 
   it("submits the admitted settings, not whatever the row's neighbours now say", async () => {
-    // The asset is 4:3 and the deployment's model advertises only 16:9 / 1080p.
-    // The snapshot says 9:16 / 720p, so every other source of these values
-    // disagrees with it — and the snapshot is the one that must win.
+    // The asset is 4:3 and the catalog entry serves only 16:9, only a 1080p
+    // target, and only natively. The snapshot says 9:16, a 720p target reached
+    // by downscaling a 768P generation that does NOT meet it — so every other
+    // source of these values disagrees with it, and the snapshot must win.
+    //
+    // The upscale/`nativeMeetsTarget: false` pair is the one that matters: it is
+    // a claim about what the customer was promised, and re-deriving it from the
+    // entry would quietly upgrade this attempt to "native 1080p".
     const f = fixture([asset({ width: 640, height: 480 })]);
     const gen = generation({
       requestAspectRatio: "9:16",
-      requestResolution: "720p",
+      requestTargetOutputResolution: "720p",
+      requestNativeGenerationResolution: "768P",
+      requestResolutionNormalization: "DOWNSCALE",
+      requestNativeMeetsTarget: false,
       requestDurationSeconds: 3,
     });
 
     const prepared = await prepareQueuedGeneration(f.deps, candidateFor(gen));
 
     expect(prepared.aspectRatio).toBe("9:16");
-    expect(prepared.resolution).toBe("720p");
+    expect(prepared.targetOutputResolution).toBe("720p");
+    expect(prepared.nativeGenerationResolution).toBe("768P");
+    expect(prepared.resolutionNormalization).toBe("DOWNSCALE");
+    expect(prepared.nativeMeetsTarget).toBe(false);
     expect(prepared.durationSeconds).toBe(3);
   });
 
@@ -492,19 +551,58 @@ describe("refusals before signing", () => {
     const f = fixture();
 
     expect(
-      (await refusalFrom(f, candidateFor(generation({ requestHash: "sha256:wrong" })))).reason,
+      // A V2-versioned hash, so the row is reconstructable and the digest is
+      // genuinely compared. A `sha256:` hash would be refused one step earlier,
+      // as an unreconstructable V1 row — a different finding.
+      (await refusalFrom(f, candidateFor(generation({ requestHash: "sha256:v2:wrong" })))).reason,
     ).toBe("REQUEST_HASH_MISMATCH");
   });
 
   it.each([
     ["provider", { providerName: "wavespeed" }],
     ["model", { providerModelId: "fake/some-other-model" }],
-  ])("refuses when the deployment's %s no longer matches the admitted one", async (_l, cap) => {
-    const f = fixture([asset()], cap);
+  ])("refuses when the catalog's %s no longer matches the admitted one", async (_l, moved) => {
+    const f = fixture([asset()], { ...ENTRY, ...moved });
 
     expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe(
       "PROVIDER_IDENTITY_MISMATCH",
     );
+  });
+
+  it("refuses when the admitted model is no longer in the catalog", async () => {
+    // Not the same finding as a mismatch: nothing resolves, so there is no
+    // contract to disagree with. Falling back to a default model here would
+    // spend the customer's money on something they did not approve.
+    const f = fixture([asset()], null);
+
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe("MODEL_UNAVAILABLE");
+  });
+
+  it("refuses when the admitted model has been de-verified", async () => {
+    // An entry can lose `SELECTABLE` when its contract is withdrawn for
+    // re-verification. It structurally has no provider model id or capability
+    // then, so there is nothing to execute against.
+    const f = fixture([asset()], {
+      key: MODEL_KEY,
+      providerName: "fake",
+      displayName: "Fixture model",
+      tier: "RECOMMENDED",
+      recommended: false,
+      availability: { kind: "UNVERIFIED", missing: ["a re-verified capability contract"] },
+    });
+
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe("MODEL_UNAVAILABLE");
+  });
+
+  it("refuses an unavailable model before signing anything", async () => {
+    // Order matters commercially: a refusal that has already minted a download
+    // credential has handed out access for work that will never run.
+    const f = fixture([asset()], null);
+
+    await refusalFrom(f, candidateFor(generation()));
+
+    expect(f.storage.signed).toHaveLength(0);
+    expect(f.storage.existsCalls).toHaveLength(0);
   });
 
   it("refuses when the asset no longer exists", async () => {
@@ -664,6 +762,7 @@ describe("the refusal contract", () => {
       "ASSET_UPLOAD_FAILED",
       "STORAGE_UNAVAILABLE",
       "SIGNED_SOURCE_URL_UNUSABLE",
+      "MODEL_UNAVAILABLE",
     ];
     const terminal: PreflightRefusalReason[] = [
       "LEGACY_SNAPSHOT_MISSING",
@@ -683,9 +782,9 @@ describe("the refusal contract", () => {
     expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
   });
 
-  it("has exactly fourteen reasons", () => {
-    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(14);
-    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(14);
+  it("has exactly fifteen reasons", () => {
+    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(15);
+    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(15);
   });
 
   it("derives disposition from the reason rather than accepting one", () => {

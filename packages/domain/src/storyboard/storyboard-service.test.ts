@@ -62,7 +62,7 @@ function project(overrides: Partial<VideoProject> = {}): VideoProject {
     status: "DRAFT",
     durationSeconds: 12,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
     stylePreset: null,
     cameraMotion: "SLOW_PAN_LEFT",
     prompt: null,
@@ -194,7 +194,7 @@ describe("createProject", () => {
     name: "  Walkthrough  ",
     durationSeconds: 30,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
   };
 
   it("creates a project for a permitted writer, trimming the name", async () => {
@@ -292,22 +292,36 @@ describe("createProject", () => {
       service.createProject(ACTOR, ORG, PROP, { ...input, durationSeconds: 30.5 }),
     ).rejects.toThrow(/whole number/i);
     await expect(
-      service.createProject(ACTOR, ORG, PROP, { ...input, resolution: "" }),
-    ).rejects.toThrow(/aspect ratio and resolution/i);
+      service.createProject(ACTOR, ORG, PROP, { ...input, aspectRatio: "  " }),
+    ).rejects.toThrow(/aspect ratio is required/i);
   });
 
-  it("applies no provider capability rule to duration, ratio or resolution", async () => {
+  it("refuses an output resolution outside the product vocabulary", async () => {
+    // The type forbids it for ordinary callers; this proves the runtime check
+    // still refuses a value arriving through an untyped boundary, rather than
+    // storing a target no model entry can describe.
+    const { service } = harness({ project: null });
+    await expect(
+      service.createProject(ACTOR, ORG, PROP, {
+        ...input,
+        targetOutputResolution: "8k" as never,
+      }),
+    ).rejects.toThrow(/output resolution/i);
+  });
+
+  it("applies no provider capability rule to duration or ratio", async () => {
     // An unusual-but-structural request is accepted: judging it is Phase 4's
     // job, and inventing a limit here would be a provisional capability table.
+    // The output target is deliberately NOT in this list — it is a closed
+    // product vocabulary rather than a provider question (ADR-0034).
     const { service } = harness({ project: null });
     const created = await service.createProject(ACTOR, ORG, PROP, {
       ...input,
       durationSeconds: 987,
       aspectRatio: "21:9",
-      resolution: "8k",
     });
     expect(created.durationSeconds).toBe(987);
-    expect(created.resolution).toBe("8k");
+    expect(created.aspectRatio).toBe("21:9");
   });
 });
 

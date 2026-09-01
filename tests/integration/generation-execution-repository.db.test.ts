@@ -129,7 +129,7 @@ async function seedTenant(organizationId: string, propertyId: string, projectId:
       name: "Walkthrough",
       durationSeconds: 12,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
       createdBy: "usr_itest_ex",
     },
   });

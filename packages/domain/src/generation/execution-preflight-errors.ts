@@ -3,13 +3,14 @@ import { AppError } from "@app/shared";
 /**
  * Why a queued generation could not be prepared for submission.
  *
- * A closed vocabulary of fourteen, deliberately separate from the message text.
+ * A closed vocabulary of fifteen, deliberately separate from the message text.
  * Phase 4C-2B maps these to durable states and Phase 4C-3 decides what a worker
  * does next; both need something stable to switch on, and matching on prose is
  * how a refusal quietly changes meaning under a reworded string.
  *
  * Thirteen through Phase 4C-2B; `ASSET_SOURCE_UNIDENTIFIABLE` was added by
- * Phase 4C-3A-2a (ADR-0029).
+ * Phase 4C-3A-2a (ADR-0029) and `MODEL_UNAVAILABLE` by Phase 4C-3B-2B
+ * (ADR-0034).
  *
  * Nothing here describes a provider outcome. Preflight never contacts a
  * provider, so no reason in this list can mean "we may have been charged" —
@@ -25,6 +26,16 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "REQUEST_HASH_MISMATCH",
   /** The deployment now serves a different provider or model than was admitted. */
   "PROVIDER_IDENTITY_MISMATCH",
+  /**
+   * The model this attempt was admitted under is not selectable in the current
+   * catalog — the key is absent, or the entry is no longer verified.
+   *
+   * Separate from `PROVIDER_IDENTITY_MISMATCH`, which is the *opposite*
+   * finding: there the entry resolves and disagrees with the row. Here nothing
+   * resolves, so there is no contract to disagree with, and an operator sent to
+   * "the deployment was repointed" would be looking at the wrong thing.
+   */
+  "MODEL_UNAVAILABLE",
   /** No asset with that id inside the generation's own organization. */
   "ASSET_NOT_FOUND",
   /** The asset exists but is still being uploaded, scanned or processed. */
@@ -92,6 +103,12 @@ const REASON_DISPOSITION: Record<PreflightRefusalReason, PreflightDisposition> =
   LEGACY_PROMPT_MISSING: "TERMINAL",
   REQUEST_HASH_MISMATCH: "TERMINAL",
   PROVIDER_IDENTITY_MISMATCH: "TERMINAL",
+  // Retryable under the same-identity criterion, and only that: a catalog entry
+  // restored or promoted from `UNVERIFIED` is exactly the world change the
+  // disposition describes, and the attempt's own frozen key and provider model
+  // id are unchanged — if the restored entry disagrees with them, the identity
+  // check refuses it terminally on the next pass. Nothing retries automatically.
+  MODEL_UNAVAILABLE: "RETRYABLE",
   ASSET_NOT_FOUND: "TERMINAL",
   ASSET_NOT_READY: "RETRYABLE",
   ASSET_UPLOAD_FAILED: "RETRYABLE",

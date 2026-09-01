@@ -8,6 +8,7 @@ import {
   computeGenerationRequestHash,
   prepareQueuedGeneration,
   type ExecutionPreflightDeps,
+  type VerifiedModelEntry,
   type VideoModelCapability,
 } from "@app/domain";
 
@@ -44,14 +45,42 @@ const prisma = new PrismaClient();
 const execution = createPrismaSceneGenerationExecutionRepository(prisma);
 const { assets } = createPrismaPropertyRepositories(prisma);
 
+const MODEL_KEY = "fixture-model";
+
 const CAPABILITY: VideoModelCapability = {
   providerName: "fake",
   providerModelId: "fake/image-to-video",
   durationSeconds: { kind: "RANGE", minSeconds: 1, maxSeconds: 10 },
-  resolutions: ["1080p"],
+  nativeGenerationResolutions: ["1080p"],
   aspectRatios: { kind: "PROVIDER_HONORED", ratios: ["16:9"] },
   negativePrompt: { kind: "UNSUPPORTED" },
   cameraMotion: { kind: "PROMPT_RENDERED" },
+};
+
+const ENTRY: VerifiedModelEntry = {
+  key: MODEL_KEY,
+  providerName: "fake",
+  providerModelId: "fake/image-to-video",
+  displayName: "Fixture model",
+  tier: "RECOMMENDED",
+  recommended: true,
+  availability: { kind: "SELECTABLE" },
+  capability: CAPABILITY,
+  nativeGeneration: {
+    byTarget: {
+      "1080p": {
+        nativeGenerationResolution: { providerValue: "1080p" },
+        normalization: "NONE",
+        nativeMeetsTarget: true,
+      },
+    },
+  },
+  pricing: null,
+};
+
+/** Resolved by the attempt's own frozen key, exactly as preflight resolves it. */
+const models: ExecutionPreflightDeps["models"] = {
+  find: (key: string) => (key === ENTRY.key ? ENTRY : undefined),
 };
 
 /** Only the two narrowed capabilities preflight declares. */
@@ -115,7 +144,7 @@ beforeEach(async () => {
       name: "Walkthrough",
       durationSeconds: 12,
       aspectRatio: "16:9",
-      resolution: "1080p",
+      targetOutputResolution: "1080p",
       createdBy: "usr_itest_pf",
     },
   });
@@ -134,7 +163,11 @@ beforeEach(async () => {
         durationSeconds: 5,
         cameraMotion: "SLOW_PAN_LEFT",
         aspectRatio: "16:9",
-        resolution: "1080p",
+        targetOutputResolution: "1080p",
+        nativeGenerationResolution: "1080p",
+        resolutionNormalization: "NONE",
+        nativeMeetsTarget: true,
+        modelKey: MODEL_KEY,
         providerName: "fake",
         providerModelId: "fake/image-to-video",
       }),
@@ -144,7 +177,12 @@ beforeEach(async () => {
       requestDurationSeconds: 5,
       requestCameraMotion: "SLOW_PAN_LEFT",
       requestAspectRatio: "16:9",
-      requestResolution: "1080p",
+      requestResolution: null,
+      requestModelKey: MODEL_KEY,
+      requestTargetOutputResolution: "1080p",
+      requestNativeGenerationResolution: "1080p",
+      requestResolutionNormalization: "NONE",
+      requestNativeMeetsTarget: true,
       requestRenderedPrompt: "Preservation rules:\n- keep the window",
       state: "QUEUED",
     },
@@ -168,7 +206,7 @@ describe.skipIf(!HAS_DB)("prepareQueuedGeneration against PostgreSQL", () => {
     const before = await prisma.sceneGeneration.findUnique({ where: { id: GENERATION } });
 
     const prepared = await prepareQueuedGeneration(
-      { assets, storage, capabilities: { current: () => CAPABILITY } },
+      { assets, storage, models },
       candidate!,
     );
 
@@ -200,7 +238,7 @@ describe.skipIf(!HAS_DB)("prepareQueuedGeneration against PostgreSQL", () => {
 
     await expect(
       prepareQueuedGeneration(
-        { assets, storage, capabilities: { current: () => CAPABILITY } },
+        { assets, storage, models },
         candidate!,
       ),
     ).rejects.toMatchObject({ reason: "ASSET_SOURCE_UNIDENTIFIABLE", disposition: "TERMINAL" });

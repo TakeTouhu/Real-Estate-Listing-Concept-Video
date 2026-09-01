@@ -66,6 +66,37 @@ export interface NativeGenerationResolution {
 }
 
 /**
+ * What composition would have to do to turn one native generation into one
+ * product target.
+ *
+ * A closed set, and a *persisted* one: it is frozen onto every admitted attempt
+ * and hashed into its request identity, so it is vocabulary rather than a
+ * private detail of the catalog (ADR-0034). `NONE` is not "nothing happened" in
+ * general — it is "no resolution change was required".
+ */
+export type ResolutionNormalization = "NONE" | "DOWNSCALE" | "UPSCALE";
+
+/** Every normalization, for exhaustive iteration and for the database enum. */
+export const RESOLUTION_NORMALIZATIONS: readonly ResolutionNormalization[] = [
+  "NONE",
+  "DOWNSCALE",
+  "UPSCALE",
+];
+
+const NORMALIZATION_MEMBERSHIP: Record<ResolutionNormalization, true> = {
+  NONE: true,
+  DOWNSCALE: true,
+  UPSCALE: true,
+};
+
+export function isResolutionNormalization(value: unknown): value is ResolutionNormalization {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(NORMALIZATION_MEMBERSHIP, value)
+  );
+}
+
+/**
  * What producing one product target on one model actually involves.
  *
  * `nativeMeetsTarget` is the load-bearing field. When it is `false` the
@@ -76,7 +107,7 @@ export interface NativeGenerationResolution {
 export interface TargetResolutionDelivery {
   readonly nativeGenerationResolution: NativeGenerationResolution;
   /** What composition would have to do. Recorded here, performed in Phase 5. */
-  readonly normalization: "NONE" | "DOWNSCALE" | "UPSCALE";
+  readonly normalization: ResolutionNormalization;
   readonly nativeMeetsTarget: boolean;
 }
 
