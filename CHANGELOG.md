@@ -3,6 +3,73 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2A: Multi-provider model catalog and two resolutions
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2a-completion.md`
+and ADR-0033.
+
+### Added
+
+- **A provider-neutral model catalog.** Four entries: MiniMax H3 Max on fal
+  (default/recommended), MiniMax H3 and Veo 3.1 (present but `UNVERIFIED`, so
+  unselectable), and WaveSpeed OpenVideo (economy, still selectable). The domain
+  owns the entry shape and the rules; `packages/video-providers` owns the vendor
+  values — the same split ADR-0019 made for capability. No fal, WaveSpeed,
+  MiniMax or Google field appears in a domain type, pinned at compile time.
+- **`TargetOutputResolution` and native generation resolution, as separate
+  concepts.** The system had one field called `resolution` meaning both, and it
+  looked correct only because OpenVideo generates natively at exactly the two
+  deliverables the product sells. H3 Max generates at `768P` and nothing else,
+  so a 1080p deliverable is a `768P` generation enlarged.
+  `planGenerationResolution` reports that as `nativeMeetsTarget: false`, and
+  nothing may describe such output as native 1080p. The relationship is **stated
+  per model per target, never inferred**: a native resolution is an opaque
+  `{ providerValue }`, because `768P` is not "768 pixels tall" independently of
+  aspect ratio (fal documents it at 16:9 as 1344×768) and `1080p` is a quality
+  class rather than a promise of 1920×1080. Normalization is recorded here and
+  performed by composition later.
+- **A discriminated entry union.** `UnverifiedModelEntry` declares
+  `capability?: never`, `nativeGeneration?: never`, `pricing?: never`, so an
+  unverified model *structurally cannot* carry operational facts — it holds
+  identity plus a list of what is missing, and the list is the work item. An
+  unreachable placeholder is still fabricated data; it reads as fact to the next
+  person, so the type forbids it rather than a convention discouraging it.
+- **`deepFreeze`.** `Object.freeze` is one level deep and `readonly` disappears
+  at runtime, so a "frozen" entry would still hand out a live `resolutions`
+  array. `OPEN_VIDEO_CAPABILITY` is deeply frozen at its source because it is
+  shared by reference with the catalog — one mutation through either reference
+  would poison both, and that descriptor decides what a paid request may ask
+  for.
+
+### Changed
+
+- `ProviderName` gains `"fal"` as a **catalog identity only**. `VIDEO_PROVIDER`
+  still accepts only `fake` and `wavespeed`, `createVideoProvider` has no fal
+  branch, and `VIDEO_PROVIDER=fal` fails validation — so no configuration can
+  point execution at an adapter that does not exist. Being the default *model*
+  and being an executable *request* are different things.
+- Every catalog entry carries no pricing. A placeholder reserves the wrong
+  number of credits while looking real, no `verified` boolean stands in for a
+  contract nobody has transcribed, and a time-limited launch discount must never
+  become a durable production assumption.
+- `SELECTABLE` means **eligible for product-level model selection against a
+  verified capability contract** — not that paid execution is reachable. H3 Max
+  is selectable and has no fal adapter at all.
+
+### Not in this milestone
+
+No persistence, request-identity, API or UI change: `VideoProject.resolution`,
+`SceneGeneration.requestResolution` and the request hash are untouched, and
+under today's single-field contract those values remain ambiguous. Separating
+them changes what is hashed and what stored rows mean, and must fail closed for
+legacy rows — that is Phase 4C-3B-2B. A full semantic ledger of every
+`resolution` occurrence is in the completion report.
+
+Also absent: any fal adapter, paid generation, real submission, worker loop,
+submission audit, polling, output ingestion, upscaling, composition, billing,
+automatic fallback, retry, or cost/quality routing. Existing generations cannot
+be retargeted by the default changing — the immutable snapshot is authoritative.
+
 ## [Unreleased] — Phase 4C-3B-1: Provider diagnostic sanitization
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b1-completion.md`

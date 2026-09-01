@@ -8,6 +8,7 @@ export * from "./execution-preflight-errors";
 export * from "./execution-source";
 export * from "./execution-preflight";
 export * from "./capability";
+export * from "./model-catalog";
 export * from "./prompt-render";
 export * from "./audit";
 export * from "./generation-service";
