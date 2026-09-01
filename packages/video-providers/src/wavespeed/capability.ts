@@ -1,4 +1,5 @@
 import { WAVESPEED_OPEN_VIDEO_MODEL_ID } from "@app/shared";
+import { deepFreeze } from "../deep-freeze";
 import type { VideoModelCapability, VideoModelCapabilityProvider } from "@app/domain";
 
 /**
@@ -14,6 +15,11 @@ import type { VideoModelCapability, VideoModelCapabilityProvider } from "@app/do
  * It lives beside the adapter rather than in the domain because these are
  * provider facts. The domain owns the *shape* of a capability and the rule
  * applied to it; the adapter package owns the values.
+ *
+ * **Deeply** frozen, not shallowly. This object is shared by reference with the
+ * model catalog so the two cannot drift, which also means one mutation through
+ * either reference poisons both — and `Object.freeze` would still hand out a
+ * live `resolutions` array (ADR-0033).
  */
 
 /** Documented request parameters, for the adapter and its tests to agree on. */
@@ -47,7 +53,7 @@ export const OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS = ["seed"] as const;
  *   it, that test demands this line become `UNSUPPORTED` rather than allowing
  *   itself to be relaxed (ADR-0020 §3).
  */
-export const OPEN_VIDEO_CAPABILITY: VideoModelCapability = Object.freeze({
+export const OPEN_VIDEO_CAPABILITY: VideoModelCapability = deepFreeze({
   providerName: "wavespeed",
   providerModelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
   // Documented as integer seconds, 3 through 20 inclusive (default 5).
