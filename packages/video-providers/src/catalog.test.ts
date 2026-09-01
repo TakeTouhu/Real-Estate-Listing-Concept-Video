@@ -164,26 +164,49 @@ describe("unverified models carry identity and nothing operational", () => {
    * No `heightPx: 0`, no 1-to-1-second duration range, no `"unverified"` token.
    * The entry has no slot for any of them.
    */
-  it.each(["minimax-h3", "veo-3-1"])("%s holds no fabricated operational value", (key) => {
+  /**
+   * The exact key set is the assertion: no `providerModelId`, no capability, no
+   * native policy, no pricing, and no room for a placeholder to return. A
+   * provider model id is where a paid request would be sent, and these are
+   * exactly the models whose contract nobody has frozen — Veo 3.1 publishes
+   * standard, Fast and other variants, so naming one would present an unmade
+   * choice as a decision.
+   */
+  it.each(["minimax-h3", "veo-3-1"])("%s holds no operational fact and no id", (key) => {
     const entry = catalog.find(key);
     if (entry === undefined) throw new Error("unreachable");
     expect(Object.keys(entry).sort()).toEqual([
       "availability",
       "displayName",
       "key",
-      "providerModelId",
       "providerName",
       "recommended",
       "tier",
     ]);
     expect(supportedTargetOutputResolutions(entry)).toEqual([]);
+    // No indirect holder either — no candidate id, no metadata bag.
+    expect(JSON.stringify(entry)).not.toContain("image-to-video");
   });
 
-  it("records what is missing rather than a bare flag", () => {
+  it("records what is unresolved, and no longer claims the endpoint is unknown", () => {
     const h3 = catalog.find("minimax-h3");
     if (h3?.availability.kind !== "UNVERIFIED") throw new Error("expected UNVERIFIED");
-    expect(h3.availability.missing).toContain("native generation resolution tokens");
-    expect(h3.availability.missing).toContain("pricing contract");
+    expect(h3.availability.missing).toContain("verified pricing contract");
+    // The route is known; the product contract is not. Saying otherwise was stale.
+    expect(h3.availability.missing.join(" ")).not.toContain("exact production endpoint");
+
+    const veo = catalog.find("veo-3-1");
+    if (veo?.availability.kind !== "UNVERIFIED") throw new Error("expected UNVERIFIED");
+    expect(veo.availability.missing).toContain(
+      "production variant selection and frozen endpoint contract",
+    );
+  });
+
+  it("keeps the verified entries' provider model ids intact", () => {
+    expect(catalog.default().providerModelId).toBe("minimax/h3-max/image-to-video");
+    const wavespeed = catalog.find("wavespeed-open-video");
+    if (wavespeed === undefined || !isSelectableModel(wavespeed)) throw new Error("unreachable");
+    expect(wavespeed.providerModelId).toBe(WAVESPEED_OPEN_VIDEO_MODEL_ID);
   });
 
   it("carries no pricing for any model, verified or not", () => {

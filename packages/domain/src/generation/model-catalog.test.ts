@@ -6,6 +6,7 @@ import {
   planGenerationResolution,
   supportedTargetOutputResolutions,
   type TargetOutputResolution,
+  type ModelEntryIdentity,
   type UnverifiedModelEntry,
   type VerifiedModelEntry,
   type VideoModelEntry,
@@ -76,7 +77,6 @@ const perTarget: VerifiedModelEntry = {
 const unverified: UnverifiedModelEntry = {
   key: "test-unverified",
   providerName: "test-provider",
-  providerModelId: "vendor/secret-endpoint",
   displayName: "Unverified",
   tier: "HIGH_RESOLUTION",
   recommended: false,
@@ -116,7 +116,8 @@ describe("an unverified entry cannot hold operational facts", () => {
    * argued they were safe because planning refused the entry. Unreachable
    * fabricated data is still fabricated data. Now the type forbids it.
    */
-  it("rejects a capability, a native policy or pricing at compile time", () => {
+  it("rejects an id, a capability, a native policy or pricing at compile time", () => {
+    type WithId = UnverifiedModelEntry & { providerModelId: string };
     type WithCapability = UnverifiedModelEntry & { capability: VideoModelCapability };
     type WithNative = UnverifiedModelEntry & {
       nativeGeneration: VerifiedModelEntry["nativeGeneration"];
@@ -125,33 +126,66 @@ describe("an unverified entry cannot hold operational facts", () => {
 
     // Each resolves to `never` on the forbidden member, which is what makes the
     // combination unconstructible rather than merely discouraged.
+    const noId: Assert<IsNever<WithId["providerModelId"]>> = true;
     const noCapability: Assert<IsNever<WithCapability["capability"]>> = true;
     const noNative: Assert<IsNever<WithNative["nativeGeneration"]>> = true;
     const noPricing: Assert<IsNever<WithPricing["pricing"]>> = true;
 
-    // And the union itself refuses such a literal.
-    type Fabricated = {
+    // And the union itself refuses such a literal — including the id-only case,
+    // which is the one that would otherwise look harmless.
+    type FabricatedCapability = {
       key: string;
       providerName: string;
-      providerModelId: string;
       displayName: string;
       tier: "PREMIUM";
       recommended: false;
       availability: { kind: "UNVERIFIED"; missing: readonly string[] };
       capability: VideoModelCapability;
     };
-    const notAnEntry: Assert<
-      IsExactly<Fabricated extends VideoModelEntry ? true : false, false>
+    type FabricatedId = {
+      key: string;
+      providerName: string;
+      displayName: string;
+      tier: "PREMIUM";
+      recommended: false;
+      availability: { kind: "UNVERIFIED"; missing: readonly string[] };
+      providerModelId: string;
+    };
+    const capabilityNotAnEntry: Assert<
+      IsExactly<FabricatedCapability extends VideoModelEntry ? true : false, false>
+    > = true;
+    const idNotAnEntry: Assert<
+      IsExactly<FabricatedId extends VideoModelEntry ? true : false, false>
     > = true;
 
-    expect([noCapability, noNative, noPricing, notAnEntry]).toEqual([true, true, true, true]);
+    expect([
+      noId,
+      noCapability,
+      noNative,
+      noPricing,
+      capabilityNotAnEntry,
+      idNotAnEntry,
+    ]).toEqual([true, true, true, true, true, true]);
+  });
+
+  /**
+   * The counterpart: a verified entry must still *require* an id. The rule is
+   * "an executable address exists only once the contract is verified", not
+   * "ids are optional everywhere".
+   */
+  it("still requires providerModelId on a verified entry", () => {
+    const required: Assert<IsExactly<VerifiedModelEntry["providerModelId"], string>> = true;
+    const absentFromSharedIdentity: Assert<
+      IsNever<Extract<keyof ModelEntryIdentity, "providerModelId">>
+    > = true;
+    expect([required, absentFromSharedIdentity]).toEqual([true, true]);
   });
 
   it("needs no placeholder value to exist at runtime", () => {
     // Only identity and the missing list. No zero, no empty array standing in
-    // for a contract, no invented token.
+    // for a contract, no invented token, and no executable address.
     expect(Object.keys(unverified).sort()).toEqual(
-      ["availability", "displayName", "key", "providerModelId", "providerName", "recommended", "tier"],
+      ["availability", "displayName", "key", "providerName", "recommended", "tier"],
     );
     expect(unverified.availability.missing.length).toBeGreaterThan(0);
   });
@@ -164,14 +198,14 @@ describe("an unverified entry cannot hold operational facts", () => {
     expect(supportedTargetOutputResolutions(unverified)).toEqual([]);
   });
 
-  it("names the model key and no provider endpoint in its refusal", () => {
+  it("names the model key and nothing else in its refusal", () => {
     try {
       planGenerationResolution(unverified, "720p");
       expect.unreachable("should have refused");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       expect(message).toContain("test-unverified");
-      expect(message).not.toContain("vendor/secret-endpoint");
+      expect(message).not.toContain("test-provider");
     }
   });
 });
