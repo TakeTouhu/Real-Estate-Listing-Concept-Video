@@ -44,6 +44,28 @@ export class InMemorySceneGenerationRepository implements SceneGenerationReposit
     return [...this.byId.values()];
   }
 
+  /**
+   * Test fixture: place a **historical** row directly into the store, bypassing
+   * `create`.
+   *
+   * This is the in-memory equivalent of seeding a legacy row with raw SQL, and
+   * it exists because `NewSceneGeneration` deliberately cannot express one:
+   * since ADR-0034 the current create port is V2-only, so a V1 attempt — or one
+   * predating ADR-0018's snapshot or ADR-0023's prompt freeze — is not something
+   * this application can write.
+   *
+   * Such rows still exist in the database and must stay readable, so tests need
+   * a way to produce them. Routing that through a named seed rather than
+   * loosening the create contract keeps the distinction visible: this is
+   * history being restored, not an admission being made.
+   *
+   * It performs no tenant check and no active-request check on purpose — it is
+   * standing in for data that is already there, not for a write.
+   */
+  seedHistorical(row: SceneGeneration): void {
+    this.byId.set(row.id, row);
+  }
+
   private owns(organizationId: string, videoProjectId: string): boolean {
     return this.projectOwners.get(videoProjectId) === organizationId;
   }

@@ -96,6 +96,36 @@ application:
 The constraint keys off the hash prefix, so the row's version is a fact it
 states rather than something a reader infers from which columns are populated.
 
+### 2b. The create port is V2-only; the read port keeps history
+
+`SceneGeneration` and `NewSceneGeneration` answer different questions, and the
+first revision of this milestone conflated them. Deriving the write type from
+the read type with a plain `Omit` inherited every nullable snapshot field, so
+application code could still express a populated legacy `requestResolution`, a
+partial V2 delivery snapshot, or a complete delivery snapshot on a row with no
+compiled prompt — a row born unexecutable.
+
+The two contracts are therefore split:
+
+- **current create port — V2 only.** Every reconstruction fact is required, the
+  five delivery facts are required, and `requestResolution` is typed as exactly
+  `null`. Not `string | null` with a convention: `null` makes the legacy
+  vocabulary *unwritable*, so the database's identity-version constraint agrees
+  with the type instead of being the only thing enforcing it.
+- **current read port — V1 + V2 history.** Unchanged and still nullable,
+  because those rows record work that may have been paid for.
+
+`requestCameraMotion` stays `string | null` on both: null there is a legitimate
+request carrying no camera motion, and the hash was computed over exactly that
+null. It is the one nullable field that is a value rather than an absence.
+
+There is deliberately no legacy create method, no compatibility flag and no
+union arm restoring V1 creation. A test needing a historical row seeds it
+directly — raw Prisma for the database suite, a named `seedHistorical` on the
+in-memory double — because that is what it is: history being restored, not an
+admission being made. Thirteen compile-time assertions pin the contract, and a
+mutation (M15) that loosens the type is proven to break them.
+
 ### 3. `VideoProject.targetOutputResolution` is a closed vocabulary, and the
 migration fails closed
 

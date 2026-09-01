@@ -4,6 +4,8 @@ import { createPrismaSceneGenerationRepository } from "@app/database";
 import {
   ACTIVE_SCENE_GENERATION_STATES,
   ActiveGenerationConflictError,
+  computeGenerationRequestHash,
+  generationRequestFactsFrom,
   SceneGenerationNotFoundError,
   type NewSceneGeneration,
   type SceneGenerationState,
@@ -894,31 +896,28 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(read.requestNativeMeetsTarget).toBeNull();
   });
 
-  it("stores a legacy row with a null snapshot and reads it back as null", async () => {
-    // The snapshot columns are still nullable on the create path — this
-    // milestone narrowed only `requestRenderedPrompt` — so a row that predates
-    // *that* contract must remain representable and must NOT acquire fabricated
-    // values.
+  it("reads back a legacy row whose snapshot is entirely null", async () => {
+    // Seeded through Prisma directly, **not** through `repo.create`. Since
+    // ADR-0034 the application's create port is V2-only, so a row like this is
+    // not something this system can write — it is history, and the read path
+    // must still represent it without fabricating values.
     //
-    // Written under a V1 hash, because that is what such a row actually has.
-    // The version constraint then requires the V2 delivery columns to be null
-    // as well, which is the same statement in the other vocabulary.
-    await repo.create(
-      ORG_A,
-      generation("gen_legacy_db", {
+    // A V1 hash, because that is what such a row actually has. The database's
+    // identity-version constraint then requires the V2 delivery columns to be
+    // null too, which is the same statement in the other vocabulary.
+    await prisma.sceneGeneration.create({
+      data: {
+        id: "gen_legacy_db",
+        videoProjectId: PROJECT_A,
+        sourceStoryboardSceneId: "scn_itest_gr",
+        assetId: "ast_itest_gr",
+        sourceAnalysisRevision: 1,
         requestHash: "sha256:legacyrow",
-        requestCompiledPrompt: null,
-        requestDurationSeconds: null,
-        requestCameraMotion: null,
-        requestAspectRatio: null,
-        requestResolution: null,
-        requestModelKey: null,
-        requestTargetOutputResolution: null,
-        requestNativeGenerationResolution: null,
-        requestResolutionNormalization: null,
-        requestNativeMeetsTarget: null,
-      }),
-    );
+        providerName: "fake",
+        providerModelId: "fake/image-to-video",
+        state: "QUEUED",
+      },
+    });
 
     const read = (await repo.findById(ORG_A, "gen_legacy_db"))!;
     expect(read.requestCompiledPrompt).toBeNull();
@@ -928,6 +927,51 @@ describe.skipIf(!HAS_DB)("request snapshot persistence", () => {
     expect(read.requestResolution).toBeNull();
     expect(read.requestModelKey).toBeNull();
     expect(read.requestNativeMeetsTarget).toBeNull();
+    expect(read.requestRenderedPrompt).toBeNull();
+  });
+
+  it("writes a complete, self-verifying V2 row through the current create port", async () => {
+    // The current-write contract against real PostgreSQL. `NewSceneGeneration`
+    // makes a V1 or partial row unwritable at compile time; this proves the row
+    // that does get written survives a round trip through the database with
+    // every fact intact, reconstructs, and reproduces its own stored identity.
+    //
+    // The hash is computed from this row's own facts rather than hard-coded,
+    // because agreement between the two is the whole assertion.
+    const draft = generation("gen_v2_write");
+    const created = await repo.create(ORG_A, {
+      ...draft,
+      requestHash: computeGenerationRequestHash({
+        assetId: draft.assetId,
+        compiledPrompt: draft.requestCompiledPrompt,
+        durationSeconds: draft.requestDurationSeconds,
+        cameraMotion: draft.requestCameraMotion,
+        aspectRatio: draft.requestAspectRatio,
+        targetOutputResolution: draft.requestTargetOutputResolution,
+        nativeGenerationResolution: draft.requestNativeGenerationResolution,
+        resolutionNormalization: draft.requestResolutionNormalization,
+        nativeMeetsTarget: draft.requestNativeMeetsTarget,
+        modelKey: draft.requestModelKey,
+        providerName: draft.providerName,
+        providerModelId: draft.providerModelId,
+      }),
+    });
+
+    // Read back from PostgreSQL rather than trusting the insert's return value.
+    const read = (await repo.findById(ORG_A, "gen_v2_write"))!;
+
+    expect(read.requestResolution).toBeNull();
+    expect(read.requestModelKey).not.toBeNull();
+    expect(read.requestTargetOutputResolution).not.toBeNull();
+    expect(read.requestNativeGenerationResolution).not.toBeNull();
+    expect(read.requestResolutionNormalization).not.toBeNull();
+    expect(read.requestNativeMeetsTarget).not.toBeNull();
+    expect(read.requestCompiledPrompt).not.toBeNull();
+    expect(read.requestDurationSeconds).not.toBeNull();
+    expect(read.requestAspectRatio).not.toBeNull();
+    expect(read.requestRenderedPrompt).not.toBeNull();
+
+    expect(computeGenerationRequestHash(generationRequestFactsFrom(read))).toBe(created.requestHash);
   });
 
   it("preserves the snapshot across an execution-field update", async () => {

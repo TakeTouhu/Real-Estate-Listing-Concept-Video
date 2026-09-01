@@ -36,10 +36,19 @@ and ADR-0034. This completes what 4C-3B-2A deliberately left undone.
   `requestNativeGenerationResolution`, `requestResolutionNormalization`,
   `requestNativeMeetsTarget`. Nullable and never backfilled: deciding what a V1
   `requestResolution` meant is exactly the ambiguity this removes.
-- **Three database CHECK constraints**, because a convention does not bind a
-  writer that is not this application. One row cannot hold both identity
-  vocabularies, cannot hold a partially populated V2 snapshot, and cannot hold a
-  snapshot disagreeing with the version its own `requestHash` states.
+- **Six database CHECK constraints**, because a convention does not bind a
+  writer that is not this application:
+  `video_projects_resolution_target_check`,
+  `scene_generations_target_output_resolution_check`,
+  `scene_generations_resolution_normalization_check`,
+  `scene_generations_model_key_nonblank_check`,
+  `scene_generations_native_resolution_nonblank_check`, and
+  `scene_generations_request_identity_version_check`. The last one is a single
+  physical constraint carrying three properties at once — V2 snapshot
+  completeness, V1/V2 vocabulary mutual exclusion, and hash-version consistency
+  — because all three are branches of the same `CASE` on the row's own hash
+  prefix, and splitting them would let a row satisfy each in isolation while
+  contradicting itself overall.
 - **Per-request model selection.** `GenerationService.startScene` takes an
   optional `modelKey`; omitted means the catalog default, resolved exactly once.
   An unknown key or an `UNVERIFIED` entry is refused with **no fallback** —

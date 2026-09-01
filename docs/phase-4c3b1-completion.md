@@ -137,8 +137,20 @@ Consequently `normalizeWaveSpeedError` no longer recognizes a `ProviderError`
   It is pinned at runtime instead — never populated — and the class's own added
   surface is pinned at compile time.
 - **Sanitization is not certainty.** 429 and 5xx still report `retryable: true`.
-  Nothing may call `createGeneration` until Phase 4C-3B-2 lands the result union
-  and the 400/401/403-only definitive allowlist.
+  Nothing may call `createGeneration` until the result union lands, which at the
+  time of this report meant Phase 4C-3B-2 and the 400/401/403-only definitive
+  allowlist.
+
+  > **Superseded, and left in place as the record of what was decided here.**
+  > The "400/401/403-only definitive allowlist" above was written when WaveSpeed
+  > was the only provider, and it placed a universal HTTP-status rule in the
+  > *common* contract. ADR-0033 made the architecture multi-provider and a
+  > queue-based provider need not express certainty through HTTP status at all,
+  > so the common contract now carries **no** universal allowlist — each adapter
+  > owns the evidence mapping its own provider into `ACCEPTED` /
+  > `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN`. Those three statuses remain
+  > the approved rule **for the WaveSpeed adapter specifically**. The active
+  > specification is in `docs/decisions/TODO.md`; this line is history.
 - **The response body is still read** by the HTTP client before being discarded.
   Not separating a body-read failure from a transport failure is 3B-2's work.
 - **Diagnostics are deliberately less specific**, and no replacement telemetry was

@@ -291,19 +291,21 @@ erDiagram
 
 ### Request-identity versioning (Phase 4C-3B-2B, ADR-0034)
 
-Three CHECK constraints, added by raw SQL because Prisma cannot express them:
+Six CHECK constraints, added by raw SQL because Prisma cannot express them:
 
 - `video_projects_resolution_target_check` — the project's product target is
   `720p` or `1080p`. Applied to the existing physical `resolution` column, which
   the Prisma model now maps as `targetOutputResolution`. **The migration fails
   closed** on any pre-existing value outside that set rather than rewriting a
   customer's stated request.
-- `scene_generations_request_identity_version_check` — one request-identity
-  vocabulary per row, keyed off the version the `requestHash` itself states. A
-  `sha256:v2:` row carries all five V2 delivery columns and no
-  `requestResolution`; any other row carries none of the five. This forbids both
-  a partially populated V2 snapshot (which would look reconstructable and hash
-  to something else) and a row holding both vocabularies at once.
+- `scene_generations_request_identity_version_check` — **one** physical
+  constraint carrying three properties, keyed off the version the `requestHash`
+  itself states: V2 snapshot completeness, V1/V2 vocabulary mutual exclusion,
+  and hash-version consistency. A `sha256:v2:` row carries all five V2 delivery
+  columns and no `requestResolution`; any other row carries none of the five.
+  The three are branches of one `CASE` rather than three constraints because
+  they constrain each other — split apart, a row could satisfy each in
+  isolation while still contradicting itself overall.
 - `scene_generations_target_output_resolution_check` and
   `scene_generations_resolution_normalization_check` — the two closed
   vocabularies, checked only when a value is present so legacy rows stay valid.

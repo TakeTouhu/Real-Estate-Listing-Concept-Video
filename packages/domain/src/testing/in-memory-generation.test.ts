@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   ACTIVE_SCENE_GENERATION_STATES,
   ActiveGenerationConflictError,
+  computeGenerationRequestHash,
+  generationRequestFactsFrom,
   SceneGenerationNotFoundError,
   TERMINAL_SCENE_GENERATION_STATES,
   type NewSceneGeneration,
@@ -282,22 +284,93 @@ describe("update", () => {
   it("represents a legacy attempt whose snapshot is absent", async () => {
     // Rows admitted before Phase 4B-1c carry nulls and must remain loadable
     // rather than being coerced into fabricated values.
-    await repo.create(
-      ORG_A,
-      generation("gen_legacy", {
-        requestHash: "sha256:legacy",
-        requestCompiledPrompt: null,
-        requestDurationSeconds: null,
-        requestCameraMotion: null,
-        requestAspectRatio: null,
-        requestResolution: null,
-      }),
-    );
+    //
+    // Seeded rather than created: since ADR-0034 the create port is V2-only, so
+    // this row is not something the application can write. That is the point —
+    // it is history being restored, and the read path must still handle it.
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    repo.seedHistorical({
+      id: "gen_legacy",
+      videoProjectId: PROJECT_A,
+      sourceStoryboardSceneId: "scn_gone",
+      assetId: "ast_1",
+      sourceAnalysisRevision: 1,
+      requestHash: "sha256:legacy",
+      providerName: "fixture-provider",
+      providerModelId: "fixture/model-v1",
+      requestCompiledPrompt: null,
+      requestDurationSeconds: null,
+      requestCameraMotion: null,
+      requestAspectRatio: null,
+      requestResolution: null,
+      requestModelKey: null,
+      requestTargetOutputResolution: null,
+      requestNativeGenerationResolution: null,
+      requestResolutionNormalization: null,
+      requestNativeMeetsTarget: null,
+      requestRenderedPrompt: null,
+      state: "QUEUED",
+      providerPredictionId: null,
+      submittedAt: null,
+      lastPolledAt: null,
+      normalizedErrorCode: null,
+      normalizedErrorMessage: null,
+      outputStorageKey: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
     const stored = (await repo.findById(ORG_A, "gen_legacy"))!;
     expect(stored.requestCompiledPrompt).toBeNull();
     expect(stored.requestDurationSeconds).toBeNull();
     expect(stored.requestAspectRatio).toBeNull();
     expect(stored.requestResolution).toBeNull();
+    // And the V2 columns too: no migration backfilled them.
+    expect(stored.requestModelKey).toBeNull();
+    expect(stored.requestNativeMeetsTarget).toBeNull();
+  });
+
+  it("produces a fully reconstructable V2 row through the current create port", async () => {
+    // The current-write contract, end to end. The type makes a V1 or partial
+    // row unwritable; this proves the row that *is* written is complete enough
+    // to reconstruct and to reproduce its own identity — which is the property
+    // the type is protecting, not the type shape itself.
+    // The hash is computed from this row's own facts rather than being the
+    // suite's placeholder, because the assertion below is precisely that the
+    // two agree. A hard-coded value would make it prove nothing.
+    const draft = generation("gen_v2_write");
+    const created = await repo.create(ORG_A, {
+      ...draft,
+      requestHash: computeGenerationRequestHash({
+        assetId: draft.assetId,
+        compiledPrompt: draft.requestCompiledPrompt,
+        durationSeconds: draft.requestDurationSeconds,
+        cameraMotion: draft.requestCameraMotion,
+        aspectRatio: draft.requestAspectRatio,
+        targetOutputResolution: draft.requestTargetOutputResolution,
+        nativeGenerationResolution: draft.requestNativeGenerationResolution,
+        resolutionNormalization: draft.requestResolutionNormalization,
+        nativeMeetsTarget: draft.requestNativeMeetsTarget,
+        modelKey: draft.requestModelKey,
+        providerName: draft.providerName,
+        providerModelId: draft.providerModelId,
+      }),
+    });
+
+    expect(created.requestResolution).toBeNull();
+    expect(created.requestModelKey).not.toBeNull();
+    expect(created.requestTargetOutputResolution).not.toBeNull();
+    expect(created.requestNativeGenerationResolution).not.toBeNull();
+    expect(created.requestResolutionNormalization).not.toBeNull();
+    expect(created.requestNativeMeetsTarget).not.toBeNull();
+    expect(created.requestCompiledPrompt).not.toBeNull();
+    expect(created.requestDurationSeconds).not.toBeNull();
+    expect(created.requestAspectRatio).not.toBeNull();
+    expect(created.requestRenderedPrompt).not.toBeNull();
+
+    // Reconstructs, and recomputes to exactly the hash stored beside it.
+    const facts = generationRequestFactsFrom(created);
+    expect(computeGenerationRequestHash(facts)).toBe(created.requestHash);
   });
 
   it("leaves identity and provenance untouched", async () => {

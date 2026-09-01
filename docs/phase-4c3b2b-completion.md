@@ -51,8 +51,14 @@ where that evidence was not yet discriminating, and closing those added more.
 
 A split that *would* work exists — separating request-identity V2 from model
 selection and the catalog-drift gate — but it is a different decomposition from
-the one authorized, and choosing it is the CTO's call. **This is the milestone's
-one BLOCKED condition; everything else in §43 passes.**
+the one authorized.
+
+**How this was resolved.** The implementation exceeded the original hard stop.
+The CTO granted an exact-head size exception rather than forcing an artificial
+split, on the measured composition above. Technical review then required two
+further corrections — the V2-only current-write type and the active-documentation
+corrections below — which necessarily moved the head, so the numbers in this
+table are the post-correction ones.
 
 ## What shipped
 
@@ -115,6 +121,34 @@ refused, and neither reads the default — asserted, because a fallback added
 later would be invisible otherwise.
 
 There is no `modelKey` column on `VideoProject` and no HTTP or UI caller yet.
+
+### 4b. The create port is V2-only
+
+`SceneGeneration` describes every row the system can **read**, history included.
+`NewSceneGeneration` describes what this application may **write** today, and
+the first revision conflated them: a plain `Omit` inherited every nullable
+snapshot field, so a populated legacy `requestResolution`, a partial V2
+snapshot, or a complete delivery snapshot on a row with no compiled prompt were
+all still expressible.
+
+The write type now requires every reconstruction fact and all five delivery
+facts, and pins `requestResolution` to exactly `null` — not `string | null` with
+a convention. That makes the legacy vocabulary *unwritable*: with the type
+narrowed, the M7 mutation (write the legacy column on a V2 row) is a **compile
+error** rather than something only the database and a test would catch.
+
+`requestCameraMotion` stays `string | null`, because null there is a legitimate
+request carrying no camera motion and the hash was computed over exactly that.
+
+There is no legacy create method, no compatibility flag and no union arm. Tests
+needing a historical row seed it directly — raw Prisma in the database suite, a
+named `seedHistorical` on the in-memory double — because that is history being
+restored, not an admission being made.
+
+Thirteen compile-time assertions in
+`packages/domain/src/generation/new-scene-generation-contract.test.ts` pin the
+contract in both directions, including that the **read** shape stays nullable so
+historical rows remain representable.
 
 ### 5. Execution resolves by the attempt's frozen key
 
@@ -182,8 +216,8 @@ vendor's name.
 | --- | --- |
 | `pnpm -r typecheck` + root `tsc --noEmit` | Pass |
 | `pnpm lint` (ESLint 9 flat) | Pass, no warnings |
-| `pnpm test` | **1,523 passed / 1,523** (67 files) |
-| `pnpm test:db` (live PostgreSQL 16) | **219 passed / 219** (9 files) |
+| `pnpm test` | **1,525 passed / 1,525** (68 files) |
+| `pnpm test:db` (live PostgreSQL 16) | **220 passed / 220** (9 files) |
 | `pnpm build` (Next.js production) | Pass |
 | `prisma migrate deploy` from an empty database | All 9 migrations applied |
 | `prisma migrate diff --exit-code` | **`No difference detected.`** |
@@ -235,6 +269,10 @@ vendor's name.
 | The migration performs no data modification | `tests/schema/resolution-identity-v2-migration.test.ts` |
 | The migration fails closed and adds every constraint, naming each V2 column in both directions | `tests/schema/resolution-identity-v2-migration.test.ts` |
 | The migration does not parse the provider's native token | `tests/schema/resolution-identity-v2-migration.test.ts` |
+| The create port cannot express a V1 row, a partial V2 snapshot, or a complete snapshot with a null prompt | `new-scene-generation-contract.test.ts` (13 compile-time assertions) |
+| The **read** shape stays nullable, so historical rows remain representable | `new-scene-generation-contract.test.ts` |
+| A row created through the current port is complete, reconstructs, and reproduces its own hash | `in-memory-generation.test.ts`, `generation-repository.db.test.ts` |
+| A legacy row seeded outside the create port still reads back as all-null | `in-memory-generation.test.ts`, `generation-repository.db.test.ts` |
 | Catalog drift — native token, normalization, `nativeMeetsTarget`, target withdrawn, capability narrowed | `execution-preflight.test.ts` |
 | An agreeing plan is not adopted, and the row is not rewritten | `execution-preflight.test.ts` |
 | The real catalog: H3 Max default, 720p→768P/DOWNSCALE/true, 1080p→768P/UPSCALE/**false** | `tests/generation/model-selection.test.ts` |
@@ -266,6 +304,22 @@ detection and is reported separately where it occurred.
 | M12 | Accept an `UNVERIFIED` model | 0 | 3 | yes |
 | M13 | Mint a signed URL before refusing a legacy row | 0 | 26 | yes |
 | M14 | Allow a drifted delivery plan through preflight | 1 | 6 | yes |
+| M15 | Loosen `NewSceneGeneration` so V1/incomplete creation is expressible | **35** (domain) / 9 (root) | 0 | yes |
+
+**M15's evidence is compile-time by design, and that is why its failing-test
+count is 0.** Vitest transpiles without type-checking, so a widened write
+contract produces no red test — it produces 35 `tsc` errors in the domain
+package, every one of them from the contract file's assertions, plus 9 at the
+root where the loosened type breaks real call sites. A ledger entry reporting
+only "0 failing tests" would have looked like a survival; it is the opposite.
+
+**M7 changed character after the correction.** With the write type narrowed,
+`requestResolution: targetOutputResolution` no longer compiles at all — the
+mutation has to be written with a deliberate `as unknown as null` cast to be
+applied. Both forms are reported: the honest form is a compile error, the
+cast form fails 6 unit tests. Its database count is now 0 rather than the 203
+reported pre-correction, because the DB suite exercises the repository directly
+and its fixtures are proper V2 rows; `GenerationService` is not on that path.
 
 **Three mutations initially survived, and each exposed a real gap that was
 closed. These are reported because they are the ledger's actual findings.**
@@ -299,6 +353,7 @@ pre-mutation copy:
 IDENTICAL  packages/domain/src/generation/request-identity.ts
 IDENTICAL  packages/domain/src/generation/generation-service.ts
 IDENTICAL  packages/domain/src/generation/execution-preflight.ts
+IDENTICAL  packages/domain/src/generation/ports.ts
 IDENTICAL  packages/video-providers/src/wavespeed/mapping.ts
 IDENTICAL  packages/video-providers/src/catalog.ts
 IDENTICAL  .../00000000000009_phase4c3b2b_resolution_identity_v2/migration.sql
@@ -337,6 +392,13 @@ established for camera motions and room types.
 absent-model preflight fixtures passed against the *present* model until the
 sentinel became `null`. Two tests were wrong in a way that would have made the
 new refusal look proven.
+
+**`NewSceneGeneration` was derived from the read shape**, which quietly
+inherited every nullable snapshot field and left V1 and partial-V2 creation
+expressible in application code. The database and the domain both refused such a
+row, so nothing was broken in practice — but "refused at runtime by two other
+layers" is a weaker guarantee than "unwritable", and the type was the layer that
+should have said so first. CTO technical review §1 required the narrowing.
 
 **The catalog-drift gate was missing from the first revision**, on the argument
 that the frozen snapshot is authoritative. It is — for *what* to submit. It is

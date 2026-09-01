@@ -17,17 +17,71 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
-- [ ] **Phase 4C-3B-2 is required before any paid submission.** 4C-3B-1 shipped
-      diagnostic sanitization only (ADR-0031). Still outstanding: the
-      `ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN` result union;
-      the definitive-rejection HTTP allowlist, approved as **exactly 400, 401,
-      403** — 422's current definitive treatment must **not** be carried forward,
-      and 429, every 5xx and every unlisted status default to
-      `SUBMISSION_UNKNOWN`; malformed-2xx semantics; manual redirect handling for
-      the paid create POST only; a request-specific 60 s submission timeout;
-      exactly-one-POST evidence; fake-provider submission outcomes. Until it
-      lands, 429 and 5xx still report `retryable: true`, so a retry policy
+- [ ] **Provider-agnostic submission certainty is required before any paid
+      submission.** 4C-3B-1 shipped diagnostic sanitization only (ADR-0031).
+      The remaining work is a **common contract plus per-adapter evidence**, and
+      the split matters — the original 4C-3B-2 design was written when WaveSpeed
+      was the only provider, and it put a universal HTTP-status rule in the
+      shared layer. That is no longer sound: since ADR-0033 the architecture is
+      multi-provider, and a queue-based provider need not express certainty
+      through HTTP status at all. ADR-0032 records the earlier decision as
+      history and is **not** rewritten; this entry is the active specification.
+
+      **Common, provider-agnostic:**
+
+      ```text
+      ProviderSubmissionOutcome
+        ACCEPTED
+        DEFINITIVELY_REJECTED
+        SUBMISSION_UNKNOWN
+      ```
+
+      The common contract carries **no universal HTTP-status allowlist**. Each
+      adapter owns the evidence mapping its own provider's response and
+      transport behaviour into these three outcomes, because only the adapter
+      knows what its provider's responses mean.
+
+      Invariants the common contract must preserve, whichever adapter is in play:
+
+      - exactly one paid submission attempt;
+      - no blind automatic POST retry;
+      - an ambiguous submission is **never** represented as an ordinary
+        retryable rejection;
+      - retryability and submission certainty are separate concepts — a thing
+        can be safe to retry, unsafe to retry, or unknown, and "unknown" is not
+        a kind of "retryable";
+      - transport and provider-response interpretation stays **inside** each
+        adapter, never in the shared layer.
+
+      **WaveSpeed adapter (approved, subject to re-verification when that work
+      is rebuilt):**
+
+      ```text
+      400 -> DEFINITIVELY_REJECTED
+      401 -> DEFINITIVELY_REJECTED
+      403 -> DEFINITIVELY_REJECTED
+      everything else after invocation -> SUBMISSION_UNKNOWN
+      ```
+
+      422's current definitive treatment must **not** be carried forward. Until
+      this lands, 429 and 5xx still report `retryable: true`, so a retry policy
       reading that flag would re-POST an ambiguous submission.
+
+      Also still outstanding for the WaveSpeed adapter: malformed-2xx semantics,
+      manual redirect handling for the paid create POST only, a request-specific
+      60 s submission timeout, exactly-one-POST evidence, and fake-provider
+      submission outcomes.
+
+      **fal adapter: the certainty classifier is deliberately unresolved.** Do
+      not infer it from WaveSpeed's. It must be established from the
+      authoritative fal queue/submission contract in the future fal-adapter and
+      submission-certainty milestone. No fal adapter exists today.
+
+      The old WaveSpeed-centric `4c3b2` branch remains **superseded and
+      read-only reference material**. It is not merged, rebased or
+      cherry-picked; individual ideas may be salvaged only after being
+      revalidated against this provider-agnostic contract, and no commit is
+      accepted merely because it existed there.
       **Required before any provider charge is possible.**
 - [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
       identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying

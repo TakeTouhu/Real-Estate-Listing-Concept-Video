@@ -1,4 +1,5 @@
 import type { StoryboardView } from "../storyboard/storyboard-service";
+import type { ResolutionNormalization, TargetOutputResolution } from "./model-catalog";
 import type { SceneGeneration, SceneGenerationState } from "./types";
 
 /**
@@ -44,31 +45,90 @@ export interface StoryboardReader {
 }
 
 /**
- * A generation attempt as it is first written. `createdAt` and `updatedAt` are
- * database-managed, matching the convention the other repositories use.
+ * A generation attempt as it is first written — **a V2 admission, and nothing
+ * else**.
  *
- * **`requestRenderedPrompt` is non-null here, though the column is nullable.**
- * The two are not in conflict: the column must stay nullable so rows admitted
- * before Phase 4C-0a remain representable, but *creating* an attempt without a
- * frozen prompt is not a state the system has — admission renders exactly once
- * and always has the string in hand (ADR-0023 §1).
+ * `createdAt` and `updatedAt` are database-managed, matching the convention the
+ * other repositories use.
  *
- * Narrowing it here is the difference between "we always pass it" and "it cannot
- * be omitted". `Omit`-inheriting `string | null` made a null-prompt attempt
- * expressible, and an attempt with no frozen prompt is one the worker can never
- * submit — a row that is born unexecutable. That is a compile error now rather
- * than a runtime refusal discovered by whoever tries to run it.
+ * ## Why this is narrower than the row it creates
  *
- * A legacy null therefore arrives only from a row written before the migration,
- * never from this path, which is exactly what `frozenExecutionPromptFrom`'s
- * fail-closed refusal is for.
+ * {@link SceneGeneration} describes *every* row the system can read, which
+ * includes history: attempts admitted before ADR-0018's snapshot, before
+ * ADR-0023's prompt freeze, and before ADR-0034's V2 resolution identity. Those
+ * rows carry nulls, and they must stay readable — they are the record of work
+ * that may have been paid for.
+ *
+ * Creating one is a different question entirely. Nothing in this system can
+ * legitimately write a V1 attempt today: there is no code path that produces an
+ * ambiguous `requestResolution`, no path that produces a partial delivery
+ * snapshot, and no path that admits a scene without a compiled prompt. Deriving
+ * this type from the read shape with a plain `Omit` inherited every one of those
+ * nullable fields anyway, which made all three expressible — a row born
+ * unexecutable, or worse, one carrying both request-identity vocabularies at
+ * once so that nothing says which it was admitted under.
+ *
+ * So the two contracts are split on purpose:
+ *
+ * - **current create port — V2 only.** Every reconstruction fact is required,
+ *   the five delivery facts are required, and `requestResolution` is pinned to
+ *   `null` rather than merely defaulted.
+ * - **current read port — V1 + V2 history.** Unchanged, still nullable.
+ *
+ * `requestResolution: null` is the sharpest part. A type of `string | null`
+ * would let a caller pass `"1080p"` and produce exactly the row ADR-0034
+ * removed; `null` makes the legacy vocabulary *unwritable* rather than merely
+ * discouraged, and the database's identity-version constraint then agrees with
+ * the type instead of being the only thing enforcing it.
+ *
+ * There is deliberately **no** legacy create method, no compatibility flag and
+ * no union arm that would restore V1 creation. A test needing a historical row
+ * seeds it through the database directly, because that is what it is: history,
+ * not something this application produces.
+ *
+ * `requestCameraMotion` stays `string | null` — null there is a legitimate
+ * request that carries no camera motion, and the hash was computed over exactly
+ * that null. It is the one nullable field that is a *value* rather than an
+ * absence.
  */
 export type NewSceneGeneration = Omit<
   SceneGeneration,
-  "createdAt" | "updatedAt" | "requestRenderedPrompt"
+  | "createdAt"
+  | "updatedAt"
+  | "requestRenderedPrompt"
+  | "requestCompiledPrompt"
+  | "requestDurationSeconds"
+  | "requestAspectRatio"
+  | "requestResolution"
+  | "requestModelKey"
+  | "requestTargetOutputResolution"
+  | "requestNativeGenerationResolution"
+  | "requestResolutionNormalization"
+  | "requestNativeMeetsTarget"
 > & {
   /** Always present: a new attempt is rendered at admission, never later. */
   readonly requestRenderedPrompt: string;
+
+  /** The reconstruction facts. Required, because admission always has them. */
+  readonly requestCompiledPrompt: string;
+  readonly requestDurationSeconds: number;
+  readonly requestAspectRatio: string;
+
+  /**
+   * Pinned to `null`, not merely nullable.
+   *
+   * This is the V1 vocabulary. It is retained on the read shape so historical
+   * rows keep their only surviving record of what they were admitted for, and it
+   * is unwritable here so no new row can ever acquire one (ADR-0034).
+   */
+  readonly requestResolution: null;
+
+  /** The V2 delivery snapshot. All five, always, or it is not an admission. */
+  readonly requestModelKey: string;
+  readonly requestTargetOutputResolution: TargetOutputResolution;
+  readonly requestNativeGenerationResolution: string;
+  readonly requestResolutionNormalization: ResolutionNormalization;
+  readonly requestNativeMeetsTarget: boolean;
 };
 
 /**
