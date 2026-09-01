@@ -20,13 +20,26 @@ and ADR-0033.
   concepts.** The system had one field called `resolution` meaning both, and it
   looked correct only because OpenVideo generates natively at exactly the two
   deliverables the product sells. H3 Max generates at `768P` and nothing else,
-  so a 1080p deliverable is a 768-line generation enlarged.
+  so a 1080p deliverable is a `768P` generation enlarged.
   `planGenerationResolution` reports that as `nativeMeetsTarget: false`, and
-  nothing may describe such output as native 1080p. Normalization is recorded
-  here and performed by composition later.
-- **`ModelAvailability`**, carrying *what is missing* rather than a bare flag —
-  MiniMax H3's native output is documented only as "2K", which has no single
-  reading in lines, so nothing invents one and the model stays unselectable.
+  nothing may describe such output as native 1080p. The relationship is **stated
+  per model per target, never inferred**: a native resolution is an opaque
+  `{ providerValue }`, because `768P` is not "768 pixels tall" independently of
+  aspect ratio (fal documents it at 16:9 as 1344×768) and `1080p` is a quality
+  class rather than a promise of 1920×1080. Normalization is recorded here and
+  performed by composition later.
+- **A discriminated entry union.** `UnverifiedModelEntry` declares
+  `capability?: never`, `nativeGeneration?: never`, `pricing?: never`, so an
+  unverified model *structurally cannot* carry operational facts — it holds
+  identity plus a list of what is missing, and the list is the work item. An
+  unreachable placeholder is still fabricated data; it reads as fact to the next
+  person, so the type forbids it rather than a convention discouraging it.
+- **`deepFreeze`.** `Object.freeze` is one level deep and `readonly` disappears
+  at runtime, so a "frozen" entry would still hand out a live `resolutions`
+  array. `OPEN_VIDEO_CAPABILITY` is deeply frozen at its source because it is
+  shared by reference with the catalog — one mutation through either reference
+  would poison both, and that descriptor decides what a paid request may ask
+  for.
 
 ### Changed
 
@@ -35,9 +48,13 @@ and ADR-0033.
   branch, and `VIDEO_PROVIDER=fal` fails validation — so no configuration can
   point execution at an adapter that does not exist. Being the default *model*
   and being an executable *request* are different things.
-- Every catalog entry carries `pricing: null`. A placeholder reserves the wrong
-  number of credits while looking real, and no `verified` boolean stands in for
-  a contract nobody has transcribed.
+- Every catalog entry carries no pricing. A placeholder reserves the wrong
+  number of credits while looking real, no `verified` boolean stands in for a
+  contract nobody has transcribed, and a time-limited launch discount must never
+  become a durable production assumption.
+- `SELECTABLE` means **eligible for product-level model selection against a
+  verified capability contract** — not that paid execution is reachable. H3 Max
+  is selectable and has no fal adapter at all.
 
 ### Not in this milestone
 

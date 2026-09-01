@@ -23,7 +23,7 @@ The system has one field called `resolution`, and it means two different things
 at once. For OpenVideo the two happen to be the same string — it generates
 natively at `720p` and `1080p`, which are also the deliverables the product
 offers — so a single field looked correct. H3 Max generates natively at `480P`
-or `768P` and at nothing else. A 1080p deliverable from H3 Max is a 768-line
+or `768P` and at nothing else. A 1080p deliverable from H3 Max is a `768P`
 generation that has been enlarged. A single field cannot say that, and a system
 that cannot say it will eventually claim native 1080p detail it never produced.
 
@@ -36,15 +36,33 @@ that cannot say it will eventually claim native 1080p detail it never produced.
 - **native generation resolution** — what the selected provider/model is asked
   to generate. Provider-specific, open, never a product promise.
 
-They are structurally distinct types, not two strings with different names. A
-native value is a `{ providerValue, heightPx }` pair; a target is a member of a
-closed union; neither is assignable to the other, and a compile-time test pins
-that.
+They are structurally distinct types, not two strings with different names.
 
-`planGenerationResolution(entry, target)` answers what producing a given
-deliverable on a given model actually involves, and its load-bearing field is
-`nativeMeetsTarget`. For H3 Max at 1080p that is **`false`**, and nothing in the
-product may describe such an output as native 1080p.
+**A native resolution is opaque — `{ providerValue }` and nothing else.** An
+earlier revision of this milestone paired the token with a `heightPx` and
+compared it arithmetically against an assumed target height. Review rejected
+that, correctly, and the reason is worth recording: `768P` is not "video height
+768" independently of aspect ratio — fal documents 768P at 16:9 as 1344×768, and
+image-to-video output follows the supplied image's ratio, so the raster size
+varies with the source. A product label like `1080p` is likewise a **quality
+class**, not a promise of 1920×1080; this service supports multiple aspect
+ratios including future vertical and square media. Deriving the relationship by
+parsing vendor strings or assuming a height is inference dressed as arithmetic.
+
+**The relationship is therefore stated per model, per target**, in the model's
+own policy, and `planGenerationResolution` is a *lookup* rather than a
+calculation. Its load-bearing field is `nativeMeetsTarget`:
+
+| Model | Target | Native token | Normalization | `nativeMeetsTarget` |
+| --- | --- | --- | --- | --- |
+| H3 Max | 720p | `768P` | DOWNSCALE | `true` |
+| H3 Max | 1080p | `768P` | UPSCALE | **`false`** |
+| OpenVideo | 720p | `720p` | NONE | `true` |
+| OpenVideo | 1080p | `1080p` | NONE | `true` |
+
+Nothing in the product may describe an H3 Max 1080p output as native 1080p. The
+supported targets are the **keys of that policy**, so no second array can
+disagree with it.
 
 ### 2. Normalization is composition's job, and is only *recorded* here
 
@@ -63,10 +81,31 @@ anywhere in the domain types, and a compile-time test asserts it — the risk is
 not that someone adds `falQueueUrl` today, but that a later adapter needs one
 field, adds it where it is convenient, and the domain quietly learns about fal.
 
-### 4. Present in the catalog ≠ selectable
+### 4. An unverified entry structurally cannot hold operational facts
 
-`ModelAvailability` is `SELECTABLE` or `UNVERIFIED` with a list of what is
-missing, because the list is the work item. Today:
+`VideoModelEntry` is a discriminated union of `VerifiedModelEntry` and
+`UnverifiedModelEntry`. A verified entry carries capability, native-generation
+policy and pricing; an unverified one carries identity plus a list of what is
+missing, and declares `capability?: never`, `nativeGeneration?: never`,
+`pricing?: never` — omitting them is fine, supplying any value is a type error.
+
+This replaces a first attempt that filled unverified entries with placeholders
+(`heightPx: 0`, a 1-to-1-second duration range, a literal `"unverified"` token)
+purely to satisfy one wide interface, on the argument that they were unreachable
+because `planGenerationResolution` refused the entry. **Unreachable fabricated
+data is still fabricated data**: it reads as fact to the next person, and the
+type system should make it impossible rather than a convention.
+
+### 5. `SELECTABLE` is selection eligibility, not execution readiness
+
+`SELECTABLE` means **eligible for product-level model selection against a
+verified capability contract**. It does *not* mean paid execution is reachable.
+Execution readiness is independently blocked by adapter availability, provider
+configuration, verified pricing, the future paid gate, and orchestration
+readiness — none of which exist. H3 Max is `SELECTABLE` and has no fal adapter
+at all, and its pricing is `null`.
+
+Today:
 
 | Model | Tier | Provider | Native | Availability |
 | --- | --- | --- | --- | --- |
@@ -75,18 +114,33 @@ missing, because the list is the work item. Today:
 | Veo 3.1 | PREMIUM | fal | — | UNVERIFIED |
 | WaveSpeed OpenVideo | ECONOMY | wavespeed | `720p` / `1080p` per target | SELECTABLE |
 
-MiniMax H3's documented native output is described as "2K", which has no single
-correct reading in lines. Rather than pick one, it stays `UNVERIFIED` with that
-stated as the missing item. Veo 3.1 needs its endpoint, resolution variants,
-duration, audio behaviour, aspect-ratio behaviour and pricing frozen first.
-`planGenerationResolution` refuses both.
+Neither unverified entry names a native token, a duration or a target policy at
+all — the type gives them nowhere to live. Their `missing` lists say what has to
+be read from the provider's documentation first: for MiniMax H3 that includes
+its native generation resolution tokens; for Veo 3.1, its endpoint and variant,
+resolution variants, duration, audio behaviour, aspect-ratio behaviour and
+pricing. `planGenerationResolution` refuses both.
 
 **H3 Max is the default, not a vendor lock-in.** The catalog exists precisely so
 the default can move, and WaveSpeed is retained as a supported economy path with
 its ADR-0019 descriptor reused *by reference* so this catalog cannot drift from
 it.
 
-### 5. Pricing is `null` until verified, and no boolean stands in for it
+### 6. Catalog data is deeply immutable at runtime
+
+`Object.freeze` is one level deep, so a "frozen" entry would still hand out a
+live `resolutions` array. `readonly` is a compile-time courtesy that disappears
+at runtime, does not survive a cast, and does not apply to a JavaScript consumer
+at all. A `deepFreeze` helper freezes the whole graph, and
+`OPEN_VIDEO_CAPABILITY` is deeply frozen **at its source** — it is shared by
+reference between the capability provider and the catalog precisely so the two
+cannot drift, which also means one mutation through either reference would
+poison both, and that descriptor decides what a paid request may ask for.
+
+Not implemented by serializing and re-parsing: that would produce a copy, which
+defeats the shared-reference identity the catalog depends on.
+
+### 7. Pricing is `null` until verified, and no boolean stands in for it
 
 Every entry carries `pricing: null` today. A placeholder number reserves the
 wrong number of credits while looking exactly like a real one, and a `verified:
@@ -96,7 +150,7 @@ with a documented `maxBilledSeconds` and a provenance note, because the one
 pricing contract already verified (OpenVideo) is resolution-dependent and the
 current `costPerSecondMinor` cannot represent it.
 
-### 6. `fal` is a catalog identity, not a wired adapter
+### 8. `fal` is a catalog identity, not a wired adapter
 
 `ProviderName` gains `"fal"`. `VIDEO_PROVIDER` deliberately does **not**: the env
 enum still accepts only `fake` and `wavespeed`, `createVideoProvider` has no fal
@@ -107,7 +161,7 @@ startup path can contact fal.
 **Being the default model and being an executable request are different things,
 and only the second costs money.** This ADR enables no paid provider execution.
 
-### 7. Existing generations are never retargeted
+### 9. Existing generations are never retargeted
 
 `SceneGeneration.providerName` and `providerModelId` are part of the immutable
 request snapshot, and request identity is computed from those persisted facts —
@@ -144,9 +198,15 @@ automatic fallback, automatic retry, and automatic cost/quality routing.
 - `planGenerationResolution` refuses two of four entries. Callers must handle
   refusal, which is the point — an unverified model cannot slip into a paid path.
 - Two capability vocabularies now coexist: `capability.resolutions` lists
-  **native** tokens (`480P`, `768P` for H3 Max), while `targetOutputResolutions`
-  lists **product** outputs. The overlap for OpenVideo (`720p`, `1080p` in both)
-  is a coincidence of that model, not a rule.
+  **native** tokens (`480P`, `768P` for H3 Max), while the policy keys list
+  **product** outputs. The overlap for OpenVideo (`720p`, `1080p` in both) is a
+  coincidence of that model, not a rule.
+- Actual raster normalization remains composition's (Phase 5). This milestone
+  records what would be required and performs none of it.
+- The WaveSpeed-centric Phase 4C-3B-2 branch is **superseded and read-only**. It
+  is not merged, rebased or cherry-picked; after 3B-2B a new provider-agnostic
+  submission-certainty milestone will salvage individually revalidated ideas
+  from it, and no commit is accepted merely because it existed there.
 - Production remains dormant: `createGeneration` has zero production callers, and
   there is no paid gate, submission audit, worker loop or provider POST.
 

@@ -70,20 +70,51 @@ and proposes Phase 4C-3B-2B below.
 
 ```ts
 // domain — shape and rules, provider-neutral
-type TargetOutputResolution = "720p" | "1080p";
-interface NativeGenerationResolution { providerValue: string; heightPx: number }
-type NativeGenerationPolicy = { kind: "FIXED"; … } | { kind: "PER_TARGET"; … };
-type ModelAvailability = { kind: "SELECTABLE" } | { kind: "UNVERIFIED"; missing: readonly string[] };
-interface VideoModelEntry { key; providerName; providerModelId; displayName; tier;
-  recommended; capability; nativeGeneration; targetOutputResolutions;
-  pricing: VerifiedModelPricing | null; availability }
-interface VideoModelCatalog { list(); default(); find(key) }
-planGenerationResolution(entry, target): GenerationResolutionPlan  // nativeMeetsTarget
+type TargetOutputResolution = "720p" | "1080p";          // a quality class, not a raster size
+interface NativeGenerationResolution { providerValue: string }   // opaque: no heightPx
+interface TargetResolutionDelivery {
+  nativeGenerationResolution: NativeGenerationResolution;
+  normalization: "NONE" | "DOWNSCALE" | "UPSCALE";
+  nativeMeetsTarget: boolean;
+}
+interface NativeGenerationPolicy {
+  byTarget: Readonly<Partial<Record<TargetOutputResolution, TargetResolutionDelivery>>>;
+}
+
+interface ModelEntryIdentity { key; providerName; providerModelId; displayName; tier; recommended }
+interface VerifiedModelEntry extends ModelEntryIdentity {
+  availability: { kind: "SELECTABLE" };
+  capability: VideoModelCapability;
+  nativeGeneration: NativeGenerationPolicy;
+  pricing: VerifiedModelPricing | null;
+}
+interface UnverifiedModelEntry extends ModelEntryIdentity {
+  availability: { kind: "UNVERIFIED"; missing: readonly string[] };
+  capability?: never; nativeGeneration?: never; pricing?: never;   // structurally forbidden
+}
+type VideoModelEntry = VerifiedModelEntry | UnverifiedModelEntry;
+
+isSelectableModel(entry): entry is VerifiedModelEntry
+supportedTargetOutputResolutions(entry): readonly TargetOutputResolution[]  // policy keys
+planGenerationResolution(entry, target): TargetResolutionDelivery           // a lookup
 
 // video-providers — the values
 createVideoModelCatalog()   // H3 Max (default), H3, Veo 3.1, WaveSpeed OpenVideo
+deepFreeze(value)           // runtime immutability for the whole graph
 ProviderName = "fake" | "wavespeed" | "fal"   // type only; the env enum is unchanged
 ```
+
+### Delivery policy, stated per model and per target
+
+| Model | Target | Native token | Normalization | `nativeMeetsTarget` |
+| --- | --- | --- | --- | --- |
+| H3 Max | 720p | `768P` | DOWNSCALE | `true` |
+| H3 Max | 1080p | `768P` | UPSCALE | **`false`** |
+| OpenVideo | 720p | `720p` | NONE | `true` |
+| OpenVideo | 1080p | `1080p` | NONE | `true` |
+
+Looked up, never calculated: `planGenerationResolution` returns the declared
+object by reference, so there is no parsing or height arithmetic to get wrong.
 
 **ADR-0033 carries the reasoning.** Zero schema, migration, request-identity,
 API and UI change.
@@ -94,7 +125,7 @@ API and UI change.
 | --- | --- |
 | `pnpm typecheck` | 0 errors |
 | `pnpm lint` | exit 0 |
-| `pnpm test` | **1436 passed**, 65 files (baseline 1399 / 63) |
+| `pnpm test` | **1452 passed**, 65 files (baseline 1399 / 63) |
 | `pnpm build` | exit 0 |
 | `pnpm test:db` | **213 passed**, 9 files (unchanged) |
 | `prisma migrate diff --from-migrations` | `No difference detected.` — no schema change |
@@ -104,10 +135,10 @@ API and UI change.
 | # | Requirement | Proven by |
 | --- | --- | --- |
 | 1 | H3 Max is the default product model | `catalog.default()` is `minimax-h3-max`; it is the only `recommended` entry |
-| 2 | H3 Max records native `768P`, not 720p/1080p | `nativeGeneration` deep-equals the `768P`/768 pair; `capability.resolutions` is `["480P","768P"]` and asserted **not** to contain `720p` or `1080p` |
+| 2 | H3 Max records native `768P`, not 720p/1080p | Both deliveries name `{ providerValue: "768P" }`; `capability.resolutions` is `["480P","768P"]` and asserted **not** to contain `720p` or `1080p` |
 | 3 | Target 720p coexists with native 768P | Plan: native `768P`, `DOWNSCALE`, `nativeMeetsTarget: true` |
 | 4 | Target 1080p coexists without claiming native 1080p | Plan: native `768P`, `UPSCALE`, **`nativeMeetsTarget: false`** |
-| 5 | A different native policy needs no orchestration change | A `PER_TARGET` model and a `FIXED` model go through the same `planGenerationResolution`, yielding opposite `nativeMeetsTarget` |
+| 5 | A different native policy needs no orchestration change | Two models with opposite policies go through the same `planGenerationResolution`, yielding opposite `nativeMeetsTarget`; an opaque token (`"studio-grade"`) works identically |
 | 6 | WaveSpeed's capability is intact | The entry holds `OPEN_VIDEO_CAPABILITY` **by reference** (`toBe`), and its resolutions/motion/negative-prompt declarations are re-asserted |
 | 7 | Persisted identities are not retargeted | A WaveSpeed-admitted fact set hashes identically before and after the default becomes fal; the same request on H3 Max hashes differently |
 | 8 | Legacy rows fail closed | Pinned at its **current** scope: `generationRequestFactsFrom` already refuses a row with `null` snapshot columns. Native-resolution fail-closed is 3B-2B — see limitations |
@@ -121,6 +152,23 @@ Plus: the target vocabulary refuses native tokens (`768P`, `480P`, `2K`,
 `720P`) and inherited names (`toString`, `__proto__`); refusals name the model
 key and not the provider endpoint; every entry is frozen and pricing is `null`
 throughout.
+
+## Review corrections applied
+
+| Blocker | Correction |
+| --- | --- |
+| **1 — fabricated capabilities on unverified entries** | `VideoModelEntry` is now a discriminated union. `UnverifiedModelEntry` declares `capability?: never`, `nativeGeneration?: never`, `pricing?: never`, so the placeholders that existed (`heightPx: 0`, a 1-to-1-second duration range, a `"unverified"` token) are **unconstructible**, not merely unreachable. Runtime tests assert both unverified entries have exactly seven identity keys and nothing else; type-level tests assert the invalid combination does not type-check. |
+| **1b — `SELECTABLE` wording too strong** | It now means *eligible for product-level model selection against a verified capability contract*, explicitly not paid-execution readiness. A test asserts H3 Max is selectable while the configured provider is `fake`, `VIDEO_PROVIDER=fal` is rejected, and its pricing is `null`. |
+| **2 — shallow freezing** | A `deepFreeze` helper freezes the whole graph, and `OPEN_VIDEO_CAPABILITY` is deeply frozen **at its source**. Six regression tests attempt real mutations — `resolutions` push and index assignment, a delivery's `nativeMeetsTarget`, a native `providerValue`, an availability `missing` list, the entry array, entry fields — and re-read through a fresh `createVideoModelCatalog()` and `createOpenVideoCapabilityProvider().current()` to prove state is unchanged. A seventh walks the graph asserting `Object.isFrozen` at every level. |
+| **3 — generic `heightPx` arithmetic** | Removed entirely. `NativeGenerationResolution` is `{ providerValue }` and nothing else; `TARGET_HEIGHT_PX` is gone; the relationship is stated per model per target and returned by reference. Tests assert no `heightPx`/`widthPx`/`pixels`/`lines` key exists, that the returned object *is* the declared one, and that a token with no numeric meaning at all (`"studio-grade"`) works. |
+
+Also added per §6: a renderer tie for H3 Max's `PROMPT_RENDERED` camera-motion
+claim. It does not assert the enum — it renders a compiled prompt with
+`SLOW_DOLLY_FORWARD` through the real `renderPrompt`, asserts the motion
+sentence is present, asserts it is absent when the scene carries no motion, and
+asserts the two renderings differ. If the renderer stopped carrying motion the
+declaration would have to become `UNSUPPORTED`, which is the same invariant
+OpenVideo already owes.
 
 ## Execution-safety answers
 
@@ -180,3 +228,7 @@ submission audit · no worker loop · no provider call.
 - **ADR-0032's submission certainty is still unimplemented.** Its
   WaveSpeed-centric plan is superseded; the outcome union will be
   provider-agnostic with status interpretation inside each adapter.
+- **The superseded 3B-2 branch is read-only reference.** It was not modified,
+  opened as a PR, merged, rebased or cherry-picked. After 3B-2B merges, a new
+  provider-agnostic submission-certainty milestone will salvage only
+  individually revalidated ideas from it.
