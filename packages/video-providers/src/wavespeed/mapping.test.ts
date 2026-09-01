@@ -52,6 +52,45 @@ describe("request mapping", () => {
     });
   });
 
+  it("sends the native token, never the product target", () => {
+    // The rename is the guard, but the rename alone would be satisfied by an
+    // adapter that happened to receive a target-shaped string. This pins the
+    // *value*: give the boundary a native token that is not a product target
+    // and it must appear on the wire unchanged.
+    const native = mapToWaveSpeedRequest(
+      { ...input, nativeGenerationResolution: "480p" },
+      "https://api.wavespeed.ai/api/v3",
+    );
+    expect(native.body.resolution).toBe("480p");
+  });
+
+  it("performs no translation between a product target and a native token", () => {
+    // A regression shape for the model this boundary does not serve yet.
+    //
+    // MiniMax H3 Max generates at `768P` and nothing else, so an admitted 1080p
+    // deliverable carries `target = 1080p, native = 768P`. Only the native token
+    // reaches a provider — `ProviderGenerationInput` cannot even express the
+    // target, which is what makes "the adapter must not send 1080p" structural
+    // rather than a rule someone has to remember.
+    //
+    // Written against this adapter because it is the only one that exists: there
+    // is deliberately no fal adapter (ADR-0033/0034), and nothing here contacts
+    // any provider. What it proves is that the *mapping* is a pass-through, so
+    // a future fal adapter inherits a boundary with no translation step to get
+    // wrong.
+    const h3MaxNative = "768P";
+    const request = mapToWaveSpeedRequest(
+      { ...input, nativeGenerationResolution: h3MaxNative },
+      "https://api.wavespeed.ai/api/v3",
+    );
+
+    expect(request.body.resolution).toBe(h3MaxNative);
+    expect(request.body.resolution).not.toBe("1080p");
+    // And no product-target field leaked onto the wire under any name.
+    expect(Object.keys(request.body)).not.toContain("targetOutputResolution");
+    expect(Object.keys(request.body)).not.toContain("target");
+  });
+
   it("adds seed only when a caller supplies one", () => {
     const withSeed = mapToWaveSpeedRequest({ ...input, seed: 42 }, "https://api.wavespeed.ai/api/v3");
     expect(Object.keys(withSeed.body).sort()).toEqual(

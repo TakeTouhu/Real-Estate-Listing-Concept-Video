@@ -130,6 +130,40 @@ describe("phase 4C-3B-2B migration fails closed", () => {
     expect(statements).toMatch(/'sha256:v2:%'/);
   });
 
+  it("requires the V2 snapshot to be all-or-none, naming every column twice", () => {
+    // Asserted per column, in both directions, rather than by the constraint's
+    // name alone. A constraint that checked only `requestModelKey` would still
+    // be named correctly and still mention the v2 prefix, while admitting a
+    // partial snapshot that looks reconstructable and hashes to something else.
+    const versionCheck = statements.slice(
+      statements.indexOf('"scene_generations_request_identity_version_check"'),
+    );
+    for (const [column] of V2_COLUMNS) {
+      expect(versionCheck).toMatch(new RegExp(`"${column}" IS NOT NULL`));
+      expect(versionCheck).toMatch(new RegExp(`"${column}" IS NULL`));
+    }
+    // And a V2 row must not also carry the ambiguous V1 column.
+    expect(versionCheck).toMatch(/"requestResolution" IS NULL/);
+  });
+
+  it("requires the model key and native token to be non-blank identifiers", () => {
+    // Not merely non-null: the all-or-none constraint is satisfied by `''`, so
+    // without this a row could present a complete-looking V2 snapshot naming no
+    // model and asking the provider to generate at nothing.
+    expect(statements).toMatch(/ADD CONSTRAINT "scene_generations_model_key_nonblank_check"/);
+    expect(statements).toMatch(
+      /ADD CONSTRAINT "scene_generations_native_resolution_nonblank_check"/,
+    );
+    expect(statements).toMatch(/btrim\("requestModelKey"\) <> ''/);
+  });
+
+  it("does not parse the provider's native token", () => {
+    // Non-blank is the only rule. A syntax check here would be this system
+    // inventing a vendor's vocabulary (ADR-0033: the token is opaque).
+    expect(statements).not.toMatch(/requestNativeGenerationResolution"\s+IN \(/);
+    expect(statements).not.toMatch(/requestNativeGenerationResolution".*~/);
+  });
+
   it("constrains both closed vocabularies only when a value is present", () => {
     // `IS NULL OR ...` in each, so a legacy row is unaffected rather than
     // retroactively invalid.

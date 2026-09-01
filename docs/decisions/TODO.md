@@ -55,12 +55,13 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       disclosure belongs is a product question, and it is a prerequisite for
       offering model selection in the UI (there is no model selector yet — the
       argument exists on the service and has no HTTP or UI caller).
-- [ ] **A V2 row can still be admitted whose delivery plan the current catalog
-      no longer states.** Preflight verifies the model key, provider and model
-      id, but deliberately does not re-derive the delivery plan — the snapshot
-      wins. That is correct for identity, and it means an operator has no report
-      of attempts whose frozen plan disagrees with today's catalog. Worth a
-      read-only reconciliation check before paid execution.
+- [ ] **A catalog delivery-plan correction silently strands admitted rows.**
+      Preflight now refuses them (`MODEL_DELIVERY_PLAN_CHANGED`, terminal), which
+      is the safe outcome — but nothing tells an operator *before* they edit the
+      catalog how many admitted attempts the edit would strand, and nothing
+      reports them afterwards. A read-only reconciliation query over
+      `scene_generations` against the current catalog is worth having before
+      paid execution, and is a prerequisite for any routine catalog correction.
 - [ ] **Verify MiniMax H3 and Veo 3.1 before either can be selected.** Both are
       in the catalog as `UNVERIFIED` with their missing items listed. H3 in
       particular is the model the product would want when native 1080p detail

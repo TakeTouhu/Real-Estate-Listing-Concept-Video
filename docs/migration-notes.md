@@ -481,7 +481,8 @@ that constrains a column customers have already written to.
 2. Adds five nullable columns to `scene_generations` — `requestModelKey`,
    `requestTargetOutputResolution`, `requestNativeGenerationResolution`,
    `requestResolutionNormalization`, `requestNativeMeetsTarget` — plus closed
-   vocabulary constraints on the latter two.
+   vocabulary constraints on two of them and non-blank constraints on the model
+   key and the native token.
 3. Adds `scene_generations_request_identity_version_check`, which makes the two
    request-identity vocabularies mutually exclusive per row, keyed off the
    version prefix the row's own `requestHash` carries.
@@ -533,6 +534,8 @@ what the immutable snapshot is for (ADR-0018).
 ```sql
 ALTER TABLE "scene_generations"
   DROP CONSTRAINT "scene_generations_request_identity_version_check",
+  DROP CONSTRAINT "scene_generations_native_resolution_nonblank_check",
+  DROP CONSTRAINT "scene_generations_model_key_nonblank_check",
   DROP CONSTRAINT "scene_generations_resolution_normalization_check",
   DROP CONSTRAINT "scene_generations_target_output_resolution_check",
   DROP COLUMN "requestNativeMeetsTarget",
@@ -559,10 +562,12 @@ to be rolled back with it.
   rows unchanged, all five V2 columns null.
 - Applied to the same database with the project's `resolution` set to `'4k'`:
   **aborted with the explicit message, and no column was added.**
-- Each constraint exercised directly: an off-vocabulary project target, a V2
-  hash with no snapshot, a V2 hash with a partial snapshot, a row carrying both
-  vocabularies, a V1 hash carrying a V2 snapshot, and an off-vocabulary
-  normalization were all rejected; a well-formed V2 row
-  (`768P`/`UPSCALE`/`false`) was accepted.
+- Each constraint exercised directly against a migrated database: an
+  off-vocabulary project target, a V2 hash with no snapshot, a V2 hash with a
+  partial snapshot, a row carrying both vocabularies, a V1 hash carrying a V2
+  snapshot, an off-vocabulary normalization, an off-vocabulary snapshot target,
+  and blank/empty model keys and native tokens were all rejected by their named
+  constraints; a well-formed V2 row (`768P`/`UPSCALE`/`false`) and a legacy V1
+  row were both accepted.
 - `tests/schema/resolution-identity-v2-migration.test.ts` parses the migration
   and asserts both the shape and the absence of every data-modifying statement.

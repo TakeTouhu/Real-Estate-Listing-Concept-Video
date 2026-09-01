@@ -86,7 +86,12 @@ application:
 - a row carrying **both vocabularies** — nothing says which one it was admitted
   under;
 - a snapshot **disagreeing with its own hash version** — a V2 snapshot under a
-  `sha256:` hash, or a V2 hash with no snapshot.
+  `sha256:` hash, or a V2 hash with no snapshot;
+- a **blank** model key or native token. Not merely non-null: the all-or-none
+  rule is satisfied by `''`, so without this a row could present a
+  complete-looking snapshot naming no model and asking the provider to generate
+  at nothing. Non-blank is the *only* rule on the native token — the token is
+  the vendor's and this system does not parse it (ADR-0033).
 
 The constraint keys off the hash prefix, so the row's version is a fact it
 states rather than something a reader infers from which columns are populated.
@@ -134,7 +139,8 @@ narrowed to `find` alone. `default()` is not on the dependency type at all,
 because falling back to the default model for an attempt admitted on another one
 is precisely the substitution this check exists to prevent.
 
-Two findings are distinguished, and a fifteenth refusal reason is added:
+Three findings are distinguished, and two refusal reasons are added, bringing
+the vocabulary to sixteen:
 
 - **`MODEL_UNAVAILABLE`** — the frozen key resolves to nothing, or to an entry
   that is no longer `SELECTABLE`. There is no contract left to compare against.
@@ -143,15 +149,32 @@ Two findings are distinguished, and a fifteenth refusal reason is added:
   describes, and the attempt's own frozen key and provider model id are
   unchanged. Nothing retries automatically.
 - **`PROVIDER_IDENTITY_MISMATCH`** — the entry resolves and disagrees with the
-  row. `TERMINAL`, unchanged.
+  row about *where the request goes*. `TERMINAL`, unchanged.
+- **`MODEL_DELIVERY_PLAN_CHANGED`** — the entry resolves and still points at the
+  same provider request, but the catalog now declares a different delivery plan
+  for the frozen target: a different native token, a different normalization, a
+  different answer on `nativeMeetsTarget`, no plan for that target at all, or a
+  capability that has narrowed until it no longer offers the frozen native
+  token. `TERMINAL`.
 
-Both refuse **before any storage credential is minted**, and a test asserts that
-ordering: a refusal that has already signed a download URL has handed out access
-for work that will never run.
+**Two authorities, and the check is agreement rather than adoption.** The frozen
+snapshot is the truth of what was approved; the current catalog is the authority
+on whether that is still safe to execute. When they agree, the snapshot is
+submitted — nothing is re-planned or re-hashed, and the prepared artifact is
+byte-identical to the frozen facts. When they disagree, *neither* answer is
+usable: submitting the frozen plan spends money on delivery semantics the
+product no longer stands behind, and submitting the current plan executes
+something the customer never approved. So preflight refuses and requires a new
+admission at the current semantics.
 
-The frozen delivery plan is **not** re-derived from the resolved entry. The
-snapshot wins, and the hash check already proved it is the one the identity was
-formed over.
+An earlier revision of this milestone omitted the agreement check on the
+grounds that "the snapshot wins". That is right about *what gets submitted* and
+wrong about *whether to submit at all* — it left a corrected catalog unable to
+stop an attempt admitted under the belief it superseded.
+
+All three refuse **before any storage credential is minted**, and tests assert
+that ordering — a refusal that has already signed a download URL has handed out
+access for work that will never run.
 
 ### 6. The provider boundary carries the native token, and nothing else
 
@@ -187,6 +210,12 @@ changed. None of the three is customer content.
 - The two derivable facts in the hash mean a catalog correction to a model's
   delivery policy makes new requests non-identical to old ones on that model.
   That is deliberate; it is not a bug to be optimized away by dropping them.
+- A catalog correction to a model's delivery policy makes every already-admitted
+  attempt on that model unexecutable (`MODEL_DELIVERY_PLAN_CHANGED`, terminal).
+  That is the intended trade: a correction means the product was wrong about
+  what it promised, and re-admitting is the honest remedy. There is no operator
+  report of how many rows a given correction would strand, which is recorded as
+  follow-up work.
 - Nothing here enables paid execution. There is still no fal adapter, no
   verified pricing, and no paid gate. `SELECTABLE` remains selection
   eligibility, exactly as ADR-0033 defined it.

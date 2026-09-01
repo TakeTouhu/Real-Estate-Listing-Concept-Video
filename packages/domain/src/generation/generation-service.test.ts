@@ -753,6 +753,10 @@ describe("startScene — model selection", () => {
     );
 
     expect(error.code).toBe("VALIDATION_FAILED");
+    // Pinned to admission's own guard. `planGenerationResolution` refuses an
+    // unverified entry too, so without this a selection check that had been
+    // deleted outright would still leave the suite green.
+    expect(error.message).toBe("The model unverified-model is not available for generation yet");
     expect(h.models.defaultCalls).toBe(0);
     expectNothingAdmitted(h);
   });

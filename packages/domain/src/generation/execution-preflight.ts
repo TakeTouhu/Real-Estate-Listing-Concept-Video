@@ -6,6 +6,8 @@ import {
   isSelectableModel,
   type ResolutionNormalization,
   type TargetOutputResolution,
+  type TargetResolutionDelivery,
+  type VerifiedModelEntry,
   type VideoModelCatalog,
 } from "./model-catalog";
 import type { SystemGenerationCandidate } from "./execution-ports";
@@ -222,7 +224,9 @@ function identityOrRefuse(asset: MediaAsset): PreparedSourceIdentity {
  * 4. recompute and verify `requestHash`;
  * 5. resolve the catalog entry by the attempt's **own frozen model key**, and
  *    refuse if it is absent or no longer selectable;
- * 6. verify provider and model identity against that entry;
+ * 6. verify provider and model identity against that entry, then verify that
+ *    the entry's **current** delivery plan for the frozen target still agrees
+ *    with the frozen one;
  * 7. first tenant-scoped asset read;
  * 8. classify it — status, deletion intent, JPEG, non-blank key and a canonical
  *    content digest — and keep the resulting source identity;
@@ -313,10 +317,6 @@ export async function prepareQueuedGeneration(
   // under an unchanged provider and model therefore passes here; that gap is a
   // hard prerequisite before real provider spending (docs/decisions/TODO.md).
   //
-  // The frozen delivery plan is deliberately **not** re-derived from the entry
-  // either. A corrected `nativeGeneration` policy must not silently change what
-  // an admitted attempt generates at; the snapshot wins, and the hash check
-  // above already proved it is the one the identity was formed over.
   if (
     entry.providerName !== generation.providerName ||
     entry.providerModelId !== generation.providerModelId
@@ -324,6 +324,36 @@ export async function prepareQueuedGeneration(
     throw new PreflightRefusalError(
       "PROVIDER_IDENTITY_MISMATCH",
       "This attempt was admitted for a provider or model the deployment no longer serves",
+    );
+  }
+
+  // The delivery plan is checked, and the check is **agreement, not adoption**.
+  //
+  // Two authorities, deliberately: the frozen snapshot is the truth of what was
+  // approved, and the current catalog is the authority on whether that is still
+  // safe to execute. When they agree, the snapshot is submitted. When they do
+  // not, neither answer is usable — submitting the frozen plan would spend money
+  // on delivery semantics the product no longer stands behind, and submitting
+  // the current plan would execute something the customer never approved — so
+  // the only honest outcome is to refuse and require a new admission (ADR-0034
+  // §5, ADR-0033's catalog-drift rule).
+  //
+  // Nothing is re-planned, rewritten or re-hashed here. `planGenerationResolution`
+  // is a lookup on the current entry; its result is compared and then discarded.
+  const declared = currentDeliveryPlanFor(entry, facts.targetOutputResolution);
+  if (
+    declared === null ||
+    declared.nativeGenerationResolution.providerValue !== facts.nativeGenerationResolution ||
+    declared.normalization !== facts.resolutionNormalization ||
+    declared.nativeMeetsTarget !== facts.nativeMeetsTarget ||
+    // A capability that has narrowed until it no longer offers the frozen token
+    // is the same failure arriving by a different route: the request as admitted
+    // is no longer one this model accepts.
+    !entry.capability.nativeGenerationResolutions.includes(facts.nativeGenerationResolution)
+  ) {
+    throw new PreflightRefusalError(
+      "MODEL_DELIVERY_PLAN_CHANGED",
+      "This model no longer delivers the requested output the way this attempt was admitted for",
     );
   }
 
@@ -433,6 +463,28 @@ export async function prepareQueuedGeneration(
     nativeMeetsTarget: facts.nativeMeetsTarget,
     requestHash: generation.requestHash,
   };
+}
+
+/**
+ * What the current catalog says this model does for this target, or `null` when
+ * it no longer says anything.
+ *
+ * Deliberately a lookup returning `null` rather than a call to
+ * `planGenerationResolution`, which throws. Throwing is the right shape at
+ * admission — a customer asking for a target the model does not serve is a
+ * validation refusal they can act on. Here "the target is no longer served" is
+ * just one of several ways the catalog can have drifted, and it has to reach
+ * the single `MODEL_DELIVERY_PLAN_CHANGED` refusal rather than escape as an
+ * `AppError` that `refuseOnDomainRefusal` would misfile as a legacy row.
+ *
+ * It reads the same `byTarget` map `planGenerationResolution` reads, and the
+ * `isSelectableModel` check above is what makes that map reachable at all.
+ */
+function currentDeliveryPlanFor(
+  entry: VerifiedModelEntry,
+  target: TargetOutputResolution,
+): TargetResolutionDelivery | null {
+  return entry.nativeGeneration.byTarget[target] ?? null;
 }
 
 /**

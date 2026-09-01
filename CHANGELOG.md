@@ -46,11 +46,17 @@ and ADR-0034. This completes what 4C-3B-2A deliberately left undone.
   generating on a model the caller did not ask for, and charging for it, is
   worse than refusing. There is deliberately no `modelKey` column on
   `VideoProject`, and no HTTP or UI caller yet.
-- **`MODEL_UNAVAILABLE`**, a fifteenth preflight refusal reason, for an attempt
-  whose frozen model key resolves to nothing or to a de-verified entry. Distinct
-  from `PROVIDER_IDENTITY_MISMATCH`, which is the opposite finding, and
-  `RETRYABLE` because a restored catalog entry is exactly the world change that
-  disposition describes. Both refuse before any storage credential is minted.
+- **Two preflight refusal reasons**, taking the vocabulary to sixteen.
+  `MODEL_UNAVAILABLE` (retryable) is an attempt whose frozen model key resolves
+  to nothing or to a de-verified entry. `MODEL_DELIVERY_PLAN_CHANGED` (terminal)
+  is an entry that still resolves and still points at the same provider request
+  but now declares a *different delivery plan* for the frozen target — a
+  different native token, normalization, or answer on `nativeMeetsTarget`. All
+  three model checks refuse before any storage credential is minted.
+- **Non-blank constraints** on the persisted model key and native token. Not
+  merely non-null: the all-or-none rule is satisfied by `''`, so without them a
+  row could present a complete-looking snapshot naming no model and asking the
+  provider to generate at nothing.
 - `modelKey`, `targetOutputResolution` and `nativeMeetsTarget` in the
   generation-requested audit entry. The third is the difference between a native
   1080p deliverable and an upscaled one, and it must be answerable later without
@@ -62,9 +68,12 @@ and ADR-0034. This completes what 4C-3B-2A deliberately left undone.
 
 - Preflight resolves the catalog by **the attempt's own frozen model key**, not
   the deployment's current default, and its dependency is narrowed to `find` so
-  `default()` is not reachable at all. The frozen delivery plan is never
-  re-derived from the resolved entry: a later catalog correction must not
-  restate what an already-approved attempt promised.
+  `default()` is not reachable at all. It then requires the entry's *current*
+  delivery plan to **agree** with the frozen one — agreement, not adoption. When
+  they agree the snapshot is submitted unchanged; when they disagree neither
+  answer is usable, because the frozen plan describes semantics the product no
+  longer stands behind and the current plan describes work the customer never
+  approved, so the attempt is refused and must be re-admitted.
 - `assertSettingsSupported` compares native to native. Validating a product
   target against a list of native tokens was the conflation itself.
 - The create-project form's free-text resolution input becomes a closed

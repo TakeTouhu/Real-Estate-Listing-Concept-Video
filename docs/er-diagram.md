@@ -307,6 +307,12 @@ Three CHECK constraints, added by raw SQL because Prisma cannot express them:
 - `scene_generations_target_output_resolution_check` and
   `scene_generations_resolution_normalization_check` — the two closed
   vocabularies, checked only when a value is present so legacy rows stay valid.
+- `scene_generations_model_key_nonblank_check` and
+  `scene_generations_native_resolution_nonblank_check` — both are identifiers,
+  and an empty string is not one. Checked as non-blank rather than merely
+  non-null because the all-or-none rule is satisfied by `''`. There is
+  deliberately no syntax rule on the native token beyond that: it is the
+  vendor's, and this system does not parse it.
 
 None of the V2 columns is indexed: they are reconstruction payload, and identity
 lookups still use the `(videoProjectId, requestHash)` partial unique index.

@@ -346,8 +346,10 @@ and ADR-0020.
   product vocabulary at every boundary including the database; and
   `startScene` takes an optional `modelKey` with no fallback. The migration
   **fails closed** on a legacy project holding an off-vocabulary resolution
-  rather than rewriting a customer's stated request. Every V1 attempt is now
-  permanently unexecutable, which is the intended outcome. Still no fal adapter,
+  rather than rewriting a customer's stated request. Preflight resolves the
+  catalog by the attempt's own frozen key and refuses a drifted delivery plan
+  (`MODEL_DELIVERY_PLAN_CHANGED`) before minting any storage credential. Every
+  V1 attempt is now permanently unexecutable, which is the intended outcome. Still no fal adapter,
   no paid execution, no model selector in the UI, and no normalization — an
   upscaled 1080p deliverable is recorded as upscaled and must not be described
   as native until Phase 5 composition exists.

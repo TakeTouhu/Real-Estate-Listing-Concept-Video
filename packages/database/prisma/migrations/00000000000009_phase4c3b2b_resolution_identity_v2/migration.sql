@@ -84,6 +84,23 @@ ALTER TABLE "scene_generations"
     OR "requestResolutionNormalization" IN ('NONE', 'DOWNSCALE', 'UPSCALE')
   );
 
+-- The model key and the native token are identifiers, and an empty string is
+-- not one. Checked as "non-blank" rather than merely "not null" because the
+-- all-or-none constraint below is satisfied by `''` — a row could otherwise
+-- present a complete-looking V2 snapshot that names no model and asks the
+-- provider to generate at nothing. Deliberately no syntax rule beyond that:
+-- the native token is the vendor's, and this system does not parse it.
+ALTER TABLE "scene_generations"
+  ADD CONSTRAINT "scene_generations_model_key_nonblank_check"
+  CHECK ("requestModelKey" IS NULL OR btrim("requestModelKey") <> '');
+
+ALTER TABLE "scene_generations"
+  ADD CONSTRAINT "scene_generations_native_resolution_nonblank_check"
+  CHECK (
+    "requestNativeGenerationResolution" IS NULL
+    OR btrim("requestNativeGenerationResolution") <> ''
+  );
+
 -- ---------------------------------------------------------------------------
 -- 3. One vocabulary per row, decided by the version in the hash.
 --

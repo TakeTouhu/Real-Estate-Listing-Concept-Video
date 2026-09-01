@@ -291,7 +291,25 @@ describe("prepareQueuedGeneration — the prepared artifact", () => {
     // The upscale/`nativeMeetsTarget: false` pair is the one that matters: it is
     // a claim about what the customer was promised, and re-deriving it from the
     // entry would quietly upgrade this attempt to "native 1080p".
-    const f = fixture([asset({ width: 640, height: 480 })]);
+    //
+    // The entry declares that 720p plan, so the drift gate agrees and the test
+    // stays about the snapshot beating the row's *neighbours* — the asset and
+    // the deployment's aspect-ratio capability — rather than accidentally
+    // exercising catalog drift, which has its own tests below.
+    const f = fixture([asset({ width: 640, height: 480 })], {
+      ...ENTRY,
+      capability: { ...CAPABILITY, nativeGenerationResolutions: ["1080p", "768P"] },
+      nativeGeneration: {
+        byTarget: {
+          ...ENTRY.nativeGeneration.byTarget,
+          "720p": {
+            nativeGenerationResolution: { providerValue: "768P" },
+            normalization: "DOWNSCALE",
+            nativeMeetsTarget: false,
+          },
+        },
+      },
+    });
     const gen = generation({
       requestAspectRatio: "9:16",
       requestTargetOutputResolution: "720p",
@@ -539,6 +557,54 @@ describe("refusals before signing", () => {
     expect((await refusalFrom(f, candidateFor(legacy))).reason).toBe("LEGACY_SNAPSHOT_MISSING");
   });
 
+  /**
+   * The V1 / partial-V2 matrix, each proven to cost nothing.
+   *
+   * A signed download URL is a credential handed out for work that will never
+   * run, so "refuses" is only half the requirement — it has to refuse *before*
+   * storage is touched at all. Both counters are asserted, not just the signing
+   * one, because an existence check is already a call into infrastructure on
+   * behalf of a row that cannot execute.
+   */
+  it.each([
+    [
+      "a V1 row carrying only the ambiguous legacy resolution",
+      {
+        requestHash: "sha256:legacyv1",
+        requestResolution: "720p",
+        requestModelKey: null,
+        requestTargetOutputResolution: null,
+        requestNativeGenerationResolution: null,
+        requestResolutionNormalization: null,
+        requestNativeMeetsTarget: null,
+      },
+    ],
+    [
+      "a partially populated V2 snapshot",
+      { requestNativeMeetsTarget: null },
+    ],
+    [
+      "a complete V2 snapshot stored under a V1 hash",
+      { requestHash: "sha256:notv2" },
+    ],
+    [
+      "a row carrying both request-identity vocabularies",
+      { requestResolution: "1080p" },
+    ],
+  ] as const)("refuses %s without touching storage", async (_label, overrides) => {
+    const f = fixture();
+
+    const refusal = await refusalFrom(f, candidateFor(generation(overrides)));
+
+    expect(refusal.reason).toBe("LEGACY_SNAPSHOT_MISSING");
+    expect(refusal.disposition).toBe("TERMINAL");
+    expect(f.storage.signed).toHaveLength(0);
+    expect(f.storage.existsCalls).toHaveLength(0);
+    // And no asset was read either: an unexecutable row is refused from its own
+    // contents, without a tenant-scoped query on its behalf.
+    expect(f.assets.reads).toHaveLength(0);
+  });
+
   it("refuses a row admitted before the prompt freeze", async () => {
     const f = fixture();
 
@@ -592,6 +658,111 @@ describe("refusals before signing", () => {
     });
 
     expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe("MODEL_UNAVAILABLE");
+  });
+
+  it.each([
+    [
+      "a different native token",
+      {
+        nativeGenerationResolution: { providerValue: "768P" },
+        normalization: "NONE" as const,
+        nativeMeetsTarget: true,
+      },
+    ],
+    [
+      "a different normalization",
+      {
+        nativeGenerationResolution: { providerValue: "1080p" },
+        normalization: "UPSCALE" as const,
+        nativeMeetsTarget: true,
+      },
+    ],
+    [
+      "a different answer on whether the native generation meets the target",
+      {
+        nativeGenerationResolution: { providerValue: "1080p" },
+        normalization: "NONE" as const,
+        // The one that matters commercially: the catalog now says this model
+        // does NOT natively reach the target it was admitted as reaching.
+        nativeMeetsTarget: false,
+      },
+    ],
+  ])("refuses when the catalog now declares %s", async (_label, delivery) => {
+    const f = fixture([asset()], {
+      ...ENTRY,
+      nativeGeneration: { byTarget: { "1080p": delivery } },
+    });
+
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe(
+      "MODEL_DELIVERY_PLAN_CHANGED",
+    );
+  });
+
+  it("refuses when the catalog no longer serves the admitted target at all", async () => {
+    const f = fixture([asset()], {
+      ...ENTRY,
+      nativeGeneration: {
+        byTarget: {
+          "720p": {
+            nativeGenerationResolution: { providerValue: "720p" },
+            normalization: "NONE",
+            nativeMeetsTarget: true,
+          },
+        },
+      },
+    });
+
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe(
+      "MODEL_DELIVERY_PLAN_CHANGED",
+    );
+  });
+
+  it("refuses when the capability no longer offers the frozen native token", async () => {
+    // The same failure by another route: the plan still says `1080p`, but the
+    // model no longer accepts it, so the request as admitted is unexecutable.
+    const f = fixture([asset()], {
+      ...ENTRY,
+      capability: { ...CAPABILITY, nativeGenerationResolutions: ["720p"] },
+    });
+
+    expect((await refusalFrom(f, candidateFor(generation()))).reason).toBe(
+      "MODEL_DELIVERY_PLAN_CHANGED",
+    );
+  });
+
+  it("does not adopt the current plan, or rewrite the row, when they agree", async () => {
+    // Agreement means the snapshot is submitted — not that the current catalog
+    // was consulted for the value. A drifted plan refuses (above); an agreeing
+    // one leaves the prepared artifact byte-identical to the frozen facts.
+    const f = fixture();
+    const gen = generation();
+
+    const prepared = await prepareQueuedGeneration(f.deps, candidateFor(gen));
+
+    expect(prepared.nativeGenerationResolution).toBe(gen.requestNativeGenerationResolution);
+    expect(prepared.resolutionNormalization).toBe(gen.requestResolutionNormalization);
+    expect(prepared.nativeMeetsTarget).toBe(gen.requestNativeMeetsTarget);
+    expect(prepared.requestHash).toBe(gen.requestHash);
+  });
+
+  it("refuses a drifted delivery plan before signing anything", async () => {
+    const f = fixture([asset()], {
+      ...ENTRY,
+      nativeGeneration: {
+        byTarget: {
+          "1080p": {
+            nativeGenerationResolution: { providerValue: "768P" },
+            normalization: "UPSCALE",
+            nativeMeetsTarget: false,
+          },
+        },
+      },
+    });
+
+    await refusalFrom(f, candidateFor(generation()));
+
+    expect(f.storage.signed).toHaveLength(0);
+    expect(f.storage.existsCalls).toHaveLength(0);
   });
 
   it("refuses an unavailable model before signing anything", async () => {
@@ -769,6 +940,7 @@ describe("the refusal contract", () => {
       "LEGACY_PROMPT_MISSING",
       "REQUEST_HASH_MISMATCH",
       "PROVIDER_IDENTITY_MISMATCH",
+      "MODEL_DELIVERY_PLAN_CHANGED",
       "ASSET_NOT_FOUND",
       "ASSET_UNRECOVERABLE",
       "ASSET_FORMAT_UNSUPPORTED",
@@ -782,9 +954,9 @@ describe("the refusal contract", () => {
     expect([...retryable, ...terminal].sort()).toEqual([...PREFLIGHT_REFUSAL_REASONS].sort());
   });
 
-  it("has exactly fifteen reasons", () => {
-    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(15);
-    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(15);
+  it("has exactly sixteen reasons", () => {
+    expect(PREFLIGHT_REFUSAL_REASONS).toHaveLength(16);
+    expect(new Set(PREFLIGHT_REFUSAL_REASONS).size).toBe(16);
   });
 
   it("derives disposition from the reason rather than accepting one", () => {

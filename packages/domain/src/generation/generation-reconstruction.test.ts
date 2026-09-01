@@ -411,6 +411,28 @@ describe("legacy generations without a snapshot", () => {
     expect(() => generationRequestFactsFrom({ ...completeV2Row(), ...missing })).toThrow(AppError);
   });
 
+  it("refuses a realistic V1 row rather than inferring what its resolution meant", () => {
+    // The row this whole milestone exists because of: a real pre-3B-2B attempt,
+    // carrying the ambiguous `requestResolution` and none of the V2 facts.
+    //
+    // It is inferable — the only wired model was OpenVideo, which generates
+    // natively at exactly that string — and inferring it is precisely what must
+    // not happen. "Old rows must have been WaveSpeed" is an assumption about
+    // history written into an immutable record of a possibly-paid attempt, and
+    // the facts it produced would not reproduce the stored hash anyway.
+    const v1: SceneGeneration = {
+      ...legacyRow(),
+      requestHash: "sha256:realv1",
+      requestCompiledPrompt: ADMITTED.compiledPrompt,
+      requestDurationSeconds: ADMITTED.durationSeconds,
+      requestCameraMotion: ADMITTED.cameraMotion,
+      requestAspectRatio: ADMITTED.aspectRatio,
+      requestResolution: "720p",
+    };
+
+    expect(() => generationRequestFactsFrom(v1)).toThrow(AppError);
+  });
+
   it("refuses a row carrying both request-identity vocabularies", () => {
     // A V2 row that also holds the ambiguous V1 column cannot say which one it
     // was admitted under. The database rejects it too; this is the domain half.
