@@ -120,8 +120,8 @@ export type ModelTier = "RECOMMENDED" | "HIGH_RESOLUTION" | "PREMIUM" | "ECONOMY
 export interface ModelEntryIdentity {
   /** Stable internal key. Never a provider id, so a vendor rename cannot move it. */
   readonly key: string;
+  /** Which provider hosts it. A routing fact, not an executable address. */
   readonly providerName: string;
-  readonly providerModelId: string;
   readonly displayName: string;
   readonly tier: ModelTier;
   /** Exactly one entry in a catalog is the default. */
@@ -140,6 +140,13 @@ export interface ModelEntryIdentity {
  * adapter at all.
  */
 export interface VerifiedModelEntry extends ModelEntryIdentity {
+  /**
+   * The provider's executable model id — an **operational** fact, not a naming
+   * one, which is why it lives here and not on the shared identity. It is the
+   * address a paid request would be sent to, and a model whose contract nobody
+   * has transcribed has no business asserting one.
+   */
+  readonly providerModelId: string;
   readonly availability: { readonly kind: "SELECTABLE" };
   readonly capability: VideoModelCapability;
   readonly nativeGeneration: NativeGenerationPolicy;
@@ -151,17 +158,24 @@ export interface VerifiedModelEntry extends ModelEntryIdentity {
  * A model that is known about but whose contract has not been verified.
  *
  * It carries identity and the list of what is missing — the list is the work
- * item — and **structurally cannot carry operational facts**. The optional
- * `never` members are the mechanism: omitting them is fine, supplying any value
- * is a type error. An earlier revision filled these with placeholders
- * (`heightPx: 0`, a 1-to-1-second duration range, a literal `"unverified"`
- * token) purely to satisfy a single wide interface, and argued they were safe
- * because `planGenerationResolution` refused the entry. Unreachable fabricated
- * data is still fabricated data: it reads as fact to the next person, and the
- * type system should make it impossible rather than a convention.
+ * item — and **structurally cannot carry operational facts**, `providerModelId`
+ * included. The optional `never` members are the mechanism: omitting them is
+ * fine, supplying any value is a type error. An earlier revision filled these
+ * with placeholders (`heightPx: 0`, a 1-to-1-second duration range, a literal
+ * `"unverified"` token) purely to satisfy a single wide interface, and argued
+ * they were safe because `planGenerationResolution` refused the entry.
+ * Unreachable fabricated data is still fabricated data: it reads as fact to the
+ * next person, and the type system should make it impossible rather than a
+ * convention.
+ *
+ * There is deliberately no `candidateProviderModelId` and no metadata bag to
+ * hold one indirectly: a "candidate" id is the same claim with a hedge in front
+ * of it, and it would be copied into a request the first time someone needed an
+ * address.
  */
 export interface UnverifiedModelEntry extends ModelEntryIdentity {
   readonly availability: { readonly kind: "UNVERIFIED"; readonly missing: readonly string[] };
+  readonly providerModelId?: never;
   readonly capability?: never;
   readonly nativeGeneration?: never;
   readonly pricing?: never;

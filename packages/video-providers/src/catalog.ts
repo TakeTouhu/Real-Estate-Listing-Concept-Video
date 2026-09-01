@@ -18,9 +18,11 @@ import { OPEN_VIDEO_CAPABILITY } from "./wavespeed/capability";
  * specifics (ADR-0033).
  *
  * Two of the four entries are `UNVERIFIED`. They are typed as
- * {@link UnverifiedModelEntry}, which **cannot hold** a capability, a native
- * generation policy or pricing — so they carry identity and a list of what is
- * missing, and nothing that could be mistaken for a transcribed fact.
+ * {@link UnverifiedModelEntry}, which **cannot hold** a `providerModelId`, a
+ * capability, a native generation policy or pricing — so they carry identity
+ * and a list of what is missing, and nothing that could be mistaken for a
+ * transcribed fact. A provider model id is an executable address, and an
+ * unverified entry has no business asserting one.
  *
  * Every value below is deeply frozen. `Object.freeze` alone would still hand a
  * consumer a live `resolutions` array, and the OpenVideo descriptor is shared
@@ -95,24 +97,28 @@ const MINIMAX_H3_MAX: VerifiedModelEntry = deepFreeze({
  *
  * Its role is the case where 1080p detail must be genuinely native rather than
  * upscaled, which is exactly why none of it may be guessed at. It carries no
- * capability, no native policy and no pricing, because the type forbids them.
+ * `providerModelId`, no capability, no native policy and no pricing, because
+ * the type forbids all four.
+ *
+ * That a route exists, and that fal currently describes 2K output for it, is
+ * **research evidence** — enough to know the model is worth verifying, not
+ * enough to be a product contract. The missing list names what is actually
+ * unresolved; "the endpoint exists" is not among them.
  */
 const MINIMAX_H3: UnverifiedModelEntry = deepFreeze({
   key: "minimax-h3",
   providerName: "fal",
-  providerModelId: "minimax/h3/image-to-video",
   displayName: "MiniMax H3",
   tier: "HIGH_RESOLUTION",
   recommended: false,
   availability: {
     kind: "UNVERIFIED",
     missing: [
-      "exact production endpoint",
-      "native generation resolution tokens",
-      "duration contract",
-      "aspect-ratio behaviour",
-      "which product output targets it can serve, and how",
-      "pricing contract",
+      "the exact capability contract this product would use",
+      "native generation resolution policy for the product catalog",
+      "duration, aspect-ratio and feature-delivery contract",
+      "target-output delivery plan for 720p and 1080p",
+      "verified pricing contract",
     ],
   },
 } as const);
@@ -121,25 +127,27 @@ const MINIMAX_H3: UnverifiedModelEntry = deepFreeze({
  * Veo 3.1 — the premium alternative, **not yet verified**.
  *
  * Native 720p and 1080p would make it the model that needs no upscale for a
- * 1080p deliverable. Everything this product would depend on is unfrozen, and
- * each unfrozen item is a way to spend money incorrectly.
+ * 1080p deliverable. The unresolved question is not whether an image-to-video
+ * route exists — one does — but **which variant this product is verifying**:
+ * fal publishes standard, Fast and other Veo 3.1 routes, and they differ in
+ * exactly the ways that decide a paid request. Freezing one id here would
+ * present a choice nobody has made as though it had been.
  */
 const VEO_31: UnverifiedModelEntry = deepFreeze({
   key: "veo-3-1",
   providerName: "fal",
-  providerModelId: "google/veo-3.1/image-to-video",
   displayName: "Veo 3.1",
   tier: "PREMIUM",
   recommended: false,
   availability: {
     kind: "UNVERIFIED",
     missing: [
-      "exact endpoint and variant",
+      "production variant selection and frozen endpoint contract",
       "resolution variants this product would use",
       "duration contract",
       "audio behaviour",
       "aspect-ratio behaviour",
-      "pricing contract",
+      "verified pricing contract",
     ],
   },
 } as const);
