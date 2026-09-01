@@ -1,6 +1,16 @@
 import type { Money } from "@app/shared";
 
-export type ProviderName = "fake" | "wavespeed";
+/**
+ * Every provider the architecture recognises.
+ *
+ * `fal` is present as a **model-catalog identity**, not as a wired adapter:
+ * `createVideoProvider` has no fal branch and `VIDEO_PROVIDER` deliberately
+ * still accepts only `fake` and `wavespeed`, so no configuration can select an
+ * adapter that does not exist and no startup path can contact fal. Naming it
+ * here is what lets the catalog describe fal-hosted models without leaking
+ * fal-specific fields into the domain (ADR-0033).
+ */
+export type ProviderName = "fake" | "wavespeed" | "fal";
 
 /**
  * Normalized, provider-agnostic input for a single scene generation.
