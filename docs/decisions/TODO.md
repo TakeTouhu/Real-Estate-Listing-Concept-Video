@@ -29,6 +29,25 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       lands, 429 and 5xx still report `retryable: true`, so a retry policy
       reading that flag would re-POST an ambiguous submission.
       **Required before any provider charge is possible.**
+- [ ] **Phase 4C-3B-2B — the resolution migration.** 3B-2A introduced the
+      `TargetOutputResolution` / native-generation vocabulary and the model
+      catalog but deliberately changed no persisted meaning. Still outstanding:
+      constrain `VideoProject.resolution` to the product target at the API, UI
+      and service boundary; add a native-generation snapshot column to
+      `SceneGeneration`; carry both facts in `GenerationRequestFacts` and the
+      request hash (an identity-semantics change to document and test
+      explicitly); fail closed in `generationRequestFactsFrom` for a legacy row
+      whose native resolution cannot be proven, rather than deriving it from
+      today's catalog; validate the native value against `capability.resolutions`
+      and the target against `targetOutputResolutions`; and feed
+      `ProviderGenerationInput.resolution` from `planGenerationResolution`. Needs
+      a Prisma migration. The full semantic ledger is in
+      `docs/phase-4c3b2a-completion.md`.
+- [ ] **Verify MiniMax H3 and Veo 3.1 before either can be selected.** Both are
+      in the catalog as `UNVERIFIED` with their missing items listed. H3 in
+      particular is the model the product would want when native 1080p detail
+      matters, and its documented native output ("2K") has no single reading in
+      lines.
 - [ ] **The paid gate may not be enabled until the WaveSpeedAI pricing contract
       is resolution-aware and verified.** Official pricing (2026-08-29) is
       resolution-dependent — 480p $0.02/s, 720p $0.04/s, 1080p $0.06/s, billed to

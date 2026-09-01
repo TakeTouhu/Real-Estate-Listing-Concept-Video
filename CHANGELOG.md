@@ -3,6 +3,56 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2A: Multi-provider model catalog and two resolutions
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2a-completion.md`
+and ADR-0033.
+
+### Added
+
+- **A provider-neutral model catalog.** Four entries: MiniMax H3 Max on fal
+  (default/recommended), MiniMax H3 and Veo 3.1 (present but `UNVERIFIED`, so
+  unselectable), and WaveSpeed OpenVideo (economy, still selectable). The domain
+  owns the entry shape and the rules; `packages/video-providers` owns the vendor
+  values — the same split ADR-0019 made for capability. No fal, WaveSpeed,
+  MiniMax or Google field appears in a domain type, pinned at compile time.
+- **`TargetOutputResolution` and native generation resolution, as separate
+  concepts.** The system had one field called `resolution` meaning both, and it
+  looked correct only because OpenVideo generates natively at exactly the two
+  deliverables the product sells. H3 Max generates at `768P` and nothing else,
+  so a 1080p deliverable is a 768-line generation enlarged.
+  `planGenerationResolution` reports that as `nativeMeetsTarget: false`, and
+  nothing may describe such output as native 1080p. Normalization is recorded
+  here and performed by composition later.
+- **`ModelAvailability`**, carrying *what is missing* rather than a bare flag —
+  MiniMax H3's native output is documented only as "2K", which has no single
+  reading in lines, so nothing invents one and the model stays unselectable.
+
+### Changed
+
+- `ProviderName` gains `"fal"` as a **catalog identity only**. `VIDEO_PROVIDER`
+  still accepts only `fake` and `wavespeed`, `createVideoProvider` has no fal
+  branch, and `VIDEO_PROVIDER=fal` fails validation — so no configuration can
+  point execution at an adapter that does not exist. Being the default *model*
+  and being an executable *request* are different things.
+- Every catalog entry carries `pricing: null`. A placeholder reserves the wrong
+  number of credits while looking real, and no `verified` boolean stands in for
+  a contract nobody has transcribed.
+
+### Not in this milestone
+
+No persistence, request-identity, API or UI change: `VideoProject.resolution`,
+`SceneGeneration.requestResolution` and the request hash are untouched, and
+under today's single-field contract those values remain ambiguous. Separating
+them changes what is hashed and what stored rows mean, and must fail closed for
+legacy rows — that is Phase 4C-3B-2B. A full semantic ledger of every
+`resolution` occurrence is in the completion report.
+
+Also absent: any fal adapter, paid generation, real submission, worker loop,
+submission audit, polling, output ingestion, upscaling, composition, billing,
+automatic fallback, retry, or cost/quality routing. Existing generations cannot
+be retargeted by the default changing — the immutable snapshot is authoritative.
+
 ## [Unreleased] — Phase 4C-3B-1: Provider diagnostic sanitization
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b1-completion.md`

@@ -330,6 +330,14 @@ and ADR-0020.
   `providerStatus` is the one machine field added. Submission certainty, redirect
   handling and timeouts are **not** in it — Phase 4C-3B-2 owns those and remains
   required before any paid submission.
+- **Phase 4C-3B-2A** — see GitHub for its lifecycle. The architecture becomes
+  explicitly multi-provider (ADR-0033): a provider-neutral model catalog with
+  MiniMax H3 Max on fal as the default, and `TargetOutputResolution` separated
+  from native generation resolution so a 1080p deliverable from a 768P model is
+  recorded as an upscale rather than claimed as native. Zero schema, request-
+  identity, API and UI change; the resolution migration is proposed as 3B-2B.
+  `fal` is a catalog identity only — no adapter, and `VIDEO_PROVIDER` still
+  refuses it.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
