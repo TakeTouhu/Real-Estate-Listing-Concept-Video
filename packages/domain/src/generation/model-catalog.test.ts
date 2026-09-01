@@ -1,54 +1,87 @@
 import { describe, expect, it } from "vitest";
 import {
   TARGET_OUTPUT_RESOLUTIONS,
+  isSelectableModel,
   isTargetOutputResolution,
   planGenerationResolution,
+  supportedTargetOutputResolutions,
   type TargetOutputResolution,
+  type UnverifiedModelEntry,
+  type VerifiedModelEntry,
   type VideoModelEntry,
 } from "./model-catalog";
+import type { VideoModelCapability } from "./capability";
 
-/**
- * A model shaped like H3 Max: one native generation resolution, whatever the
- * customer asked for.
- */
-function fixedNativeModel(heightPx: number, providerValue: string): VideoModelEntry {
-  return {
-    key: "test-fixed",
-    providerName: "test-provider",
-    providerModelId: "test/fixed",
-    displayName: "Fixed Native",
-    tier: "RECOMMENDED",
-    recommended: true,
-    capability: {
-      providerName: "test-provider",
-      providerModelId: "test/fixed",
-      durationSeconds: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
-      resolutions: [providerValue],
-      aspectRatios: { kind: "COMPOSITION_OWNED" },
-      negativePrompt: { kind: "UNSUPPORTED" },
-      cameraMotion: { kind: "PROMPT_RENDERED" },
-    },
-    nativeGeneration: { kind: "FIXED", native: { providerValue, heightPx } },
-    targetOutputResolutions: ["720p", "1080p"],
-    pricing: null,
-    availability: { kind: "SELECTABLE" },
-  };
-}
+type Assert<T extends true> = T;
+type IsNever<T> = [T] extends [never] ? true : false;
+type IsExactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
-/** A model shaped like OpenVideo: native generation at each product target. */
-function perTargetModel(): VideoModelEntry {
-  return {
-    ...fixedNativeModel(720, "720p"),
-    key: "test-per-target",
-    nativeGeneration: {
-      kind: "PER_TARGET",
-      byTarget: {
-        "720p": { providerValue: "720p", heightPx: 720 },
-        "1080p": { providerValue: "1080p", heightPx: 1080 },
+const capability: VideoModelCapability = {
+  providerName: "test-provider",
+  providerModelId: "test/model",
+  durationSeconds: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
+  resolutions: ["768P"],
+  aspectRatios: { kind: "COMPOSITION_OWNED" },
+  negativePrompt: { kind: "UNSUPPORTED" },
+  cameraMotion: { kind: "PROMPT_RENDERED" },
+};
+
+/** A model shaped like H3 Max: one native token serving both targets differently. */
+const fixedNative: VerifiedModelEntry = {
+  key: "test-fixed",
+  providerName: "test-provider",
+  providerModelId: "test/model",
+  displayName: "Fixed Native",
+  tier: "RECOMMENDED",
+  recommended: true,
+  availability: { kind: "SELECTABLE" },
+  capability,
+  nativeGeneration: {
+    byTarget: {
+      "720p": {
+        nativeGenerationResolution: { providerValue: "768P" },
+        normalization: "DOWNSCALE",
+        nativeMeetsTarget: true,
+      },
+      "1080p": {
+        nativeGenerationResolution: { providerValue: "768P" },
+        normalization: "UPSCALE",
+        nativeMeetsTarget: false,
       },
     },
-  };
-}
+  },
+  pricing: null,
+};
+
+/** A model shaped like OpenVideo: native generation at each product target. */
+const perTarget: VerifiedModelEntry = {
+  ...fixedNative,
+  key: "test-per-target",
+  nativeGeneration: {
+    byTarget: {
+      "720p": {
+        nativeGenerationResolution: { providerValue: "720p" },
+        normalization: "NONE",
+        nativeMeetsTarget: true,
+      },
+      "1080p": {
+        nativeGenerationResolution: { providerValue: "1080p" },
+        normalization: "NONE",
+        nativeMeetsTarget: true,
+      },
+    },
+  },
+};
+
+const unverified: UnverifiedModelEntry = {
+  key: "test-unverified",
+  providerName: "test-provider",
+  providerModelId: "vendor/secret-endpoint",
+  displayName: "Unverified",
+  tier: "HIGH_RESOLUTION",
+  recommended: false,
+  availability: { kind: "UNVERIFIED", missing: ["native generation resolution tokens"] },
+};
 
 describe("the product target vocabulary is closed", () => {
   it("supports exactly 720p and 1080p", () => {
@@ -56,7 +89,7 @@ describe("the product target vocabulary is closed", () => {
   });
 
   it("refuses anything else, including native generation tokens", () => {
-    // `768P` is a *native* value. Admitting it as a product target is exactly
+    // `768P` is a *native* token. Admitting it as a product target is exactly
     // the conflation this vocabulary exists to prevent.
     for (const value of ["768P", "480P", "2K", "720P", "1080P", "4k", "", null, 720, {}]) {
       expect(`${String(value)}:${isTargetOutputResolution(value)}`).toBe(
@@ -75,103 +108,63 @@ describe("the product target vocabulary is closed", () => {
   });
 });
 
-describe("a fixed-native model keeps target and native apart", () => {
-  const h3MaxLike = fixedNativeModel(768, "768P");
-
+describe("an unverified entry cannot hold operational facts", () => {
   /**
-   * The 720p case. 768 lines is *more* than 720, so the deliverable carries
-   * native detail and composition only has to come down.
+   * The blocker this correction closes. An earlier revision filled unverified
+   * entries with placeholders — a zero height, a 1-to-1-second duration range,
+   * a literal `"unverified"` token — purely to satisfy one wide interface, and
+   * argued they were safe because planning refused the entry. Unreachable
+   * fabricated data is still fabricated data. Now the type forbids it.
    */
-  it("serves a 720p target from 768P natively, with detail to spare", () => {
-    const plan = planGenerationResolution(h3MaxLike, "720p");
-    expect(plan.nativeGenerationResolution).toEqual({ providerValue: "768P", heightPx: 768 });
-    expect(plan.normalization).toBe("DOWNSCALE");
-    expect(plan.nativeMeetsTarget).toBe(true);
-  });
-
-  /**
-   * The case the whole separation exists for. The customer can ask for a 1080p
-   * deliverable and get one — but it is 768 lines enlarged, and
-   * `nativeMeetsTarget: false` is the fact that must survive all the way to
-   * anything that describes the output.
-   */
-  it("serves a 1080p target from the same 768P generation, and says it is not native", () => {
-    const plan = planGenerationResolution(h3MaxLike, "1080p");
-    expect(plan.nativeGenerationResolution.providerValue).toBe("768P");
-    expect(plan.normalization).toBe("UPSCALE");
-    expect(plan.nativeMeetsTarget).toBe(false);
-  });
-
-  it("never reports a native resolution equal to the target it cannot reach", () => {
-    for (const target of TARGET_OUTPUT_RESOLUTIONS) {
-      const plan = planGenerationResolution(h3MaxLike, target);
-      expect(`${target}:${plan.nativeGenerationResolution.providerValue}`).toBe(`${target}:768P`);
-    }
-  });
-});
-
-describe("a per-target model needs no normalization", () => {
-  it("generates natively at each product output", () => {
-    const model = perTargetModel();
-    for (const target of TARGET_OUTPUT_RESOLUTIONS) {
-      const plan = planGenerationResolution(model, target);
-      expect(`${target}:${plan.normalization}`).toBe(`${target}:NONE`);
-      expect(plan.nativeMeetsTarget).toBe(true);
-      expect(plan.nativeGenerationResolution.providerValue).toBe(target);
-    }
-  });
-
-  /**
-   * The point of the whole exercise: two models with completely different
-   * native policies are planned by the same function, and orchestration does
-   * not branch on which provider it is.
-   */
-  it("is planned by the same function as a fixed-native model", () => {
-    const fixed = planGenerationResolution(fixedNativeModel(768, "768P"), "1080p");
-    const perTarget = planGenerationResolution(perTargetModel(), "1080p");
-    expect(fixed.targetOutputResolution).toBe(perTarget.targetOutputResolution);
-    expect(fixed.nativeMeetsTarget).toBe(false);
-    expect(perTarget.nativeMeetsTarget).toBe(true);
-  });
-
-  it("treats an exactly-equal native resolution as meeting the target", () => {
-    const plan = planGenerationResolution(fixedNativeModel(1080, "1080p"), "1080p");
-    expect(plan.normalization).toBe("NONE");
-    expect(plan.nativeMeetsTarget).toBe(true);
-  });
-});
-
-describe("planning refuses rather than guessing", () => {
-  it("refuses a model that is not verified for selection", () => {
-    const unverified: VideoModelEntry = {
-      ...fixedNativeModel(0, "2K"),
-      key: "test-unverified",
-      availability: { kind: "UNVERIFIED", missing: ["native output resolution in lines"] },
+  it("rejects a capability, a native policy or pricing at compile time", () => {
+    type WithCapability = UnverifiedModelEntry & { capability: VideoModelCapability };
+    type WithNative = UnverifiedModelEntry & {
+      nativeGeneration: VerifiedModelEntry["nativeGeneration"];
     };
+    type WithPricing = UnverifiedModelEntry & { pricing: null };
+
+    // Each resolves to `never` on the forbidden member, which is what makes the
+    // combination unconstructible rather than merely discouraged.
+    const noCapability: Assert<IsNever<WithCapability["capability"]>> = true;
+    const noNative: Assert<IsNever<WithNative["nativeGeneration"]>> = true;
+    const noPricing: Assert<IsNever<WithPricing["pricing"]>> = true;
+
+    // And the union itself refuses such a literal.
+    type Fabricated = {
+      key: string;
+      providerName: string;
+      providerModelId: string;
+      displayName: string;
+      tier: "PREMIUM";
+      recommended: false;
+      availability: { kind: "UNVERIFIED"; missing: readonly string[] };
+      capability: VideoModelCapability;
+    };
+    const notAnEntry: Assert<
+      IsExactly<Fabricated extends VideoModelEntry ? true : false, false>
+    > = true;
+
+    expect([noCapability, noNative, noPricing, notAnEntry]).toEqual([true, true, true, true]);
+  });
+
+  it("needs no placeholder value to exist at runtime", () => {
+    // Only identity and the missing list. No zero, no empty array standing in
+    // for a contract, no invented token.
+    expect(Object.keys(unverified).sort()).toEqual(
+      ["availability", "displayName", "key", "providerModelId", "providerName", "recommended", "tier"],
+    );
+    expect(unverified.availability.missing.length).toBeGreaterThan(0);
+  });
+
+  it("is refused before any operational fact is consulted", () => {
     expect(() => planGenerationResolution(unverified, "1080p")).toThrowError(
       /not verified for selection/,
     );
+    expect(isSelectableModel(unverified)).toBe(false);
+    expect(supportedTargetOutputResolutions(unverified)).toEqual([]);
   });
 
-  it("refuses a target the model does not list", () => {
-    const only720: VideoModelEntry = {
-      ...fixedNativeModel(768, "768P"),
-      targetOutputResolutions: ["720p"],
-    };
-    expect(() => planGenerationResolution(only720, "1080p")).toThrowError(
-      /does not support the 1080p output/,
-    );
-    expect(planGenerationResolution(only720, "720p").normalization).toBe("DOWNSCALE");
-  });
-
-  /** The refusal names the model key and leaks nothing else. */
-  it("names no provider payload, endpoint or credential in its refusal", () => {
-    const unverified: VideoModelEntry = {
-      ...fixedNativeModel(0, "2K"),
-      key: "test-unverified",
-      providerModelId: "vendor/secret-endpoint",
-      availability: { kind: "UNVERIFIED", missing: ["pricing contract"] },
-    };
+  it("names the model key and no provider endpoint in its refusal", () => {
     try {
       planGenerationResolution(unverified, "720p");
       expect.unreachable("should have refused");
@@ -183,15 +176,123 @@ describe("planning refuses rather than guessing", () => {
   });
 });
 
+describe("delivery is stated per target, never inferred", () => {
+  it("serves a 720p target from 768P as a downscale that meets the target", () => {
+    const plan = planGenerationResolution(fixedNative, "720p");
+    expect(plan.nativeGenerationResolution).toEqual({ providerValue: "768P" });
+    expect(plan.normalization).toBe("DOWNSCALE");
+    expect(plan.nativeMeetsTarget).toBe(true);
+  });
+
+  /**
+   * The case the whole separation exists for: the same 768P generation, and an
+   * explicit statement that it does not carry 1080p detail.
+   */
+  it("serves a 1080p target from the same 768P generation, and says it is not native", () => {
+    const plan = planGenerationResolution(fixedNative, "1080p");
+    expect(plan.nativeGenerationResolution).toEqual({ providerValue: "768P" });
+    expect(plan.normalization).toBe("UPSCALE");
+    expect(plan.nativeMeetsTarget).toBe(false);
+  });
+
+  it("returns the policy verbatim rather than computing it", () => {
+    // Reference equality with what the model declared. Nothing was derived, so
+    // there is nothing for a parsing bug to get wrong.
+    for (const target of TARGET_OUTPUT_RESOLUTIONS) {
+      expect(planGenerationResolution(fixedNative, target)).toBe(
+        fixedNative.nativeGeneration.byTarget[target],
+      );
+    }
+  });
+
+  /**
+   * Provider tokens are opaque. A model may name its native resolution anything
+   * — `768P`, `2K`, `hd-plus` — and the relationship still holds, because it
+   * was stated rather than parsed out of the string.
+   */
+  it("works with a provider token carrying no numeric meaning at all", () => {
+    const opaque: VerifiedModelEntry = {
+      ...fixedNative,
+      key: "test-opaque",
+      nativeGeneration: {
+        byTarget: {
+          "1080p": {
+            nativeGenerationResolution: { providerValue: "studio-grade" },
+            normalization: "NONE",
+            nativeMeetsTarget: true,
+          },
+        },
+      },
+    };
+    const plan = planGenerationResolution(opaque, "1080p");
+    expect(plan.nativeGenerationResolution.providerValue).toBe("studio-grade");
+    expect(plan.nativeMeetsTarget).toBe(true);
+  });
+
+  it("carries no pixel-height field on a native resolution", () => {
+    type NativeKeys = keyof VerifiedModelEntry["nativeGeneration"]["byTarget"]["720p"] & string;
+    const none: Assert<
+      IsNever<Extract<NativeKeys, "heightPx" | "widthPx" | "pixels" | "lines">>
+    > = true;
+    expect(none).toBe(true);
+    const plan = planGenerationResolution(fixedNative, "1080p");
+    expect(Object.keys(plan.nativeGenerationResolution)).toEqual(["providerValue"]);
+  });
+
+  it("needs no normalization for a model that generates at each target", () => {
+    for (const target of TARGET_OUTPUT_RESOLUTIONS) {
+      const plan = planGenerationResolution(perTarget, target);
+      expect(`${target}:${plan.normalization}`).toBe(`${target}:NONE`);
+      expect(plan.nativeMeetsTarget).toBe(true);
+    }
+  });
+
+  /**
+   * Two models with completely different policies planned by the same function
+   * — orchestration does not branch on which provider it is.
+   */
+  it("plans both model shapes through one function", () => {
+    expect(planGenerationResolution(fixedNative, "1080p").nativeMeetsTarget).toBe(false);
+    expect(planGenerationResolution(perTarget, "1080p").nativeMeetsTarget).toBe(true);
+  });
+});
+
+describe("supported targets come from the stated policy", () => {
+  it("derives them from the policy keys, so no second list can disagree", () => {
+    expect(supportedTargetOutputResolutions(fixedNative)).toEqual(["720p", "1080p"]);
+    const only720: VerifiedModelEntry = {
+      ...fixedNative,
+      nativeGeneration: {
+        byTarget: {
+          "720p": {
+            nativeGenerationResolution: { providerValue: "768P" },
+            normalization: "DOWNSCALE",
+            nativeMeetsTarget: true,
+          },
+        },
+      },
+    };
+    expect(supportedTargetOutputResolutions(only720)).toEqual(["720p"]);
+    expect(() => planGenerationResolution(only720, "1080p")).toThrowError(
+      /does not support the 1080p output/,
+    );
+  });
+
+  it("has no separate targetOutputResolutions field to drift", () => {
+    const none: Assert<
+      IsNever<Extract<keyof VerifiedModelEntry, "targetOutputResolutions">>
+    > = true;
+    expect(none).toBe(true);
+  });
+});
+
 describe("the model entry stays provider-neutral", () => {
   /**
-   * Compile-time. The risk is not that someone writes `falQueueUrl` today — it
-   * is that a later adapter needs one field, adds it here because it is
-   * convenient, and the domain quietly learns about fal.
+   * The risk is not that someone writes `falQueueUrl` today — it is that a
+   * later adapter needs one field, adds it where convenient, and the domain
+   * quietly learns about fal.
    */
   it("declares no provider-specific field", () => {
-    type Assert<T extends true> = T;
-    type IsNever<T> = [T] extends [never] ? true : false;
     type ProviderSpecific =
       | "falQueueUrl"
       | "falEndpoint"
@@ -206,14 +307,10 @@ describe("the model entry stays provider-neutral", () => {
   });
 
   it("keeps native resolution and product target structurally distinct", () => {
-    type Assert<T extends true> = T;
-    type IsExactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-    // A native value is a provider token plus a height; a target is a closed
-    // union. Neither is assignable to the other.
     const targetIsClosed: Assert<IsExactly<TargetOutputResolution, "720p" | "1080p">> = true;
     const nativeIsNotATarget: Assert<
       IsExactly<
-        [VideoModelEntry["nativeGeneration"]] extends [TargetOutputResolution] ? true : false,
+        [VerifiedModelEntry["nativeGeneration"]] extends [TargetOutputResolution] ? true : false,
         false
       >
     > = true;
