@@ -84,10 +84,27 @@ field, adds it where it is convenient, and the domain quietly learns about fal.
 ### 4. An unverified entry structurally cannot hold operational facts
 
 `VideoModelEntry` is a discriminated union of `VerifiedModelEntry` and
-`UnverifiedModelEntry`. A verified entry carries capability, native-generation
-policy and pricing; an unverified one carries identity plus a list of what is
-missing, and declares `capability?: never`, `nativeGeneration?: never`,
-`pricing?: never` — omitting them is fine, supplying any value is a type error.
+`UnverifiedModelEntry`. A verified entry carries `providerModelId`, capability,
+native-generation policy and pricing; an unverified one carries identity plus a
+list of what is missing, and declares `providerModelId?: never`,
+`capability?: never`, `nativeGeneration?: never`, `pricing?: never` — omitting
+them is fine, supplying any value is a type error.
+
+**`providerModelId` is a verified-only fact.** It is an executable address —
+where a paid request would be sent — not a naming one, so it sits on the
+verified arm rather than the shared identity. Veo 3.1 makes the point concrete:
+fal publishes standard, Fast and other 3.1 routes, and freezing one id before
+the product has chosen which variant it verifies would present an unmade
+decision as a made one. There is deliberately no `candidateProviderModelId` and
+no metadata bag to hold one indirectly; a "candidate" id is the same claim with
+a hedge in front of it, and it would be copied into a request the first time
+someone needed an address.
+
+Knowing a route exists is research evidence, not a product contract. Both
+unverified entries name none, and their `missing` lists say what is genuinely
+unresolved — the capability contract this product would use, the native
+resolution policy, duration/aspect-ratio/feature delivery, the target-output
+plan, and verified pricing — rather than claiming the endpoint is unknown.
 
 This replaces a first attempt that filled unverified entries with placeholders
 (`heightPx: 0`, a 1-to-1-second duration range, a literal `"unverified"` token)

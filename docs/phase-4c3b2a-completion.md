@@ -81,8 +81,9 @@ interface NativeGenerationPolicy {
   byTarget: Readonly<Partial<Record<TargetOutputResolution, TargetResolutionDelivery>>>;
 }
 
-interface ModelEntryIdentity { key; providerName; providerModelId; displayName; tier; recommended }
+interface ModelEntryIdentity { key; providerName; displayName; tier; recommended }
 interface VerifiedModelEntry extends ModelEntryIdentity {
+  providerModelId: string;                    // an executable address — verified-only
   availability: { kind: "SELECTABLE" };
   capability: VideoModelCapability;
   nativeGeneration: NativeGenerationPolicy;
@@ -90,7 +91,8 @@ interface VerifiedModelEntry extends ModelEntryIdentity {
 }
 interface UnverifiedModelEntry extends ModelEntryIdentity {
   availability: { kind: "UNVERIFIED"; missing: readonly string[] };
-  capability?: never; nativeGeneration?: never; pricing?: never;   // structurally forbidden
+  providerModelId?: never;                    // structurally forbidden, with the rest
+  capability?: never; nativeGeneration?: never; pricing?: never;
 }
 type VideoModelEntry = VerifiedModelEntry | UnverifiedModelEntry;
 
@@ -157,7 +159,8 @@ throughout.
 
 | Blocker | Correction |
 | --- | --- |
-| **1 — fabricated capabilities on unverified entries** | `VideoModelEntry` is now a discriminated union. `UnverifiedModelEntry` declares `capability?: never`, `nativeGeneration?: never`, `pricing?: never`, so the placeholders that existed (`heightPx: 0`, a 1-to-1-second duration range, a `"unverified"` token) are **unconstructible**, not merely unreachable. Runtime tests assert both unverified entries have exactly seven identity keys and nothing else; type-level tests assert the invalid combination does not type-check. |
+| **1 — fabricated capabilities on unverified entries** | `VideoModelEntry` is now a discriminated union. `UnverifiedModelEntry` declares `providerModelId?: never`, `capability?: never`, `nativeGeneration?: never`, `pricing?: never`, so the placeholders that existed (`heightPx: 0`, a 1-to-1-second duration range, a `"unverified"` token) are **unconstructible**, not merely unreachable. Runtime tests assert both unverified entries have exactly six identity keys and nothing else; type-level tests assert the invalid combinations do not type-check. |
+| **1b — provisional provider model ids** | `providerModelId` moved from the shared identity to the verified arm: it is an executable address, and an unverified entry has no business asserting one. The concrete ids are removed from MiniMax H3 and Veo 3.1, with no replacement and no `candidateProviderModelId`. H3's stale `"exact production endpoint"` missing item is gone — the route is known, the *product contract* is not — and Veo's names `production variant selection and frozen endpoint contract`, because fal publishes standard, Fast and other 3.1 routes. |
 | **1b — `SELECTABLE` wording too strong** | It now means *eligible for product-level model selection against a verified capability contract*, explicitly not paid-execution readiness. A test asserts H3 Max is selectable while the configured provider is `fake`, `VIDEO_PROVIDER=fal` is rejected, and its pricing is `null`. |
 | **2 — shallow freezing** | A `deepFreeze` helper freezes the whole graph, and `OPEN_VIDEO_CAPABILITY` is deeply frozen **at its source**. Six regression tests attempt real mutations — `resolutions` push and index assignment, a delivery's `nativeMeetsTarget`, a native `providerValue`, an availability `missing` list, the entry array, entry fields — and re-read through a fresh `createVideoModelCatalog()` and `createOpenVideoCapabilityProvider().current()` to prove state is unchanged. A seventh walks the graph asserting `Object.isFrozen` at every level. |
 | **3 — generic `heightPx` arithmetic** | Removed entirely. `NativeGenerationResolution` is `{ providerValue }` and nothing else; `TARGET_HEIGHT_PX` is gone; the relationship is stated per model per target and returned by reference. Tests assert no `heightPx`/`widthPx`/`pixels`/`lines` key exists, that the returned object *is* the declared one, and that a token with no numeric meaning at all (`"studio-grade"`) works. |
