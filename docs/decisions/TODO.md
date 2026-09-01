@@ -24,8 +24,17 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       was the only provider, and it put a universal HTTP-status rule in the
       shared layer. That is no longer sound: since ADR-0033 the architecture is
       multi-provider, and a queue-based provider need not express certainty
-      through HTTP status at all. ADR-0032 records the earlier decision as
-      history and is **not** rewritten; this entry is the active specification.
+      through HTTP status at all.
+
+      **There is no ADR-0032 file, and none should be written.** The number
+      appears in earlier prose as a placeholder for a decision that was planned
+      but never recorded as an ADR — the earlier WaveSpeed-centric design exists
+      only as superseded planning and as branch history on
+      `claude/real-estate-virtual-tour-phase-4c3b2-hga252`. That branch is
+      **read-only reference material**: it is not merged, rebased or
+      cherry-picked wholesale, and any idea taken from it must be revalidated
+      against the contract below before it counts as a decision. **This entry is
+      the active specification.**
 
       **Common, provider-agnostic:**
 
@@ -77,11 +86,6 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       authoritative fal queue/submission contract in the future fal-adapter and
       submission-certainty milestone. No fal adapter exists today.
 
-      The old WaveSpeed-centric `4c3b2` branch remains **superseded and
-      read-only reference material**. It is not merged, rebased or
-      cherry-picked; individual ideas may be salvaged only after being
-      revalidated against this provider-agnostic contract, and no commit is
-      accepted merely because it existed there.
       **Required before any provider charge is possible.**
 - [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
       identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying

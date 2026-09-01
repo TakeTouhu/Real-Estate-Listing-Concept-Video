@@ -19,11 +19,12 @@ and ADR-0034. This completes what 4C-3B-2A deliberately left undone.
   `docs/api-changes-phase-4c3b2b.md`.
 - **`requestHash` is versioned: `sha256:` becomes `sha256:v2:`**, over a
   twelve-element tuple rather than eight. Every attempt admitted before this
-  change is permanently unreconstructable and therefore unexecutable — its
-  inputs are genuinely gone, which was already true for rows predating ADR-0018
-  and ADR-0023. No stored hash is rewritten and no legacy snapshot is
-  backfilled; doing either would make in-flight requests look new, which is a
-  duplicate provider charge rather than a visible error.
+  change is permanently unreconstructable and therefore unexecutable: the V2
+  delivery semantics required for safe execution cannot be proven from a V1 row
+  without reinterpreting historical data. That was already true for rows
+  predating ADR-0018 and ADR-0023. No stored hash is rewritten and no legacy
+  snapshot is backfilled; doing either would make in-flight requests look new,
+  which is a duplicate provider charge rather than a visible error.
 - `ProviderGenerationInput.resolution` becomes `nativeGenerationResolution`, and
   `VideoModelCapability.resolutions` becomes `nativeGenerationResolutions`. The
   WaveSpeed adapter still sends the vendor's own `resolution` wire field; an

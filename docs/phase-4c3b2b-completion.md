@@ -7,58 +7,54 @@ Decision record: ADR-0034
 > This report is an immutable technical snapshot and carries no lifecycle
 > status. The GitHub pull request is the authoritative lifecycle source.
 
-## Size — over the hard stop, reported rather than trimmed
+## Size — final, and covered by a one-time CTO exception
+
+Measured from the final reviewed head against base
+`9e530504b8098c3093eecc8140d36094067f8a42`.
 
 | Scope | Insertions | Deletions | Total |
 | --- | ---: | ---: | ---: |
-| **Code and tests** (excludes `docs/`, `CHANGELOG.md`) | 2,593 | 305 | **2,898** |
-| — production TypeScript only | 742 | 107 | 849 |
-| — tests | 1,683 | 196 | 1,879 |
-| — migration SQL + Prisma schema | 168 | 2 | 170 |
-| API and UI only (`apps/`, `tests/api/`) | 168 | 47 | 215 |
-| Domain, database, providers, non-API tests | 2,425 | 258 | 2,683 |
-| Documentation (`docs/`, `CHANGELOG.md`) | 896 | 16 | 912 |
-| **Everything** | 3,489 | 321 | 3,810 |
+| Production TypeScript | 840 | 123 | 963 |
+| Tests | 2,048 | 221 | 2,269 |
+| Migration SQL + Prisma schema | 168 | 2 | 170 |
+| Documentation (`docs/`, `CHANGELOG.md`) | 1,205 | 30 | 1,235 |
+| **Code + tests + migration** | 3,056 | 346 | **3,402** |
+| **Everything** | 4,261 | 376 | **4,637** |
 
-The authorized ceiling was ≤1,600 with a hard stop above 1,900. **This exceeds
-it by a wide margin**, and the excess is reported rather than absorbed by
-deleting evidence.
+**The CTO has granted a one-time size exception for Phase 4C-3B-2B / PR #49.**
+The milestone's original ceiling was ≤1,600 with a hard stop above 1,900; the
+correction envelope was subsequently raised to 3,450 code-and-tests and 4,700
+overall, and the values above are within it. The exception was granted because
+the excess is predominantly **required test and documentation evidence** rather
+than feature scope: production TypeScript is 963 changed lines against 2,269 of
+tests.
 
-**The pre-authorized split does not resolve it.** §39 proposed 3B-2B-1
-(domain/persistence/identity) and 3B-2B-2 (API/UI naming). Measured on the
-finished work, the API/UI half is **215 lines** and the domain half is
-**2,683** — the second is still 40% over the hard stop on its own. The split
-produces one compliant milestone and one that is not, so it does not buy what it
-was meant to buy.
+**This exception is specific to this milestone and is not precedent for any
+later one.** The code + tests + migration total of **3,402** is frozen.
 
-**Production code is 849 lines; tests are 1,879.** The size is dominated by
-evidence, and most of it was mandated: §32 (per-fact hash regression), §33 (a
-five-case legacy matrix), §34 (a five-case model-selection matrix against the
-real catalog), §35 (provider-boundary regression), plus the migration-text
-regression §6 and §19 require. The mutation ledger in §36 then found two places
+### Why the authorized split would not have helped
+
+The pre-authorized split was 3B-2B-1 (domain/persistence/identity) and 3B-2B-2
+(API/UI naming). Measured on the finished work at the time it was proposed, the
+API/UI half was **215** changed lines and the domain half **2,683** — the second
+still well over the hard stop on its own. The split would have produced one
+compliant milestone and one that was not, which is why an exception was the
+better answer than an artificial division.
+
+A split that *would* have worked exists — separating request-identity V2 from
+model selection and the catalog-drift gate — but it is a different decomposition
+from the one authorized, and the work was already complete when that became
+apparent.
+
+### Where the evidence went
+
+Most of the test volume was mandated by the milestone brief: §32 (per-fact hash
+regression), §33 (the legacy matrix), §34 (the model-selection matrix against
+the real catalog), §35 (the provider-boundary regression), and the migration-text
+regressions §6 and §19 require. The §36 mutation ledger then found three places
 where that evidence was not yet discriminating, and closing those added more.
-
-| File | Lines changed |
-| --- | ---: |
-| `generation-service.test.ts` | 380 |
-| `execution-preflight.test.ts` | 322 |
-| `tests/generation/model-selection.test.ts` | 292 (new) |
-| `generation-repository.db.test.ts` | 169 |
-| `generation-service.ts` | 149 |
-| `tests/schema/resolution-identity-v2-migration.test.ts` | 158 (new) |
-| `generation-reconstruction.test.ts` | 162 |
-| `migration.sql` | 142 (new) |
-
-A split that *would* work exists — separating request-identity V2 from model
-selection and the catalog-drift gate — but it is a different decomposition from
-the one authorized.
-
-**How this was resolved.** The implementation exceeded the original hard stop.
-The CTO granted an exact-head size exception rather than forcing an artificial
-split, on the measured composition above. Technical review then required two
-further corrections — the V2-only current-write type and the active-documentation
-corrections below — which necessarily moved the head, so the numbers in this
-table are the post-correction ones.
+Technical review added the V2-only create contract with its thirteen
+compile-time assertions and two current-write regressions.
 
 ## What shipped
 
@@ -95,7 +91,7 @@ neutral message that names no id, hash, prompt, model key or provider detail:
 
 | State | Why it refuses |
 | --- | --- |
-| V1 row (all five null) | Inputs are genuinely gone. |
+| V1 row (all five null) | The V2 delivery semantics required for safe execution cannot be proven from a V1 row without reinterpreting historical data. |
 | Partial V2 snapshot | Corruption, not a legacy record — and it would hash to something else. |
 | Both vocabularies present | Nothing says which one it was admitted under. |
 | V2 snapshot under a `sha256:` hash | The row's own prefix says which tuple produced it. |
@@ -433,6 +429,7 @@ corrected catalog with no way to stop an attempt it had superseded. Brief
   tells an operator beforehand how many attempts an edit would strand and
   nothing reports them afterwards. A read-only reconciliation query is a
   prerequisite for routine catalog corrections.
-- Unchanged and cumulative: no fal adapter, no paid gate, ADR-0032's submission
-  certainty is still unimplemented, and pricing is `null` for every selectable
-  model.
+- Unchanged and cumulative: no fal adapter, no paid gate, provider-agnostic
+  submission certainty is still unimplemented (there is no ADR-0032 file — the
+  active specification lives in `docs/decisions/TODO.md`), and pricing is `null`
+  for every selectable model.

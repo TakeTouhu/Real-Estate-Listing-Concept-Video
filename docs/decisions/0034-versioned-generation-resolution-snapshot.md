@@ -77,7 +77,7 @@ the same reason ADR-0018's snapshot was not: deciding what a V1
 were hashed over it, so removing the column would destroy the only surviving
 record of what a V1 attempt was admitted for.
 
-Three states are forbidden, by database CHECK constraint rather than by
+Four states are forbidden, by database CHECK constraint rather than by
 convention, because the constraint also binds writers that are not this
 application:
 
@@ -233,10 +233,11 @@ changed. None of the three is customer content.
 
 ## Consequences
 
-- Every V1 attempt is permanently unexecutable. This is the intended outcome —
-  its inputs are genuinely gone — and it was already true for rows predating
-  ADR-0018 and ADR-0023. Preflight classifies it as `LEGACY_SNAPSHOT_MISSING`,
-  which is `TERMINAL`.
+- Every V1 attempt is permanently unexecutable, and that is the intended
+  outcome: the V2 delivery semantics required for safe execution cannot be
+  proven from a V1 row without reinterpreting historical data. The same was
+  already true for rows predating ADR-0018 and ADR-0023. Preflight classifies it
+  as `LEGACY_SNAPSHOT_MISSING`, which is `TERMINAL`.
 - The two derivable facts in the hash mean a catalog correction to a model's
   delivery policy makes new requests non-identical to old ones on that model.
   That is deliberate; it is not a bug to be optimized away by dropping them.
