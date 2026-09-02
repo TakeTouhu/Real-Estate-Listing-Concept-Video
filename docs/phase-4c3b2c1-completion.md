@@ -17,18 +17,30 @@ Measured against base. All counts include documentation.
 | Production TypeScript | 484 | 89 | 573 |
 | Tests | 655 | 47 | 702 |
 | Migration SQL + Prisma schema | 0 | 0 | 0 |
-| Documentation (`docs/`, `CHANGELOG.md`) | 448 | 13 | 461 |
-| **Everything** | 1,587 | 149 | **1,736** |
+| Documentation (`docs/`, `CHANGELOG.md`) | 481 | 16 | 497 |
+| **Everything** | 1,620 | 152 | **1,772** |
 
-Target ≤1,600, hard stop >1,800. **136 over target, 64 under the hard stop.**
+Target ≤1,600, hard stop >1,800. **172 over target, 28 under the hard stop.**
 Reported, not excepted; no size exception is requested.
 
 Documentation prose was tightened twice to close the gap, from 477 changed lines
-to 461. What remains is the ADR, this report, and the four narrow updates §10
+to 461, and then grew by 36 for the `docs/SystemArchitecture.md` correction
+below. What remains is the ADR, this report, and the narrow updates §10
 requires; cutting further would mean dropping a required documentation item or a
 discriminating test, and §9 forbids the latter. The composition is above rather
 than an argument — production TypeScript is 573 changed lines against 702 of
-tests and 461 of documentation.
+tests and 497 of documentation.
+
+### One file beyond the list §10 named
+
+`docs/SystemArchitecture.md` declared
+`createGeneration(...): Promise<ProviderGenerationRef>`. This branch is what
+makes that declaration wrong, so the canonical architecture document would
+otherwise have directed implementers to the pre-change return type. It now shows
+the submission sub-port and the outcome union, with a dated amendment note in
+the same style as the ADR-0024 supersession already in that section. Flagged
+rather than done silently, and trivially revertible if the CTO prefers it
+carried to 3B-2C-2.
 
 ## What changed
 
@@ -154,7 +166,7 @@ runtime work was removed.
 
 | Item | Status |
 | --- | --- |
-| Architecture diagram | Updated — the provider-neutral submission port only |
+| Architecture diagram | Updated — `docs/architecture.md` status table, and the provider interface in `docs/SystemArchitecture.md`. Neither shows a submission-only adapter, because none exists |
 | Entity-relationship diagram | **Not applicable** — no schema change |
 | Critical sequence diagram | **Deferred to the whole-phase report** — the invocation boundary is described in ADR-0035 §5; a diagram of a one-adapter contract would restate it |
 | OpenAPI / API change summary | **Not applicable** — no HTTP API, DTO or route changed |
