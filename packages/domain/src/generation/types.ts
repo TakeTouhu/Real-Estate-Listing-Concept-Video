@@ -6,6 +6,8 @@
  * service (4B) and the worker (4C) all have to agree on.
  */
 
+import type { ResolutionNormalization, TargetOutputResolution } from "./model-catalog";
+
 /**
  * The lifecycle of one scene-generation attempt.
  *
@@ -61,6 +63,15 @@ export const SCENE_GENERATION_STATES: readonly SceneGenerationState[] = [
  * Identity is textual, not semantic: two prompts that a human would call
  * equivalent are different requests, because proving otherwise is not something
  * this function can do.
+ *
+ * **V2.** There used to be a single `resolution: string` here, and it was
+ * ambiguous: for the only wired model, what the customer asked for and what the
+ * provider was told to generate were the same string, so one field could stand
+ * for both. It cannot once a second model exists — H3 Max serves a 1080p target
+ * from a 768P generation — so the one field is replaced by five explicit facts
+ * and there is deliberately **no `resolution` alias** left to fall back on
+ * (ADR-0034). All five are hashed; see `computeGenerationRequestHash` for why
+ * the two derivable ones are included on purpose.
  */
 export interface GenerationRequestFacts {
   readonly assetId: string;
@@ -69,7 +80,16 @@ export interface GenerationRequestFacts {
   readonly durationSeconds: number;
   readonly cameraMotion: string | null;
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /** The product deliverable the customer asked for. A quality class. */
+  readonly targetOutputResolution: TargetOutputResolution;
+  /** The provider's own token for what the model is asked to generate. */
+  readonly nativeGenerationResolution: string;
+  /** How the native generation reaches the target. Delivery semantics. */
+  readonly resolutionNormalization: ResolutionNormalization;
+  /** `false` means the delivered file carries the size but not the detail. */
+  readonly nativeMeetsTarget: boolean;
+  /** The catalog's stable internal key — what was selected, not where it lives. */
+  readonly modelKey: string;
   readonly providerName: string;
   readonly providerModelId: string;
 }
@@ -128,7 +148,7 @@ export interface SceneGenerationProvenance {
  *
  * The set is exactly the {@link GenerationRequestFacts} not already persisted
  * elsewhere on the row. Together with `assetId`, `providerName` and
- * `providerModelId`, an attempt therefore carries all eight hash facts and can
+ * `providerModelId`, an attempt therefore carries every hash fact and can
  * **recompute its own `requestHash`** — an invariant, not a convention.
  *
  * Nothing beyond that is copied. Scene position, room type, and project
@@ -166,8 +186,50 @@ export interface SceneGenerationRequestSnapshot {
   readonly requestCameraMotion: string | null;
   /** Snapshotted because the project's value is mutable after admission. */
   readonly requestAspectRatio: string | null;
-  /** Snapshotted because the project's value is mutable after admission. */
+  /**
+   * **V1 only, and never written again.**
+   *
+   * This is the ambiguous single `resolution` the identity contract used before
+   * ADR-0034 — a string that meant "what the customer asked for" and "what the
+   * provider generates" at the same time, which was only ever true because one
+   * model happened to make them coincide.
+   *
+   * It is retained rather than dropped because the rows that carry it were
+   * hashed over it: deleting the column would destroy the only evidence of what
+   * a V1 attempt was admitted for, and rewriting those values into the V2 fields
+   * would be a guess about which of the two meanings each one had. So V1 rows
+   * keep it and stay unreconstructable, and a V2 row must have it `null` —
+   * a row with both vocabularies populated is corruption, and the database
+   * enforces that rather than trusting callers.
+   */
   readonly requestResolution: string | null;
+  /**
+   * The V2 delivery snapshot: which model was selected, what the customer asked
+   * for, and exactly how this model was going to satisfy it.
+   *
+   * These five are all-or-none, enforced in the database. `null` across all
+   * five means the attempt was admitted under V1 and predates the contract;
+   * **they are not backfilled**, because reconstructing them would mean deciding
+   * what a V1 `requestResolution` meant, which is the ambiguity that caused this
+   * change. Consumers fail closed (`generationRequestFactsFrom`).
+   *
+   * `requestModelKey` is the catalog key rather than the provider model id: the
+   * id is already on the row as `providerModelId`, and the key is what execution
+   * resolves the catalog by, so a vendor renaming an endpoint cannot silently
+   * repoint an admitted attempt at a different entry.
+   */
+  readonly requestModelKey: string | null;
+  readonly requestTargetOutputResolution: TargetOutputResolution | null;
+  /** The provider's own token, stored verbatim and never parsed. */
+  readonly requestNativeGenerationResolution: string | null;
+  readonly requestResolutionNormalization: ResolutionNormalization | null;
+  /**
+   * Frozen at admission, not recomputed at execution.
+   *
+   * A later catalog correction must not be able to turn an attempt the customer
+   * was told is upscaled into one described as native, or the reverse.
+   */
+  readonly requestNativeMeetsTarget: boolean | null;
   /**
    * The exact positive provider prompt string produced at admission.
    *

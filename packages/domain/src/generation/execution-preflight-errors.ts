@@ -3,13 +3,14 @@ import { AppError } from "@app/shared";
 /**
  * Why a queued generation could not be prepared for submission.
  *
- * A closed vocabulary of fourteen, deliberately separate from the message text.
+ * A closed vocabulary of sixteen, deliberately separate from the message text.
  * Phase 4C-2B maps these to durable states and Phase 4C-3 decides what a worker
  * does next; both need something stable to switch on, and matching on prose is
  * how a refusal quietly changes meaning under a reworded string.
  *
  * Thirteen through Phase 4C-2B; `ASSET_SOURCE_UNIDENTIFIABLE` was added by
- * Phase 4C-3A-2a (ADR-0029).
+ * Phase 4C-3A-2a (ADR-0029); `MODEL_UNAVAILABLE` and
+ * `MODEL_DELIVERY_PLAN_CHANGED` by Phase 4C-3B-2B (ADR-0034).
  *
  * Nothing here describes a provider outcome. Preflight never contacts a
  * provider, so no reason in this list can mean "we may have been charged" —
@@ -25,6 +26,35 @@ export const PREFLIGHT_REFUSAL_REASONS = [
   "REQUEST_HASH_MISMATCH",
   /** The deployment now serves a different provider or model than was admitted. */
   "PROVIDER_IDENTITY_MISMATCH",
+  /**
+   * The model this attempt was admitted under is not selectable in the current
+   * catalog — the key is absent, or the entry is no longer verified.
+   *
+   * Separate from `PROVIDER_IDENTITY_MISMATCH`, which is the *opposite*
+   * finding: there the entry resolves and disagrees with the row. Here nothing
+   * resolves, so there is no contract to disagree with, and an operator sent to
+   * "the deployment was repointed" would be looking at the wrong thing.
+   */
+  "MODEL_UNAVAILABLE",
+  /**
+   * The model still resolves and still points at the same provider request,
+   * but the catalog now describes a **different delivery plan** for the target
+   * this attempt was admitted for — a different native token, a different
+   * normalization, or a different answer to whether the native generation meets
+   * the target.
+   *
+   * Distinct from `PROVIDER_IDENTITY_MISMATCH`, which is about *where* the
+   * request goes. This one is about *what the customer was promised*: the same
+   * provider and model id can be re-declared as, say, upscaling to 1080p where
+   * they were previously believed to serve it natively. Submitting under the
+   * frozen plan would spend money on a request whose delivery semantics the
+   * product no longer stands behind, and submitting under the current plan
+   * would execute something the customer never approved (ADR-0034).
+   *
+   * Also covers a capability that has narrowed until it no longer lists the
+   * frozen native token at all.
+   */
+  "MODEL_DELIVERY_PLAN_CHANGED",
   /** No asset with that id inside the generation's own organization. */
   "ASSET_NOT_FOUND",
   /** The asset exists but is still being uploaded, scanned or processed. */
@@ -92,6 +122,18 @@ const REASON_DISPOSITION: Record<PreflightRefusalReason, PreflightDisposition> =
   LEGACY_PROMPT_MISSING: "TERMINAL",
   REQUEST_HASH_MISMATCH: "TERMINAL",
   PROVIDER_IDENTITY_MISMATCH: "TERMINAL",
+  // Retryable under the same-identity criterion, and only that: a catalog entry
+  // restored or promoted from `UNVERIFIED` is exactly the world change the
+  // disposition describes, and the attempt's own frozen key and provider model
+  // id are unchanged — if the restored entry disagrees with them, the identity
+  // check refuses it terminally on the next pass. Nothing retries automatically.
+  MODEL_UNAVAILABLE: "RETRYABLE",
+  // Terminal, unlike its neighbour. A catalog entry coming back is a plausible
+  // world change; a *corrected* delivery plan is a deliberate statement that the
+  // model does something other than what this attempt was admitted under. The
+  // honest remedy is a new admission at the current semantics, not a retry of
+  // one the product no longer stands behind.
+  MODEL_DELIVERY_PLAN_CHANGED: "TERMINAL",
   ASSET_NOT_FOUND: "TERMINAL",
   ASSET_NOT_READY: "RETRYABLE",
   ASSET_UPLOAD_FAILED: "RETRYABLE",

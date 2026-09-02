@@ -92,8 +92,8 @@ export function StoryboardView({
           <dd>{project.durationSeconds} seconds</dd>
           <dt>Aspect ratio</dt>
           <dd>{project.aspectRatio}</dd>
-          <dt>Resolution</dt>
-          <dd>{project.resolution}</dd>
+          <dt>Output resolution</dt>
+          <dd>{project.targetOutputResolution}</dd>
           {motion ? (
             <>
               <dt>Camera motion</dt>

@@ -8,6 +8,16 @@ interface Props {
   readonly organizationId: string;
   readonly propertyId: string;
   readonly cameraMotionOptions: readonly CameraMotionOption[];
+  /**
+   * The product output targets, resolved by the server page.
+   *
+   * Passed as plain data for the same reason `cameraMotionOptions` is: this is
+   * a Client Component, and importing the domain constant would put domain code
+   * — and, through the package index, server-only crypto — in the browser
+   * bundle. The server refuses an off-vocabulary value regardless of what this
+   * control offers.
+   */
+  readonly targetOutputResolutionOptions: readonly string[];
 }
 
 /**
@@ -53,22 +63,38 @@ type OptionalKey = (typeof OPTIONAL_FIELDS)[number]["key"];
  * scenes — because the create endpoint cannot express them and a client must
  * not present a project as already composed.
  *
- * Aspect ratio and resolution remain free text. The configured model's real
- * capabilities now exist (ADR-0019) but are enforced at generation admission,
- * on the server, where the authority belongs — this component fetches no
- * capability and re-derives no rule. The placeholders show the *shape* of the
- * string, not a claim about what any provider accepts.
+ * Aspect ratio remains free text. The configured model's real capabilities now
+ * exist (ADR-0019) but are enforced at generation admission, on the server,
+ * where the authority belongs — this component fetches no capability and
+ * re-derives no rule. The placeholder shows the *shape* of the string, not a
+ * claim about what any provider accepts.
+ *
+ * Output resolution is the exception, and for a different reason than
+ * capability: it is a **closed product vocabulary**, not a provider value, so
+ * the control offers exactly its members and starts unset. It is deliberately
+ * not defaulted to one — a pre-selected `1080p` would have the customer
+ * "choose" the more expensive deliverable by not looking at the field. The
+ * options are derived from the domain constant by the server page, so a new
+ * target cannot appear in the product without appearing in this control.
+ *
+ * The value is a quality class, which is why nothing here says "1920×1080":
+ * this service supports several aspect ratios, and whether a model reaches the
+ * target natively or by upscaling is a per-model fact the server records at
+ * admission.
  */
 export function CreateProjectPanel({
   organizationId,
   propertyId,
   cameraMotionOptions,
+  targetOutputResolutionOptions,
 }: Props) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [duration, setDuration] = useState("");
   const [aspectRatio, setAspectRatio] = useState("");
-  const [resolution, setResolution] = useState("");
+  // "" is a real state — nothing chosen yet — and it is why the empty option
+  // exists rather than a pre-selected default.
+  const [targetOutputResolution, setTargetOutputResolution] = useState("");
   const [optional, setOptional] = useState<Record<OptionalKey, string>>({ prompt: "" });
   const [cameraMotion, setCameraMotion] = useState("");
   const [pending, setPending] = useState(false);
@@ -84,7 +110,7 @@ export function CreateProjectPanel({
     name.trim().length > 0 &&
     durationValid &&
     aspectRatio.trim().length > 0 &&
-    resolution.trim().length > 0;
+    targetOutputResolution !== "";
 
   async function submit(): Promise<void> {
     setPending(true);
@@ -94,7 +120,7 @@ export function CreateProjectPanel({
       name: name.trim(),
       durationSeconds,
       aspectRatio: aspectRatio.trim(),
-      resolution: resolution.trim(),
+      targetOutputResolution,
     };
     for (const { key } of OPTIONAL_FIELDS) {
       const value = optional[key].trim();
@@ -117,7 +143,7 @@ export function CreateProjectPanel({
         setName("");
         setDuration("");
         setAspectRatio("");
-        setResolution("");
+        setTargetOutputResolution("");
         setOptional({ prompt: "" });
         setCameraMotion("");
         router.refresh();
@@ -156,12 +182,27 @@ export function CreateProjectPanel({
         onChange={setAspectRatio}
         placeholder="16:9"
       />
-      <Field
-        label="Resolution"
-        value={resolution}
-        onChange={setResolution}
-        placeholder="1080p"
-      />
+      <label className="field">
+        <span className="muted">Output resolution</span>
+        <select
+          value={targetOutputResolution}
+          aria-label="Output resolution"
+          onChange={(event) =>
+            // Checked against the same list the options were built from, so a
+            // value this control did not offer cannot reach component state.
+            setTargetOutputResolution(
+              targetOutputResolutionOptions.find((target) => target === event.target.value) ?? "",
+            )
+          }
+        >
+          <option value="">Choose a resolution</option>
+          {targetOutputResolutionOptions.map((target) => (
+            <option key={target} value={target}>
+              {target}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {OPTIONAL_FIELDS.map(({ key, label }) => (
         <Field

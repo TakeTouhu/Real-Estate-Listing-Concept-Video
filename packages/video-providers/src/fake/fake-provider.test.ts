@@ -8,7 +8,7 @@ const input: ProviderGenerationInput = {
   prompt: "bright natural interior",
   durationSeconds: 6,
   aspectRatio: "16:9",
-  resolution: "1080p",
+  nativeGenerationResolution: "1080p",
   requestHash: "abc123",
 };
 

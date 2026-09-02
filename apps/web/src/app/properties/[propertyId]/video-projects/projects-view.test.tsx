@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoProjectDto } from "@/lib/storyboard";
 import { ProjectsView } from "./projects-view";
@@ -19,7 +19,7 @@ function project(overrides: Partial<VideoProjectDto> = {}): VideoProjectDto {
     status: "DRAFT",
     durationSeconds: 30,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
     cameraMotion: null,
     prompt: null,
     negativePrompt: null,
@@ -37,6 +37,7 @@ function view(projects: VideoProjectDto[], canCreate = true) {
       projects={projects}
       canCreate={canCreate}
       cameraMotionOptions={[{ value: "STATIC", label: "Static (no camera movement)" }]}
+      targetOutputResolutionOptions={["720p", "1080p"]}
     />,
   );
 }
@@ -74,11 +75,11 @@ describe("project list", () => {
   });
 
   it("shows the settings a customer needs before composing", () => {
-    view([
+    const { container } = view([
       project({
         durationSeconds: 45,
         aspectRatio: "9:16",
-        resolution: "720p",
+        targetOutputResolution: "720p",
         cameraMotion: "SLOW_DOLLY_FORWARD",
         prompt: "bright and airy",
         negativePrompt: "no harsh shadows",
@@ -87,7 +88,12 @@ describe("project list", () => {
 
     expect(screen.getByText("45 seconds")).toBeTruthy();
     expect(screen.getByText("9:16")).toBeTruthy();
-    expect(screen.getByText("720p")).toBeTruthy();
+    // Scoped to the project's own settings list. The create panel renders both
+    // an "Output resolution" label and a `720p` <option>, so an unscoped query
+    // would pass on the empty control rather than on the recorded value.
+    const settings = within(container.querySelector("dl")!);
+    expect(settings.getByText("Output resolution")).toBeTruthy();
+    expect(settings.getByText("720p")).toBeTruthy();
     expect(screen.getByText("Slow dolly forward")).toBeTruthy();
     expect(screen.getByText("bright and airy")).toBeTruthy();
     expect(screen.getByText("no harsh shadows")).toBeTruthy();

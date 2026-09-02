@@ -17,32 +17,109 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
-- [ ] **Phase 4C-3B-2 is required before any paid submission.** 4C-3B-1 shipped
-      diagnostic sanitization only (ADR-0031). Still outstanding: the
-      `ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN` result union;
-      the definitive-rejection HTTP allowlist, approved as **exactly 400, 401,
-      403** — 422's current definitive treatment must **not** be carried forward,
-      and 429, every 5xx and every unlisted status default to
-      `SUBMISSION_UNKNOWN`; malformed-2xx semantics; manual redirect handling for
-      the paid create POST only; a request-specific 60 s submission timeout;
-      exactly-one-POST evidence; fake-provider submission outcomes. Until it
-      lands, 429 and 5xx still report `retryable: true`, so a retry policy
+- [ ] **Provider-agnostic submission certainty is required before any paid
+      submission.** 4C-3B-1 shipped diagnostic sanitization only (ADR-0031).
+      The remaining work is a **common contract plus per-adapter evidence**, and
+      the split matters — the original 4C-3B-2 design was written when WaveSpeed
+      was the only provider, and it put a universal HTTP-status rule in the
+      shared layer. That is no longer sound: since ADR-0033 the architecture is
+      multi-provider, and a queue-based provider need not express certainty
+      through HTTP status at all.
+
+      **There is no ADR-0032 file, and none should be written.** The number
+      appears in earlier prose as a placeholder for a decision that was planned
+      but never recorded as an ADR — the earlier WaveSpeed-centric design exists
+      only as superseded planning and as branch history on
+      `claude/real-estate-virtual-tour-phase-4c3b2-hga252`. That branch is
+      **read-only reference material**: it is not merged, rebased or
+      cherry-picked wholesale, and any idea taken from it must be revalidated
+      against the contract below before it counts as a decision. **This entry is
+      the active specification.**
+
+      **Common, provider-agnostic:**
+
+      ```text
+      ProviderSubmissionOutcome
+        ACCEPTED
+        DEFINITIVELY_REJECTED
+        SUBMISSION_UNKNOWN
+      ```
+
+      The common contract carries **no universal HTTP-status allowlist**. Each
+      adapter owns the evidence mapping its own provider's response and
+      transport behaviour into these three outcomes, because only the adapter
+      knows what its provider's responses mean.
+
+      Invariants the common contract must preserve, whichever adapter is in play:
+
+      - exactly one paid submission attempt;
+      - no blind automatic POST retry;
+      - an ambiguous submission is **never** represented as an ordinary
+        retryable rejection;
+      - retryability and submission certainty are separate concepts — a thing
+        can be safe to retry, unsafe to retry, or unknown, and "unknown" is not
+        a kind of "retryable";
+      - transport and provider-response interpretation stays **inside** each
+        adapter, never in the shared layer.
+
+      **WaveSpeed adapter (approved, subject to re-verification when that work
+      is rebuilt):**
+
+      ```text
+      400 -> DEFINITIVELY_REJECTED
+      401 -> DEFINITIVELY_REJECTED
+      403 -> DEFINITIVELY_REJECTED
+      everything else after invocation -> SUBMISSION_UNKNOWN
+      ```
+
+      422's current definitive treatment must **not** be carried forward. Until
+      this lands, 429 and 5xx still report `retryable: true`, so a retry policy
       reading that flag would re-POST an ambiguous submission.
+
+      Also still outstanding for the WaveSpeed adapter: malformed-2xx semantics,
+      manual redirect handling for the paid create POST only, a request-specific
+      60 s submission timeout, exactly-one-POST evidence, and fake-provider
+      submission outcomes.
+
+      **fal adapter: the certainty classifier is deliberately unresolved.** Do
+      not infer it from WaveSpeed's. It must be established from the
+      authoritative fal queue/submission contract in the future fal-adapter and
+      submission-certainty milestone. No fal adapter exists today.
+
       **Required before any provider charge is possible.**
-- [ ] **Phase 4C-3B-2B — the resolution migration.** 3B-2A introduced the
-      `TargetOutputResolution` / native-generation vocabulary and the model
-      catalog but deliberately changed no persisted meaning. Still outstanding:
-      constrain `VideoProject.resolution` to the product target at the API, UI
-      and service boundary; add a native-generation snapshot column to
-      `SceneGeneration`; carry both facts in `GenerationRequestFacts` and the
-      request hash (an identity-semantics change to document and test
-      explicitly); fail closed in `generationRequestFactsFrom` for a legacy row
-      whose native resolution cannot be proven, rather than deriving it from
-      today's catalog; validate the native value against `capability.resolutions`
-      and the target against `targetOutputResolutions`; and feed
-      `ProviderGenerationInput.resolution` from `planGenerationResolution`. Needs
-      a Prisma migration. The full semantic ledger is in
-      `docs/phase-4c3b2a-completion.md`.
+- [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
+      identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying
+      both resolutions plus the frozen delivery plan and the model key;
+      `SceneGeneration` gained five all-or-none V2 snapshot columns that are
+      never backfilled; `VideoProject.targetOutputResolution` is constrained to
+      the product vocabulary at the API, UI, service and database boundaries,
+      with the migration failing closed rather than rewriting a legacy value;
+      `generationRequestFactsFrom` refuses a V1 row, a partial snapshot, a row
+      carrying both vocabularies, and a snapshot disagreeing with its own hash
+      version; `startScene` takes an optional `modelKey` with no fallback;
+      preflight resolves the catalog by the attempt's own frozen key and refuses
+      `MODEL_UNAVAILABLE` before signing; and the provider boundary carries
+      `nativeGenerationResolution`. Follow-ups it did **not** do are listed
+      below.
+- [ ] **Nothing normalizes a delivered video to its target yet.** ADR-0034
+      records `UPSCALE` / `DOWNSCALE` and performs neither, so an H3 Max 1080p
+      deliverable would be a 768P generation at 768P. Phase 5 owns composition,
+      and until it lands the product must not describe any `nativeMeetsTarget:
+      false` output as native — the flag is persisted and audited so that claim
+      is checkable, not so it can be ignored.
+- [ ] **No customer-facing surface exposes `nativeMeetsTarget`.** It is on the
+      row and in the audit log, but nothing shows a customer that the 1080p they
+      asked for will be upscaled on the model they picked. Deciding where that
+      disclosure belongs is a product question, and it is a prerequisite for
+      offering model selection in the UI (there is no model selector yet — the
+      argument exists on the service and has no HTTP or UI caller).
+- [ ] **A catalog delivery-plan correction silently strands admitted rows.**
+      Preflight now refuses them (`MODEL_DELIVERY_PLAN_CHANGED`, terminal), which
+      is the safe outcome — but nothing tells an operator *before* they edit the
+      catalog how many admitted attempts the edit would strand, and nothing
+      reports them afterwards. A read-only reconciliation query over
+      `scene_generations` against the current catalog is worth having before
+      paid execution, and is a prerequisite for any routine catalog correction.
 - [ ] **Verify MiniMax H3 and Veo 3.1 before either can be selected.** Both are
       in the catalog as `UNVERIFIED` with their missing items listed. H3 in
       particular is the model the product would want when native 1080p detail

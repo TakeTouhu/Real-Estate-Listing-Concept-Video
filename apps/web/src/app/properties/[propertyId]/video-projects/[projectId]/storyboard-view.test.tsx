@@ -18,7 +18,7 @@ function project(overrides: Partial<VideoProjectDto> = {}): VideoProjectDto {
     status: "DRAFT",
     durationSeconds: 30,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
     cameraMotion: null,
     prompt: null,
     negativePrompt: null,
@@ -125,7 +125,7 @@ describe("project settings", () => {
       project: project({
         durationSeconds: 45,
         aspectRatio: "9:16",
-        resolution: "720p",
+        targetOutputResolution: "720p",
         cameraMotion: "SLOW_DOLLY_FORWARD",
         prompt: "bright and airy",
         negativePrompt: "no harsh shadows",

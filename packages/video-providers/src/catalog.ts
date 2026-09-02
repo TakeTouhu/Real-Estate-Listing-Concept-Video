@@ -25,7 +25,8 @@ import { OPEN_VIDEO_CAPABILITY } from "./wavespeed/capability";
  * unverified entry has no business asserting one.
  *
  * Every value below is deeply frozen. `Object.freeze` alone would still hand a
- * consumer a live `resolutions` array, and the OpenVideo descriptor is shared
+ * consumer a live `nativeGenerationResolutions` array, and the OpenVideo
+ * descriptor is shared
  * by reference with the capability provider.
  */
 
@@ -68,7 +69,7 @@ const MINIMAX_H3_MAX: VerifiedModelEntry = deepFreeze({
     providerModelId: MINIMAX_H3_MAX_MODEL_ID,
     durationSeconds: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
     // Native generation tokens, not product outputs.
-    resolutions: ["480P", "768P"],
+    nativeGenerationResolutions: ["480P", "768P"],
     aspectRatios: { kind: "COMPOSITION_OWNED" },
     negativePrompt: { kind: "UNSUPPORTED" },
     // A claim about the renderer, pinned by a test — see ADR-0020.

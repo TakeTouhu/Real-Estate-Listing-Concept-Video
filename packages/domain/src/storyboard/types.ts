@@ -1,4 +1,8 @@
 import type { RoomType } from "../analysis/types";
+// Type-only, and one-directional at runtime: the resolution vocabulary is
+// declared once, next to the catalog that has to honour it, so a project cannot
+// store a target no model entry is able to describe.
+import type { TargetOutputResolution } from "../generation/model-catalog";
 
 /**
  * Project lifecycle:
@@ -21,9 +25,11 @@ export const VIDEO_PROJECT_STATUSES: readonly VideoProjectStatus[] = [
 /**
  * Project-level settings for one property's walkthrough video.
  *
- * Provider-neutral: `durationSeconds`, `aspectRatio` and `resolution` are stored
- * as requested. Validating them against a model's real capabilities is Phase 4
- * work — this phase does not invent provisional provider limits.
+ * Provider-neutral: `durationSeconds` and `aspectRatio` are stored as
+ * requested. `targetOutputResolution` is the exception, and deliberately so —
+ * it is a closed product vocabulary rather than free text, because it is a
+ * promise the product makes about the deliverable, not a value passed through
+ * to a vendor (ADR-0034).
  */
 export interface VideoProject {
   readonly id: string;
@@ -33,7 +39,16 @@ export interface VideoProject {
   readonly status: VideoProjectStatus;
   readonly durationSeconds: number;
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /**
+   * The product deliverable the customer asked for — a **quality class**, not a
+   * raster size, and not the token any provider is sent.
+   *
+   * It was `resolution: string` until ADR-0034. The rename is not cosmetic: the
+   * old field was read by generation as the value to *generate at*, which was
+   * only ever coherent because the one wired model generated natively at the
+   * same two strings the product offered.
+   */
+  readonly targetOutputResolution: TargetOutputResolution;
   readonly stylePreset: string | null;
   readonly cameraMotion: string | null;
   /** Untrusted user text. Compiled and moderated in Phase 3C-3, never here. */

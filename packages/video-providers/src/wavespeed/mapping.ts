@@ -55,7 +55,11 @@ export function mapToWaveSpeedRequest(
     image: input.sourceImageUrl,
     prompt: input.prompt,
     duration: input.durationSeconds,
-    resolution: input.resolution,
+    // The provider's own wire field, fed from the domain's explicitly-named
+    // native token. The rename stops here: `resolution` is what OpenVideo
+    // documents, and an adapter's job is to speak the vendor's vocabulary
+    // rather than to export it inwards (ADR-0034).
+    resolution: input.nativeGenerationResolution,
   };
   if (input.seed !== undefined) body.seed = input.seed;
   return { url: buildSubmitUrl(baseUrl, input.modelId), body };

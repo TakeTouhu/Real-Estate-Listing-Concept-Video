@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
+import { TARGET_OUTPUT_RESOLUTIONS } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
@@ -7,6 +8,7 @@ import {
   optionalString,
   readJsonBody,
   requireOrganizationIdFromQuery,
+  requiredMember,
   requiredPositiveInteger,
   requiredString,
 } from "@/lib/request";
@@ -20,7 +22,9 @@ export const dynamic = "force-dynamic";
  * may write to it, and what a valid project looks like are all decided by
  * StoryboardService. The handler checks the *shape* of the body and nothing
  * else — in particular it applies no provider capability rule to duration,
- * aspect ratio, or resolution, which is Phase 4's job.
+ * aspect ratio, which is Phase 4's job. `targetOutputResolution` is the one
+ * exception, and not a capability rule: it is a closed product vocabulary, so
+ * membership is a shape check.
  *
  * Lifecycle state is not accepted: `CreateProjectInput` cannot express status,
  * a composition fingerprint, or scenes, so a client cannot present a project as
@@ -44,7 +48,15 @@ export async function POST(
         name: requiredString(body, "name"),
         durationSeconds: requiredPositiveInteger(body, "durationSeconds"),
         aspectRatio: requiredString(body, "aspectRatio"),
-        resolution: requiredString(body, "resolution"),
+        // A closed product vocabulary, checked here rather than accepted as
+        // free text. The old `resolution` key is deliberately NOT accepted as
+        // an alias: leaving it writable would let an un-updated client keep
+        // setting the ambiguous value this milestone removed (ADR-0034).
+        targetOutputResolution: requiredMember(
+          body,
+          "targetOutputResolution",
+          TARGET_OUTPUT_RESOLUTIONS,
+        ),
         prompt: optionalString(body, "prompt"),
         negativePrompt: optionalString(body, "negativePrompt"),
         cameraMotion: optionalString(body, "cameraMotion"),

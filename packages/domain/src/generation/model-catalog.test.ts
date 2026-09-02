@@ -21,7 +21,7 @@ const capability: VideoModelCapability = {
   providerName: "test-provider",
   providerModelId: "test/model",
   durationSeconds: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
-  resolutions: ["768P"],
+  nativeGenerationResolutions: ["768P"],
   aspectRatios: { kind: "COMPOSITION_OWNED" },
   negativePrompt: { kind: "UNSUPPORTED" },
   cameraMotion: { kind: "PROMPT_RENDERED" },

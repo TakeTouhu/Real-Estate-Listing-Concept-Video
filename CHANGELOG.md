@@ -3,6 +3,115 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2B: Versioned request identity and the resolution snapshot
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2b-completion.md`
+and ADR-0034. This completes what 4C-3B-2A deliberately left undone.
+
+### Breaking
+
+- **`resolution` becomes `targetOutputResolution` on the video-project API,
+  DTO, domain entity and Prisma model**, and its value is now a closed
+  vocabulary (`720p` / `1080p`) rather than any non-empty string. The old key is
+  **not** accepted as an alias anywhere — a request sending only `resolution`
+  gets a `422`. Keeping it writable would let a client that was never updated
+  keep setting the ambiguous value, which is the defect being fixed. Details in
+  `docs/api-changes-phase-4c3b2b.md`.
+- **`requestHash` is versioned: `sha256:` becomes `sha256:v2:`**, over a
+  twelve-element tuple rather than eight. Every attempt admitted before this
+  change is permanently unreconstructable and therefore unexecutable: the V2
+  delivery semantics required for safe execution cannot be proven from a V1 row
+  without reinterpreting historical data. That was already true for rows
+  predating ADR-0018 and ADR-0023. No stored hash is rewritten and no legacy
+  snapshot is backfilled; doing either would make in-flight requests look new,
+  which is a duplicate provider charge rather than a visible error.
+- `ProviderGenerationInput.resolution` becomes `nativeGenerationResolution`, and
+  `VideoModelCapability.resolutions` becomes `nativeGenerationResolutions`. The
+  WaveSpeed adapter still sends the vendor's own `resolution` wire field; an
+  adapter speaks the vendor's vocabulary rather than exporting it inwards.
+
+### Added
+
+- **Five all-or-none V2 snapshot columns on `scene_generations`** —
+  `requestModelKey`, `requestTargetOutputResolution`,
+  `requestNativeGenerationResolution`, `requestResolutionNormalization`,
+  `requestNativeMeetsTarget`. Nullable and never backfilled: deciding what a V1
+  `requestResolution` meant is exactly the ambiguity this removes.
+- **Six database CHECK constraints**, because a convention does not bind a
+  writer that is not this application:
+  `video_projects_resolution_target_check`,
+  `scene_generations_target_output_resolution_check`,
+  `scene_generations_resolution_normalization_check`,
+  `scene_generations_model_key_nonblank_check`,
+  `scene_generations_native_resolution_nonblank_check`, and
+  `scene_generations_request_identity_version_check`. The last one is a single
+  physical constraint carrying three properties at once — V2 snapshot
+  completeness, V1/V2 vocabulary mutual exclusion, and hash-version consistency
+  — because all three are branches of the same `CASE` on the row's own hash
+  prefix, and splitting them would let a row satisfy each in isolation while
+  contradicting itself overall.
+- **Per-request model selection.** `GenerationService.startScene` takes an
+  optional `modelKey`; omitted means the catalog default, resolved exactly once.
+  An unknown key or an `UNVERIFIED` entry is refused with **no fallback** —
+  generating on a model the caller did not ask for, and charging for it, is
+  worse than refusing. There is deliberately no `modelKey` column on
+  `VideoProject`, and no HTTP or UI caller yet.
+- **Two preflight refusal reasons**, taking the vocabulary to sixteen.
+  `MODEL_UNAVAILABLE` (retryable) is an attempt whose frozen model key resolves
+  to nothing or to a de-verified entry. `MODEL_DELIVERY_PLAN_CHANGED` (terminal)
+  is an entry that still resolves and still points at the same provider request
+  but now declares a *different delivery plan* for the frozen target — a
+  different native token, normalization, or answer on `nativeMeetsTarget`. All
+  three model checks refuse before any storage credential is minted.
+- **Non-blank constraints** on the persisted model key and native token. Not
+  merely non-null: the all-or-none rule is satisfied by `''`, so without them a
+  row could present a complete-looking snapshot naming no model and asking the
+  provider to generate at nothing.
+- `modelKey`, `targetOutputResolution` and `nativeMeetsTarget` in the
+  generation-requested audit entry. The third is the difference between a native
+  1080p deliverable and an upscaled one, and it must be answerable later without
+  re-deriving it from a catalog that may since have changed.
+- A pinned literal digest for the V2 tuple, which fails on any reordering rather
+  than only on a one-sided change.
+
+### Changed
+
+- Preflight resolves the catalog by **the attempt's own frozen model key**, not
+  the deployment's current default, and its dependency is narrowed to `find` so
+  `default()` is not reachable at all. It then requires the entry's *current*
+  delivery plan to **agree** with the frozen one — agreement, not adoption. When
+  they agree the snapshot is submitted unchanged; when they disagree neither
+  answer is usable, because the frozen plan describes semantics the product no
+  longer stands behind and the current plan describes work the customer never
+  approved, so the attempt is refused and must be re-admitted.
+- `assertSettingsSupported` compares native to native. Validating a product
+  target against a list of native tokens was the conflation itself.
+- The create-project form's free-text resolution input becomes a closed
+  selector, starting unset — a pre-selected `1080p` would have a customer
+  "choose" the more expensive deliverable by not looking at the field.
+
+### Migration
+
+`00000000000009_phase4c3b2b_resolution_identity_v2` **fails closed**: it aborts
+with an explicit, actionable message if any existing project holds a resolution
+outside the product vocabulary, rather than rewriting a customer's stated
+request in a table that already has generations hashed against it. It performs
+no `UPDATE`, `INSERT`, `DELETE`, `DROP` or `RENAME`, and `requestResolution` is
+retained as the only surviving record of what V1 attempts were admitted for.
+Operational detail, including the abort procedure, is in
+`docs/migration-notes.md`.
+
+### Not in this milestone
+
+Composition still performs no normalization — `UPSCALE` is recorded and not
+honoured, so an H3 Max 1080p deliverable is not native 1080p until Phase 5, and
+nothing in the product may describe it as such. No customer-facing surface
+exposes `nativeMeetsTarget`, and there is no model selector in the UI; both are
+prerequisites for offering model choice to customers and are recorded in
+`docs/decisions/TODO.md`. Still absent: any fal adapter, paid generation, real
+submission, worker loop, submission audit, polling, output ingestion, billing,
+automatic fallback, retry, or cost/quality routing.
+
 ## [Unreleased] — Phase 4C-3B-2A: Multi-provider model catalog and two resolutions
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2a-completion.md`

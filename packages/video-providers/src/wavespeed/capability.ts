@@ -19,7 +19,7 @@ import type { VideoModelCapability, VideoModelCapabilityProvider } from "@app/do
  * **Deeply** frozen, not shallowly. This object is shared by reference with the
  * model catalog so the two cannot drift, which also means one mutation through
  * either reference poisons both — and `Object.freeze` would still hand out a
- * live `resolutions` array (ADR-0033).
+ * live `nativeGenerationResolutions` array (ADR-0033).
  */
 
 /** Documented request parameters, for the adapter and its tests to agree on. */
@@ -58,8 +58,11 @@ export const OPEN_VIDEO_CAPABILITY: VideoModelCapability = deepFreeze({
   providerModelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
   // Documented as integer seconds, 3 through 20 inclusive (default 5).
   durationSeconds: { kind: "RANGE", minSeconds: 3, maxSeconds: 20 },
-  // Documented output resolutions (default 480p).
-  resolutions: ["480p", "720p", "1080p"],
+  // The tokens this model documents for its own generation, default 480p.
+  // Named `nativeGenerationResolutions` since ADR-0034: for OpenVideo these
+  // happen to coincide with two product targets, and that coincidence is
+  // exactly what made one ambiguous `resolution` field look correct.
+  nativeGenerationResolutions: ["480p", "720p", "1080p"],
   aspectRatios: { kind: "COMPOSITION_OWNED" },
   negativePrompt: { kind: "UNSUPPORTED" },
   cameraMotion: { kind: "PROMPT_RENDERED" },

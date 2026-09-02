@@ -238,7 +238,7 @@ function validBody(overrides: Record<string, unknown> = {}) {
     name: "Walkthrough",
     durationSeconds: 30,
     aspectRatio: "16:9",
-    resolution: "1080p",
+    targetOutputResolution: "1080p",
     ...overrides,
   };
 }
@@ -322,9 +322,9 @@ describe("creation result", () => {
     expect(stored.compositionFingerprint).toBeNull();
   });
 
-  it("applies no provider capability rule", async () => {
+  it("applies no provider capability rule to duration or aspect ratio", async () => {
     const res = await createProject(
-      req(validBody({ durationSeconds: 987, aspectRatio: "21:9", resolution: "8k" })),
+      req(validBody({ durationSeconds: 987, aspectRatio: "21:9" })),
       params(),
     );
     expect(res.status).toBe(201);
@@ -340,7 +340,14 @@ describe("request validation", () => {
       ["fractional duration", req(validBody({ durationSeconds: 30.5 }))],
       ["zero duration", req(validBody({ durationSeconds: 0 }))],
       ["string duration", req(validBody({ durationSeconds: "30" }))],
-      ["missing resolution", req(validBody({ resolution: undefined }))],
+      ["missing output resolution", req(validBody({ targetOutputResolution: undefined }))],
+      // The old key is not an alias. A client still sending `resolution` is
+      // refused rather than quietly creating a project with no target.
+      ["the pre-ADR-0034 key", req({ ...validBody({ targetOutputResolution: undefined }), resolution: "1080p" })],
+      // A closed product vocabulary, enforced over HTTP for API callers who
+      // never load the form that offers only its members.
+      ["an off-vocabulary output resolution", req(validBody({ targetOutputResolution: "8k" }))],
+      ["a non-string output resolution", req(validBody({ targetOutputResolution: 1080 }))],
       ["non-JSON body", req(null, "not json")],
     ];
     for (const [name, request] of cases) {

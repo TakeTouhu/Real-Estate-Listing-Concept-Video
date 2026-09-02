@@ -467,3 +467,107 @@ so it is only safe while no generation has been submitted.
 `tests/schema/execution-prompt-freeze-column.test.ts` parses the migration and
 asserts both the shape and the absence of `UPDATE`/`INSERT`/`DELETE`/`TRUNCATE`,
 any index, and any reference to `requestHash`.
+
+## Phase 4C-3B-2B — `00000000000009_phase4c3b2b_resolution_identity_v2`
+
+The first migration in this project that **can refuse to run**, and the first
+that constrains a column customers have already written to.
+
+### What it does
+
+1. Checks every `video_projects.resolution` against the product vocabulary and
+   **raises** if any row is outside it, then adds
+   `video_projects_resolution_target_check` restricting it to `720p` / `1080p`.
+2. Adds five nullable columns to `scene_generations` — `requestModelKey`,
+   `requestTargetOutputResolution`, `requestNativeGenerationResolution`,
+   `requestResolutionNormalization`, `requestNativeMeetsTarget` — plus closed
+   vocabulary constraints on two of them and non-blank constraints on the model
+   key and the native token.
+3. Adds `scene_generations_request_identity_version_check`, which makes the two
+   request-identity vocabularies mutually exclusive per row, keyed off the
+   version prefix the row's own `requestHash` carries.
+
+### What it deliberately does not do
+
+No `UPDATE`, no `INSERT`, no `DELETE`, no `TRUNCATE`, no `DROP`, no `RENAME`, no
+index. No `requestHash` is rewritten and no V1 snapshot is backfilled.
+
+The physical column keeps the name `resolution`; the Prisma model maps
+`targetOutputResolution` onto it. A physical rename would be a larger, riskier
+migration that buys nothing — the meaning is fixed by the constraint and the
+domain type, not by the column name.
+
+`requestResolution` is retained. The rows carrying it were hashed over it, so
+dropping the column would destroy the only surviving record of what a V1 attempt
+was admitted for, and rewriting those values into the V2 columns would be a
+guess about which of their two meanings applied (ADR-0034).
+
+### If it aborts
+
+The failure looks like:
+
+```
+ERROR:  Cannot apply the output-resolution constraint: N video_projects row(s)
+        hold a value outside (720p, 1080p). ...
+```
+
+This is **intended behaviour, not a broken migration.** A project row is a
+customer's stated request, and `scene_generations` rows are already hashed
+against it, so rewriting `4k` to `1080p` would change what somebody asked for
+underneath an identity computed from it. Nothing is applied — the transaction
+rolls back, including the `scene_generations` columns.
+
+Resolve it by deciding, per row, what each project should actually be, with the
+customer's intent in hand:
+
+```sql
+SELECT id, "organizationId", "propertyId", resolution FROM video_projects
+WHERE resolution NOT IN ('720p', '1080p');
+```
+
+An attempt already admitted against such a project keeps its own frozen
+`requestResolution` regardless of what the project is corrected to — that is
+what the immutable snapshot is for (ADR-0018).
+
+### Rollback
+
+```sql
+ALTER TABLE "scene_generations"
+  DROP CONSTRAINT "scene_generations_request_identity_version_check",
+  DROP CONSTRAINT "scene_generations_native_resolution_nonblank_check",
+  DROP CONSTRAINT "scene_generations_model_key_nonblank_check",
+  DROP CONSTRAINT "scene_generations_resolution_normalization_check",
+  DROP CONSTRAINT "scene_generations_target_output_resolution_check",
+  DROP COLUMN "requestNativeMeetsTarget",
+  DROP COLUMN "requestResolutionNormalization",
+  DROP COLUMN "requestNativeGenerationResolution",
+  DROP COLUMN "requestTargetOutputResolution",
+  DROP COLUMN "requestModelKey";
+ALTER TABLE "video_projects" DROP CONSTRAINT "video_projects_resolution_target_check";
+```
+
+This discards every V2 delivery snapshot, leaving those attempts with a
+`sha256:v2:` hash and no facts to reproduce it — permanently unreconstructable.
+It is only safe while no V2 attempt matters, and the application code would have
+to be rolled back with it.
+
+### Verification performed on this branch
+
+- `prisma migrate deploy` from an empty database: all nine migrations applied.
+- `prisma migrate diff --exit-code` against the resulting database:
+  **`No difference detected.`**
+- Applied to a database built from the eight pre-3B-2B migrations holding a
+  legacy project (`resolution = '1080p'`) and a V1 generation
+  (`requestHash = 'sha256:legacyhash'`, `requestResolution = '1080p'`): both
+  rows unchanged, all five V2 columns null.
+- Applied to the same database with the project's `resolution` set to `'4k'`:
+  **aborted with the explicit message, and no column was added.**
+- Each constraint exercised directly against a migrated database: an
+  off-vocabulary project target, a V2 hash with no snapshot, a V2 hash with a
+  partial snapshot, a row carrying both vocabularies, a V1 hash carrying a V2
+  snapshot, an off-vocabulary normalization, an off-vocabulary snapshot target,
+  and blank/empty model keys and native tokens were all rejected by their named
+  constraints; a well-formed V2 row (`768P`/`UPSCALE`/`false`) and a legacy V1
+  row were both accepted.
+- `tests/schema/resolution-identity-v2-migration.test.ts` parses the migration
+  and asserts both the shape and the absence of every data-modifying statement.

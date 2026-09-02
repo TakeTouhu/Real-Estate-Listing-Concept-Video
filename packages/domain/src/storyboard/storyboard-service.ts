@@ -4,6 +4,11 @@ import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
 import type { AssetAnalysisRepository } from "../analysis/ports";
 import type { MediaAssetRepository, PropertyRepository } from "../property/ports";
+import {
+  isTargetOutputResolution,
+  TARGET_OUTPUT_RESOLUTIONS,
+  type TargetOutputResolution,
+} from "../generation/model-catalog";
 import { allocateDurations, requireMinimumScenes, type DurationBounds } from "./duration";
 import { selectEligibleAnalyses, type EligibleInput } from "./eligibility";
 import { computeCompositionFingerprint } from "./fingerprint";
@@ -54,7 +59,12 @@ export interface CreateProjectInput {
   readonly name: string;
   readonly durationSeconds: number;
   readonly aspectRatio: string;
-  readonly resolution: string;
+  /**
+   * A closed set, so an unsupported deliverable is unrepresentable rather than
+   * trimmed and stored. The route still validates the wire value — this type
+   * governs callers, not untrusted JSON.
+   */
+  readonly targetOutputResolution: TargetOutputResolution;
   readonly prompt?: string | null;
   readonly negativePrompt?: string | null;
   readonly cameraMotion?: string | null;
@@ -105,8 +115,17 @@ export class StoryboardService {
         "Requested duration must be a positive whole number of seconds",
       );
     }
-    if (input.aspectRatio.trim().length === 0 || input.resolution.trim().length === 0) {
-      throw new AppError("VALIDATION_FAILED", "Aspect ratio and resolution are required");
+    if (input.aspectRatio.trim().length === 0) {
+      throw new AppError("VALIDATION_FAILED", "An aspect ratio is required");
+    }
+    // The target is a closed set, so "present and non-blank" is not the check —
+    // membership is. A caller that reached here with an off-vocabulary value
+    // through an untyped boundary is refused rather than stored.
+    if (!isTargetOutputResolution(input.targetOutputResolution)) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        `Choose an output resolution: ${TARGET_OUTPUT_RESOLUTIONS.join(", ")}`,
+      );
     }
     // Camera motion is customer-selected but system-constrained: only an
     // approved token may be stored. The check is here, in the domain, and not in
@@ -122,7 +141,8 @@ export class StoryboardService {
       status: "DRAFT",
       durationSeconds: input.durationSeconds,
       aspectRatio: input.aspectRatio.trim(),
-      resolution: input.resolution.trim(),
+      // Not trimmed: a member of a closed set is stored exactly as declared.
+      targetOutputResolution: input.targetOutputResolution,
       stylePreset: null,
       cameraMotion,
       prompt: input.prompt ?? null,

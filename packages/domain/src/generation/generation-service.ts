@@ -8,9 +8,15 @@ import type { StoryboardScene, VideoProject } from "../storyboard/types";
 import {
   assertSettingsSupported,
   type GenerationRequestSettings,
-  type VideoModelCapability,
-  type VideoModelCapabilityProvider,
 } from "./capability";
+import {
+  isSelectableModel,
+  planGenerationResolution,
+  type TargetOutputResolution,
+  type TargetResolutionDelivery,
+  type VerifiedModelEntry,
+  type VideoModelCatalog,
+} from "./model-catalog";
 import { GENERATION_AUDIT_RESOURCE_TYPE, GenerationAuditAction } from "./audit";
 import {
   ActiveGenerationConflictError,
@@ -27,7 +33,8 @@ export interface GenerationServiceDeps {
   /** The narrow storyboard slice: freshness and the scoped project + scenes. */
   readonly storyboard: StoryboardReader;
   readonly generations: SceneGenerationRepository;
-  readonly capabilities: VideoModelCapabilityProvider;
+  /** The model table. Replaces the single-model capability port (ADR-0033). */
+  readonly models: VideoModelCatalog;
   readonly ids: IdGenerator;
 }
 
@@ -72,17 +79,29 @@ export class GenerationService {
    * 4. reject if the freshness the read just re-derived is `false`;
    * 5. resolve the scene **only** inside those scenes;
    * 6. reject a scene with no compiled prompt;
-   * 7. snapshot the capability once, and validate the request against it;
+   * 7. resolve the model **once** and plan how it delivers the project's target,
+   *    then validate the request against that model's capability;
    * 8. compute the request hash;
    * 9. return an existing **active** attempt if one holds this identity;
    * 10. otherwise return the latest **succeeded** attempt if one does;
    * 11. otherwise `create` (at most once), then `audit`.
    *
+   * @param modelKey Which catalog entry to generate on. Omitted means **the
+   *   catalog's default**, resolved once here — never a per-project stored
+   *   choice: there is deliberately no `modelKey` column on `VideoProject`, so
+   *   a project cannot silently pin an old model and no migration has to guess
+   *   what an existing project would have chosen. An unknown key, or one naming
+   *   an unverified entry, is refused; nothing falls back to the default,
+   *   because generating on a model the caller did not ask for is the one
+   *   outcome worse than refusing.
+   *
    * @throws AppError FORBIDDEN when the actor lacks `property:write`.
    * @throws AppError NOT_FOUND when the project, or the scene within it, is not
    *   this organization's — the two are indistinguishable.
    * @throws AppError VALIDATION_FAILED when the storyboard is stale/absent, the
-   *   scene has no compiled prompt, or the request exceeds model capability.
+   *   scene has no compiled prompt, the model key is unknown or unverified, the
+   *   model does not serve the project's output target, or the request exceeds
+   *   model capability.
    * @throws AppError INTERNAL_ERROR when a create conflict cannot be reconciled
    *   to an existing attempt (a concurrency/infrastructure convergence failure,
    *   not an invalid request).
@@ -92,6 +111,7 @@ export class GenerationService {
     organizationId: string,
     videoProjectId: string,
     storyboardSceneId: string,
+    modelKey?: string,
   ): Promise<SceneGeneration> {
     // (1) Authorization first. Nothing — not even a project read — happens for a
     // caller who lacks write access to this organization.
@@ -144,13 +164,20 @@ export class GenerationService {
     // before any capability or spend decision (ADR-0022).
     assertApprovedCameraMotion(scene.cameraMotion);
 
-    // (7) One capability snapshot for the whole request. It supplies the
-    // provider/model pair used for validation, the request hash, AND the
-    // persisted row, so a configuration change mid-request cannot split those
-    // three apart. Capability rules themselves live in `assertSettingsSupported`
-    // and are not restated here.
-    const capability = this.deps.capabilities.current();
-    assertSettingsSupported(this.settingsFor(view.project, scene), capability);
+    // (7) One model resolution for the whole request, and one delivery plan
+    // from it. The single resolved entry supplies the provider/model pair used
+    // for validation, the request hash AND the persisted row, so a catalog
+    // change mid-request cannot split those three apart — which is also why the
+    // default is read exactly once, here, rather than again at each use.
+    //
+    // `planGenerationResolution` answers what this model does to reach the
+    // project's *target*; `assertSettingsSupported` then validates what will
+    // actually be generated, in the model's own native vocabulary. Two
+    // questions, deliberately asked in that order: validating a product target
+    // against a list of native tokens is the conflation ADR-0034 removed.
+    const entry = this.resolveModel(modelKey);
+    const delivery = planGenerationResolution(entry, view.project.targetOutputResolution);
+    assertSettingsSupported(this.settingsFor(view.project, scene, delivery), entry.capability);
 
     // (8) The local idempotency identity.
     const requestHash = computeGenerationRequestHash({
@@ -159,9 +186,13 @@ export class GenerationService {
       durationSeconds: scene.durationSeconds,
       cameraMotion: scene.cameraMotion,
       aspectRatio: view.project.aspectRatio,
-      resolution: view.project.resolution,
-      providerName: capability.providerName,
-      providerModelId: capability.providerModelId,
+      targetOutputResolution: view.project.targetOutputResolution,
+      nativeGenerationResolution: delivery.nativeGenerationResolution.providerValue,
+      resolutionNormalization: delivery.normalization,
+      nativeMeetsTarget: delivery.nativeMeetsTarget,
+      modelKey: entry.key,
+      providerName: entry.providerName,
+      providerModelId: entry.providerModelId,
     });
 
     // (9) Active reuse. An attempt already in flight — in ANY active state,
@@ -196,8 +227,41 @@ export class GenerationService {
       scene,
       scene.compiledPrompt,
       requestHash,
-      capability,
+      entry,
+      delivery,
+      view.project.targetOutputResolution,
     );
+  }
+
+  /**
+   * Resolve which model this request runs on. **Refuses rather than falling
+   * back.**
+   *
+   * Both failures are `VALIDATION_FAILED` and both name only the key the caller
+   * supplied, which the caller already knows. An unverified entry is refused for
+   * the same reason `planGenerationResolution` refuses it: the entry structurally
+   * has no provider model id, no capability and no delivery policy, so there is
+   * nothing to admit a paid request against. Saying so explicitly here — rather
+   * than letting the narrowing fail somewhere downstream — is what makes the
+   * message actionable.
+   *
+   * The default is read here and nowhere else, so one admission can never end up
+   * hashing one model and persisting another.
+   */
+  private resolveModel(modelKey: string | undefined): VerifiedModelEntry {
+    if (modelKey === undefined) return this.deps.models.default();
+
+    const entry = this.deps.models.find(modelKey);
+    if (entry === undefined) {
+      throw new AppError("VALIDATION_FAILED", `There is no model named ${modelKey}`);
+    }
+    if (!isSelectableModel(entry)) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        `The model ${modelKey} is not available for generation yet`,
+      );
+    }
+    return entry;
   }
 
   /**
@@ -216,7 +280,9 @@ export class GenerationService {
     /** Proven non-null by the caller; typed as `string` so it cannot regress. */
     compiledPrompt: string,
     requestHash: string,
-    capability: VideoModelCapability,
+    entry: VerifiedModelEntry,
+    delivery: TargetResolutionDelivery,
+    targetOutputResolution: TargetOutputResolution,
   ): Promise<SceneGeneration> {
     // Render the provider prompt exactly once, here, for a genuinely new
     // attempt — after both reuse lookups, because a reused row already carries
@@ -238,8 +304,8 @@ export class GenerationService {
       assetId: scene.assetId,
       sourceAnalysisRevision: scene.sourceAnalysisRevision,
       requestHash,
-      providerName: capability.providerName,
-      providerModelId: capability.providerModelId,
+      providerName: entry.providerName,
+      providerModelId: entry.providerModelId,
       // The immutable request snapshot (ADR-0018), taken from the SAME resolved
       // `scene`, `project` and `capability` that produced `requestHash` above —
       // nothing is re-read in between, so the snapshot and the hash cannot
@@ -254,7 +320,20 @@ export class GenerationService {
       requestDurationSeconds: scene.durationSeconds,
       requestCameraMotion: scene.cameraMotion,
       requestAspectRatio: project.aspectRatio,
-      requestResolution: project.resolution,
+      // The V1 column is written `null` and never again anything else. A row
+      // carrying both vocabularies is corruption; the database rejects it, and
+      // this is the only writer that could produce one.
+      requestResolution: null,
+      // The V2 delivery snapshot, taken from the SAME `entry` and `delivery`
+      // that produced `requestHash` — including the two facts derivable from
+      // today's catalog. Freezing those is the point: a later correction to how
+      // this model reaches 1080p must not retroactively change what an already
+      // approved attempt promised (ADR-0034).
+      requestModelKey: entry.key,
+      requestTargetOutputResolution: targetOutputResolution,
+      requestNativeGenerationResolution: delivery.nativeGenerationResolution.providerValue,
+      requestResolutionNormalization: delivery.normalization,
+      requestNativeMeetsTarget: delivery.nativeMeetsTarget,
       // The execution artifact: what will actually be sent, frozen alongside
       // what was asked for. Renderer changes after this point apply to new
       // admissions only (ADR-0023).
@@ -320,6 +399,15 @@ export class GenerationService {
         requestHash: created.requestHash,
         providerName: created.providerName,
         providerModelId: created.providerModelId,
+        // Which model, what the customer was promised, and whether the model
+        // actually produces that detail natively. The third is the one worth
+        // auditing: it is the difference between a native 1080p deliverable and
+        // an upscaled one, and it must be answerable later without re-deriving
+        // it from a catalog that may since have changed. None of the three is
+        // customer content.
+        modelKey: created.requestModelKey,
+        targetOutputResolution: created.requestTargetOutputResolution,
+        nativeMeetsTarget: created.requestNativeMeetsTarget,
         state: created.state,
       },
     });
@@ -367,15 +455,24 @@ export class GenerationService {
    * Assemble the capability question for this scene.
    *
    * Duration and camera motion are the scene's (the scene is the unit that gets
-   * generated); resolution, aspect ratio and the negative prompt are the
-   * project's. The negative prompt is the stored project value — equivalent by
-   * construction to the compiled prompt's user-negative, since both apply the
-   * same blank-is-absent rule — so nothing here parses `compiledPrompt`.
+   * generated); aspect ratio and the negative prompt are the project's. The
+   * negative prompt is the stored project value — equivalent by construction to
+   * the compiled prompt's user-negative, since both apply the same
+   * blank-is-absent rule — so nothing here parses `compiledPrompt`.
+   *
+   * The resolution comes from neither: it is the **native** token out of the
+   * model's own delivery plan, because the question this assembles is "can the
+   * model generate what we are about to ask it for", and what we ask it for is
+   * never the customer's product target.
    */
-  private settingsFor(project: VideoProject, scene: StoryboardScene): GenerationRequestSettings {
+  private settingsFor(
+    project: VideoProject,
+    scene: StoryboardScene,
+    delivery: TargetResolutionDelivery,
+  ): GenerationRequestSettings {
     return {
       durationSeconds: scene.durationSeconds,
-      resolution: project.resolution,
+      nativeGenerationResolution: delivery.nativeGenerationResolution.providerValue,
       aspectRatio: project.aspectRatio,
       cameraMotion: scene.cameraMotion,
       negativePrompt: project.negativePrompt,

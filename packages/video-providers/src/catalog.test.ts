@@ -64,9 +64,9 @@ describe("H3 Max carries only verified fal facts", () => {
   const h3Max = catalog.default();
 
   it("declares the documented native tokens, and no product output among them", () => {
-    expect(h3Max.capability.resolutions).toEqual(["480P", "768P"]);
-    expect(h3Max.capability.resolutions).not.toContain("720p");
-    expect(h3Max.capability.resolutions).not.toContain("1080p");
+    expect(h3Max.capability.nativeGenerationResolutions).toEqual(["480P", "768P"]);
+    expect(h3Max.capability.nativeGenerationResolutions).not.toContain("720p");
+    expect(h3Max.capability.nativeGenerationResolutions).not.toContain("1080p");
   });
 
   it("documents 5-15 second durations", () => {
@@ -233,7 +233,7 @@ describe("WaveSpeed remains supported and unchanged", () => {
   it("reuses the frozen OpenVideo capability descriptor itself", () => {
     if (wavespeed === undefined || !isSelectableModel(wavespeed)) throw new Error("unreachable");
     expect(wavespeed.capability).toBe(OPEN_VIDEO_CAPABILITY);
-    expect(OPEN_VIDEO_CAPABILITY.resolutions).toEqual(["480p", "720p", "1080p"]);
+    expect(OPEN_VIDEO_CAPABILITY.nativeGenerationResolutions).toEqual(["480p", "720p", "1080p"]);
     expect(OPEN_VIDEO_CAPABILITY.cameraMotion).toEqual({ kind: "PROMPT_RENDERED" });
   });
 
@@ -270,9 +270,9 @@ describe("catalog data is deeply immutable at runtime", () => {
 
   it("refuses mutation of a capability's resolutions array", () => {
     const h3Max = catalog.default();
-    attempt(() => (h3Max.capability.resolutions as string[]).push("4K"));
-    attempt(() => ((h3Max.capability.resolutions as string[])[0] = "poisoned"));
-    expect(createVideoModelCatalog().default().capability.resolutions).toEqual(["480P", "768P"]);
+    attempt(() => (h3Max.capability.nativeGenerationResolutions as string[]).push("4K"));
+    attempt(() => ((h3Max.capability.nativeGenerationResolutions as string[])[0] = "poisoned"));
+    expect(createVideoModelCatalog().default().capability.nativeGenerationResolutions).toEqual(["480P", "768P"]);
   });
 
   it("refuses mutation of a native generation policy", () => {
@@ -324,14 +324,14 @@ describe("catalog data is deeply immutable at runtime", () => {
   it("cannot poison the shared OpenVideo descriptor through the catalog", () => {
     const wavespeed = catalog.find("wavespeed-open-video");
     if (wavespeed === undefined || !isSelectableModel(wavespeed)) throw new Error("unreachable");
-    attempt(() => (wavespeed.capability.resolutions as string[]).push("8K"));
-    attempt(() => ((wavespeed.capability.resolutions as string[])[0] = "poisoned"));
+    attempt(() => (wavespeed.capability.nativeGenerationResolutions as string[]).push("8K"));
+    attempt(() => ((wavespeed.capability.nativeGenerationResolutions as string[])[0] = "poisoned"));
     attempt(
       () =>
         ((wavespeed.capability.cameraMotion as { kind: string }).kind = "UNSUPPORTED"),
     );
 
-    expect(createOpenVideoCapabilityProvider().current().resolutions).toEqual([
+    expect(createOpenVideoCapabilityProvider().current().nativeGenerationResolutions).toEqual([
       "480p",
       "720p",
       "1080p",
@@ -339,7 +339,7 @@ describe("catalog data is deeply immutable at runtime", () => {
     expect(createOpenVideoCapabilityProvider().current().cameraMotion).toEqual({
       kind: "PROMPT_RENDERED",
     });
-    expect(OPEN_VIDEO_CAPABILITY.resolutions).toEqual(["480p", "720p", "1080p"]);
+    expect(OPEN_VIDEO_CAPABILITY.nativeGenerationResolutions).toEqual(["480p", "720p", "1080p"]);
   });
 
   it("freezes every reachable object in the graph", () => {
@@ -348,7 +348,7 @@ describe("catalog data is deeply immutable at runtime", () => {
       expect(Object.isFrozen(entry.availability)).toBe(true);
       if (isSelectableModel(entry)) {
         expect(Object.isFrozen(entry.capability)).toBe(true);
-        expect(Object.isFrozen(entry.capability.resolutions)).toBe(true);
+        expect(Object.isFrozen(entry.capability.nativeGenerationResolutions)).toBe(true);
         expect(Object.isFrozen(entry.capability.durationSeconds)).toBe(true);
         expect(Object.isFrozen(entry.capability.aspectRatios)).toBe(true);
         expect(Object.isFrozen(entry.capability.cameraMotion)).toBe(true);
@@ -382,7 +382,11 @@ describe("existing generations are not retargeted by the catalog default", () =>
     durationSeconds: 6,
     cameraMotion: null,
     aspectRatio: "16:9",
-    resolution: "720p",
+    targetOutputResolution: "720p",
+    nativeGenerationResolution: "720p",
+    resolutionNormalization: "NONE",
+    nativeMeetsTarget: true,
+    modelKey: "wavespeed-open-video",
     providerName: "wavespeed",
     providerModelId: WAVESPEED_OPEN_VIDEO_MODEL_ID,
   };
@@ -397,6 +401,7 @@ describe("existing generations are not retargeted by the catalog default", () =>
     expect(
       computeGenerationRequestHash({
         ...admittedOnWaveSpeed,
+        modelKey: "minimax-h3-max",
         providerName: "fal",
         providerModelId: MINIMAX_H3_MAX_MODEL_ID,
       }),
@@ -404,14 +409,17 @@ describe("existing generations are not retargeted by the catalog default", () =>
   });
 
   /**
-   * Resolution is already identity-bearing. Under today's single-field contract
-   * that value is LEGACY_AMBIGUOUS — simultaneously the product target and the
-   * native token, because for OpenVideo they coincide. Separating them changes
-   * what is hashed, which is why that migration is Phase 4C-3B-2B.
+   * The single ambiguous `resolution` this file described as LEGACY_AMBIGUOUS is
+   * gone. Phase 4C-3B-2B split it into the product target and the native token,
+   * and both are identity-bearing separately — which is what lets two requests
+   * that generate identically but promise different deliverables stay distinct.
    */
-  it("already treats resolution as identity-bearing", () => {
+  it("treats the product target and the native token as separate identity", () => {
     expect(
-      computeGenerationRequestHash({ ...admittedOnWaveSpeed, resolution: "1080p" }),
+      computeGenerationRequestHash({ ...admittedOnWaveSpeed, targetOutputResolution: "1080p" }),
+    ).not.toBe(computeGenerationRequestHash(admittedOnWaveSpeed));
+    expect(
+      computeGenerationRequestHash({ ...admittedOnWaveSpeed, nativeGenerationResolution: "1080p" }),
     ).not.toBe(computeGenerationRequestHash(admittedOnWaveSpeed));
   });
 });
