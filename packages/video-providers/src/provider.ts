@@ -22,8 +22,13 @@ import type {
  * cancellation contracts are unverified. Such an adapter can implement exactly
  * this port and declare nothing else, rather than being forced through the full
  * {@link VideoGenerationProvider} and inventing three answers to satisfy a type
- * — the same fabrication ADR-0033 refused for unverified catalog entries. No
- * submission-only adapter is implemented yet.
+ * — the same fabrication ADR-0033 refused for unverified catalog entries.
+ *
+ * `FalH3MaxSubmissionProvider` is exactly that adapter: it implements this port
+ * and nothing else. It is **dormant** — no configuration selects it and no
+ * production code constructs it — and the full {@link VideoGenerationProvider}
+ * remains unimplemented for fal, which has no verified polling, cancellation or
+ * pricing contract (ADR-0035 §7).
  *
  * **`createGeneration` does not throw for expected submission failures.** A
  * rejected, timed-out or ambiguous submission is a *result*, returned as a

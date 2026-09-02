@@ -3,6 +3,47 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2C-2: Dormant fal H3 Max submission adapter
+
+Completes Phase 4C-3B-2C. See GitHub for lifecycle; detail in
+`docs/phase-4c3b2c2-completion.md`, `docs/phase-4c3b2c-completion.md` and
+ADR-0035 §7. No database, API, environment, factory or pricing change.
+
+### Added
+
+- **`FalH3MaxSubmissionProvider`**, a submission-only adapter implementing the
+  merged `VideoGenerationSubmissionProvider` and returning the merged
+  `ProviderSubmissionOutcome`. It exists to demonstrate — rather than assert —
+  that the certainty vocabulary is provider-neutral, and it does so by
+  **disagreeing** with WaveSpeed: fal treats **no** remote status as a definitive
+  rejection, because its queue publishes nothing establishing non-acceptance.
+  Only two local refusals before any HTTP call are definitive (unsupported model,
+  blank credential).
+- Acceptance requires fal's documented `request_id`, trimmed; `response_url`,
+  `status_url`, `cancel_url` and `gateway_request_id` are never consulted. The
+  executable model id comes from the catalog's `MINIMAX_H3_MAX_MODEL_ID`, and
+  the queue host is frozen rather than configurable.
+
+### Security
+
+- The fal credential is constructor input, never a `process.env` read, and never
+  logged, returned in an error, or attached to a thrown value — including on the
+  local-refusal path, which is regression-tested with a real credential in scope.
+- Local error text is a closed set of fixed helpers; no helper accepts a
+  caller-supplied `messageSanitized`, which would be an open channel into a field
+  ADR-0031 requires to be application-owned.
+- Non-2xx bodies are never parsed; only a validated integer status survives.
+  `normalizeError` trusts provenance, never shape.
+
+### Not included
+
+The adapter is **dormant and production-unreachable**: `VIDEO_PROVIDER` still
+accepts only `fake` and `wavespeed`, no fal key exists in the environment schema,
+`createVideoProvider` has no fal branch, and nothing in production constructs it.
+No `@fal-ai/client` dependency, no pricing change (H3 Max keeps `pricing: null`),
+no polling, cancellation, cost estimation, orchestration or persistence. No
+provider was contacted.
+
 ## [Unreleased] — Phase 4C-3B-2C-1: Provider submission certainty
 
 First of two subphases; Phase 4C-3B-2C is not complete until 3B-2C-2 lands. See

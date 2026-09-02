@@ -373,6 +373,19 @@ and ADR-0020.
   No database or API change, no paid call, and **no fal adapter** — that is
   3B-2C-2, until which the vocabulary's provider-neutrality is claimed rather
   than demonstrated.
+- **Phase 4C-3B-2C-2** — see GitHub for its lifecycle. Completes Phase
+  4C-3B-2C. Adds a **dormant** fal / MiniMax H3 Max submission adapter
+  implementing the merged submission-only port (ADR-0035 §7). Its value is
+  evidential: a provider-neutral abstraction with one implementation is an
+  assertion, and this one demonstrates neutrality by **disagreeing** with
+  WaveSpeed exactly where the vendors' published contracts differ — fal treats
+  no remote status as a definitive rejection, so only two local refusals before
+  any HTTP call are definitive. Acceptance requires fal's documented
+  `request_id` and nothing adjacent to it. The executable model id comes from
+  the catalog; the queue host is frozen; the credential is constructor input.
+  Unreachable in production: `VIDEO_PROVIDER` is unchanged, there is no fal key
+  in the environment schema, and the factory has no fal branch. No pricing, no
+  polling, no orchestration, no provider contacted.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

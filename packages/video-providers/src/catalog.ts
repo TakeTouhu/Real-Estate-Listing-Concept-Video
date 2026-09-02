@@ -203,10 +203,12 @@ const ENTRIES: readonly VideoModelEntry[] = deepFreeze([
  * The production catalog.
  *
  * Constructing it performs no I/O and contacts no provider — it is a frozen
- * table. Nothing here selects a provider adapter or enables paid execution:
+ * table. Nothing here selects a provider adapter or enables paid execution.
  * `SELECTABLE` means eligible for product-level model selection against a
- * verified capability contract, and H3 Max is `SELECTABLE` while having no fal
- * adapter at all (ADR-0033).
+ * verified capability contract — it is **not** a runtime-enabled paid provider.
+ * H3 Max is `SELECTABLE` and now has a dormant submission-only fal adapter, but
+ * still no runtime provider selection, no factory wiring and no paid execution
+ * path (ADR-0033, ADR-0035 §7).
  */
 export function createVideoModelCatalog(): VideoModelCatalog {
   return {

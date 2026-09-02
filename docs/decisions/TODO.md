@@ -81,14 +81,19 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       handling, the 60 s submission timeout, exactly-one-POST evidence and
       fake-provider submission outcomes all landed.
 
-      **Still open: the fal adapter, Phase 4C-3B-2C-2.** Its certainty
-      classifier is deliberately unresolved and must **not** be inferred from
-      WaveSpeed's — it has to be established from the authoritative fal
-      queue/submission contract. No fal adapter exists today, so the
-      provider-neutrality of the vocabulary is currently claimed rather than
-      demonstrated.
+      **The fal adapter is done too** — Phase 4C-3B-2C-2, ADR-0035 §7. Its
+      classifier was established from fal's own published queue contract rather
+      than inferred from WaveSpeed's, and the two deliberately differ: fal
+      treats no remote status as definitive. Provider-neutrality is therefore
+      demonstrated rather than claimed. The adapter is dormant and
+      production-unreachable.
 
-      **Required before any provider charge is possible.**
+      Still unverified against the live fal API: endpoint, field names, native
+      token and the `request_id` envelope all come from documentation, and must
+      be re-verified before fal is enabled.
+
+      **Persistence and reconciliation are still required before any provider
+      charge is possible.**
 - [ ] **`SUBMISSION_UNKNOWN` is representable but not survivable.** ADR-0035
       makes the ambiguous outcome expressible and stops it being silently
       re-POSTed; nothing yet persists it, reconciles it against the provider, or
