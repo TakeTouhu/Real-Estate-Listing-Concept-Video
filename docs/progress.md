@@ -358,6 +358,24 @@ and ADR-0020.
   no paid execution, no model selector in the UI, and no normalization — an
   upscaled 1080p deliverable is recorded as upscaled and must not be described
   as native until Phase 5 composition exists.
+- **Phase 4C-3B-2C** — see GitHub for its lifecycle. Submission stops reporting
+  failure the way every other provider call does (ADR-0035):
+  `createGeneration` returns `ProviderSubmissionOutcome` — `ACCEPTED`,
+  `DEFINITIVELY_REJECTED`, `SUBMISSION_UNKNOWN` — instead of throwing, because
+  `catch { retry() }` is the natural handler for an exception and the natural
+  handler here charges the customer twice. Certainty and retryability are kept
+  orthogonal and the union carries neither `retryable` nor an HTTP status, both
+  pinned at compile time. WaveSpeed's definitive rejections narrow to an
+  allowlist of 400/401/403; **422 is no longer definitive**, since on a
+  generation API it can be a refusal reached after acceptance. A **dormant** fal
+  / H3 Max adapter implements the new submission-only port to prove the
+  vocabulary is provider-neutral rather than a WaveSpeed shape — and it disagrees
+  with WaveSpeed exactly where it should, treating no remote status as
+  definitive. It is unreachable by configuration: `VIDEO_PROVIDER` still accepts
+  only `fake` and `wavespeed`, there is no `FAL_API_KEY`, and the factory has no
+  fal branch. No database change, no API change, no paid call, and no provider
+  was contacted. `SUBMISSION_UNKNOWN` is representable but not yet persisted or
+  reconciled — the system cannot silently re-charge, but it cannot yet recover.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

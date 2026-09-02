@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { ProviderErrorException } from "../errors";
 import type { HttpClient, HttpRequest, HttpResponse } from "../http";
 import type { ProviderGenerationInput } from "../types";
 import { FalH3MaxSubmissionProvider, FAL_SUBMISSION_TIMEOUT_MS } from "./h3-max-provider";
+import { falHttpError } from "./errors";
 import { FAL_H3_MAX_ENDPOINT_ID } from "./h3-max-mapping";
 
 /**
@@ -329,5 +331,74 @@ describe("fal H3 Max submission — nothing sensitive escapes", () => {
       ["code", "kind", "messageSanitized", "providerStatus", "retryable"].sort(),
     );
     expect(JSON.stringify(outcome.error)).not.toContain("raw provider bytes");
+  });
+
+  /**
+   * The local refusal path, which the cases above never reach.
+   *
+   * Every other secrecy test here runs *after* a POST, so all of them would pass
+   * while a local refusal quoted the credential straight back — and a local
+   * refusal is the one message most likely to be written as a helpful
+   * diagnostic, because the fault is on this side. §16 is unconditional: the
+   * credential is never returned in any error.
+   */
+  it("keeps the credential out of a local refusal, where it is in scope", async () => {
+    const request = vi.fn();
+
+    const outcome = await provider({ request }).createGeneration({
+      ...input,
+      modelId: "minimax/h3/image-to-video",
+    });
+
+    expect(outcome.kind).toBe("DEFINITIVELY_REJECTED");
+    expect(request).not.toHaveBeenCalled();
+    // The adapter holds the real credential on this path, so its absence here
+    // is evidence rather than an accident of the fixture.
+    expect(JSON.stringify(outcome)).not.toContain(CREDENTIAL);
+  });
+});
+
+describe("fal trusts a thrown value by provenance, never by shape", () => {
+  /**
+   * The nominal boundary, tested where fal actually applies it.
+   *
+   * `normalizeError` recognises this application's own errors with
+   * `instanceof ProviderErrorException` (ADR-0031 §4). The alternative — a shape
+   * check on `kind` and `retryable` — looks equivalent and is not: the value
+   * below has exactly the right field types, so a structural test accepts it,
+   * and the thrower has then chosen both public diagnostic strings outright.
+   *
+   * WaveSpeed has this regression already. fal did not, and until it did, that
+   * boundary could be swapped for a duck test with nothing failing.
+   */
+  it("refuses a structurally valid look-alike thrown by the transport", async () => {
+    const lookAlike = {
+      kind: "AUTH",
+      retryable: false,
+      code: CREDENTIAL,
+      messageSanitized: "https://storage.internal/o/org/img?token=SIGNED",
+      providerStatus: 401,
+    };
+    const request = vi.fn().mockRejectedValue(lookAlike);
+
+    const outcome = await provider({ request }).createGeneration(input);
+
+    expect(outcome.kind).toBe("SUBMISSION_UNKNOWN");
+    if (outcome.kind === "ACCEPTED") throw new Error("expected a failure outcome");
+    expect(outcome.error.kind).toBe("NETWORK");
+    expect(outcome.error.code).toBe("FAL_SUBMISSION_NETWORK_ERROR");
+    expect(outcome.error.messageSanitized).toBe("Network error contacting fal");
+    expect(outcome.error.providerStatus).toBeUndefined();
+
+    const serialized = JSON.stringify(outcome);
+    expect(serialized).not.toContain(CREDENTIAL);
+    expect(serialized).not.toContain("SIGNED");
+  });
+
+  it("preserves an error this application constructed, via instanceof", () => {
+    const original = falHttpError(503);
+    const adapter = provider({ request: vi.fn() });
+
+    expect(adapter.normalizeError(new ProviderErrorException(original))).toEqual(original);
   });
 });

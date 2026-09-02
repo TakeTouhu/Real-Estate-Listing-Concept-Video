@@ -33,7 +33,7 @@ flowchart TB
   subgraph adapters["Adapters"]
     db["@app/database<br/>Prisma repositories"]
     store["@app/storage<br/>LocalObjectStorage<br/>SharpImageProcessor<br/>PassthroughMalwareScanner"]
-    vp["@app/video-providers<br/>VideoGenerationProvider<br/>Fake · WaveSpeed"]
+    vp["@app/video-providers<br/>VideoGenerationProvider<br/>Fake · WaveSpeed<br/>SubmissionProvider: fal (dormant)"]
     aip["@app/ai-providers<br/>ImageAnalysisProvider<br/>Deterministic (offline)"]
     obs["@app/observability<br/>redacting logger"]
   end
@@ -110,6 +110,8 @@ flowchart TB
 | `@app/domain` generation module: state machine, request identity, immutable request snapshot, capability contract, `GenerationService.startScene` | Implemented (Phases 4A, 4B-1; ADR-0016, 0017, 0018) |
 | `@app/domain` `renderPrompt` — the one place a structured `CompiledPrompt` becomes a provider prompt string | Implemented (Phase 4B-2b, ADR-0020); **nothing submits it yet** |
 | `@app/video-providers` verified OpenVideo capability descriptor | Implemented (Phase 4B-2a, ADR-0019) |
+| `@app/video-providers` `ProviderSubmissionOutcome` + `VideoGenerationSubmissionProvider` | Implemented (Phase 4C-3B-2C, ADR-0035); submission reports certainty as a returned value, not an exception |
+| `@app/video-providers` fal / MiniMax H3 Max submission adapter | Implemented and **dormant** (Phase 4C-3B-2C); `VIDEO_PROVIDER` refuses `fal`, no `FAL_API_KEY`, no factory branch, zero production callers |
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` execution loop, generation orchestration | **Not implemented** (Phase 4) |
 | `@app/queue` | **Placeholder.** No transport exists: the `QUEUED` generation row is the durable queue (ADR-0024) |

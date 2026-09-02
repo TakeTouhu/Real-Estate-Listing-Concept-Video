@@ -3,6 +3,82 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2C: Provider submission certainty
+
+See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2c-completion.md`
+and ADR-0035. No database change, no API change, no user-visible change.
+
+### Breaking
+
+- **`VideoGenerationProvider.createGeneration` returns
+  `ProviderSubmissionOutcome` instead of `ProviderGenerationRef`**, and no
+  longer throws for expected provider or transport failures. The three arms are
+  `ACCEPTED`, `DEFINITIVELY_REJECTED` and `SUBMISSION_UNKNOWN`. Internal seam
+  only — it has no production callers, so nothing customer-facing changes.
+  Status polling and cancellation keep their exception behaviour; neither can
+  incur a charge.
+- **A 422 from WaveSpeed is no longer a definitive rejection.** It is now
+  `SUBMISSION_UNKNOWN`: on a generation API an unprocessable entity can be a
+  moderation or model-level refusal reached *after* the request was accepted, so
+  it is not proof that nothing happened or was billed. Its `ProviderError` is
+  unchanged — still `INVALID_INPUT`, still `retryable: false`.
+
+### Added
+
+- **`ProviderSubmissionOutcome`**, the one answer to "may this request be sent
+  again?". It deliberately carries no `retryable` and no HTTP status of its own,
+  both enforced at compile time, because certainty and retryability are
+  orthogonal: `SUBMISSION_UNKNOWN` with `retryable: true` is valid and common,
+  and no ordinary retryable flag authorizes a second create POST.
+- **`VideoGenerationSubmissionProvider`**, a narrow port declaring `name`,
+  `createGeneration` and `normalizeError`. `VideoGenerationProvider` extends it,
+  so there is exactly one definition of what submitting costs and returns.
+- **A dormant fal / MiniMax H3 Max submission adapter**, implementing only that
+  narrow port. It exists to demonstrate the vocabulary is provider-neutral
+  rather than a WaveSpeed shape wearing a general name — and the two adapters
+  disagree about the thing that matters: fal treats **no** remote status as
+  definitive, because its queue publishes nothing establishing non-acceptance.
+  Unreachable by configuration: `VIDEO_PROVIDER` still accepts only `fake` and
+  `wavespeed`, there is no `FAL_API_KEY` in the environment schema,
+  `createVideoProvider` has no fal branch, and the class requires a credential
+  supplied by its constructor that nothing in production supplies.
+- **Explicit submission hardening**, per adapter and separately asserted:
+  `redirect: "manual"` so a followed 3xx cannot become an unauthorized second
+  POST, and a request-specific 60 s submission timeout distinct from the
+  client-wide default.
+- Three-outcome submission support on `FakeVideoProvider`, so callers can be
+  tested against each arm without a provider.
+
+### Changed
+
+- **The `HttpClient` seam moved from `wavespeed/` to the package root**, since
+  two adapters now need it and two copies of "exactly one outbound request"
+  would eventually disagree. `wavespeed/http.ts` remains as a re-export shim, so
+  existing imports keep resolving. `HttpRequest` gained optional `timeoutMs` and
+  `redirect`; `FetchHttpClient` still performs exactly one `fetch` per call with
+  no retry or backoff anywhere in the transport.
+
+### Security
+
+- The fal adapter's credential is constructor input, never an environment read,
+  so the adapter cannot be armed by configuration alone. It is used only in the
+  `Authorization` header and is never logged, returned in an error, or attached
+  to a thrown value — including on local refusal paths, which is where a
+  "helpful" diagnostic would most plausibly have quoted it.
+- fal recognises this application's own errors nominally
+  (`instanceof ProviderErrorException`), never structurally, so an arbitrary
+  thrown value cannot choose its own `code` and `messageSanitized` (ADR-0031
+  §4). ADR-0031's existing WaveSpeed regressions are preserved unchanged.
+
+### Not included
+
+Deliberately out of scope: paid generation remains unreachable, and this
+milestone adds no orchestration, no paid gate, no submission audit persistence,
+no polling or output ingestion, and no fal enablement. `SUBMISSION_UNKNOWN` is
+representable but not yet persisted or reconciled — recorded in
+`docs/decisions/TODO.md`. No provider was contacted; every test injects a fake
+transport.
+
 ## [Unreleased] — Phase 4C-3B-2B: Versioned request identity and the resolution snapshot
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2b-completion.md`

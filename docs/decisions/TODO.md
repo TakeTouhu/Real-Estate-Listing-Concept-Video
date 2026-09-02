@@ -17,76 +17,43 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       wired when `WaveSpeedVideoProvider` is implemented in Phase 1).
 - [ ] Review WaveSpeedAI commercial-use terms, data handling, retention, and
       model policy before production launch.
-- [ ] **Provider-agnostic submission certainty is required before any paid
-      submission.** 4C-3B-1 shipped diagnostic sanitization only (ADR-0031).
-      The remaining work is a **common contract plus per-adapter evidence**, and
-      the split matters — the original 4C-3B-2 design was written when WaveSpeed
-      was the only provider, and it put a universal HTTP-status rule in the
-      shared layer. That is no longer sound: since ADR-0033 the architecture is
-      multi-provider, and a queue-based provider need not express certainty
-      through HTTP status at all.
+- [x] **Provider-agnostic submission certainty.** **Closed in Phase 4C-3B-2C**
+      (ADR-0035). `createGeneration` returns `ProviderSubmissionOutcome`
+      (`ACCEPTED` / `DEFINITIVELY_REJECTED` / `SUBMISSION_UNKNOWN`) and no
+      longer throws for expected provider or transport failures. The union
+      carries no `retryable` and no HTTP status of its own — both pinned at
+      compile time — so certainty cannot be read off retryability. Submission
+      became its own port, `VideoGenerationSubmissionProvider`, which the full
+      seam extends.
 
-      **There is no ADR-0032 file, and none should be written.** The number
-      appears in earlier prose as a placeholder for a decision that was planned
-      but never recorded as an ADR — the earlier WaveSpeed-centric design exists
-      only as superseded planning and as branch history on
-      `claude/real-estate-virtual-tour-phase-4c3b2-hga252`. That branch is
-      **read-only reference material**: it is not merged, rebased or
-      cherry-picked wholesale, and any idea taken from it must be revalidated
-      against the contract below before it counts as a decision. **This entry is
-      the active specification.**
+      Each adapter owns its own evidence, as this entry required. WaveSpeed
+      allowlists `400` / `401` / `403` and nothing else; **422 is not carried
+      forward**, because on a generation API it can be a refusal reached after
+      acceptance. fal treats **no** remote status as definitive, its only
+      definitive rejections being local refusals raised before the HTTP method is
+      invoked. Exactly-one-POST is held up by a transport that performs one
+      `fetch` with no retry, `redirect: "manual"` on the paid POST, and a
+      request-specific 60 s submission timeout — each asserted per adapter and
+      mutation-verified.
 
-      **Common, provider-agnostic:**
+      **There is still no ADR-0032 file, and none should be written.** The number
+      was a placeholder for a decision never recorded as an ADR; ADR-0035 is the
+      decision. The superseded WaveSpeed-centric design on
+      `claude/real-estate-virtual-tour-phase-4c3b2-hga252` remains read-only
+      reference material and was not merged, rebased or cherry-picked.
+- [ ] **`SUBMISSION_UNKNOWN` is representable but not yet survivable.** ADR-0035
+      makes the ambiguous outcome expressible and stops it from being silently
+      re-POSTed; nothing yet **persists** it, reconciles it against the provider,
+      or holds a credit reservation open while it is unresolved. Today the
+      guarantee is that the system cannot silently re-charge — not that it can
+      recover. A row whose submission outcome is unknown has no state to sit in,
+      no operator surface, and no reconciliation path.
 
-      ```text
-      ProviderSubmissionOutcome
-        ACCEPTED
-        DEFINITIVELY_REJECTED
-        SUBMISSION_UNKNOWN
-      ```
-
-      The common contract carries **no universal HTTP-status allowlist**. Each
-      adapter owns the evidence mapping its own provider's response and
-      transport behaviour into these three outcomes, because only the adapter
-      knows what its provider's responses mean.
-
-      Invariants the common contract must preserve, whichever adapter is in play:
-
-      - exactly one paid submission attempt;
-      - no blind automatic POST retry;
-      - an ambiguous submission is **never** represented as an ordinary
-        retryable rejection;
-      - retryability and submission certainty are separate concepts — a thing
-        can be safe to retry, unsafe to retry, or unknown, and "unknown" is not
-        a kind of "retryable";
-      - transport and provider-response interpretation stays **inside** each
-        adapter, never in the shared layer.
-
-      **WaveSpeed adapter (approved, subject to re-verification when that work
-      is rebuilt):**
-
-      ```text
-      400 -> DEFINITIVELY_REJECTED
-      401 -> DEFINITIVELY_REJECTED
-      403 -> DEFINITIVELY_REJECTED
-      everything else after invocation -> SUBMISSION_UNKNOWN
-      ```
-
-      422's current definitive treatment must **not** be carried forward. Until
-      this lands, 429 and 5xx still report `retryable: true`, so a retry policy
-      reading that flag would re-POST an ambiguous submission.
-
-      Also still outstanding for the WaveSpeed adapter: malformed-2xx semantics,
-      manual redirect handling for the paid create POST only, a request-specific
-      60 s submission timeout, exactly-one-POST evidence, and fake-provider
-      submission outcomes.
-
-      **fal adapter: the certainty classifier is deliberately unresolved.** Do
-      not infer it from WaveSpeed's. It must be established from the
-      authoritative fal queue/submission contract in the future fal-adapter and
-      submission-certainty milestone. No fal adapter exists today.
-
-      **Required before any provider charge is possible.**
+      Required before any provider charge is possible, alongside submission
+      audit persistence and the paid gate. `DEFINITIVELY_REJECTED` may fail an
+      attempt and release its reservation; `SUBMISSION_UNKNOWN` must not, because
+      a reservation released against work the provider is billing produces an
+      unfunded charge.
 - [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
       identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying
       both resolutions plus the frozen delivery plan and the model key;
