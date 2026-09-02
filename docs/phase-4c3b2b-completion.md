@@ -416,8 +416,10 @@ corrected catalog with no way to stop an attempt it had superseded. Brief
 
 ## Known limitations
 
-- **Every V1 attempt is now permanently unexecutable.** Intended — its inputs
-  are gone — and already true for rows predating ADR-0018 and ADR-0023.
+- **Every V1 attempt is now permanently unexecutable.** Intended — the V2
+  delivery semantics required for safe execution cannot be proven from a V1 row
+  without reinterpreting historical data — and already true for rows predating
+  ADR-0018 and ADR-0023.
 - **Nothing normalizes a delivered video.** `UPSCALE` is recorded and not
   honoured. An H3 Max 1080p deliverable is not native 1080p until Phase 5
   composition exists, and nothing in the product may describe it as such.

@@ -6,9 +6,18 @@ import type {
   ProviderGenerationInput,
   ProviderGenerationRef,
   ProviderGenerationStatus,
+  ProviderSubmissionOutcome,
 } from "../types";
 import type { WaveSpeedConfig } from "./config";
 import type { HttpClient } from "./http";
+import {
+  accepted,
+  classifyWaveSpeedSubmissionStatus,
+  definitivelyRejected,
+  submissionResponseUnreadable,
+  submissionUnknown,
+  WAVESPEED_SUBMISSION_TIMEOUT_MS,
+} from "./submission";
 import {
   buildSubmitUrl,
   extractOutputUrl,
@@ -63,28 +72,76 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
     };
   }
 
-  async createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef> {
+  /**
+   * Submit one paid generation, exactly once, and report what is known.
+   *
+   * The method is structured around a single line — the `this.http.request`
+   * call — because that line is the invocation boundary. Before it, a failure
+   * proves nothing reached WaveSpeed and is a definitive rejection. From the
+   * moment it is entered, WaveSpeed may hold the request and may bill for it,
+   * so every unhappy path after that point is `SUBMISSION_UNKNOWN` unless the
+   * status itself proves otherwise (ADR-0035).
+   *
+   * There is deliberately no loop, no retry and no second request anywhere in
+   * this method. `requestHash` is never transmitted: it is this application's
+   * own coordination key, and WaveSpeed documents no idempotency contract that
+   * would make re-sending safe.
+   */
+  async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+    // --- Before invocation ---------------------------------------------------
+    // Mapping is local and total, but it is still on this side of the boundary:
+    // if it ever refuses, nothing has been sent and the rejection is definitive.
+    let req: ReturnType<typeof mapToWaveSpeedRequest>;
     try {
-      const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
-      const res = await this.http.request({
+      req = mapToWaveSpeedRequest(input, this.config.baseUrl);
+    } catch (error) {
+      return definitivelyRejected(this.normalizeError(error));
+    }
+
+    // --- Invocation ----------------------------------------------------------
+    // One request. Everything below is classification of what came back, never
+    // another attempt.
+    let res;
+    try {
+      res = await this.http.request({
         method: "POST",
         url: req.url,
         headers: this.authHeaders(),
         body: JSON.stringify(req.body),
+        timeoutMs: WAVESPEED_SUBMISSION_TIMEOUT_MS,
+        // A followed redirect would re-send this body to another URL: a second
+        // POST nobody authorized, for an operation that may bill on arrival.
+        redirect: "manual",
       });
-      if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
-      }
-      const predictionId = parsePredictionId(safeJsonParse(res.body));
-      return {
-        provider: this.name,
-        modelId: input.modelId,
-        predictionId,
-        submittedAt: this.now().toISOString(),
-      };
     } catch (error) {
-      throw new ProviderErrorException(this.normalizeError(error));
+      // Timeout, abort, connection reset, DNS failure — all after the request
+      // was handed to the transport. None of them says whether WaveSpeed
+      // received it.
+      return submissionUnknown(this.normalizeError(error));
     }
+
+    // --- After invocation ----------------------------------------------------
+    // A 3xx lands here rather than being followed, and falls through to
+    // UNKNOWN: the request left this process and its fate is not established.
+    if (res.status < 200 || res.status >= 300) {
+      return classifyWaveSpeedSubmissionStatus(res.status);
+    }
+
+    // A 2xx this process cannot read is still a 2xx. The provider may hold the
+    // request; the failure is on this side.
+    let predictionId: string;
+    try {
+      predictionId = parsePredictionId(safeJsonParse(res.body));
+    } catch {
+      return submissionResponseUnreadable();
+    }
+
+    return accepted({
+      provider: this.name,
+      modelId: input.modelId,
+      predictionId,
+      submittedAt: this.now().toISOString(),
+    });
   }
 
   async getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus> {

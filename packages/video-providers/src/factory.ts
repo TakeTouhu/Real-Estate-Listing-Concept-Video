@@ -3,7 +3,7 @@ import type { VideoGenerationProvider } from "./provider";
 import type { VideoModelPricing } from "./types";
 import { FakeVideoProvider } from "./fake/fake-provider";
 import { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
-import { FetchHttpClient, type HttpClient } from "./wavespeed/http";
+import { FetchHttpClient, type HttpClient } from "./http";
 
 /**
  * Placeholder pricing until verified WaveSpeedAI model pricing is wired in
