@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { WaveSpeedVideoProvider } from "./wavespeed-provider";
 import type { WaveSpeedConfig } from "./config";
 import type { HttpClient, HttpRequest, HttpResponse } from "./http";
+import { WAVESPEED_SUBMISSION_TIMEOUT_MS } from "./submission";
 import { WAVESPEED_OPEN_VIDEO_MODEL_ID } from "@app/shared";
-import { isProviderErrorException } from "../errors";
+
 import type { ProviderGenerationInput, ProviderGenerationRef } from "../types";
 
 const config: WaveSpeedConfig = {
@@ -42,35 +43,59 @@ function stubClient(responses: HttpResponse[]): { http: HttpClient; calls: HttpR
 const now = () => new Date("2026-01-01T00:00:00.000Z");
 
 describe("WaveSpeedVideoProvider (injected http, no network)", () => {
-  it("submits with Bearer auth and returns an internal ref", async () => {
+  it("submits with Bearer auth and returns ACCEPTED with an internal ref", async () => {
     const { http, calls } = stubClient([
       { status: 200, body: JSON.stringify({ data: { id: "pred_9" } }) },
     ]);
     const provider = new WaveSpeedVideoProvider(config, { http, now });
-    const ref = await provider.createGeneration(input);
+    const outcome = await provider.createGeneration(input);
 
-    expect(ref.predictionId).toBe("pred_9");
-    expect(ref.provider).toBe("wavespeed");
-    expect(ref.submittedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(outcome.kind).toBe("ACCEPTED");
+    if (outcome.kind !== "ACCEPTED") throw new Error("expected ACCEPTED");
+    expect(outcome.ref.predictionId).toBe("pred_9");
+    expect(outcome.ref.provider).toBe("wavespeed");
+    expect(outcome.ref.submittedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(calls).toHaveLength(1);
     expect(calls[0]?.headers.Authorization).toBe("Bearer super-secret-key");
     expect(calls[0]?.url).toContain("/wavespeed-ai/open-video/image-to-video");
+  });
+
+  it("sends the paid POST with manual redirect and the submission timeout", async () => {
+    const { http, calls } = stubClient([
+      { status: 200, body: JSON.stringify({ data: { id: "pred_9" } }) },
+    ]);
+    await new WaveSpeedVideoProvider(config, { http, now }).createGeneration(input);
+
+    expect(calls[0]?.redirect).toBe("manual");
+    expect(calls[0]?.timeoutMs).toBe(WAVESPEED_SUBMISSION_TIMEOUT_MS);
+  });
+
+  it("never transmits the internal request hash or an idempotency key", async () => {
+    // `requestHash` is this application's own coordination key. WaveSpeed
+    // documents no idempotency contract, so sending it would imply a guarantee
+    // that does not exist (ADR-0031, ADR-0035).
+    const { http, calls } = stubClient([
+      { status: 200, body: JSON.stringify({ data: { id: "pred_9" } }) },
+    ]);
+    await new WaveSpeedVideoProvider(config, { http, now }).createGeneration(input);
+
+    const sent = JSON.stringify({ headers: calls[0]?.headers, body: calls[0]?.body });
+    expect(sent).not.toContain("hash1");
+    expect(sent).not.toContain("requestHash");
+    expect(Object.keys(calls[0]?.headers ?? {})).not.toContain("Idempotency-Key");
   });
 
   it("normalizes an auth failure into a non-retryable ProviderError", async () => {
     const { http } = stubClient([{ status: 401, body: "unauthorized" }]);
     const provider = new WaveSpeedVideoProvider(config, { http, now });
-    try {
-      await provider.createGeneration(input);
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      expect(isProviderErrorException(err)).toBe(true);
-      if (isProviderErrorException(err)) {
-        expect(err.error.kind).toBe("AUTH");
-        expect(err.error.retryable).toBe(false);
-        // Secret safety: the API key must never leak into the error surface.
-        expect(JSON.stringify(err.error)).not.toContain("super-secret-key");
-      }
-    }
+    const outcome = await provider.createGeneration(input);
+
+    expect(outcome.kind).toBe("DEFINITIVELY_REJECTED");
+    if (outcome.kind === "ACCEPTED") throw new Error("expected a failure outcome");
+    expect(outcome.error.kind).toBe("AUTH");
+    expect(outcome.error.retryable).toBe(false);
+    // Secret safety: the API key must never leak into the error surface.
+    expect(JSON.stringify(outcome.error)).not.toContain("super-secret-key");
   });
 
   it("maps provider status into normalized state and output url", async () => {
@@ -92,12 +117,18 @@ describe("WaveSpeedVideoProvider (injected http, no network)", () => {
     expect(status.temporaryOutputUrl).toBe("https://x/out.mp4");
   });
 
-  it("classifies a network throw as retryable NETWORK", async () => {
-    const http: HttpClient = { request: vi.fn().mockRejectedValue(new Error("econn")) };
-    const provider = new WaveSpeedVideoProvider(config, { http, now });
-    await expect(provider.createGeneration(input)).rejects.toMatchObject({
-      error: { kind: "NETWORK", retryable: true },
-    });
+  it("classifies a network throw as retryable NETWORK, but UNKNOWN certainty", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("econn"));
+    const provider = new WaveSpeedVideoProvider(config, { http: { request }, now });
+    const outcome = await provider.createGeneration(input);
+
+    expect(outcome.kind).toBe("SUBMISSION_UNKNOWN");
+    if (outcome.kind === "ACCEPTED") throw new Error("expected a failure outcome");
+    // The two dimensions, visibly independent: the transport may work later,
+    // and that says nothing about whether WaveSpeed already has the request.
+    expect(outcome.error.kind).toBe("NETWORK");
+    expect(outcome.error.retryable).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("estimates cost without any network call", async () => {

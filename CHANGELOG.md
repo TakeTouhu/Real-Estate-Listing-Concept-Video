@@ -3,6 +3,60 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2C-1: Provider submission certainty
+
+First of two subphases; Phase 4C-3B-2C is not complete until 3B-2C-2 lands. See
+GitHub for lifecycle. Detail in `docs/phase-4c3b2c1-completion.md` and ADR-0035.
+No database change, no API change, no user-visible change.
+
+### Breaking
+
+- **`VideoGenerationProvider.createGeneration` returns `ProviderSubmissionOutcome`
+  instead of `ProviderGenerationRef`**, and no longer throws for expected
+  provider or transport failures. Arms: `ACCEPTED`, `DEFINITIVELY_REJECTED`,
+  `SUBMISSION_UNKNOWN`. Internal seam with no production callers, so nothing
+  customer-facing changes. Status polling and cancellation keep their exception
+  behaviour; neither can incur a charge.
+- **A 422 from WaveSpeed is no longer a definitive rejection**, but
+  `SUBMISSION_UNKNOWN`: the currently verified WaveSpeed contract does not
+  establish 422 as proof of non-acceptance. Its `ProviderError` is unchanged.
+- **`parsePredictionId` returns `string | null` and never throws.** It is total
+  over arbitrary parsed JSON — a body of exactly `null` previously raised a
+  `TypeError` — and trims a valid identifier.
+
+### Added
+
+- **`ProviderSubmissionOutcome`**, the one answer to "may this request be sent
+  again?". It carries no `retryable` and no HTTP status of its own, both enforced
+  at compile time: `SUBMISSION_UNKNOWN` with `retryable: true` is valid and
+  common, and no ordinary retryable flag authorizes a second create POST.
+- **`VideoGenerationSubmissionProvider`**, a narrow port declaring `name`,
+  `createGeneration` and `normalizeError`, which the full seam extends.
+- **Explicit submission hardening**: `redirect: "manual"` so a followed 3xx
+  cannot become an unauthorized second POST, and a request-specific 60 s timeout
+  distinct from the client-wide default. Three-outcome submission support on
+  `FakeVideoProvider`.
+
+### Changed
+
+- **The `HttpClient` seam moved from `wavespeed/` to the package root**, since it
+  is not WaveSpeed's and any second adapter needs the same contract.
+  `wavespeed/http.ts` remains a re-export shim. `HttpRequest` gained optional
+  `timeoutMs` and `redirect`; `FetchHttpClient` still performs exactly one
+  `fetch` per call with no retry.
+- The WaveSpeed definitive-rejection allowlist is a closed `switch` with **no
+  exported backing array** — an exported array would be a mutable object
+  controlling a financial classification. Tests restate it independently and
+  sweep statuses 100–599. The malformed-2xx diagnostic no longer says the
+  submission was accepted.
+
+### Not included
+
+Paid generation remains unreachable. No orchestration, no paid gate, no
+submission audit persistence, no polling or output ingestion, and **no fal
+adapter** — that is 3B-2C-2. `SUBMISSION_UNKNOWN` is representable but not yet
+persisted or reconciled. No provider was contacted.
+
 ## [Unreleased] — Phase 4C-3B-2B: Versioned request identity and the resolution snapshot
 
 See GitHub for lifecycle. Technical detail in `docs/phase-4c3b2b-completion.md`

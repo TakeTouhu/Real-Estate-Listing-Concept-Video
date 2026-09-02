@@ -117,6 +117,46 @@ export interface ProviderGenerationStatus {
   readonly error?: ProviderError;
 }
 
+/**
+ * The outcome of **one** attempt to submit a paid generation request.
+ *
+ * This is the only place in the system that answers the question money depends
+ * on: *may this request be sent again?* Nothing else — not an HTTP status, not
+ * `retryable`, not an exception type — is allowed to imply it.
+ *
+ * Three arms, and the third is the important one:
+ *
+ * - `ACCEPTED` — the provider took the request and named it. A prediction id
+ *   is in hand, so the work is trackable and must never be re-submitted.
+ * - `DEFINITIVELY_REJECTED` — the request provably did **not** reach a state
+ *   where the provider could have begun or billed work. Only evidence that
+ *   actually establishes this may produce it.
+ * - `SUBMISSION_UNKNOWN` — everything else. The provider may hold the request,
+ *   may be executing it, may have billed it; this process simply does not know.
+ *
+ * **Certainty is not retryability.** They are orthogonal dimensions, and
+ * conflating them is the specific mistake this union exists to prevent: a 429
+ * or a 5xx normalizes to `retryable: true` because the *transport* may succeed
+ * later, which says nothing about whether the provider already accepted the
+ * request. Both of these are valid and mean different things:
+ *
+ * ```text
+ * SUBMISSION_UNKNOWN + error.retryable === true
+ * SUBMISSION_UNKNOWN + error.retryable === false
+ * ```
+ *
+ * An ordinary `retryable` flag must never authorize a second create POST.
+ *
+ * Deliberately provider-neutral: no HTTP status, no vendor field, no queue
+ * concept. A sanitized status lives on {@link ProviderError.providerStatus} and
+ * nowhere else, because each adapter — not this union — owns the evidence that
+ * maps its own vendor's behaviour onto these three answers (ADR-0035).
+ */
+export type ProviderSubmissionOutcome =
+  | { readonly kind: "ACCEPTED"; readonly ref: ProviderGenerationRef }
+  | { readonly kind: "DEFINITIVELY_REJECTED"; readonly error: ProviderError }
+  | { readonly kind: "SUBMISSION_UNKNOWN"; readonly error: ProviderError };
+
 export type ProviderErrorKind =
   | "NETWORK"
   | "RATE_LIMITED"

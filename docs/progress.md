@@ -358,6 +358,21 @@ and ADR-0020.
   no paid execution, no model selector in the UI, and no normalization — an
   upscaled 1080p deliverable is recorded as upscaled and must not be described
   as native until Phase 5 composition exists.
+- **Phase 4C-3B-2C-1** — see GitHub for its lifecycle. The first of two
+  subphases; 4C-3B-2C is **not** complete. Submission stops reporting failure
+  the way every other provider call does (ADR-0035): `createGeneration` returns
+  `ProviderSubmissionOutcome` — `ACCEPTED`, `DEFINITIVELY_REJECTED`,
+  `SUBMISSION_UNKNOWN` — instead of throwing, because `catch { retry() }` is the
+  natural handler for an exception and the natural handler here charges the
+  customer twice. Certainty and retryability stay orthogonal; the union carries
+  neither `retryable` nor an HTTP status. WaveSpeed's definitive rejections
+  narrow to a closed 400/401/403 switch with no exported backing array, and
+  **422 is no longer definitive** because the verified contract does not
+  establish it as proof of non-acceptance. `parsePredictionId` became total, so
+  a `null` body is a classified `SUBMISSION_UNKNOWN` rather than a `TypeError`.
+  No database or API change, no paid call, and **no fal adapter** — that is
+  3B-2C-2, until which the vocabulary's provider-neutrality is claimed rather
+  than demonstrated.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

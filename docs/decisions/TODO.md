@@ -72,21 +72,32 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       everything else after invocation -> SUBMISSION_UNKNOWN
       ```
 
-      422's current definitive treatment must **not** be carried forward. Until
-      this lands, 429 and 5xx still report `retryable: true`, so a retry policy
-      reading that flag would re-POST an ambiguous submission.
+      **The common contract and the WaveSpeed adapter are done** — Phase
+      4C-3B-2C-1, ADR-0035. `createGeneration` returns
+      `ProviderSubmissionOutcome`; the union carries no `retryable` and no HTTP
+      status, both pinned at compile time; WaveSpeed allowlists 400/401/403
+      through a closed switch with no exported backing array; 422 is **not**
+      carried forward as definitive; malformed-2xx semantics, manual redirect
+      handling, the 60 s submission timeout, exactly-one-POST evidence and
+      fake-provider submission outcomes all landed.
 
-      Also still outstanding for the WaveSpeed adapter: malformed-2xx semantics,
-      manual redirect handling for the paid create POST only, a request-specific
-      60 s submission timeout, exactly-one-POST evidence, and fake-provider
-      submission outcomes.
-
-      **fal adapter: the certainty classifier is deliberately unresolved.** Do
-      not infer it from WaveSpeed's. It must be established from the
-      authoritative fal queue/submission contract in the future fal-adapter and
-      submission-certainty milestone. No fal adapter exists today.
+      **Still open: the fal adapter, Phase 4C-3B-2C-2.** Its certainty
+      classifier is deliberately unresolved and must **not** be inferred from
+      WaveSpeed's — it has to be established from the authoritative fal
+      queue/submission contract. No fal adapter exists today, so the
+      provider-neutrality of the vocabulary is currently claimed rather than
+      demonstrated.
 
       **Required before any provider charge is possible.**
+- [ ] **`SUBMISSION_UNKNOWN` is representable but not survivable.** ADR-0035
+      makes the ambiguous outcome expressible and stops it being silently
+      re-POSTed; nothing yet persists it, reconciles it against the provider, or
+      holds a credit reservation open while it is unresolved. Today the
+      guarantee is that the system cannot silently re-charge — not that it can
+      recover. `DEFINITIVELY_REJECTED` may fail an attempt and release its
+      reservation; `SUBMISSION_UNKNOWN` must not, because a reservation released
+      against work the provider is billing produces an unfunded charge. Required
+      alongside submission audit persistence and the paid gate.
 - [x] **Phase 4C-3B-2B — the resolution migration.** Done (ADR-0034). Request
       identity is versioned (`sha256:v2:`) over a twelve-element tuple carrying
       both resolutions plus the frozen delivery plan and the model key;
