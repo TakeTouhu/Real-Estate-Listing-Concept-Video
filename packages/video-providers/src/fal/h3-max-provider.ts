@@ -13,8 +13,15 @@ import {
 } from "./errors";
 import { mapToFalH3MaxRequest, parseFalQueueRequestId } from "./h3-max-mapping";
 
-/** Matches WaveSpeed's submission window; the ambiguous gap is what costs. */
-export const FAL_SUBMISSION_TIMEOUT_MS = 60_000;
+/**
+ * Matches WaveSpeed's submission window; the ambiguous gap is what costs.
+ *
+ * Module-local on purpose. It is an implementation detail, and exporting it
+ * would invite a test to assert the constant against itself — which pins
+ * nothing, because a drift in the value moves both sides together. The
+ * 60-second contract is verified through the captured `HttpRequest` instead.
+ */
+const FAL_SUBMISSION_TIMEOUT_MS = 60_000;
 
 export interface FalH3MaxSubmissionConfig {
   /**

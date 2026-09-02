@@ -3,7 +3,7 @@ import { MINIMAX_H3_MAX_MODEL_ID } from "../catalog";
 import { ProviderErrorException } from "../errors";
 import type { HttpClient, HttpRequest, HttpResponse } from "../http";
 import type { ProviderGenerationInput } from "../types";
-import { FAL_SUBMISSION_TIMEOUT_MS, FalH3MaxSubmissionProvider } from "./h3-max-provider";
+import { FalH3MaxSubmissionProvider } from "./h3-max-provider";
 import { falHttpError } from "./errors";
 
 /**
@@ -20,6 +20,16 @@ import { falHttpError } from "./errors";
  */
 
 const CREDENTIAL = "fal-secret-credential";
+
+/**
+ * The submission deadline, stated here rather than imported.
+ *
+ * Importing the production constant would assert it against itself: a drift
+ * from 60 s would move the implementation and the expectation together and this
+ * suite would stay green. The contract is 60 seconds, so the test owns 60
+ * seconds.
+ */
+const EXPECTED_SUBMISSION_TIMEOUT_MS = 60_000;
 
 const input: ProviderGenerationInput = {
   modelId: MINIMAX_H3_MAX_MODEL_ID,
@@ -90,7 +100,7 @@ describe("fal H3 Max submission — accepted", () => {
     expect(calls[0]?.headers.Authorization).toBe(`Key ${CREDENTIAL}`);
     expect(calls[0]?.headers["Content-Type"]).toBe("application/json");
     expect(calls[0]?.redirect).toBe("manual");
-    expect(calls[0]?.timeoutMs).toBe(FAL_SUBMISSION_TIMEOUT_MS);
+    expect(calls[0]?.timeoutMs).toBe(EXPECTED_SUBMISSION_TIMEOUT_MS);
   });
 
   it("trims a request_id that arrives padded", async () => {

@@ -9,14 +9,15 @@ All counts include documentation.
 
 | Scope | Insertions | Deletions | Total |
 | --- | ---: | ---: | ---: |
-| Production TypeScript | 353 | 0 | 353 |
-| Tests | 450 | 0 | 450 |
+| Production TypeScript | 377 | 10 | 387 |
+| Tests | 460 | 0 | 460 |
 | Migration SQL + Prisma schema | 0 | 0 | 0 |
-| Documentation (`docs/`, `CHANGELOG.md`) | 337 | 17 | 354 |
-| **Everything** | 1,141 | 17 | **1,158** |
+| Documentation (`docs/`, `CHANGELOG.md`) | 345 | 17 | 362 |
+| **Everything** | 1,182 | 27 | **1,209** |
 
-Target ≤1,150, hard stop >1,400. **8 over target, 242 under the hard stop.**
-Reported, not excepted; no size exception is requested.
+Target ≤1,150, hard stop >1,400. **59 over target, 191 under the hard stop.**
+Reported, not excepted. Every figure is measured from base `c99c15c` and
+reconciles with GitHub's compare; none is hand-maintained.
 
 ## The contract
 
@@ -27,7 +28,7 @@ Reported, not excepted; no size exception is requested.
 | Authorization | `Key <credential>`, plus `Content-Type: application/json`, and no other header |
 | Body | `image_url`, `prompt`, `duration`, `resolution`, `prompt_expansion_mode`, `enable_safety_checker`, and `seed` only when supplied |
 | Frozen constants | `prompt_expansion_mode: "balanced"`, `enable_safety_checker: true` |
-| Timeout | 60 s, request-specific |
+| Timeout | 60 s, request-specific — the constant is module-local, and the test owns the literal |
 | Redirects | `manual` — a 3xx is `SUBMISSION_UNKNOWN`, never followed |
 
 The queue host is a constant, not configuration: the superseded `baseUrl`
@@ -111,11 +112,17 @@ not transmitted and there is no `Idempotency-Key`.
 | F2 | nominal provenance replaced by structural duck typing | KILLED | 1 failing test |
 | F3 | `parseFalQueueRequestId` stops being total (JSON literal `null`) | KILLED | 4 failing tests |
 | F4 | request construction and transport resolution move inside the certainty `try` | KILLED | 1 failing test |
+| F5 | the submission timeout drifts from the 60-second contract | KILLED | 1 failing test |
 
-**12/12 killed.** M7–M14 are the authorized set, run as specified and not
-substituted; F1–F4 are the defects PR #50's review surfaced, carried forward as
-additional evidence. Each was applied to real source, gated, and restored
-byte-identically; no marker remains.
+**13/13 killed.** M7–M14 are the authorized set, run as specified and not
+substituted; F1–F5 are additional. Each was applied to real source, gated, and
+restored byte-identically; no marker remains.
+
+F5 exists because the timeout regression was previously self-referential: it
+imported the production constant and asserted it against itself, so a drift from
+60 s would have moved both sides together and stayed green. The constant is now
+module-local and unexported, and the test owns the literal 60,000 — which is
+what makes F5 killable at all.
 
 ## Dormancy
 

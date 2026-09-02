@@ -35,7 +35,7 @@ export {
  * branch, and the adapter cannot be constructed without a credential nothing in
  * production supplies (ADR-0035).
  */
-export { FalH3MaxSubmissionProvider, FAL_SUBMISSION_TIMEOUT_MS } from "./fal/h3-max-provider";
+export { FalH3MaxSubmissionProvider } from "./fal/h3-max-provider";
 export type {
   FalH3MaxSubmissionConfig,
   FalH3MaxSubmissionDeps,

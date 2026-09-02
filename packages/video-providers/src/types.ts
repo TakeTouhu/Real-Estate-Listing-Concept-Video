@@ -3,12 +3,12 @@ import type { Money } from "@app/shared";
 /**
  * Every provider the architecture recognises.
  *
- * `fal` is present as a **model-catalog identity**, not as a wired adapter:
- * `createVideoProvider` has no fal branch and `VIDEO_PROVIDER` deliberately
- * still accepts only `fake` and `wavespeed`, so no configuration can select an
- * adapter that does not exist and no startup path can contact fal. Naming it
+ * `fal` names a model-catalog identity **and** a dormant submission-only
+ * adapter — but not a wired one: `createVideoProvider` has no fal branch and
+ * `VIDEO_PROVIDER` deliberately still accepts only `fake` and `wavespeed`, so
+ * no configuration can select fal and no startup path can contact it. Naming it
  * here is what lets the catalog describe fal-hosted models without leaking
- * fal-specific fields into the domain (ADR-0033).
+ * fal-specific fields into the domain (ADR-0033, ADR-0035 §7).
  */
 export type ProviderName = "fake" | "wavespeed" | "fal";
 
