@@ -72,14 +72,25 @@ Generation APIs return immediately after validation, credit reservation, and dur
 ## Provider abstraction
 
 ```ts
-interface VideoGenerationProvider {
-  createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef>;
+interface VideoGenerationSubmissionProvider {
+  createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome>;
+  normalizeError(error: unknown): ProviderError;
+}
+
+interface VideoGenerationProvider extends VideoGenerationSubmissionProvider {
   getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus>;
   cancelGeneration(ref: ProviderGenerationRef): Promise<void>;
   estimateCost(input: ProviderGenerationInput): Promise<Money>;
-  normalizeError(error: unknown): ProviderError;
 }
 ```
+
+**Amended 2026-09-02 by ADR-0035:** submission returns a certainty outcome —
+`ACCEPTED`, `DEFINITIVELY_REJECTED` or `SUBMISSION_UNKNOWN` — rather than a bare
+ref, and does not throw for expected provider or transport failures. It is split
+into its own port because it is the only call whose failure is financial: a
+create POST that fails may already have been billed, and `retryable` describes
+the transport rather than the provider's decision. Status and cancellation keep
+their exception behaviour; neither can incur a charge.
 
 WaveSpeedAI is the initial implementation, but provider-specific SDKs and payloads stay inside `packages/video-providers`.
 

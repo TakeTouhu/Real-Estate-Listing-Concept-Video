@@ -6,9 +6,17 @@ import type {
   ProviderGenerationInput,
   ProviderGenerationRef,
   ProviderGenerationStatus,
+  ProviderSubmissionOutcome,
 } from "../types";
 import type { WaveSpeedConfig } from "./config";
-import type { HttpClient } from "./http";
+import type { HttpClient, HttpRequest } from "./http";
+import {
+  accepted,
+  classifyWaveSpeedSubmissionStatus,
+  submissionResponseUnreadable,
+  submissionUnknown,
+  WAVESPEED_SUBMISSION_TIMEOUT_MS,
+} from "./submission";
 import {
   buildSubmitUrl,
   extractOutputUrl,
@@ -63,28 +71,76 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
     };
   }
 
-  async createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef> {
+  /**
+   * Submit one paid generation, exactly once, and report what is known.
+   *
+   * The invocation boundary is the `submitRequest` call. From that point
+   * WaveSpeed may hold the request and may bill for it, so every unhappy path
+   * after it is `SUBMISSION_UNKNOWN` unless the status proves otherwise. Before
+   * it, being on this side is *necessary* for a definitive rejection but not
+   * sufficient: only an explicitly modelled local refusal may claim one, and an
+   * unexpected exception propagates as the defect it is (ADR-0035).
+   *
+   * No loop, no retry, no second request. `requestHash` is never transmitted:
+   * it is this application's own coordination key, and WaveSpeed documents no
+   * idempotency contract that would make re-sending safe.
+   */
+  async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+    // --- Before invocation ---------------------------------------------------
+    // Deliberately unguarded, and drawn as widely as JavaScript allows: mapping,
+    // headers, body serialization and *resolving the transport method* all
+    // complete before the certainty `try` opens. Each runs before the call, so a
+    // failure is a defect — not evidence about a provider — and catching one
+    // would turn an unknown bug into a claim about billing (ADR-0035).
+    const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
+    const httpRequest: HttpRequest = {
+      method: "POST",
+      url: req.url,
+      headers: this.authHeaders(),
+      body: JSON.stringify(req.body),
+      timeoutMs: WAVESPEED_SUBMISSION_TIMEOUT_MS,
+      // A followed redirect would re-send this body to another URL: a second
+      // POST nobody authorized, for an operation that may bill on arrival.
+      redirect: "manual",
+    };
+    // Resolved, not called: a throwing `request` getter is a transport defect,
+    // and reading it inside the `try` would disguise it as an unknown fate.
+    const submitRequest = this.http.request.bind(this.http);
+
+    // --- Invocation ----------------------------------------------------------
+    // The `try` opens on the call and nothing else. One request; everything
+    // below classifies what came back, never another attempt.
+    let res;
     try {
-      const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
-      const res = await this.http.request({
-        method: "POST",
-        url: req.url,
-        headers: this.authHeaders(),
-        body: JSON.stringify(req.body),
-      });
-      if (res.status < 200 || res.status >= 300) {
-        throw new ProviderErrorException(normalizeHttpStatusError(res.status));
-      }
-      const predictionId = parsePredictionId(safeJsonParse(res.body));
-      return {
-        provider: this.name,
-        modelId: input.modelId,
-        predictionId,
-        submittedAt: this.now().toISOString(),
-      };
+      res = await submitRequest(httpRequest);
     } catch (error) {
-      throw new ProviderErrorException(this.normalizeError(error));
+      // Timeout, abort, connection reset, DNS failure — all raised from inside
+      // the transport, after it held the request. None says whether it arrived.
+      return submissionUnknown(this.normalizeError(error));
     }
+
+    // --- After invocation ----------------------------------------------------
+    // A 3xx lands here rather than being followed, and falls through to
+    // UNKNOWN: the request left this process and its fate is not established.
+    if (res.status < 200 || res.status >= 300) {
+      return classifyWaveSpeedSubmissionStatus(res.status);
+    }
+
+    // A 2xx this process cannot read is still a 2xx. The provider may hold the
+    // request; the failure is on this side. `parsePredictionId` is total over
+    // arbitrary parsed JSON — a literal `null` body included — so this is a
+    // branch on a value, not a `catch` standing in for validation.
+    const predictionId = parsePredictionId(safeJsonParse(res.body));
+    if (predictionId === null) {
+      return submissionResponseUnreadable();
+    }
+
+    return accepted({
+      provider: this.name,
+      modelId: input.modelId,
+      predictionId,
+      submittedAt: this.now().toISOString(),
+    });
   }
 
   async getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus> {

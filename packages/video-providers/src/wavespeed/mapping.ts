@@ -1,4 +1,4 @@
-import { ProviderErrorException, isHttpStatus, providerError } from "../errors";
+import { isHttpStatus, providerError } from "../errors";
 import type {
   ProviderError,
   ProviderGenerationInput,
@@ -76,20 +76,38 @@ interface WaveSpeedEnvelope {
   readonly status?: string;
 }
 
-export function parsePredictionId(payload: unknown): string {
+/** True for a value whose properties can be read without throwing. */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Recover the prediction id from a parsed 2xx body, or `null`.
+ *
+ * **Total over arbitrary parsed JSON**, and that is the whole contract. The
+ * input is whatever `JSON.parse` returned for bytes this application does not
+ * control: a literal `null`, a bare number, an array, a string. The previous
+ * version asserted `payload as WaveSpeedEnvelope` and then read `.data` — an
+ * assertion is a compile-time claim and does nothing at runtime, so a body of
+ * exactly `null` raised a `TypeError` from inside a function documented to
+ * signal by throwing a `ProviderErrorException`.
+ *
+ * It returns `null` rather than throwing because a malformed success is not an
+ * error condition to be caught: it is one of the ordinary answers a submission
+ * can produce, and the caller must classify it as `SUBMISSION_UNKNOWN`
+ * (ADR-0035). Nothing about the payload reaches the returned value except a
+ * validated, trimmed identifier.
+ */
+export function parsePredictionId(payload: unknown): string | null {
+  if (!isObject(payload)) return null;
   const env = payload as WaveSpeedEnvelope;
-  const id = env.data?.id ?? env.id;
-  if (typeof id !== "string" || id.length === 0) {
-    throw new ProviderErrorException(
-      providerError({
-        kind: "PROVIDER",
-        code: "WAVESPEED_MISSING_PREDICTION_ID",
-        messageSanitized: "WaveSpeedAI response did not contain a prediction id",
-        retryable: false,
-      }),
-    );
-  }
-  return id;
+  const nested = isObject(env.data) ? env.data.id : undefined;
+  const id = nested ?? env.id;
+  if (typeof id !== "string") return null;
+  // Whitespace is not an identifier. Trimming here rather than at the call site
+  // keeps one definition of what counts as usable.
+  const trimmed = id.trim();
+  return trimmed.length === 0 ? null : trimmed;
 }
 
 /**

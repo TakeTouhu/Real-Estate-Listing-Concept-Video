@@ -131,8 +131,35 @@ describe("parsePredictionId", () => {
     expect(parsePredictionId({ id: "pred_2" })).toBe("pred_2");
   });
 
-  it("throws a normalized provider error when missing", () => {
-    expect(() => parsePredictionId({})).toThrowError(/WaveSpeedAI response/);
+  it("trims a usable identifier", () => {
+    expect(parsePredictionId({ data: { id: "  pred_1 \n" } })).toBe("pred_1");
+  });
+
+  /**
+   * Total over everything `JSON.parse` can hand back.
+   *
+   * It returns `null` rather than throwing because a malformed provider success
+   * is an ordinary answer to classify, not an exceptional condition — and
+   * because the previous version asserted its argument into an envelope type
+   * and then read a property off it, which made a body of exactly `null` raise
+   * a `TypeError` (ADR-0035).
+   */
+  it.each([
+    ["JSON null", null],
+    ["undefined", undefined],
+    ["a number", 42],
+    ["a string", "pred_1"],
+    ["a boolean", true],
+    ["an array", []],
+    ["an empty object", {}],
+    ["a null data envelope", { data: null }],
+    ["a non-object data envelope", { data: "pred_1" }],
+    ["a non-string id", { data: { id: 12345 } }],
+    ["a null id", { data: { id: null } }],
+    ["an empty id", { data: { id: "" } }],
+    ["a whitespace-only id", { data: { id: "  \t\n" } }],
+  ])("returns null for %s without throwing", (_label, payload) => {
+    expect(parsePredictionId(payload)).toBeNull();
   });
 });
 

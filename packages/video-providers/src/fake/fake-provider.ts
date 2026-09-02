@@ -6,14 +6,37 @@ import type {
   ProviderGenerationInput,
   ProviderGenerationRef,
   ProviderGenerationStatus,
+  ProviderSubmissionOutcome,
   VideoModelPricing,
 } from "../types";
+
+/**
+ * Which submission outcome the fake produces, chosen up front.
+ *
+ * A closed vocabulary rather than a callback, and it carries no message: a
+ * caller-supplied string would end up in `ProviderError.messageSanitized`,
+ * which ADR-0031 requires to be application-owned. The fake is the provider
+ * every test and local run wires, so it is exactly where that habit would form.
+ */
+export type FakeSubmissionOutcomeKind =
+  | "ACCEPTED"
+  | "DEFINITIVELY_REJECTED"
+  | "SUBMISSION_UNKNOWN";
 
 export interface FakeVideoProviderOptions {
   readonly pricing?: VideoModelPricing;
   readonly now?: () => Date;
   /** Base for the synthetic temporary output URL (never a real endpoint). */
   readonly outputUrlBase?: string;
+  /**
+   * The submission outcome to return. Defaults to `ACCEPTED`.
+   *
+   * This is the offline seam for exercising the ambiguous path: a worker's
+   * handling of `SUBMISSION_UNKNOWN` is the most expensive thing to get wrong
+   * and the hardest to reach with a real provider, so it has to be reachable
+   * deterministically and without a network.
+   */
+  readonly submissionOutcome?: FakeSubmissionOutcomeKind;
 }
 
 const DEFAULT_PRICING: VideoModelPricing = { currency: "USD", costPerSecondMinor: 5 };
@@ -29,19 +52,57 @@ export class FakeVideoProvider implements VideoGenerationProvider {
   private readonly pricing: VideoModelPricing;
   private readonly now: () => Date;
   private readonly outputUrlBase: string;
+  private readonly submissionOutcome: FakeSubmissionOutcomeKind;
 
   constructor(options: FakeVideoProviderOptions = {}) {
     this.pricing = options.pricing ?? DEFAULT_PRICING;
     this.now = options.now ?? (() => new Date());
     this.outputUrlBase = options.outputUrlBase ?? "https://fake-provider.internal/outputs";
+    this.submissionOutcome = options.submissionOutcome ?? "ACCEPTED";
   }
 
-  createGeneration(input: ProviderGenerationInput): Promise<ProviderGenerationRef> {
+  /**
+   * Return the configured outcome, deterministically and offline.
+   *
+   * The two failure arms use fixed application-owned errors, and their
+   * `retryable` values are chosen to make the orthogonality visible: the
+   * ambiguous one is `retryable: true`, which is exactly the combination a
+   * caller must **not** read as permission to submit again.
+   */
+  createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+    if (this.submissionOutcome === "DEFINITIVELY_REJECTED") {
+      return Promise.resolve({
+        kind: "DEFINITIVELY_REJECTED",
+        error: providerError({
+          kind: "INVALID_INPUT",
+          code: "FAKE_SUBMISSION_REJECTED",
+          messageSanitized: "Fake provider rejected the submission",
+          retryable: false,
+        }),
+      });
+    }
+    if (this.submissionOutcome === "SUBMISSION_UNKNOWN") {
+      return Promise.resolve({
+        kind: "SUBMISSION_UNKNOWN",
+        error: providerError({
+          kind: "TIMEOUT",
+          code: "FAKE_SUBMISSION_UNKNOWN",
+          messageSanitized: "Fake provider submission outcome is unknown",
+          // Deliberately true: a retryable transport error still leaves the
+          // submission ambiguous, and nothing may treat this as a licence to
+          // re-POST (ADR-0035).
+          retryable: true,
+        }),
+      });
+    }
     return Promise.resolve({
-      provider: this.name,
-      modelId: input.modelId,
-      predictionId: `fake_${input.requestHash}`,
-      submittedAt: this.now().toISOString(),
+      kind: "ACCEPTED",
+      ref: {
+        provider: this.name,
+        modelId: input.modelId,
+        predictionId: `fake_${input.requestHash}`,
+        submittedAt: this.now().toISOString(),
+      },
     });
   }
 

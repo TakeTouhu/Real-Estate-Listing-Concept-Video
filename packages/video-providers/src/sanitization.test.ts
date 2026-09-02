@@ -6,7 +6,12 @@ import { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
 import { normalizeHttpStatusError, normalizeWaveSpeedError } from "./wavespeed/mapping";
 import type { WaveSpeedConfig } from "./wavespeed/config";
 import type { HttpClient, HttpResponse } from "./wavespeed/http";
-import type { ProviderError, ProviderGenerationInput, ProviderGenerationRef } from "./types";
+import type {
+  ProviderError,
+  ProviderGenerationInput,
+  ProviderGenerationRef,
+  ProviderSubmissionOutcome,
+} from "./types";
 
 /**
  * The secrecy contract, exercised with values that would be catastrophic to
@@ -119,12 +124,34 @@ async function caught(op: () => Promise<unknown>): Promise<ProviderErrorExceptio
 }
 
 /**
+ * The normalized error carried by a failed submission, whichever arm it is.
+ *
+ * Submission stopped throwing for expected provider and transport failures: it
+ * now returns `DEFINITIVELY_REJECTED` or `SUBMISSION_UNKNOWN` (ADR-0035). The
+ * secrecy contract did not move with it — the same `ProviderError` is still the
+ * only thing a caller can read — so these regressions assert exactly what they
+ * asserted before, reached through the union instead of a `catch`.
+ *
+ * Which arm a status lands in is `submission.test.ts`'s subject and deliberately
+ * not restated here; this file cares only that nothing external survives.
+ */
+async function submissionError(
+  op: () => Promise<ProviderSubmissionOutcome>,
+): Promise<ProviderError> {
+  const outcome = await op();
+  if (outcome.kind === "ACCEPTED") throw new Error("expected a failed submission outcome");
+  return outcome.error;
+}
+
+/**
  * Statuses the adapter distinguishes today, plus one it does not.
  *
- * Retryability and kind are asserted **as they currently stand**. Whether a
- * status proves the provider did not accept a paid submission is Phase
- * 4C-3B-2's question; this milestone only proves the diagnostics are safe, and
- * pinning current behaviour here is what keeps that later change deliberate.
+ * These are *diagnostics* — kind, code, retryability — and they are asserted
+ * here and nowhere else. Whether a status proves WaveSpeed did not accept a paid
+ * submission is a separate question with a separate answer, and it deliberately
+ * does not appear in this table: `submission.test.ts` owns it. Keeping the two
+ * apart is the point, because `retryable` is the field most likely to be misread
+ * as permission to submit again (ADR-0035).
  */
 const STATUS_CASES: readonly {
   status: number;
@@ -163,15 +190,19 @@ describe("HTTP status diagnostics are sanitized", () => {
   /**
    * The end-to-end form, and the one that fails if the body summary returns.
    * The stub answers every operation with a body full of sentinels.
+   *
+   * Status polling and cancellation still signal failure by throwing, so they
+   * are exercised through the thrown value exactly as before.
    */
-  const operations: readonly { name: string; run: (p: WaveSpeedVideoProvider) => Promise<unknown> }[] =
-    [
-      { name: "createGeneration", run: (p) => p.createGeneration(input) },
-      { name: "getStatus", run: (p) => p.getStatus(ref) },
-      { name: "cancelGeneration", run: (p) => p.cancelGeneration(ref) },
-    ];
+  const throwingOperations: readonly {
+    name: string;
+    run: (p: WaveSpeedVideoProvider) => Promise<unknown>;
+  }[] = [
+    { name: "getStatus", run: (p) => p.getStatus(ref) },
+    { name: "cancelGeneration", run: (p) => p.cancelGeneration(ref) },
+  ];
 
-  for (const { name, run } of operations) {
+  for (const { name, run } of throwingOperations) {
     it.each(STATUS_CASES)(`${name} discards a hostile $status body`, async ({ status }) => {
       const provider = new WaveSpeedVideoProvider(config, {
         http: clientReturning({ status, body: HOSTILE_BODY }),
@@ -182,13 +213,32 @@ describe("HTTP status diagnostics are sanitized", () => {
     });
   }
 
+  it.each(STATUS_CASES)("createGeneration discards a hostile $status body", async ({ status }) => {
+    const provider = new WaveSpeedVideoProvider(config, {
+      http: clientReturning({ status, body: HOSTILE_BODY }),
+    });
+
+    const outcome = await provider.createGeneration(input);
+    if (outcome.kind === "ACCEPTED") throw new Error("expected a failed submission outcome");
+
+    expectNoSentinels(outcome.error);
+    expect(outcome.error.providerStatus).toBe(status);
+    // The outcome is now a value a caller may log, persist or serialize whole,
+    // so the secrecy contract is asserted on the wrapper as well as its error.
+    // A future field on either arm that carried provider bytes would fail here.
+    const serialized = JSON.stringify(outcome);
+    for (const [name, sentinel] of Object.entries(SENTINELS)) {
+      expect(`${name}:${serialized.includes(sentinel)}`).toBe(`${name}:false`);
+    }
+  });
+
   it("keeps a hostile body out of a 2xx response that carries no prediction id", async () => {
     const provider = new WaveSpeedVideoProvider(config, {
       http: clientReturning({ status: 200, body: HOSTILE_BODY }),
     });
-    const exception = await caught(() => provider.createGeneration(input));
-    expect(exception.error.code).toBe("WAVESPEED_MISSING_PREDICTION_ID");
-    expectNoSentinels(exception.error);
+    const error = await submissionError(() => provider.createGeneration(input));
+    expect(error.code).toBe("WAVESPEED_SUBMISSION_RESPONSE_INVALID");
+    expectNoSentinels(error);
   });
 });
 
@@ -223,7 +273,17 @@ describe("network and abort diagnostics retain nothing external", () => {
 
   it("carries nothing external out of a rejected request, end to end", async () => {
     const provider = new WaveSpeedVideoProvider(config, { http: clientThrowing(hostileError()) });
-    const exception = await caught(() => provider.createGeneration(input));
+    const error = await submissionError(() => provider.createGeneration(input));
+    expect(error.kind).toBe("NETWORK");
+    expectNoSentinels(error);
+  });
+
+  it("carries nothing external out of a rejected poll, end to end", async () => {
+    // The same transport failure on the path that still throws. Submission
+    // changed shape in this milestone; polling did not, and this keeps the
+    // exception-carried form of the contract exercised rather than assumed.
+    const provider = new WaveSpeedVideoProvider(config, { http: clientThrowing(hostileError()) });
+    const exception = await caught(() => provider.getStatus(ref));
     expect(exception.error.kind).toBe("NETWORK");
     expectNoSentinels(exception.error);
   });
