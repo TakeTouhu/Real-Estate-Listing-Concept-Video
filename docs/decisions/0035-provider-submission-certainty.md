@@ -25,10 +25,9 @@ twice. An abstraction whose obvious use is the dangerous one is a defect.
 The failure this prevents: a submission times out at 60 s. From this side that
 is indistinguishable from success — the request may never have arrived, or may
 be queued, executing and billable. The timeout normalizes to `retryable: true`,
-an exception propagates, a retry policy re-POSTs, and the system may now be
-paying twice for one scene with two prediction ids, only one of them tracked.
-Nothing available to the caller distinguished that case from a request that
-provably never landed.
+an exception propagates, a retry policy re-POSTs, and one scene may now be
+billed twice with two prediction ids, only one tracked. Nothing available to the
+caller distinguished that from a request that provably never landed.
 
 Since ADR-0033 the architecture is also multi-provider, and certainty was
 expressed implicitly through WaveSpeed's HTTP status handling — so there was
@@ -85,10 +84,10 @@ layer.
 **422 is deliberately absent**, and its previous definitive treatment is not
 carried forward: the currently verified WaveSpeed contract does not establish
 422 as proof of non-acceptance. That absence of proof is the entire reason — no
-claim is made here about what WaveSpeed does internally with a 422, because none
-has been verified. The asymmetry settles the doubt: an over-narrow allowlist
-parks a request a human can re-submit; an over-broad one re-POSTs work that may
-already be billed.
+claim is made about what WaveSpeed does internally with a 422, because none has
+been verified. The asymmetry settles the doubt: an over-narrow allowlist parks a
+request a human can re-submit; an over-broad one re-POSTs work that may already
+be billed.
 
 The allowlist is a `switch` over literals with no exported backing collection.
 An exported array would be a mutable object controlling a financial
@@ -120,9 +119,23 @@ redirect or a malformed success. Three mechanisms, not a comment:
 - Submission passes an explicit 60 s `timeoutMs`, separate from the client-wide
   default, because abandoning a paid submission does not cancel it.
 
-Every adapter is structured with an explicit invocation boundary: above the
-`http.request` line a failure proves nothing was sent; from that line onward it
-does not.
+Every adapter is structured around an explicit invocation boundary, and the rule
+has three cases rather than two — being above the `http.request` line is
+necessary for a definitive rejection but not sufficient:
+
+| Case | Result |
+| --- | --- |
+| An **explicitly recognized** local validation refusal, before invocation | `DEFINITIVELY_REJECTED` |
+| An unexpected programmer or invariant defect | **throws** |
+| Any failure from the moment invocation begins | the provider-specific certainty rule |
+
+The middle row is the one worth stating: a defect is not evidence about a
+provider, and catching an arbitrary local exception to call it
+`DEFINITIVELY_REJECTED` converts an unknown bug into a financial claim. So
+WaveSpeed's mapper call is deliberately unguarded, and the adapter has no
+explicitly modelled local refusal today. When one is introduced it must arrive
+through a closed refusal contract or another nominal, application-owned
+mechanism, never a catch-all.
 
 ### 6. Malformed provider success is a classified outcome, not an exception
 
@@ -144,21 +157,20 @@ exists because nobody can establish it.
 ## Consequences
 
 A future orchestrator can distinguish "re-submit" from "investigate" without
-guessing. `DEFINITIVELY_REJECTED` can fail an attempt and release its credit
-reservation; `SUBMISSION_UNKNOWN` must not, because a reservation released
+guessing. `DEFINITIVELY_REJECTED` may fail an attempt and release its credit
+reservation; `SUBMISSION_UNKNOWN` must not, because releasing a reservation
 against work the provider is billing produces an unfunded charge.
 
 This subphase changes a boundary and nothing behind it: no paid generation, no
 orchestration, no paid gate, no submission audit persistence, no polling or
 output ingestion, and no second adapter.
 
-`SUBMISSION_UNKNOWN` is only *representable*. Nothing persists it, reconciles it
-against the provider, or holds a reservation open while unresolved — so the
-guarantee is that the system cannot silently re-charge, not that it can recover.
-And a provider-neutral abstraction with one implementation is an assertion: the
-fal / H3 Max submission adapter is a separate subphase, and its classifier must
-be established from fal's own published contract rather than inferred from this
-one. Both are recorded in `docs/decisions/TODO.md`.
+`SUBMISSION_UNKNOWN` is only *representable*. Nothing persists it, reconciles it,
+or holds a reservation open while unresolved — so the guarantee is that the
+system cannot silently re-charge, not that it can recover. And a
+provider-neutral abstraction with one implementation is an assertion: the fal /
+H3 Max adapter is a separate subphase, and its classifier must come from fal's
+own published contract. Both are recorded in `docs/decisions/TODO.md`.
 
 ## Rejected alternatives
 
@@ -168,7 +180,3 @@ type change is what makes the compiler enumerate every caller.
 
 **An exception subclass per certainty.** Still an exception, so `catch (e) {
 retry() }` still compiles and is still the obvious handler.
-
-**Keeping the exported allowlist array for tests to import.** It made the test
-agree with the module by construction, including after a change that widened it.
-A financial rule wants an independent second statement.

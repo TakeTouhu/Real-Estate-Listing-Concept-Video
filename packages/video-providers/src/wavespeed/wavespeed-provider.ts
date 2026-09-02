@@ -13,7 +13,6 @@ import type { HttpClient } from "./http";
 import {
   accepted,
   classifyWaveSpeedSubmissionStatus,
-  definitivelyRejected,
   submissionResponseUnreadable,
   submissionUnknown,
   WAVESPEED_SUBMISSION_TIMEOUT_MS,
@@ -76,11 +75,15 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
    * Submit one paid generation, exactly once, and report what is known.
    *
    * The method is structured around a single line — the `this.http.request`
-   * call — because that line is the invocation boundary. Before it, a failure
-   * proves nothing reached WaveSpeed and is a definitive rejection. From the
-   * moment it is entered, WaveSpeed may hold the request and may bill for it,
-   * so every unhappy path after that point is `SUBMISSION_UNKNOWN` unless the
-   * status itself proves otherwise (ADR-0035).
+   * call — because that line is the invocation boundary. From the moment it is
+   * entered, WaveSpeed may hold the request and may bill for it, so every
+   * unhappy path after that point is `SUBMISSION_UNKNOWN` unless the status
+   * itself proves otherwise (ADR-0035).
+   *
+   * Before it, being on this side of the boundary is *necessary* for a
+   * definitive rejection but not sufficient: only an **explicitly modelled**
+   * local refusal may claim one. An unexpected exception is a defect, not
+   * evidence about the provider, and still propagates.
    *
    * There is deliberately no loop, no retry and no second request anywhere in
    * this method. `requestHash` is never transmitted: it is this application's
@@ -89,14 +92,14 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
    */
   async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
     // --- Before invocation ---------------------------------------------------
-    // Mapping is local and total, but it is still on this side of the boundary:
-    // if it ever refuses, nothing has been sent and the rejection is definitive.
-    let req: ReturnType<typeof mapToWaveSpeedRequest>;
-    try {
-      req = mapToWaveSpeedRequest(input, this.config.baseUrl);
-    } catch (error) {
-      return definitivelyRejected(this.normalizeError(error));
-    }
+    // Deliberately unguarded. `mapToWaveSpeedRequest` declares no validation
+    // contract, so anything it threw would be a programmer or invariant defect
+    // — and a defect is not evidence about a provider. Catching it here would
+    // convert an unknown bug into `DEFINITIVELY_REJECTED`, which is a claim
+    // this process is in no position to make. It propagates instead (ADR-0035).
+    // Only an explicitly modelled local refusal may be definitive; none exists
+    // on this path today.
+    const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
 
     // --- Invocation ----------------------------------------------------------
     // One request. Everything below is classification of what came back, never

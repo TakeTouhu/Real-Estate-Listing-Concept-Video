@@ -54,8 +54,7 @@ No database change, no API change, no user-visible change.
 
 Paid generation remains unreachable. No orchestration, no paid gate, no
 submission audit persistence, no polling or output ingestion, and **no fal
-adapter** — that is 3B-2C-2. `SUBMISSION_UNKNOWN` is representable but not yet
-persisted or reconciled. No provider was contacted.
+adapter** — that is 3B-2C-2. No provider was contacted.
 
 ## [Unreleased] — Phase 4C-3B-2B: Versioned request identity and the resolution snapshot
 

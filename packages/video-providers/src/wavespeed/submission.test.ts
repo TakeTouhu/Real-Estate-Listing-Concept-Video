@@ -56,6 +56,30 @@ function submit(http: HttpClient) {
   return new WaveSpeedVideoProvider(config, { http, now }).createGeneration(input);
 }
 
+describe("WaveSpeed submission — a local defect is not certainty", () => {
+  it("propagates an unexpected pre-invocation throw instead of calling it rejected", async () => {
+    // The defect is injected through the input itself — a throwing getter — so
+    // no framework is needed to reach the mapper's own failure path.
+    //
+    // `DEFINITIVELY_REJECTED` asserts the provider could not have begun or
+    // billed work. A bug in this process is no evidence for that, and a
+    // catch-all here would silently upgrade every unknown local failure into
+    // that financial claim. Being before the boundary is necessary for a
+    // definitive rejection, not sufficient (ADR-0035).
+    const defective: ProviderGenerationInput = Object.defineProperty({ ...input }, "prompt", {
+      get(): string {
+        throw new TypeError("invariant violated while building the request");
+      },
+    });
+    const request = vi.fn();
+
+    await expect(
+      new WaveSpeedVideoProvider(config, { http: { request }, now }).createGeneration(defective),
+    ).rejects.toThrow(TypeError);
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 describe("WaveSpeed submission — accepted", () => {
   it("returns ACCEPTED for a 2xx carrying a prediction id, after one POST", async () => {
     const { http, calls } = respondWith({
@@ -103,10 +127,9 @@ describe("WaveSpeed submission — definitively rejected", () => {
 
 describe("WaveSpeed submission — unknown", () => {
   it.each([
-    // The one that changed. 422 was previously definitive; on a generation API
-    // it can mean a moderation or model-level refusal reached *after* the
-    // request was accepted, so it is no longer proof that nothing happened.
-    [422, "an unprocessable entity that may already have consumed work"],
+    // The one that changed. The currently verified WaveSpeed contract does not
+    // establish 422 as proof of non-acceptance, so it is conservatively UNKNOWN.
+    [422, "an unprocessable entity that is not established as non-acceptance"],
     [429, "a rate limit, which describes the transport and not the decision"],
     [500, "a server error"],
     [503, "an unavailable upstream"],
