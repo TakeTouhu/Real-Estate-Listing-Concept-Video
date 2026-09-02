@@ -27,6 +27,20 @@ export {
   WAVESPEED_SUBMISSION_TIMEOUT_MS,
 } from "./wavespeed/submission";
 
+/**
+ * The dormant fal / H3 Max submission adapter.
+ *
+ * Exported so it can be tested and reviewed, **not** so it can be wired:
+ * `VIDEO_PROVIDER` accepts only `fake` and `wavespeed`, the factory has no fal
+ * branch, and the adapter cannot be constructed without a credential nothing in
+ * production supplies (ADR-0035).
+ */
+export { FalH3MaxSubmissionProvider, FAL_SUBMISSION_TIMEOUT_MS } from "./fal/h3-max-provider";
+export type {
+  FalH3MaxSubmissionConfig,
+  FalH3MaxSubmissionDeps,
+} from "./fal/h3-max-provider";
+
 export {
   OPEN_VIDEO_CAPABILITY,
   OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS,

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-02
-- Phase: 4C-3B-2C-1
+- Phase: 4C-3B-2C-1; §7 added in 4C-3B-2C-2
 - Amends: ADR-0031 — narrows what an exception from a provider adapter means,
   without changing what a `ProviderError` may contain
 - Relates to: ADR-0030, which guarantees at most one *claim*; this ADR governs
@@ -101,9 +101,9 @@ definition of what submitting costs and returns.
 The split exists so an adapter can implement submission alone: the catalog
 admits models whose pricing, polling and cancellation contracts are unverified
 (ADR-0033), and such an adapter can declare only what it can honour rather than
-invent three answers to satisfy a type. **No submission-only adapter is
-implemented in this subphase.** Status polling and cancellation keep their
-exception behaviour; neither can incur a charge.
+invent three answers to satisfy a type. The fal / H3 Max adapter (§7) is
+exactly that: submission and error normalization, nothing else. Status polling
+and cancellation keep their exception behaviour; neither can incur a charge.
 
 ### 5. At most one outbound submission per call
 
@@ -167,10 +167,52 @@ output ingestion, and no second adapter.
 
 `SUBMISSION_UNKNOWN` is only *representable*: nothing persists it, reconciles it,
 or holds a reservation open while unresolved, so the guarantee is that the
-system cannot silently re-charge, not that it can recover. And a
-provider-neutral abstraction with one implementation is an assertion — the fal /
-H3 Max adapter is a separate subphase, and its classifier must come from fal's
-own published contract. Both are in `docs/decisions/TODO.md`.
+system cannot silently re-charge, not that it can recover. Recorded in
+`docs/decisions/TODO.md`.
+
+## 7. The fal / H3 Max adapter (added in 4C-3B-2C-2)
+
+A provider-neutral abstraction with one implementation is an assertion. This
+adapter is the evidence, and it earns that only by **disagreeing** with
+WaveSpeed where the vendors' published contracts differ.
+
+**No remote status is definitive.** WaveSpeed allowlists 400/401/403 because its
+contract establishes them; fal's queue publishes nothing that establishes
+non-acceptance for any status, and a 422 there may follow work already admitted
+and billable. Inheriting WaveSpeed's rule would invent a certainty fal never
+offered. Every post-invocation result without a valid `request_id` — 3xx, any
+4xx, any 5xx, transport failure, timeout, malformed JSON, empty body, or a 2xx
+whose id is missing, non-string, empty or whitespace — is `SUBMISSION_UNKNOWN`.
+
+**Acceptance requires a named request.** Only fal's documented `request_id`
+counts, trimmed. `response_url`, `status_url`, `cancel_url` and
+`gateway_request_id` are deliberately not consulted: an adjacent or derived
+identifier would let a body that never named the work look trackable. The HTTP
+seam exposes no response headers, so `x-fal-request-id` is not reachable either
+— and widening the seam to reach it would reopen the raw-header channel
+ADR-0031 closed.
+
+**Only two local refusals are definitive:** an unsupported model id and a blank
+credential, both raised before any HTTP invocation, so each proves nothing was
+sent. There is no catch-all: an unexpected pre-invocation defect propagates.
+Local error text is a closed set of fixed helpers — no helper accepts a
+caller-supplied `messageSanitized`, because that parameter is an open channel
+into a field ADR-0031 requires to be application-owned.
+
+**Raw HTTP, not `@fal-ai/client`.** The exactly-one-POST guarantee must stay
+auditable in this repository; the SDK's retry behaviour is not part of its
+published contract and could change in a patch release. That guarantee is about
+*this application*: fal's own durable-queue retries are provider-internal
+processing of a request it has already accepted, and are **not** an application
+re-POST — which is why `X-Fal-No-Retry` is not sent. Suppressing fal's internal
+recovery to satisfy an application-side rule would trade reliability for a
+property the application already holds.
+
+**Dormant, and unpriced.** `VIDEO_PROVIDER` still accepts only `fake` and
+`wavespeed`, no fal key exists in the environment schema, `createVideoProvider`
+has no fal branch, and nothing in production constructs the class. The catalog
+entry keeps `pricing: null`: no fal price is transcribed, and cost estimation,
+orchestration, polling, persistence and paid execution are all out of scope.
 
 ## Rejected alternatives
 
