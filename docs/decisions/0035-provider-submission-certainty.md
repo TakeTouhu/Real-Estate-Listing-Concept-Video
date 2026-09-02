@@ -25,14 +25,14 @@ twice. An abstraction whose obvious use is the dangerous one is a defect.
 The failure this prevents: a submission times out at 60 s. From this side that
 is indistinguishable from success — the request may never have arrived, or may
 be queued, executing and billable. The timeout normalizes to `retryable: true`,
-an exception propagates, a retry policy re-POSTs, and one scene may now be
-billed twice with two prediction ids, only one tracked. Nothing available to the
-caller distinguished that from a request that provably never landed.
+an exception propagates, a retry policy re-POSTs, and one scene may be billed
+twice with two prediction ids, only one tracked. Nothing distinguished that from
+a request that provably never landed.
 
 Since ADR-0033 the architecture is also multi-provider, and certainty was
-expressed implicitly through WaveSpeed's HTTP status handling — so there was
-nothing for a second adapter to implement, only a shape to copy. Copying would
-be wrong: providers publish different guarantees.
+expressed implicitly through WaveSpeed's HTTP status handling — nothing for a
+second adapter to implement, only a shape to copy. Copying would be wrong:
+providers publish different guarantees.
 
 ## Decision
 
@@ -63,17 +63,16 @@ SUBMISSION_UNKNOWN + error.retryable === false   // and it may not
 ```
 
 Neither authorizes a second create POST. `retryable` survives because it is
-useful for scheduling and diagnostics; it answers a different question.
+useful for scheduling and diagnostics; it answers another question.
 
 ### 3. The union is provider-neutral; each adapter owns its own evidence
 
 No HTTP status, no vendor field, no queue concept appears on the union. A
 sanitized status lives on `ProviderError.providerStatus` and decides nothing.
 
-The mapping from vendor behaviour to these three answers is **not shared**. Each
+The mapping from vendor behaviour to these three answers is **not shared**: each
 adapter must justify its own `DEFINITIVELY_REJECTED` rule from what its vendor
-actually publishes, so the rule lives in the adapter and never in a shared
-layer.
+publishes, so the rule lives in the adapter, never in a shared layer.
 
 **WaveSpeed** allowlists `400`, `401`, `403` and nothing else:
 
@@ -100,11 +99,11 @@ classification, and any module holding the reference could widen it.
 definition of what submitting costs and returns.
 
 The split exists so an adapter can implement submission alone: the catalog
-already admits models whose pricing, polling and cancellation contracts are
-unverified (ADR-0033), and such an adapter can declare only what it can honour
-instead of inventing three answers to satisfy a type. **No submission-only
-adapter is implemented in this subphase.** Status polling and cancellation keep
-their exception behaviour; neither can incur a charge.
+admits models whose pricing, polling and cancellation contracts are unverified
+(ADR-0033), and such an adapter can declare only what it can honour rather than
+invent three answers to satisfy a type. **No submission-only adapter is
+implemented in this subphase.** Status polling and cancellation keep their
+exception behaviour; neither can incur a charge.
 
 ### 5. At most one outbound submission per call
 
@@ -115,13 +114,12 @@ redirect or a malformed success. Three mechanisms, not a comment:
   retry or backoff anywhere in the transport.
 - Submission passes `redirect: "manual"`. A followed 3xx re-sends the body to a
   new URL — a second POST nobody authorized, for an operation that may bill on
-  arrival. A 3xx therefore falls through to `SUBMISSION_UNKNOWN`.
+  arrival — so a 3xx falls through to `SUBMISSION_UNKNOWN`.
 - Submission passes an explicit 60 s `timeoutMs`, separate from the client-wide
   default, because abandoning a paid submission does not cancel it.
 
-Every adapter is structured around an explicit invocation boundary, and the rule
-has three cases rather than two — being above the `http.request` line is
-necessary for a definitive rejection but not sufficient:
+The boundary is the **invocation of the injected transport method**, and the
+rule has three cases rather than two:
 
 | Case | Result |
 | --- | --- |
@@ -129,13 +127,16 @@ necessary for a definitive rejection but not sufficient:
 | An unexpected programmer or invariant defect | **throws** |
 | Any failure from the moment invocation begins | the provider-specific certainty rule |
 
-The middle row is the one worth stating: a defect is not evidence about a
-provider, and catching an arbitrary local exception to call it
-`DEFINITIVELY_REJECTED` converts an unknown bug into a financial claim. So
-WaveSpeed's mapper call is deliberately unguarded, and the adapter has no
-explicitly modelled local refusal today. When one is introduced it must arrive
-through a closed refusal contract or another nominal, application-owned
-mechanism, never a catch-all.
+Being before the boundary is therefore necessary for a definitive rejection but
+not sufficient: a defect is not evidence about a provider, and catching one to
+call it `DEFINITIVELY_REJECTED` converts an unknown bug into a financial claim.
+No such refusal is modelled today; when one is, it must arrive through a closed
+refusal contract or another nominal mechanism, never a catch-all.
+
+The boundary is drawn in code as widely as JavaScript requires: mapping, header
+construction, body serialization and **resolving the transport method itself**
+all complete before the certainty `try` opens, since every one executes before
+the call. A throwing `request` getter is a defect, not an unknown fate.
 
 ### 6. Malformed provider success is a classified outcome, not an exception
 
@@ -143,12 +144,11 @@ A 2xx whose prediction id cannot be recovered is `SUBMISSION_UNKNOWN`: the
 provider answered with success and may hold the request, and what failed is this
 side's ability to name it.
 
-`parsePredictionId` is therefore **total** over arbitrary parsed JSON and
-returns `string | null`. It previously asserted its argument into an envelope
-type and then read a property off it — an assertion is a compile-time claim and
-validates nothing — so a body of exactly `null` raised a `TypeError` from a
-function documented to signal by throwing a `ProviderErrorException`. The guard
-is now a runtime check, and a valid identifier is normalized by trimming.
+`parsePredictionId` is therefore **total** over arbitrary parsed JSON, returning
+`string | null`. It previously asserted its argument into an envelope type and
+read a property off it — an assertion is a compile-time claim and validates
+nothing — so a body of exactly `null` raised a `TypeError`. The guard is now a
+runtime check, and a valid identifier is normalized by trimming.
 
 Its diagnostic says only that no usable prediction id was present. It must not
 say the submission was accepted: acceptance is precisely the fact this outcome
@@ -165,12 +165,12 @@ This subphase changes a boundary and nothing behind it: no paid generation, no
 orchestration, no paid gate, no submission audit persistence, no polling or
 output ingestion, and no second adapter.
 
-`SUBMISSION_UNKNOWN` is only *representable*. Nothing persists it, reconciles it,
-or holds a reservation open while unresolved — so the guarantee is that the
+`SUBMISSION_UNKNOWN` is only *representable*: nothing persists it, reconciles it,
+or holds a reservation open while unresolved, so the guarantee is that the
 system cannot silently re-charge, not that it can recover. And a
-provider-neutral abstraction with one implementation is an assertion: the fal /
+provider-neutral abstraction with one implementation is an assertion — the fal /
 H3 Max adapter is a separate subphase, and its classifier must come from fal's
-own published contract. Both are recorded in `docs/decisions/TODO.md`.
+own published contract. Both are in `docs/decisions/TODO.md`.
 
 ## Rejected alternatives
 

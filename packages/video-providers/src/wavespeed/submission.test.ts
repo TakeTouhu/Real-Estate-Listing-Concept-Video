@@ -8,16 +8,12 @@ import { WaveSpeedVideoProvider } from "./wavespeed-provider";
 /**
  * WaveSpeed submission certainty, exhaustively.
  *
- * Every case here answers one question: *after this response, may the request
- * be sent again?* The suite is deliberately status-by-status rather than
- * grouped, because the interesting failures are the ones where a plausible
- * reading of a status gives the wrong answer — 422 looks like a rejection, a
- * 429 looks retryable, and a malformed 2xx looks like a failure. Each of those
- * would authorize a duplicate charge.
- *
- * Every case also asserts the request count. "Exactly one POST" is the property
- * that actually protects the customer's money; a classifier that were perfect
- * but looped would be worse than one that were coarse and did not.
+ * Every case answers one question: *after this response, may the request be
+ * sent again?* It is status-by-status because the interesting failures are the
+ * ones where a plausible reading gives the wrong answer — 422 looks like a
+ * rejection, 429 looks retryable, a malformed 2xx looks like a failure — and
+ * each would authorize a duplicate charge. Every case also asserts the request
+ * count, since "exactly one POST" is what protects the customer's money.
  *
  * No network: the transport is a stub that records what it was asked to do.
  */
@@ -58,14 +54,10 @@ function submit(http: HttpClient) {
 
 describe("WaveSpeed submission — a local defect is not certainty", () => {
   it("propagates an unexpected pre-invocation throw instead of calling it rejected", async () => {
-    // The defect is injected through the input itself — a throwing getter — so
-    // no framework is needed to reach the mapper's own failure path.
-    //
     // `DEFINITIVELY_REJECTED` asserts the provider could not have begun or
-    // billed work. A bug in this process is no evidence for that, and a
-    // catch-all here would silently upgrade every unknown local failure into
-    // that financial claim. Being before the boundary is necessary for a
-    // definitive rejection, not sufficient (ADR-0035).
+    // billed work, and a bug here is no evidence for that. Being before the
+    // boundary is necessary for a definitive rejection, not sufficient. The
+    // defect is injected through the input, so no framework is needed.
     const defective: ProviderGenerationInput = Object.defineProperty({ ...input }, "prompt", {
       get(): string {
         throw new TypeError("invariant violated while building the request");
@@ -77,6 +69,21 @@ describe("WaveSpeed submission — a local defect is not certainty", () => {
       new WaveSpeedVideoProvider(config, { http: { request }, now }).createGeneration(defective),
     ).rejects.toThrow(TypeError);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("propagates a defect raised while resolving the transport method", async () => {
+    // Resolving `http.request` is itself pre-invocation work. Inside the
+    // certainty `try`, a broken transport would become an unknown submission —
+    // when nothing was ever called.
+    const http: HttpClient = {
+      get request(): never {
+        throw new TypeError("transport is not wired");
+      },
+    };
+
+    await expect(
+      new WaveSpeedVideoProvider(config, { http, now }).createGeneration(input),
+    ).rejects.toThrow(TypeError);
   });
 });
 
@@ -158,7 +165,8 @@ describe("WaveSpeed submission — unknown", () => {
   });
 
   it("treats a 2xx with unparseable JSON as UNKNOWN, not rejection", async () => {
-    // The provider said yes. This process simply cannot read the answer, so the
+    // The provider returned a 2xx response, which is not the same as known
+    // acceptance. This process cannot read the answer either way, so the
     // request may be running and billing right now.
     const { http, calls } = respondWith({ status: 200, body: "<html>not json</html>" });
 

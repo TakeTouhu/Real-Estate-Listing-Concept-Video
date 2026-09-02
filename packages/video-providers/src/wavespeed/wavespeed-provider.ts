@@ -9,7 +9,7 @@ import type {
   ProviderSubmissionOutcome,
 } from "../types";
 import type { WaveSpeedConfig } from "./config";
-import type { HttpClient } from "./http";
+import type { HttpClient, HttpRequest } from "./http";
 import {
   accepted,
   classifyWaveSpeedSubmissionStatus,
@@ -74,52 +74,48 @@ export class WaveSpeedVideoProvider implements VideoGenerationProvider {
   /**
    * Submit one paid generation, exactly once, and report what is known.
    *
-   * The method is structured around a single line — the `this.http.request`
-   * call — because that line is the invocation boundary. From the moment it is
-   * entered, WaveSpeed may hold the request and may bill for it, so every
-   * unhappy path after that point is `SUBMISSION_UNKNOWN` unless the status
-   * itself proves otherwise (ADR-0035).
+   * The invocation boundary is the `submitRequest` call. From that point
+   * WaveSpeed may hold the request and may bill for it, so every unhappy path
+   * after it is `SUBMISSION_UNKNOWN` unless the status proves otherwise. Before
+   * it, being on this side is *necessary* for a definitive rejection but not
+   * sufficient: only an explicitly modelled local refusal may claim one, and an
+   * unexpected exception propagates as the defect it is (ADR-0035).
    *
-   * Before it, being on this side of the boundary is *necessary* for a
-   * definitive rejection but not sufficient: only an **explicitly modelled**
-   * local refusal may claim one. An unexpected exception is a defect, not
-   * evidence about the provider, and still propagates.
-   *
-   * There is deliberately no loop, no retry and no second request anywhere in
-   * this method. `requestHash` is never transmitted: it is this application's
-   * own coordination key, and WaveSpeed documents no idempotency contract that
-   * would make re-sending safe.
+   * No loop, no retry, no second request. `requestHash` is never transmitted:
+   * it is this application's own coordination key, and WaveSpeed documents no
+   * idempotency contract that would make re-sending safe.
    */
   async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
     // --- Before invocation ---------------------------------------------------
-    // Deliberately unguarded. `mapToWaveSpeedRequest` declares no validation
-    // contract, so anything it threw would be a programmer or invariant defect
-    // — and a defect is not evidence about a provider. Catching it here would
-    // convert an unknown bug into `DEFINITIVELY_REJECTED`, which is a claim
-    // this process is in no position to make. It propagates instead (ADR-0035).
-    // Only an explicitly modelled local refusal may be definitive; none exists
-    // on this path today.
+    // Deliberately unguarded, and drawn as widely as JavaScript allows: mapping,
+    // headers, body serialization and *resolving the transport method* all
+    // complete before the certainty `try` opens. Each runs before the call, so a
+    // failure is a defect — not evidence about a provider — and catching one
+    // would turn an unknown bug into a claim about billing (ADR-0035).
     const req = mapToWaveSpeedRequest(input, this.config.baseUrl);
+    const httpRequest: HttpRequest = {
+      method: "POST",
+      url: req.url,
+      headers: this.authHeaders(),
+      body: JSON.stringify(req.body),
+      timeoutMs: WAVESPEED_SUBMISSION_TIMEOUT_MS,
+      // A followed redirect would re-send this body to another URL: a second
+      // POST nobody authorized, for an operation that may bill on arrival.
+      redirect: "manual",
+    };
+    // Resolved, not called: a throwing `request` getter is a transport defect,
+    // and reading it inside the `try` would disguise it as an unknown fate.
+    const submitRequest = this.http.request.bind(this.http);
 
     // --- Invocation ----------------------------------------------------------
-    // One request. Everything below is classification of what came back, never
-    // another attempt.
+    // The `try` opens on the call and nothing else. One request; everything
+    // below classifies what came back, never another attempt.
     let res;
     try {
-      res = await this.http.request({
-        method: "POST",
-        url: req.url,
-        headers: this.authHeaders(),
-        body: JSON.stringify(req.body),
-        timeoutMs: WAVESPEED_SUBMISSION_TIMEOUT_MS,
-        // A followed redirect would re-send this body to another URL: a second
-        // POST nobody authorized, for an operation that may bill on arrival.
-        redirect: "manual",
-      });
+      res = await submitRequest(httpRequest);
     } catch (error) {
-      // Timeout, abort, connection reset, DNS failure — all after the request
-      // was handed to the transport. None of them says whether WaveSpeed
-      // received it.
+      // Timeout, abort, connection reset, DNS failure — all raised from inside
+      // the transport, after it held the request. None says whether it arrived.
       return submissionUnknown(this.normalizeError(error));
     }
 

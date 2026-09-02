@@ -1,12 +1,12 @@
 # Phase 4C-3B-2C-1 — Completion report
 
 Provider-neutral submission certainty: the contract, the WaveSpeed
-implementation, and the Fake provider.
+implementation, and the Fake provider. Decision record: ADR-0035.
 
-Base: `544e35afd9bb53ab8e6091f2a01a70c302807892`. Decision record: ADR-0035.
+Base: `544e35afd9bb53ab8e6091f2a01a70c302807892`.
 
-> Phase 4C-3B-2C is **not** complete. This is the first of two subphases; the
-> fal / H3 Max submission adapter is 3B-2C-2 and is not implemented here.
+> Phase 4C-3B-2C is **not** complete: the fal / H3 Max submission adapter is
+> 3B-2C-2 and is not implemented here.
 
 ## Size
 
@@ -14,33 +14,28 @@ Measured against base. All counts include documentation.
 
 | Scope | Insertions | Deletions | Total |
 | --- | ---: | ---: | ---: |
-| Production TypeScript | 487 | 89 | 576 |
-| Tests | 678 | 47 | 725 |
+| Production TypeScript | 489 | 95 | 584 |
+| Tests | 686 | 47 | 733 |
 | Migration SQL + Prisma schema | 0 | 0 | 0 |
-| Documentation (`docs/`, `CHANGELOG.md`) | 482 | 16 | 498 |
-| **Everything** | 1,647 | 152 | **1,799** |
+| Documentation (`docs/`, `CHANGELOG.md`) | 467 | 16 | 483 |
+| **Everything** | 1,642 | 158 | **1,800** |
 
-Target ≤1,600, hard stop >1,800. **199 over target, 1 under the hard stop.**
-Reported, not excepted; no size exception is requested.
+Target ≤1,600, hard stop >1,800. **200 over target, at the 1,800 limit and
+not over it.** Reported, not excepted; no size exception is requested.
 
-Documentation prose was tightened three times against this ceiling, the last to
-absorb the programmer-defect correction. No discriminating test was removed.
-
-`docs/SystemArchitecture.md` is included and **CTO-approved for this subphase**
-despite not being in §10's list: it declared
-`createGeneration(...): Promise<ProviderGenerationRef>`, which this branch makes
-wrong, so the canonical document would otherwise point implementers at the
-pre-change return type.
+Prose and comments were tightened repeatedly against this ceiling; no
+discriminating test was removed. `docs/SystemArchitecture.md` is included and
+**CTO-approved for this subphase** despite not being in §10's list: it declared
+the pre-ADR-0035 return type, which this branch makes wrong.
 
 ## What changed
 
 `createGeneration` returns `ProviderSubmissionOutcome` — `ACCEPTED`,
 `DEFINITIVELY_REJECTED`, `SUBMISSION_UNKNOWN` — and no longer throws for
-expected provider or transport failures. `SUBMISSION_UNKNOWN` is the default; an
-adapter must positively establish non-acceptance to say anything else. The union
-carries **no `retryable` and no HTTP status of its own**, pinned at compile time.
-Submission became its own port, `VideoGenerationSubmissionProvider`. ADR-0035
-carries the rationale.
+expected provider or transport failures. `SUBMISSION_UNKNOWN` is the default;
+the union carries **no `retryable` and no HTTP status of its own**, pinned at
+compile time. Submission became its own port,
+`VideoGenerationSubmissionProvider`. ADR-0035 carries the rationale.
 
 ### WaveSpeed certainty
 
@@ -57,41 +52,35 @@ carries the rationale.
 does not establish it as proof of non-acceptance. No claim is made about what
 WaveSpeed does internally with a 422; none has been verified.
 
-**There is no `DEFINITIVELY_REJECTED` before invocation on this path.** Only an
-*explicitly modelled* local refusal may claim one, and this adapter has none, so
-the mapper call is deliberately unguarded and an unexpected defect propagates.
-Catching it would convert an unknown bug into a financial claim (ADR-0035 §5).
+**There is no `DEFINITIVELY_REJECTED` before invocation on this path**, because
+none is modelled. The boundary is the invocation of the injected transport
+method; everything before it — mapping, headers, serialization and *resolving
+that method* — sits outside the certainty `try`, so defects propagate.
 
-The allowlist is a `switch` with **no exported backing collection** — an
-exported array would be a mutable object controlling a financial
-classification. Tests restate the three statuses independently and sweep every
-status from 100 to 599 to prove nothing else is definitive.
+The allowlist is a `switch` with **no exported backing collection**. Tests
+restate the three statuses independently and sweep 100–599 to prove nothing
+else is definitive.
 
-### Malformed provider success
+### Malformed provider success, and exactly one POST
 
 `parsePredictionId` is now total over arbitrary parsed JSON, returning
-`string | null`. It previously asserted its argument into an envelope type and
-read a property off it, so a body of exactly `null` raised a `TypeError` — a
-defect escaping the one method whose failures must all be classified outcomes.
-The guard is a runtime check; a valid identifier is trimmed. Its diagnostic no
-longer claims acceptance, only that no usable prediction id was present.
+`string | null`; it previously asserted its argument into an envelope type and
+read a property off it, so a body of exactly `null` raised a `TypeError`. A
+valid identifier is trimmed, and the diagnostic no longer claims acceptance.
 
-### At most one outbound POST
-
-Exactly one `fetch` per request with no retry anywhere in the transport;
-`redirect: "manual"` so a followed 3xx cannot become an unauthorized second
-POST; an explicit 60 s timeout separate from the client-wide 30 s default. Every
-submission test asserts the outbound call count, not only the outcome. The
-`HttpClient` seam moved to the package root, since it is not WaveSpeed's;
-`wavespeed/http.ts` remains a re-export shim.
+One `fetch` per request with no retry in the transport, `redirect: "manual"`,
+and a 60 s timeout separate from the client-wide 30 s default. Every submission
+test asserts the outbound call count, not only the outcome. The `HttpClient`
+seam moved to the package root; `wavespeed/http.ts` is a re-export shim.
 
 ## Mutation ledger (§8)
 
-Every mutation was applied to real source, gated, and restored byte-identically
-(asserted by the harness and confirmed by a clean `git status`).
+Applied to real source, gated, restored byte-identically (harness-asserted, and
+confirmed by a clean `git status`).
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
+| MB | request preparation and transport resolution move back inside the certainty `try` | KILLED | 1 failing test |
 | MP | an arbitrary pre-invocation defect is caught and called `DEFINITIVELY_REJECTED` | KILLED | 1 failing test |
 | M1 | `createGeneration` returns `ProviderGenerationRef` directly again | KILLED | 6 type errors |
 | M2 | WaveSpeed 429 classified `DEFINITIVELY_REJECTED` | KILLED | 3 failing tests |
@@ -107,14 +96,13 @@ Every mutation was applied to real source, gated, and restored byte-identically
 | E4 | the malformed-2xx diagnostic claims the submission was accepted | KILLED | 1 failing test |
 | E5 | the outcome union grows a `retryable` flag of its own | KILLED | 5 type errors |
 
-**14/14 killed.** M1–M6, M15 and MN are the required set; E1–E5 are retained
-WaveSpeed mutations from the superseded work; MP is the programmer-defect
-boundary. All are additions — nothing was removed or substituted.
+**15/15 killed.** M1–M6, M15 and MN are the required set; E1–E5 are retained
+from the superseded work. All are additions — nothing removed or substituted.
 
-MP's evidence is one test injecting the defect through the input itself, via a
-throwing getter, so no injection framework was added. Under the mutation the
-`TypeError` becomes `DEFINITIVELY_REJECTED`; the test requires it to propagate,
-transport never called.
+MP and MB are the boundary pair, one test each and no injection framework. MP
+injects a defect through a throwing getter on the *input*; MB moves request
+preparation and transport resolution back inside the certainty `try`, which a
+throwing `request` getter then turns into `SUBMISSION_UNKNOWN`.
 
 ## Security
 
@@ -122,13 +110,12 @@ Every ADR-0031 regression is preserved. The `createGeneration` cases now read
 the returned outcome instead of catching an exception, with every secrecy
 assertion unchanged and one added: the whole outcome is serialized and checked,
 so a future field on either failure arm carrying provider bytes fails the suite.
-`getStatus` and `cancelGeneration` still assert the thrown form, and a
-transport-failure case was added on the polling path.
+`getStatus` and `cancelGeneration` still assert the thrown form, plus a new
+transport-failure case on the polling path.
 
 No error message contains a row id, `requestHash`, provider name, provider model
 id, model key, prompt, signed URL, or customer data. No `any`, no `@ts-ignore`,
-no cast used to bypass a type — and the one assertion doing runtime work was
-removed.
+no cast bypassing a type — and the one assertion doing runtime work was removed.
 
 ## Dormancy
 
@@ -152,7 +139,7 @@ fal symbol.
 | --- | --- |
 | `pnpm typecheck` | Pass |
 | `pnpm lint` | Pass |
-| `pnpm test` | Pass — 70 files, 1,587 tests |
+| `pnpm test` | Pass — 70 files, 1,588 tests |
 | `pnpm build` | Pass |
 | `pnpm test:db` | Pass — 9 files, 220 tests |
 | Prisma schema parity | `No difference detected.` |
@@ -176,11 +163,10 @@ fal symbol.
 
 - **`SUBMISSION_UNKNOWN` is representable but not survivable.** Nothing persists
   it, reconciles it, or holds a credit reservation open while unresolved.
-- **Nothing calls `createGeneration`.** The contract is enforced by the compiler
-  and the tests, by no runtime path.
+- **Nothing calls `createGeneration`.** Enforced by compiler and tests only.
 - **Neutrality is claimed, not demonstrated.** One implementation cannot show
   the vocabulary is not a WaveSpeed shape wearing a general name; that is
-  3B-2C-2's job, and its classifier must come from fal's own published contract.
+  3B-2C-2's job.
 - **WaveSpeed's allowlist is unverified against the live API.** 400/401/403 is
   reasoned from HTTP semantics, not observed; no live call is authorized.
 
@@ -190,4 +176,4 @@ fal symbol.
 edited. For the record: its "Known limitations" claim that a V1 attempt's
 "inputs are gone" overstates the case. The accurate statement — already in that
 report's refusal table and ADR-0034 — is that V2 delivery semantics cannot be
-proven from a V1 row without reinterpreting historical data.
+proven from a V1 row without reinterpreting history.

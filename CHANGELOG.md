@@ -14,15 +14,14 @@ No database change, no API change, no user-visible change.
 - **`VideoGenerationProvider.createGeneration` returns `ProviderSubmissionOutcome`
   instead of `ProviderGenerationRef`**, and no longer throws for expected
   provider or transport failures. Arms: `ACCEPTED`, `DEFINITIVELY_REJECTED`,
-  `SUBMISSION_UNKNOWN`. Internal seam with no production callers, so nothing
-  customer-facing changes. Status polling and cancellation keep their exception
-  behaviour; neither can incur a charge.
-- **A 422 from WaveSpeed is no longer a definitive rejection**, but
-  `SUBMISSION_UNKNOWN`: the currently verified WaveSpeed contract does not
-  establish 422 as proof of non-acceptance. Its `ProviderError` is unchanged.
-- **`parsePredictionId` returns `string | null` and never throws.** It is total
-  over arbitrary parsed JSON — a body of exactly `null` previously raised a
-  `TypeError` — and trims a valid identifier.
+  `SUBMISSION_UNKNOWN`. Internal seam with no production callers. Status polling
+  and cancellation keep their exception behaviour; neither can incur a charge.
+- **A 422 from WaveSpeed is no longer definitive**, but `SUBMISSION_UNKNOWN`:
+  the verified WaveSpeed contract does not establish 422 as proof of
+  non-acceptance. Its `ProviderError` is unchanged.
+- **`parsePredictionId` returns `string | null` and never throws.** Total over
+  arbitrary parsed JSON — a body of exactly `null` previously raised a
+  `TypeError` — and it trims a valid identifier.
 
 ### Added
 
@@ -32,10 +31,11 @@ No database change, no API change, no user-visible change.
   common, and no ordinary retryable flag authorizes a second create POST.
 - **`VideoGenerationSubmissionProvider`**, a narrow port declaring `name`,
   `createGeneration` and `normalizeError`, which the full seam extends.
-- **Explicit submission hardening**: `redirect: "manual"` so a followed 3xx
-  cannot become an unauthorized second POST, and a request-specific 60 s timeout
-  distinct from the client-wide default. Three-outcome submission support on
-  `FakeVideoProvider`.
+- **Explicit submission hardening**: `redirect: "manual"`, a request-specific
+  60 s timeout, and an invocation boundary drawn so that request preparation and
+  transport resolution sit outside the certainty `try` — a local defect
+  propagates rather than becoming a submission of unknown fate. Three-outcome
+  submission support on `FakeVideoProvider`.
 
 ### Changed
 
@@ -44,11 +44,10 @@ No database change, no API change, no user-visible change.
   `wavespeed/http.ts` remains a re-export shim. `HttpRequest` gained optional
   `timeoutMs` and `redirect`; `FetchHttpClient` still performs exactly one
   `fetch` per call with no retry.
-- The WaveSpeed definitive-rejection allowlist is a closed `switch` with **no
-  exported backing array** — an exported array would be a mutable object
-  controlling a financial classification. Tests restate it independently and
-  sweep statuses 100–599. The malformed-2xx diagnostic no longer says the
-  submission was accepted.
+- The definitive-rejection allowlist is a closed `switch` with **no exported
+  backing array**, which would be a mutable object controlling a financial
+  classification. Tests restate it independently and sweep 100–599. The
+  malformed-2xx diagnostic no longer says the submission was accepted.
 
 ### Not included
 
