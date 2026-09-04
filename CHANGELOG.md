@@ -30,19 +30,27 @@ customer charge, and no migration.
   pricing snapshots, a `NO_NEGATIVE_UNIT_ECONOMICS` evaluator that costs the
   contractual maximum of three paid attempts, and a pure Safety Guard.
 - **Audit-bound pricing snapshots.** `createPricingSnapshot` derives its costs
-  from one contract, one risk profile and one duration through the same
-  calculation ordinary pricing uses; it accepts no pre-computed estimate and no
-  independent risk buffer, so no two of its recorded facts can disagree. Each
+  from one contract, one risk-profile key and one duration through the same
+  calculation ordinary pricing uses. It accepts no pre-computed estimate, no
+  risk-profile object and no independent risk buffer, so no two of its recorded
+  facts can disagree: the profile is resolved from the frozen catalog by key, so
+  a stored buffer is always the canonical one for the key stored beside it. Each
   record carries a fingerprint of the contract's complete commercial content,
   not just its identity, so two contracts sharing an identity but differing in
   price, verification, duration policy or effective window are distinguishable
   in the record.
-- **Fail-closed exchange rates.** A rate must be a strictly positive integer
-  fraction; zero, negative, fractional, `NaN` and infinite components are
-  refused as `FX_SNAPSHOT_RATE_INVALID`. Previously a zero or negative rate
-  would have driven every provider cost to zero or below — improving every
+- **Fail-closed exchange rates, on a single validation path.** A rate must
+  convert USD to JPY and be a strictly positive integer fraction; wrong
+  direction is `FX_SNAPSHOT_CURRENCY_MISMATCH`, and zero, negative, fractional,
+  `NaN` and infinite components are `FX_SNAPSHOT_RATE_INVALID`. Both the
+  conversion and the snapshot use the same check, so a snapshot can no longer
+  name a rate the conversion would have refused. Previously a zero or negative
+  rate would have driven every provider cost to zero or below — improving every
   margin — and a zero denominator threw from the arithmetic rather than
   returning a pricing answer.
+- **Overflow-safe rate scaling.** The micro-USD denominator is composed in
+  `BigInt`, so a positive safe-integer rate denominator can no longer become an
+  unsafe integer when scaled and throw from inside the arithmetic.
 
 ### Not included
 

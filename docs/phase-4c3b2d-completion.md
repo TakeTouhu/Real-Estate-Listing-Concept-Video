@@ -91,9 +91,10 @@ an estimate's `riskProfileKey` could contradict a hand-supplied
 `riskBufferBps`.
 
 Both classes are now gone rather than detected. `createPricingSnapshot` takes
-`{ contract, riskProfile, requestedSeconds, pricingEffectiveAt, fx? }` and runs
-the same `estimateProviderCost` ordinary pricing uses. There is no `estimate`
-input and no `riskBufferBps` input, so there is nothing left that can disagree.
+`{ contract, riskProfileKey, requestedSeconds, pricingEffectiveAt, fx? }` and
+runs the same `estimateProviderCost` ordinary pricing uses. There is no
+`estimate` input, no `riskProfile` input and no `riskBufferBps` input, so there
+is nothing left that can disagree.
 It returns a `PricingResult` rather than throwing, because the remaining
 failures — a promotional-only contract, an ungeneratable duration, an unusable
 rate — are ordinary outcomes a caller must handle.
@@ -104,14 +105,37 @@ prove *which* same-identity contract produced a record. Exact text rather than a
 digest — a hash buys brevity and pays in collisions and a dependency, and an
 audit field is not length-constrained.
 
-**Invalid FX rates fail closed.** `FxSnapshot` was checked only for currency
-direction. A zero numerator converts every provider cost to ¥0 and a negative
-one makes it negative — both *improve* every margin, so the corruption is
-invisible exactly where a margin review looks. A zero denominator was worse
-than wrong: it reached `mulDiv` and threw, making a bad input an unhandled
-defect. `validateFxSnapshot` now requires both components to be positive safe
-integers, returning `FX_SNAPSHOT_RATE_INVALID`, and the snapshot refuses to name
-a rate it could not validate.
+**The risk profile is resolved, not supplied.** Removing `riskBufferBps` and
+accepting a `CostRiskProfile` object reopened the same hole one level down: the
+type is structurally constructible, so `{ key: "NORMAL_AI", bufferBps:
+bps(5_000) }` produced a record whose buffer contradicted the canonical policy
+its own key named — and which `costRiskProfile(riskProfileKey)` therefore could
+not reproduce. The input is now `riskProfileKey: CostRiskProfileKey`, a closed
+union, and the profile behind it comes from the frozen catalog. Estimate, key,
+buffer and planning cost all derive from that one object.
+
+**Invalid FX fails closed, on one path.** `FxSnapshot` was checked only for
+currency direction, and only by the conversion. Two problems, both real. A zero
+numerator converts every provider cost to ¥0 and a negative one makes it
+negative — both *improve* every margin, so the corruption is invisible exactly
+where a margin review looks; a zero denominator was worse than wrong, reaching
+`mulDiv` and throwing, which made a bad input an unhandled defect. Separately,
+the snapshot validated rate components but not direction, so it could name a
+JPY→USD rate: valid in itself, but for a conversion this domain cannot perform,
+leaving a record pointing at a rate that could never have produced it.
+
+`validateFxSnapshot` is now the single path both call sites use, checking
+direction *and* requiring both components to be positive safe integers. Two
+implementations of "is this rate usable?" would eventually disagree, and the
+disagreement is exactly the defect above.
+
+**FX scaling no longer overflows.** `rateDenominator * 1_000_000` could leave
+the safe-integer range while the denominator itself was an ordinary accepted
+value, so the arithmetic threw on an input validation had just approved. The
+denominator is now composed in `BigInt` and never becomes a `number`. One
+residual is worth naming: a *result* too large to represent still throws, which
+is a defect signal about the amount rather than an FX input error, and no
+accepted rate can trigger it at any realistic provider cost.
 
 **Stable and promotional verification are separate fields.** One shared
 verification state forced a single answer to two questions, so a perfectly good
@@ -156,17 +180,24 @@ thin.
 
 ## Mutation ledger
 
-Forty-four mutations — §43's set, immutability and boundary cases, the review
-corrections, and the snapshot-binding and FX groups from the final round — each
-applied to real source, gated, and restored byte-identically. Counts are from
-the final run against the corrected code.
+Forty-nine mutations — §43's set, immutability and boundary cases, the review
+corrections, the snapshot-binding and FX groups, and the audit-integrity group
+— each applied to real source, gated, and restored byte-identically. Counts are
+from the final run against the corrected code.
 
-C7 is absent from the table, and deliberately. It mutated the identity-only
-mismatch check, and that check no longer exists: the CTO's correction removed
-the inputs it guarded rather than strengthening it, so there is nothing left to
-disable. The property it protected is now carried by S8, which is stronger —
-S8 re-adds an `estimate` input and is killed at compile time, whereas C7 could
-only catch a mismatch that had already been constructed.
+Two entries have been retired rather than dropped, and both for the same
+reason: the code they mutated no longer exists, because the correction removed
+what they guarded instead of strengthening it. **C7** disabled the identity-only
+mismatch check; **S1** hardcoded a risk buffer that no longer arrives as an
+input. Their properties are carried by **S8** and **R1/R2/R3**, and carried more
+strongly — S8 and R1 are killed at compile time, whereas C7 and S1 could only
+catch a bad value that had already been constructed.
+
+Mutations must be able to run to prove anything. Three in this round would not
+have compiled as first written, because the identifiers they used were not
+imported in the file being mutated; each was rewritten to use only what is in
+scope, so its survival or death is evidence about the tests rather than about
+the mutation. That is the M11 lesson from the fal round, applied here.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -202,20 +233,25 @@ only catch a mismatch that had already been constructed.
 | C4 | snapshot stores a mutable `Date` | KILLED | 2 failing tests |
 | C5 | the safety floor becomes optional again | KILLED | 2 type errors |
 | C6 | a verified stable price is refused whenever a promotion exists | KILLED | 1 failing test |
-| S1 | the snapshot's risk buffer stops coming from the risk profile | KILLED | 13 failing tests |
-| S2 | the snapshot's risk profile key is hardcoded | KILLED | 1 failing test |
+| S2 | the snapshot's risk profile key is hardcoded | KILLED | 2 failing tests |
 | S3 | the fingerprint omits the stable rule | KILLED | 2 failing tests |
 | S4 | the fingerprint omits the billable duration policy | KILLED | 2 failing tests |
 | S5 | the fingerprint omits the effective window | KILLED | 1 failing test |
 | S6 | the fingerprint omits the stable verification state | KILLED | 1 failing test |
 | S7 | a failed cost estimate stops being returned as a refusal | KILLED | 1 failing test |
-| S8 | an independent estimate input is re-added | KILLED | 2 type errors |
-| X1 | the positive-numerator check is removed | KILLED | 5 failing tests |
-| X2 | the positive-denominator check is removed | KILLED | 3 failing tests |
-| X3 | the safe-integer requirement on the rate is removed | KILLED | 6 failing tests |
-| X4 | the snapshot stops validating the FX rate it records | KILLED | 1 failing test |
+| S8 | an independent estimate input is re-added | KILLED | 4 type errors |
+| X1 | the positive-numerator check is removed | KILLED | 6 failing tests |
+| X2 | the positive-denominator check is removed | KILLED | 4 failing tests |
+| X3 | the safe-integer requirement on the rate is removed | KILLED | 7 failing tests |
+| X4 | the snapshot stops validating the FX rate it records | KILLED | 3 failing tests |
+| X5 | the canonical FX path stops checking currency direction | KILLED | 3 failing tests |
+| X6 | the snapshot's currency-direction protection is removed | KILLED | 2 failing tests |
+| X7 | FX denominator scaling returns to unsafe number arithmetic | KILLED | 2 failing tests |
+| R1 | an arbitrary risk profile object is accepted again | KILLED | 4 type errors |
+| R2 | the snapshot records a non-canonical buffer for its key | KILLED | 4 failing tests |
+| R3 | the risk profile stops being resolved from the catalog | KILLED | 3 failing tests |
 
-**44/44 killed.**
+**49/49 killed.**
 
 Two survived on their first run, and both exposed real gaps rather than noise.
 **P7** survived because rewriting the promotional-only fixture to `UNVERIFIED`
@@ -232,7 +268,7 @@ that can hold requiredness.
 | --- | --- |
 | `pnpm typecheck` | Pass |
 | `pnpm lint` | Pass |
-| `pnpm test` | Pass — 74 files, 1,802 tests (167 pricing) |
+| `pnpm test` | Pass — 74 files, 1,809 tests (174 pricing) |
 | `pnpm build` | Pass |
 | `pnpm test:db` | Pass — 9 files, 220 tests |
 | Prisma parity | `No difference detected.` |
@@ -245,10 +281,10 @@ domain; evaluation instants and FX rates are injected.
 
 | | Lines |
 | --- | --- |
-| Production | 1,690 |
-| Tests | 1,435 |
-| Documentation | ~355 |
-| **Total changed** | **around 3,480** |
+| Production | 1,759 |
+| Tests | 1,570 |
+| Documentation | ~400 |
+| **Total changed** | **around 3,730** |
 
 Production and test counts are exact. The documentation figure is approximate on
 purpose: this section is part of what it measures, so every attempt to state the
@@ -257,12 +293,14 @@ total precisely changed it. The exact number at any given commit is
 
 Recorded rather than managed. The CTO has accepted the phase size and directed
 that PR #53 not be split solely to reduce the diff, and that no test or
-documentation be removed for that purpose — so nothing was. Three correction
-rounds took it from 2,420 to roughly 3,480, and the growth is predominantly
+documentation be removed for that purpose — so nothing was. Four correction
+rounds took it from 2,420 to roughly 3,730, and the growth is predominantly
 contract tests: the full-identity lookup, the `EpochMillis` conversion, the
-required floor, the snapshot binding and the FX rules each needed coverage, and
-two of the properties (a required parameter, an absent input) can only be held
-by compile-time assertions because no runtime test can observe them.
+required floor, the snapshot binding, the canonical risk profile and the FX
+rules each needed coverage. Three of the properties — a required parameter, an
+absent input, a rejected input shape — can only be held by compile-time
+assertions, because no runtime test can observe an argument a caller never
+passes.
 
 ## Paid gate — still blocked
 

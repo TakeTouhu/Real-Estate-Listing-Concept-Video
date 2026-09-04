@@ -12,6 +12,7 @@ import { costRiskProfile, createProviderPricingCatalog } from "./provider-pricin
 import {
   providerPricingContractFingerprint,
   providerPricingContractKey,
+  type CostRiskProfileKey,
   type DurationBillingRule,
   type ProviderPricingContract,
   type ProviderPricingIdentity,
@@ -542,7 +543,7 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
   function snapshot() {
     const taken = createPricingSnapshot({
       contract: h3Max(),
-      riskProfile: costRiskProfile("NORMAL_AI"),
+      riskProfileKey: "NORMAL_AI",
       requestedSeconds: 5,
       pricingEffectiveAt: AT,
     });
@@ -574,7 +575,7 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
     const at = new Date("2026-09-02T00:00:00.000Z");
     const taken = createPricingSnapshot({
       contract: h3Max(),
-      riskProfile: costRiskProfile("NORMAL_AI"),
+      riskProfileKey: "NORMAL_AI",
       requestedSeconds: 5,
       pricingEffectiveAt: epochMillisFromDate(at),
     });
@@ -605,7 +606,7 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
     const past = snapshot();
     createPricingSnapshot({
       contract: veoFast(),
-      riskProfile: costRiskProfile("HIGH_QUALITY_AI"),
+      riskProfileKey: "HIGH_QUALITY_AI",
       requestedSeconds: 5,
       pricingEffectiveAt: AT,
     });
@@ -641,16 +642,43 @@ describe("a snapshot is bound to the exact facts it was computed from", () => {
    * optional parameter is invisible to a caller that never passes it, so a
    * runtime test cannot prove the absence of an input.
    */
-  it("accepts no estimate and no independent risk buffer", () => {
+  it("accepts no estimate, no risk profile object and no independent risk buffer", () => {
     type Accepted = keyof PricingSnapshotInput;
     type Expected =
       | "contract"
-      | "riskProfile"
+      | "riskProfileKey"
       | "requestedSeconds"
       | "pricingEffectiveAt"
       | "fx";
     const exact: Assert<IsExactly<Accepted, Expected>> = true;
     expect(exact).toBe(true);
+
+    // Stated individually as well, so a failure names which input returned.
+    type Rejects<K extends string> = K extends Accepted ? false : true;
+    const noEstimate: Assert<Rejects<"estimate">> = true;
+    const noProfile: Assert<Rejects<"riskProfile">> = true;
+    const noBuffer: Assert<Rejects<"riskBufferBps">> = true;
+    expect([noEstimate, noProfile, noBuffer]).toEqual([true, true, true]);
+  });
+
+  /**
+   * A `CostRiskProfile` is structurally constructible, so accepting the object
+   * rather than its key let a caller pair the `NORMAL_AI` key with the
+   * high-quality buffer — a record that `costRiskProfile(riskProfileKey)`
+   * cannot reproduce, which is exactly the re-derivation property asserted
+   * below. The input is a key; the profile is resolved from the frozen catalog.
+   */
+  it("resolves the canonical profile for its key and cannot be told otherwise", () => {
+    const key: keyof PricingSnapshotInput = "riskProfileKey";
+    expect(key).toBe("riskProfileKey");
+
+    const normal = take(h3Max(), "NORMAL_AI");
+    const high = take(h3Max(), "HIGH_QUALITY_AI");
+    if (!normal.ok || !high.ok) throw new Error("expected snapshots");
+
+    // Each recorded buffer is the canonical one for the recorded key.
+    expect(normal.value.riskBufferBps).toBe(costRiskProfile("NORMAL_AI").bufferBps);
+    expect(high.value.riskBufferBps).toBe(costRiskProfile("HIGH_QUALITY_AI").bufferBps);
   });
 
   /** A same-identity contract whose commercial content has been altered. */
@@ -658,10 +686,10 @@ describe("a snapshot is bound to the exact facts it was computed from", () => {
     return change(h3Max());
   }
 
-  function take(contract: ProviderPricingContract, profile: Parameters<typeof costRiskProfile>[0]) {
+  function take(contract: ProviderPricingContract, profile: CostRiskProfileKey) {
     return createPricingSnapshot({
       contract,
-      riskProfile: costRiskProfile(profile),
+      riskProfileKey: profile,
       requestedSeconds: 5,
       pricingEffectiveAt: AT,
     });
@@ -744,6 +772,18 @@ describe("a snapshot is bound to the exact facts it was computed from", () => {
     expect(taken.value.estimatedPlanningCostMicroUsd).toBe(600_000);
   });
 
+  it("re-derives its recorded buffer from its recorded key", () => {
+    // The property the canonical resolution exists for, stated directly: the
+    // stored buffer is whatever `costRiskProfile` says for the stored key.
+    for (const key of ["NORMAL_AI", "HIGH_QUALITY_AI"] as const) {
+      const taken = take(h3Max(), key);
+      if (!taken.ok) throw new Error("expected a snapshot");
+      const record = taken.value;
+      expect(record.riskProfileKey).toBe(key);
+      expect(costRiskProfile(record.riskProfileKey).bufferBps).toBe(record.riskBufferBps);
+    }
+  });
+
   it("re-derives exactly from the contract and risk profile it records", () => {
     // The whole point of an audit record: recompute from what it names and get
     // back what it stored, with nothing taken from the snapshot's own numbers.
@@ -822,15 +862,68 @@ describe("FX conversion requires an explicit, audited rate", () => {
     expect(converted.value).toBe(78);
   });
 
-  it("refuses a snapshot in the wrong currency direction", () => {
-    const converted = convertMicroUsdToYen(microUsd(520_000), {
-      ...fx,
-      baseCurrency: "JPY",
-      quoteCurrency: "USD",
-    });
+  const reversed = { ...fx, baseCurrency: "JPY", quoteCurrency: "USD" };
+
+  it("refuses a conversion in the wrong currency direction", () => {
+    const converted = convertMicroUsdToYen(microUsd(520_000), reversed);
     expect(converted.ok).toBe(false);
     if (converted.ok) throw new Error("expected a refusal");
     expect(converted.error.reason).toBe("FX_SNAPSHOT_CURRENCY_MISMATCH");
+  });
+
+  /**
+   * Direction is validated on the *same* path as the rate components, and both
+   * call sites use it.
+   *
+   * The earlier split was a real hole rather than a tidiness point: the
+   * conversion checked direction and the snapshot did not, so a snapshot could
+   * name a JPY→USD rate — a rate perfectly valid in itself, for a conversion
+   * this domain cannot perform. The record would have pointed at a rate that
+   * could never have produced it.
+   */
+  describe("one validation path serves the conversion and the snapshot", () => {
+    function snapshotWith(rate: typeof fx) {
+      return createPricingSnapshot({
+        contract: h3Max(),
+        riskProfileKey: "NORMAL_AI",
+        requestedSeconds: 5,
+        pricingEffectiveAt: AT,
+        fx: rate,
+      });
+    }
+
+    it("accepts USD→JPY and records the rate id", () => {
+      const taken = snapshotWith(fx);
+      if (!taken.ok) throw new Error("expected a snapshot");
+      expect(taken.value.fxSnapshotId).toBe("fx-2026-09-02");
+    });
+
+    it("refuses to snapshot against a JPY→USD rate, however valid its components", () => {
+      expect(validateFxSnapshot(reversed).ok).toBe(false);
+      const taken = snapshotWith(reversed);
+      expect(taken.ok).toBe(false);
+      if (taken.ok) throw new Error("expected a refusal");
+      expect(taken.error.reason).toBe("FX_SNAPSHOT_CURRENCY_MISMATCH");
+    });
+
+    it("agrees with the conversion on every rejected rate", () => {
+      // Neither call site may develop its own opinion.
+      for (const rate of [
+        reversed,
+        { ...fx, baseCurrency: "EUR" },
+        { ...fx, quoteCurrency: "USD" },
+        { ...fx, rateNumerator: 0 },
+        { ...fx, rateDenominator: 0 },
+        { ...fx, rateNumerator: 1.5 },
+      ]) {
+        const direct = convertMicroUsdToYen(microUsd(520_000), rate);
+        const viaSnapshot = snapshotWith(rate);
+        expect(direct.ok).toBe(false);
+        expect(viaSnapshot.ok).toBe(false);
+        if (direct.ok || viaSnapshot.ok) throw new Error("expected refusals");
+        expect(viaSnapshot.error.reason).toBe(direct.error.reason);
+      }
+    });
   });
 
   /**
@@ -879,6 +972,48 @@ describe("FX conversion requires an explicit, audited rate", () => {
       }
     });
 
+    /**
+     * The denominator is scaled by a million to turn micro-USD into USD, and
+     * `rateDenominator * 1_000_000` could leave the safe-integer range while
+     * `rateDenominator` itself was an ordinary positive integer that validation
+     * had just accepted. The arithmetic then threw, so an accepted input
+     * produced an unhandled defect instead of a pricing answer. The whole
+     * denominator is now composed in `BigInt` and never becomes a `number`.
+     */
+    it("survives the largest accepted rate components", () => {
+      const extremes = [
+        { rateNumerator: Number.MAX_SAFE_INTEGER, rateDenominator: 1 },
+        { rateNumerator: 1, rateDenominator: Number.MAX_SAFE_INTEGER },
+        { rateNumerator: Number.MAX_SAFE_INTEGER, rateDenominator: Number.MAX_SAFE_INTEGER },
+        // The exact boundary: one more than this and the old expression's
+        // `denominator * 1_000_000` stopped being a safe integer.
+        { rateNumerator: 150, rateDenominator: 9_007_199_255 },
+        { rateNumerator: 150, rateDenominator: 9_007_199_254_740_991 },
+      ];
+      for (const override of extremes) {
+        const rate = { ...fx, ...override };
+        expect(validateFxSnapshot(rate).ok).toBe(true);
+        const converted = convertMicroUsdToYen(microUsd(520_000), rate);
+        // No throw, and a real answer rather than a defect.
+        if (!converted.ok) throw new Error("expected a conversion");
+        expect(Number.isSafeInteger(converted.value)).toBe(true);
+        expect(converted.value).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    it("stays exact at a denominator that would have overflowed the old scaling", () => {
+      // 1 million micro-USD is exactly $1; at 3/2 yen per USD that is ¥2 after
+      // rounding half away from zero. The denominator here is large enough that
+      // `× 1_000_000` exceeds Number.MAX_SAFE_INTEGER.
+      const converted = convertMicroUsdToYen(microUsd(1_000_000), {
+        ...fx,
+        rateNumerator: 3 * 5_000_000_000,
+        rateDenominator: 2 * 5_000_000_000,
+      });
+      if (!converted.ok) throw new Error("expected a conversion");
+      expect(converted.value).toBe(2);
+    });
+
     it("does not echo the rejected values", () => {
       const converted = convertMicroUsdToYen(microUsd(520_000), { ...fx, rateNumerator: -150 });
       if (converted.ok) throw new Error("expected a refusal");
@@ -891,7 +1026,7 @@ describe("FX conversion requires an explicit, audited rate", () => {
       // conversion that could never have been performed.
       const taken = createPricingSnapshot({
         contract: h3Max(),
-        riskProfile: costRiskProfile("NORMAL_AI"),
+        riskProfileKey: "NORMAL_AI",
         requestedSeconds: 5,
         pricingEffectiveAt: AT,
         fx: { ...fx, rateNumerator: 0 },
@@ -904,7 +1039,7 @@ describe("FX conversion requires an explicit, audited rate", () => {
     it("records the rate it validated", () => {
       const taken = createPricingSnapshot({
         contract: h3Max(),
-        riskProfile: costRiskProfile("NORMAL_AI"),
+        riskProfileKey: "NORMAL_AI",
         requestedSeconds: 5,
         pricingEffectiveAt: AT,
         fx,

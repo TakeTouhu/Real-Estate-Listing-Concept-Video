@@ -96,18 +96,33 @@ export function bps(value: number): Bps {
  * and an asymmetric one would make a refund behave differently from a charge.
  */
 function mulDiv(value: number, numerator: number, denominator: number): number {
-  assertSafeInteger(value, "operand");
-  assertSafeInteger(numerator, "numerator");
   assertSafeInteger(denominator, "denominator");
   if (denominator === 0) throw new PricingArithmeticError("denominator must not be zero");
+  return mulDivBig(value, numerator, BigInt(denominator));
+}
+
+/**
+ * The same arithmetic, with the denominator already formed as a `BigInt`.
+ *
+ * Exists because a denominator can be a *product* — an exchange rate's
+ * denominator times the millionth that converts micro-USD to USD — and forming
+ * that product as a `number` can leave the safe-integer range even when both
+ * factors are comfortably inside it. That threw `PricingArithmeticError` from
+ * inside the arithmetic, turning a merely large input into an unhandled defect
+ * rather than a pricing answer. Composing the denominator in `BigInt` removes
+ * the intermediate entirely.
+ */
+function mulDivBig(value: number, numerator: number, den: bigint): number {
+  assertSafeInteger(value, "operand");
+  assertSafeInteger(numerator, "numerator");
+  if (den === 0n) throw new PricingArithmeticError("denominator must not be zero");
 
   const product = BigInt(value) * BigInt(numerator);
-  const den = BigInt(denominator);
   const quotient = product / den;
   const remainder = product % den;
   const twiceRemainder = (remainder < 0n ? -remainder : remainder) * 2n;
   const roundsAway = twiceRemainder >= (den < 0n ? -den : den);
-  const sign = product < 0n !== denominator < 0 ? -1n : 1n;
+  const sign = product < 0n !== den < 0n ? -1n : 1n;
   const result = roundsAway ? quotient + sign : quotient;
 
   const asNumber = Number(result);
@@ -135,6 +150,26 @@ export function applyBpsToYen(amount: Yen, rate: Bps): Yen {
  */
 export function scaleYen(amount: Yen, numerator: number, denominator: number): Yen {
   return yen(mulDiv(amount, numerator, denominator));
+}
+
+/**
+ * `amount × numerator / (denominator × scale)`, the denominator formed in BigInt.
+ *
+ * The exchange-rate case. Writing it as `scaleYen(amount, numerator,
+ * denominator * scale)` looks equivalent and is not: `denominator × 1,000,000`
+ * can exceed the safe-integer range while the denominator itself is a perfectly
+ * ordinary positive integer, and the arithmetic would then reject an input it
+ * had already accepted. Here the product never becomes a `number` at all.
+ */
+export function scaleYenByRate(
+  amount: Yen,
+  numerator: number,
+  denominator: number,
+  scale: number,
+): Yen {
+  assertSafeInteger(denominator, "denominator");
+  assertSafeInteger(scale, "scale");
+  return yen(mulDivBig(amount, numerator, BigInt(denominator) * BigInt(scale)));
 }
 
 export function multiplyMicroUsd(amount: MicroUsd, factor: number): MicroUsd {

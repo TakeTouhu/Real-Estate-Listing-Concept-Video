@@ -12,7 +12,7 @@ import {
   applyBpsToMicroUsd,
   bps,
   multiplyMicroUsd,
-  scaleYen,
+  scaleYenByRate,
   yen,
   type MicroUsd,
   type Yen,
@@ -149,25 +149,38 @@ export function estimateProviderCost(
 }
 
 /**
- * Check an exchange rate before anything is priced through it.
+ * The **one** check an exchange rate must pass to be used for provider cost.
  *
- * A rate is a fraction, and only a strictly positive one is a rate at all. A
- * zero numerator silently converts every provider cost to ¥0 and a negative one
- * converts it to a negative number — both of which *improve* every margin, so
- * the failure is invisible in exactly the place a margin review looks. A zero
- * denominator is not even arithmetic: it reached `mulDiv` and threw
- * `PricingArithmeticError`, turning a bad input into an unhandled defect.
+ * Both call sites — the conversion itself and the pricing snapshot that names a
+ * rate — go through here, and neither carries its own copy. Two
+ * implementations of "is this rate usable?" would eventually disagree, and the
+ * disagreement would surface as a snapshot naming a rate the conversion would
+ * have refused: an audit record pointing at a rate that could never have
+ * produced it.
  *
- * So an unusable rate is an ordinary returned refusal, like every other
- * expected pricing failure, and the reason names the category without echoing
- * the values: an error is not a place to restate inputs.
+ * Direction is part of usability, not a separate concern. This domain converts
+ * USD to JPY and nothing else, so a JPY→USD snapshot is not a rate with a
+ * different sign — it is a rate for a conversion this module cannot perform,
+ * and applying it would be a hundredfold error that still looks like a number.
  *
- * Both components must be safe integers, which is what excludes `NaN`,
- * `Infinity` and fractional rates. A rate is expressed as a rational precisely
- * so that no float ever enters the calculation; admitting a float here would
- * defeat that at the boundary.
+ * A rate is also a fraction, and only a strictly positive one is a rate at all.
+ * A zero numerator converts every provider cost to ¥0 and a negative one makes
+ * it negative — both *improve* every margin, so the failure hides in exactly
+ * the place a margin review looks. A zero denominator was worse: it reached
+ * `mulDiv` and threw, turning a bad input into an unhandled defect.
+ *
+ * Both components must be safe integers, which excludes `NaN`, `Infinity` and
+ * fractional rates. A rate is expressed as a rational precisely so no float
+ * enters the calculation; admitting one here would defeat that at the boundary.
+ *
+ * Every failure is a returned `PricingResult`, and the reason names the
+ * category without echoing the values: an error is not a place to restate
+ * inputs.
  */
 export function validateFxSnapshot(fx: FxSnapshot): PricingResult<FxSnapshot> {
+  if (fx.baseCurrency !== "USD" || fx.quoteCurrency !== "JPY") {
+    return pricingFailure("FX_SNAPSHOT_CURRENCY_MISMATCH");
+  }
   if (!Number.isSafeInteger(fx.rateNumerator) || !Number.isSafeInteger(fx.rateDenominator)) {
     return pricingFailure("FX_SNAPSHOT_RATE_INVALID");
   }
@@ -180,21 +193,23 @@ export function validateFxSnapshot(fx: FxSnapshot): PricingResult<FxSnapshot> {
   return pricingOk(fx);
 }
 
+/** Micro-USD per USD. The denominator this rate is scaled by. */
+const MICRO_USD_PER_USD = 1_000_000;
+
 /**
- * Convert micro-USD to yen through an explicitly supplied rate.
+ * Convert micro-USD to yen through an explicitly supplied, validated rate.
  *
- * The snapshot's currencies are checked rather than assumed: a rate applied in
- * the wrong direction is a hundredfold error that still looks like a number.
- * The rate itself is checked for the same reason — see `validateFxSnapshot`.
+ * The scaling denominator is composed in `BigInt` rather than as
+ * `rateDenominator * 1_000_000`. A positive safe-integer denominator can leave
+ * the safe-integer range once multiplied by a million, and the old expression
+ * would then have thrown from inside the arithmetic on an input validation had
+ * already accepted.
  */
 export function convertMicroUsdToYen(amount: MicroUsd, fx: FxSnapshot): PricingResult<Yen> {
-  if (fx.baseCurrency !== "USD" || fx.quoteCurrency !== "JPY") {
-    return pricingFailure("FX_SNAPSHOT_CURRENCY_MISMATCH");
-  }
   const validated = validateFxSnapshot(fx);
   if (!validated.ok) return validated;
   // micro-USD → USD → JPY, as one exact fraction so the millionth never rounds twice.
   return pricingOk(
-    scaleYen(yen(amount), fx.rateNumerator, fx.rateDenominator * 1_000_000),
+    scaleYenByRate(yen(amount), fx.rateNumerator, fx.rateDenominator, MICRO_USD_PER_USD),
   );
 }

@@ -5,8 +5,9 @@ import {
   validateFxSnapshot,
   type ProviderCostEstimate,
 } from "./provider-cost-calculator";
+import { costRiskProfile } from "./provider-pricing-catalog";
 import type {
-  CostRiskProfile,
+  CostRiskProfileKey,
   FxSnapshot,
   ProviderPricingContract,
   ProviderPricingIdentity,
@@ -74,10 +75,26 @@ export interface PricingSnapshot {
  * detected here, because there are no longer two things that can differ:
  * everything is derived from one contract, one risk profile and one duration,
  * through the same calculation ordinary pricing uses.
+ *
+ * There is likewise no `riskProfile` field. A `CostRiskProfile` is structurally
+ * constructible, so accepting the object rather than its key reopened the same
+ * hole one level down — a caller could pair the `NORMAL_AI` key with the
+ * high-quality buffer. Only the key is accepted, and the profile behind it is
+ * resolved from the frozen catalog.
  */
 export interface PricingSnapshotInput {
   readonly contract: ProviderPricingContract;
-  readonly riskProfile: CostRiskProfile;
+  /**
+   * A **key**, not a profile.
+   *
+   * `CostRiskProfile` is structurally constructible, so accepting one let a
+   * caller pass `{ key: "NORMAL_AI", bufferBps: bps(5_000) }` and file a record
+   * whose stored buffer contradicts the canonical policy its own key names.
+   * Such a record cannot be reproduced by `costRiskProfile(riskProfileKey)`,
+   * which is precisely the re-derivation property this phase asserts. A key is
+   * a closed union with one authority behind it.
+   */
+  readonly riskProfileKey: CostRiskProfileKey;
   readonly requestedSeconds: number;
   readonly pricingEffectiveAt: EpochMillis;
   readonly fx?: FxSnapshot | null;
@@ -103,13 +120,15 @@ export interface PricingSnapshotInput {
 export function createPricingSnapshot(
   input: PricingSnapshotInput,
 ): PricingResult<PricingSnapshot> {
+  // The canonical frozen policy for this key, resolved here rather than
+  // supplied. Every figure below — the estimate's planning cost included —
+  // comes from this one object, so the recorded key and buffer cannot disagree
+  // with each other or with the cost they produced.
+  const riskProfile = costRiskProfile(input.riskProfileKey);
+
   // The same calculation ordinary pricing uses. A snapshot that computed its
   // own costs could drift from the figures the product actually quotes.
-  const estimate = estimateProviderCost(
-    input.contract,
-    input.riskProfile,
-    input.requestedSeconds,
-  );
+  const estimate = estimateProviderCost(input.contract, riskProfile, input.requestedSeconds);
   if (!estimate.ok) return estimate;
 
   // A rate is recorded only once it is usable. Naming an fx snapshot whose rate
@@ -128,8 +147,8 @@ export function createPricingSnapshot(
       contractKey: estimate.value.contractKey,
       contractFingerprint: providerPricingContractFingerprint(input.contract),
       stablePriceReference: input.contract.stable.rule,
-      riskProfileKey: input.riskProfile.key,
-      riskBufferBps: input.riskProfile.bufferBps,
+      riskProfileKey: riskProfile.key,
+      riskBufferBps: riskProfile.bufferBps,
       requestedSeconds: estimate.value.requestedSeconds,
       billableSeconds: estimate.value.billableSeconds,
       estimatedStableCostMicroUsd: estimate.value.stableCostMicroUsd,
