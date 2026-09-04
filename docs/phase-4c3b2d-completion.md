@@ -197,6 +197,28 @@ that can hold requiredness.
 No network call, no environment read and no `Date.now()` anywhere in the pricing
 domain; evaluation instants and FX rates are injected.
 
+## Size — flagged, not trimmed
+
+| | Lines |
+| --- | --- |
+| Production | 1,522 |
+| Tests | 1,179 |
+| Documentation | 284 |
+| **Total changed** | **2,985** |
+
+Raised explicitly because size is what PR #50 was rejected for. This phase's
+brief set no size gate, and the head the CTO reviewed was already 2,420 total
+changed lines without objection; the two correction rounds added 565 more, and
+the great majority of that is test code — the full-identity lookup, the
+`EpochMillis` conversion, the required floor and the snapshot binding each
+needed new coverage, and the compile-time arity assertion that finally killed C5
+exists only because a runtime test could not.
+
+Nothing was cut to make this number smaller. If 2,985 is over the line for this
+phase, the correct remedy is a split instruction, not quietly thinned evidence —
+and the split would be clean, because the customer and provider halves share no
+code.
+
 ## Paid gate — still blocked
 
 `VIDEO_PROVIDER` remains `z.enum(["fake", "wavespeed"])`. No `FAL_API_KEY` or
