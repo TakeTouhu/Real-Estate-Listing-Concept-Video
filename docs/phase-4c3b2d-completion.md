@@ -203,10 +203,13 @@ domain; evaluation instants and FX rates are injected.
 | --- | --- |
 | Production | 1,522 |
 | Tests | 1,179 |
-| Documentation | 306 |
-| **Total changed** | **3,007** |
+| Documentation | ~310 |
+| **Total changed** | **just over 3,000** |
 
-Measured at the final head, this section included.
+Production and test counts are exact. The documentation figure is approximate on
+purpose: this section is part of what it measures, so every attempt to state the
+total precisely changed it. The exact number at any given commit is
+`git diff --numstat 4019cc88..HEAD`.
 
 Raised explicitly because size is what PR #50 was rejected for. This phase's
 brief set no size gate, and the head the CTO reviewed was already 2,420 total
