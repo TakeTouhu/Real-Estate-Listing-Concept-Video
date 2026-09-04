@@ -80,13 +80,38 @@ commercial rule opt-in. Rounding now happens in exactly one place —
 and annual prepayment go through it. `annualContractRawPricing` returns exact
 figures only and has no rounded field to bypass it with.
 
-**The snapshot binds its estimate to its contract.** Raised in review against
-the corrected head, and a real gap: `contract` and `estimate` were independent
-inputs, so an H3 Max contract could be filed with a Veo estimate and produce a
-frozen record whose costs cannot be re-derived from the price it names.
-`ProviderCostEstimate` now carries the contract key it was computed from, and a
-mismatch throws — an audit record that cannot be re-derived is worse than none,
-and a caller pairing two unrelated inputs is a defect, not an outcome.
+**The snapshot derives everything from one calculation.** This went through two
+rounds. Review first found that `contract` and `estimate` were independent
+inputs, so an H3 Max contract could be filed with a Veo estimate; the first fix
+gave `ProviderCostEstimate` a `contractKey` and threw on a mismatch. The CTO
+then established that identity matching was necessary but not sufficient — two
+contracts can share all seven identity dimensions and still differ in stable
+price, verification state, duration policy or effective window, and separately
+an estimate's `riskProfileKey` could contradict a hand-supplied
+`riskBufferBps`.
+
+Both classes are now gone rather than detected. `createPricingSnapshot` takes
+`{ contract, riskProfile, requestedSeconds, pricingEffectiveAt, fx? }` and runs
+the same `estimateProviderCost` ordinary pricing uses. There is no `estimate`
+input and no `riskBufferBps` input, so there is nothing left that can disagree.
+It returns a `PricingResult` rather than throwing, because the remaining
+failures — a promotional-only contract, an ungeneratable duration, an unusable
+rate — are ordinary outcomes a caller must handle.
+
+The snapshot also records a **contract fingerprint**: a canonical encoding of
+every price-changing field, not just the identity. That is what lets an auditor
+prove *which* same-identity contract produced a record. Exact text rather than a
+digest — a hash buys brevity and pays in collisions and a dependency, and an
+audit field is not length-constrained.
+
+**Invalid FX rates fail closed.** `FxSnapshot` was checked only for currency
+direction. A zero numerator converts every provider cost to ¥0 and a negative
+one makes it negative — both *improve* every margin, so the corruption is
+invisible exactly where a margin review looks. A zero denominator was worse
+than wrong: it reached `mulDiv` and threw, making a bad input an unhandled
+defect. `validateFxSnapshot` now requires both components to be positive safe
+integers, returning `FX_SNAPSHOT_RATE_INVALID`, and the snapshot refuses to name
+a rate it could not validate.
 
 **Stable and promotional verification are separate fields.** One shared
 verification state forced a single answer to two questions, so a perfectly good
@@ -131,9 +156,17 @@ thin.
 
 ## Mutation ledger
 
-Thirty-three mutations — §43's set, immutability and boundary cases, and the
-seven from review — each applied to real source, gated, and restored
-byte-identically. Counts are from the final run against the corrected code.
+Forty-four mutations — §43's set, immutability and boundary cases, the review
+corrections, and the snapshot-binding and FX groups from the final round — each
+applied to real source, gated, and restored byte-identically. Counts are from
+the final run against the corrected code.
+
+C7 is absent from the table, and deliberately. It mutated the identity-only
+mismatch check, and that check no longer exists: the CTO's correction removed
+the inputs it guarded rather than strengthening it, so there is nothing left to
+disable. The property it protected is now carried by S8, which is stronger —
+S8 re-adds an `estimate` input and is killed at compile time, whereas C7 could
+only catch a mismatch that had already been constructed.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -169,9 +202,20 @@ byte-identically. Counts are from the final run against the corrected code.
 | C4 | snapshot stores a mutable `Date` | KILLED | 2 failing tests |
 | C5 | the safety floor becomes optional again | KILLED | 2 type errors |
 | C6 | a verified stable price is refused whenever a promotion exists | KILLED | 1 failing test |
-| C7 | the snapshot accepts an estimate from a different contract | KILLED | 1 failing test |
+| S1 | the snapshot's risk buffer stops coming from the risk profile | KILLED | 13 failing tests |
+| S2 | the snapshot's risk profile key is hardcoded | KILLED | 1 failing test |
+| S3 | the fingerprint omits the stable rule | KILLED | 2 failing tests |
+| S4 | the fingerprint omits the billable duration policy | KILLED | 2 failing tests |
+| S5 | the fingerprint omits the effective window | KILLED | 1 failing test |
+| S6 | the fingerprint omits the stable verification state | KILLED | 1 failing test |
+| S7 | a failed cost estimate stops being returned as a refusal | KILLED | 1 failing test |
+| S8 | an independent estimate input is re-added | KILLED | 2 type errors |
+| X1 | the positive-numerator check is removed | KILLED | 5 failing tests |
+| X2 | the positive-denominator check is removed | KILLED | 3 failing tests |
+| X3 | the safe-integer requirement on the rate is removed | KILLED | 6 failing tests |
+| X4 | the snapshot stops validating the FX rate it records | KILLED | 1 failing test |
 
-**33/33 killed.**
+**44/44 killed.**
 
 Two survived on their first run, and both exposed real gaps rather than noise.
 **P7** survived because rewriting the promotional-only fixture to `UNVERIFIED`
@@ -188,7 +232,7 @@ that can hold requiredness.
 | --- | --- |
 | `pnpm typecheck` | Pass |
 | `pnpm lint` | Pass |
-| `pnpm test` | Pass — 74 files, 1,779 tests (144 new) |
+| `pnpm test` | Pass — 74 files, 1,802 tests (167 pricing) |
 | `pnpm build` | Pass |
 | `pnpm test:db` | Pass — 9 files, 220 tests |
 | Prisma parity | `No difference detected.` |
@@ -201,28 +245,24 @@ domain; evaluation instants and FX rates are injected.
 
 | | Lines |
 | --- | --- |
-| Production | 1,522 |
-| Tests | 1,179 |
-| Documentation | ~310 |
-| **Total changed** | **just over 3,000** |
+| Production | 1,690 |
+| Tests | 1,435 |
+| Documentation | ~355 |
+| **Total changed** | **around 3,480** |
 
 Production and test counts are exact. The documentation figure is approximate on
 purpose: this section is part of what it measures, so every attempt to state the
 total precisely changed it. The exact number at any given commit is
 `git diff --numstat 4019cc88..HEAD`.
 
-Raised explicitly because size is what PR #50 was rejected for. This phase's
-brief set no size gate, and the head the CTO reviewed was already 2,420 total
-changed lines without objection; the two correction rounds added 565 more, and
-the great majority of that is test code — the full-identity lookup, the
-`EpochMillis` conversion, the required floor and the snapshot binding each
-needed new coverage, and the compile-time arity assertion that finally killed C5
-exists only because a runtime test could not.
-
-Nothing was cut to make this number smaller. If 2,985 is over the line for this
-phase, the correct remedy is a split instruction, not quietly thinned evidence —
-and the split would be clean, because the customer and provider halves share no
-code.
+Recorded rather than managed. The CTO has accepted the phase size and directed
+that PR #53 not be split solely to reduce the diff, and that no test or
+documentation be removed for that purpose — so nothing was. Three correction
+rounds took it from 2,420 to roughly 3,480, and the growth is predominantly
+contract tests: the full-identity lookup, the `EpochMillis` conversion, the
+required floor, the snapshot binding and the FX rules each needed coverage, and
+two of the properties (a required parameter, an absent input) can only be held
+by compile-time assertions because no runtime test can observe them.
 
 ## Paid gate — still blocked
 

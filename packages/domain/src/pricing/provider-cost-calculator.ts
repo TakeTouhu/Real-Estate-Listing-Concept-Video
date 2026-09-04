@@ -149,15 +149,50 @@ export function estimateProviderCost(
 }
 
 /**
+ * Check an exchange rate before anything is priced through it.
+ *
+ * A rate is a fraction, and only a strictly positive one is a rate at all. A
+ * zero numerator silently converts every provider cost to ¥0 and a negative one
+ * converts it to a negative number — both of which *improve* every margin, so
+ * the failure is invisible in exactly the place a margin review looks. A zero
+ * denominator is not even arithmetic: it reached `mulDiv` and threw
+ * `PricingArithmeticError`, turning a bad input into an unhandled defect.
+ *
+ * So an unusable rate is an ordinary returned refusal, like every other
+ * expected pricing failure, and the reason names the category without echoing
+ * the values: an error is not a place to restate inputs.
+ *
+ * Both components must be safe integers, which is what excludes `NaN`,
+ * `Infinity` and fractional rates. A rate is expressed as a rational precisely
+ * so that no float ever enters the calculation; admitting a float here would
+ * defeat that at the boundary.
+ */
+export function validateFxSnapshot(fx: FxSnapshot): PricingResult<FxSnapshot> {
+  if (!Number.isSafeInteger(fx.rateNumerator) || !Number.isSafeInteger(fx.rateDenominator)) {
+    return pricingFailure("FX_SNAPSHOT_RATE_INVALID");
+  }
+  if (fx.rateNumerator <= 0) {
+    return pricingFailure("FX_SNAPSHOT_RATE_INVALID");
+  }
+  if (fx.rateDenominator <= 0) {
+    return pricingFailure("FX_SNAPSHOT_RATE_INVALID");
+  }
+  return pricingOk(fx);
+}
+
+/**
  * Convert micro-USD to yen through an explicitly supplied rate.
  *
  * The snapshot's currencies are checked rather than assumed: a rate applied in
  * the wrong direction is a hundredfold error that still looks like a number.
+ * The rate itself is checked for the same reason — see `validateFxSnapshot`.
  */
 export function convertMicroUsdToYen(amount: MicroUsd, fx: FxSnapshot): PricingResult<Yen> {
   if (fx.baseCurrency !== "USD" || fx.quoteCurrency !== "JPY") {
     return pricingFailure("FX_SNAPSHOT_CURRENCY_MISMATCH");
   }
+  const validated = validateFxSnapshot(fx);
+  if (!validated.ok) return validated;
   // micro-USD → USD → JPY, as one exact fraction so the millionth never rounds twice.
   return pricingOk(
     scaleYen(yen(amount), fx.rateNumerator, fx.rateDenominator * 1_000_000),

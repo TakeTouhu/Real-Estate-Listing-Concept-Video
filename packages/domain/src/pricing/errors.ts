@@ -30,7 +30,8 @@ export type PricingErrorReason =
   | "PRICING_CONTRACT_NOT_YET_EFFECTIVE"
   | "PRICING_CONTRACT_PROMOTIONAL_ONLY"
   // FX
-  | "FX_SNAPSHOT_CURRENCY_MISMATCH";
+  | "FX_SNAPSHOT_CURRENCY_MISMATCH"
+  | "FX_SNAPSHOT_RATE_INVALID";
 
 export interface PricingError {
   readonly reason: PricingErrorReason;

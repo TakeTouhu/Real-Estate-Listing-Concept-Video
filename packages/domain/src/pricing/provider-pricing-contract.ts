@@ -57,10 +57,16 @@ const IDENTITY_DIMENSIONS = [
  * cannot forge a different identity's key.
  */
 export function providerPricingContractKey(identity: ProviderPricingIdentity): string {
-  return IDENTITY_DIMENSIONS.map((dimension) =>
-    identity[dimension].replaceAll("\\", "\\\\").replaceAll("|", "\\|"),
-  ).join("|");
+  return IDENTITY_DIMENSIONS.map((dimension) => encodeSegment(identity[dimension])).join("|");
 }
+
+/** Escaped so a value containing the separator cannot forge another's encoding. */
+function encodeSegment(value: string | number): string {
+  return String(value).replaceAll("\\", "\\\\").replaceAll("|", "\\|");
+}
+
+/** No rule, no promotion, no end date — one token, distinct from any real value. */
+const ABSENT = "~";
 
 /**
  * How a provider turns a duration into money.
@@ -147,6 +153,79 @@ export interface ProviderPricingContract {
   readonly effectiveFrom: EpochMillis;
   /** `null` means open-ended, not "expired". */
   readonly effectiveUntil: EpochMillis | null;
+}
+
+/**
+ * A complete encoding of everything about a contract that can change a bill.
+ *
+ * The identity key is not enough for an audit record. Two contracts can share
+ * all seven identity dimensions and still differ in the stable price, the
+ * verification state, the duration policy, the promotion or the effective
+ * window — so a record that names only the identity cannot prove *which* of
+ * them produced its numbers. The fingerprint closes that: re-encode any
+ * candidate contract and compare, and a record either re-derives exactly or
+ * demonstrably does not belong to that contract.
+ *
+ * Exact canonical text rather than a digest. A hash would buy brevity and pay
+ * for it with collisions and a dependency, and nothing about an audit field is
+ * length-constrained — an exact encoding has no false matches at all. Field
+ * order is fixed here rather than taken from object key order, so re-ordering a
+ * catalog literal cannot change a fingerprint without changing a price.
+ *
+ * Variable-length parts carry their own length, so no arrangement of one arm's
+ * values can be read as another's.
+ */
+export function providerPricingContractFingerprint(contract: ProviderPricingContract): string {
+  return [
+    providerPricingContractKey(contract.identity),
+    contract.stable.verification,
+    ...encodeRule(contract.stable.rule),
+    ...encodeDurationPolicy(contract.billableDuration),
+    ...encodePromotion(contract.promotion),
+    encodeSegment(contract.effectiveFrom),
+    contract.effectiveUntil === null ? ABSENT : encodeSegment(contract.effectiveUntil),
+  ].join("|");
+}
+
+function encodeRule(rule: DurationBillingRule | null): readonly string[] {
+  if (rule === null) return [ABSENT];
+  switch (rule.kind) {
+    case "PER_SECOND":
+      return [rule.kind, encodeSegment(rule.unitPriceMicroUsdPerSecond)];
+    case "FIXED_DURATION":
+      return [rule.kind, encodeSegment(rule.durationSeconds), encodeSegment(rule.priceMicroUsd)];
+    case "DURATION_BUCKET":
+      return [
+        rule.kind,
+        encodeSegment(rule.buckets.length),
+        ...rule.buckets.flatMap((bucket) => [
+          encodeSegment(bucket.upToSeconds),
+          encodeSegment(bucket.priceMicroUsd),
+        ]),
+      ];
+  }
+}
+
+function encodeDurationPolicy(policy: BillableDurationPolicy): readonly string[] {
+  return policy.kind === "CONTINUOUS"
+    ? [policy.kind, encodeSegment(policy.minSeconds), encodeSegment(policy.maxSeconds)]
+    : [
+        policy.kind,
+        encodeSegment(policy.supportedSeconds.length),
+        ...policy.supportedSeconds.map(encodeSegment),
+      ];
+}
+
+function encodePromotion(promotion: ProviderPromotionalPrice | null): readonly string[] {
+  return promotion === null
+    ? [ABSENT]
+    : [
+        "PROMOTION",
+        promotion.verification,
+        ...encodeRule(promotion.rule),
+        encodeSegment(promotion.effectiveFrom),
+        encodeSegment(promotion.effectiveUntil),
+      ];
 }
 
 /**

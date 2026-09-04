@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { evaluatePaidSubmissionPricingEligibility } from "./pricing-eligibility";
-import { createPricingSnapshot } from "./pricing-snapshot";
+import { createPricingSnapshot, type PricingSnapshotInput } from "./pricing-snapshot";
 import {
   convertMicroUsdToYen,
   estimateProviderCost,
   priceForBillableDuration,
   resolveBillableDurationSeconds,
+  validateFxSnapshot,
 } from "./provider-cost-calculator";
 import { costRiskProfile, createProviderPricingCatalog } from "./provider-pricing-catalog";
 import {
+  providerPricingContractFingerprint,
   providerPricingContractKey,
   type DurationBillingRule,
   type ProviderPricingContract,
   type ProviderPricingIdentity,
 } from "./provider-pricing-contract";
-import { bps, epochMillis, epochMillisFromDate, microUsd } from "./units";
+import { epochMillis, epochMillisFromDate, microUsd } from "./units";
 
 /**
  * Provider pricing, asserted against the frozen cost contract.
@@ -538,14 +540,14 @@ describe("paid-submission pricing eligibility refuses by default", () => {
 
 describe("pricing snapshots are immutable and do not follow the catalog", () => {
   function snapshot() {
-    const estimate = estimateProviderCost(h3Max(), costRiskProfile("NORMAL_AI"), 5);
-    if (!estimate.ok) throw new Error("expected an estimate");
-    return createPricingSnapshot({
+    const taken = createPricingSnapshot({
       contract: h3Max(),
-      estimate: estimate.value,
-      riskBufferBps: bps(3_000),
+      riskProfile: costRiskProfile("NORMAL_AI"),
+      requestedSeconds: 5,
       pricingEffectiveAt: AT,
     });
+    if (!taken.ok) throw new Error("expected a snapshot");
+    return taken.value;
   }
 
   it("records the decision that was made", () => {
@@ -570,16 +572,15 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
 
   it("cannot be moved through the caller's original time value", () => {
     const at = new Date("2026-09-02T00:00:00.000Z");
-    const estimate = estimateProviderCost(h3Max(), costRiskProfile("NORMAL_AI"), 5);
-    if (!estimate.ok) throw new Error("expected an estimate");
     const taken = createPricingSnapshot({
       contract: h3Max(),
-      estimate: estimate.value,
-      riskBufferBps: bps(3_000),
+      riskProfile: costRiskProfile("NORMAL_AI"),
+      requestedSeconds: 5,
       pricingEffectiveAt: epochMillisFromDate(at),
     });
+    if (!taken.ok) throw new Error("expected a snapshot");
     at.setFullYear(2030);
-    expect(taken.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
+    expect(taken.value.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
   });
 
   it("cannot be moved through the instant it exposes", () => {
@@ -594,38 +595,212 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
     expect(taken.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
   });
 
-  it("refuses an estimate computed from a different contract", () => {
-    // Two unrelated inputs would otherwise produce a frozen record whose costs
-    // cannot be re-derived from the identity it claims.
-    const veoEstimate = estimateProviderCost(veoFast(), costRiskProfile("HIGH_QUALITY_AI"), 5);
-    if (!veoEstimate.ok) throw new Error("expected an estimate");
-    expect(() =>
-      createPricingSnapshot({
-        contract: h3Max(),
-        estimate: veoEstimate.value,
-        riskBufferBps: bps(3_000),
-        pricingEffectiveAt: AT,
-      }),
-    ).toThrow(/does not belong/);
-  });
-
   it("records the exact contract it priced against", () => {
     const taken = snapshot();
     expect(taken.contractKey).toBe(providerPricingContractKey(H3_MAX_IDENTITY));
+    expect(taken.contractFingerprint).toBe(providerPricingContractFingerprint(h3Max()));
   });
 
-  it("does not change when a later estimate uses different data", () => {
+  it("does not change when a later snapshot uses different data", () => {
     const past = snapshot();
-    const laterEstimate = estimateProviderCost(veoFast(), costRiskProfile("HIGH_QUALITY_AI"), 5);
-    if (!laterEstimate.ok) throw new Error("expected an estimate");
     createPricingSnapshot({
       contract: veoFast(),
-      estimate: laterEstimate.value,
-      riskBufferBps: bps(5_000),
+      riskProfile: costRiskProfile("HIGH_QUALITY_AI"),
+      requestedSeconds: 5,
       pricingEffectiveAt: AT,
     });
     expect(past.provider).toBe("fal");
     expect(past.estimatedPlanningCostMicroUsd).toBe(520_000);
+  });
+});
+
+/**
+ * The audit property this suite exists for: a snapshot's recorded numbers must
+ * be re-derivable from the contract and risk profile it names, and no pair of
+ * disagreeing facts may reach it.
+ *
+ * The previous constructor took `contract`, `estimate` and `riskBufferBps` as
+ * three independent inputs, and validated only that the estimate's *identity*
+ * key matched. That left two mismatch classes open: a same-identity contract
+ * whose content differed, and a risk buffer contradicting the profile the
+ * estimate was computed with. Both are now impossible by construction rather
+ * than refused at runtime — the inputs that could disagree are gone — so the
+ * type-level assertions below are load-bearing, not decorative.
+ */
+describe("a snapshot is bound to the exact facts it was computed from", () => {
+  type Assert<T extends true> = T;
+  type IsExactly<A, B> = (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2
+    ? true
+    : false;
+
+  /**
+   * The five accepted inputs, pinned exactly.
+   *
+   * `Assert` fails to compile if a sixth appears, which is the only thing that
+   * can hold "there is no `estimate` parameter". C5 taught this directly: an
+   * optional parameter is invisible to a caller that never passes it, so a
+   * runtime test cannot prove the absence of an input.
+   */
+  it("accepts no estimate and no independent risk buffer", () => {
+    type Accepted = keyof PricingSnapshotInput;
+    type Expected =
+      | "contract"
+      | "riskProfile"
+      | "requestedSeconds"
+      | "pricingEffectiveAt"
+      | "fx";
+    const exact: Assert<IsExactly<Accepted, Expected>> = true;
+    expect(exact).toBe(true);
+  });
+
+  /** A same-identity contract whose commercial content has been altered. */
+  function doctored(change: (base: ProviderPricingContract) => ProviderPricingContract) {
+    return change(h3Max());
+  }
+
+  function take(contract: ProviderPricingContract, profile: Parameters<typeof costRiskProfile>[0]) {
+    return createPricingSnapshot({
+      contract,
+      riskProfile: costRiskProfile(profile),
+      requestedSeconds: 5,
+      pricingEffectiveAt: AT,
+    });
+  }
+
+  it("cannot be given a cost computed from another provider's contract (case 1)", () => {
+    // Veo and H3 Max differ in identity, so their fingerprints differ. There is
+    // no input through which one's costs could be filed under the other.
+    const h3 = take(h3Max(), "NORMAL_AI");
+    const veo = take(veoFast(), "HIGH_QUALITY_AI");
+    if (!h3.ok || !veo.ok) throw new Error("expected snapshots");
+    expect(h3.value.contractFingerprint).not.toBe(veo.value.contractFingerprint);
+    expect(h3.value.estimatedStableCostMicroUsd).toBe(400_000);
+    expect(veo.value.estimatedStableCostMicroUsd).toBe(600_000);
+  });
+
+  it("distinguishes a same-identity contract whose stable price was modified (case 2)", () => {
+    // The identity key is *identical*, which is exactly the gap the fingerprint
+    // closes: at $0.09 the record must not be mistakable for the $0.08 one.
+    const dearer = doctored((base) => ({
+      ...base,
+      stable: {
+        ...base.stable,
+        rule: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: microUsd(90_000) },
+      },
+    }));
+    expect(providerPricingContractKey(dearer.identity)).toBe(
+      providerPricingContractKey(H3_MAX_IDENTITY),
+    );
+
+    const taken = take(dearer, "NORMAL_AI");
+    if (!taken.ok) throw new Error("expected a snapshot");
+    expect(taken.value.contractFingerprint).not.toBe(
+      providerPricingContractFingerprint(h3Max()),
+    );
+    // The costs belong to the contract supplied, not to the catalogued one.
+    expect(taken.value.estimatedStableCostMicroUsd).toBe(450_000);
+  });
+
+  it("refuses a same-identity contract whose stable rule is null (case 3)", () => {
+    const promotionalOnly = doctored((base) => ({
+      ...base,
+      stable: { verification: "VERIFIED_STABLE", rule: null },
+    }));
+    const taken = take(promotionalOnly, "NORMAL_AI");
+    expect(taken.ok).toBe(false);
+    if (taken.ok) throw new Error("expected a refusal");
+    expect(taken.error.reason).toBe("PRICING_CONTRACT_PROMOTIONAL_ONLY");
+  });
+
+  it("distinguishes a same-identity contract whose duration policy was modified (case 4)", () => {
+    // A discrete policy bills 5 seconds as 6, so the same request costs more.
+    const discrete = doctored((base) => ({
+      ...base,
+      billableDuration: { kind: "DISCRETE", supportedSeconds: [4, 6, 8] },
+    }));
+    const taken = take(discrete, "NORMAL_AI");
+    if (!taken.ok) throw new Error("expected a snapshot");
+    expect(taken.value.contractFingerprint).not.toBe(
+      providerPricingContractFingerprint(h3Max()),
+    );
+    expect(taken.value.billableSeconds).toBe(6);
+    expect(taken.value.estimatedStableCostMicroUsd).toBe(480_000);
+  });
+
+  it("cannot record a 50% buffer over a cost computed at 30% (case 5)", () => {
+    const taken = take(h3Max(), "NORMAL_AI");
+    if (!taken.ok) throw new Error("expected a snapshot");
+    expect(taken.value.riskProfileKey).toBe("NORMAL_AI");
+    expect(taken.value.riskBufferBps).toBe(3_000);
+    // 400,000 × 1.30, which is the only planning cost consistent with both.
+    expect(taken.value.estimatedPlanningCostMicroUsd).toBe(520_000);
+  });
+
+  it("cannot record a 30% buffer over a cost computed at 50% (case 6)", () => {
+    const taken = take(h3Max(), "HIGH_QUALITY_AI");
+    if (!taken.ok) throw new Error("expected a snapshot");
+    expect(taken.value.riskProfileKey).toBe("HIGH_QUALITY_AI");
+    expect(taken.value.riskBufferBps).toBe(5_000);
+    expect(taken.value.estimatedPlanningCostMicroUsd).toBe(600_000);
+  });
+
+  it("re-derives exactly from the contract and risk profile it records", () => {
+    // The whole point of an audit record: recompute from what it names and get
+    // back what it stored, with nothing taken from the snapshot's own numbers.
+    const taken = take(h3Max(), "NORMAL_AI");
+    if (!taken.ok) throw new Error("expected a snapshot");
+    const record = taken.value;
+
+    const named = catalog.findByKey(record.contractKey);
+    if (named === undefined) throw new Error("expected the named contract");
+    expect(providerPricingContractFingerprint(named)).toBe(record.contractFingerprint);
+
+    const rederived = estimateProviderCost(
+      named,
+      costRiskProfile(record.riskProfileKey),
+      record.requestedSeconds,
+    );
+    if (!rederived.ok) throw new Error("expected an estimate");
+    expect(rederived.value.billableSeconds).toBe(record.billableSeconds);
+    expect(rederived.value.stableCostMicroUsd).toBe(record.estimatedStableCostMicroUsd);
+    expect(rederived.value.planningCostMicroUsd).toBe(record.estimatedPlanningCostMicroUsd);
+  });
+
+  it("fingerprints every price-changing dimension", () => {
+    // Each of these leaves the identity key untouched, so each is a collision
+    // the identity alone could not have caught.
+    const base = providerPricingContractFingerprint(h3Max());
+    const variants: readonly ProviderPricingContract[] = [
+      doctored((c) => ({ ...c, stable: { ...c.stable, verification: "UNVERIFIED" } })),
+      doctored((c) => ({
+        ...c,
+        stable: {
+          ...c.stable,
+          rule: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: microUsd(90_000) },
+        },
+      })),
+      doctored((c) => ({
+        ...c,
+        billableDuration: { kind: "CONTINUOUS", minSeconds: 5, maxSeconds: 16 },
+      })),
+      doctored((c) => ({ ...c, effectiveFrom: epochMillis(0) })),
+      doctored((c) => ({ ...c, effectiveUntil: epochMillis(4_102_444_800_000) })),
+      doctored((c) => ({
+        ...c,
+        promotion: {
+          verification: "VERIFIED_PROMOTIONAL",
+          rule: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: microUsd(20_000) },
+          effectiveFrom: epochMillis(0),
+          effectiveUntil: epochMillis(4_102_444_800_000),
+        },
+      })),
+    ];
+    for (const variant of variants) {
+      expect(providerPricingContractKey(variant.identity)).toBe(
+        providerPricingContractKey(H3_MAX_IDENTITY),
+      );
+      expect(providerPricingContractFingerprint(variant)).not.toBe(base);
+    }
   });
 });
 
@@ -656,5 +831,86 @@ describe("FX conversion requires an explicit, audited rate", () => {
     expect(converted.ok).toBe(false);
     if (converted.ok) throw new Error("expected a refusal");
     expect(converted.error.reason).toBe("FX_SNAPSHOT_CURRENCY_MISMATCH");
+  });
+
+  /**
+   * An unusable rate fails closed.
+   *
+   * This is the direction that matters: a zero numerator converts every
+   * provider cost to ¥0 and a negative one converts it to a negative number,
+   * and both *improve* every margin — so the corruption is invisible precisely
+   * where a margin review would look for it. A zero denominator was worse than
+   * wrong: it reached the arithmetic and threw, turning a bad input into an
+   * unhandled defect rather than a pricing answer.
+   */
+  describe("an unusable rate is refused rather than silently applied", () => {
+    it.each([
+      ["zero numerator", { rateNumerator: 0 }],
+      ["negative numerator", { rateNumerator: -150 }],
+      ["zero denominator", { rateDenominator: 0 }],
+      ["negative denominator", { rateDenominator: -1 }],
+      ["fractional numerator", { rateNumerator: 150.5 }],
+      ["fractional denominator", { rateDenominator: 1.5 }],
+      ["NaN numerator", { rateNumerator: Number.NaN }],
+      ["NaN denominator", { rateDenominator: Number.NaN }],
+      ["infinite numerator", { rateNumerator: Number.POSITIVE_INFINITY }],
+      ["infinite denominator", { rateDenominator: Number.POSITIVE_INFINITY }],
+    ] as const)("refuses a %s", (_name, override) => {
+      const converted = convertMicroUsdToYen(microUsd(520_000), { ...fx, ...override });
+      expect(converted.ok).toBe(false);
+      if (converted.ok) throw new Error("expected a refusal");
+      expect(converted.error.reason).toBe("FX_SNAPSHOT_RATE_INVALID");
+    });
+
+    it("accepts a strictly positive integer rate", () => {
+      expect(validateFxSnapshot(fx).ok).toBe(true);
+      expect(validateFxSnapshot({ ...fx, rateNumerator: 1, rateDenominator: 1 }).ok).toBe(true);
+    });
+
+    it("never returns a zero or negative amount for a positive cost", () => {
+      // The property behind the rule, stated independently of the checks.
+      for (const override of [
+        { rateNumerator: 0 },
+        { rateNumerator: -150 },
+        { rateDenominator: -1 },
+      ]) {
+        const converted = convertMicroUsdToYen(microUsd(520_000), { ...fx, ...override });
+        if (converted.ok) throw new Error("expected a refusal, not an amount");
+      }
+    });
+
+    it("does not echo the rejected values", () => {
+      const converted = convertMicroUsdToYen(microUsd(520_000), { ...fx, rateNumerator: -150 });
+      if (converted.ok) throw new Error("expected a refusal");
+      expect(Object.keys(converted.error)).toEqual(["reason"]);
+      expect(JSON.stringify(converted.error)).not.toContain("150");
+    });
+
+    it("refuses to snapshot a decision against an unusable rate", () => {
+      // A snapshot naming an fx id whose rate is unusable would document a
+      // conversion that could never have been performed.
+      const taken = createPricingSnapshot({
+        contract: h3Max(),
+        riskProfile: costRiskProfile("NORMAL_AI"),
+        requestedSeconds: 5,
+        pricingEffectiveAt: AT,
+        fx: { ...fx, rateNumerator: 0 },
+      });
+      expect(taken.ok).toBe(false);
+      if (taken.ok) throw new Error("expected a refusal");
+      expect(taken.error.reason).toBe("FX_SNAPSHOT_RATE_INVALID");
+    });
+
+    it("records the rate it validated", () => {
+      const taken = createPricingSnapshot({
+        contract: h3Max(),
+        riskProfile: costRiskProfile("NORMAL_AI"),
+        requestedSeconds: 5,
+        pricingEffectiveAt: AT,
+        fx,
+      });
+      if (!taken.ok) throw new Error("expected a snapshot");
+      expect(taken.value.fxSnapshotId).toBe("fx-2026-09-02");
+    });
   });
 });

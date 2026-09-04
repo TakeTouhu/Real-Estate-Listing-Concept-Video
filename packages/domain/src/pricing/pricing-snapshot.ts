@@ -1,11 +1,17 @@
 import { deepFreeze } from "@app/shared";
-import type { ProviderCostEstimate } from "./provider-cost-calculator";
+import { pricingOk, type PricingResult } from "./errors";
+import {
+  estimateProviderCost,
+  validateFxSnapshot,
+  type ProviderCostEstimate,
+} from "./provider-cost-calculator";
 import type {
+  CostRiskProfile,
   FxSnapshot,
   ProviderPricingContract,
   ProviderPricingIdentity,
 } from "./provider-pricing-contract";
-import { providerPricingContractKey } from "./provider-pricing-contract";
+import { providerPricingContractFingerprint } from "./provider-pricing-contract";
 import type { Bps, EpochMillis, MicroUsd } from "./units";
 
 /**
@@ -28,8 +34,17 @@ export interface PricingSnapshot {
   readonly pricingVersion: string;
   readonly provider: string;
   readonly identity: ProviderPricingIdentity;
-  /** The opaque key of the exact contract this decision priced against. */
+  /** The opaque key of the exact contract identity this decision priced against. */
   readonly contractKey: string;
+  /**
+   * The complete commercial content of that contract, encoded.
+   *
+   * The key alone names only the identity, and two contracts can share an
+   * identity while differing in price, verification, duration policy, promotion
+   * or effective window. Without this, a record cannot prove which of them
+   * produced its numbers.
+   */
+  readonly contractFingerprint: string;
   /** How the stable price was expressed, so the estimate can be re-derived. */
   readonly stablePriceReference: ProviderPricingContract["stable"]["rule"];
   readonly riskProfileKey: ProviderCostEstimate["riskProfileKey"];
@@ -39,12 +54,44 @@ export interface PricingSnapshot {
   readonly estimatedStableCostMicroUsd: MicroUsd;
   readonly estimatedPlanningCostMicroUsd: MicroUsd;
   readonly pricingEffectiveAt: EpochMillis;
-  /** Present only when a conversion actually happened, naming the rate used. */
+  /** Present only when a rate was supplied, naming the rate that was validated. */
   readonly fxSnapshotId: string | null;
 }
 
 /**
- * Freeze a pricing decision.
+ * The facts a pricing decision is made from. Deliberately the *only* inputs.
+ *
+ * There is no `estimate` field and no `riskBufferBps` field, and their absence
+ * is the correctness property. When a caller supplied a pre-computed estimate
+ * alongside a contract, the two could disagree — a Veo cost filed under an H3
+ * Max identity, or a cost computed from a doctored same-identity contract — and
+ * validating identity alone could not detect it. Separately, an estimate's
+ * `riskProfileKey` and a hand-supplied `riskBufferBps` could contradict each
+ * other: a cost computed at the 30% normal buffer, recorded as though it
+ * carried the 50% high-quality one.
+ *
+ * Removing the inputs removes both classes outright. A mismatch is not
+ * detected here, because there are no longer two things that can differ:
+ * everything is derived from one contract, one risk profile and one duration,
+ * through the same calculation ordinary pricing uses.
+ */
+export interface PricingSnapshotInput {
+  readonly contract: ProviderPricingContract;
+  readonly riskProfile: CostRiskProfile;
+  readonly requestedSeconds: number;
+  readonly pricingEffectiveAt: EpochMillis;
+  readonly fx?: FxSnapshot | null;
+}
+
+/**
+ * Freeze a pricing decision, derived in one calculation.
+ *
+ * Returns a result rather than throwing, because the reasons this can fail are
+ * ordinary pricing outcomes a caller must handle: a promotional-only contract
+ * has no stable rule to plan against, a duration the provider will not generate
+ * has no cost, and an unusable exchange rate is a bad input rather than a
+ * defect. The mismatch this used to throw on is gone — not because it is
+ * tolerated, but because the inputs that could disagree no longer exist.
  *
  * The effective instant is an `EpochMillis` number, not a `Date`. Freezing an
  * object protects the reference, not the object behind it, so a snapshot
@@ -52,37 +99,43 @@ export interface PricingSnapshot {
  * with `setTime` — and a past decision whose instant can be moved is not a
  * record. A number closes that off for the caller's copy and the stored value
  * alike.
- *
- * The estimate must have been computed from the contract being snapshotted. A
- * mismatch is a programmer defect — nobody deliberately files a Veo cost under
- * an H3 Max identity — so it throws rather than returning a result: an audit
- * record whose stored costs cannot be re-derived from the price it names is
- * worse than no record, and continuing past that would be the bug.
  */
-export function createPricingSnapshot(input: {
-  readonly contract: ProviderPricingContract;
-  readonly estimate: ProviderCostEstimate;
-  readonly riskBufferBps: Bps;
-  readonly pricingEffectiveAt: EpochMillis;
-  readonly fx?: FxSnapshot | null;
-}): PricingSnapshot {
-  const contractKey = providerPricingContractKey(input.contract.identity);
-  if (input.estimate.contractKey !== contractKey) {
-    throw new Error("Pricing snapshot estimate does not belong to the supplied contract");
+export function createPricingSnapshot(
+  input: PricingSnapshotInput,
+): PricingResult<PricingSnapshot> {
+  // The same calculation ordinary pricing uses. A snapshot that computed its
+  // own costs could drift from the figures the product actually quotes.
+  const estimate = estimateProviderCost(
+    input.contract,
+    input.riskProfile,
+    input.requestedSeconds,
+  );
+  if (!estimate.ok) return estimate;
+
+  // A rate is recorded only once it is usable. Naming an fx snapshot whose rate
+  // is zero, negative or non-integral would document a conversion that could
+  // never have been performed.
+  if (input.fx !== undefined && input.fx !== null) {
+    const fx = validateFxSnapshot(input.fx);
+    if (!fx.ok) return fx;
   }
-  return deepFreeze({
-    pricingVersion: input.contract.identity.pricingVersion,
-    provider: input.contract.identity.provider,
-    identity: input.contract.identity,
-    contractKey,
-    stablePriceReference: input.contract.stable.rule,
-    riskProfileKey: input.estimate.riskProfileKey,
-    riskBufferBps: input.riskBufferBps,
-    requestedSeconds: input.estimate.requestedSeconds,
-    billableSeconds: input.estimate.billableSeconds,
-    estimatedStableCostMicroUsd: input.estimate.stableCostMicroUsd,
-    estimatedPlanningCostMicroUsd: input.estimate.planningCostMicroUsd,
-    pricingEffectiveAt: input.pricingEffectiveAt,
-    fxSnapshotId: input.fx?.id ?? null,
-  });
+
+  return pricingOk(
+    deepFreeze({
+      pricingVersion: input.contract.identity.pricingVersion,
+      provider: input.contract.identity.provider,
+      identity: input.contract.identity,
+      contractKey: estimate.value.contractKey,
+      contractFingerprint: providerPricingContractFingerprint(input.contract),
+      stablePriceReference: input.contract.stable.rule,
+      riskProfileKey: input.riskProfile.key,
+      riskBufferBps: input.riskProfile.bufferBps,
+      requestedSeconds: estimate.value.requestedSeconds,
+      billableSeconds: estimate.value.billableSeconds,
+      estimatedStableCostMicroUsd: estimate.value.stableCostMicroUsd,
+      estimatedPlanningCostMicroUsd: estimate.value.planningCostMicroUsd,
+      pricingEffectiveAt: input.pricingEffectiveAt,
+      fxSnapshotId: input.fx?.id ?? null,
+    }),
+  );
 }
