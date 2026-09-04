@@ -203,8 +203,10 @@ domain; evaluation instants and FX rates are injected.
 | --- | --- |
 | Production | 1,522 |
 | Tests | 1,179 |
-| Documentation | 284 |
-| **Total changed** | **2,985** |
+| Documentation | 306 |
+| **Total changed** | **3,007** |
+
+Measured at the final head, this section included.
 
 Raised explicitly because size is what PR #50 was rejected for. This phase's
 brief set no size gate, and the head the CTO reviewed was already 2,420 total
