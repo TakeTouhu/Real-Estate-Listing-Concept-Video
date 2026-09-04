@@ -3,6 +3,65 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2D: Pricing contract hardening
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2d-completion.md`. Pure
+domain contracts: no billing, payment, persistence, provider execution or
+customer charge, and no migration.
+
+### Added
+
+- **A pricing domain in `@app/domain`**, with customer price and provider cost
+  in separate modules and no path between them. A vendor rate change cannot move
+  a customer's price or entitlement by construction rather than by convention.
+- **Integer money throughout.** Provider amounts in micro-USD, customer amounts
+  in whole yen, every rate in basis points, each a distinct nominal type. No
+  contract value is a float. Intermediate arithmetic uses a `BigInt` product and
+  rounds half away from zero.
+- **The frozen customer contract**: three plans, seat pricing that never touches
+  generation entitlement, the 30-second video-unit rule, high-quality units as a
+  sub-limit inside the total, a 5% annual prepayment discount, and 1.20/1.50
+  add-on multipliers over one plan-derived calculation base.
+- **Provider pricing contracts** identified by every dimension that changes the
+  bill, with explicit verification states, a `PER_SECOND` / `FIXED_DURATION` /
+  `DURATION_BUCKET` billing algebra, and billable duration held distinct from
+  the customer's scene length — a 5-second Veo scene bills 6 seconds.
+- **Risk buffers held apart from provider prices** (3,000 / 5,000 bps), immutable
+  pricing snapshots, a `NO_NEGATIVE_UNIT_ECONOMICS` evaluator that costs the
+  contractual maximum of three paid attempts, and a pure Safety Guard.
+- **Audit-bound pricing snapshots.** `createPricingSnapshot` derives its costs
+  from one contract, one risk-profile key and one duration through the same
+  calculation ordinary pricing uses. It accepts no pre-computed estimate, no
+  risk-profile object and no independent risk buffer, so no two of its recorded
+  facts can disagree: the profile is resolved from the frozen catalog by key, so
+  a stored buffer is always the canonical one for the key stored beside it. Each
+  record carries a fingerprint of the contract's complete commercial content,
+  not just its identity, so two contracts sharing an identity but differing in
+  price, verification, duration policy or effective window are distinguishable
+  in the record.
+- **Fail-closed exchange rates, on a single validation path.** A rate must
+  convert USD to JPY and be a strictly positive integer fraction; wrong
+  direction is `FX_SNAPSHOT_CURRENCY_MISMATCH`, and zero, negative, fractional,
+  `NaN` and infinite components are `FX_SNAPSHOT_RATE_INVALID`. Both the
+  conversion and the snapshot use the same check, so a snapshot can no longer
+  name a rate the conversion would have refused. Previously a zero or negative
+  rate would have driven every provider cost to zero or below — improving every
+  margin — and a zero denominator threw from the arithmetic rather than
+  returning a pricing answer.
+- **Overflow-safe rate scaling.** The micro-USD denominator is composed in
+  `BigInt`, so a positive safe-integer rate denominator can no longer become an
+  unsafe integer when scaled and throw from inside the arithmetic.
+
+### Not included
+
+The paid gate stays shut: `VIDEO_PROVIDER` is unchanged, there is no fal or Veo
+key, factory branch or execution path, no payment gateway, and no
+pricing-driven submission gate. `packages/video-providers` has zero changes to
+its types, ports, adapters, catalog or factory, so submission certainty and
+`SUBMISSION_UNKNOWN` semantics are byte-identical. H3 Max keeps `pricing: null`
+and no model's selectability or verification state moved. No promotional price
+is recorded, because no exact effective window is known.
+
 ## [Unreleased] — Phase 4C-3B-2C-2: Dormant fal H3 Max submission adapter
 
 Completes Phase 4C-3B-2C. See GitHub for lifecycle; detail in

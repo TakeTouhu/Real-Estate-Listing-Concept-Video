@@ -14,3 +14,4 @@ export * from "./property/index";
 export * from "./analysis/index";
 export * from "./storyboard/index";
 export * from "./generation/index";
+export * from "./pricing/index";

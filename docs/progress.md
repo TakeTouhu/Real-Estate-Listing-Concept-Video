@@ -386,6 +386,20 @@ and ADR-0020.
   Unreachable in production: `VIDEO_PROVIDER` is unchanged, there is no fal key
   in the environment schema, and the factory has no fal branch. No pricing, no
   polling, no orchestration, no provider contacted.
+- **Phase 4C-3B-2D** — see GitHub for its lifecycle. Adds a pricing domain in
+  `@app/domain` whose central property is separation: customer price and
+  provider cost are different modules with no path between them, so a vendor
+  rate change cannot move what a customer is charged or entitled to. Money is
+  integer everywhere — micro-USD, whole yen, basis points — as distinct nominal
+  types, so a provider cost added to a customer price is a compile error. Risk
+  buffers are held apart from provider prices, billable duration is distinct
+  from the customer's scene length, and eligibility refuses by default: missing,
+  unverified, expired and promotional-only pricing cannot authorize paid work,
+  and an eligible price still cannot make an unexecutable model runnable. No H3
+  Max promotion is recorded, because its exact window is unknown and a guessed
+  boundary would let a discount become the planning base. Pure contracts only —
+  no billing, payment, persistence, orchestration or migration, and the paid
+  gate is unchanged.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
