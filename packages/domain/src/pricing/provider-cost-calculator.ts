@@ -1,10 +1,11 @@
 import { pricingFailure, pricingOk, type PricingResult } from "./errors";
-import type {
-  BillableDurationPolicy,
-  CostRiskProfile,
-  DurationBillingRule,
-  FxSnapshot,
-  ProviderPricingContract,
+import {
+  providerPricingContractKey,
+  type BillableDurationPolicy,
+  type CostRiskProfile,
+  type DurationBillingRule,
+  type FxSnapshot,
+  type ProviderPricingContract,
 } from "./provider-pricing-contract";
 import {
   ONE_HUNDRED_PERCENT_BPS,
@@ -88,6 +89,16 @@ export function priceForBillableDuration(
 }
 
 export interface ProviderCostEstimate {
+  /**
+   * The contract this estimate was computed from.
+   *
+   * Carried so a downstream audit record cannot pair one provider's contract
+   * with another's numbers. Without it, `contract` and `estimate` are two
+   * unrelated inputs and nothing can tell that a Veo cost was filed under an
+   * H3 Max identity — which would produce a frozen record whose stored costs
+   * cannot be re-derived from the price it claims to have used.
+   */
+  readonly contractKey: string;
   readonly requestedSeconds: number;
   /** What the provider bills for, which may exceed `requestedSeconds`. */
   readonly billableSeconds: number;
@@ -128,6 +139,7 @@ export function estimateProviderCost(
   );
 
   return pricingOk({
+    contractKey: providerPricingContractKey(contract.identity),
     requestedSeconds,
     billableSeconds: billable.value,
     stableCostMicroUsd: stable.value,

@@ -80,6 +80,14 @@ commercial rule opt-in. Rounding now happens in exactly one place —
 and annual prepayment go through it. `annualContractRawPricing` returns exact
 figures only and has no rounded field to bypass it with.
 
+**The snapshot binds its estimate to its contract.** Raised in review against
+the corrected head, and a real gap: `contract` and `estimate` were independent
+inputs, so an H3 Max contract could be filed with a Veo estimate and produce a
+frozen record whose costs cannot be re-derived from the price it names.
+`ProviderCostEstimate` now carries the contract key it was computed from, and a
+mismatch throws — an audit record that cannot be re-derived is worse than none,
+and a caller pairing two unrelated inputs is a defect, not an outcome.
+
 **Stable and promotional verification are separate fields.** One shared
 verification state forced a single answer to two questions, so a perfectly good
 list price became ineligible merely because a discount also existed. A contract
@@ -123,8 +131,8 @@ thin.
 
 ## Mutation ledger
 
-Thirty-two mutations — §43's set, immutability and boundary cases, and the six
-required by this review — each applied to real source, gated, and restored
+Thirty-three mutations — §43's set, immutability and boundary cases, and the
+seven from review — each applied to real source, gated, and restored
 byte-identically. Counts are from the final run against the corrected code.
 
 | ID | Mutation | Result | Detected by |
@@ -161,8 +169,9 @@ byte-identically. Counts are from the final run against the corrected code.
 | C4 | snapshot stores a mutable `Date` | KILLED | 2 failing tests |
 | C5 | the safety floor becomes optional again | KILLED | 2 type errors |
 | C6 | a verified stable price is refused whenever a promotion exists | KILLED | 1 failing test |
+| C7 | the snapshot accepts an estimate from a different contract | KILLED | 1 failing test |
 
-**32/32 killed.**
+**33/33 killed.**
 
 Two survived on their first run, and both exposed real gaps rather than noise.
 **P7** survived because rewriting the promotional-only fixture to `UNVERIFIED`
@@ -179,7 +188,7 @@ that can hold requiredness.
 | --- | --- |
 | `pnpm typecheck` | Pass |
 | `pnpm lint` | Pass |
-| `pnpm test` | Pass — 74 files, 1,775 tests (140 new) |
+| `pnpm test` | Pass — 74 files, 1,779 tests (144 new) |
 | `pnpm build` | Pass |
 | `pnpm test:db` | Pass — 9 files, 220 tests |
 | Prisma parity | `No difference detected.` |

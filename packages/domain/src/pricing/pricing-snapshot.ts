@@ -52,6 +52,12 @@ export interface PricingSnapshot {
  * with `setTime` — and a past decision whose instant can be moved is not a
  * record. A number closes that off for the caller's copy and the stored value
  * alike.
+ *
+ * The estimate must have been computed from the contract being snapshotted. A
+ * mismatch is a programmer defect — nobody deliberately files a Veo cost under
+ * an H3 Max identity — so it throws rather than returning a result: an audit
+ * record whose stored costs cannot be re-derived from the price it names is
+ * worse than no record, and continuing past that would be the bug.
  */
 export function createPricingSnapshot(input: {
   readonly contract: ProviderPricingContract;
@@ -60,11 +66,15 @@ export function createPricingSnapshot(input: {
   readonly pricingEffectiveAt: EpochMillis;
   readonly fx?: FxSnapshot | null;
 }): PricingSnapshot {
+  const contractKey = providerPricingContractKey(input.contract.identity);
+  if (input.estimate.contractKey !== contractKey) {
+    throw new Error("Pricing snapshot estimate does not belong to the supplied contract");
+  }
   return deepFreeze({
     pricingVersion: input.contract.identity.pricingVersion,
     provider: input.contract.identity.provider,
     identity: input.contract.identity,
-    contractKey: providerPricingContractKey(input.contract.identity),
+    contractKey,
     stablePriceReference: input.contract.stable.rule,
     riskProfileKey: input.estimate.riskProfileKey,
     riskBufferBps: input.riskBufferBps,

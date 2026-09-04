@@ -14,7 +14,7 @@ import {
   type ProviderPricingContract,
   type ProviderPricingIdentity,
 } from "./provider-pricing-contract";
-import { bps, epochMillisFromDate, microUsd } from "./units";
+import { bps, epochMillis, epochMillisFromDate, microUsd } from "./units";
 
 /**
  * Provider pricing, asserted against the frozen cost contract.
@@ -201,6 +201,16 @@ describe("WaveSpeed OpenVideo bills 3 to 20 seconds inclusive", () => {
     expect(result.ok).toBe(accepted);
   });
 
+  /**
+   * OpenVideo's capability descriptor permits 480p, 720p and 1080p, but only
+   * the 1080p rate is verified. A lookup that ignored the tier would hand a
+   * 480p request the 1080p price; the complete identity refuses instead, which
+   * is the honest answer for a price nobody has confirmed.
+   */
+  it.each(["480p", "720p"])("has no verified contract for the %s tier", (tier) => {
+    expect(catalog.findByIdentity({ ...OPEN_VIDEO_IDENTITY, nativeTier: tier })).toBeUndefined();
+  });
+
   it("encodes the verified range on the contract itself", () => {
     const policy = openVideo().billableDuration;
     if (policy.kind !== "CONTINUOUS") throw new Error("expected a continuous policy");
@@ -353,6 +363,19 @@ describe("paid-submission pricing eligibility refuses by default", () => {
   ): ProviderPricingContract {
     return { ...base, ...patch };
   }
+
+  /**
+   * A `NaN` instant would make both window comparisons false and turn a
+   * fail-closed check into a fail-open one. It cannot arrive: `epochMillis`
+   * admits only safe integers, so an unparseable date is rejected at
+   * construction rather than silently becoming "always in force".
+   */
+  it("cannot be reached with an invalid instant", () => {
+    expect(() => epochMillisFromDate(new Date("not a date"))).toThrow();
+    expect(() => epochMillis(Number.NaN)).toThrow();
+    expect(() => epochMillis(Number.POSITIVE_INFINITY)).toThrow();
+    expect(() => epochMillis(1.5)).toThrow();
+  });
 
   it("accepts a verified stable contract in force", () => {
     const result = evaluatePaidSubmissionPricingEligibility(h3Max(), AT);
@@ -569,6 +592,21 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
       (taken as { pricingEffectiveAt: number }).pricingEffectiveAt = 0;
     }).toThrow();
     expect(taken.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
+  });
+
+  it("refuses an estimate computed from a different contract", () => {
+    // Two unrelated inputs would otherwise produce a frozen record whose costs
+    // cannot be re-derived from the identity it claims.
+    const veoEstimate = estimateProviderCost(veoFast(), costRiskProfile("HIGH_QUALITY_AI"), 5);
+    if (!veoEstimate.ok) throw new Error("expected an estimate");
+    expect(() =>
+      createPricingSnapshot({
+        contract: h3Max(),
+        estimate: veoEstimate.value,
+        riskBufferBps: bps(3_000),
+        pricingEffectiveAt: AT,
+      }),
+    ).toThrow(/does not belong/);
   });
 
   it("records the exact contract it priced against", () => {
