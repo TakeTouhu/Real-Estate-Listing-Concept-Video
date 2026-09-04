@@ -3,6 +3,43 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2D: Pricing contract hardening
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2d-completion.md`. Pure
+domain contracts: no billing, payment, persistence, provider execution or
+customer charge, and no migration.
+
+### Added
+
+- **A pricing domain in `@app/domain`**, with customer price and provider cost
+  in separate modules and no path between them. A vendor rate change cannot move
+  a customer's price or entitlement by construction rather than by convention.
+- **Integer money throughout.** Provider amounts in micro-USD, customer amounts
+  in whole yen, every rate in basis points, each a distinct nominal type. No
+  contract value is a float. Intermediate arithmetic uses a `BigInt` product and
+  rounds half away from zero.
+- **The frozen customer contract**: three plans, seat pricing that never touches
+  generation entitlement, the 30-second video-unit rule, high-quality units as a
+  sub-limit inside the total, a 5% annual prepayment discount, and 1.20/1.50
+  add-on multipliers over one plan-derived calculation base.
+- **Provider pricing contracts** identified by every dimension that changes the
+  bill, with explicit verification states, a `PER_SECOND` / `FIXED_DURATION` /
+  `DURATION_BUCKET` billing algebra, and billable duration held distinct from
+  the customer's scene length — a 5-second Veo scene bills 6 seconds.
+- **Risk buffers held apart from provider prices** (3,000 / 5,000 bps), immutable
+  pricing snapshots, a `NO_NEGATIVE_UNIT_ECONOMICS` evaluator that costs the
+  contractual maximum of three paid attempts, and a pure Safety Guard.
+
+### Not included
+
+The paid gate stays shut: `VIDEO_PROVIDER` is unchanged, there is no fal or Veo
+key, factory branch or execution path, no payment gateway, and no
+pricing-driven submission gate. `packages/video-providers` has zero changes to
+its types, ports, adapters, catalog or factory, so submission certainty and
+`SUBMISSION_UNKNOWN` semantics are byte-identical. H3 Max keeps `pricing: null`
+and no model's selectability or verification state moved. No promotional price
+is recorded, because no exact effective window is known.
+
 ## [Unreleased] — Phase 4C-3B-2C-2: Dormant fal H3 Max submission adapter
 
 Completes Phase 4C-3B-2C. See GitHub for lifecycle; detail in
