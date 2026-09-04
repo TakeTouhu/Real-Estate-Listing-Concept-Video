@@ -16,6 +16,7 @@
 declare const microUsdBrand: unique symbol;
 declare const yenBrand: unique symbol;
 declare const bpsBrand: unique symbol;
+declare const epochMillisBrand: unique symbol;
 
 /** United States dollars in millionths. `$0.08` is `80_000`. */
 export type MicroUsd = number & { readonly [microUsdBrand]: "MicroUsd" };
@@ -25,6 +26,17 @@ export type Yen = number & { readonly [yenBrand]: "Yen" };
 
 /** Basis points: hundredths of a percent. `30%` is `3_000`, `1.20x` is `12_000`. */
 export type Bps = number & { readonly [bpsBrand]: "Bps" };
+
+/**
+ * An instant, as integer milliseconds since the Unix epoch.
+ *
+ * Deliberately **not** a `Date`. `Object.freeze` protects a reference, not the
+ * object behind it, so a deeply frozen pricing contract holding a `Date` still
+ * hands every consumer something they can rewrite with `setTime` — and a
+ * "past decision" whose effective instant can be moved is not a record. A
+ * number cannot be mutated by anyone.
+ */
+export type EpochMillis = number & { readonly [epochMillisBrand]: "EpochMillis" };
 
 /** One hundred percent, and the denominator of every basis-point calculation. */
 export const ONE_HUNDRED_PERCENT_BPS = 10_000;
@@ -52,6 +64,16 @@ export function microUsd(value: number): MicroUsd {
 export function yen(value: number): Yen {
   assertSafeInteger(value, "yen amount");
   return value as Yen;
+}
+
+export function epochMillis(value: number): EpochMillis {
+  assertSafeInteger(value, "epoch milliseconds");
+  return value as EpochMillis;
+}
+
+/** Convert at the outer boundary, where a `Date` is still convenient. */
+export function epochMillisFromDate(value: Date): EpochMillis {
+  return epochMillis(value.getTime());
 }
 
 export function bps(value: number): Bps {

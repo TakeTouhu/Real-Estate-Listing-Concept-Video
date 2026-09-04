@@ -1,12 +1,12 @@
 import { deepFreeze } from "@app/shared";
 import type { ProviderCostEstimate } from "./provider-cost-calculator";
 import type {
-  EvaluationInstant,
   FxSnapshot,
   ProviderPricingContract,
   ProviderPricingIdentity,
 } from "./provider-pricing-contract";
-import type { Bps, MicroUsd } from "./units";
+import { providerPricingContractKey } from "./provider-pricing-contract";
+import type { Bps, EpochMillis, MicroUsd } from "./units";
 
 /**
  * The pricing decision as it stood when a generation was admitted.
@@ -28,15 +28,17 @@ export interface PricingSnapshot {
   readonly pricingVersion: string;
   readonly provider: string;
   readonly identity: ProviderPricingIdentity;
+  /** The opaque key of the exact contract this decision priced against. */
+  readonly contractKey: string;
   /** How the stable price was expressed, so the estimate can be re-derived. */
-  readonly stablePriceReference: ProviderPricingContract["stableRule"];
+  readonly stablePriceReference: ProviderPricingContract["stable"]["rule"];
   readonly riskProfileKey: ProviderCostEstimate["riskProfileKey"];
   readonly riskBufferBps: Bps;
   readonly requestedSeconds: number;
   readonly billableSeconds: number;
   readonly estimatedStableCostMicroUsd: MicroUsd;
   readonly estimatedPlanningCostMicroUsd: MicroUsd;
-  readonly pricingEffectiveAt: EvaluationInstant;
+  readonly pricingEffectiveAt: EpochMillis;
   /** Present only when a conversion actually happened, naming the rate used. */
   readonly fxSnapshotId: string | null;
 }
@@ -44,30 +46,33 @@ export interface PricingSnapshot {
 /**
  * Freeze a pricing decision.
  *
- * Deep-frozen and detached: the `Date` is copied rather than aliased, because a
- * `Date` is mutable and a shared reference would let a caller move a snapshot's
- * effective time after the fact. Freezing the object would not have stopped
- * that — `Object.freeze` protects the reference, not the instant inside it.
+ * The effective instant is an `EpochMillis` number, not a `Date`. Freezing an
+ * object protects the reference, not the object behind it, so a snapshot
+ * holding a `Date` would still hand every consumer something they could rewrite
+ * with `setTime` — and a past decision whose instant can be moved is not a
+ * record. A number closes that off for the caller's copy and the stored value
+ * alike.
  */
 export function createPricingSnapshot(input: {
   readonly contract: ProviderPricingContract;
   readonly estimate: ProviderCostEstimate;
   readonly riskBufferBps: Bps;
-  readonly pricingEffectiveAt: EvaluationInstant;
+  readonly pricingEffectiveAt: EpochMillis;
   readonly fx?: FxSnapshot | null;
 }): PricingSnapshot {
   return deepFreeze({
     pricingVersion: input.contract.identity.pricingVersion,
     provider: input.contract.identity.provider,
     identity: input.contract.identity,
-    stablePriceReference: input.contract.stableRule,
+    contractKey: providerPricingContractKey(input.contract.identity),
+    stablePriceReference: input.contract.stable.rule,
     riskProfileKey: input.estimate.riskProfileKey,
     riskBufferBps: input.riskBufferBps,
     requestedSeconds: input.estimate.requestedSeconds,
     billableSeconds: input.estimate.billableSeconds,
     estimatedStableCostMicroUsd: input.estimate.stableCostMicroUsd,
     estimatedPlanningCostMicroUsd: input.estimate.planningCostMicroUsd,
-    pricingEffectiveAt: new Date(input.pricingEffectiveAt.getTime()),
+    pricingEffectiveAt: input.pricingEffectiveAt,
     fxSnapshotId: input.fx?.id ?? null,
   });
 }

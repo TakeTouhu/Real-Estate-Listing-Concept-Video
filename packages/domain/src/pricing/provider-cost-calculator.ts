@@ -110,13 +110,16 @@ export function estimateProviderCost(
   riskProfile: CostRiskProfile,
   requestedSeconds: number,
 ): PricingResult<ProviderCostEstimate> {
-  if (contract.stableRule === null) {
+  // The stable rule, and only the stable rule. `contract.promotion` is never
+  // read here: a discount that can end is not a basis for a margin model.
+  const stableRule = contract.stable.rule;
+  if (stableRule === null) {
     return pricingFailure("PRICING_CONTRACT_PROMOTIONAL_ONLY");
   }
   const billable = resolveBillableDurationSeconds(contract.billableDuration, requestedSeconds);
   if (!billable.ok) return billable;
 
-  const stable = priceForBillableDuration(contract.stableRule, billable.value);
+  const stable = priceForBillableDuration(stableRule, billable.value);
   if (!stable.ok) return stable;
 
   const planning = applyBpsToMicroUsd(

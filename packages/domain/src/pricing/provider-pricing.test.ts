@@ -8,8 +8,13 @@ import {
   resolveBillableDurationSeconds,
 } from "./provider-cost-calculator";
 import { costRiskProfile, createProviderPricingCatalog } from "./provider-pricing-catalog";
-import type { DurationBillingRule, ProviderPricingContract } from "./provider-pricing-contract";
-import { bps, microUsd } from "./units";
+import {
+  providerPricingContractKey,
+  type DurationBillingRule,
+  type ProviderPricingContract,
+  type ProviderPricingIdentity,
+} from "./provider-pricing-contract";
+import { bps, epochMillisFromDate, microUsd } from "./units";
 
 /**
  * Provider pricing, asserted against the frozen cost contract.
@@ -20,27 +25,61 @@ import { bps, microUsd } from "./units";
  */
 
 const catalog = createProviderPricingCatalog();
-const AT = new Date("2026-09-02T00:00:00.000Z");
+const AT = epochMillisFromDate(new Date("2026-09-02T00:00:00.000Z"));
 
-function contract(provider: string, key: string): ProviderPricingContract {
-  const found = catalog.find(provider, key);
-  if (found === undefined) throw new Error(`missing pricing contract: ${provider}/${key}`);
+/** The complete identity of each catalogued contract, restated as literals. */
+const H3_MAX_IDENTITY: ProviderPricingIdentity = {
+  provider: "fal",
+  pricingModelKey: "minimax-h3-max",
+  generationMode: "image-to-video",
+  nativeTier: "768P",
+  audioMode: "none",
+  durationBillingRuleId: "per-second",
+  pricingVersion: "2026-09-02.1",
+};
+
+// Veo 3.1 Fast is billed by fal, not by Google: the model is Google's, the
+// invoice is fal's, and a pricing contract names whoever charges.
+const VEO_FAST_IDENTITY: ProviderPricingIdentity = {
+  ...H3_MAX_IDENTITY,
+  pricingModelKey: "veo-3-1-fast",
+  nativeTier: "1080p",
+  audioMode: "off",
+};
+
+const OPEN_VIDEO_IDENTITY: ProviderPricingIdentity = {
+  ...H3_MAX_IDENTITY,
+  provider: "wavespeed",
+  pricingModelKey: "wavespeed-open-video",
+  nativeTier: "1080p",
+};
+
+function contract(identity: ProviderPricingIdentity): ProviderPricingContract {
+  const found = catalog.findByIdentity(identity);
+  if (found === undefined) throw new Error("missing pricing contract");
   return found;
 }
 
-const h3Max = () => contract("fal", "minimax-h3-max");
-const veoFast = () => contract("google-veo", "veo-3-1-fast");
-const openVideo = () => contract("wavespeed", "wavespeed-open-video");
+const h3Max = () => contract(H3_MAX_IDENTITY);
+const veoFast = () => contract(VEO_FAST_IDENTITY);
+const openVideo = () => contract(OPEN_VIDEO_IDENTITY);
 
 describe("stable provider prices are exactly as verified", () => {
   it.each([
-    ["fal", "minimax-h3-max", 80_000],
-    ["google-veo", "veo-3-1-fast", 100_000],
-    ["wavespeed", "wavespeed-open-video", 60_000],
-  ])("%s/%s is %i micro-USD per billable second", (provider, key, price) => {
-    const rule = contract(provider, key).stableRule;
+    ["H3 Max", H3_MAX_IDENTITY, 80_000],
+    ["Veo 3.1 Fast", VEO_FAST_IDENTITY, 100_000],
+    ["OpenVideo", OPEN_VIDEO_IDENTITY, 60_000],
+  ] as const)("%s is %i micro-USD per billable second", (_name, identity, price) => {
+    const rule = contract(identity).stable.rule;
     if (rule === null || rule.kind !== "PER_SECOND") throw new Error("expected a per-second rule");
     expect(rule.unitPriceMicroUsdPerSecond).toBe(price);
+  });
+
+  it("bills Veo 3.1 Fast through fal, not through Google", () => {
+    // The manufacturer is Google; the billing contract is fal's, and it must
+    // match the model catalog's provider convention for this route.
+    expect(veoFast().identity.provider).toBe("fal");
+    expect(catalog.all().map((entry) => entry.identity.provider)).not.toContain("google-veo");
   });
 
   /**
@@ -51,9 +90,9 @@ describe("stable provider prices are exactly as verified", () => {
    */
   it("does not carry the H3 Max launch promotion as a planning base", () => {
     const entry = h3Max();
-    expect(entry.promotional).toBeNull();
-    expect(entry.verification).toBe("VERIFIED_STABLE");
-    const rule = entry.stableRule;
+    expect(entry.promotion).toBeNull();
+    expect(entry.stable.verification).toBe("VERIFIED_STABLE");
+    const rule = entry.stable.rule;
     if (rule === null || rule.kind !== "PER_SECOND") throw new Error("expected a per-second rule");
     expect(rule.unitPriceMicroUsdPerSecond).not.toBe(20_000);
   });
@@ -63,9 +102,21 @@ describe("stable provider prices are exactly as verified", () => {
     expect(Object.isFrozen(entry)).toBe(true);
     expect(Object.isFrozen(catalog.all())).toBe(true);
     expect(() => {
-      (entry as { verification: string }).verification = "UNVERIFIED";
+      (entry.stable as { verification: string }).verification = "UNVERIFIED";
     }).toThrow();
-    expect(h3Max().verification).toBe("VERIFIED_STABLE");
+    expect(h3Max().stable.verification).toBe("VERIFIED_STABLE");
+  });
+
+  it("exposes instants as immutable numbers, not Date objects", () => {
+    // `Object.freeze` protects a reference, not the object behind it: a frozen
+    // contract holding a Date still hands out something `setTime` can rewrite.
+    const entry = h3Max();
+    expect(typeof entry.effectiveFrom).toBe("number");
+    expect(entry.effectiveFrom).not.toBeInstanceOf(Date);
+    expect(() => {
+      (entry as { effectiveFrom: number }).effectiveFrom = 0;
+    }).toThrow();
+    expect(h3Max().effectiveFrom).toBe(Date.parse("2026-09-01T00:00:00.000Z"));
   });
 
   it("freezes nested duration policy, not just the outer record", () => {
@@ -76,6 +127,85 @@ describe("stable provider prices are exactly as verified", () => {
       (policy.supportedSeconds as number[]).push(5);
     }).toThrow();
     expect(policy.supportedSeconds).toEqual([4, 6, 8]);
+  });
+});
+
+describe("lookup distinguishes every material billing dimension", () => {
+  /**
+   * Provider and model alone are not an identity. The same model at a different
+   * tier, audio mode or billing rule is a different bill, and a partial match
+   * would return one of those variants arbitrarily — the wrong price for a
+   * request that looked identical.
+   */
+  it.each([
+    ["native tier", { nativeTier: "1080p" }],
+    ["audio mode", { audioMode: "on" }],
+    ["generation mode", { generationMode: "text-to-video" }],
+    ["billing rule", { durationBillingRuleId: "duration-bucket" }],
+    ["pricing version", { pricingVersion: "2027-01-01.1" }],
+  ] as const)("does not match H3 Max on a different %s", (_name, patch) => {
+    expect(catalog.findByIdentity({ ...H3_MAX_IDENTITY, ...patch })).toBeUndefined();
+  });
+
+  it("does not match a different provider or model", () => {
+    expect(catalog.findByIdentity({ ...H3_MAX_IDENTITY, provider: "wavespeed" })).toBeUndefined();
+    expect(
+      catalog.findByIdentity({ ...H3_MAX_IDENTITY, pricingModelKey: "veo-3-1-fast" }),
+    ).toBeUndefined();
+  });
+
+  it("never returns a sibling variant of the same provider and model", () => {
+    // Veo Fast and H3 Max are both fal, and both would satisfy a
+    // provider-and-model-only lookup keyed on provider alone.
+    const veoAtH3MaxTier = catalog.findByIdentity({
+      ...VEO_FAST_IDENTITY,
+      nativeTier: "768P",
+      audioMode: "none",
+    });
+    expect(veoAtH3MaxTier).toBeUndefined();
+    expect(veoFast().identity.pricingModelKey).toBe("veo-3-1-fast");
+    expect(h3Max().identity.pricingModelKey).toBe("minimax-h3-max");
+  });
+
+  it("gives every catalogued contract a distinct key", () => {
+    const keys = catalog.all().map((entry) => providerPricingContractKey(entry.identity));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("cannot have one identity's key forged by another's values", () => {
+    // Segments are escaped before joining, so a value containing the separator
+    // cannot spell out a different identity.
+    const forged = providerPricingContractKey({
+      ...H3_MAX_IDENTITY,
+      pricingModelKey: "minimax-h3-max|image-to-video|1080p",
+    });
+    expect(forged).not.toBe(providerPricingContractKey(H3_MAX_IDENTITY));
+    expect(catalog.findByKey(forged)).toBeUndefined();
+  });
+
+  it("resolves by key exactly as it resolves by identity", () => {
+    const key = providerPricingContractKey(VEO_FAST_IDENTITY);
+    expect(catalog.findByKey(key)).toBe(catalog.findByIdentity(VEO_FAST_IDENTITY));
+  });
+});
+
+describe("WaveSpeed OpenVideo bills 3 to 20 seconds inclusive", () => {
+  it.each([
+    [1, false],
+    [2, false],
+    [3, true],
+    [20, true],
+    [21, false],
+  ])("%i seconds accepted: %s", (seconds, accepted) => {
+    const result = resolveBillableDurationSeconds(openVideo().billableDuration, seconds);
+    expect(result.ok).toBe(accepted);
+  });
+
+  it("encodes the verified range on the contract itself", () => {
+    const policy = openVideo().billableDuration;
+    if (policy.kind !== "CONTINUOUS") throw new Error("expected a continuous policy");
+    expect(policy.minSeconds).toBe(3);
+    expect(policy.maxSeconds).toBe(20);
   });
 });
 
@@ -148,6 +278,7 @@ describe("provider billable duration is not the customer's scene length", () => 
   });
 
   it("refuses a continuous duration outside the supported range", () => {
+    // H3 Max is 5–15 seconds.
     expect(resolveBillableDurationSeconds(h3Max().billableDuration, 4).ok).toBe(false);
     expect(resolveBillableDurationSeconds(h3Max().billableDuration, 16).ok).toBe(false);
   });
@@ -238,9 +369,9 @@ describe("paid-submission pricing eligibility refuses by default", () => {
     expect(result.error.reason).toBe(reason);
   });
 
-  it("refuses UNVERIFIED pricing", () => {
+  it("refuses UNVERIFIED stable pricing", () => {
     const result = evaluatePaidSubmissionPricingEligibility(
-      withVerification(h3Max(), { verification: "UNVERIFIED" }),
+      withVerification(h3Max(), { stable: { verification: "UNVERIFIED", rule: null } }),
       AT,
     );
     expect(result.ok).toBe(false);
@@ -248,9 +379,11 @@ describe("paid-submission pricing eligibility refuses by default", () => {
     expect(result.error.reason).toBe("PRICING_CONTRACT_UNVERIFIED");
   });
 
-  it("refuses EXPIRED pricing", () => {
+  it("refuses EXPIRED stable pricing", () => {
     const result = evaluatePaidSubmissionPricingEligibility(
-      withVerification(h3Max(), { verification: "EXPIRED" }),
+      withVerification(h3Max(), {
+        stable: { verification: "EXPIRED", rule: h3Max().stable.rule },
+      }),
       AT,
     );
     expect(result.ok).toBe(false);
@@ -260,7 +393,9 @@ describe("paid-submission pricing eligibility refuses by default", () => {
 
   it("refuses a contract whose effective window has closed, whatever it is labelled", () => {
     const result = evaluatePaidSubmissionPricingEligibility(
-      withVerification(h3Max(), { effectiveUntil: new Date("2026-09-01T00:00:00.000Z") }),
+      withVerification(h3Max(), {
+        effectiveUntil: epochMillisFromDate(new Date("2026-09-01T00:00:00.000Z")),
+      }),
       AT,
     );
     expect(result.ok).toBe(false);
@@ -270,7 +405,9 @@ describe("paid-submission pricing eligibility refuses by default", () => {
 
   it("refuses a contract that is not yet in force", () => {
     const result = evaluatePaidSubmissionPricingEligibility(
-      withVerification(h3Max(), { effectiveFrom: new Date("2026-10-01T00:00:00.000Z") }),
+      withVerification(h3Max(), {
+        effectiveFrom: epochMillisFromDate(new Date("2026-10-01T00:00:00.000Z")),
+      }),
       AT,
     );
     expect(result.ok).toBe(false);
@@ -283,25 +420,76 @@ describe("paid-submission pricing eligibility refuses by default", () => {
    * when it ends there is no verified price to fall back to, so the system
    * would have committed to work it could not cost afterwards.
    */
+  const LIVE_PROMOTION = {
+    verification: "VERIFIED_PROMOTIONAL",
+    rule: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: microUsd(20_000) },
+    effectiveFrom: epochMillisFromDate(new Date("2026-08-01T00:00:00.000Z")),
+    effectiveUntil: epochMillisFromDate(new Date("2026-12-01T00:00:00.000Z")),
+  } as const;
+
   it("refuses promotional-only pricing, even while the promotion is live", () => {
     const promotionalOnly = withVerification(h3Max(), {
-      verification: "VERIFIED_PROMOTIONAL",
-      stableRule: null,
-      promotional: {
-        rule: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: microUsd(20_000) },
-        effectiveFrom: new Date("2026-08-01T00:00:00.000Z"),
-        effectiveUntil: new Date("2026-12-01T00:00:00.000Z"),
-      },
+      stable: { verification: "UNVERIFIED", rule: null },
+      promotion: LIVE_PROMOTION,
     });
     const result = evaluatePaidSubmissionPricingEligibility(promotionalOnly, AT);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.error.reason).toBe("PRICING_CONTRACT_UNVERIFIED");
+  });
+
+  /**
+   * A verified *label* with no rule behind it is promotional-only in substance.
+   * The label and the rule are separate fields, so they can disagree — and the
+   * rule is the one that decides whether anything can be priced.
+   */
+  it("refuses a contract labelled verified-stable that carries no stable rule", () => {
+    const result = evaluatePaidSubmissionPricingEligibility(
+      withVerification(h3Max(), {
+        stable: { verification: "VERIFIED_STABLE", rule: null },
+        promotion: LIVE_PROMOTION,
+      }),
+      AT,
+    );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a refusal");
     expect(result.error.reason).toBe("PRICING_CONTRACT_PROMOTIONAL_ONLY");
   });
 
+  /**
+   * The correction that matters: a verified stable price is not disqualified by
+   * the existence of a promotion. Eligibility asks about the list price; a
+   * discount alongside it is irrelevant to that question, and planning still
+   * uses the stable rule.
+   */
+  it("accepts a verified stable price that also carries a live verified promotion", () => {
+    const both = withVerification(h3Max(), { promotion: LIVE_PROMOTION });
+    const result = evaluatePaidSubmissionPricingEligibility(both, AT);
+    expect(result.ok).toBe(true);
+
+    const estimate = estimateProviderCost(both, costRiskProfile("NORMAL_AI"), 5);
+    if (!estimate.ok) throw new Error("expected an estimate");
+    // $0.08 stable, not the $0.02 promotion: 5 × 80,000, never 5 × 20,000.
+    expect(estimate.value.stableCostMicroUsd).toBe(400_000);
+    expect(estimate.value.stableCostMicroUsd).not.toBe(100_000);
+  });
+
+  it("refuses an expired stable price regardless of a live promotion", () => {
+    const result = evaluatePaidSubmissionPricingEligibility(
+      withVerification(h3Max(), {
+        stable: { verification: "EXPIRED", rule: h3Max().stable.rule },
+        promotion: LIVE_PROMOTION,
+      }),
+      AT,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.error.reason).toBe("PRICING_CONTRACT_EXPIRED");
+  });
+
   it("refuses to estimate from a contract with no stable rule", () => {
     const estimate = estimateProviderCost(
-      withVerification(h3Max(), { stableRule: null }),
+      withVerification(h3Max(), { stable: { verification: "VERIFIED_STABLE", rule: null } }),
       costRiskProfile("NORMAL_AI"),
       5,
     );
@@ -357,9 +545,7 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
     expect(taken.estimatedPlanningCostMicroUsd).toBe(520_000);
   });
 
-  it("detaches its effective instant from the caller's Date", () => {
-    // A frozen object holding a live Date is not immutable: freezing protects
-    // the reference, not the instant inside it.
+  it("cannot be moved through the caller's original time value", () => {
     const at = new Date("2026-09-02T00:00:00.000Z");
     const estimate = estimateProviderCost(h3Max(), costRiskProfile("NORMAL_AI"), 5);
     if (!estimate.ok) throw new Error("expected an estimate");
@@ -367,10 +553,27 @@ describe("pricing snapshots are immutable and do not follow the catalog", () => 
       contract: h3Max(),
       estimate: estimate.value,
       riskBufferBps: bps(3_000),
-      pricingEffectiveAt: at,
+      pricingEffectiveAt: epochMillisFromDate(at),
     });
     at.setFullYear(2030);
-    expect(taken.pricingEffectiveAt.getUTCFullYear()).toBe(2026);
+    expect(taken.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
+  });
+
+  it("cannot be moved through the instant it exposes", () => {
+    // The stored value is a number, so there is no `setTime` to reach for —
+    // which is the half a frozen `Date` would have left open.
+    const taken = snapshot();
+    expect(typeof taken.pricingEffectiveAt).toBe("number");
+    expect(taken.pricingEffectiveAt).not.toBeInstanceOf(Date);
+    expect(() => {
+      (taken as { pricingEffectiveAt: number }).pricingEffectiveAt = 0;
+    }).toThrow();
+    expect(taken.pricingEffectiveAt).toBe(Date.parse("2026-09-02T00:00:00.000Z"));
+  });
+
+  it("records the exact contract it priced against", () => {
+    const taken = snapshot();
+    expect(taken.contractKey).toBe(providerPricingContractKey(H3_MAX_IDENTITY));
   });
 
   it("does not change when a later estimate uses different data", () => {

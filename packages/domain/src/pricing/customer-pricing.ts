@@ -13,7 +13,6 @@ import {
   roundYenToNearestHundred,
   roundYenUpToHundred,
   scaleYen,
-  yen,
   type Yen,
 } from "./units";
 
@@ -81,30 +80,94 @@ export function additionalUserMonthlyPriceYenExTax(additionalUsers: number): Pri
   return pricingOk(scaleYen(ADDITIONAL_USER_PRICE_YEN_EX_TAX_PER_MONTH, additionalUsers, 1));
 }
 
-export interface AnnualContractPricing {
+export interface AnnualContractRawPricing {
   readonly grossAnnualYenExTax: Yen;
+  /** Exact and unrounded. Not a quotable price — see `finalizeCustomerPrice`. */
   readonly prepaymentRawYenExTax: Yen;
-  readonly prepaymentFinalYenExTax: Yen;
 }
 
 /**
- * The two ways of paying for the same 12-month contract.
+ * The raw arithmetic of the two ways of paying for one 12-month contract.
+ *
+ * Returns no final figure on purpose. Rounding a customer price is the step
+ * that can push it under a profitability floor, so it is not something a pure
+ * calculation may do on its own — a caller that wants a quotable number passes
+ * this through {@link finalizeCustomerPrice} and supplies the floor.
  *
  * The gross figure is derived from the frozen monthly price rather than stored,
- * so a monthly price and an annual total cannot disagree. The discount is
- * applied to the exact gross, and only the customer-facing result is rounded.
+ * so a monthly price and an annual total cannot disagree.
  */
-export function annualContractPricing(plan: CustomerPlan): AnnualContractPricing {
+export function annualContractRawPricing(plan: CustomerPlan): AnnualContractRawPricing {
   const gross = scaleYen(plan.monthlyPriceYenExTax, CONTRACT_MONTHS, 1);
-  const raw = applyBpsToYen(
-    gross,
-    (ONE_HUNDRED_PERCENT_BPS - ANNUAL_PREPAYMENT_DISCOUNT_BPS) as typeof ANNUAL_PREPAYMENT_DISCOUNT_BPS,
-  );
   return {
     grossAnnualYenExTax: gross,
-    prepaymentRawYenExTax: raw,
-    prepaymentFinalYenExTax: roundYenToNearestHundred(raw),
+    prepaymentRawYenExTax: applyBpsToYen(
+      gross,
+      (ONE_HUNDRED_PERCENT_BPS -
+        ANNUAL_PREPAYMENT_DISCOUNT_BPS) as typeof ANNUAL_PREPAYMENT_DISCOUNT_BPS,
+    ),
   };
+}
+
+export interface FinalCustomerPrice {
+  /** Exact, unrounded, before any customer-facing rounding. */
+  readonly rawYenExTax: Yen;
+  /** What the customer is quoted. */
+  readonly finalYenExTax: Yen;
+  /** True when nearest-¥100 was rejected because it would have been unprofitable. */
+  readonly roundedAwayFromNearestForSafety: boolean;
+}
+
+/**
+ * Turn an exact price into a quotable one, safely.
+ *
+ * This is the **only** way to obtain a final customer price, and the floor is a
+ * required argument rather than a defaulted one. A default of zero would have
+ * made the commercial rule opt-in, and a safety rule a caller can skip by
+ * omitting a parameter is not a safety rule.
+ *
+ * The order is fixed: raw → validate → rounded candidate → re-validate → final.
+ * Nearest-¥100 can move a price *down*, so when the rounded candidate falls
+ * below the floor the next ¥100 up is used instead, and if even that is below
+ * the floor the price is refused rather than quoted at a loss.
+ */
+export function finalizeCustomerPrice(
+  rawYenExTax: Yen,
+  minimumSafePriceYenExTax: Yen,
+): PricingResult<FinalCustomerPrice> {
+  if (rawYenExTax < minimumSafePriceYenExTax) {
+    return pricingFailure("ROUNDED_PRICE_WOULD_BE_UNPROFITABLE");
+  }
+
+  const nearest = roundYenToNearestHundred(rawYenExTax);
+  if (nearest >= minimumSafePriceYenExTax) {
+    return pricingOk({
+      rawYenExTax,
+      finalYenExTax: nearest,
+      roundedAwayFromNearestForSafety: false,
+    });
+  }
+
+  const safeUp = roundYenUpToHundred(rawYenExTax);
+  if (safeUp < minimumSafePriceYenExTax) {
+    return pricingFailure("ROUNDED_PRICE_WOULD_BE_UNPROFITABLE");
+  }
+  return pricingOk({
+    rawYenExTax,
+    finalYenExTax: safeUp,
+    roundedAwayFromNearestForSafety: true,
+  });
+}
+
+/** The quotable annual prepayment price, which cannot be produced unvalidated. */
+export function annualPrepaymentFinalPrice(
+  plan: CustomerPlan,
+  minimumSafePriceYenExTax: Yen,
+): PricingResult<FinalCustomerPrice> {
+  return finalizeCustomerPrice(
+    annualContractRawPricing(plan).prepaymentRawYenExTax,
+    minimumSafePriceYenExTax,
+  );
 }
 
 /**
@@ -132,15 +195,9 @@ export function addOnCalculationBase(plan: CustomerPlan): AddOnCalculationBase {
 
 export type AddOnKind = "NORMAL" | "HIGH_QUALITY";
 
-export interface AddOnPackagePrice {
+export interface AddOnPackagePrice extends FinalCustomerPrice {
   readonly kind: AddOnKind;
   readonly units: number;
-  /** Exact, unrounded, before any customer-facing rounding. */
-  readonly rawYenExTax: Yen;
-  /** What the customer is quoted. */
-  readonly finalYenExTax: Yen;
-  /** True when nearest-¥100 was rejected because it would have been unprofitable. */
-  readonly roundedAwayFromNearestForSafety: boolean;
 }
 
 /**
@@ -161,17 +218,17 @@ export interface AddOnPackagePrice {
  * the price of the package rather than the price of a rounded unit times a
  * count (§5, §12).
  *
- * `minimumSafePriceYenExTax` is the profitability floor. Nearest-¥100 rounding
- * can move a price *down*, and a price is not allowed to become unprofitable
- * for the sake of a round number — so when the rounded candidate falls below
- * the floor the next ¥100 up is used instead, and if even that is below the
- * floor the package is refused rather than quoted at a loss (§13).
+ * `minimumSafePriceYenExTax` is the profitability floor, and it is required.
+ * A defaulted floor would make the commercial rule opt-in, and a safety rule a
+ * caller can skip by omitting a parameter is not a safety rule. Finalization is
+ * delegated to {@link finalizeCustomerPrice}, so add-ons and annual prepayment
+ * cannot diverge in how they round.
  */
 export function addOnPackagePrice(
   plan: CustomerPlan,
   kind: AddOnKind,
   units: number,
-  minimumSafePriceYenExTax: Yen = yen(0),
+  minimumSafePriceYenExTax: Yen,
 ): PricingResult<AddOnPackagePrice> {
   if (!Number.isSafeInteger(units) || units <= 0) {
     return pricingFailure("QUANTITY_NOT_A_POSITIVE_INTEGER");
@@ -189,25 +246,7 @@ export function addOnPackagePrice(
     plan.includedVideoUnits * ONE_HUNDRED_PERCENT_BPS,
   );
 
-  // raw → validate → rounded candidate → re-validate → final.
-  if (raw < minimumSafePriceYenExTax) {
-    return pricingFailure("ROUNDED_PRICE_WOULD_BE_UNPROFITABLE");
-  }
-
-  const nearest = roundYenToNearestHundred(raw);
-  if (nearest >= minimumSafePriceYenExTax) {
-    return pricingOk({ kind, units, rawYenExTax: raw, finalYenExTax: nearest, roundedAwayFromNearestForSafety: false });
-  }
-
-  const safeUp = roundYenUpToHundred(raw);
-  if (safeUp < minimumSafePriceYenExTax) {
-    return pricingFailure("ROUNDED_PRICE_WOULD_BE_UNPROFITABLE");
-  }
-  return pricingOk({
-    kind,
-    units,
-    rawYenExTax: raw,
-    finalYenExTax: safeUp,
-    roundedAwayFromNearestForSafety: true,
-  });
+  const finalized = finalizeCustomerPrice(raw, minimumSafePriceYenExTax);
+  if (!finalized.ok) return finalized;
+  return pricingOk({ kind, units, ...finalized.value });
 }
