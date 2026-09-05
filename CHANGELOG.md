@@ -3,6 +3,142 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2E: Generation orchestration and audit state
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2e-completion.md`. Persistence
+and pure domain only: no provider call, polling, reconciliation worker, output
+ingestion, composition, entitlement ledger or payment.
+
+### Added
+
+- **Six orchestration tables**, making one accounting rule structural: a customer
+  video unit is not a provider attempt. `generation_jobs`,
+  `generation_reservations`, `generation_scenes`, `scene_generation_requests`,
+  `generation_pricing_snapshots`, `fx_rate_snapshots` and
+  `generation_transition_events`. One entitlement can now produce an initial
+  generation, up to two user regenerations and any number of system recovery
+  attempts, and each is separately countable after the fact.
+- **A submission-certainty axis** on the existing attempt row, separate from
+  execution state and mirroring `ProviderSubmissionOutcome`. A database CHECK
+  enforces that a provider reference implies `ACCEPTED`, so a fabricated id
+  cannot be stored for an uncertain submission.
+- **A compare-and-set provider boundary.** `QUEUED → SUBMITTING` proves a
+  pricing snapshot exists, moves the state and version, stamps the boundary
+  instant and appends its event inside one transaction whose commit *is* the
+  authorization to call a provider. Two concurrent workers cannot both win it.
+- **Append-only machine history**, separate from `AuditLog`, with per-aggregate
+  sequences and allowlisted metadata — prompts, provider payloads, URLs and
+  credentials are refused before they reach the column.
+- **Derived entitlement.** User regenerations are counted from delivered
+  requests rather than a mutable counter, so a provider failure never consumes a
+  customer's right; system recovery is counted on its own axis. High-quality
+  units sit inside the total, enforced by a CHECK.
+
+### Changed
+
+- `SceneGeneration` was evolved rather than replaced: it now explicitly means
+  exactly one provider invocation, with orchestration linkage beside its
+  existing immutable request snapshot.
+- `@app/domain` now exports `epochMillis` and `epochMillisFromDate`, without
+  which `createPricingSnapshot` was callable only by a caller willing to cast
+  past its own branded type.
+
+### Corrected after review
+
+- **Tenant scope on every orchestration repository.** Bare ids let any caller
+  holding one reach another organization's generation history; every method now
+  takes `organizationId` and resolves ownership through the `VideoProject`
+  boundary, in the same predicate as the CAS. Transition events carry an
+  immutable, indexed `organizationId` set from the scoped operation.
+- **The active-request index reads both vocabularies.** It tested only the
+  legacy `state` column, which orchestrated attempts never advance — so a
+  terminal orchestrated attempt still looked active and its SYSTEM_RECOVERY
+  replacement could not be inserted, making the frozen retry rule unreachable.
+- **Request uniqueness split into three partial indexes.** The old one did not
+  constrain `INITIAL` at all (NULL ordinals are distinct in PostgreSQL) and made
+  a *failed* regeneration occupy its entitlement slot permanently, so a customer
+  whose regeneration failed could never ask again.
+- **Reservation and attempt admission are single commits.** Transaction B
+  creates the hold, moves the job and writes both events together, copying unit
+  counts from the job; Transaction C creates the attempt, its pricing snapshot
+  and its first event together.
+- **The pricing decision is bound to its attempt.** Provider, contract key and
+  V2 model key must agree at admission and again at the provider boundary, so a
+  WaveSpeed attempt can no longer be authorized against a fal cost decision.
+- **Video units delegate to the customer pricing contract** rather than
+  reimplementing `ceil(seconds / 30)`, which had turned 91 seconds into four
+  units — a tier the product does not sell.
+- **Cancellation stops where no provider can have been paid.** A job in
+  `GENERATING` may hold attempts at a provider, so that decision cannot be read
+  from the job's own state; the unconditional edges are removed.
+- **A scene's delivered pointer is constrained to its own requests** by a
+  composite foreign key.
+
+### Corrected after final admission review
+
+- **Attempt admission no longer believes anything a persisted row already
+  knows.** The request hash, the asset, the compiled prompt, the duration, the
+  camera motion, the aspect ratio, the target resolution and the attempt kind
+  are all derived inside the transaction from the `GenerationScene` and the
+  `GenerationJob`. A caller could previously supply a V2-prefixed digest of its
+  own for identical work and walk straight past the active-request identity
+  protection that stops the platform paying twice; the hash is now computed by
+  the existing `computeGenerationRequestHash` over the exact facts being
+  persisted, so the stored row can always re-derive it.
+- **A job snapshots the project's output configuration at admission.**
+  `GenerationJob` gains `targetAspectRatio` beside its target resolution, both
+  frozen from the `VideoProject` and never read from it again — project settings
+  are mutable, and an attempt admitted days later must render what the customer
+  started. A database CHECK repeats the project's closed resolution vocabulary
+  rather than opening a second, independently configurable one.
+- **One PRIMARY attempt and one live attempt per logical request**, enforced by
+  two partial unique indexes rather than by derivation alone. Two "first"
+  attempts cannot be told apart afterwards, and system recovery is sequential
+  recovery from a finished attempt, not permission to run two paid attempts at
+  once. Admission returns `ATTEMPT_ALREADY_ACTIVE` for the latter.
+- **The first attempt starts its request in the same commit.** Split apart, the
+  database claimed a customer's request had not begun while a provider attempt
+  for it already existed.
+- **The pricing binding covers what it prices.** Beyond provider, contract key
+  and model key it now requires the snapshot's duration, native tier and risk
+  profile to match the scene, the attempt and the job's quality tier — a
+  snapshot priced for five seconds on a fifteen-second scene understated the
+  cost by two thirds with every other field agreeing, and a `HIGH_QUALITY` job
+  planned at the normal buffer under-planned every attempt by twenty points.
+  Unsupported execution modes (anything but image-to-video with no audio) fail
+  closed rather than being priced.
+- **Atomic primitives cannot be bypassed.** The generic transition methods
+  refuse the edges an atomic transaction owns — `RESERVING → RESERVED`,
+  `PENDING → GENERATING`, `GENERATING → DELIVERED` and both edges into
+  `CONSUMED` — returning `TRANSITION_RESERVED` instead of producing a reserved
+  job with no hold or a delivered request with no verified output.
+- **Transaction B's history describes real transitions.** The reservation is
+  created `RESERVING` and genuinely moved to `RESERVED` inside the same commit;
+  it was previously inserted straight as `RESERVED` while the event stream
+  claimed a transition that never happened.
+- **A concurrent regeneration race returns a business outcome.** The losing
+  transaction's unique violation is translated to `REGENERATION_ALREADY_ACTIVE`,
+  and only that exact index — never any `P2002`, which would turn an unrelated
+  collision into a cheerful "someone else is already doing this".
+- **An FX rate named by a pricing snapshot is persisted with it**, validated
+  through the pricing domain's own canonical check, and a same-id rate whose
+  content differs is a conflict rather than a cache hit.
+
+### Legacy
+
+No existing row was updated. Every new column on `scene_generations` is nullable
+and stays NULL for rows admitted before this phase, including certainty: a legacy
+row in `SUBMITTING` may or may not have reached the provider, and there is no way
+to find out now. The legacy state vocabulary is kept rather than relabelled, and
+the attempt repository fails closed on a legacy row rather than inventing one.
+
+### Not included
+
+The paid gate is unchanged: `VIDEO_PROVIDER` stays `fake`/`wavespeed`, and there
+is no fal or Veo execution path, payment gateway, live submission gate or
+reconciliation worker. Nothing constructs these repositories at runtime — the
+foundation is dormant with respect to live generation.
+
 ## [Unreleased] — Phase 4C-3B-2D: Pricing contract hardening
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2d-completion.md`. Pure

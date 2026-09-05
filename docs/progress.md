@@ -400,6 +400,53 @@ and ADR-0020.
   boundary would let a discount become the planning base. Pure contracts only —
   no billing, payment, persistence, orchestration or migration, and the paid
   gate is unchanged.
+- **Phase 4C-3B-2E** — see GitHub for its lifecycle. Persists generation
+  orchestration, making one accounting rule structural rather than aspirational:
+  a customer video unit is not a provider attempt. One entitlement can produce an
+  initial generation, up to two user regenerations and any number of system
+  recovery attempts, and six new tables keep them separately countable after the
+  fact. Submission certainty becomes its own axis, so "the provider may have
+  accepted this and we do not know" is a state the database can hold rather than
+  a gap in one. The provider boundary is a compare-and-set that proves a pricing
+  snapshot exists, stamps the crossing and appends its event in one transaction
+  whose commit *is* the authorization to call a provider — two concurrent workers
+  cannot both win it, and an attempt that crossed once can never return to
+  `QUEUED`, so a retry is always a new row. Machine transition history is
+  append-only, separate from `AuditLog`, and its metadata is an allowlist that
+  refuses prompts and provider payloads outright. User regenerations are derived
+  from delivered requests rather than counted, so a provider failure never spends
+  a customer's right. No existing row was altered: legacy attempts keep their own
+  state vocabulary and carry NULL for every new column, because a legacy row in
+  `SUBMITTING` may or may not have reached the provider and there is no way to
+  find out now. Persistence only — no provider call, polling, reconciliation,
+  ingestion, composition, entitlement ledger or payment, nothing constructs these
+  repositories at runtime, and the paid gate is unchanged. Corrected after
+  review: every repository is organization-scoped rather than taking bare ids;
+  the active-request index reads both the legacy and orchestration vocabularies,
+  without which a terminal orchestrated attempt blocked its own recovery row;
+  request uniqueness became three partial indexes, so a failed regeneration no
+  longer occupies an entitlement slot the customer never spent; reservation and
+  attempt admission became single commits; each attempt is bound to the exact
+  pricing contract it was priced by; unit derivation delegates to the customer
+  pricing contract instead of reimplementing it; and cancellation stops where no
+  provider can yet have been paid. Corrected again after the admission review:
+  attempt admission no longer believes anything a persisted row already knows —
+  the request identity, the asset, the prompt, the duration, the aspect ratio,
+  the target resolution and the attempt kind are all derived inside the
+  transaction from the scene and the job, so a caller can no longer offer its
+  own V2 digest for identical work and walk past the duplicate-submission
+  protection. A job snapshots the project's output configuration at admission
+  rather than reading mutable settings later; one PRIMARY and one live attempt
+  per logical request are held by partial unique indexes as well as by
+  derivation; the first attempt starts its request in the same commit; the
+  pricing binding now also covers duration, native tier, risk profile and
+  execution mode, so a high-quality job cannot be planned at the normal buffer;
+  the generic transition methods refuse the edges an atomic transaction owns;
+  Transaction B moves the reservation it creates rather than writing history for
+  a transition that never happened; a concurrent regeneration race returns a
+  business outcome instead of a raw database error; and an exchange rate named
+  by a pricing snapshot is persisted, validated and conflict-checked inside the
+  same commit.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
