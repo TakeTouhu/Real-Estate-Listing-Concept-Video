@@ -93,6 +93,7 @@ export function domainSnapshot(
   const taken = createPricingSnapshot({
     contract,
     riskProfileKey,
+    // The fixture scene is five seconds; the binding requires them to agree.
     requestedSeconds: 5,
     pricingEffectiveAt: epochMillisFromDate(new Date("2026-09-04T00:00:00.000Z")),
   });
@@ -101,13 +102,18 @@ export function domainSnapshot(
 }
 
 /**
- * An attempt admission whose pricing binding is correct by construction.
+ * An attempt admission whose bindings are correct by construction.
  *
- * WaveSpeed OpenVideo throughout: the provider the attempt names, the provider
- * the snapshot prices, and the model key on both sides all agree. The earlier
- * fixture paired a WaveSpeed attempt with a fal/H3 Max snapshot, which was
- * exactly the mis-binding the boundary now refuses — a fixture that could not
- * be admitted at all today.
+ * WaveSpeed OpenVideo throughout, with the snapshot priced for the fixture
+ * scene's five seconds at the fixture job's tier. The earlier version paired a
+ * WaveSpeed attempt with a fal/H3 Max snapshot, and priced a HIGH_QUALITY job
+ * at the NORMAL_AI buffer — both of which the bindings now refuse, so neither
+ * fixture could be admitted today.
+ *
+ * Note what is *not* here: no `requestHash`, no `attemptKind`, no asset,
+ * prompt, duration, camera motion, aspect ratio or target resolution. Each has
+ * an authority elsewhere, and a fixture that could still supply one would be
+ * testing a shape the production API does not offer.
  */
 export function attemptInput(
   overrides: Partial<AdmitGenerationAttemptInput> & {
@@ -116,25 +122,19 @@ export function attemptInput(
   },
 ): AdmitGenerationAttemptInput {
   return {
-    attemptKind: "PRIMARY",
-    requestHash: `sha256:v2:${"a".repeat(63)}1`,
     providerName: "wavespeed",
     providerModelId: "wavespeed-ai/open-video/image-to-video",
     requestModelKey: "wavespeed-open-video",
-    requestCompiledPrompt: "a sunlit living room, cinematic",
     requestRenderedPrompt: "a sunlit living room, cinematic, slow pan",
-    requestDurationSeconds: 5,
-    requestCameraMotion: "SLOW_PAN",
-    requestAspectRatio: "16:9",
-    requestTargetOutputResolution: "1080p",
     requestNativeGenerationResolution: "1080p",
     requestResolutionNormalization: "NONE",
     requestNativeMeetsTarget: true,
-    sourceStoryboardSceneId: STORYBOARD_SCENE,
-    sourceAssetId: ASSET_A,
-    sourceAnalysisRevision: 1,
     pricingSnapshotId: `price_${overrides.id}`,
-    pricingSnapshot: domainSnapshot(),
+    // The fixture job is HIGH_QUALITY, so the snapshot must plan against the
+    // 50% high-quality buffer. Pricing a high-quality job at NORMAL_AI
+    // under-plans it by twenty points, invisibly.
+    pricingSnapshot: domainSnapshot(OPEN_VIDEO_IDENTITY, "HIGH_QUALITY_AI"),
+    fxSnapshot: null,
     ...overrides,
   };
 }
@@ -184,7 +184,10 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
     });
     await prisma.videoProject.upsert({
       where: { id: project },
-      update: {},
+      // Restored, not left as found: a test that proves the job snapshot is
+      // frozen has to move the project underneath it, and the next test must
+      // not inherit that move.
+      update: { aspectRatio: "16:9", targetOutputResolution: "1080p" },
       create: {
         id: project,
         organizationId: org,
@@ -220,7 +223,6 @@ export async function seedChain(
       videoProjectId,
       requestedByUserId: "usr_itest",
       qualityTier: "HIGH_QUALITY",
-      targetOutputResolution: "1080p",
       requestedDurationSeconds: 60,
     },
     ctx(),

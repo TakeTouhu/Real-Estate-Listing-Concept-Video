@@ -40,11 +40,7 @@ describe.skipIf(!HAS_DB)("organization A cannot reach organization B's generatio
     b = await seedChain(prisma, "tenantb", ORG_B, PROJECT_B);
     const admitted = await repos.attempts.admit(
       ORG_B,
-      attemptInput({
-        id: "sgen_tenantb",
-        generationSceneRequestId: b.request.id,
-        sourceAssetId: "ast_itest_orch_b",
-      }),
+      attemptInput({ id: "sgen_tenantb", generationSceneRequestId: b.request.id }),
       ctx(),
     );
     if (admitted.kind !== "ADMITTED") throw new Error(`admission failed: ${admitted.kind}`);
@@ -163,12 +159,15 @@ describe.skipIf(!HAS_DB)("organization A cannot reach organization B's generatio
       });
       expect(scene.kind).toBe("LOST");
 
+      // CANCELLED rather than GENERATING: the latter belongs to attempt
+      // admission and the generic API reserves it, which would mask the tenant
+      // check under test.
       const request = await repos.requests.transition({
         organizationId: ORG_A,
         id: b.request.id,
         expectedState: "PENDING",
         expectedVersion: 0,
-        nextState: "GENERATING",
+        nextState: "CANCELLED",
         context: ctx(),
       });
       expect(request.kind).toBe("LOST");
@@ -259,7 +258,6 @@ describe.skipIf(!HAS_DB)("organization A cannot reach organization B's generatio
           videoProjectId: PROJECT_B,
           requestedByUserId: "usr_attacker",
           qualityTier: "NORMAL",
-          targetOutputResolution: "1080p",
           requestedDurationSeconds: 30,
         },
         ctx(),

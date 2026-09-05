@@ -42,27 +42,37 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     await prisma.$disconnect();
   });
 
-  /** Drive a request to a terminal state through the real transitions. */
+  /**
+   * Drive a request to a terminal state.
+   *
+   * `PENDING -> GENERATING` belongs to attempt admission and
+   * `GENERATING -> DELIVERED` to Transaction F, which is deferred — so neither
+   * is reachable through the production API, by design. A test that needs a
+   * historical DELIVERED row seeds it directly, which is exactly the
+   * arrangement §11 prescribes: the entitlement rules under test are about what
+   * the *stored* history means, not about how it got there.
+   *
+   * `FAILED_TERMINAL` goes through the real transition, because that edge is
+   * not reserved.
+   */
   async function finish(
     id: string,
     version: number,
     to: "DELIVERED" | "FAILED_TERMINAL",
   ): Promise<void> {
-    const generating = await repos.requests.transition({
+    if (to === "DELIVERED") {
+      await prisma.sceneGenerationRequest.update({
+        where: { id },
+        data: { state: "DELIVERED", stateVersion: version + 2, deliveredAt: new Date() },
+      });
+      return;
+    }
+    const done = await repos.requests.transition({
       organizationId: ORG_A,
       id,
       expectedState: "PENDING",
       expectedVersion: version,
-      nextState: "GENERATING",
-      context: ctx(),
-    });
-    if (generating.kind !== "APPLIED") throw new Error("expected APPLIED");
-    const done = await repos.requests.transition({
-      organizationId: ORG_A,
-      id,
-      expectedState: "GENERATING",
-      expectedVersion: generating.value.stateVersion,
-      nextState: to,
+      nextState: "FAILED_TERMINAL",
       context: ctx(),
     });
     if (done.kind !== "APPLIED") throw new Error("expected APPLIED");
@@ -154,6 +164,15 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
       admitRegen(scene.id, "genreq_race_b"),
     ]);
 
+    // Both calls *return*. The loser's unique violation is an expected business
+    // outcome — the customer asked for something already in flight — so it is
+    // translated at the boundary rather than escaping as a database error a
+    // caller would have to recognise by its Prisma code.
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+    const kinds = results.map((r) => (r.status === "fulfilled" ? r.value.kind : "REJECTED"));
+    expect(kinds.filter((k) => k === "ADMITTED")).toHaveLength(1);
+    expect(kinds.filter((k) => k === "REGENERATION_ALREADY_ACTIVE")).toHaveLength(1);
+
     const admitted = results.filter(
       (r) => r.status === "fulfilled" && r.value.kind === "ADMITTED",
     );
@@ -166,6 +185,21 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     expect(stored[0]?.userRegenerationOrdinal).toBe(1);
   });
 
+  it("does not report an unrelated unique violation as an active regeneration", async () => {
+    // The narrow half of the same translation. Prisma reports every unique
+    // violation as P2002, and translating all of them would turn an unrelated
+    // collision into a cheerful "someone else is already doing this" — the kind
+    // of mistranslation that hides a real defect for months.
+    const { scene } = await seedChain(prisma, "regendup");
+    const first = await admitRegen(scene.id, "genreq_dup");
+    if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+    await finish(first.request.id, first.request.stateVersion, "DELIVERED");
+
+    // Nothing is in flight, so the entitlement check passes and the id itself
+    // is what collides.
+    await expect(admitRegen(scene.id, "genreq_dup")).rejects.toThrow();
+  });
+
   it("records when a request was delivered and when one failed", async () => {
     // Added because a mutation removing the `deliveredAt` write survived: the
     // entitlement derives from `state`, so nothing observable broke while the
@@ -175,6 +209,20 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     const first = await admitRegen(scene.id, "genreq_stamp_ok");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     expect(first.request.deliveredAt).toBeNull();
+
+    // Delivery is Transaction F's, and Transaction F is deferred: the
+    // production API refuses the edge rather than letting a caller consume a
+    // customer's regeneration right without the output verification that
+    // justifies it.
+    const refused = await repos.requests.transition({
+      organizationId: ORG_A,
+      id: first.request.id,
+      expectedState: "PENDING",
+      expectedVersion: first.request.stateVersion,
+      nextState: "GENERATING",
+      context: ctx(),
+    });
+    expect(refused.kind).toBe("TRANSITION_RESERVED");
 
     await finish(first.request.id, first.request.stateVersion, "DELIVERED");
     const delivered = await repos.requests.findById(ORG_A, first.request.id);

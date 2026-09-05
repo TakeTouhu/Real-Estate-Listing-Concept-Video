@@ -647,7 +647,13 @@ model GenerationJob {
   requestedByUserId           String
   qualityTier                 GenerationQualityTier
   /// The product deliverable class, matching video_projects.resolution.
+  /// The output configuration snapshotted from the VideoProject when this
+  /// lifecycle began, and never read from the project again. Project settings
+  /// are mutable; an attempt admitted three days later must be generated for
+  /// what the customer started. A CHECK restricts the resolution to the closed
+  /// product vocabulary, the same one video_projects carries.
   targetOutputResolution      String
+  targetAspectRatio           String
   requestedDurationSeconds    Int
   /// Entitlement arithmetic, frozen at creation. High-quality units sit INSIDE
   /// the total; they are never additional.

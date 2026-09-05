@@ -74,6 +74,56 @@ ingestion, composition, entitlement ledger or payment.
 - **A scene's delivered pointer is constrained to its own requests** by a
   composite foreign key.
 
+### Corrected after final admission review
+
+- **Attempt admission no longer believes anything a persisted row already
+  knows.** The request hash, the asset, the compiled prompt, the duration, the
+  camera motion, the aspect ratio, the target resolution and the attempt kind
+  are all derived inside the transaction from the `GenerationScene` and the
+  `GenerationJob`. A caller could previously supply a V2-prefixed digest of its
+  own for identical work and walk straight past the active-request identity
+  protection that stops the platform paying twice; the hash is now computed by
+  the existing `computeGenerationRequestHash` over the exact facts being
+  persisted, so the stored row can always re-derive it.
+- **A job snapshots the project's output configuration at admission.**
+  `GenerationJob` gains `targetAspectRatio` beside its target resolution, both
+  frozen from the `VideoProject` and never read from it again — project settings
+  are mutable, and an attempt admitted days later must render what the customer
+  started. A database CHECK repeats the project's closed resolution vocabulary
+  rather than opening a second, independently configurable one.
+- **One PRIMARY attempt and one live attempt per logical request**, enforced by
+  two partial unique indexes rather than by derivation alone. Two "first"
+  attempts cannot be told apart afterwards, and system recovery is sequential
+  recovery from a finished attempt, not permission to run two paid attempts at
+  once. Admission returns `ATTEMPT_ALREADY_ACTIVE` for the latter.
+- **The first attempt starts its request in the same commit.** Split apart, the
+  database claimed a customer's request had not begun while a provider attempt
+  for it already existed.
+- **The pricing binding covers what it prices.** Beyond provider, contract key
+  and model key it now requires the snapshot's duration, native tier and risk
+  profile to match the scene, the attempt and the job's quality tier — a
+  snapshot priced for five seconds on a fifteen-second scene understated the
+  cost by two thirds with every other field agreeing, and a `HIGH_QUALITY` job
+  planned at the normal buffer under-planned every attempt by twenty points.
+  Unsupported execution modes (anything but image-to-video with no audio) fail
+  closed rather than being priced.
+- **Atomic primitives cannot be bypassed.** The generic transition methods
+  refuse the edges an atomic transaction owns — `RESERVING → RESERVED`,
+  `PENDING → GENERATING`, `GENERATING → DELIVERED` and both edges into
+  `CONSUMED` — returning `TRANSITION_RESERVED` instead of producing a reserved
+  job with no hold or a delivered request with no verified output.
+- **Transaction B's history describes real transitions.** The reservation is
+  created `RESERVING` and genuinely moved to `RESERVED` inside the same commit;
+  it was previously inserted straight as `RESERVED` while the event stream
+  claimed a transition that never happened.
+- **A concurrent regeneration race returns a business outcome.** The losing
+  transaction's unique violation is translated to `REGENERATION_ALREADY_ACTIVE`,
+  and only that exact index — never any `P2002`, which would turn an unrelated
+  collision into a cheerful "someone else is already doing this".
+- **An FX rate named by a pricing snapshot is persisted with it**, validated
+  through the pricing domain's own canonical check, and a same-id rate whose
+  content differs is a conflict rather than a cache hit.
+
 ### Legacy
 
 No existing row was updated. Every new column on `scene_generations` is nullable

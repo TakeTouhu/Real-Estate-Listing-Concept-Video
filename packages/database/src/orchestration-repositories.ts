@@ -20,8 +20,12 @@ import type {
   GenerationTransitionEventRepository,
   NewGenerationJob,
   NewGenerationScene,
+  FxBindingFailure,
+  FxSnapshot,
+  GenerationRequestFacts,
   PricingBindingFailure,
   PricingSnapshot,
+  ReservedTransitionOutcome,
   ReserveGenerationJobInput,
   ReserveGenerationJobOutcome,
   SceneGenerationAttemptRepository,
@@ -31,14 +35,20 @@ import type {
   TransitionOutcome,
 } from "@app/domain";
 import {
+  AUTHORIZED_AUDIO_MODE,
+  AUTHORIZED_GENERATION_MODE,
   canTransitionAttempt,
   canTransitionJob,
   canTransitionReservation,
   canTransitionScene,
   canTransitionSceneRequest,
+  computeGenerationRequestHash,
+  isTargetOutputResolution,
   nextUserRegenerationOrdinal,
   requiredUnitsFor,
+  riskProfileKeyForQualityTier,
   sanitizeTransitionMetadata,
+  validateFxSnapshot,
 } from "@app/domain";
 import { AppError, randomId } from "@app/shared";
 
@@ -67,8 +77,78 @@ type Tx = Prisma.TransactionClient;
 
 const EVENT_ID_PREFIX = "genevt";
 
-/** The versioned request-identity prefix an orchestrated attempt must carry. */
-const V2_REQUEST_HASH_PREFIX = "sha256:v2:";
+/**
+ * Edges the generic transition methods refuse, because an atomic primitive owns
+ * them.
+ *
+ * Exposing an edge beside the transaction that owns it defeats the transaction:
+ * a caller could still produce a `RESERVED` job with no reservation, or mark a
+ * request delivered without the output verification that makes delivery mean
+ * anything. Listed as data so the refusal is one lookup rather than three
+ * conditionals that can drift apart.
+ */
+const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
+  // Transaction B owns this.
+  "RESERVING->RESERVED",
+  // Transaction G owns this, and Transaction G is deferred.
+  "DELIVERABLE_VALIDATING->DELIVERABLE_READY",
+];
+
+const REQUEST_RESERVED_EDGES: readonly `${string}->${string}`[] = [
+  // Attempt admission owns this: the request generates *because* an attempt
+  // exists, and the two must become true together.
+  "PENDING->GENERATING",
+  // Transaction F owns this, and Transaction F is deferred. Delivery consumes
+  // a customer regeneration right; the half that makes it safe — output
+  // verification — does not exist yet.
+  "GENERATING->DELIVERED",
+];
+
+const RESERVATION_RESERVED_EDGES: readonly `${string}->${string}`[] = [
+  // Transaction G owns this: consuming a unit and marking a deliverable ready
+  // are one fact, and the quota ledger is deferred.
+  "RESERVED->CONSUMED",
+  "RECONCILIATION_HOLD->CONSUMED",
+];
+
+function isReservedEdge(
+  reserved: readonly string[],
+  from: string,
+  to: string,
+): boolean {
+  return reserved.includes(`${from}->${to}`);
+}
+
+/**
+ * Is this the active-regeneration index refusing a second in-flight request?
+ *
+ * Matched narrowly. Prisma reports every unique violation as `P2002`, and
+ * translating them all would turn an unrelated collision — a duplicate id, a
+ * future constraint — into a cheerful "someone else is already doing this",
+ * which is the kind of mistranslation that hides a real defect for months.
+ */
+function isActiveRegenerationConflict(error: unknown): boolean {
+  if ((error as { code?: unknown }).code !== "P2002") return false;
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  // A partial index reports its own name rather than a field list.
+  if (typeof target === "string") {
+    return target === "scene_generation_requests_active_key";
+  }
+  if (Array.isArray(target)) {
+    return target.map(String).includes("scene_generation_requests_active_key");
+  }
+  return false;
+}
+
+/** Attempt states in which the provider may hold and bill for this attempt. */
+const ACTIVE_ORCHESTRATION_STATES = [
+  "QUEUED",
+  "SUBMITTING",
+  "PROCESSING",
+  "RECONCILIATION_PENDING",
+  "PROVIDER_SUCCEEDED",
+  "OUTPUT_INGESTING",
+] as const;
 
 /**
  * Append one transition event, allocating its per-aggregate sequence.
@@ -164,7 +244,10 @@ function toJob(r: JobRow, organizationId: string): GenerationJob {
     organizationId,
     requestedByUserId: r.requestedByUserId,
     qualityTier: r.qualityTier,
-    targetOutputResolution: r.targetOutputResolution,
+    // Validated on the way in; a row that predates the constraint cannot exist
+    // because the column arrived with it.
+    targetOutputResolution: r.targetOutputResolution as GenerationJob["targetOutputResolution"],
+    targetAspectRatio: r.targetAspectRatio,
     requestedDurationSeconds: r.requestedDurationSeconds,
     requiredVideoUnits: r.requiredVideoUnits,
     requiredHighQualityUnits: r.requiredHighQualityUnits,
@@ -328,26 +411,118 @@ function toAttempt(r: AttemptRow): GenerationAttempt {
 /**
  * Does this cost decision belong to this attempt?
  *
- * Three questions, not one. An earlier version asked only whether *a* snapshot
- * existed, which would have authorized a WaveSpeed attempt against a fal cost
- * decision: an audit record that cannot be re-derived, and a future cost gate
- * reading a price for work nobody was doing.
+ * Seven questions, not three. An earlier version asked only whether *a*
+ * snapshot existed, which would have authorized a WaveSpeed attempt against a
+ * fal cost decision. Matching provider and model key alone is still not enough:
+ * a snapshot priced for five seconds attached to a fifteen-second scene
+ * understates the cost by two thirds with every other field agreeing, and the
+ * native tier is a pricing dimension of its own.
+ *
+ * Every comparison is opaque equality. Nothing parses `768P` or `1080p` — a
+ * renamed tier must become a mismatch rather than a silently reinterpreted one.
  */
 function checkPricingBinding(input: {
-  readonly snapshotProvider: string;
-  readonly snapshotContractKey: string;
-  readonly snapshotModelKey: string;
+  readonly snapshot: {
+    readonly provider: string;
+    readonly contractKey: string;
+    readonly requestedSeconds: number;
+    readonly riskProfileKey: string;
+    readonly identity: {
+      readonly pricingModelKey: string;
+      readonly nativeTier: string;
+      readonly generationMode: string;
+      readonly audioMode: string;
+    };
+  };
   readonly attemptProvider: string;
-  readonly attemptContractKey: string;
   readonly attemptModelKey: string | null;
+  readonly attemptNativeTier: string;
+  readonly sceneDurationSeconds: number;
+  readonly jobQualityTier: "NORMAL" | "HIGH_QUALITY";
+  /** Present only at the provider boundary, where the row already carries one. */
+  readonly attemptContractKey?: string;
 }): PricingBindingFailure | null {
-  if (input.snapshotProvider !== input.attemptProvider) return "PROVIDER_MISMATCH";
-  if (input.snapshotContractKey !== input.attemptContractKey) return "CONTRACT_KEY_MISMATCH";
-  // A newly orchestrated attempt must carry the V2 model identity. A null here
+  const { snapshot } = input;
+  if (snapshot.provider !== input.attemptProvider) return "PROVIDER_MISMATCH";
+  // A newly orchestrated attempt must carry the V2 model identity; a null here
   // is a V1/ambiguous attempt, which may not be newly admitted.
   if (input.attemptModelKey === null) return "MODEL_KEY_MISMATCH";
-  if (input.snapshotModelKey !== input.attemptModelKey) return "MODEL_KEY_MISMATCH";
+  if (snapshot.identity.pricingModelKey !== input.attemptModelKey) return "MODEL_KEY_MISMATCH";
+  if (snapshot.requestedSeconds !== input.sceneDurationSeconds) return "DURATION_MISMATCH";
+  if (snapshot.identity.nativeTier !== input.attemptNativeTier) return "NATIVE_TIER_MISMATCH";
+  // The product has no audio-enabled generation contract, so an identity that
+  // prices one describes work no attempt here can represent.
+  if (snapshot.identity.generationMode !== AUTHORIZED_GENERATION_MODE) {
+    return "GENERATION_MODE_UNSUPPORTED";
+  }
+  if (snapshot.identity.audioMode !== AUTHORIZED_AUDIO_MODE) return "AUDIO_MODE_UNSUPPORTED";
+  // A HIGH_QUALITY job planned at the 30% normal buffer under-plans every
+  // attempt by twenty points, and does it invisibly: both halves look
+  // internally consistent.
+  if (snapshot.riskProfileKey !== riskProfileKeyForQualityTier(input.jobQualityTier)) {
+    return "RISK_PROFILE_MISMATCH";
+  }
+  if (
+    input.attemptContractKey !== undefined &&
+    snapshot.contractKey !== input.attemptContractKey
+  ) {
+    return "CONTRACT_KEY_MISMATCH";
+  }
   return null;
+}
+
+/**
+ * Persist the exact rate a pricing snapshot names, or explain why it cannot.
+ *
+ * A snapshot naming an FX id nobody can produce is an audit record that cannot
+ * be re-derived — the same failure the contract fingerprint exists to prevent
+ * one level up. So the rate itself is required whenever the snapshot names one,
+ * validated through the pricing domain's own canonical check, and stored inside
+ * this transaction.
+ *
+ * A row that already exists is compared field by field rather than reused. Two
+ * different rates under one id is a conflict, not a cache hit, and silently
+ * accepting the stored one would price an attempt against a rate its snapshot
+ * never saw. Nothing here updates an existing row or fetches anything.
+ */
+async function bindFxSnapshot(
+  tx: Tx,
+  snapshot: PricingSnapshot,
+  supplied: FxSnapshot | null,
+): Promise<FxBindingFailure | null> {
+  if (snapshot.fxSnapshotId === null) {
+    return supplied === null ? null : "FX_SNAPSHOT_UNEXPECTED";
+  }
+  if (supplied === null) return "FX_SNAPSHOT_REQUIRED";
+  if (supplied.id !== snapshot.fxSnapshotId) return "FX_SNAPSHOT_ID_MISMATCH";
+
+  const validated = validateFxSnapshot(supplied);
+  if (!validated.ok) return "FX_SNAPSHOT_INVALID";
+
+  const existing = await tx.fxRateSnapshot.findUnique({ where: { id: supplied.id } });
+  if (existing === null) {
+    await tx.fxRateSnapshot.create({
+      data: {
+        id: supplied.id,
+        baseCurrency: supplied.baseCurrency,
+        quoteCurrency: supplied.quoteCurrency,
+        rateNumerator: BigInt(supplied.rateNumerator),
+        rateDenominator: BigInt(supplied.rateDenominator),
+        effectiveAtEpochMs: BigInt(supplied.effectiveAt),
+        sourceReference: supplied.sourceReference,
+      },
+    });
+    return null;
+  }
+
+  const identical =
+    existing.baseCurrency === supplied.baseCurrency &&
+    existing.quoteCurrency === supplied.quoteCurrency &&
+    existing.rateNumerator === BigInt(supplied.rateNumerator) &&
+    existing.rateDenominator === BigInt(supplied.rateDenominator) &&
+    existing.effectiveAtEpochMs === BigInt(supplied.effectiveAt) &&
+    existing.sourceReference === supplied.sourceReference;
+  return identical ? null : "FX_SNAPSHOT_CONFLICT";
 }
 
 export function createGenerationJobRepository(prisma: PrismaClient): GenerationJobRepository {
@@ -370,11 +545,19 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
 
       // Ownership is proved before anything is written, and the write itself
       // carries the derived facts rather than the caller's.
+      // The output configuration is snapshotted here and never read from the
+      // project again. Project settings are mutable; an attempt admitted three
+      // days later must be generated for what the customer started.
       const project = await prisma.videoProject.findFirst({
         where: { id: job.videoProjectId, organizationId },
-        select: { id: true },
+        select: { id: true, targetOutputResolution: true, aspectRatio: true },
       });
       if (project === null) return { kind: "PROJECT_NOT_FOUND" };
+      // The project's value was validated when it was written; this refuses
+      // rather than widening the product vocabulary a second time.
+      if (!isTargetOutputResolution(project.targetOutputResolution)) {
+        return { kind: "PROJECT_NOT_FOUND" };
+      }
 
       return prisma.$transaction(async (tx) => {
         const row = await tx.generationJob.create({
@@ -383,7 +566,8 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
             videoProjectId: job.videoProjectId,
             requestedByUserId: job.requestedByUserId,
             qualityTier: job.qualityTier,
-            targetOutputResolution: job.targetOutputResolution,
+            targetOutputResolution: project.targetOutputResolution,
+            targetAspectRatio: project.aspectRatio,
             requestedDurationSeconds: job.requestedDurationSeconds,
             requiredVideoUnits: units.value.totalVideoUnits,
             requiredHighQualityUnits: units.value.highQualityUnits,
@@ -409,7 +593,12 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
       return row === null ? null : toJob(row, organizationId);
     },
 
-    async transition(input): Promise<TransitionOutcome<GenerationJob>> {
+    async transition(
+      input,
+    ): Promise<TransitionOutcome<GenerationJob> | ReservedTransitionOutcome> {
+      if (isReservedEdge(JOB_RESERVED_EDGES, input.expectedState, input.nextState)) {
+        return { kind: "TRANSITION_RESERVED" };
+      }
       assertLegal(
         canTransitionJob(input.expectedState, input.nextState),
         input.expectedState,
@@ -498,7 +687,14 @@ export function createGenerationReservationRepository(
         });
         if (moved.count === 0) return { kind: "LOST" };
 
-        const reservation = await tx.generationReservation.create({
+        // The reservation is created RESERVING and then actually moved to
+        // RESERVED inside this same commit. An earlier version inserted it
+        // directly as RESERVED while writing history claiming a
+        // RESERVING -> RESERVED transition — the final row was right and the
+        // event stream described a state change that never happened, which is
+        // precisely the "event without an aggregate change" this phase forbids.
+        // Nothing observes the intermediate state: the transaction is atomic.
+        const created = await tx.generationReservation.create({
           data: {
             id: input.reservationId,
             generationJobId: input.generationJobId,
@@ -508,29 +704,36 @@ export function createGenerationReservationRepository(
             // Copied from the job, which was itself derived at admission.
             reservedTotalVideoUnits: job.requiredVideoUnits,
             reservedHighQualityUnits: job.requiredHighQualityUnits,
-            state: "RESERVED",
-            // The hold is created already RESERVED, so no intermediate state is
-            // observable: this transaction either produces a complete hold or
-            // none at all.
-            stateVersion: 1,
+            state: "RESERVING",
+            stateVersion: 0,
           },
         });
-
         await appendEvent(tx, {
           organizationId,
           aggregateType: "RESERVATION",
-          aggregateId: reservation.id,
+          aggregateId: created.id,
           fromState: null,
           toState: "RESERVING",
           context,
         });
+
+        const held = await tx.generationReservation.updateMany({
+          where: { id: created.id, state: "RESERVING", stateVersion: 0 },
+          data: { state: "RESERVED", stateVersion: { increment: 1 } },
+        });
+        if (held.count === 0) {
+          throw new AppError("INTERNAL_ERROR", "Reservation vanished inside its own creation");
+        }
         await appendEvent(tx, {
           organizationId,
           aggregateType: "RESERVATION",
-          aggregateId: reservation.id,
+          aggregateId: created.id,
           fromState: "RESERVING",
           toState: "RESERVED",
           context,
+        });
+        const reservation = await tx.generationReservation.findUniqueOrThrow({
+          where: { id: created.id },
         });
         await appendEvent(tx, {
           organizationId,
@@ -562,7 +765,12 @@ export function createGenerationReservationRepository(
       return row === null ? null : toReservation(row);
     },
 
-    async transition(input): Promise<TransitionOutcome<GenerationReservation>> {
+    async transition(
+      input,
+    ): Promise<TransitionOutcome<GenerationReservation> | ReservedTransitionOutcome> {
+      if (isReservedEdge(RESERVATION_RESERVED_EDGES, input.expectedState, input.nextState)) {
+        return { kind: "TRANSITION_RESERVED" };
+      }
       assertLegal(
         canTransitionReservation(input.expectedState, input.nextState),
         input.expectedState,
@@ -580,10 +788,17 @@ export function createGenerationReservationRepository(
           data: {
             state: input.nextState,
             stateVersion: { increment: 1 },
-            // Terminal timestamps are set by the transition that reaches them,
-            // so a released or consumed hold carries when it happened without a
-            // second write that could be forgotten.
-            ...(input.nextState === "CONSUMED" ? { consumedAt: new Date() } : {}),
+            // Set by the transition that reaches the state, so a released hold
+            // carries when it happened without a second write that could be
+            // forgotten.
+            //
+            // There is deliberately no `consumedAt` branch here. Both edges
+            // into `CONSUMED` are reserved for Transaction G, so this method
+            // can never reach that state — and a write that cannot execute is
+            // not a rule, it is a claim the code makes about itself. Transaction
+            // G will stamp `consumedAt` in the commit that actually spends the
+            // unit. A mutation ledger found this by removing the branch and
+            // watching nothing fail.
             ...(input.nextState === "RELEASED" ? { releasedAt: new Date() } : {}),
           },
         });
@@ -759,16 +974,30 @@ export function createSceneGenerationRequestRepository(
         const ordinal = nextUserRegenerationOrdinal(siblings);
         if (ordinal === null) return { kind: "ENTITLEMENT_EXHAUSTED" };
 
-        const row = await tx.sceneGenerationRequest.create({
-          data: {
-            id: input.id,
-            generationSceneId: input.generationSceneId,
-            kind: "USER_REGENERATION",
-            userRegenerationOrdinal: ordinal,
-            requestedByUserId: input.requestedByUserId,
-            state: "PENDING",
-          },
-        });
+        // A genuine concurrent race gets past the check above: both
+        // transactions read the same siblings before either commits. The
+        // partial index settles it, and the loser's P2002 is an expected
+        // business outcome — the caller asked for something another request is
+        // already doing — not a database defect. Only that exact violation is
+        // translated; anything else propagates unchanged.
+        let row;
+        try {
+          row = await tx.sceneGenerationRequest.create({
+            data: {
+              id: input.id,
+              generationSceneId: input.generationSceneId,
+              kind: "USER_REGENERATION",
+              userRegenerationOrdinal: ordinal,
+              requestedByUserId: input.requestedByUserId,
+              state: "PENDING",
+            },
+          });
+        } catch (error) {
+          if (isActiveRegenerationConflict(error)) {
+            return { kind: "REGENERATION_ALREADY_ACTIVE" };
+          }
+          throw error;
+        }
         await appendEvent(tx, {
           organizationId,
           aggregateType: "SCENE_REQUEST",
@@ -796,7 +1025,12 @@ export function createSceneGenerationRequestRepository(
       return rows.map(toRequest);
     },
 
-    async transition(input): Promise<TransitionOutcome<SceneGenerationRequestRecord>> {
+    async transition(
+      input,
+    ): Promise<TransitionOutcome<SceneGenerationRequestRecord> | ReservedTransitionOutcome> {
+      if (isReservedEdge(REQUEST_RESERVED_EDGES, input.expectedState, input.nextState)) {
+        return { kind: "TRANSITION_RESERVED" };
+      }
       assertLegal(
         canTransitionSceneRequest(input.expectedState, input.nextState),
         input.expectedState,
@@ -814,10 +1048,12 @@ export function createSceneGenerationRequestRepository(
           data: {
             state: input.nextState,
             stateVersion: { increment: 1 },
-            // `deliveredAt` is the instant a customer's right was spent, so it
-            // is written by the transition that earns it rather than by a
-            // caller that might forget.
-            ...(input.nextState === "DELIVERED" ? { deliveredAt: new Date() } : {}),
+            // Same reasoning as the reservation above: `GENERATING → DELIVERED`
+            // is reserved for Transaction F, so this method cannot reach
+            // `DELIVERED` and a `deliveredAt` branch here would be unreachable.
+            // `deliveredAt` is the instant a customer's regeneration right was
+            // spent; it belongs to the commit that spends it, alongside the
+            // output verification that justifies delivery.
             ...(input.nextState === "FAILED_TERMINAL" ? { failedAt: new Date() } : {}),
           },
         });
@@ -895,69 +1131,139 @@ export function createSceneGenerationAttemptRepository(
       context: TransitionContext,
     ): Promise<AdmitGenerationAttemptOutcome> {
       return prisma.$transaction(async (tx): Promise<AdmitGenerationAttemptOutcome> => {
+        // The parent request, and through it every fact this attempt must not
+        // be told. A caller-supplied copy of any of these could disagree with
+        // the scene it claims to render.
         const request = await tx.sceneGenerationRequest.findFirst({
           where: { id: input.generationSceneRequestId, ...requestScope(organizationId) },
           select: {
             id: true,
+            state: true,
+            stateVersion: true,
             generationScene: {
-              select: { generationJob: { select: { videoProjectId: true } } },
+              select: {
+                sourceStoryboardSceneId: true,
+                sourceAssetId: true,
+                sourceAnalysisRevision: true,
+                snapshotDurationSeconds: true,
+                snapshotCameraMotion: true,
+                snapshotCompiledPrompt: true,
+                generationJob: {
+                  select: {
+                    videoProjectId: true,
+                    qualityTier: true,
+                    targetOutputResolution: true,
+                    targetAspectRatio: true,
+                  },
+                },
+              },
             },
           },
         });
         if (request === null) return { kind: "REQUEST_NOT_FOUND" };
 
-        // A newly orchestrated attempt must carry the V2 request identity. The
-        // Phase 4C-3B-2B CHECK keys the V2 snapshot off this prefix, so an
-        // attempt admitted with a V1 hash would be storing a V2 payload the
-        // database refuses — and a V1 identity cannot express which model was
-        // selected, which is what the pricing binding is checked against.
-        if (!input.requestHash.startsWith(V2_REQUEST_HASH_PREFIX)) {
-          return { kind: "PRICING_BINDING_INVALID", reason: "MODEL_KEY_MISMATCH" };
+        // A finished request admits nothing. Admitting an attempt onto a
+        // DELIVERED request would spend money on work the customer already has.
+        if (request.state !== "PENDING" && request.state !== "GENERATING") {
+          return { kind: "REQUEST_NOT_ADMITTING" };
+        }
+
+        const scene = request.generationScene;
+        const job = scene.generationJob;
+
+        // A V2 executable request needs a compiled prompt. A scene without one
+        // cannot produce a hash, so nothing is created rather than a row that
+        // can never be executed or re-derived.
+        if (scene.snapshotCompiledPrompt === null) {
+          return { kind: "SCENE_FACTS_INCOMPLETE" };
+        }
+        if (!isTargetOutputResolution(job.targetOutputResolution)) {
+          return { kind: "SCENE_FACTS_INCOMPLETE" };
         }
 
         const snapshot = input.pricingSnapshot;
         const mismatch = checkPricingBinding({
-          snapshotProvider: snapshot.provider,
-          snapshotContractKey: snapshot.contractKey,
-          snapshotModelKey: snapshot.identity.pricingModelKey,
+          snapshot,
           attemptProvider: input.providerName,
-          attemptContractKey: snapshot.contractKey,
           attemptModelKey: input.requestModelKey,
+          attemptNativeTier: input.requestNativeGenerationResolution,
+          sceneDurationSeconds: scene.snapshotDurationSeconds,
+          jobQualityTier: job.qualityTier,
         });
         if (mismatch !== null) {
           return { kind: "PRICING_BINDING_INVALID", reason: mismatch };
         }
 
-        // Ordinals are scoped to the request and never reused. Read inside the
-        // transaction; the unique index on (request, ordinal) settles a race.
-        const highest = await tx.sceneGeneration.aggregate({
-          where: { generationSceneRequestId: input.generationSceneRequestId },
-          _max: { attemptOrdinal: true },
+        const fxFailure = await bindFxSnapshot(tx, snapshot, input.fxSnapshot);
+        if (fxFailure !== null) return { kind: "FX_BINDING_INVALID", reason: fxFailure };
+
+        // Attempt kind and ordinal are derived from what already exists. A
+        // caller could otherwise make the first attempt a SYSTEM_RECOVERY, or
+        // file a second PRIMARY — and after the fact the ordinal alone cannot
+        // say which of two "first" attempts was really first.
+        const siblings = await tx.sceneGeneration.findMany({
+          where: { generationSceneRequestId: request.id },
+          select: { attemptOrdinal: true, orchestrationState: true },
         });
+        const active = siblings.some(
+          (a) =>
+            a.orchestrationState !== null &&
+            (ACTIVE_ORCHESTRATION_STATES as readonly string[]).includes(a.orchestrationState),
+        );
+        // System recovery is sequential recovery from a *finished* attempt, not
+        // permission to run two paid attempts at once.
+        if (active) return { kind: "ATTEMPT_ALREADY_ACTIVE" };
+
+        const attemptOrdinal = siblings.reduce(
+          (highest, a) => Math.max(highest, a.attemptOrdinal ?? 0),
+          0,
+        ) + 1;
+        const attemptKind = siblings.length === 0 ? "PRIMARY" : "SYSTEM_RECOVERY";
+
+        // The request identity, derived from the exact facts about to be
+        // persisted — never accepted from a caller. A caller offering its own
+        // V2-prefixed digest for identical facts walks straight past the
+        // active-request protection that stops the platform paying twice.
+        const facts: GenerationRequestFacts = {
+          assetId: scene.sourceAssetId,
+          compiledPrompt: scene.snapshotCompiledPrompt,
+          durationSeconds: scene.snapshotDurationSeconds,
+          cameraMotion: scene.snapshotCameraMotion,
+          aspectRatio: job.targetAspectRatio,
+          targetOutputResolution: job.targetOutputResolution,
+          nativeGenerationResolution: input.requestNativeGenerationResolution,
+          resolutionNormalization: input.requestResolutionNormalization,
+          nativeMeetsTarget: input.requestNativeMeetsTarget,
+          modelKey: input.requestModelKey,
+          providerName: input.providerName,
+          providerModelId: input.providerModelId,
+        };
+        const requestHash = computeGenerationRequestHash(facts);
 
         const attempt = await tx.sceneGeneration.create({
           data: {
             id: input.id,
-            videoProjectId: request.generationScene.generationJob.videoProjectId,
-            sourceStoryboardSceneId: input.sourceStoryboardSceneId,
-            assetId: input.sourceAssetId,
-            sourceAnalysisRevision: input.sourceAnalysisRevision,
-            requestHash: input.requestHash,
+            videoProjectId: job.videoProjectId,
+            // Every fact below comes from the scene or the job, never the caller.
+            sourceStoryboardSceneId: scene.sourceStoryboardSceneId,
+            assetId: scene.sourceAssetId,
+            sourceAnalysisRevision: scene.sourceAnalysisRevision,
+            requestHash,
             providerName: input.providerName,
             providerModelId: input.providerModelId,
-            requestCompiledPrompt: input.requestCompiledPrompt,
+            requestCompiledPrompt: scene.snapshotCompiledPrompt,
             requestRenderedPrompt: input.requestRenderedPrompt,
-            requestDurationSeconds: input.requestDurationSeconds,
-            requestCameraMotion: input.requestCameraMotion,
-            requestAspectRatio: input.requestAspectRatio,
+            requestDurationSeconds: scene.snapshotDurationSeconds,
+            requestCameraMotion: scene.snapshotCameraMotion,
+            requestAspectRatio: job.targetAspectRatio,
             requestModelKey: input.requestModelKey,
-            requestTargetOutputResolution: input.requestTargetOutputResolution,
+            requestTargetOutputResolution: job.targetOutputResolution,
             requestNativeGenerationResolution: input.requestNativeGenerationResolution,
             requestResolutionNormalization: input.requestResolutionNormalization,
             requestNativeMeetsTarget: input.requestNativeMeetsTarget,
-            generationSceneRequestId: input.generationSceneRequestId,
-            attemptOrdinal: (highest._max.attemptOrdinal ?? 0) + 1,
-            attemptKind: input.attemptKind,
+            generationSceneRequestId: request.id,
+            attemptOrdinal,
+            attemptKind,
             submissionCertainty: "PRE_SUBMISSION",
             orchestrationState: "QUEUED",
             // Copied from the snapshot, never from the caller.
@@ -978,6 +1284,30 @@ export function createSceneGenerationAttemptRepository(
           toState: "QUEUED",
           context,
         });
+
+        // The first attempt starts the customer's request, in this same commit.
+        // Split apart, the database would claim the request had not begun while
+        // a provider attempt for it already existed.
+        if (attemptKind === "PRIMARY") {
+          const started = await tx.sceneGenerationRequest.updateMany({
+            where: { id: request.id, state: "PENDING", stateVersion: request.stateVersion },
+            data: { state: "GENERATING", stateVersion: { increment: 1 } },
+          });
+          if (started.count === 0) {
+            throw new AppError(
+              "INTERNAL_ERROR",
+              "Scene request moved during its own first attempt admission",
+            );
+          }
+          await appendEvent(tx, {
+            organizationId,
+            aggregateType: "SCENE_REQUEST",
+            aggregateId: request.id,
+            fromState: "PENDING",
+            toState: "GENERATING",
+            context,
+          });
+        }
 
         return { kind: "ADMITTED", attempt: toAttempt(attempt) };
       });
@@ -1015,33 +1345,80 @@ export function createSceneGenerationAttemptRepository(
       return prisma.$transaction(async (tx): Promise<ArmProviderBoundaryOutcome> => {
         const attempt = await tx.sceneGeneration.findFirst({
           where: { id: input.id, ...attemptScope(input.organizationId) },
-          select: { ...ATTEMPT_SELECT, requestModelKey: true },
+          select: {
+            ...ATTEMPT_SELECT,
+            requestModelKey: true,
+            requestDurationSeconds: true,
+            requestNativeGenerationResolution: true,
+            generationSceneRequest: {
+              select: {
+                generationScene: {
+                  select: { generationJob: { select: { qualityTier: true } } },
+                },
+              },
+            },
+          },
         });
-        if (attempt === null) return { kind: "LOST" };
+        if (attempt === null || attempt.generationSceneRequest === null) {
+          return { kind: "LOST" };
+        }
 
         const snapshot = await tx.generationPricingSnapshot.findUnique({
           where: { sceneGenerationId: input.id },
-          select: { sceneGenerationId: true, provider: true, contractKey: true, identityJson: true },
+          select: {
+            sceneGenerationId: true,
+            provider: true,
+            contractKey: true,
+            requestedSeconds: true,
+            riskProfileKey: true,
+            identityJson: true,
+          },
         });
         if (snapshot === null) return { kind: "MISSING_PRICING_SNAPSHOT" };
         if (snapshot.sceneGenerationId !== attempt.id) {
           return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_NOT_FOR_ATTEMPT" };
         }
 
-        const identity = snapshot.identityJson as { pricingModelKey?: unknown } | null;
-        const snapshotModelKey =
-          typeof identity?.pricingModelKey === "string" ? identity.pricingModelKey : null;
-        if (snapshotModelKey === null || attempt.pricingContractKey === null) {
+        // The identity is read back from the stored row rather than recomputed,
+        // so a snapshot corrupted after admission is caught here rather than
+        // trusted because admission once approved it.
+        const identity = snapshot.identityJson as {
+          pricingModelKey?: unknown;
+          nativeTier?: unknown;
+          generationMode?: unknown;
+          audioMode?: unknown;
+        } | null;
+        if (
+          typeof identity?.pricingModelKey !== "string" ||
+          typeof identity.nativeTier !== "string" ||
+          typeof identity.generationMode !== "string" ||
+          typeof identity.audioMode !== "string" ||
+          attempt.pricingContractKey === null ||
+          attempt.requestDurationSeconds === null ||
+          attempt.requestNativeGenerationResolution === null
+        ) {
           return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_MISSING" };
         }
 
         const mismatch = checkPricingBinding({
-          snapshotProvider: snapshot.provider,
-          snapshotContractKey: snapshot.contractKey,
-          snapshotModelKey,
+          snapshot: {
+            provider: snapshot.provider,
+            contractKey: snapshot.contractKey,
+            requestedSeconds: snapshot.requestedSeconds,
+            riskProfileKey: snapshot.riskProfileKey,
+            identity: {
+              pricingModelKey: identity.pricingModelKey,
+              nativeTier: identity.nativeTier,
+              generationMode: identity.generationMode,
+              audioMode: identity.audioMode,
+            },
+          },
           attemptProvider: attempt.providerName,
-          attemptContractKey: attempt.pricingContractKey,
           attemptModelKey: attempt.requestModelKey,
+          attemptNativeTier: attempt.requestNativeGenerationResolution,
+          sceneDurationSeconds: attempt.requestDurationSeconds,
+          jobQualityTier: attempt.generationSceneRequest.generationScene.generationJob.qualityTier,
+          attemptContractKey: attempt.pricingContractKey,
         });
         if (mismatch !== null) {
           return { kind: "PRICING_BINDING_INVALID", reason: mismatch };

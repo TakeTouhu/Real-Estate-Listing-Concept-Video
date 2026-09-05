@@ -79,6 +79,7 @@ CREATE TABLE "generation_jobs" (
     "requestedByUserId" TEXT NOT NULL,
     "qualityTier" "GenerationQualityTier" NOT NULL,
     "targetOutputResolution" TEXT NOT NULL,
+    "targetAspectRatio" TEXT NOT NULL,
     "requestedDurationSeconds" INTEGER NOT NULL,
     "requiredVideoUnits" INTEGER NOT NULL,
     "requiredHighQualityUnits" INTEGER NOT NULL,
@@ -603,4 +604,50 @@ ALTER TABLE "scene_generations"
   CHECK (
     "submissionCertainty" IS DISTINCT FROM 'ACCEPTED'
     OR ("providerPredictionId" IS NOT NULL AND "providerAcceptedAt" IS NOT NULL)
+  );
+
+-- ---------------------------------------------------------------------------
+-- 15. The job's output snapshot uses the closed product vocabulary.
+--
+-- Snapshotted from an already-validated `video_projects` row, so this repeats
+-- that table's constraint rather than introducing a second, independently
+-- configurable target vocabulary. A new product tier must be added in one
+-- place, not two.
+ALTER TABLE "generation_jobs"
+  ADD CONSTRAINT "generation_jobs_target_resolution_check"
+  CHECK ("targetOutputResolution" IN ('720p', '1080p'));
+
+-- ---------------------------------------------------------------------------
+-- 16. One PRIMARY attempt per logical request.
+--
+-- Attempt kind is derived — the first attempt is PRIMARY, every later one is
+-- SYSTEM_RECOVERY — but derivation lives in application code, and this table
+-- outlives it. Two PRIMARY rows under one request would mean two "first"
+-- attempts, and the ordinal alone cannot say which is which after the fact.
+CREATE UNIQUE INDEX "scene_generations_primary_attempt_key"
+  ON "scene_generations" ("generationSceneRequestId")
+  WHERE "attemptKind" = 'PRIMARY';
+
+-- ---------------------------------------------------------------------------
+-- 17. One live attempt per logical request.
+--
+-- Distinct from the `(videoProjectId, requestHash)` active-request index, and
+-- both are needed. That one protects request *identity* across the project —
+-- the same work must not be submitted twice under two identities. This one
+-- protects one logical request from *parallel* provider work: system recovery
+-- is sequential recovery from a finished attempt, not permission to run two
+-- paid attempts at once.
+--
+-- The predicate lists exactly the states in which a provider may hold and bill
+-- for this attempt. The five terminal states release it, so a recovery may be
+-- admitted once the previous attempt has actually finished.
+CREATE UNIQUE INDEX "scene_generations_active_attempt_per_request_key"
+  ON "scene_generations" ("generationSceneRequestId")
+  WHERE "orchestrationState" IN (
+    'QUEUED',
+    'SUBMITTING',
+    'PROCESSING',
+    'RECONCILIATION_PENDING',
+    'PROVIDER_SUCCEEDED',
+    'OUTPUT_INGESTING'
   );

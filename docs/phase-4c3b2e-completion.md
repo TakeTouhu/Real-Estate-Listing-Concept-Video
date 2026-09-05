@@ -334,6 +334,110 @@ established acceptance either; that outcome belongs on the uncertainty path.
 The relationship is an equivalence for orchestrated rows, enforced in both
 directions by the domain and by a database CHECK, with legacy rows exempt.
 
+## Corrections applied after the final admission review
+
+One theme runs through all of them: **attempt admission must not believe
+anything a persisted row already knows.** Every fact a caller could supply was
+a fact that could disagree with the scene it claimed to render.
+
+**The request hash was caller authority.** `AdmitGenerationAttemptInput`
+carried a `requestHash`, and admission checked only that it began with
+`sha256:v2:`. A caller offering its own V2-prefixed digest for identical work
+walked straight past the `(videoProjectId, requestHash)` active-request index —
+the one protection that stops the platform paying twice for the same
+generation. The field is gone. Admission now assembles `GenerationRequestFacts`
+from the scene and the job and calls the existing
+`computeGenerationRequestHash`; nothing in this phase reimplements the tuple. A
+test reloads the stored row through the pre-existing `SceneGeneration`
+repository, rebuilds the facts with the pre-existing
+`generationRequestFactsFrom`, recomputes, and requires the two to be equal — so
+a row that could not re-derive its own identity fails the build.
+
+**Asset, prompt, duration, camera motion, aspect ratio and target resolution
+were caller authority too.** All six now come from the `GenerationScene` and
+the `GenerationJob` inside the transaction. A scene with no compiled prompt is
+refused as `SCENE_FACTS_INCOMPLETE` rather than stored as a row that can never
+be executed or re-derived.
+
+**A job had no aspect ratio and did not snapshot the project.** The job now
+carries `targetAspectRatio` beside `targetOutputResolution`, both copied from
+the `VideoProject` at admission and never read from it again — project settings
+are mutable, and an attempt admitted three days later must render what the
+customer started. A `CHECK` repeats the project's closed `('720p','1080p')`
+vocabulary rather than opening a second one that could drift; the repository
+refuses a project whose stored value is outside it rather than widening the
+product vocabulary in a second place.
+
+**Attempt kind was caller authority, and nothing stopped two of them.** The
+kind is now derived — the first attempt is `PRIMARY`, every later one is
+`SYSTEM_RECOVERY` — and two partial unique indexes hold the line underneath the
+derivation: one `PRIMARY` per request, and one *live* attempt per request. The
+second is distinct from the identity index and both are needed: identity
+protects the project from submitting the same work twice, and this protects one
+request from parallel provider work. Admission returns `ATTEMPT_ALREADY_ACTIVE`
+rather than filing a second paid attempt beside a live one, and a finished
+attempt releases the slot so real recovery still works. Both indexes have tests
+that bypass the repository entirely, because the rule has to survive a caller
+that never met it.
+
+**The first attempt did not start its request.** `PRIMARY` admission now moves
+the request `PENDING → GENERATING` in the same commit. Split apart, the database
+claimed the customer's request had not begun while a provider attempt for it
+already existed. A recovery attempt deliberately does *not* move it again: the
+request has been generating all along.
+
+**The pricing binding did not cover what it priced.** Provider, contract key
+and model key agreeing is not enough — a snapshot priced for five seconds
+attached to a fifteen-second scene understates the cost by two thirds with
+every other field internally consistent. The binding now also requires the
+snapshot's `requestedSeconds` to equal the scene's duration, its native tier to
+equal the attempt's generation resolution, and its risk profile to equal the one
+the job's quality tier plans against — a `HIGH_QUALITY` job priced at the 30%
+`NORMAL_AI` buffer under-plans every attempt by twenty points, invisibly,
+because both halves look right on their own. `riskProfileKeyForQualityTier` is
+the single mapping between the two vocabularies. Execution modes fail closed:
+the product sells no audio-enabled contract, so a snapshot describing one is
+refused (`GENERATION_MODE_UNSUPPORTED`, `AUDIO_MODE_UNSUPPORTED`) rather than
+priced. Every comparison is opaque equality — nothing parses `768P` or `1080p`,
+so a renamed tier becomes a mismatch rather than a silent reinterpretation.
+
+**`providerModelId` is preserved without a forbidden dependency.** It is
+persisted and hashed as an opaque string. `@app/domain` does not import
+`@app/video-providers` to validate a catalog value; the model *key* is bound to
+the pricing contract instead, which is the fact that decides money.
+
+**Atomic primitives were bypassable.** The generic `transition` methods could
+reproduce, one CAS at a time, exactly what an atomic transaction exists to make
+indivisible — a `RESERVED` job with no reservation, or a `DELIVERED` request
+with no verified output. Four edges are now refused with
+`TRANSITION_RESERVED`: `RESERVING → RESERVED` (Transaction B),
+`PENDING → GENERATING` (attempt admission), and `GENERATING → DELIVERED` plus
+both edges into `CONSUMED` (Transactions F and G, deferred). The pure state
+machines still contain these edges, because they are legal transitions; what is
+missing is a *persistence route* for them, and the refusal names that.
+
+**Transaction B wrote history that had not happened.** The reservation was
+inserted directly as `RESERVED` while the event stream claimed a
+`RESERVING → RESERVED` transition. The final row was right and the history was
+fiction — the "event without an aggregate change" this phase forbids. It is now
+created `RESERVING` and genuinely moved inside the same commit, which the tests
+check by asserting `stateVersion` is 1 rather than 0.
+
+**A regeneration race leaked a database error.** The losing transaction's
+unique violation is a business outcome — the customer asked for something
+already in flight — and is translated to `REGENERATION_ALREADY_ACTIVE`. Only
+that exact index is translated: reporting every `P2002` that way would turn an
+unrelated collision into a cheerful "someone else is already doing this", which
+is the kind of mistranslation that hides a real defect for months. Both halves
+have tests.
+
+**FX persistence was incomplete.** A snapshot naming an FX id nobody could
+produce is an audit record that cannot be re-derived. The rate is now required
+whenever the snapshot names one, validated through the pricing domain's own
+`validateFxSnapshot`, and written inside the admission transaction. A row that
+already exists is compared field by field; a same-id rate with different content
+is `FX_SNAPSHOT_CONFLICT`, not a cache hit. Nothing updates an existing rate.
+
 ## Verification
 
 | Gate | Result |
@@ -342,7 +446,7 @@ directions by the domain and by a database CHECK, with legacy rows exempt.
 | `pnpm lint` | Pass |
 | `pnpm test` | Pass — 76 files, 1,967 tests (158 orchestration) |
 | `pnpm build` | Pass |
-| `pnpm test:db` | Pass — 14 files, 317 tests (98 new) |
+| `pnpm test:db` | Pass — 15 files, 352 tests |
 | Migration on an empty database | Pass |
 | Migration with legacy rows present | Pass — 6 tests |
 | Migration on `revt_empty` | Pass |
@@ -365,93 +469,147 @@ hash, contract fingerprint, estimated cost, submission certainty, absence of a
 provider reference, reconciliation deadline, and the last transition sequence.
 It also asserts that re-arming the uncertain attempt returns `LOST`.
 
-## Mutation ledger — 48/49 killed
+## Mutation ledger — 74/76 killed
 
-Forty-nine mutations: the first round's set, re-run, plus thirty aimed at the
-correction round. **Every one targets an executed artefact** — the migration SQL
-that builds the database, or the TypeScript that runs. A mutation editing only
-`schema.prisma` is inert, because the database is built by applying migrations;
-that error was made once in the first round and is not repeated.
+Seventy-six mutations: the two earlier rounds re-run against this head, plus
+twenty-eight aimed at the admission corrections. **Every one targets an
+executed artefact** — the migration SQL that builds the database, or the
+TypeScript that runs. A mutation editing only `schema.prisma` is inert, because
+the database is built by applying migrations; that error was made once in the
+first round and is not repeated.
 
-| ID | Mutation | Detected by |
-| --- | --- | --- |
-| M1 | CAS drops the state predicate | 7 db tests |
-| M2 | CAS drops the version predicate | 4 db tests |
-| M4 | `SUBMITTING → QUEUED` allowed | 1 unit test |
-| M5 | `RECONCILIATION_PENDING → QUEUED` allowed | 1 unit test |
-| M6 | `FAILED_RETRYABLE` revives the row | 3 unit tests |
-| M7 | provider reference without ACCEPTED | 1 unit test |
-| M8 | regeneration counted at request creation | 5 unit tests |
-| M9 | recovery counted as user regeneration | 2 unit tests |
-| M10 | third user regeneration admitted | 2 unit tests |
-| M11 | transition event insert removed | 5 db tests |
-| M14 | prompt key allowlisted | 2 unit tests |
-| M15 | forbidden keys dropped silently | 14 unit tests |
-| M16 | attempt→request FK becomes cascade | 3 db tests |
-| M17 | regeneration ordinal CHECK removed | 3 db tests |
-| M18 | provider-reference CHECK removed | 4 db tests |
-| M19 | reservation unit CHECK removed | 4 db tests |
-| M21 | reconciliation-metadata CHECK removed | 4 db tests |
-| M22 | billing cycle taken from completion | 4 db tests |
-| M23 | delivery no longer timestamped | 1 db test |
-| N1 | active index reverts to legacy-only predicate | 7 db tests |
-| N2 | orchestration active set includes terminal states | 11 db tests |
-| N3 | INITIAL partial unique index removed | 3 db tests |
-| N4 | failed regeneration ordinal permanently unique again | 3 db tests |
-| N5 | active user-regeneration uniqueness removed | 1 db test |
-| N6 | `organizationId` dropped from the job CAS | 4 db tests |
-| N7 | tenant predicate dropped from the boundary CAS | **SURVIVED** |
-| N8 | tenant predicate dropped from attempt reads | 4 db tests |
-| N9 | event reads stop filtering by organization | 4 db tests |
-| N10 | Transaction B split into two commits | 4 db tests |
-| N11 | Transaction C split into two commits | 36 db tests |
-| N12 | pricing provider-binding check removed | 6 db tests |
-| N13 | pricing contract-key binding check removed | 4 db tests |
-| N14 | pricing model-key binding check removed | 4 db tests |
-| N15 | boundary stops re-checking the binding | 5 db tests |
-| N16 | 90-second product ceiling removed | 1 db test |
-| N17 | unit-tier CHECK becomes an inequality | 4 db tests |
-| N18 | NORMAL/HQ derivation CHECK removed | 5 db tests |
-| N19 | admission stops deriving units | 99 db tests |
-| N20 | `requiredUnitsFor` reimplements ceil | 7 unit tests |
-| N21 | `GENERATING → CANCELLED` re-enabled (job) | 2 unit tests |
-| N22 | `GENERATING → CANCELLED` re-enabled (request) | 2 unit tests |
-| N23 | `GENERATING → CANCELLED` re-enabled (scene) | 2 unit tests |
-| N24 | same-scene delivered-request FK removed | 6 db tests |
-| N25 | ACCEPTED without a reference, at the database | 4 db tests |
-| N26 | ACCEPTED without a reference, in the domain | 1 unit test |
-| N27 | contract key taken from the caller | 25 db tests |
-| N28 | event organization read from metadata | 4 db tests |
-| N29 | admission stops requiring V2 identity | typecheck |
-| N30 | reservation copies caller units | 7 db tests |
+Four entries carry a `b` suffix. Those are re-aimed replacements for mutations
+that did not measure what they claimed to, and both the original miss and the
+correction are described below rather than quietly dropped.
 
-### The five that survived a first run
+| ID | Mutation | Result | Detected by |
+| --- | --- | --- | --- |
+| M1 | QUEUED -> SUBMITTING CAS drops the state predicate | KILLED | 7 failing db tests |
+| M2 | the stateVersion check is removed from the provider boundary | KILLED | 4 failing db tests |
+| M4 | SUBMITTING -> QUEUED becomes allowed | KILLED | 3 failing unit tests |
+| M5 | RECONCILIATION_PENDING -> QUEUED becomes allowed | KILLED | 3 failing unit tests |
+| M6 | FAILED_RETRYABLE revives the same attempt row | KILLED | 5 failing unit tests |
+| M7 | a provider reference is accepted without ACCEPTED certainty | KILLED | 3 failing unit tests |
+| M8 | user regeneration is counted at request creation instead of delivery | KILLED | 7 failing unit tests |
+| M9 | SYSTEM_RECOVERY attempts count as user regenerations | KILLED | 4 failing unit tests |
+| M10 | a third user regeneration becomes admissible | KILLED | 4 failing unit tests |
+| M11 | the transition event insert is removed from the provider boundary | KILLED | 5 failing db tests |
+| M14 | the prompt allowlist admits a compiled prompt | KILLED | 4 failing unit tests |
+| M15 | forbidden metadata keys are dropped silently instead of refused | KILLED | 16 failing unit tests |
+| M16 | the attempt-to-request foreign key becomes a cascade | KILLED | 3 failing db tests |
+| M17 | the regeneration ordinal CHECK is removed | KILLED | 3 failing db tests |
+| M18 | the provider-reference CHECK is removed | KILLED | 4 failing db tests |
+| M19 | the high-quality-within-total reservation CHECK is removed | KILLED | 4 failing db tests |
+| M21 | the reconciliation-metadata CHECK is removed | KILLED | 4 failing db tests |
+| M22b | the release of a hold is no longer timestamped | KILLED | 4 failing db tests |
+| M23b | the failure of a request is no longer timestamped | KILLED | 3 failing db tests |
+| N1 | the active-request index reverts to the legacy-only predicate | KILLED | 7 failing db tests |
+| N2 | the orchestration active set wrongly includes terminal states | KILLED | 17 failing db tests |
+| N3 | the INITIAL partial unique index is removed | KILLED | 3 failing db tests |
+| N4 | a failed regeneration ordinal becomes permanently unique again | KILLED | 3 failing db tests |
+| N5 | the active user-regeneration uniqueness is removed | KILLED | 3 failing db tests |
+| N6 | organizationId is dropped from the job transition CAS | KILLED | 7 failing db tests |
+| N7 | the tenant predicate is dropped from the provider boundary CAS | **SURVIVED** | 0 failing tests |
+| N8 | the tenant predicate is dropped from attempt reads | KILLED | 4 failing db tests |
+| N9 | transition-event reads stop filtering by organization | KILLED | 4 failing db tests |
+| N10 | Transaction B splits: the job moves outside the reservation commit | KILLED | 4 failing db tests |
+| N11 | Transaction C splits: the pricing snapshot is written outside the commit | KILLED | 36 failing db tests |
+| N12 | the pricing provider-binding check is removed | KILLED | 11 failing db tests |
+| N13 | the pricing contract-key binding check is removed | KILLED | 4 failing db tests |
+| N14 | the pricing model-key binding check is removed | KILLED | 8 failing db tests |
+| N15 | the provider boundary stops re-checking the pricing binding | KILLED | 5 failing db tests |
+| N16 | the 90-second product ceiling is removed | KILLED | 4 failing db tests |
+| N17 | the job unit-tier CHECK becomes a mere inequality | KILLED | 5 failing db tests |
+| N18 | the NORMAL/HIGH_QUALITY derivation CHECK is removed | KILLED | 5 failing db tests |
+| N19 | job admission stops deriving units from the pricing contract | KILLED | 140 failing db tests |
+| N20 | requiredUnitsFor reimplements ceil instead of delegating | KILLED | 9 failing unit tests |
+| N21 | GENERATING -> CANCELLED is re-enabled on the job | KILLED | 4 failing unit tests |
+| N22 | GENERATING -> CANCELLED is re-enabled on the scene request | KILLED | 4 failing unit tests |
+| N23 | GENERATING -> CANCELLED is re-enabled on the scene | KILLED | 4 failing unit tests |
+| N24 | the same-scene delivered-request foreign key is removed | KILLED | 6 failing db tests |
+| N25 | ACCEPTED no longer requires a provider reference at the database | KILLED | 4 failing db tests |
+| N26 | ACCEPTED no longer requires a provider reference in the domain | KILLED | 3 failing unit tests |
+| N27 | the pricing contract key is taken from the caller, not the snapshot | KILLED | 25 failing db tests |
+| N28 | the event's organization is read from caller metadata | KILLED | 4 failing db tests |
+| N30 | the reservation copies caller units instead of the job's | KILLED | 7 failing db tests |
+| P1 | the request hash is driven by caller prompt text instead of the scene's | KILLED | 5 failing db tests |
+| P2 | the request hash is a V2-shaped constant rather than a derivation | KILLED | 5 failing db tests |
+| P3 | the persisted asset stops coming from the GenerationScene | KILLED | 5 failing db tests |
+| P4b | the attempt duration stops coming from the GenerationScene | KILLED | 29 failing db tests |
+| P5 | the attempt target resolution stops coming from the GenerationJob | KILLED | 5 failing db tests |
+| P6 | the attempt aspect ratio stops coming from the GenerationJob | KILLED | 5 failing db tests |
+| P7 | attempt kind stops being derived from the attempts that exist | KILLED | 24 failing db tests |
+| P8 | a second PRIMARY attempt becomes storable | KILLED | 8 failing db tests |
+| P9 | PRIMARY admission stops moving the request PENDING -> GENERATING | KILLED | 12 failing db tests |
+| P10 | the active-attempt-per-request index is removed | KILLED | 4 failing db tests |
+| P11 | the pricing duration binding is removed | KILLED | 4 failing db tests |
+| P12 | the pricing native-tier binding is removed | KILLED | 4 failing db tests |
+| P13 | the pricing risk-profile binding is removed | KILLED | 5 failing db tests |
+| P14 | the generation-mode binding is removed | KILLED | 4 failing db tests |
+| P15 | the audio-mode binding is removed | KILLED | 4 failing db tests |
+| P16 | Transaction B inserts the reservation directly as RESERVED again | KILLED | 4 failing db tests |
+| P17 | the generic Job RESERVING -> RESERVED bypass is restored | KILLED | 4 failing db tests |
+| P18 | the generic Request GENERATING -> DELIVERED bypass is restored | KILLED | 4 failing db tests |
+| P19 | the generic Reservation -> CONSUMED bypass is restored | KILLED | 4 failing db tests |
+| P20b | a raw P2002 leaks from a concurrent user-regeneration admission | **SURVIVED** | 0 failing tests |
+| P21 | any unique violation is reported as an active regeneration | KILLED | 3 failing db tests |
+| P22 | an FX rate with the same id but different content is accepted | KILLED | 4 failing db tests |
+| P23 | the FX rate a snapshot names is never persisted | KILLED | 4 failing db tests |
+| P24 | the concurrent-attempt guard is removed from admission | KILLED | 4 failing db tests |
+| P25 | a finished request admits a new paid attempt | KILLED | 6 failing db tests |
+| P26 | the job's output configuration is no longer snapshotted from the project | KILLED | 4 failing db tests |
+| P27 | the job target-resolution vocabulary is no longer closed at the database | KILLED | 4 failing db tests |
+| P28 | a scene with no compiled prompt is admitted anyway | KILLED | 4 failing db tests |
 
-Four were real test gaps and are now closed. **M23** — the entitlement derives
-from `state`, so removing the `deliveredAt` write broke nothing observable while
-silently emptying the column that records *when* a right was spent. **N5** — the
-repository also checks for an active sibling inside its transaction, which is
-what a sequential caller hits, so the index had no test of its own; one now
-bypasses the repository entirely. **N16** — the earlier test paired 91 seconds
-with four units, so the *tier* constraint rejected it and the ceiling was never
-exercised; the new case uses three units, which only the ceiling can refuse.
-**N28** — `billingCycleKey` was absent from test metadata, so the mutation's
-fallback yielded the right organization; a test now puts a plausible value there.
+### Four mutations that measured the wrong thing, and what they found
 
-### N7 survives, and is reported rather than papered over
+**M22 and M23 survived, and were right to.** They removed the `consumedAt` and
+`deliveredAt` writes from the generic transition methods — and nothing failed,
+because after this round's atomic-primitive correction *neither branch can
+execute*. Both edges into `CONSUMED` belong to Transaction G and
+`GENERATING → DELIVERED` to Transaction F, so the generic methods refuse them
+before reaching the write. The branches were removed: a write that cannot run is
+not a rule, it is a claim the code makes about itself, and those two timestamps
+belong to the commits that actually spend and release a customer's units.
+**M22b** and **M23b** replace them, aimed at the sibling writes that *are*
+reachable — `releasedAt` and `failedAt` — and both die.
 
+**P4 was aimed badly by the author.** It replaced the scene's duration with the
+literal `5`, which is exactly the fixture scene's duration, so the mutation was
+a no-op and its survival said nothing. **P4b** uses `7` and dies against 29
+tests.
+
+**P20 was killed by the typechecker, which is not the evidence wanted.**
+Deleting the whole catch arm left `isActiveRegenerationConflict` unreferenced,
+so `tsc` failed before any behaviour was observed. **P20b** removes only the
+translation and keeps the reference — and it survives. See below.
+
+### Two survivors, reported rather than papered over
+
+**N7 — the tenant predicate in the provider-boundary CAS.**
 `armProviderBoundary` loads the attempt with a tenant-scoped `findFirst`
-**inside its transaction** and returns `LOST` when it finds nothing. The tenant
+**inside its transaction** and returns `LOST` when it finds nothing. The
 predicate in the CAS `where` is therefore a second, redundant copy of a check
-that has already decided the outcome — removing it changes no behaviour any test
+that has already decided the outcome; removing it changes no behaviour any test
 can observe, and **N8**, which removes the scoped read itself, dies immediately.
-
 The requirement that tenant scope share the CAS's transactional decision is met
-by that read. The redundant predicate is kept as defence in depth: it costs one
-join and would matter if the load were ever refactored out of the transaction.
-Manufacturing a test for a mutation that corresponds to no reachable failure
-would be evidence about nothing, which is the same error M16 taught in the first
-round.
+by that read. The redundant predicate is kept as defence in depth.
+
+**P20b — the concurrent-regeneration translation.** The catch arm turns the
+losing transaction's unique violation into `REGENERATION_ALREADY_ACTIVE`. It
+survives because the suite cannot deterministically reach it: the in-transaction
+pre-check and the partial index share the same predicate, so only a genuine
+interleave — one process reading before another commits — lands in the catch.
+That was probed directly rather than assumed: eight simultaneous admissions on
+one scene, and then two admissions through two independent `PrismaClient`
+instances with separate pools, all serialized and were answered by the
+pre-check. The arm is real production defence for two API processes and is kept;
+its narrow half is separately proven, because **P21** — translating *every*
+`P2002` — dies against a test that admits a duplicate id and requires the error
+to propagate.
+
+Manufacturing a test for either would be evidence about nothing, which is the
+same error M16 taught in the first round.
 
 ## Paid gate — still blocked
 
@@ -472,14 +630,16 @@ live generation, by design.
 - **`GenerationDeliverableVersion` is not implemented.** `GenerationJob`
   carries a nullable `currentDeliverableVersionId` with no foreign key, which is
   honest about the table not existing yet.
-- **Transaction F (scene delivered) is not implemented as a single primitive.**
-  Its parts exist — request `GENERATING → DELIVERED` under CAS, and
-  `GenerationScene.currentDeliveredRequestId` — but composing them into one
-  atomic winner-selection belongs with output ingestion, which is deferred. The
-  constraints for it are in place.
-- **`GenerationScene.currentDeliveredRequestId` carries no foreign key**, to
-  avoid a circular required reference that would make insertion order
-  load-bearing.
+- **Transaction F (scene delivered) is not implemented, and its edge is now
+  closed rather than half-open.** `GENERATING → DELIVERED` is refused by the
+  generic request transition with `TRANSITION_RESERVED`: delivery spends a
+  customer's regeneration right, and the half that makes it safe — output
+  verification — does not exist yet. The constraints, the composite foreign key
+  and `GenerationScene.currentDeliveredRequestId` are in place for it. The same
+  applies to Transaction G and both edges into `CONSUMED`.
+- **`deliveredAt` and `consumedAt` are therefore never written today.** The
+  transactions that earn those instants will write them; the generic methods no
+  longer carry unreachable branches that pretend to.
 - **The job state machine's cancellation and failure edges are the one place I
   extended beyond the brief's explicit list.** §9 froze the forward path;
   which non-terminal states may reach `CANCELLED` and `FAILED_TERMINAL` was not

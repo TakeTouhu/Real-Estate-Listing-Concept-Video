@@ -50,8 +50,6 @@ const REQUEST_REGEN = "genreq_rec_regen1";
 const ATTEMPT_FAILED = "sgen_rec_primary";
 const ATTEMPT_UNKNOWN = "sgen_rec_recovery";
 
-/** One identity, shared by the primary attempt and its recovery. */
-const SHARED_REQUEST_HASH = `sha256:v2:${"f".repeat(63)}9`;
 
 const SUBMITTED_AT = new Date("2026-09-30T23:40:00.000Z");
 const RECONCILIATION_STARTED = new Date("2026-09-30T23:41:00.000Z");
@@ -77,7 +75,6 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
         videoProjectId: PROJECT_A,
         requestedByUserId: "usr_customer",
         qualityTier: "HIGH_QUALITY",
-        targetOutputResolution: "1080p",
         requestedDurationSeconds: 60,
       },
       ctx({ actorType: "USER", actorUserId: "usr_customer", correlationId: "corr_rec_request" }),
@@ -154,22 +151,12 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       ctx({ correlationId: "corr_rec_request" }),
     );
     if (initial === null) throw new Error("fixture initial request not created");
-    const initialGenerating = await repos.requests.transition({
-      organizationId: ORG_A,
-      id: REQUEST_INITIAL,
-      expectedState: "PENDING",
-      expectedVersion: initial.stateVersion,
-      nextState: "GENERATING",
-      context: ctx({ correlationId: "corr_rec_request" }),
-    });
-    if (initialGenerating.kind !== "APPLIED") throw new Error("fixture transition lost");
-    await repos.requests.transition({
-      organizationId: ORG_A,
-      id: REQUEST_INITIAL,
-      expectedState: "GENERATING",
-      expectedVersion: initialGenerating.value.stateVersion,
-      nextState: "DELIVERED",
-      context: ctx({ correlationId: "corr_rec_request" }),
+    // Historical delivery, seeded directly: `GENERATING -> DELIVERED` belongs to
+    // Transaction F, which is deferred, so the production API refuses it. What
+    // this fixture needs is the stored *result* of a past delivery.
+    await writer.sceneGenerationRequest.update({
+      where: { id: REQUEST_INITIAL },
+      data: { state: "DELIVERED", stateVersion: 2, deliveredAt: new Date("2026-09-29T12:00:00.000Z") },
     });
 
     const regen = await repos.requests.admitUserRegeneration(
@@ -178,14 +165,8 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       ctx({ actorType: "USER", actorUserId: "usr_customer", correlationId: "corr_rec_request" }),
     );
     if (regen.kind !== "ADMITTED") throw new Error(`fixture regeneration failed: ${regen.kind}`);
-    await repos.requests.transition({
-      organizationId: ORG_A,
-      id: REQUEST_REGEN,
-      expectedState: "PENDING",
-      expectedVersion: regen.request.stateVersion,
-      nextState: "GENERATING",
-      context: ctx({ correlationId: "corr_rec_request" }),
-    });
+    // The request moves to GENERATING as part of admitting its first attempt,
+    // in that same commit — not through a separate call.
 
     // Attempt 1: PRIMARY, admitted through the real primitive, then definitively
     // rejected. Its terminal state releases the request identity, which is what
@@ -195,8 +176,6 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       attemptInput({
         id: ATTEMPT_FAILED,
         generationSceneRequestId: REQUEST_REGEN,
-        requestHash: SHARED_REQUEST_HASH,
-        sourceAnalysisRevision: 3,
         pricingSnapshotId: "price_rec_primary",
       }),
       ctx({ correlationId: "corr_rec_request" }),
@@ -229,9 +208,6 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       attemptInput({
         id: ATTEMPT_UNKNOWN,
         generationSceneRequestId: REQUEST_REGEN,
-        attemptKind: "SYSTEM_RECOVERY",
-        requestHash: SHARED_REQUEST_HASH,
-        sourceAnalysisRevision: 3,
         pricingSnapshotId: "price_rec_recovery",
       }),
       ctx({ correlationId: "corr_rec_request" }),
@@ -319,11 +295,11 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       [2, "SYSTEM_RECOVERY"],
     ]);
     expect(systemRecoveryAttemptCount(attempts)).toBe(1);
-    // Both attempts share one request identity: same work, second try.
-    expect(attempts.map((a) => a.requestHash)).toEqual([
-      SHARED_REQUEST_HASH,
-      SHARED_REQUEST_HASH,
-    ]);
+    // Both attempts share one request identity — not by fixture arrangement but
+    // because the hash is derived from the same scene and job facts. That is the
+    // property: the recovery is another try at the same work.
+    expect(attempts[0]!.requestHash).toBe(attempts[1]!.requestHash);
+    expect(attempts[0]!.requestHash.startsWith("sha256:v2:")).toBe(true);
 
     const uncertain = attempts[1]!;
 
@@ -354,9 +330,11 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
     expect(price?.contractFingerprint).toBe(providerPricingContractFingerprint(contract!));
     // The attempt's own binding agrees with the price filed against it.
     expect(uncertain.pricingContractKey).toBe(price?.contractKey);
-    // 5 billable seconds at 60,000 micro-USD, plus the 30% normal buffer.
+    // 5 billable seconds at 60,000 micro-USD, plus the 50% buffer this
+    // HIGH_QUALITY job's tier requires — the binding refuses any other.
     expect(price?.estimatedStableCostMicroUsd).toBe(300_000n);
-    expect(price?.estimatedPlanningCostMicroUsd).toBe(390_000n);
+    expect(price?.estimatedPlanningCostMicroUsd).toBe(450_000n);
+    expect(price?.riskProfileKey).toBe("HIGH_QUALITY_AI");
 
     // What transition happened last?
     const history = await repos.events.listForAggregate(ORG_A, "SCENE_REQUEST", REQUEST_REGEN);
@@ -409,9 +387,6 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       attemptInput({
         id: "sgen_rec_third",
         generationSceneRequestId: REQUEST_REGEN,
-        attemptKind: "SYSTEM_RECOVERY",
-        requestHash: SHARED_REQUEST_HASH,
-        sourceAnalysisRevision: 3,
         pricingSnapshotId: "price_rec_third",
       }),
       ctx(),

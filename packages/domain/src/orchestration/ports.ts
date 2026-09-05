@@ -1,4 +1,5 @@
-import type { PricingSnapshot } from "../pricing/index";
+import type { ResolutionNormalization, TargetOutputResolution } from "../generation/model-catalog";
+import type { FxSnapshot, PricingSnapshot } from "../pricing/index";
 import type { AttemptOutcomePersistence } from "./certainty";
 import type { SafeTransitionMetadata } from "./transition-metadata";
 import type {
@@ -67,7 +68,16 @@ export interface GenerationJob {
   readonly organizationId: string;
   readonly requestedByUserId: string;
   readonly qualityTier: GenerationQualityTier;
-  readonly targetOutputResolution: string;
+  /**
+   * The output configuration as it stood when this lifecycle began.
+   *
+   * Snapshotted from the `VideoProject` inside the creation transaction and
+   * never read again: project settings are mutable, and an attempt admitted
+   * three days later must be generated for what the customer started, not for
+   * whatever the project says today.
+   */
+  readonly targetOutputResolution: TargetOutputResolution;
+  readonly targetAspectRatio: string;
   readonly requestedDurationSeconds: number;
   readonly requiredVideoUnits: number;
   readonly requiredHighQualityUnits: number;
@@ -94,7 +104,6 @@ export interface NewGenerationJob {
   readonly videoProjectId: string;
   readonly requestedByUserId: string;
   readonly qualityTier: GenerationQualityTier;
-  readonly targetOutputResolution: string;
   readonly requestedDurationSeconds: number;
 }
 
@@ -264,48 +273,97 @@ export interface GenerationAttempt {
 /**
  * Transaction C's input: admitting one provider attempt.
  *
- * `videoProjectId` is absent. It is resolved from the parent request through
- * scene → job → project, because a caller-supplied project id is a caller
- * asserting which tenant's history this attempt joins.
+ * Everything absent from this shape is absent because something else already
+ * owns it, and two caller-controlled copies of one fact will eventually
+ * disagree.
+ *
+ * - **`requestHash`** is derived, never supplied. A caller offering its own
+ *   V2-prefixed digest for identical request facts walks straight past the
+ *   active-request identity protection, which is the whole defence against
+ *   paying twice for one request.
+ * - **`videoProjectId`** is resolved through request → scene → job → project:
+ *   a caller-supplied project id chooses which tenant's history this joins.
+ * - **`attemptKind` and `attemptOrdinal`** are derived from the attempts that
+ *   already exist. A caller could otherwise make the first attempt a
+ *   `SYSTEM_RECOVERY`, or file a second `PRIMARY`.
+ * - **The scene's facts** — asset, prompt, duration, camera motion,
+ *   provenance — come from the parent `GenerationScene`.
+ * - **The job's facts** — target resolution and aspect ratio — come from the
+ *   parent `GenerationJob`'s frozen snapshot.
+ *
+ * What remains is the delivery plan: which provider and model this request is
+ * routed to, and how the native output reconciles with the target. This phase
+ * does not own the model-routing catalog, so those stay explicit — but every
+ * one of them participates in the derived hash.
  */
 export interface AdmitGenerationAttemptInput {
   readonly id: string;
   readonly generationSceneRequestId: string;
-  readonly attemptKind: GenerationAttemptKind;
-  readonly requestHash: string;
   readonly providerName: string;
   readonly providerModelId: string;
   /** The V2 model identity. Required: a new attempt may not be admitted V1. */
   readonly requestModelKey: string;
-  readonly requestCompiledPrompt: string;
   readonly requestRenderedPrompt: string;
-  readonly requestDurationSeconds: number;
-  readonly requestCameraMotion: string | null;
-  readonly requestAspectRatio: string;
-  readonly requestTargetOutputResolution: string;
   readonly requestNativeGenerationResolution: string;
-  readonly requestResolutionNormalization: string;
+  readonly requestResolutionNormalization: ResolutionNormalization;
   readonly requestNativeMeetsTarget: boolean;
-  readonly sourceStoryboardSceneId: string;
-  readonly sourceAssetId: string;
-  readonly sourceAnalysisRevision: number;
-  /** The pricing decision. Its provider and model must match this attempt. */
+  /** The pricing decision. Bound to this attempt on every dimension that moves cost. */
   readonly pricingSnapshotId: string;
   readonly pricingSnapshot: PricingSnapshot;
+  /**
+   * The exact immutable rate the snapshot names, when it names one.
+   *
+   * Required when `pricingSnapshot.fxSnapshotId` is non-null and forbidden
+   * otherwise: a snapshot naming a rate nobody can produce is an audit record
+   * that cannot be re-derived.
+   */
+  readonly fxSnapshot: FxSnapshot | null;
 }
 
 export type AdmitGenerationAttemptOutcome =
   | { readonly kind: "ADMITTED"; readonly attempt: GenerationAttempt }
   | { readonly kind: "REQUEST_NOT_FOUND" }
-  | { readonly kind: "PRICING_BINDING_INVALID"; readonly reason: PricingBindingFailure };
+  /** The parent request is DELIVERED, FAILED_TERMINAL or CANCELLED. */
+  | { readonly kind: "REQUEST_NOT_ADMITTING" }
+  /**
+   * Another attempt under the same logical request is still live.
+   *
+   * System recovery is sequential recovery from a finished attempt, not
+   * permission to run two paid attempts at once.
+   */
+  | { readonly kind: "ATTEMPT_ALREADY_ACTIVE" }
+  /** The scene lacks a fact a V2 executable request requires. */
+  | { readonly kind: "SCENE_FACTS_INCOMPLETE" }
+  | { readonly kind: "PRICING_BINDING_INVALID"; readonly reason: PricingBindingFailure }
+  | { readonly kind: "FX_BINDING_INVALID"; readonly reason: FxBindingFailure };
 
-/** Why a pricing decision does not belong to the attempt it was offered for. */
+/**
+ * Why a pricing decision does not belong to the attempt it was offered for.
+ *
+ * Provider and model key are not enough. A snapshot priced for five seconds
+ * attached to a fifteen-second scene understates the cost by two thirds with
+ * every other field agreeing, and a native tier is a pricing dimension in its
+ * own right.
+ */
 export type PricingBindingFailure =
   | "PROVIDER_MISMATCH"
   | "MODEL_KEY_MISMATCH"
   | "CONTRACT_KEY_MISMATCH"
+  | "DURATION_MISMATCH"
+  | "NATIVE_TIER_MISMATCH"
+  | "GENERATION_MODE_UNSUPPORTED"
+  | "AUDIO_MODE_UNSUPPORTED"
+  | "RISK_PROFILE_MISMATCH"
   | "SNAPSHOT_MISSING"
   | "SNAPSHOT_NOT_FOR_ATTEMPT";
+
+/** Why the supplied exchange rate does not match the snapshot that names it. */
+export type FxBindingFailure =
+  | "FX_SNAPSHOT_REQUIRED"
+  | "FX_SNAPSHOT_UNEXPECTED"
+  | "FX_SNAPSHOT_ID_MISMATCH"
+  | "FX_SNAPSHOT_INVALID"
+  | "FX_SNAPSHOT_CONFLICT";
 
 export interface GenerationTransitionEventRecord {
   readonly id: string;
@@ -325,6 +383,32 @@ export interface GenerationTransitionEventRecord {
   readonly createdAt: Date;
 }
 
+/**
+ * Edges the generic transition APIs deliberately refuse.
+ *
+ * Adding an atomic primitive achieves nothing if the same edge stays reachable
+ * through a generic method beside it: a caller would still be able to produce a
+ * `RESERVED` job with no reservation, which is exactly the state Transaction B
+ * exists to prevent.
+ *
+ * Three groups, for three reasons:
+ *
+ * - **`RESERVING -> RESERVED` on a job** belongs to `reserve()`.
+ * - **`PENDING -> GENERATING` on a request** belongs to attempt admission: the
+ *   request starts generating *because* an attempt exists.
+ * - **`GENERATING -> DELIVERED` on a request**, and the pair
+ *   `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` with `-> CONSUMED`, belong to
+ *   Transactions F and G, which are deferred. Delivery consumes a customer's
+ *   regeneration right and `CONSUMED` spends their unit; exposing either alone
+ *   would make an incomplete workflow executable, and the missing halves —
+ *   output verification and the quota ledger — are what make it safe.
+ *
+ * The pure state machines still describe these edges: they are legal moves with
+ * no persistence route yet, which is the honest description of deferred work.
+ * Tests needing such rows seed them through raw Prisma.
+ */
+export type ReservedTransitionOutcome = { readonly kind: "TRANSITION_RESERVED" };
+
 export interface GenerationJobRepository {
   /**
    * Create a job and its first transition event in one transaction.
@@ -338,6 +422,10 @@ export interface GenerationJobRepository {
     context: TransitionContext,
   ): Promise<CreateGenerationJobOutcome>;
   findById(organizationId: string, id: string): Promise<GenerationJob | null>;
+  /**
+   * Refuses `RESERVING -> RESERVED` (Transaction B) and
+   * `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` (Transaction G, deferred).
+   */
   transition(input: {
     readonly organizationId: string;
     readonly id: string;
@@ -345,7 +433,7 @@ export interface GenerationJobRepository {
     readonly expectedVersion: number;
     readonly nextState: GenerationJobState;
     readonly context: TransitionContext;
-  }): Promise<TransitionOutcome<GenerationJob>>;
+  }): Promise<TransitionOutcome<GenerationJob> | ReservedTransitionOutcome>;
 }
 
 export interface GenerationReservationRepository {
@@ -366,6 +454,7 @@ export interface GenerationReservationRepository {
     organizationId: string,
     generationJobId: string,
   ): Promise<GenerationReservation | null>;
+  /** Refuses `-> CONSUMED` (Transaction G, deferred). */
   transition(input: {
     readonly organizationId: string;
     readonly id: string;
@@ -373,7 +462,7 @@ export interface GenerationReservationRepository {
     readonly expectedVersion: number;
     readonly nextState: GenerationReservationState;
     readonly context: TransitionContext;
-  }): Promise<TransitionOutcome<GenerationReservation>>;
+  }): Promise<TransitionOutcome<GenerationReservation> | ReservedTransitionOutcome>;
 }
 
 export interface GenerationSceneRepository {
@@ -427,6 +516,10 @@ export interface SceneGenerationRequestRepository {
     organizationId: string,
     generationSceneId: string,
   ): Promise<readonly SceneGenerationRequestRecord[]>;
+  /**
+   * Refuses `PENDING -> GENERATING` (attempt admission owns it) and
+   * `GENERATING -> DELIVERED` (Transaction F, deferred).
+   */
   transition(input: {
     readonly organizationId: string;
     readonly id: string;
@@ -434,7 +527,7 @@ export interface SceneGenerationRequestRepository {
     readonly expectedVersion: number;
     readonly nextState: SceneGenerationRequestState;
     readonly context: TransitionContext;
-  }): Promise<TransitionOutcome<SceneGenerationRequestRecord>>;
+  }): Promise<TransitionOutcome<SceneGenerationRequestRecord> | ReservedTransitionOutcome>;
 }
 
 /**

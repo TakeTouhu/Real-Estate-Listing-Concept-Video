@@ -1,4 +1,8 @@
-import { videoUnitsForSeconds, type PricingResult } from "../pricing/index";
+import {
+  videoUnitsForSeconds,
+  type CostRiskProfileKey,
+  type PricingResult,
+} from "../pricing/index";
 import {
   MAX_USER_REGENERATIONS_PER_SCENE,
   type GenerationAttemptKind,
@@ -137,3 +141,31 @@ export function nextAttemptOrdinal(
 ): number {
   return attempts.reduce((highest, a) => Math.max(highest, a.attemptOrdinal), 0) + 1;
 }
+
+/**
+ * The cost risk profile a job's quality tier plans against.
+ *
+ * One mapping, in one place. The two vocabularies exist for different reasons —
+ * `GenerationQualityTier` is what the customer bought, `CostRiskProfileKey` is
+ * how much variance the platform budgets for — and nothing derives one from the
+ * other by name. Left implicit, an integration fixture priced a `HIGH_QUALITY`
+ * job at the 30% normal buffer, under-planning every high-quality attempt by
+ * twenty percentage points and doing it invisibly, because both halves looked
+ * internally consistent.
+ */
+export function riskProfileKeyForQualityTier(
+  tier: GenerationQualityTier,
+): CostRiskProfileKey {
+  return tier === "HIGH_QUALITY" ? "HIGH_QUALITY_AI" : "NORMAL_AI";
+}
+
+/**
+ * The execution semantics this phase is authorized to price and persist.
+ *
+ * The product has no audio-enabled generation contract, so an identity that
+ * prices one describes work no attempt here can represent. Opaque tokens
+ * compared for equality — nothing parses them, because a renamed tier must
+ * become a lookup miss rather than a silently reinterpreted mode.
+ */
+export const AUTHORIZED_GENERATION_MODE = "image-to-video";
+export const AUTHORIZED_AUDIO_MODE = "none";

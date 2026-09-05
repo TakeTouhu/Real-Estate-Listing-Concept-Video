@@ -70,7 +70,6 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           videoProjectId: PROJECT_A,
           requestedByUserId: "usr_itest",
           qualityTier: "HIGH_QUALITY",
-          targetOutputResolution: "1080p",
           requestedDurationSeconds: 61,
         },
         ctx(),
@@ -81,6 +80,56 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       expect(created.job.requiredHighQualityUnits).toBe(3);
     });
 
+    it("snapshots the project's output configuration instead of choosing its own", async () => {
+      // Frozen at admission and never read from the project again: project
+      // settings are mutable, and an attempt admitted three days later must be
+      // generated for what the customer actually started.
+      const project = await prisma.videoProject.findUniqueOrThrow({ where: { id: PROJECT_A } });
+      const created = await repos.jobs.create(
+        ORG_A,
+        {
+          id: "genjob_snapshot",
+          videoProjectId: PROJECT_A,
+          requestedByUserId: "usr_itest",
+          qualityTier: "NORMAL",
+          requestedDurationSeconds: 30,
+        },
+        ctx(),
+      );
+      if (created.kind !== "CREATED") throw new Error("expected CREATED");
+      expect(created.job.targetOutputResolution).toBe(project.targetOutputResolution);
+      expect(created.job.targetAspectRatio).toBe(project.aspectRatio);
+
+      // And it stays put when the project moves on.
+      await prisma.videoProject.update({
+        where: { id: PROJECT_A },
+        data: { targetOutputResolution: "720p", aspectRatio: "9:16" },
+      });
+      const reloaded = await repos.jobs.findById(ORG_A, "genjob_snapshot");
+      expect(reloaded?.targetOutputResolution).toBe(project.targetOutputResolution);
+      expect(reloaded?.targetAspectRatio).toBe(project.aspectRatio);
+    });
+
+    it("refuses a target resolution outside the product vocabulary at the database", async () => {
+      // The job's snapshot repeats the project's closed vocabulary rather than
+      // opening a second, independently configurable one.
+      await expect(
+        prisma.generationJob.create({
+          data: {
+            id: "genjob_badres",
+            videoProjectId: PROJECT_A,
+            requestedByUserId: "usr_itest",
+            qualityTier: "NORMAL",
+            targetOutputResolution: "4K",
+            targetAspectRatio: "16:9",
+            requestedDurationSeconds: 30,
+            requiredVideoUnits: 1,
+            requiredHighQualityUnits: 0,
+          },
+        }),
+      ).rejects.toThrow(/generation_jobs_target_resolution_check/);
+    });
+
     it("refuses a duration the product does not sell instead of inventing a tier", async () => {
       const created = await repos.jobs.create(
         ORG_A,
@@ -89,7 +138,6 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           videoProjectId: PROJECT_A,
           requestedByUserId: "usr_itest",
           qualityTier: "NORMAL",
-          targetOutputResolution: "1080p",
           requestedDurationSeconds: 91,
         },
         ctx(),
@@ -111,6 +159,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
             requestedByUserId: "usr_itest",
             qualityTier: "NORMAL",
             targetOutputResolution: "1080p",
+            targetAspectRatio: "16:9",
             requestedDurationSeconds: 91,
             requiredVideoUnits: 3,
             requiredHighQualityUnits: 0,
@@ -131,6 +180,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
             requestedByUserId: "usr_itest",
             qualityTier: "NORMAL",
             targetOutputResolution: "1080p",
+            targetAspectRatio: "16:9",
             requiredHighQualityUnits: 0,
             ...patch,
           },
@@ -150,6 +200,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
             requestedByUserId: "usr_itest",
             qualityTier: patch.qualityTier,
             targetOutputResolution: "1080p",
+            targetAspectRatio: "16:9",
             requestedDurationSeconds: 60,
             requiredVideoUnits: 2,
             requiredHighQualityUnits: patch.hq,
@@ -192,6 +243,15 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       expect(reserved.reservation.reservedTotalVideoUnits).toBe(job.requiredVideoUnits);
       expect(reserved.reservation.reservedHighQualityUnits).toBe(job.requiredHighQualityUnits);
       expect(reserved.reservation.state).toBe("RESERVED");
+      // Version 1, not 0. The row is created RESERVING and genuinely moved
+      // inside the same commit, so the two events below describe transitions
+      // that actually happened. Inserted straight as RESERVED it would still
+      // read RESERVED here, and the history would be fiction.
+      expect(reserved.reservation.stateVersion).toBe(1);
+      const stored = await prisma.generationReservation.findUniqueOrThrow({
+        where: { id: reserved.reservation.id },
+      });
+      expect(stored.stateVersion).toBe(1);
 
       const jobHistory = await repos.events.listForAggregate(ORG_A, "JOB", job.id);
       const resHistory = await repos.events.listForAggregate(
@@ -328,10 +388,11 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       if (reserved.kind !== "RESERVED") throw new Error("expected RESERVED");
 
       let version = reserved.reservation.stateVersion;
+      // CONSUMED is deliberately absent: it belongs to Transaction G, which is
+      // deferred, and the generic API refuses that edge.
       for (const [from, to] of [
         ["RESERVED", "RECONCILIATION_HOLD"],
         ["RECONCILIATION_HOLD", "RESERVED"],
-        ["RESERVED", "CONSUMED"],
       ] as const) {
         const step = await repos.reservations.transition({
           organizationId: ORG_A,
@@ -346,9 +407,94 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
         expect(step.value.billingCycleKey).toBe("2026-09");
       }
       const final = await repos.reservations.findByJobId(ORG_A, job.id);
-      expect(final?.state).toBe("CONSUMED");
+      expect(final?.state).toBe("RESERVED");
       expect(final?.billingCycleKey).toBe("2026-09");
-      expect(final?.consumedAt).not.toBeNull();
+    });
+
+    it("stamps a released hold with when it was given back", async () => {
+      // `RELEASED` is the one terminal edge this method can actually reach —
+      // both edges into `CONSUMED` belong to Transaction G — and the instant a
+      // customer's units returned to them is what a billing dispute is settled
+      // with. Added because a mutation removing the sibling `consumedAt` write
+      // survived: it was unreachable, and this asserts the half that is not.
+      const { job } = await seedChain(prisma, "release");
+      const moved = await repos.jobs.transition({
+        organizationId: ORG_A,
+        id: job.id,
+        expectedState: "CREATED",
+        expectedVersion: 0,
+        nextState: "RESERVING",
+        context: ctx(),
+      });
+      if (moved.kind !== "APPLIED") throw new Error("expected APPLIED");
+      const reserved = await repos.reservations.reserve(
+        ORG_A,
+        {
+          reservationId: "genres_release",
+          generationJobId: job.id,
+          expectedJobVersion: moved.value.stateVersion,
+          billingCycleKey: "2026-09",
+          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
+          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        },
+        ctx(),
+      );
+      if (reserved.kind !== "RESERVED") throw new Error("expected RESERVED");
+      expect(reserved.reservation.releasedAt).toBeNull();
+
+      const released = await repos.reservations.transition({
+        organizationId: ORG_A,
+        id: reserved.reservation.id,
+        expectedState: "RESERVED",
+        expectedVersion: reserved.reservation.stateVersion,
+        nextState: "RELEASED",
+        context: ctx(),
+      });
+      if (released.kind !== "APPLIED") throw new Error("expected APPLIED");
+      expect(released.value.releasedAt).not.toBeNull();
+      // And nothing invents a consumption on the way out.
+      expect(released.value.consumedAt).toBeNull();
+    });
+
+    it("refuses to consume a reservation through the generic API", async () => {
+      // Consuming a unit and marking a deliverable ready are one fact, and the
+      // quota ledger that makes it safe is deferred. Exposing this edge alone
+      // would make an incomplete workflow executable.
+      const { job } = await seedChain(prisma, "noconsume");
+      const moved = await repos.jobs.transition({
+        organizationId: ORG_A,
+        id: job.id,
+        expectedState: "CREATED",
+        expectedVersion: 0,
+        nextState: "RESERVING",
+        context: ctx(),
+      });
+      if (moved.kind !== "APPLIED") throw new Error("expected APPLIED");
+      const reserved = await repos.reservations.reserve(
+        ORG_A,
+        {
+          reservationId: "genres_noconsume",
+          generationJobId: job.id,
+          expectedJobVersion: moved.value.stateVersion,
+          billingCycleKey: "2026-09",
+          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
+          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        },
+        ctx(),
+      );
+      if (reserved.kind !== "RESERVED") throw new Error("expected RESERVED");
+      const refused = await repos.reservations.transition({
+        organizationId: ORG_A,
+        id: reserved.reservation.id,
+        expectedState: "RESERVED",
+        expectedVersion: reserved.reservation.stateVersion,
+        nextState: "CONSUMED",
+        context: ctx(),
+      });
+      expect(refused.kind).toBe("TRANSITION_RESERVED");
+      const row = await repos.reservations.findByJobId(ORG_A, job.id);
+      expect(row?.state).toBe("RESERVED");
+      expect(row?.consumedAt).toBeNull();
     });
 
     it("refuses negative units and high-quality above total at the database", async () => {
@@ -414,18 +560,83 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       ).toBeNull();
     });
 
-    it("allocates attempt ordinals per request and never reuses one", async () => {
+    it("derives PRIMARY then SYSTEM_RECOVERY, and never reuses an ordinal", async () => {
+      // Attempt kind is derived, not supplied: the first attempt on a request
+      // is PRIMARY, every later one is SYSTEM_RECOVERY. A caller cannot make
+      // the first a recovery, because there is no input for it.
       const { request } = await seedChain(prisma, "ord");
       const first = await admit("ord1", request.id);
-      const second = await admit("ord2", request.id, {
-        attemptKind: "SYSTEM_RECOVERY",
-        pricingSnapshotId: "price_sgen_ord2",
-        // A different request identity: this test is about ordinal allocation,
-        // and the active-request index is exercised on its own below.
-        requestHash: `sha256:v2:${"c".repeat(63)}2`,
+      expect(first.attemptKind).toBe("PRIMARY");
+      expect(first.attemptOrdinal).toBe(1);
+
+      // The first must finish before another may be admitted: recovery is
+      // sequential, not parallel paid work.
+      await prisma.sceneGeneration.update({
+        where: { id: first.id },
+        data: { orchestrationState: "FAILED_TERMINAL", submissionBoundaryEnteredAt: new Date() },
       });
-      expect([first.attemptOrdinal, second.attemptOrdinal]).toEqual([1, 2]);
+
+      const second = await admit("ord2", request.id, { pricingSnapshotId: "price_sgen_ord2" });
       expect(second.attemptKind).toBe("SYSTEM_RECOVERY");
+      expect(second.attemptOrdinal).toBe(2);
+      // Same derived identity — the same work, tried again.
+      expect(second.requestHash).toBe(first.requestHash);
+    });
+
+    it("refuses a second attempt while one is still live", async () => {
+      const { request } = await seedChain(prisma, "concurrent");
+      await admit("conc1", request.id);
+      const second = await repos.attempts.admit(
+        ORG_A,
+        attemptInput({
+          id: "sgen_conc2",
+          generationSceneRequestId: request.id,
+          pricingSnapshotId: "price_sgen_conc2",
+        }),
+        ctx(),
+      );
+      expect(second.kind).toBe("ATTEMPT_ALREADY_ACTIVE");
+      expect(await prisma.sceneGeneration.findUnique({ where: { id: "sgen_conc2" } })).toBeNull();
+    });
+
+    it("refuses two PRIMARY rows at the database", async () => {
+      const { request } = await seedChain(prisma, "twoprimary");
+      const first = await admit("twoprimary", request.id);
+      await prisma.sceneGeneration.update({
+        where: { id: first.id },
+        data: { orchestrationState: "FAILED_TERMINAL", submissionBoundaryEnteredAt: new Date() },
+      });
+      // Bypassing the derivation entirely: the index still refuses.
+      await expect(
+        prisma.sceneGeneration.create({
+          data: {
+            id: "sgen_twoprimary_b",
+            videoProjectId: PROJECT_A,
+            sourceStoryboardSceneId: STORYBOARD_SCENE,
+            assetId: ASSET_A,
+            sourceAnalysisRevision: 1,
+            requestHash: `sha256:v2:${"9".repeat(63)}1`,
+            providerName: "wavespeed",
+            providerModelId: "wavespeed-ai/open-video/image-to-video",
+            requestCompiledPrompt: "p",
+            requestDurationSeconds: 5,
+            requestAspectRatio: "16:9",
+            requestModelKey: "wavespeed-open-video",
+            requestTargetOutputResolution: "1080p",
+            requestNativeGenerationResolution: "1080p",
+            requestResolutionNormalization: "NONE",
+            requestNativeMeetsTarget: true,
+            requestRenderedPrompt: "p",
+            generationSceneRequestId: request.id,
+            attemptOrdinal: 9,
+            attemptKind: "PRIMARY",
+            submissionCertainty: "PRE_SUBMISSION",
+            orchestrationState: "FAILED_TERMINAL",
+            submissionBoundaryEnteredAt: new Date(),
+            pricingContractKey: "k",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
     });
 
     it("refuses an attempt whose request belongs to nobody it can see", async () => {
@@ -660,13 +871,16 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
    *
    * The Phase 4A-2a index tested the legacy `state` column, which an
    * orchestrated attempt never advances — so a terminal orchestrated attempt
-   * still looked active, and the recovery row meant to replace it could not be
-   * inserted. Every case below reuses the **same** requestHash, because the
-   * provider request facts really are the same; perturbing the hash would hide
-   * the defect rather than test it.
+   * still looked active, and the recovery meant to replace it could not be
+   * inserted.
+   *
+   * Request hashes are now **derived**, so the same-identity cases below arise
+   * naturally rather than by fixture arrangement: an initial request and a
+   * regeneration of the same scene, routed to the same model, are the same work
+   * and therefore produce the same hash. Nothing here can perturb a hash to
+   * sidestep the index, because nothing here supplies one.
    */
   describe("the active-request index reads both vocabularies", () => {
-    const SHARED_HASH = `sha256:v2:${"b".repeat(63)}7`;
     /** Legacy rows predate V2 identity, so their hash carries no v2 prefix. */
     const LEGACY_HASH = `${"e".repeat(64)}`;
 
@@ -698,14 +912,32 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       await expect(legacyRow("sgen_legacy_after", "QUEUED")).resolves.toBeTruthy();
     });
 
+    /**
+     * Two logical requests for one scene produce one request identity.
+     *
+     * The initial request's attempt and a regeneration's attempt describe the
+     * same work — same asset, prompt, duration, model — so their derived hashes
+     * are equal. While the first is live the second must be refused; once it is
+     * terminal the identity is released.
+     */
+    async function regenerationRequestOn(sceneId: string, suffix: string) {
+      const admitted = await repos.requests.admitUserRegeneration(
+        ORG_A,
+        { id: `genreq_regen_${suffix}`, generationSceneId: sceneId, requestedByUserId: "usr" },
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`regen failed: ${admitted.kind}`);
+      return admitted.request;
+    }
+
     it.each([["QUEUED"], ["SUBMITTING"], ["PROCESSING"], ["RECONCILIATION_PENDING"]] as const)(
-      "blocks a duplicate while an orchestrated attempt is %s",
+      "blocks a second logical request's attempt while the first is %s",
       async (state) => {
-        const { request } = await seedChain(prisma, `act${state}`);
-        const attempt = await admit(`act${state}`, request.id, { requestHash: SHARED_HASH });
+        const { scene, request } = await seedChain(prisma, `act${state}`);
+        const first = await admit(`act${state}`, request.id);
         if (state !== "QUEUED") {
           await prisma.sceneGeneration.update({
-            where: { id: attempt.id },
+            where: { id: first.id },
             data: {
               orchestrationState: state,
               submissionBoundaryEnteredAt: new Date(),
@@ -719,12 +951,9 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
             },
           });
         }
+        const regen = await regenerationRequestOn(scene.id, `act${state}`);
         await expect(
-          admit(`act${state}dup`, request.id, {
-            requestHash: SHARED_HASH,
-            attemptKind: "SYSTEM_RECOVERY",
-            pricingSnapshotId: `price_sgen_act${state}dup`,
-          }),
+          admit(`act${state}dup`, regen.id, { pricingSnapshotId: `price_act${state}dup` }),
         ).rejects.toMatchObject({ code: "P2002" });
       },
     );
@@ -735,11 +964,11 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       ["RECONCILIATION_EXHAUSTED"],
       ["OUTPUT_VERIFIED"],
       ["CANCELLED_PRE_SUBMISSION"],
-    ] as const)("permits a recovery row with the same hash after %s", async (state) => {
-      const { request } = await seedChain(prisma, `rel${state}`);
-      const attempt = await admit(`rel${state}`, request.id, { requestHash: SHARED_HASH });
+    ] as const)("permits a second request's attempt with the same hash after %s", async (state) => {
+      const { scene, request } = await seedChain(prisma, `rel${state}`);
+      const first = await admit(`rel${state}`, request.id);
       await prisma.sceneGeneration.update({
-        where: { id: attempt.id },
+        where: { id: first.id },
         data: {
           orchestrationState: state,
           ...(state === "CANCELLED_PRE_SUBMISSION"
@@ -748,16 +977,14 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
         },
       });
 
-      const recovery = await admit(`rel${state}rec`, request.id, {
-        // The SAME hash. The provider request facts are unchanged, and this is
-        // exactly what the old index made impossible.
-        requestHash: SHARED_HASH,
-        attemptKind: "SYSTEM_RECOVERY",
-        pricingSnapshotId: `price_sgen_rel${state}rec`,
+      const regen = await regenerationRequestOn(scene.id, `rel${state}`);
+      const second = await admit(`rel${state}rec`, regen.id, {
+        pricingSnapshotId: `price_rel${state}rec`,
       });
-      expect(recovery.attemptKind).toBe("SYSTEM_RECOVERY");
-      expect(recovery.requestHash).toBe(SHARED_HASH);
-      expect(recovery.attemptOrdinal).toBe(2);
+      // Same derived identity, admitted because the first attempt finished.
+      expect(second.requestHash).toBe(first.requestHash);
+      expect(second.attemptKind).toBe("PRIMARY");
+      expect(second.attemptOrdinal).toBe(1);
     });
   });
 
@@ -955,10 +1182,11 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
     it("increases the sequence monotonically per aggregate", async () => {
       const { job } = await seedChain(prisma, "seq");
       let version = 0;
+      // RESERVING -> RESERVED is absent: it belongs to Transaction B, and the
+      // generic API refuses it.
       for (const [from, to] of [
         ["CREATED", "RESERVING"],
-        ["RESERVING", "RESERVED"],
-        ["RESERVED", "GENERATING"],
+        ["RESERVING", "CANCELLED"],
       ] as const) {
         const moved = await repos.jobs.transition({
           organizationId: ORG_A,
@@ -972,7 +1200,61 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
         version = moved.value.stateVersion;
       }
       const history = await repos.events.listForAggregate(ORG_A, "JOB", job.id);
-      expect(history.map((e) => e.sequence)).toEqual([1, 2, 3, 4]);
+      expect(history.map((e) => e.sequence)).toEqual([1, 2, 3]);
+    });
+
+    it("refuses the edges that belong to an atomic primitive", async () => {
+      // Adding a primitive achieves nothing if the same edge stays reachable
+      // beside it: a caller could still produce a RESERVED job with no
+      // reservation behind it.
+      const { job, request } = await seedChain(prisma, "reserved");
+      const moved = await repos.jobs.transition({
+        organizationId: ORG_A,
+        id: job.id,
+        expectedState: "CREATED",
+        expectedVersion: 0,
+        nextState: "RESERVING",
+        context: ctx(),
+      });
+      if (moved.kind !== "APPLIED") throw new Error("expected APPLIED");
+
+      const bypass = await repos.jobs.transition({
+        organizationId: ORG_A,
+        id: job.id,
+        expectedState: "RESERVING",
+        expectedVersion: moved.value.stateVersion,
+        nextState: "RESERVED",
+        context: ctx(),
+      });
+      expect(bypass.kind).toBe("TRANSITION_RESERVED");
+      expect((await repos.jobs.findById(ORG_A, job.id))?.state).toBe("RESERVING");
+      expect(await repos.reservations.findByJobId(ORG_A, job.id)).toBeNull();
+
+      // Attempt admission owns PENDING -> GENERATING on a request.
+      const startBypass = await repos.requests.transition({
+        organizationId: ORG_A,
+        id: request.id,
+        expectedState: "PENDING",
+        expectedVersion: 0,
+        nextState: "GENERATING",
+        context: ctx(),
+      });
+      expect(startBypass.kind).toBe("TRANSITION_RESERVED");
+
+      // Transaction F owns GENERATING -> DELIVERED, and it is deferred.
+      await admit("reserved", request.id);
+      const current = await repos.requests.findById(ORG_A, request.id);
+      expect(current?.state).toBe("GENERATING");
+      const deliverBypass = await repos.requests.transition({
+        organizationId: ORG_A,
+        id: request.id,
+        expectedState: "GENERATING",
+        expectedVersion: current!.stateVersion,
+        nextState: "DELIVERED",
+        context: ctx(),
+      });
+      expect(deliverBypass.kind).toBe("TRANSITION_RESERVED");
+      expect((await repos.requests.findById(ORG_A, request.id))?.state).toBe("GENERATING");
     });
 
     it("offers no update or delete method for history", () => {
@@ -1030,7 +1312,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
     it("round-trips every field of the domain decision without precision loss", async () => {
       const { request } = await seedChain(prisma, "price");
       const attempt = await admit("price", request.id);
-      const domain = domainSnapshot();
+      const domain = domainSnapshot(undefined, "HIGH_QUALITY_AI");
       const stored = await repos.pricing.findByAttemptId(ORG_A, attempt.id);
       if (stored === null) throw new Error("expected a stored snapshot");
 
@@ -1045,20 +1327,21 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       // BIGINT round-trip: the integers come back exactly, not as floats.
       expect(stored.estimatedStableCostMicroUsd).toBe(BigInt(domain.estimatedStableCostMicroUsd));
       expect(stored.pricingEffectiveAtEpochMs).toBe(BigInt(domain.pricingEffectiveAt));
-      // OpenVideo: 5 billable seconds at 60,000 micro-USD, plus the 30% buffer.
+      // OpenVideo: 5 billable seconds at 60,000 micro-USD, plus the 50%
+      // high-quality buffer the parent job's tier requires.
       expect(stored.estimatedStableCostMicroUsd).toBe(300_000n);
-      expect(stored.estimatedPlanningCostMicroUsd).toBe(390_000n);
-      expect(stored.riskBufferBps).toBe(costRiskProfile("NORMAL_AI").bufferBps);
+      expect(stored.estimatedPlanningCostMicroUsd).toBe(450_000n);
+      expect(stored.riskBufferBps).toBe(costRiskProfile("HIGH_QUALITY_AI").bufferBps);
     });
 
     it("is not rewritten when the in-memory catalog would price differently", async () => {
       const { request } = await seedChain(prisma, "frozen");
       const attempt = await admit("frozen", request.id);
-      const later = domainSnapshot(undefined, "HIGH_QUALITY_AI");
-      expect(later.estimatedPlanningCostMicroUsd).toBe(450_000);
+      const later = domainSnapshot(undefined, "NORMAL_AI");
+      expect(later.estimatedPlanningCostMicroUsd).toBe(390_000);
       const stored = await repos.pricing.findByAttemptId(ORG_A, attempt.id);
-      expect(stored?.estimatedPlanningCostMicroUsd).toBe(390_000n);
-      expect(stored?.riskProfileKey).toBe("NORMAL_AI");
+      expect(stored?.estimatedPlanningCostMicroUsd).toBe(450_000n);
+      expect(stored?.riskProfileKey).toBe("HIGH_QUALITY_AI");
     });
 
     it("keeps an FX rate immutable and undeletable while a snapshot names it", async () => {

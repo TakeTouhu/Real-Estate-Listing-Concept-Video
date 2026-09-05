@@ -429,7 +429,24 @@ and ADR-0020.
   attempt admission became single commits; each attempt is bound to the exact
   pricing contract it was priced by; unit derivation delegates to the customer
   pricing contract instead of reimplementing it; and cancellation stops where no
-  provider can yet have been paid.
+  provider can yet have been paid. Corrected again after the admission review:
+  attempt admission no longer believes anything a persisted row already knows —
+  the request identity, the asset, the prompt, the duration, the aspect ratio,
+  the target resolution and the attempt kind are all derived inside the
+  transaction from the scene and the job, so a caller can no longer offer its
+  own V2 digest for identical work and walk past the duplicate-submission
+  protection. A job snapshots the project's output configuration at admission
+  rather than reading mutable settings later; one PRIMARY and one live attempt
+  per logical request are held by partial unique indexes as well as by
+  derivation; the first attempt starts its request in the same commit; the
+  pricing binding now also covers duration, native tier, risk profile and
+  execution mode, so a high-quality job cannot be planned at the normal buffer;
+  the generic transition methods refuse the edges an atomic transaction owns;
+  Transaction B moves the reservation it creates rather than writing history for
+  a transition that never happened; a concurrent regeneration race returns a
+  business outcome instead of a raw database error; and an exchange rate named
+  by a pricing snapshot is persisted, validated and conflict-checked inside the
+  same commit.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
