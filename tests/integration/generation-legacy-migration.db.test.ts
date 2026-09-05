@@ -161,7 +161,7 @@ describe.skipIf(!HAS_DB)("legacy scene generations are left exactly as they were
     // Fails closed rather than inventing an attempt kind and a certainty. The
     // legacy row stays readable through the repository that owns it.
     const attempts = createSceneGenerationAttemptRepository(prisma);
-    await expect(attempts.findById("sgen_legacy_processing")).rejects.toThrow(
+    await expect(attempts.findById(ORG, "sgen_legacy_processing")).rejects.toThrow(
       /predates orchestration/,
     );
   });

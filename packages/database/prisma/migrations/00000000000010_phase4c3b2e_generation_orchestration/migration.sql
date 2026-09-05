@@ -63,6 +63,7 @@ ALTER TABLE "scene_generations" ADD COLUMN     "attemptKind" "GenerationAttemptK
 ADD COLUMN     "attemptOrdinal" INTEGER,
 ADD COLUMN     "generationSceneRequestId" TEXT,
 ADD COLUMN     "orchestrationState" "GenerationAttemptState",
+ADD COLUMN     "pricingContractKey" TEXT,
 ADD COLUMN     "providerAcceptedAt" TIMESTAMP(3),
 ADD COLUMN     "reconciliationDeadlineAt" TIMESTAMP(3),
 ADD COLUMN     "reconciliationResolvedAt" TIMESTAMP(3),
@@ -186,6 +187,7 @@ CREATE TABLE "fx_rate_snapshots" (
 -- CreateTable
 CREATE TABLE "generation_transition_events" (
     "id" TEXT NOT NULL,
+    "organizationId" TEXT NOT NULL,
     "aggregateType" "GenerationTransitionAggregateType" NOT NULL,
     "aggregateId" TEXT NOT NULL,
     "sequence" INTEGER NOT NULL,
@@ -225,13 +227,16 @@ CREATE UNIQUE INDEX "generation_scenes_generationJobId_position_key" ON "generat
 CREATE INDEX "scene_generation_requests_generationSceneId_idx" ON "scene_generation_requests"("generationSceneId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "scene_generation_requests_generationSceneId_kind_userRegene_key" ON "scene_generation_requests"("generationSceneId", "kind", "userRegenerationOrdinal");
+CREATE UNIQUE INDEX "scene_generation_requests_id_generationSceneId_key" ON "scene_generation_requests"("id", "generationSceneId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "generation_pricing_snapshots_sceneGenerationId_key" ON "generation_pricing_snapshots"("sceneGenerationId");
 
 -- CreateIndex
 CREATE INDEX "generation_pricing_snapshots_contractKey_idx" ON "generation_pricing_snapshots"("contractKey");
+
+-- CreateIndex
+CREATE INDEX "generation_transition_events_organizationId_idx" ON "generation_transition_events"("organizationId");
 
 -- CreateIndex
 CREATE INDEX "generation_transition_events_aggregateId_idx" ON "generation_transition_events"("aggregateId");
@@ -259,6 +264,9 @@ ALTER TABLE "generation_reservations" ADD CONSTRAINT "generation_reservations_ge
 
 -- AddForeignKey
 ALTER TABLE "generation_scenes" ADD CONSTRAINT "generation_scenes_generationJobId_fkey" FOREIGN KEY ("generationJobId") REFERENCES "generation_jobs"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "generation_scenes" ADD CONSTRAINT "generation_scenes_currentDeliveredRequestId_id_fkey" FOREIGN KEY ("currentDeliveredRequestId", "id") REFERENCES "scene_generation_requests"("id", "generationSceneId") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "scene_generation_requests" ADD CONSTRAINT "scene_generation_requests_generationSceneId_fkey" FOREIGN KEY ("generationSceneId") REFERENCES "generation_scenes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -380,17 +388,36 @@ ALTER TABLE "scene_generations"
 -- property of units already counted, not an additional allowance, and a row
 -- claiming 2 total with 3 high-quality would be selling something that does not
 -- exist.
+-- The product's duration tiers, not an inequality.
+--
+-- An inequality (`units > 0`) admitted a 90-second job holding one unit, and a
+-- ceil() written a second time in application code turned 91 seconds into four
+-- units -- inventing an entitlement tier the product does not sell. The tiers
+-- are stated exactly, and 91 seconds is refused rather than converted.
+ALTER TABLE "generation_jobs"
+  ADD CONSTRAINT "generation_jobs_duration_check"
+  CHECK ("requestedDurationSeconds" BETWEEN 1 AND 90);
+
 ALTER TABLE "generation_jobs"
   ADD CONSTRAINT "generation_jobs_units_check"
   CHECK (
-    "requiredVideoUnits" > 0
-    AND "requiredHighQualityUnits" >= 0
-    AND "requiredHighQualityUnits" <= "requiredVideoUnits"
+    "requiredVideoUnits" = CASE
+      WHEN "requestedDurationSeconds" <= 30 THEN 1
+      WHEN "requestedDurationSeconds" <= 60 THEN 2
+      ELSE 3
+    END
   );
 
+-- High quality marks units that are already counted; it never adds any.
+-- NORMAL holds none, HIGH_QUALITY holds exactly the total. Both halves are
+-- stated so neither `NORMAL` with high-quality units nor `HIGH_QUALITY` with
+-- none is constructible.
 ALTER TABLE "generation_jobs"
-  ADD CONSTRAINT "generation_jobs_duration_check"
-  CHECK ("requestedDurationSeconds" > 0);
+  ADD CONSTRAINT "generation_jobs_quality_units_check"
+  CHECK (
+    ("qualityTier" = 'NORMAL' AND "requiredHighQualityUnits" = 0)
+    OR ("qualityTier" = 'HIGH_QUALITY' AND "requiredHighQualityUnits" = "requiredVideoUnits")
+  );
 
 ALTER TABLE "generation_jobs"
   ADD CONSTRAINT "generation_jobs_state_version_check"
@@ -453,3 +480,127 @@ ALTER TABLE "generation_pricing_snapshots"
 ALTER TABLE "fx_rate_snapshots"
   ADD CONSTRAINT "fx_rate_snapshots_rate_check"
   CHECK ("rateNumerator" > 0 AND "rateDenominator" > 0);
+
+-- ---------------------------------------------------------------------------
+-- 11. The active-request index, taught to read two vocabularies.
+--
+-- This is a correctness fix, not a refinement. The Phase 4A-2a index tested
+-- `state`, the legacy column. An orchestrated attempt advances
+-- `orchestrationState` instead and leaves `state` at its `QUEUED` default
+-- forever — so an orchestrated attempt that reached FAILED_TERMINAL still
+-- looked active to the old predicate, and the SYSTEM_RECOVERY row that is
+-- supposed to replace it could not be inserted. The frozen rule that a retry
+-- uses a new attempt row was unreachable in practice.
+--
+-- One predicate, two branches, keyed on which vocabulary the row speaks:
+--
+--   orchestrationState IS NULL      -> legacy predicate, character for character
+--   orchestrationState IS NOT NULL  -> the orchestration active set
+--
+-- The legacy branch is copied unchanged. Rewriting it would re-judge rows
+-- admitted under a contract that no longer exists.
+--
+-- The orchestration branch lists only states in which THIS attempt is still
+-- live. The five terminal states release the identity, which is exactly what
+-- lets a recovery attempt reuse the same requestHash — the provider request
+-- facts really are the same, and pretending otherwise by perturbing the hash
+-- would defeat the duplicate-submission protection this index exists for.
+DROP INDEX "scene_generations_active_request_key";
+
+CREATE UNIQUE INDEX "scene_generations_active_request_key"
+  ON "scene_generations" ("videoProjectId", "requestHash")
+  WHERE (
+    ("orchestrationState" IS NULL
+      AND "state" IN ('QUEUED', 'SUBMITTING', 'PROCESSING', 'FAILED_RETRYABLE', 'SUBMISSION_UNKNOWN'))
+    OR
+    ("orchestrationState" IS NOT NULL
+      AND "orchestrationState" IN (
+        'QUEUED',
+        'SUBMITTING',
+        'PROCESSING',
+        'RECONCILIATION_PENDING',
+        'PROVIDER_SUCCEEDED',
+        'OUTPUT_INGESTING'
+      ))
+  );
+
+-- ---------------------------------------------------------------------------
+-- 12. Request uniqueness, in three partial indexes.
+--
+-- The unconditional index over (scene, kind, ordinal) was wrong twice.
+--
+-- It did not constrain INITIAL at all. Every INITIAL row carries a NULL
+-- ordinal, PostgreSQL treats NULLs as distinct, and so any number of initial
+-- requests per scene were legal.
+--
+-- And it made a FAILED user regeneration permanently occupy an entitlement
+-- slot the customer had not spent. The commercial rule is that a right is
+-- consumed on delivery; the index consumed it on creation, so a customer whose
+-- regeneration failed could never ask again.
+
+-- At most one initial request per scene.
+CREATE UNIQUE INDEX "scene_generation_requests_initial_key"
+  ON "scene_generation_requests" ("generationSceneId")
+  WHERE "kind" = 'INITIAL';
+
+-- An entitlement ordinal can be *spent* only once. Failed and cancelled
+-- requests stay in history and are not counted here, so a later request may
+-- reuse the ordinal they never consumed.
+CREATE UNIQUE INDEX "scene_generation_requests_delivered_ordinal_key"
+  ON "scene_generation_requests" ("generationSceneId", "userRegenerationOrdinal")
+  WHERE "kind" = 'USER_REGENERATION' AND "state" = 'DELIVERED';
+
+-- At most one regeneration in flight per scene. This is what stops two
+-- concurrent admissions from deriving the same next ordinal and both
+-- committing: whichever transaction commits second violates this index.
+CREATE UNIQUE INDEX "scene_generation_requests_active_key"
+  ON "scene_generation_requests" ("generationSceneId")
+  WHERE "kind" = 'USER_REGENERATION' AND "state" IN ('PENDING', 'GENERATING');
+
+-- ---------------------------------------------------------------------------
+-- 13. An orchestrated attempt must name the pricing contract it was priced by.
+--
+-- Nullable for legacy rows, which have no pricing decision at all and will
+-- never acquire one. Required for orchestrated rows, alongside the rest of the
+-- orchestration set.
+ALTER TABLE "scene_generations"
+  DROP CONSTRAINT "scene_generations_orchestration_all_or_none_check";
+
+ALTER TABLE "scene_generations"
+  ADD CONSTRAINT "scene_generations_orchestration_all_or_none_check"
+  CHECK (
+    (
+      "generationSceneRequestId" IS NULL
+      AND "attemptOrdinal" IS NULL
+      AND "attemptKind" IS NULL
+      AND "submissionCertainty" IS NULL
+      AND "orchestrationState" IS NULL
+      AND "pricingContractKey" IS NULL
+    )
+    OR (
+      "generationSceneRequestId" IS NOT NULL
+      AND "attemptOrdinal" IS NOT NULL
+      AND "attemptKind" IS NOT NULL
+      AND "submissionCertainty" IS NOT NULL
+      AND "orchestrationState" IS NOT NULL
+      AND "pricingContractKey" IS NOT NULL
+    )
+  );
+
+-- ---------------------------------------------------------------------------
+-- 14. ACCEPTED means a real provider reference, in both directions.
+--
+-- The provider contract has three outcomes, and only one of them establishes
+-- what the provider took. A response that cannot produce a reference has not
+-- established acceptance either — it belongs on the uncertainty path, which is
+-- why SUBMISSION_UNKNOWN never carries a reference.
+--
+-- Legacy rows are exempt: they carry NULL certainty, and some hold references
+-- recorded under the older contract. Invalidating those would be a claim about
+-- history rather than a rule about new work.
+ALTER TABLE "scene_generations"
+  ADD CONSTRAINT "scene_generations_accepted_requires_reference_check"
+  CHECK (
+    "submissionCertainty" IS DISTINCT FROM 'ACCEPTED'
+    OR ("providerPredictionId" IS NOT NULL AND "providerAcceptedAt" IS NOT NULL)
+  );

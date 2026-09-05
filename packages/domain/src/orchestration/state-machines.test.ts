@@ -60,8 +60,21 @@ describe("the customer video lifecycle", () => {
     ["FAILED_TERMINAL", "CREATED"],
     ["CANCELLED", "GENERATING"],
     ["CANCELLED", "RESERVED"],
+    // Cancellation past RESERVED is not unconditionally safe: a job in
+    // GENERATING may hold attempts already at a provider, and that decision
+    // cannot be made from the job's own state.
+    ["GENERATING", "CANCELLED"],
+    ["SCENES_READY", "CANCELLED"],
+    ["COMPOSITION_PENDING", "CANCELLED"],
+    ["COMPOSING", "CANCELLED"],
   ] as const)("refuses %s -> %s", (from, to) => {
     expect(canTransitionJob(from, to)).toBe(false);
+  });
+
+  it("permits cancellation only where no provider can yet have been paid", () => {
+    // Stated over the whole vocabulary so a later edge cannot quietly widen it.
+    const cancellable = GENERATION_JOB_STATES.filter((s) => canTransitionJob(s, "CANCELLED"));
+    expect(cancellable).toEqual(["CREATED", "RESERVING", "RESERVED"]);
   });
 
   it("keeps a delivered video delivered", () => {
@@ -131,8 +144,15 @@ describe("one logical scene", () => {
     ["FAILED_TERMINAL", "GENERATING"],
     ["CANCELLED", "PENDING"],
     ["READY", "FAILED_TERMINAL"],
+    // An attempt underneath may already be at a provider.
+    ["GENERATING", "CANCELLED"],
   ] as const)("refuses %s -> %s", (from, to) => {
     expect(canTransitionScene(from, to)).toBe(false);
+  });
+
+  it("permits cancellation only before generation starts", () => {
+    const cancellable = GENERATION_SCENE_STATES.filter((s) => canTransitionScene(s, "CANCELLED"));
+    expect(cancellable).toEqual(["PENDING"]);
   });
 
   it("never transitions to itself", () => {
@@ -147,7 +167,6 @@ describe("one customer-visible rendition request", () => {
     ["PENDING", "GENERATING"],
     ["GENERATING", "DELIVERED"],
     ["GENERATING", "FAILED_TERMINAL"],
-    ["GENERATING", "CANCELLED"],
     ["PENDING", "CANCELLED"],
   ] as const)("allows %s -> %s", (from, to) => {
     expect(canTransitionSceneRequest(from, to)).toBe(true);
@@ -165,8 +184,18 @@ describe("one customer-visible rendition request", () => {
     // A system recovery attempt does not restart the customer's request.
     ["GENERATING", "PENDING"],
     ["PENDING", "DELIVERED"],
+    // A request that reported itself cancelled while a paid call was in flight
+    // would be a lie about what the platform is doing.
+    ["GENERATING", "CANCELLED"],
   ] as const)("refuses %s -> %s", (from, to) => {
     expect(canTransitionSceneRequest(from, to)).toBe(false);
+  });
+
+  it("permits cancellation only before generation starts", () => {
+    const cancellable = SCENE_GENERATION_REQUEST_STATES.filter((s) =>
+      canTransitionSceneRequest(s, "CANCELLED"),
+    );
+    expect(cancellable).toEqual(["PENDING"]);
   });
 
   it("never transitions to itself", () => {

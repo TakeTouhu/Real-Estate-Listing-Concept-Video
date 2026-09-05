@@ -420,7 +420,16 @@ and ADR-0020.
   `SUBMITTING` may or may not have reached the provider and there is no way to
   find out now. Persistence only — no provider call, polling, reconciliation,
   ingestion, composition, entitlement ledger or payment, nothing constructs these
-  repositories at runtime, and the paid gate is unchanged.
+  repositories at runtime, and the paid gate is unchanged. Corrected after
+  review: every repository is organization-scoped rather than taking bare ids;
+  the active-request index reads both the legacy and orchestration vocabularies,
+  without which a terminal orchestrated attempt blocked its own recovery row;
+  request uniqueness became three partial indexes, so a failed regeneration no
+  longer occupies an entitlement slot the customer never spent; reservation and
+  attempt admission became single commits; each attempt is bound to the exact
+  pricing contract it was priced by; unit derivation delegates to the customer
+  pricing contract instead of reimplementing it; and cancellation stops where no
+  provider can yet have been paid.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

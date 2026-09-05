@@ -30,15 +30,24 @@ import type {
  * customer keeps what they already have.
  */
 const JOB_TRANSITIONS: Readonly<Record<GenerationJobState, readonly GenerationJobState[]>> = {
+  // Cancellation stops at RESERVED, and the reason is not tidiness.
+  //
+  // A job in GENERATING may already hold attempts in SUBMITTING, PROCESSING or
+  // RECONCILIATION_PENDING — a provider may be working on it and billing for
+  // it. Whether cancelling is safe therefore cannot be decided from the job's
+  // own state, and an unconditional edge here would let a caller cancel a paid
+  // call by looking only at the aggregate it happens to hold.
+  //
+  // A future conditional workflow may cancel during early GENERATING after
+  // proving no attempt crossed the provider boundary. That is a composite
+  // decision over attempt rows, not a transition, and it is not authorized in
+  // this phase. Until it exists, this table fails closed.
   CREATED: ["RESERVING", "CANCELLED", "FAILED_TERMINAL"],
   RESERVING: ["RESERVED", "CANCELLED", "FAILED_TERMINAL"],
   RESERVED: ["GENERATING", "CANCELLED", "FAILED_TERMINAL"],
-  GENERATING: ["SCENES_READY", "CANCELLED", "FAILED_TERMINAL"],
-  SCENES_READY: ["COMPOSITION_PENDING", "CANCELLED", "FAILED_TERMINAL"],
-  COMPOSITION_PENDING: ["COMPOSING", "CANCELLED", "FAILED_TERMINAL"],
-  // Past this point the platform is spending its own compute on work the
-  // customer has already paid for, and a cancellation would strand it. Failure
-  // is still reachable; user cancellation is not.
+  GENERATING: ["SCENES_READY", "FAILED_TERMINAL"],
+  SCENES_READY: ["COMPOSITION_PENDING", "FAILED_TERMINAL"],
+  COMPOSITION_PENDING: ["COMPOSING", "FAILED_TERMINAL"],
   COMPOSING: ["DELIVERABLE_VALIDATING", "FAILED_TERMINAL"],
   DELIVERABLE_VALIDATING: ["DELIVERABLE_READY", "FAILED_TERMINAL"],
   // Not terminal, and not failable. A delivered video stays delivered.
@@ -71,8 +80,10 @@ const RESERVATION_TRANSITIONS: Readonly<
 const SCENE_TRANSITIONS: Readonly<
   Record<GenerationSceneState, readonly GenerationSceneState[]>
 > = {
+  // Same rule as the job: once a scene is GENERATING an attempt may already be
+  // at a provider, so cancellation is not unconditionally safe.
   PENDING: ["GENERATING", "CANCELLED", "FAILED_TERMINAL"],
-  GENERATING: ["READY", "CANCELLED", "FAILED_TERMINAL"],
+  GENERATING: ["READY", "FAILED_TERMINAL"],
   // A ready scene can be regenerated, and a failed revision returns it to
   // READY: the customer keeps the rendition they already had.
   READY: ["REVISING"],
@@ -93,7 +104,10 @@ const REQUEST_TRANSITIONS: Readonly<
   Record<SceneGenerationRequestState, readonly SceneGenerationRequestState[]>
 > = {
   PENDING: ["GENERATING", "CANCELLED", "FAILED_TERMINAL"],
-  GENERATING: ["DELIVERED", "CANCELLED", "FAILED_TERMINAL"],
+  // No cancellation once generating: the attempt underneath may be at a
+  // provider, and a request that reports itself cancelled while a paid call is
+  // in flight is a lie about what the platform is doing.
+  GENERATING: ["DELIVERED", "FAILED_TERMINAL"],
   DELIVERED: [],
   FAILED_TERMINAL: [],
   CANCELLED: [],

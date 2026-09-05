@@ -4,16 +4,29 @@ import type { GenerationAttemptState, SubmissionCertainty } from "./types";
  * What must be true of an attempt row once a provider outcome is known.
  *
  * The pairing of certainty with execution state is not free-form. Three
- * combinations are the whole contract, and the invariant that ties them
- * together is the one that keeps a fabricated provider reference out of the
- * database:
+ * combinations are the whole contract, and they follow
+ * `ProviderSubmissionOutcome` exactly:
  *
- *     providerPredictionId != null  =>  certainty == ACCEPTED
+ *     ACCEPTED               requires a real provider reference
+ *     DEFINITIVELY_REJECTED  has none, and never will
+ *     SUBMISSION_UNKNOWN     has none *yet*, and may never
  *
- * Stated in that direction on purpose. The converse is false: an accepted
- * submission whose response could not be parsed has no reference to record, and
- * inventing one so the column looks populated would put an unusable id into a
- * paid attempt's permanent record.
+ * The relationship is therefore an equivalence for orchestrated rows, not a
+ * one-way implication:
+ *
+ *     certainty == ACCEPTED  <=>  providerPredictionId != null
+ *
+ * An earlier version of this comment claimed the converse was false — that an
+ * accepted submission whose response could not be parsed would be `ACCEPTED`
+ * with no reference. That contradicts the provider contract: a response that
+ * cannot establish a reference has not established acceptance either, and the
+ * outcome belongs on the uncertainty path. `SUBMISSION_UNKNOWN` exists for
+ * precisely that case, which is why it never carries a reference.
+ *
+ * Legacy rows are exempt. They predate the certainty axis entirely, carry NULL
+ * certainty, and some hold a provider reference recorded under the old
+ * contract — invalidating them would be a claim about history rather than a
+ * rule about new work.
  */
 
 /** The persistable shape of one provider submission outcome. */
@@ -73,7 +86,11 @@ export function isCoherentAttemptRecord(input: {
   readonly state: GenerationAttemptState;
   readonly providerPredictionId: string | null;
 }): boolean {
+  // Both directions. A reference without acceptance is a fabricated id; an
+  // acceptance without a reference is an outcome that never established what
+  // the provider took, which is uncertainty wearing the wrong label.
   if (input.providerPredictionId !== null && input.certainty !== "ACCEPTED") return false;
+  if (input.certainty === "ACCEPTED" && input.providerPredictionId === null) return false;
 
   switch (input.certainty) {
     case "PRE_SUBMISSION":

@@ -1,3 +1,4 @@
+import { videoUnitsForSeconds, type PricingResult } from "../pricing/index";
 import {
   MAX_USER_REGENERATIONS_PER_SCENE,
   type GenerationAttemptKind,
@@ -14,9 +15,6 @@ import {
  * "when they asked" and never "when the platform tried".
  */
 
-/** One video unit covers 30 seconds. The same rule the pricing domain uses. */
-const SECONDS_PER_VIDEO_UNIT = 30;
-
 /**
  * The units one job must hold before any provider is contacted.
  *
@@ -31,17 +29,32 @@ export interface RequiredGenerationUnits {
   readonly highQualityUnits: number;
 }
 
+/**
+ * How many units a job requires, **delegated** to the customer pricing domain.
+ *
+ * This function used to carry its own `Math.ceil(seconds / 30)`, which was a
+ * second implementation of a contract Phase 4C-3B-2D already owns — and it
+ * disagreed with the original in the place that matters commercially: it
+ * happily turned 91 seconds into four units, inventing an entitlement tier the
+ * product does not sell. The product ceiling is 90 seconds, and beyond it the
+ * correct answer is a refusal, not a bigger number.
+ *
+ * Returning a `PricingResult` rather than throwing, because an over-long
+ * duration is an ordinary customer input the caller must handle, and it is the
+ * same shape `videoUnitsForSeconds` already uses.
+ */
 export function requiredUnitsFor(
   qualityTier: GenerationQualityTier,
   totalDurationSeconds: number,
-): RequiredGenerationUnits {
-  if (!Number.isSafeInteger(totalDurationSeconds) || totalDurationSeconds <= 0) {
-    throw new RangeError("Generation duration must be a positive whole number of seconds");
-  }
-  const totalVideoUnits = Math.ceil(totalDurationSeconds / SECONDS_PER_VIDEO_UNIT);
+): PricingResult<RequiredGenerationUnits> {
+  const units = videoUnitsForSeconds(totalDurationSeconds);
+  if (!units.ok) return units;
   return {
-    totalVideoUnits,
-    highQualityUnits: qualityTier === "HIGH_QUALITY" ? totalVideoUnits : 0,
+    ok: true,
+    value: {
+      totalVideoUnits: units.value,
+      highQualityUnits: qualityTier === "HIGH_QUALITY" ? units.value : 0,
+    },
   };
 }
 

@@ -465,6 +465,11 @@ model SceneGeneration {
   /// state, and the reason `providerPredictionId` can be trusted: a database
   /// CHECK requires ACCEPTED whenever a prediction id is present.
   submissionCertainty               SubmissionCertainty?
+  /// The pricing contract this attempt was admitted against, copied from its
+  /// snapshot at admission and never supplied by a caller. It is what lets the
+  /// provider boundary check that the cost decision belongs to *this* attempt
+  /// rather than merely existing somewhere.
+  pricingContractKey                String?
   /// The orchestration execution state. A separate column from `state` rather
   /// than a rewrite of it: legacy rows keep the legacy vocabulary, because
   /// relabelling a historical state is a claim nobody can verify now.
@@ -716,11 +721,16 @@ model GenerationScene {
   /// The delivered request currently selected for this scene. No FK: it points
   /// into a child table, and a circular required reference would make insertion
   /// order load-bearing.
+  /// The delivered request currently selected for this scene. Constrained by a
+  /// composite foreign key to `(id, generationSceneId)` on the request, so a
+  /// non-null value can only ever name a request belonging to THIS scene --
+  /// a nonexistent id and another scene's id are both rejected by PostgreSQL.
   currentDeliveredRequestId String?
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
   generationJob             GenerationJob            @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
-  requests                  SceneGenerationRequest[]
+  requests                  SceneGenerationRequest[] @relation("SceneRequests")
+  currentDeliveredRequest   SceneGenerationRequest?  @relation("SceneCurrentDelivered", fields: [currentDeliveredRequestId, id], references: [id, generationSceneId], onDelete: Restrict)
 
   @@unique([generationJobId, position])
   @@index([generationJobId])
@@ -747,10 +757,13 @@ model SceneGenerationRequest {
   createdAt               DateTime                    @default(now())
   deliveredAt             DateTime?
   failedAt                DateTime?
-  generationScene         GenerationScene             @relation(fields: [generationSceneId], references: [id], onDelete: Restrict)
+  generationScene         GenerationScene             @relation("SceneRequests", fields: [generationSceneId], references: [id], onDelete: Restrict)
+  currentForScenes        GenerationScene[]           @relation("SceneCurrentDelivered")
   attempts                SceneGeneration[]
 
-  @@unique([generationSceneId, kind, userRegenerationOrdinal])
+  /// The composite key the scene's `currentDeliveredRequestId` points through,
+  /// so a scene can only ever name a request that belongs to it.
+  @@unique([id, generationSceneId])
   @@index([generationSceneId])
   @@map("scene_generation_requests")
 }
@@ -819,27 +832,34 @@ model FxRateSnapshot {
 ///
 /// There is no update or delete path anywhere in the repository layer.
 model GenerationTransitionEvent {
-  id            String                            @id
-  aggregateType GenerationTransitionAggregateType
-  aggregateId   String
+  id             String                            @id
+  /// Operational tenant scope, immutable, supplied by the scoped orchestration
+  /// operation that appends the event -- never read out of `safeMetadata`.
+  /// Carried here so history can be queried safely without reconstructing
+  /// ownership from a polymorphic `aggregateId`. Deliberately NOT a foreign key
+  /// with a cascade: paid history must not be deletable through an org row.
+  organizationId String
+  aggregateType  GenerationTransitionAggregateType
+  aggregateId    String
   /// Per-aggregate, starting at 1. Unique with the aggregate, so a gap or a
   /// duplicate is a detectable defect rather than a silent reordering.
-  sequence      Int
-  fromState     String?
-  toState       String
-  eventType     String
-  actorType     GenerationTransitionActorType
-  actorUserId   String?
-  reasonCode    String?
+  sequence       Int
+  fromState      String?
+  toState        String
+  eventType      String
+  actorType      GenerationTransitionActorType
+  actorUserId    String?
+  reasonCode     String?
   /// Opaque. Groups every operation caused by one user request.
-  correlationId String
-  causationId   String?
+  correlationId  String
+  causationId    String?
   /// Allowlisted keys only. Prompts, provider payloads, URLs and credentials
   /// are rejected before they reach this column.
-  safeMetadata  Json                              @default("{}")
-  createdAt     DateTime                          @default(now())
+  safeMetadata   Json                              @default("{}")
+  createdAt      DateTime                          @default(now())
 
   @@unique([aggregateType, aggregateId, sequence])
+  @@index([organizationId])
   @@index([aggregateId])
   @@index([correlationId])
   @@map("generation_transition_events")

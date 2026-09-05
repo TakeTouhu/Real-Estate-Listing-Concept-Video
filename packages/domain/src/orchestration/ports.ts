@@ -1,4 +1,5 @@
 import type { PricingSnapshot } from "../pricing/index";
+import type { AttemptOutcomePersistence } from "./certainty";
 import type { SafeTransitionMetadata } from "./transition-metadata";
 import type {
   GenerationAttemptKind,
@@ -17,12 +18,20 @@ import type {
 /**
  * The persistence contract for generation orchestration.
  *
- * Every mutation is a **transition**, never a write. There is deliberately no
- * `update(id, fields)` anywhere in this file: an open write is how a state
- * machine gets bypassed, and the states these rows carry decide whether a paid
- * provider call is authorized. A caller must name the state and version it
- * believes it is replacing, and the implementation must refuse if either has
- * moved.
+ * Two rules shape every method here.
+ *
+ * **Every mutation is a transition, never a write.** There is deliberately no
+ * `update(id, fields)`: an open write is how a state machine gets bypassed, and
+ * the states these rows carry decide whether a paid provider call is
+ * authorized. A caller must name the state and version it believes it is
+ * replacing, and the implementation must refuse if either has moved.
+ *
+ * **Every method is organization-scoped.** An id is not an authorization. Bare
+ * ids let any caller that obtains one reach another tenant's generation
+ * history, so `organizationId` is a required parameter throughout and is
+ * resolved through the `VideoProject` ownership boundary the rest of the
+ * schema already uses. A cross-tenant id behaves exactly like a missing one:
+ * no read, no mutation, no event, no disclosure that the row exists.
  */
 
 /** What every transition must supply so history is complete and traceable. */
@@ -42,10 +51,11 @@ export interface TransitionContext {
  * The result of a compare-and-set transition.
  *
  * A discriminated union rather than a boolean or a throw. `LOST` is an ordinary,
- * expected outcome — another worker got there first — and the caller's correct
- * response is to reload and re-evaluate, never to retry the side effect. A
- * boolean invites `if (!ok) retry()`, which is the exact bug this phase exists
- * to make impossible.
+ * expected outcome — another worker got there first, or the row belongs to
+ * another tenant — and the caller's correct response is to reload and
+ * re-evaluate, never to retry the side effect. A boolean invites
+ * `if (!ok) retry()`, which is the exact bug this phase exists to make
+ * impossible.
  */
 export type TransitionOutcome<T> =
   | { readonly kind: "APPLIED"; readonly value: T }
@@ -54,6 +64,7 @@ export type TransitionOutcome<T> =
 export interface GenerationJob {
   readonly id: string;
   readonly videoProjectId: string;
+  readonly organizationId: string;
   readonly requestedByUserId: string;
   readonly qualityTier: GenerationQualityTier;
   readonly targetOutputResolution: string;
@@ -67,6 +78,17 @@ export interface GenerationJob {
   readonly updatedAt: Date;
 }
 
+/**
+ * A new job, with the entitlement arithmetic **absent**.
+ *
+ * `requiredVideoUnits` and `requiredHighQualityUnits` are not accepted from a
+ * caller. They are a deterministic function of duration and quality tier, and
+ * accepting them independently made three impossible things constructible: a
+ * 90-second job holding one unit, a `NORMAL` job with high-quality units, and a
+ * `HIGH_QUALITY` job with none. They are derived at the admission boundary from
+ * the customer pricing contract, and a duration the product does not sell is
+ * refused rather than converted into more units.
+ */
 export interface NewGenerationJob {
   readonly id: string;
   readonly videoProjectId: string;
@@ -74,9 +96,13 @@ export interface NewGenerationJob {
   readonly qualityTier: GenerationQualityTier;
   readonly targetOutputResolution: string;
   readonly requestedDurationSeconds: number;
-  readonly requiredVideoUnits: number;
-  readonly requiredHighQualityUnits: number;
 }
+
+/** Why a job could not be admitted. Closed, and never provider-derived. */
+export type CreateGenerationJobOutcome =
+  | { readonly kind: "CREATED"; readonly job: GenerationJob }
+  | { readonly kind: "PROJECT_NOT_FOUND" }
+  | { readonly kind: "DURATION_NOT_SUPPORTED" };
 
 export interface GenerationReservation {
   readonly id: string;
@@ -103,15 +129,32 @@ export interface GenerationReservation {
   readonly updatedAt: Date;
 }
 
-export interface NewGenerationReservation {
-  readonly id: string;
+/**
+ * Transaction B's input.
+ *
+ * The unit counts are absent here too, and for a stronger reason than at job
+ * creation: the reservation must hold exactly what the job was admitted for.
+ * Accepting them independently would let a reservation cover fewer units than
+ * the job it belongs to — an under-charge no later reconciliation could
+ * detect, because both rows would look internally consistent.
+ */
+export interface ReserveGenerationJobInput {
+  readonly reservationId: string;
   readonly generationJobId: string;
+  readonly expectedJobVersion: number;
   readonly billingCycleKey: string;
   readonly billingCycleStartedAt: Date;
   readonly billingCycleEndsAt: Date;
-  readonly reservedTotalVideoUnits: number;
-  readonly reservedHighQualityUnits: number;
 }
+
+export type ReserveGenerationJobOutcome =
+  | {
+      readonly kind: "RESERVED";
+      readonly job: GenerationJob;
+      readonly reservation: GenerationReservation;
+    }
+  | { readonly kind: "LOST" }
+  | { readonly kind: "ALREADY_RESERVED" };
 
 export interface GenerationScene {
   readonly id: string;
@@ -159,22 +202,33 @@ export interface SceneGenerationRequestRecord {
   readonly failedAt: Date | null;
 }
 
-export interface NewSceneGenerationRequest {
+/**
+ * Admitting a user regeneration.
+ *
+ * **The ordinal is absent, deliberately.** A caller nominating `1` or `2` is a
+ * caller asserting how much of the customer's entitlement is already spent,
+ * which is not a fact any caller holds — it is derived from delivered requests
+ * inside the transaction that creates the row. Accepting it would make the
+ * entitlement as trustworthy as the least careful call site.
+ */
+export interface AdmitUserRegenerationInput {
   readonly id: string;
   readonly generationSceneId: string;
-  readonly kind: SceneGenerationRequestKind;
-  readonly userRegenerationOrdinal: number | null;
-  readonly requestedByUserId: string | null;
+  readonly requestedByUserId: string;
 }
+
+export type AdmitUserRegenerationOutcome =
+  | { readonly kind: "ADMITTED"; readonly request: SceneGenerationRequestRecord }
+  | { readonly kind: "SCENE_NOT_FOUND" }
+  | { readonly kind: "ENTITLEMENT_EXHAUSTED" }
+  | { readonly kind: "REGENERATION_ALREADY_ACTIVE" };
 
 /**
  * One provider attempt, in the orchestration vocabulary.
  *
  * A projection of the existing `scene_generations` row, not a second table.
- * The row already carries the immutable request snapshot, the request hash and
- * the provider identity; this adds the orchestration linkage and the certainty
- * axis. Legacy rows have `generationSceneRequestId === null` and are readable
- * but never orchestrated.
+ * Legacy rows have `generationSceneRequestId === null` and are readable but
+ * never orchestrated.
  */
 export interface GenerationAttempt {
   readonly id: string;
@@ -188,6 +242,14 @@ export interface GenerationAttempt {
   readonly providerName: string;
   readonly providerModelId: string;
   readonly requestHash: string;
+  /**
+   * The pricing contract this attempt was admitted against.
+   *
+   * Copied from the snapshot at admission and never supplied by a caller. It is
+   * what lets the provider boundary check that the cost decision belongs to
+   * *this* attempt rather than merely existing.
+   */
+  readonly pricingContractKey: string;
   readonly providerPredictionId: string | null;
   readonly submissionBoundaryEnteredAt: Date | null;
   readonly providerAcceptedAt: Date | null;
@@ -199,8 +261,55 @@ export interface GenerationAttempt {
   readonly createdAt: Date;
 }
 
+/**
+ * Transaction C's input: admitting one provider attempt.
+ *
+ * `videoProjectId` is absent. It is resolved from the parent request through
+ * scene → job → project, because a caller-supplied project id is a caller
+ * asserting which tenant's history this attempt joins.
+ */
+export interface AdmitGenerationAttemptInput {
+  readonly id: string;
+  readonly generationSceneRequestId: string;
+  readonly attemptKind: GenerationAttemptKind;
+  readonly requestHash: string;
+  readonly providerName: string;
+  readonly providerModelId: string;
+  /** The V2 model identity. Required: a new attempt may not be admitted V1. */
+  readonly requestModelKey: string;
+  readonly requestCompiledPrompt: string;
+  readonly requestRenderedPrompt: string;
+  readonly requestDurationSeconds: number;
+  readonly requestCameraMotion: string | null;
+  readonly requestAspectRatio: string;
+  readonly requestTargetOutputResolution: string;
+  readonly requestNativeGenerationResolution: string;
+  readonly requestResolutionNormalization: string;
+  readonly requestNativeMeetsTarget: boolean;
+  readonly sourceStoryboardSceneId: string;
+  readonly sourceAssetId: string;
+  readonly sourceAnalysisRevision: number;
+  /** The pricing decision. Its provider and model must match this attempt. */
+  readonly pricingSnapshotId: string;
+  readonly pricingSnapshot: PricingSnapshot;
+}
+
+export type AdmitGenerationAttemptOutcome =
+  | { readonly kind: "ADMITTED"; readonly attempt: GenerationAttempt }
+  | { readonly kind: "REQUEST_NOT_FOUND" }
+  | { readonly kind: "PRICING_BINDING_INVALID"; readonly reason: PricingBindingFailure };
+
+/** Why a pricing decision does not belong to the attempt it was offered for. */
+export type PricingBindingFailure =
+  | "PROVIDER_MISMATCH"
+  | "MODEL_KEY_MISMATCH"
+  | "CONTRACT_KEY_MISMATCH"
+  | "SNAPSHOT_MISSING"
+  | "SNAPSHOT_NOT_FOR_ATTEMPT";
+
 export interface GenerationTransitionEventRecord {
   readonly id: string;
+  readonly organizationId: string;
   readonly aggregateType: GenerationTransitionAggregateType;
   readonly aggregateId: string;
   readonly sequence: number;
@@ -217,10 +326,20 @@ export interface GenerationTransitionEventRecord {
 }
 
 export interface GenerationJobRepository {
-  /** Creates the job and its first transition event in one transaction. */
-  create(job: NewGenerationJob, context: TransitionContext): Promise<GenerationJob>;
-  findById(id: string): Promise<GenerationJob | null>;
+  /**
+   * Create a job and its first transition event in one transaction.
+   *
+   * Derives the entitlement arithmetic rather than accepting it, and refuses a
+   * duration the product does not sell.
+   */
+  create(
+    organizationId: string,
+    job: NewGenerationJob,
+    context: TransitionContext,
+  ): Promise<CreateGenerationJobOutcome>;
+  findById(organizationId: string, id: string): Promise<GenerationJob | null>;
   transition(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedState: GenerationJobState;
     readonly expectedVersion: number;
@@ -230,12 +349,25 @@ export interface GenerationJobRepository {
 }
 
 export interface GenerationReservationRepository {
-  create(
-    reservation: NewGenerationReservation,
+  /**
+   * Transaction B, as one commit.
+   *
+   * Creates the reservation, moves the job `RESERVING -> RESERVED`, and writes
+   * both transition events together. Split across two commits — as an earlier
+   * version was — a crash between them leaves a reservation whose job never
+   * moved, or a moved job with no hold behind it, and neither row can tell.
+   */
+  reserve(
+    organizationId: string,
+    input: ReserveGenerationJobInput,
     context: TransitionContext,
-  ): Promise<GenerationReservation>;
-  findByJobId(generationJobId: string): Promise<GenerationReservation | null>;
+  ): Promise<ReserveGenerationJobOutcome>;
+  findByJobId(
+    organizationId: string,
+    generationJobId: string,
+  ): Promise<GenerationReservation | null>;
   transition(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedState: GenerationReservationState;
     readonly expectedVersion: number;
@@ -245,10 +377,18 @@ export interface GenerationReservationRepository {
 }
 
 export interface GenerationSceneRepository {
-  create(scene: NewGenerationScene, context: TransitionContext): Promise<GenerationScene>;
-  findById(id: string): Promise<GenerationScene | null>;
-  listByJobId(generationJobId: string): Promise<readonly GenerationScene[]>;
+  create(
+    organizationId: string,
+    scene: NewGenerationScene,
+    context: TransitionContext,
+  ): Promise<GenerationScene | null>;
+  findById(organizationId: string, id: string): Promise<GenerationScene | null>;
+  listByJobId(
+    organizationId: string,
+    generationJobId: string,
+  ): Promise<readonly GenerationScene[]>;
   transition(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedState: GenerationSceneState;
     readonly expectedVersion: number;
@@ -258,13 +398,37 @@ export interface GenerationSceneRepository {
 }
 
 export interface SceneGenerationRequestRepository {
-  create(
-    request: NewSceneGenerationRequest,
+  /** The one initial request for a scene. A second is refused by the database. */
+  createInitial(
+    organizationId: string,
+    input: {
+      readonly id: string;
+      readonly generationSceneId: string;
+      readonly requestedByUserId: string | null;
+    },
     context: TransitionContext,
-  ): Promise<SceneGenerationRequestRecord>;
-  findById(id: string): Promise<SceneGenerationRequestRecord | null>;
-  listBySceneId(generationSceneId: string): Promise<readonly SceneGenerationRequestRecord[]>;
+  ): Promise<SceneGenerationRequestRecord | null>;
+
+  /**
+   * Admit a user regeneration, deriving its ordinal inside the transaction.
+   *
+   * Refuses when the entitlement is spent or another regeneration is already in
+   * flight for the scene — the second is what stops two concurrent admissions
+   * from both claiming the same ordinal.
+   */
+  admitUserRegeneration(
+    organizationId: string,
+    input: AdmitUserRegenerationInput,
+    context: TransitionContext,
+  ): Promise<AdmitUserRegenerationOutcome>;
+
+  findById(organizationId: string, id: string): Promise<SceneGenerationRequestRecord | null>;
+  listBySceneId(
+    organizationId: string,
+    generationSceneId: string,
+  ): Promise<readonly SceneGenerationRequestRecord[]>;
   transition(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedState: SceneGenerationRequestState;
     readonly expectedVersion: number;
@@ -274,32 +438,52 @@ export interface SceneGenerationRequestRepository {
 }
 
 /**
- * What a worker receives when it wins the right to call a provider.
+ * What a worker receives when it asks for the right to call a provider.
  *
  * `ARMED` is the *only* value that authorizes an outbound call, and it is
  * returned only after the transaction that moved the attempt into `SUBMITTING`
- * has committed. Every other value means the call must not happen — including
- * `MISSING_PRICING_SNAPSHOT`, which is a refusal rather than a reason to go and
- * create one mid-flight.
+ * has committed. `PRICING_BINDING_INVALID` is a refusal rather than a throw:
+ * an attempt whose cost decision does not belong to it is unarmable, which is
+ * an outcome a worker must handle, not a crash.
  */
 export type ArmProviderBoundaryOutcome =
   | { readonly kind: "ARMED"; readonly attempt: GenerationAttempt }
   | { readonly kind: "LOST" }
-  | { readonly kind: "MISSING_PRICING_SNAPSHOT" };
+  | { readonly kind: "MISSING_PRICING_SNAPSHOT" }
+  | { readonly kind: "PRICING_BINDING_INVALID"; readonly reason: PricingBindingFailure };
 
 export interface SceneGenerationAttemptRepository {
-  findById(id: string): Promise<GenerationAttempt | null>;
-  listByRequestId(generationSceneRequestId: string): Promise<readonly GenerationAttempt[]>;
+  /**
+   * Transaction C, as one commit.
+   *
+   * Creates the attempt row, its pricing snapshot and its first event
+   * together. Split apart, a crash between them leaves an admitted attempt
+   * with no cost decision — which the provider boundary would then refuse
+   * forever, stranding work nobody can explain.
+   */
+  admit(
+    organizationId: string,
+    input: AdmitGenerationAttemptInput,
+    context: TransitionContext,
+  ): Promise<AdmitGenerationAttemptOutcome>;
+
+  findById(organizationId: string, id: string): Promise<GenerationAttempt | null>;
+  listByRequestId(
+    organizationId: string,
+    generationSceneRequestId: string,
+  ): Promise<readonly GenerationAttempt[]>;
 
   /**
-   * Move `QUEUED -> SUBMITTING` under compare-and-set, having first proved a
-   * pricing snapshot exists.
+   * Move `QUEUED -> SUBMITTING` under compare-and-set, having first proved the
+   * pricing decision belongs to *this* attempt.
    *
-   * The commit of this transaction *is* the authorization to call a provider.
-   * Nothing else grants it, and a `LOST` result must never be retried into a
-   * call: losing means another worker is already submitting this exact attempt.
+   * Existence is not enough. An earlier version checked only that some snapshot
+   * was present, which would have authorized a WaveSpeed attempt using a fal
+   * cost decision — an audit record that cannot be re-derived and a future cost
+   * gate reading the wrong price.
    */
   armProviderBoundary(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedVersion: number;
     readonly context: TransitionContext;
@@ -307,9 +491,10 @@ export interface SceneGenerationAttemptRepository {
 
   /** Persist a provider submission outcome atomically with its event. */
   recordSubmissionOutcome(input: {
+    readonly organizationId: string;
     readonly id: string;
     readonly expectedVersion: number;
-    readonly outcome: import("./certainty").AttemptOutcomePersistence;
+    readonly outcome: AttemptOutcomePersistence;
     readonly normalizedErrorCode: string | null;
     readonly context: TransitionContext;
   }): Promise<TransitionOutcome<GenerationAttempt>>;
@@ -333,21 +518,19 @@ export interface GenerationPricingSnapshotRecord {
   readonly createdAt: Date;
 }
 
+/**
+ * Read-only.
+ *
+ * A pricing snapshot is written by attempt admission and never afterwards.
+ * There is no create method here, and no update or delete anywhere: the row is
+ * the record of what the platform believed a call would cost when it
+ * authorized the call.
+ */
 export interface GenerationPricingSnapshotRepository {
-  /**
-   * Persist the domain's immutable pricing decision against one attempt.
-   *
-   * Takes the domain `PricingSnapshot` rather than loose fields, so no price is
-   * ever recomputed on the way into the database. There is no update method and
-   * no delete method: a pricing snapshot is the record of what the platform
-   * believed a call would cost when it authorized the call.
-   */
-  create(input: {
-    readonly id: string;
-    readonly sceneGenerationId: string;
-    readonly snapshot: PricingSnapshot;
-  }): Promise<GenerationPricingSnapshotRecord>;
-  findByAttemptId(sceneGenerationId: string): Promise<GenerationPricingSnapshotRecord | null>;
+  findByAttemptId(
+    organizationId: string,
+    sceneGenerationId: string,
+  ): Promise<GenerationPricingSnapshotRecord | null>;
 }
 
 /**
@@ -359,8 +542,12 @@ export interface GenerationPricingSnapshotRepository {
  */
 export interface GenerationTransitionEventRepository {
   listForAggregate(
+    organizationId: string,
     aggregateType: GenerationTransitionAggregateType,
     aggregateId: string,
   ): Promise<readonly GenerationTransitionEventRecord[]>;
-  listForCorrelation(correlationId: string): Promise<readonly GenerationTransitionEventRecord[]>;
+  listForCorrelation(
+    organizationId: string,
+    correlationId: string,
+  ): Promise<readonly GenerationTransitionEventRecord[]>;
 }

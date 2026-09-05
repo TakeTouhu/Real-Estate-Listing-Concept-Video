@@ -14,6 +14,7 @@ import {
   FORBIDDEN_TRANSITION_METADATA_KEYS,
   sanitizeTransitionMetadata,
 } from "./transition-metadata";
+import { videoUnitsForSeconds } from "../pricing/index";
 import { MAX_USER_REGENERATIONS_PER_SCENE } from "./types";
 
 /**
@@ -128,37 +129,79 @@ describe("system recovery is not a customer regeneration", () => {
 });
 
 describe("high-quality units sit inside the total, never beside it", () => {
+  function units(tier: "NORMAL" | "HIGH_QUALITY", seconds: number) {
+    const result = requiredUnitsFor(tier, seconds);
+    if (!result.ok) throw new Error(`expected units, got ${result.error.reason}`);
+    return result.value;
+  }
+
   it("reserves total only for normal quality", () => {
-    expect(requiredUnitsFor("NORMAL", 60)).toEqual({ totalVideoUnits: 2, highQualityUnits: 0 });
+    expect(units("NORMAL", 60)).toEqual({ totalVideoUnits: 2, highQualityUnits: 0 });
   });
 
   it("reserves the same total and marks it high quality", () => {
     // 60 seconds at high quality is 2 total and 2 high-quality — not 2 + 2.
     // Additive arithmetic here would double every high-quality customer's bill.
-    expect(requiredUnitsFor("HIGH_QUALITY", 60)).toEqual({
-      totalVideoUnits: 2,
-      highQualityUnits: 2,
-    });
+    expect(units("HIGH_QUALITY", 60)).toEqual({ totalVideoUnits: 2, highQualityUnits: 2 });
   });
 
   it("never reports more high-quality units than total units", () => {
-    for (const seconds of [1, 29, 30, 31, 60, 90, 121]) {
-      const normal = requiredUnitsFor("NORMAL", seconds);
-      const high = requiredUnitsFor("HIGH_QUALITY", seconds);
-      expect(normal.highQualityUnits).toBeLessThanOrEqual(normal.totalVideoUnits);
+    for (const seconds of [1, 29, 30, 31, 60, 90]) {
+      expect(units("NORMAL", seconds).highQualityUnits).toBe(0);
+      const high = units("HIGH_QUALITY", seconds);
       expect(high.highQualityUnits).toBe(high.totalVideoUnits);
     }
   });
 
-  it("rounds a partial unit up", () => {
-    // 31 seconds is two units. Rounding down would give away the second one.
-    expect(requiredUnitsFor("NORMAL", 31).totalVideoUnits).toBe(2);
-    expect(requiredUnitsFor("NORMAL", 30).totalVideoUnits).toBe(1);
-    expect(requiredUnitsFor("NORMAL", 1).totalVideoUnits).toBe(1);
+  /**
+   * The product's tiers, stated as literals.
+   *
+   * This function used to carry its own `Math.ceil(seconds / 30)` — a second
+   * implementation of a contract the pricing domain already owns, which
+   * disagreed with it exactly where it mattered: 91 seconds became four units,
+   * inventing a tier the product does not sell.
+   */
+  it.each([
+    [1, 1],
+    [30, 1],
+    [31, 2],
+    [60, 2],
+    [61, 3],
+    [90, 3],
+  ])("prices %i seconds as %i units", (seconds, expected) => {
+    expect(units("NORMAL", seconds).totalVideoUnits).toBe(expected);
   });
 
-  it.each([[0], [-30], [1.5], [Number.NaN]])("refuses a duration of %s", (seconds) => {
-    expect(() => requiredUnitsFor("NORMAL", seconds)).toThrow(RangeError);
+  it("refuses a duration beyond the product ceiling rather than inventing a tier", () => {
+    for (const seconds of [91, 120, 3600]) {
+      const result = requiredUnitsFor("NORMAL", seconds);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected a refusal");
+      expect(result.error.reason).toBe("DURATION_EXCEEDS_PRODUCT_POLICY");
+    }
+  });
+
+  it.each([[0], [-30], [1.5], [Number.NaN], [Number.POSITIVE_INFINITY]])(
+    "refuses a duration of %s",
+    (seconds) => {
+      const result = requiredUnitsFor("NORMAL", seconds);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected a refusal");
+      expect(result.error.reason).toBe("DURATION_NOT_A_POSITIVE_INTEGER");
+    },
+  );
+
+  it("agrees with the customer pricing contract it delegates to", () => {
+    // The property that matters is not the arithmetic but that there is only
+    // one of it. If the pricing contract's ceiling moves, this moves with it.
+    for (const seconds of [1, 30, 31, 60, 61, 90, 91]) {
+      const delegated = videoUnitsForSeconds(seconds);
+      const derived = requiredUnitsFor("HIGH_QUALITY", seconds);
+      expect(derived.ok).toBe(delegated.ok);
+      if (delegated.ok && derived.ok) {
+        expect(derived.value.totalVideoUnits).toBe(delegated.value);
+      }
+    }
   });
 });
 
@@ -225,9 +268,23 @@ describe("certainty and execution state are separate axes", () => {
   it("refuses an accepted attempt that claims nothing was sent", () => {
     for (const state of ["QUEUED", "SUBMITTING", "CANCELLED_PRE_SUBMISSION"] as const) {
       expect(
-        isCoherentAttemptRecord({ certainty: "ACCEPTED", state, providerPredictionId: null }),
+        isCoherentAttemptRecord({ certainty: "ACCEPTED", state, providerPredictionId: "pred_1" }),
       ).toBe(false);
     }
+  });
+
+  it("refuses ACCEPTED with no provider reference", () => {
+    // The relationship is an equivalence, not a one-way implication. A response
+    // that cannot establish a reference has not established acceptance either;
+    // that outcome belongs on the uncertainty path, which is exactly why
+    // SUBMISSION_UNKNOWN never carries a reference.
+    expect(
+      isCoherentAttemptRecord({
+        certainty: "ACCEPTED",
+        state: "PROCESSING",
+        providerPredictionId: null,
+      }),
+    ).toBe(false);
   });
 
   it("freezes a reconciliation deadline rather than recomputing it", () => {

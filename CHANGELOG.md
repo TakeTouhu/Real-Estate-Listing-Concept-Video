@@ -43,6 +43,37 @@ ingestion, composition, entitlement ledger or payment.
   which `createPricingSnapshot` was callable only by a caller willing to cast
   past its own branded type.
 
+### Corrected after review
+
+- **Tenant scope on every orchestration repository.** Bare ids let any caller
+  holding one reach another organization's generation history; every method now
+  takes `organizationId` and resolves ownership through the `VideoProject`
+  boundary, in the same predicate as the CAS. Transition events carry an
+  immutable, indexed `organizationId` set from the scoped operation.
+- **The active-request index reads both vocabularies.** It tested only the
+  legacy `state` column, which orchestrated attempts never advance — so a
+  terminal orchestrated attempt still looked active and its SYSTEM_RECOVERY
+  replacement could not be inserted, making the frozen retry rule unreachable.
+- **Request uniqueness split into three partial indexes.** The old one did not
+  constrain `INITIAL` at all (NULL ordinals are distinct in PostgreSQL) and made
+  a *failed* regeneration occupy its entitlement slot permanently, so a customer
+  whose regeneration failed could never ask again.
+- **Reservation and attempt admission are single commits.** Transaction B
+  creates the hold, moves the job and writes both events together, copying unit
+  counts from the job; Transaction C creates the attempt, its pricing snapshot
+  and its first event together.
+- **The pricing decision is bound to its attempt.** Provider, contract key and
+  V2 model key must agree at admission and again at the provider boundary, so a
+  WaveSpeed attempt can no longer be authorized against a fal cost decision.
+- **Video units delegate to the customer pricing contract** rather than
+  reimplementing `ceil(seconds / 30)`, which had turned 91 seconds into four
+  units — a tier the product does not sell.
+- **Cancellation stops where no provider can have been paid.** A job in
+  `GENERATING` may hold attempts at a provider, so that decision cannot be read
+  from the job's own state; the unconditional edges are removed.
+- **A scene's delivered pointer is constrained to its own requests** by a
+  composite foreign key.
+
 ### Legacy
 
 No existing row was updated. Every new column on `scene_generations` is nullable
