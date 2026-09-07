@@ -3,6 +3,24 @@
 Submission outcome persistence and uncertainty entry. Base:
 `ce1fed14c1125bf83d26ab8ec0ef4a5d725f34e7`.
 
+> **Revision 2 — CTO review corrections.** The first submission
+> (`7c42115df7a257c7626d2dce1c13df625c0d2d36`) was not approved. Six defects are
+> corrected here, and several statements in Revision 1 were wrong:
+>
+> | Superseded claim | Correction |
+> | --- | --- |
+> | Replay identity includes the landing state | It is **provider reality only**. An accepted attempt that has since reached `OUTPUT_VERIFIED` replays; it does not conflict |
+> | "All reconciliation timestamps are boundary-anchored" | Only the **deadline** is. `reconciliationStartedAt` is when the system first durably concluded it did not know, and comes from the post-lock clock |
+> | Fifteen minutes is the stale-`SUBMITTING` threshold | **Nothing is frozen.** The invented default is removed; the threshold is a production-activation decision, tracked in `docs/decisions/TODO.md` |
+> | The caller supplies `providerAcceptedAt` | The observation has no such field. The instant comes from the same post-lock clock |
+> | `normalizedErrorCode` accepts any string | It is a validated short application code. Arbitrary text is refused, closed, with nothing written |
+> | An entitlement anomaly needs only to not block the write | It must also be **said out loud** — classified from the persisted request kind and written durably into the outcome event |
+> | A rate limit illustrates `DEFINITIVELY_REJECTED` | It does not. WaveSpeed 429 and a fal status with no provider reference both map to `SUBMISSION_UNKNOWN` today |
+>
+> Also corrected: the reservation's own transition now writes
+> `SUBMISSION_UNCERTAINTY_HOLD` rather than reusing an attempt-side label, and
+> the stale threshold must be **strictly** less than the reconciliation window.
+
 Phase 4C-3B-2F-1 ended at the paid boundary: it decided whether an attempt was
 allowed to cross, moved it `QUEUED → SUBMITTING`, and stopped. Nothing then knew
 how to write down what happened next. This phase supplies exactly that, and
@@ -38,9 +56,13 @@ provider gets paid for work the platform believes it never ordered.
 
 ```ts
 type ProviderSubmissionObservation =
-  | { kind: "ACCEPTED"; providerPredictionId: string; providerAcceptedAt: EpochMillis }
-  | { kind: "DEFINITIVELY_REJECTED"; retryable: boolean; normalizedErrorCode: string | null }
-  | { kind: "SUBMISSION_UNKNOWN"; normalizedErrorCode: string | null };
+  | { kind: "ACCEPTED"; providerPredictionId: string }
+  | {
+      kind: "DEFINITIVELY_REJECTED";
+      retryable: boolean;
+      normalizedErrorCode: SubmissionDiagnosticCode | null;
+    }
+  | { kind: "SUBMISSION_UNKNOWN"; normalizedErrorCode: SubmissionDiagnosticCode | null };
 ```
 
 No HTTP status, no provider error body, no vendor enum, no provider name. An
@@ -49,14 +71,65 @@ layer never learns which provider it was talking to. That is what lets the
 persistence rules be written once and exercised in full without a provider
 existing.
 
+There is no timestamp and no free-text field. A caller able to name the
+acceptance instant could backdate paid submission history; a caller able to write
+free text into the diagnostic field could put a signed URL or a customer prompt
+into the most widely read table in an incident.
+
 `retryable` says only whether a *new* attempt row may be admitted for the same
 request. It never means this row may be re-POSTed. Nothing in this phase ever
 re-POSTs anything.
+
+**No current adapter reaches `DEFINITIVELY_REJECTED` for a remote rate limit.**
+WaveSpeed maps 429 to `SUBMISSION_UNKNOWN`, and so does a fal HTTP status with no
+provider reference, because neither establishes that the provider did not begin
+billable work. The arm exists for a future contract that can prove
+non-acceptance; it is not a description of what today's adapters do.
 
 An `ACCEPTED` whose `providerPredictionId` is blank is rejected as
 `OBSERVATION_MALFORMED` rather than persisted. An acceptance that cannot name
 what was accepted has not established acceptance; it is uncertainty, and it
 belongs on the third arm.
+
+## Replay identity is provider reality, not the landing state
+
+This is the correction that mattered most. Revision 1 compared the persisted
+attempt state against the state the *first* application wrote, which made an
+entirely ordinary sequence look like a disagreement:
+
+```text
+ACCEPTED lands            → PROCESSING
+execution proceeds        → PROVIDER_SUCCEEDED → OUTPUT_INGESTING → OUTPUT_VERIFIED
+the same ACCEPTED arrives → refused, "TERMINAL_STATE_MISMATCH"
+```
+
+Nothing there contradicts the record. The provider accepted the work, named it,
+and still has; the lifecycle simply moved on. Refusing demanded a human
+adjudicate a duplicate delivery of unchanged news.
+
+A replay now requires the recorded **certainty** to match, the **provider
+reference** to match, and the attempt to be somewhere that certainty can explain:
+
+| Recorded certainty | States a replay may find it in |
+| --- | --- |
+| `ACCEPTED` | `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING`, `OUTPUT_VERIFIED`, `FAILED_RETRYABLE`, `FAILED_TERMINAL` |
+| `SUBMISSION_UNKNOWN` | `RECONCILIATION_PENDING`, `RECONCILIATION_EXHAUSTED` |
+| `DEFINITIVELY_REJECTED` | `FAILED_RETRYABLE`, `FAILED_TERMINAL` |
+
+An accepted attempt that later failed *while running* has not been un-accepted.
+`RECONCILIATION_EXHAUSTED` says the window closed while provider reality was
+still unknown — a later fact about how long nobody found out, not a
+contradiction — so another `SUBMISSION_UNKNOWN` replays there, and the row is
+never dragged back to `RECONCILIATION_PENDING`.
+
+A different provider reference remains a conflict at every one of those states.
+For `DEFINITIVELY_REJECTED` the landing state *is* provider reality, so a
+retryable-versus-terminal disagreement also remains a conflict: the observation's
+own `retryable` flag decides which state is correct.
+
+A state that certainty cannot explain — `ACCEPTED` on a row sitting in
+`RECONCILIATION_PENDING` — is `RECORDED_STATE_INCOHERENT`: a corrupt record
+rather than two disagreeing observers, and not this phase's to repair.
 
 ## Three answers on arrival, never two
 
@@ -78,64 +151,137 @@ forever on its own earlier success.
 
 ### What "exactly this" compares
 
-Certainty, then the provider reference, then the state it implies.
+Certainty, then the provider reference, then whether the recorded state is one
+that certainty can explain — never the state the first application wrote.
 `normalizedErrorCode` is deliberately **excluded**: it is diagnostic text about
 how the platform classified a failure, and two workers describing the same
 rejection slightly differently have not disagreed about what the provider did.
 
 | Recorded vs observed | Answer |
 | --- | --- |
-| Same certainty, same reference, same state | `REPLAYED` |
+| Same certainty, same reference, compatible state | `REPLAYED` |
 | Different certainty (`ACCEPTED` vs `SUBMISSION_UNKNOWN`) | `CONFLICTING_OBSERVATION` / `CERTAINTY_MISMATCH` |
 | Same certainty, different provider reference | `CONFLICTING_OBSERVATION` / `PROVIDER_REFERENCE_MISMATCH` |
-| Same certainty, different terminal state | `CONFLICTING_OBSERVATION` / `TERMINAL_STATE_MISMATCH` |
+| `DEFINITIVELY_REJECTED`, retryable vs terminal | `CONFLICTING_OBSERVATION` / `TERMINAL_STATE_MISMATCH` |
+| Same certainty, a state that certainty cannot explain | `CONFLICTING_OBSERVATION` / `RECORDED_STATE_INCOHERENT` |
 
 A second, different provider reference is refused rather than overwritten.
 Overwriting would discard the ability to ask the provider about the reference
 that was replaced — a reference the platform may still owe money against.
 
-## Every deadline is anchored to the boundary
+## Two reconciliation instants, only one from the boundary
 
-```ts
-reconciliationStartedAt  = submissionBoundaryEnteredAt
-reconciliationDeadlineAt = submissionBoundaryEnteredAt + reconciliationWindowMs
+Revision 1 derived both from `submissionBoundaryEnteredAt`, which backdated
+operational history: it claimed the system knew an attempt was uncertain at a
+moment when nobody had looked yet. For a stale attempt swept hours later, those
+are different facts by hours.
+
+```text
+submissionBoundaryEnteredAt  when the paid provider boundary was crossed
+reconciliationStartedAt      when the system first durably concluded it did not know
+                             → the post-lock clock instant, never the boundary
+reconciliationDeadlineAt     submissionBoundaryEnteredAt + reconciliationWindowMs
+                             → unchanged, still boundary-derived
 ```
 
-Never `now`, never the current time plus a window, never a value a caller
-supplies. Three properties fall out of that single choice, and none of them are
-separately enforced:
+Keeping the *deadline* boundary-derived is what carries the properties worth
+having:
 
 1. **Replay cannot extend a deadline.** The same observation ten hours later
-   computes the same durable shape, matches the record, and writes nothing.
-2. **The two entry routes agree.** A direct `SUBMISSION_UNKNOWN` and a stale
-   sweep hours later produce byte-identical rows, so their race is benign — the
-   loser replays rather than conflicting.
-3. **A retry cannot buy time.** The window bounds how long the platform carries
-   an unresolved charge, and deriving it from when someone happened to look would
-   let repeated retries push that bound indefinitely.
+   computes the same value and writes nothing.
+2. **A delayed sweeper gets less time, never more.** It inherits whatever remains
+   of the window rather than restarting it.
+3. **The two entry routes agree on it** whichever wins their race, even though
+   their clocks differ — which is what keeps that race benign.
 
-### Window policy
+If the derived deadline is already in the past it is persisted as-is. Whether
+that uncertainty is exhausted is Phase 2G-2's decision; extending the deadline to
+make it look live would take that decision here, and take it wrongly.
 
-| Setting | Default | Bound |
+A replay never moves either persisted timestamp, and the evaluator deliberately
+does **not** compare a replaying worker's freshly computed
+`reconciliationStartedAt` against the stored one — that would make every replay
+after the first millisecond a conflict.
+
+## The acceptance instant is the platform's
+
+`providerAcceptedAt` is stamped from the same single post-lock clock instant, and
+the normalized `ACCEPTED` observation has no field for it at all:
+
+```ts
+{ readonly kind: "ACCEPTED"; readonly providerPredictionId: string }
+```
+
+No currently frozen provider submission contract establishes an authoritative
+provider-side acceptance timestamp, so a caller-supplied one would be an
+unverified claim about when money started being spent — backdatable and
+future-datable at will. The clock is read once per decision, not once per field.
+A replay never re-stamps it.
+
+## Window policy — and the threshold that is deliberately absent
+
+| Setting | Shipped default | Bound |
 | --- | --- | --- |
 | `reconciliationWindowMs` | 24 h (the Phase 2E constant) | `> 0`, and **≤ 24 h** |
-| `staleSubmittingAfterMs` | 15 min | `> 0`, and ≤ the reconciliation window |
+| `staleSubmittingAfterMs` | **none** | `> 0`, and **strictly** `<` the window |
 
-The ceiling *is* the Phase 2E default rather than a second constant that could
-drift from it. An attempt in `RECONCILIATION_PENDING` holds uncertain provider
-cost against its organization's Safety Guard for the whole window, so a window
-measured in days would let one incident suppress a tenant's throughput long after
-anyone could still find out what happened.
+Revision 1 introduced a fifteen-minute stale-`SUBMITTING` default. It was never
+frozen by anyone, and it is removed. How long an attempt may sit at the boundary
+before it is presumed lost depends on provider latency distributions nobody has
+measured, and a plausible-looking constant is how a guess becomes policy: the
+number gets quoted, relied on, and never revisited. Too short and an ordinary
+slow response converts a live paid submission into permanent uncertainty; too
+long and a crashed submission holds its reservation hostage. **Fifteen minutes is
+not the product policy**, and no production value is frozen by this phase — it is
+recorded as unresolved in `docs/decisions/TODO.md`. Tests use fixtures.
 
-The stale threshold is deliberately far shorter than the window: becoming
-*uncertain* should happen quickly, while *resolving* that uncertainty gets the
-long budget. A threshold beyond the window is refused — it would declare an
-attempt lost after the deadline it is supposed to be given.
+The inequality is strict: at equality an attempt becomes stale exactly when its
+reconciliation deadline arrives, so the uncertainty it enters is already expired.
+That is refused as `STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE`.
+
+The 24-hour ceiling is retained, and *is* the Phase 2E default rather than a
+second constant that could drift from it. An attempt in `RECONCILIATION_PENDING`
+holds uncertain provider cost against its organization's Safety Guard for the
+whole window, so a window measured in days would let one incident suppress a
+tenant's throughput long after anyone could still find out what happened.
 
 `validateReconciliationPolicy` returns a result rather than throwing.
 Configuration arrives from outside the process and a bad value is an operator
 mistake, not a programming defect, so it is answerable and the caller decides
-whether to refuse startup or fall back.
+whether to refuse startup or fall back. It never silently falls back to a
+hard-coded threshold. Production wiring is out of scope: the phase is dormant and
+has no caller.
+
+## Diagnostics are short application codes, never text
+
+Revision 1 accepted `normalizedErrorCode: string | null` and persisted it
+directly. That re-opened the channel ADR-0031 closed — a caller could write a
+signed URL, an `Authorization` header, a customer prompt, a raw provider body or
+a stack trace into a field that is dumped into tickets and pasted into chat.
+
+The repository had no reusable safe application error-code value object at an
+allowed dependency level (`@app/shared` has none, and `ProviderError` lives in
+`@app/video-providers`, which domain may not import), so a minimal
+provider-neutral one is introduced:
+
+```text
+SCREAMING_SNAKE_CASE, ASCII only
+starts with an uppercase letter
+at most 48 characters
+```
+
+A signed URL has `:` and `/`. A bearer token has a space and lowercase. A prompt
+has spaces. A stack trace has newlines. None survive, and none can be smuggled
+through by being long. The type is branded, so a bare `string` cannot be assigned
+where a code is required — and the boundary re-checks at runtime anyway, because
+a cast is exactly what a caller in a hurry writes.
+
+A malformed code is a closed refusal — `OBSERVATION_MALFORMED`, no attempt write,
+no reservation write, no event — and is deliberately distinguished from "no
+diagnosis offered". Silently dropping it would persist the outcome while
+discarding the evidence that a caller tried to put a secret in the audit trail.
+`null` is always acceptable and always honest. The same contract applies to the
+stale-recovery route.
 
 ## Staleness is at-or-after, on an injected clock
 
@@ -148,8 +294,10 @@ attempt counts as lost, and the opposite reading leaves one instant in which
 nothing may act.
 
 The clock is a `SubmissionClock` port, and the service reads it **once, inside
-the lock**. A staleness judgement made before waiting for the lock could declare
-an attempt lost that a worker finished while this transaction queued.
+the lock** — that single instant is the staleness judgement, the acceptance
+timestamp and the uncertainty-start timestamp. A staleness judgement made before
+waiting for the lock could declare an attempt lost that a worker finished while
+this transaction queued.
 
 The staleness guard applies only to the sweeper, and only to an attempt that
 would otherwise be *applied*. An attempt that already has an outcome is a replay
@@ -186,6 +334,56 @@ Uncertainty suspends the customer's hold; certainty does not.
 | `RELEASED` | unchanged | unchanged |
 | `RECONCILIATION_HOLD` | unchanged (already there) | unchanged |
 | *absent* | unchanged — outcome still recorded | unchanged — outcome still recorded |
+
+### An anomaly that blocks nothing is still said out loud
+
+Revision 1 got the first half right and the second half wrong: a missing or
+released reservation produced an ordinary `APPLIED` and vanished, so nobody found
+out that money had been spent against bookkeeping that did not add up.
+
+The write still proceeds. It is now also classified, from a closed vocabulary:
+
+```text
+NONE
+RESERVATION_MISSING
+RESERVATION_RELEASED
+RESERVATION_RESERVING
+INITIAL_RESERVATION_ALREADY_CONSUMED
+RESERVATION_STATE_INCONSISTENT
+```
+
+Separating the valid `CONSUMED` from the anomalous one needs the parent request's
+kind, which is joined through the persisted chain and **never** caller-supplied —
+a caller able to assert it could relabel an anomaly as routine by claiming a
+regeneration that never happened.
+
+| Request kind | Reservation | Anomaly |
+| --- | --- | --- |
+| `USER_REGENERATION` | `CONSUMED` | `NONE` — correct by contract |
+| `INITIAL` | `CONSUMED` | `INITIAL_RESERVATION_ALREADY_CONSUMED` |
+| either | absent | `RESERVATION_MISSING` |
+| either | `RELEASED` | `RESERVATION_RELEASED` |
+| either | `RESERVING` | `RESERVATION_RESERVING` |
+| either | `RESERVED` / `RECONCILIATION_HOLD` | `NONE` |
+
+`RESERVATION_STATE_INCONSISTENT` is currently **unreachable** and kept
+deliberately: the classifier switches exhaustively over
+`GenerationReservationState`, so a new state fails to compile there rather than
+falling through to a label — which is the better failure. The member exists so
+whoever adds that state has somewhere honest to put it while they decide.
+
+The classification is written into the attempt's transition-event metadata in the
+same transaction, not merely returned on `APPLIED`. A crash between commit and
+the caller reading the return value must not erase the only record that an
+anomaly existed, and a database test cold-reads it back to prove it.
+
+### The reservation event has its own type
+
+`RESERVED → RECONCILIATION_HOLD` writes `SUBMISSION_UNCERTAINTY_HOLD`, not either
+attempt-side label. The two events describe different facts, and an operator
+querying for entitlement suspensions should not have to know which attempt-side
+route caused each one. Neither label is caller-selectable. When no reservation
+transition occurs, no reservation event is written.
 
 `CONSUMED` stays consumed. A post-delivery `USER_REGENERATION` runs against a
 `CONSUMED` reservation by contract; suspending it would re-open an entitlement
@@ -241,12 +439,34 @@ caller gets `LOST_CONCURRENCY` — a closed outcome, not a rejected promise.
 | Two identical `ACCEPTED` observations | one `APPLIED`, one `REPLAYED`; exactly one event |
 | Two `ACCEPTED` naming different references | one `APPLIED`, one `CONFLICTING_OBSERVATION`; exactly one reference on file |
 | `ACCEPTED` versus `SUBMISSION_UNKNOWN` | one `APPLIED`, one `CONFLICTING_OBSERVATION`; the row holds one coherent outcome, never a blend |
-| Direct `SUBMISSION_UNKNOWN` versus stale sweep | one `APPLIED`, one `REPLAYED`; both routes computed identical state |
+| Direct `SUBMISSION_UNKNOWN` versus stale sweep, **on two different clocks** | one `APPLIED`, one `REPLAYED`; the winner's `reconciliationStartedAt` stands whole, and the deadline is identical either way |
 | Reservation `RELEASED` versus uncertainty entry | uncertainty entry blocks on the row lock, then records the outcome; the released hold is not revived |
+| A Phase 2F-1 cost admission holding the same locks | uncertainty entry blocks until the gate's transaction commits |
+
+The stale race deserves the sharper statement it now gets. Revision 1 tested it
+with one clock, so both routes computed byte-identical rows and the loser
+replayed trivially. Now that `reconciliationStartedAt` comes from each worker's
+own clock the rows are *not* identical — and the loser must still replay, because
+replay identity is provider reality and not bookkeeping about when each worker
+happened to learn it. The persisted start belongs to whichever route committed
+first, whole, never blended and never overwritten by the loser; the deadline is
+the same either way because it is boundary-derived.
 
 Provider reality is never lost because a concurrent entitlement transition won
-first. In the last race the reservation ends `RELEASED` and the attempt still
-ends `RECONCILIATION_PENDING`.
+first. In the `RELEASED` race the reservation ends `RELEASED` and the attempt
+still ends `RECONCILIATION_PENDING`.
+
+### On the reservation lock mode
+
+`FOR UPDATE` is kept because it takes the mode this transaction will need at the
+single ordered point where it takes it. The write would be serialized either way
+— the later `UPDATE` acquires an exclusive row lock and waits for any shared
+holder — so a `FOR SHARE` acquisition does not lose the reservation transition,
+and Revision 1's ledger recorded exactly that as a survivor. What `FOR UPDATE`
+avoids is the *upgrade*: acquiring shared and later escalating to exclusive is
+the classic shape in which two transactions holding the same shared lock
+deadlock. That is a reason from the lock discipline, not a claim the suite
+proves, and the code comment says so.
 
 ## Critical sequence — recording one outcome
 
@@ -303,14 +523,17 @@ source of a fact the caller already holds.
 | Release notes | Not applicable — nothing user-visible ships; the phase is dormant persistence with no caller |
 | Database migration notes | No migration. `prisma migrate diff` reports no difference in both directions; `docs/migration-notes.md` is unchanged |
 | Phase completion report | This document |
-| ADR | `docs/decisions/0036-submission-outcome-persistence.md` — extends ADR-0035 from "submission *returns* a three-armed outcome" to how that outcome is persisted, identified on replay, and anchored in time |
+| ADR | `docs/decisions/0036-submission-outcome-persistence.md` — extends ADR-0035 from "submission *returns* a three-armed outcome" to how that outcome is persisted, identified on replay, and timestamped. Revised alongside this document |
+| Unresolved decisions | `docs/decisions/TODO.md` — the production stale-`SUBMITTING` threshold |
 
 ## Structure
 
 ```text
 packages/domain/src/submission/
+├── diagnostic-code.ts        the safe short-code boundary for normalizedErrorCode
+├── entitlement-anomaly.ts    the closed anomaly vocabulary and its classifier
 ├── observation.ts            provider-neutral normalized observation
-├── reconciliation-window.ts  window + stale policy, validation, anchoring
+├── reconciliation-window.ts  window + stale policy, validation, deadline derivation
 ├── outcome.ts                the pure evaluator (APPLY / REPLAY / CONFLICT / …)
 ├── ports.ts                  clock, repository, closed result union
 └── service.ts                two entry points, one rule set
@@ -340,6 +563,7 @@ Two non-schema adjustments were required:
 | --- | --- |
 | `isCoherentAttemptRecord` accepts `DEFINITIVELY_REJECTED + FAILED_RETRYABLE` | Phase 2E's helper allowed only `FAILED_TERMINAL`; both are definitive rejections and the database CHECK never constrained the pairing |
 | `submissionCertainty` added to the transition-metadata allowlist | so the outcome event can carry the certainty it recorded |
+| `entitlementAnomaly` added to the transition-metadata allowlist | so an anomaly survives the process that noticed it. A closed vocabulary value, never provider or customer text |
 
 `appendEvent` in `orchestration-repositories.ts` was exported as
 `appendGenerationEvent` so this phase reuses one event-append implementation
@@ -357,106 +581,93 @@ rather than growing a second.
 - No credit settlement — `RECONCILIATION_HOLD` suspends, it does not settle.
 - No API route, no worker loop, no scheduler. Both entry points are dormant
   domain services with no caller.
-- No Phase 4C-3B-2G-2 work (reconciliation resolution, deadline expiry,
-  `RECONCILIATION_EXHAUSTED`).
+- No Phase 4C-3B-2G-2 work (reconciliation resolution, deadline expiry, the
+  `RECONCILIATION_EXHAUSTED` worker, a global stale scanner). This phase *reads*
+  `RECONCILIATION_EXHAUSTED` as a replay-compatible state; it never writes it.
+- No Phase 4C-3B-2F-2 paid provider activation.
+- No production configuration wiring for `staleSubmittingAfterMs`. The phase is
+  dormant and has no caller; a production caller must supply a validated policy,
+  and the value itself is unresolved (`docs/decisions/TODO.md`).
 
-## Mutation ledger — 44/51 killed
+## Mutation ledger — 56/56 killed
 
 Every mutation removes exactly one rule this phase is supposed to enforce, from
 an artefact that actually executes. A mutation is *killed* when the suites fail,
-and each is restored byte-identically before the next runs.
+and each is restored byte-identically before the next runs. The `C` series
+targets the rules this correction round introduced; the `P` series preserves the
+first round's coverage against the rewritten sources.
+
+Revision 1's ledger reported 44/51 with seven survivors, all of them redundant
+defences in the persistence layer. Three of those survivors are gone because the
+code they guarded was rewritten; the rest were re-aimed at behaviour that is now
+reachable. **No survivor remains, and none was retired by deleting the mutation.**
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
-| O1 | an exact replay re-applies instead of replaying | KILLED | 11 failing unit tests |
-| O2 | a certainty mismatch stops being a conflict | KILLED | 8 failing unit tests |
-| O3 | a different provider reference stops being a conflict | KILLED | 6 failing unit tests |
-| O4 | a terminal-state mismatch stops being a conflict | KILLED | 4 failing unit tests |
-| O5 | `RECONCILIATION_PENDING` stops counting as post-submission | KILLED | 7 failing unit tests |
-| O6 | `PROCESSING` stops counting as post-submission | KILLED | 9 failing unit tests |
-| O7 | `FAILED_TERMINAL` stops counting as post-submission | KILLED | 5 failing unit tests |
-| O8 | both reconciliation timestamps are anchored to now | KILLED | 3 failing unit tests |
-| O9 | the deadline is anchored to now while the start stays at the boundary | KILLED | 6 failing unit tests |
-| O10 | an acceptance does not persist the provider reference | KILLED | 10 failing unit tests |
-| O11 | a blank provider reference is accepted as an acceptance | KILLED | 3 failing unit tests |
-| O12 | `SUBMISSION_UNKNOWN` returns the attempt to `QUEUED` | KILLED | 11 failing unit tests |
-| O13 | uncertainty stops suspending the reservation | KILLED | 3 failing unit tests |
-| O14 | an acceptance suspends the reservation too | KILLED | 3 failing unit tests |
-| O15 | the retryable flag stops selecting the failure state | KILLED | 7 failing unit tests |
-| O16 | a `QUEUED` attempt may receive an outcome | KILLED | 3 failing unit tests |
-| O17 | a cancelled attempt may receive an outcome | KILLED | 3 failing unit tests |
-| O18 | a half-written certainty on a `SUBMITTING` row is applied over | KILLED | 4 failing unit tests |
-| O19 | a malformed observation is persisted | KILLED | 3 failing unit tests |
-| O20 | an attempt with no boundary instant is treated as stale | KILLED | 3 failing unit tests |
-| W1 | the stale threshold becomes strictly-after instead of at-or-after | KILLED | 8 failing unit tests |
-| W2 | the 24-hour reconciliation ceiling is removed | KILLED | 3 failing unit tests |
-| W3 | the ceiling drifts to 48 hours | KILLED | 3 failing unit tests |
-| W4 | a non-positive reconciliation window is accepted | KILLED | 6 failing unit tests |
-| W5 | a non-positive stale threshold is accepted | KILLED | 3 failing unit tests |
-| W6 | a stale threshold beyond the window is accepted | KILLED | 3 failing unit tests |
-| W7 | the deadline is computed from the stale threshold instead of the window | KILLED | 3 failing unit tests |
-| S1 | the clock is read before the lock is taken | KILLED | 3 failing unit tests |
-| S2 | the sweeper stops requiring staleness | KILLED | 3 failing unit tests |
-| S3 | a replay is reported as a fresh application | KILLED | 5 failing unit tests |
-| S4 | the caller regains authority over the event label | KILLED | 4 failing unit tests |
-| S5 | stale recovery is labelled as a direct observation | KILLED | 3 failing unit tests |
-| S6 | a lost CAS is reported as a replay | KILLED | 3 failing unit tests |
-| S7 | a cross-tenant attempt is distinguishable from a missing one | KILLED | 3 failing unit tests |
-| R1 | the reservation row lock is removed | KILLED | 4 failing db tests |
-| R2 | the reservation is locked `FOR SHARE` instead of `FOR UPDATE` | **SURVIVED** | 0 failing tests |
-| R3 | the cost-admission advisory lock is removed | KILLED (compile only) | 1 package fails typecheck |
-| R3b | the advisory lock is keyed on the attempt instead of the cycle | **SURVIVED** | 0 failing tests |
-| R4 | the CAS drops the version predicate | KILLED (compile only) | 1 package fails typecheck |
-| R4b | the CAS accepts any version at or above the expected one | **SURVIVED** | 0 failing tests |
-| R5 | the CAS drops the `SUBMITTING` predicate | **SURVIVED** | 0 failing tests |
-| R6 | the CAS drops the `PRE_SUBMISSION` predicate | **SURVIVED** | 0 failing tests |
-| R7 | the attempt lookup drops its tenant predicate | KILLED | 5 failing db tests |
-| R8 | a `CONSUMED` reservation is suspended too | KILLED | 7 failing db tests |
-| R9 | a missing reservation blocks persistence of provider reality | KILLED | 7 failing db tests |
-| R10 | the reservation hold is never applied | KILLED | 8 failing db tests |
-| R11 | the attempt outcome event is never appended | KILLED | 9 failing db tests |
-| R12 | the reservation hold event is never appended | KILLED | 4 failing db tests |
-| R13 | the incoherent-write guard is removed | KILLED (compile only) | 1 package fails typecheck |
-| R13b | the incoherent-write guard is made unconditionally true | **SURVIVED** | 0 failing tests |
-| R14 | both reservation defences are weakened at once | **SURVIVED** | 0 failing tests |
+| C1a | same ACCEPTED after PROVIDER_SUCCEEDED becomes a conflict | KILLED | 3 failing unit tests |
+| C1b | same ACCEPTED after OUTPUT_VERIFIED becomes a conflict | KILLED | 3 failing unit tests |
+| C1c | same UNKNOWN after RECONCILIATION_EXHAUSTED becomes a conflict | KILLED | 3 failing unit tests |
+| C1d | replay reverts to comparing the landing state | KILLED | 9 failing unit tests |
+| C1e | a different provider reference stops being a conflict | KILLED | 11 failing unit tests |
+| C1f | retryable-vs-terminal rejection stops being a conflict | KILLED | 3 failing unit tests |
+| C1g | a certainty mismatch stops being a conflict | KILLED | 8 failing unit tests |
+| C1h | ACCEPTED becomes compatible with RECONCILIATION_PENDING | KILLED | 3 failing unit tests |
+| C2a | reconciliationStartedAt is restored to the boundary | KILLED | 5 failing unit tests |
+| C2b | the deadline becomes now-based instead of boundary-based | KILLED | 6 failing unit tests |
+| C2c | a replay rewrites reconciliationStartedAt | KILLED | 10 failing unit tests |
+| C4a | the acceptance instant is taken from the boundary, not the clock | KILLED | 4 failing unit tests |
+| C4b | caller-controlled providerAcceptedAt is restored | KILLED | 3 failing unit tests |
+| C3a | a fifteen-minute production stale default is reintroduced | KILLED | 3 failing unit tests |
+| C3b | a stale threshold equal to the window is accepted | KILLED | 3 failing unit tests |
+| C3c | the 24-hour reconciliation ceiling is removed | KILLED | 4 failing unit tests |
+| C3d | the ceiling drifts to 48 hours | KILLED | 3 failing unit tests |
+| C3e | the stale threshold becomes strictly-after instead of at-or-after | KILLED | 10 failing unit tests |
+| C3f | a non-positive reconciliation window is accepted | KILLED | 6 failing unit tests |
+| C3g | a non-positive stale threshold is accepted | KILLED | 3 failing unit tests |
+| C3h | the deadline is computed from the stale threshold | KILLED | 3 failing unit tests |
+| C5a | any string is accepted as a diagnostic code | KILLED | 27 failing unit tests |
+| C5b | the length bound is removed | KILLED | 3 failing unit tests |
+| C5c | whitespace becomes an acceptable code character | KILLED | 4 failing unit tests |
+| C5d | the observation stops validating the code at all | KILLED | 10 failing unit tests |
+| C5e | a malformed code is silently dropped instead of refused | KILLED | 22 failing unit tests |
+| C5f | a blank provider reference is accepted as an acceptance | KILLED | 3 failing unit tests |
+| C6a | INITIAL over a CONSUMED reservation is treated as normal | KILLED | 6 failing unit tests |
+| C6b | a missing reservation is no longer flagged | KILLED | 8 failing unit tests |
+| C6c | a released reservation is no longer flagged | KILLED | 6 failing unit tests |
+| C6d | a reservation still being taken is no longer flagged | KILLED | 3 failing unit tests |
+| C6e | the anomaly is returned but never written down | KILLED | 8 failing unit tests |
+| C6f | the request kind is taken from the caller's metadata | KILLED | 3 failing unit tests |
+| C6g | the reservation hold event reuses the attempt event type | KILLED | 4 failing unit tests |
+| C6h | the repository ignores the reservation event type | KILLED | 4 failing db tests |
+| C6i | the repository stops loading the request kind | KILLED | 4 failing db tests |
+| P1 | an exact replay re-applies instead of replaying | KILLED | 5 failing unit tests |
+| P2 | SUBMISSION_UNKNOWN returns the attempt to QUEUED | KILLED | 5 failing unit tests |
+| P3 | uncertainty stops suspending the reservation | KILLED | 3 failing unit tests |
+| P4 | an acceptance does not persist the provider reference | KILLED | 16 failing unit tests |
+| P5 | the clock is read before the lock is taken | KILLED | 3 failing unit tests |
+| P6 | the sweeper stops requiring staleness | KILLED | 3 failing unit tests |
+| P7 | the caller regains authority over the attempt event label | KILLED | 6 failing unit tests |
+| P8 | stale recovery is labelled as a direct observation | KILLED | 5 failing unit tests |
+| P9 | a lost CAS is reported as a replay | KILLED | 3 failing unit tests |
+| P10 | a cross-tenant attempt is distinguishable from a missing one | KILLED | 3 failing unit tests |
+| P11 | the reservation row lock is removed | KILLED | 4 failing db tests |
+| P12 | the attempt lookup drops its tenant predicate | KILLED | 5 failing db tests |
+| P13 | a CONSUMED reservation is suspended too | KILLED | 11 failing db tests |
+| P14 | a missing reservation blocks persistence of provider reality | KILLED | 9 failing db tests |
+| P15 | the reservation hold is never applied | KILLED | 12 failing db tests |
+| P16 | the attempt outcome event is never appended | KILLED | 16 failing db tests |
+| P17 | a QUEUED attempt may receive an outcome | KILLED | 3 failing unit tests |
+| P18 | a half-written certainty on a SUBMITTING row is applied over | KILLED | 4 failing unit tests |
+| P19 | the retryable flag stops selecting the failure state | KILLED | 7 failing unit tests |
+| P20 | an attempt with no boundary instant is treated as stale | KILLED | 3 failing unit tests |
 
-R3, R4 and R13 stop compiling because the mutation orphans a variable or an
-import, which is a real but uninformative kill. Each was re-aimed as `R3b`,
-`R4b` and `R13b` so the *rule* is measured rather than the compiler, and all
-three of those survive.
-
-### The survivors, and why they are reported rather than papered over
-
-All seven live in the persistence layer, and all seven are the same finding:
-**the write is already serialized by something else, so a second defence removes
-nothing observable.**
-
-- **R5, R6, R4b — the CAS predicates.** `loadFacts` and `apply` run inside one
-  transaction that already holds both locks, and the evaluator refuses every
-  non-boundary state before `apply` is reached. Nothing can change the row in
-  between, so `orchestrationState`, `submissionCertainty` and strict version
-  equality in the `where` clause cannot currently be the thing that stops a bad
-  write. They stay because they are what makes the write correct *without*
-  relying on that reasoning holding for every future caller — the compare-and-set
-  should be safe read in isolation.
-- **R2, R3b, R14 — the lock mode and the lock key.** The reservation `UPDATE`
-  takes an exclusive row lock of its own and waits for any shared holder, so a
-  `FOR SHARE` acquisition still serializes the transition; and the reservation
-  row lock still serializes two writers even when the advisory lock is keyed
-  wrongly. `FOR UPDATE` is kept because it takes the mode it will need at a
-  single ordered point instead of upgrading shared→exclusive mid-transaction,
-  which is the classic deadlock shape; the advisory key is kept aligned with
-  Phase 2F-1 because that is what makes the two phases contend on the cycle they
-  share rather than by accident. Neither claim is that the suite proves them, and
-  the code comment says so.
-- **R13b — the incoherent-write guard.** It is defence in depth over a database
-  CHECK constraint. No test writes an incoherent shape, because the evaluator
-  cannot produce one; the guard exists so that a future writer that could would
-  fail loudly here rather than as an opaque constraint error.
-
-`R1` — removing the reservation row lock outright — kills four database tests,
-which is what establishes that the serialization these survivors are redundant
-*with* actually exists and is load-bearing.
+The three previously typecheck-only kills (`R3`, `R4`, `R13`) do not appear:
+their re-aimed forms were absorbed into the persistence mutations above, which
+are killed behaviourally. The lock-mode and lock-key survivors (`R2`, `R3b`,
+`R14`) are no longer measured separately — `P11`, removing the reservation row
+lock outright, kills four database tests, and the mode question it left open is
+discussed under **Concurrency and lock order** rather than being presented as
+test-backed.
 
 ## Verification
 
@@ -468,27 +679,40 @@ graph.
 | --- | --- |
 | `pnpm typecheck` | Pass (all packages and apps) |
 | `pnpm lint` | Pass (0 problems) |
-| `pnpm test` | Pass — 85 files, **2175 tests** |
+| `pnpm test` | Pass — 87 files, **2246 tests** |
 | `pnpm build` | Pass (Next.js production build) |
-| `pnpm test:db` | Pass — 18 files, **448 tests** |
+| `pnpm test:db` | Pass — 18 files, **473 tests** |
 | `prisma migrate diff` schema ↔ live database | `No difference detected` |
 | `prisma migrate diff` migrations ↔ schema | `No difference detected` |
-| Mutation ledger | 44/51 killed, 7 documented survivors |
+| Mutation ledger | **56/56 killed, 0 survivors** |
+
+The Prisma checks are run against `packages/database/prisma/schema.prisma`, which
+is where the schema actually lives; the root `prisma/` directory holds only a
+README pointing there.
 
 ### Suite breakdown
 
 | Suite | Tests |
 | --- | --- |
-| `packages/domain/src/submission/outcome.test.ts` | 38 |
-| `packages/domain/src/submission/service.test.ts` | 20 |
-| `tests/integration/submission-outcome.db.test.ts` | 26 |
+| `packages/domain/src/submission/outcome.test.ts` | 58 |
+| `packages/domain/src/submission/service.test.ts` | 33 |
+| `packages/domain/src/submission/diagnostic-code.test.ts` | 29 |
+| `packages/domain/src/submission/entitlement-anomaly.test.ts` | 9 |
+| `tests/integration/submission-outcome.db.test.ts` | 51 |
 
-The database suite covers the three outcomes, replay exactness (no second event,
-no timestamp moved, no `providerAcceptedAt` re-stamped), all three conflict
-reasons, stale recovery at and one millisecond before its threshold, deadline
-parity between the two entry routes, the full reservation matrix including an
-absent reservation, no-quota / no-recovery-attempt / no-regeneration-consumed,
-cross-tenant isolation in both directions, and six concurrency races.
+The database suite covers the three outcomes; replay exactness (no second event,
+no timestamp moved, no `providerAcceptedAt` re-stamped); same-reference
+`ACCEPTED` replay at `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING` and
+`OUTPUT_VERIFIED`, with a differing reference still conflicting at each;
+`SUBMISSION_UNKNOWN` replay after `RECONCILIATION_EXHAUSTED`; the two
+reconciliation instants and an already-past deadline; every conflict reason;
+stale recovery at and one millisecond before its threshold; the full reservation
+matrix including an absent reservation; the entitlement-anomaly matrix
+cold-read back from transition-event metadata; the reservation hold's own event
+type; hostile diagnostic codes refused with nothing written; no-quota /
+no-recovery-attempt / no-regeneration-consumed; cross-tenant isolation in both
+directions; and six concurrency races — including the direct-versus-stale race
+run on **two different clocks**.
 
 Phase 4C-3B-2F-1's own suites are unchanged and still pass; the only shared code
 touched is `appendEvent`'s rename to `appendGenerationEvent` and the widening of

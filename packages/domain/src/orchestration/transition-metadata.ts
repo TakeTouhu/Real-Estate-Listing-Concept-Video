@@ -28,6 +28,13 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
   "attemptOrdinal",
   "billingCycleKey",
   "correlationId",
+  /**
+   * How the customer's entitlement bookkeeping looked when a provider outcome
+   * landed after the paid boundary. A closed vocabulary value — `NONE`,
+   * `RESERVATION_MISSING`, `INITIAL_RESERVATION_ALREADY_CONSUMED` and the rest —
+   * written so that an anomaly survives the process that noticed it.
+   */
+  "entitlementAnomaly",
   "generationJobId",
   "generationSceneId",
   "highQualityUnits",

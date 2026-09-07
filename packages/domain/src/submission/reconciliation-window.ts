@@ -5,18 +5,19 @@ import { DEFAULT_RECONCILIATION_WINDOW_MS } from "../orchestration/certainty";
  * How long uncertainty is allowed to stay open, and when a silent attempt
  * becomes one.
  *
- * Both figures are anchored to the same instant — `submissionBoundaryEnteredAt`,
- * the moment the attempt committed to crossing — and that choice is what makes
- * the rest of this phase well behaved. Two workers can enter uncertainty for
- * the same attempt by different routes (one observing a timeout directly,
- * another sweeping up a stale row hours later) and both compute **the same
- * deadline**, because neither derives it from when it happened to look. The
- * race between them is therefore benign: whichever commits first, the second
- * sees durable state identical to what it would have written, and replays.
+ * Both figures here are measured **from the submission boundary** — the moment
+ * the attempt committed to crossing — and that is what makes the deadline well
+ * behaved. Two workers can enter uncertainty for the same attempt by different
+ * routes (one observing a timeout directly, another sweeping up a stale row
+ * hours later) and both compute **the same deadline**, because neither derives
+ * it from when it happened to look. A retry therefore cannot extend the bound on
+ * how long the platform carries an unresolved charge, and a delayed sweeper
+ * simply inherits less remaining time rather than granting itself more.
  *
- * Deriving from "now" would have made those two paths disagree, made replay
- * non-idempotent, and — worst — let a retry quietly extend a deadline that was
- * supposed to bound how long the platform carries an unresolved charge.
+ * Note what is *not* derived here: `reconciliationStartedAt`. That is a record
+ * of when the system first durably concluded it did not know, which for a stale
+ * attempt is hours after the boundary. Deriving it from the boundary would have
+ * backdated operational history — see ADR-0036 §2.
  */
 
 /**
@@ -34,15 +35,21 @@ import { DEFAULT_RECONCILIATION_WINDOW_MS } from "../orchestration/certainty";
 export const MAX_RECONCILIATION_WINDOW_MS = DEFAULT_RECONCILIATION_WINDOW_MS;
 
 /**
- * How long an attempt may sit in `SUBMITTING` before it is presumed lost.
+ * There is deliberately no default stale-`SUBMITTING` threshold.
  *
- * Fifteen minutes. Long enough that an ordinary slow provider response is never
- * mistaken for a dead worker, short enough that a genuinely crashed submission
- * does not hold its reservation hostage for a day. It is deliberately far
- * shorter than the reconciliation window: becoming *uncertain* should happen
- * quickly, while *resolving* that uncertainty is what gets the long budget.
+ * How long an attempt may sit at the boundary before it is presumed lost is a
+ * production-activation decision that depends on real provider latency
+ * distributions nobody has measured yet, and shipping a plausible-looking
+ * constant is how a guess becomes policy: the number gets quoted, then relied
+ * on, and no one revisits where it came from. Too short and an ordinary slow
+ * provider response is mistaken for a dead worker, converting a live paid
+ * submission into permanent uncertainty; too long and a genuinely crashed
+ * submission holds its reservation hostage.
+ *
+ * A caller therefore supplies a validated `ReconciliationPolicy`. Tests pick
+ * whatever deterministic value is convenient; those are fixtures, not policy.
+ * The unresolved production value is tracked in `docs/decisions/TODO.md`.
  */
-export const DEFAULT_STALE_SUBMITTING_AFTER_MS = 15 * 60 * 1000;
 
 export interface ReconciliationPolicy {
   readonly reconciliationWindowMs: number;
@@ -57,7 +64,7 @@ export type ReconciliationPolicyFailure =
   | "RECONCILIATION_WINDOW_NOT_POSITIVE"
   | "RECONCILIATION_WINDOW_TOO_LONG"
   | "STALE_THRESHOLD_NOT_POSITIVE"
-  | "STALE_THRESHOLD_EXCEEDS_WINDOW";
+  | "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE";
 
 /**
  * Validate a configured policy, returning a result rather than throwing.
@@ -81,21 +88,14 @@ export function validateReconciliationPolicy(input: {
   if (!Number.isSafeInteger(staleSubmittingAfterMs) || staleSubmittingAfterMs <= 0) {
     return { ok: false, reason: "STALE_THRESHOLD_NOT_POSITIVE" };
   }
-  // A stale threshold beyond the window would declare an attempt lost after the
-  // deadline it is supposed to be given — uncertainty that expires before it
-  // begins.
-  if (staleSubmittingAfterMs > reconciliationWindowMs) {
-    return { ok: false, reason: "STALE_THRESHOLD_EXCEEDS_WINDOW" };
+  // Strictly before, not at-or-before. At equality the attempt becomes stale
+  // exactly when its reconciliation deadline arrives, so the uncertainty it
+  // enters is already expired — a window that exists only as an instant. Beyond
+  // equality is worse still. Both are the same defect and both are refused.
+  if (staleSubmittingAfterMs >= reconciliationWindowMs) {
+    return { ok: false, reason: "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE" };
   }
   return { ok: true, policy: { reconciliationWindowMs, staleSubmittingAfterMs } };
-}
-
-/** The default policy, already validated. */
-export function defaultReconciliationPolicy(): ReconciliationPolicy {
-  return {
-    reconciliationWindowMs: DEFAULT_RECONCILIATION_WINDOW_MS,
-    staleSubmittingAfterMs: DEFAULT_STALE_SUBMITTING_AFTER_MS,
-  };
 }
 
 /**

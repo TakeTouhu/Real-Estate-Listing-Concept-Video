@@ -1,6 +1,11 @@
 import type { EpochMillis } from "../pricing/units";
 import type { TransitionContext } from "../orchestration/ports";
-import type { GenerationReservationState } from "../orchestration/types";
+import type {
+  GenerationReservationState,
+  SceneGenerationRequestKind,
+} from "../orchestration/types";
+import type { EntitlementAnomaly } from "./entitlement-anomaly";
+import type { SubmissionDiagnosticCode } from "./diagnostic-code";
 import type { AttemptSubmissionFacts, SubmissionOutcomeWrite } from "./outcome";
 import type {
   NotAtBoundaryReason,
@@ -50,6 +55,15 @@ export interface SubmissionOutcomeFacts {
   readonly attempt: AttemptSubmissionFacts;
   /** `null` when the job has no reservation at all — an anomaly, not a block. */
   readonly reservation: ReservationOutcomeFacts | null;
+  /**
+   * The parent logical request's kind, read through the persisted chain.
+   *
+   * Never caller-supplied. It is the fact that separates a correct `CONSUMED`
+   * reservation (a post-delivery `USER_REGENERATION`, by contract) from an
+   * anomalous one (an `INITIAL` request standing on a spent unit), and a caller
+   * able to assert it could relabel an entitlement anomaly as routine.
+   */
+  readonly requestKind: SceneGenerationRequestKind;
 }
 
 /**
@@ -79,6 +93,14 @@ export interface SubmissionOutcomeSession {
     readonly expectedVersion: number;
     readonly write: SubmissionOutcomeWrite;
     readonly context: TransitionContext;
+    /**
+     * The event type for the reservation's own transition, when one occurs.
+     *
+     * Separate from the attempt's, because the two events describe different
+     * facts: one says what a provider did, the other says what happened to a
+     * customer's entitlement as a result. Neither is caller-selectable.
+     */
+    readonly reservationEventType: string;
   }): Promise<ApplyOutcomeResult>;
 }
 
@@ -104,7 +126,14 @@ export interface RecordSubmissionObservationInput {
 export interface EnterUncertaintyForStaleInput {
   readonly organizationId: string;
   readonly attemptId: string;
-  readonly normalizedErrorCode: string | null;
+  /**
+   * A validated short application code, or nothing.
+   *
+   * The same safe-code contract the direct route uses: an operator sweeping up
+   * abandoned attempts must not be able to write free text into the audit trail
+   * either.
+   */
+  readonly normalizedErrorCode: SubmissionDiagnosticCode | null;
   readonly context: TransitionContext;
 }
 
@@ -122,7 +151,20 @@ export interface EnterUncertaintyForStaleInput {
  * owe money against.
  */
 export type SubmissionOutcomeResult =
-  | { readonly kind: "APPLIED"; readonly attemptId: string; readonly stateVersion: number }
+  | {
+      readonly kind: "APPLIED";
+      readonly attemptId: string;
+      readonly stateVersion: number;
+      /**
+       * What the entitlement bookkeeping looked like when this landed.
+       *
+       * Returned as a convenience for a caller still alive to read it. It is
+       * *also* written into the attempt's transition event metadata, because a
+       * crash after commit must not erase the only record that an anomaly
+       * existed.
+       */
+      readonly entitlementAnomaly: EntitlementAnomaly;
+    }
   | { readonly kind: "REPLAYED"; readonly attemptId: string }
   | {
       readonly kind: "CONFLICTING_OBSERVATION";

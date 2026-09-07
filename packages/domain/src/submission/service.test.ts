@@ -11,12 +11,22 @@ import {
   type SubmissionOutcomeFacts,
   type SubmissionOutcomeRepository,
 } from "./ports";
-import { defaultReconciliationPolicy, staleSubmittingBoundary } from "./reconciliation-window";
+import {
+  staleSubmittingBoundary,
+  type ReconciliationPolicy,
+} from "./reconciliation-window";
 import {
   STALE_SUBMISSION_RECOVERY_EVENT_TYPE,
+  SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE,
   SUBMISSION_OUTCOME_EVENT_TYPE,
   createSubmissionOutcomeService,
 } from "./service";
+import type { SceneGenerationRequestKind } from "../orchestration/types";
+import type { ReservationOutcomeFacts } from "./ports";
+import {
+  parseSubmissionDiagnosticCode,
+  type SubmissionDiagnosticCode,
+} from "./diagnostic-code";
 
 /**
  * The service's contract at the seams the database cannot reach: which clock it
@@ -24,7 +34,11 @@ import {
  */
 
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
-const POLICY = defaultReconciliationPolicy();
+/** A fixture. There is deliberately no shipped production stale threshold. */
+const POLICY: ReconciliationPolicy = {
+  reconciliationWindowMs: 24 * 60 * 60 * 1000,
+  staleSubmittingAfterMs: 15 * 60 * 1000,
+};
 const STALE_AT = staleSubmittingBoundary(BOUNDARY, POLICY);
 
 function atBoundary(overrides: Partial<AttemptSubmissionFacts> = {}): AttemptSubmissionFacts {
@@ -56,11 +70,23 @@ function harness(options: {
   apply?: () => Promise<ApplyOutcomeResult>;
   now?: EpochMillis;
   onLock?: () => void;
+  requestKind?: SceneGenerationRequestKind;
+  reservation?: ReservationOutcomeFacts | null;
 } = {}) {
   const facts =
-    options.facts === undefined ? { attempt: atBoundary(), reservation: null } : options.facts;
+    options.facts === undefined
+      ? {
+          attempt: atBoundary(),
+          reservation: options.reservation ?? null,
+          requestKind: options.requestKind ?? ("INITIAL" as SceneGenerationRequestKind),
+        }
+      : options.facts;
   const calls = { apply: 0, clock: 0 };
-  const applied: { expectedVersion: number; context: TransitionContext }[] = [];
+  const applied: {
+    expectedVersion: number;
+    context: TransitionContext;
+    reservationEventType: string;
+  }[] = [];
   const base = createFixedSubmissionClock(options.now ?? BOUNDARY);
   const outcomes: SubmissionOutcomeRepository = {
     async withAttemptOutcome(_input, run) {
@@ -71,7 +97,11 @@ function harness(options: {
         },
         async apply(input) {
           calls.apply += 1;
-          applied.push({ expectedVersion: input.expectedVersion, context: input.context });
+          applied.push({
+            expectedVersion: input.expectedVersion,
+            context: input.context,
+            reservationEventType: input.reservationEventType,
+          });
           return (options.apply ?? (async () => ({ kind: "APPLIED", stateVersion: 4 })))();
         },
       });
@@ -96,8 +126,14 @@ function harness(options: {
 const ACCEPTED = {
   kind: "ACCEPTED" as const,
   providerPredictionId: "pred_abc",
-  providerAcceptedAt: BOUNDARY,
 };
+
+/** Codes exist only by passing the safe-code boundary. */
+const CODE_TIMEOUT = ((): SubmissionDiagnosticCode => {
+  const parsed = parseSubmissionDiagnosticCode("TIMEOUT");
+  if (!parsed.ok || parsed.code === null) throw new Error("fixture");
+  return parsed.code;
+})();
 
 describe("recording a directly observed outcome", () => {
   it("applies and reports the version the database committed", async () => {
@@ -108,7 +144,12 @@ describe("recording a directly observed outcome", () => {
       observation: ACCEPTED,
       context: CONTEXT,
     });
-    expect(outcome).toEqual({ kind: "APPLIED", attemptId: "sgen_svc", stateVersion: 4 });
+    expect(outcome).toEqual({
+      kind: "APPLIED",
+      attemptId: "sgen_svc",
+      stateVersion: 4,
+      entitlementAnomaly: "RESERVATION_MISSING",
+    });
   });
 
   it("answers a missing or cross-tenant attempt without writing", async () => {
@@ -147,6 +188,7 @@ describe("recording a directly observed outcome", () => {
           providerPredictionId: "pred_abc",
         }),
         reservation: null,
+        requestKind: "INITIAL",
       },
     });
     expect(
@@ -170,6 +212,7 @@ describe("recording a directly observed outcome", () => {
           providerPredictionId: "pred_abc",
         }),
         reservation: null,
+        requestKind: "INITIAL",
       },
     });
     expect(
@@ -237,6 +280,7 @@ describe("stale-submitting recovery", () => {
           submissionCertainty: "SUBMISSION_UNKNOWN",
         }),
         reservation: null,
+        requestKind: "INITIAL",
       },
     });
     expect(
@@ -262,6 +306,7 @@ describe("stale-submitting recovery", () => {
           providerPredictionId: "pred_abc",
         }),
         reservation: null,
+        requestKind: "INITIAL",
       },
     });
     expect(
@@ -288,7 +333,7 @@ describe("the clock and the event label", () => {
           order.push("lock");
           return run({
             async loadFacts() {
-              return { attempt: atBoundary(), reservation: null };
+              return { attempt: atBoundary(), reservation: null, requestKind: "INITIAL" };
             },
             async apply() {
               return { kind: "APPLIED", stateVersion: 4 };
@@ -377,7 +422,7 @@ describe("the clock and the event label", () => {
     await service.recordObservation({
       organizationId: "org_svc",
       attemptId: "sgen_svc",
-      observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: "TIMEOUT" },
+      observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: CODE_TIMEOUT },
       context: CONTEXT,
     });
     expect(applied[0]?.context.metadata).toMatchObject({
@@ -453,5 +498,178 @@ describe("the submission module has no provider or network dependency", () => {
       expect(`${name}: ${text.includes("Date.now(")}`).toBe(`${name}: false`);
       expect(`${name}: ${text.includes("new Date(")}`).toBe(`${name}: false`);
     }
+  });
+});
+
+describe("entitlement anomalies are recorded, never a refusal", () => {
+  const HELD: ReservationOutcomeFacts = { id: "genres_1", state: "RESERVED", stateVersion: 0 };
+  const SPENT: ReservationOutcomeFacts = { id: "genres_1", state: "CONSUMED", stateVersion: 2 };
+  const GONE: ReservationOutcomeFacts = { id: "genres_1", state: "RELEASED", stateVersion: 3 };
+
+  async function landUnknown(options: {
+    requestKind: SceneGenerationRequestKind;
+    reservation: ReservationOutcomeFacts | null;
+  }) {
+    const h = harness(options);
+    const outcome = await h.service.recordObservation({
+      organizationId: "org_svc",
+      attemptId: "sgen_svc",
+      observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: CODE_TIMEOUT },
+      context: CONTEXT,
+    });
+    return { outcome, applied: h.applied, calls: h.calls };
+  }
+
+  it("calls a held reservation under an INITIAL request normal", async () => {
+    const { outcome, applied } = await landUnknown({
+      requestKind: "INITIAL",
+      reservation: HELD,
+    });
+    expect(outcome).toMatchObject({ kind: "APPLIED", entitlementAnomaly: "NONE" });
+    expect(applied[0]?.context.metadata).toMatchObject({ entitlementAnomaly: "NONE" });
+  });
+
+  it("calls a CONSUMED reservation under a user regeneration normal", async () => {
+    // Correct by contract: the regeneration right is sold with the original
+    // video and exercised after delivery, when the unit is already spent.
+    const { outcome, applied } = await landUnknown({
+      requestKind: "USER_REGENERATION",
+      reservation: SPENT,
+    });
+    expect(outcome).toMatchObject({ kind: "APPLIED", entitlementAnomaly: "NONE" });
+    expect(applied[0]?.context.metadata).toMatchObject({
+      entitlementAnomaly: "NONE",
+      requestKind: "USER_REGENERATION",
+    });
+  });
+
+  it("records a CONSUMED reservation under an INITIAL request, and still writes", async () => {
+    const { outcome, applied, calls } = await landUnknown({
+      requestKind: "INITIAL",
+      reservation: SPENT,
+    });
+    expect(outcome).toMatchObject({
+      kind: "APPLIED",
+      entitlementAnomaly: "INITIAL_RESERVATION_ALREADY_CONSUMED",
+    });
+    // Recorded, not refused. Provider reality after the paid boundary is
+    // persisted whether or not the bookkeeping adds up.
+    expect(calls.apply).toBe(1);
+    expect(applied[0]?.context.metadata).toMatchObject({
+      entitlementAnomaly: "INITIAL_RESERVATION_ALREADY_CONSUMED",
+    });
+  });
+
+  it("records a missing reservation and still writes", async () => {
+    const { outcome, calls, applied } = await landUnknown({
+      requestKind: "INITIAL",
+      reservation: null,
+    });
+    expect(outcome).toMatchObject({
+      kind: "APPLIED",
+      entitlementAnomaly: "RESERVATION_MISSING",
+    });
+    expect(calls.apply).toBe(1);
+    expect(applied[0]?.context.metadata).toMatchObject({
+      entitlementAnomaly: "RESERVATION_MISSING",
+    });
+  });
+
+  it("records a released reservation and still writes", async () => {
+    const { outcome, applied } = await landUnknown({
+      requestKind: "INITIAL",
+      reservation: GONE,
+    });
+    expect(outcome).toMatchObject({
+      kind: "APPLIED",
+      entitlementAnomaly: "RESERVATION_RELEASED",
+    });
+    expect(applied[0]?.context.metadata).toMatchObject({
+      entitlementAnomaly: "RESERVATION_RELEASED",
+    });
+  });
+
+  it("writes the anomaly into metadata even when the caller supplied none", async () => {
+    // The point of putting it in the transition event: a crash between commit
+    // and the caller reading the return value must not erase the only record
+    // that an anomaly existed.
+    const { applied } = await landUnknown({ requestKind: "INITIAL", reservation: null });
+    expect(Object.keys(applied[0]?.context.metadata ?? {})).toContain("entitlementAnomaly");
+  });
+});
+
+describe("the reservation event has its own label", () => {
+  it("passes a reservation-specific event type, distinct from either attempt label", async () => {
+    // The attempt event says what a provider did; the reservation event says a
+    // customer's entitlement was suspended because nobody could say what the
+    // provider did. An operator querying for entitlement suspensions should not
+    // have to know which attempt-side route caused each one.
+    const { service, applied } = harness({
+      requestKind: "INITIAL",
+      reservation: { id: "genres_1", state: "RESERVED", stateVersion: 0 },
+    });
+    await service.recordObservation({
+      organizationId: "org_svc",
+      attemptId: "sgen_svc",
+      observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: null },
+      context: CONTEXT,
+    });
+    expect(applied[0]?.reservationEventType).toBe(SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE);
+    expect(applied[0]?.reservationEventType).not.toBe(SUBMISSION_OUTCOME_EVENT_TYPE);
+    expect(applied[0]?.reservationEventType).not.toBe(STALE_SUBMISSION_RECOVERY_EVENT_TYPE);
+    expect(applied[0]?.reservationEventType).not.toBe("CALLER_CHOSEN");
+  });
+
+  it("uses the same reservation label from the stale-recovery route", async () => {
+    const { service, applied } = harness({
+      now: STALE_AT,
+      requestKind: "INITIAL",
+      reservation: { id: "genres_1", state: "RESERVED", stateVersion: 0 },
+    });
+    await service.enterUncertaintyForStaleSubmitting({
+      organizationId: "org_svc",
+      attemptId: "sgen_svc",
+      normalizedErrorCode: null,
+      context: CONTEXT,
+    });
+    expect(applied[0]?.reservationEventType).toBe(SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE);
+    // While the attempt-side label still distinguishes the two routes.
+    expect(applied[0]?.context.eventType).toBe(STALE_SUBMISSION_RECOVERY_EVENT_TYPE);
+  });
+});
+
+describe("a malformed diagnostic code refuses before anything is written", () => {
+  it.each([
+    "https://signed.example/path?token=SECRET",
+    "Bearer secret-token",
+    "a sunlit living room, cinematic",
+    "Provider returned 429: too many requests",
+  ])("refuses %s and writes nothing", async (hostile) => {
+    const { service, calls } = harness();
+    expect(
+      await service.recordObservation({
+        organizationId: "org_svc",
+        attemptId: "sgen_svc",
+        observation: {
+          kind: "SUBMISSION_UNKNOWN",
+          normalizedErrorCode: hostile as SubmissionDiagnosticCode,
+        },
+        context: CONTEXT,
+      }),
+    ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+    expect(calls.apply).toBe(0);
+  });
+
+  it("refuses hostile text on the stale-recovery route too", async () => {
+    const { service, calls } = harness({ now: STALE_AT });
+    expect(
+      await service.enterUncertaintyForStaleSubmitting({
+        organizationId: "org_svc",
+        attemptId: "sgen_svc",
+        normalizedErrorCode: "Bearer secret-token" as SubmissionDiagnosticCode,
+        context: CONTEXT,
+      }),
+    ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+    expect(calls.apply).toBe(0);
   });
 });

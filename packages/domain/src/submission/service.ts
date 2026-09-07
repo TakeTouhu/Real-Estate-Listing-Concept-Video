@@ -3,6 +3,7 @@ import type { TransitionContext } from "../orchestration/ports";
 import { decideSubmissionOutcome, isRecoverableStaleSubmitting } from "./outcome";
 import type { SubmissionOutcomeDecision } from "./outcome";
 import type { ProviderSubmissionObservation } from "./observation";
+import { classifyEntitlementAnomaly, type EntitlementAnomaly } from "./entitlement-anomaly";
 import type {
   EnterUncertaintyForStaleInput,
   RecordSubmissionObservationInput,
@@ -16,10 +17,9 @@ import type {
  * Two entry points, one rule set. A worker that watched the POST reports what
  * it saw; a sweeper that finds an attempt abandoned at the boundary reports
  * that nobody knows. Both land in the same place, through the same evaluator,
- * and — because every timestamp is anchored to `submissionBoundaryEnteredAt`
- * rather than to now — both produce byte-identical durable state for the same
- * attempt. That is what makes their race benign rather than a source of two
- * different deadlines for one uncertainty.
+ * and produce the same durable shape for the same attempt — the reconciliation
+ * *deadline* in particular, which is derived from the submission boundary, so
+ * neither route can grant itself a longer window by looking later.
  *
  * **Nothing here contacts a provider.** This phase records reality that has
  * already been observed; it never goes and asks. The dependency set is a
@@ -27,11 +27,22 @@ import type {
  * without editing the port file.
  */
 
-/** The event type a submission outcome writes. Not caller-supplied. */
+/** The event type a submission outcome writes on the attempt. Not caller-supplied. */
 export const SUBMISSION_OUTCOME_EVENT_TYPE = "SUBMISSION_OUTCOME_RECORDED";
 
-/** The event type stale-submitting recovery writes. */
+/** The event type stale-submitting recovery writes on the attempt. */
 export const STALE_SUBMISSION_RECOVERY_EVENT_TYPE = "STALE_SUBMISSION_UNCERTAINTY_ENTERED";
+
+/**
+ * The event type the *reservation's* own transition writes.
+ *
+ * Deliberately not either of the attempt labels. The two events describe
+ * different facts — one says what a provider did, the other says a customer's
+ * entitlement was suspended because nobody could say what the provider did —
+ * and an operator querying for entitlement suspensions should not have to know
+ * which attempt-side route happened to cause each one.
+ */
+export const SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE = "SUBMISSION_UNCERTAINTY_HOLD";
 
 /**
  * Attach the outcome facts to the caller's context.
@@ -41,6 +52,12 @@ export const STALE_SUBMISSION_RECOVERY_EVENT_TYPE = "STALE_SUBMISSION_UNCERTAINT
  * future reconciliation worker select on, and a caller able to write something
  * else could make a provider outcome indistinguishable from any other
  * transition.
+ *
+ * `entitlementAnomaly` rides along for a reason that outlives this process. An
+ * anomaly discovered here is reported in the return value, but a crash between
+ * commit and the caller reading it would leave no trace that money was spent
+ * against bookkeeping that did not add up. Writing it into the same transaction
+ * as the outcome makes it reconstructable from the database alone.
  */
 function withOutcomeRecord(
   context: TransitionContext,
@@ -49,6 +66,8 @@ function withOutcomeRecord(
     readonly certainty: string;
     readonly reconciliationDeadlineAt: number | null;
     readonly attemptId: string;
+    readonly entitlementAnomaly: EntitlementAnomaly;
+    readonly requestKind: string;
   },
 ): TransitionContext {
   return {
@@ -59,6 +78,8 @@ function withOutcomeRecord(
       attemptId: facts.attemptId,
       submissionCertainty: facts.certainty,
       reconciliationDeadlineAt: facts.reconciliationDeadlineAt,
+      entitlementAnomaly: facts.entitlementAnomaly,
+      requestKind: facts.requestKind,
     }),
   };
 }
@@ -96,9 +117,11 @@ export function createSubmissionOutcomeService(deps: SubmissionOutcomeDeps) {
         // distinguishable denial would confirm another tenant's row exists.
         if (facts === null) return { kind: "ATTEMPT_NOT_FOUND" };
 
-        // Read once, inside the lock. A stale judgement made before waiting for
-        // the lock could declare an attempt lost that a worker finished while
-        // this transaction queued.
+        // Read once, inside the lock. Everything this write stamps — the
+        // acceptance instant, the moment uncertainty became durable — comes from
+        // this one value, and so does the staleness judgement. A stale judgement
+        // made before waiting for the lock could declare an attempt lost that a
+        // worker finished while this transaction queued.
         const now = deps.clock.now();
 
         const decision = decideSubmissionOutcome({
@@ -122,20 +145,32 @@ export function createSubmissionOutcomeService(deps: SubmissionOutcomeDeps) {
           }
         }
 
-        // Exactly the news already on file. No event, no timestamp moves, no
-        // deadline extended — the whole point of anchoring them to the boundary.
+        // Exactly the provider reality already on file. No event, no timestamp
+        // moves, no deadline extended, and — because replay identity is what the
+        // provider did rather than where the attempt landed — no false conflict
+        // just because execution has since moved on.
         if (decision.kind === "REPLAY") {
           return { kind: "REPLAYED", attemptId: facts.attempt.attemptId };
         }
         if (decision.kind !== "APPLY") return translate(decision);
 
+        // Classified from persisted facts only: the request kind comes through
+        // the chain, the reservation state from the row locked above.
+        const entitlementAnomaly = classifyEntitlementAnomaly({
+          requestKind: facts.requestKind,
+          reservationState: facts.reservation?.state ?? null,
+        });
+
         const applied = await session.apply({
           expectedVersion: facts.attempt.stateVersion,
           write: decision.write,
+          reservationEventType: SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE,
           context: withOutcomeRecord(input.context, eventType, {
             attemptId: facts.attempt.attemptId,
             certainty: decision.write.submissionCertainty,
             reconciliationDeadlineAt: decision.write.reconciliationDeadlineAt,
+            entitlementAnomaly,
+            requestKind: facts.requestKind,
           }),
         });
         if (applied.kind === "LOST") return { kind: "LOST_CONCURRENCY" };
@@ -144,6 +179,7 @@ export function createSubmissionOutcomeService(deps: SubmissionOutcomeDeps) {
           kind: "APPLIED",
           attemptId: facts.attempt.attemptId,
           stateVersion: applied.stateVersion,
+          entitlementAnomaly,
         };
       },
     );

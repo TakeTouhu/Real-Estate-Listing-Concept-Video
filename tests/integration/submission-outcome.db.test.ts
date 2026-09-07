@@ -5,16 +5,19 @@ import {
   createPricingSnapshot,
   createProviderPricingCatalog,
   createSubmissionOutcomeService,
-  defaultReconciliationPolicy,
   epochMillisFromDate,
+  parseSubmissionDiagnosticCode,
   staleSubmittingBoundary,
   STALE_SUBMISSION_RECOVERY_EVENT_TYPE,
+  SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE,
   SUBMISSION_OUTCOME_EVENT_TYPE,
   type EpochMillis,
   type FxSnapshot,
   type PricingSnapshot,
   type ProviderSubmissionObservation,
+  type ReconciliationPolicy,
   type SubmissionClock,
+  type SubmissionDiagnosticCode,
 } from "@app/domain";
 import {
   createPaidSubmissionAuthorizationRepository,
@@ -52,7 +55,22 @@ const other = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 const blocker = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
-const POLICY = defaultReconciliationPolicy();
+/**
+ * A fixture, not a product policy. There is deliberately no shipped default
+ * stale-`SUBMITTING` threshold: how long an attempt may sit at the boundary
+ * before it is presumed lost is a production-activation decision.
+ */
+const POLICY: ReconciliationPolicy = {
+  reconciliationWindowMs: 24 * 60 * 60 * 1000,
+  staleSubmittingAfterMs: 15 * 60 * 1000,
+};
+
+/** Codes exist only by passing the safe-code boundary. */
+function code(value: string): SubmissionDiagnosticCode {
+  const parsed = parseSubmissionDiagnosticCode(value);
+  if (!parsed.ok || parsed.code === null) throw new Error(`not a safe code: ${value}`);
+  return parsed.code;
+}
 const STALE_AT = staleSubmittingBoundary(BOUNDARY, POLICY);
 const CYCLE = "2026-09";
 const FX_ID = "fx_outcome";
@@ -70,11 +88,10 @@ const FX: FxSnapshot = {
 const ACCEPTED: ProviderSubmissionObservation = {
   kind: "ACCEPTED",
   providerPredictionId: "pred_live",
-  providerAcceptedAt: BOUNDARY,
 };
 const UNKNOWN: ProviderSubmissionObservation = {
   kind: "SUBMISSION_UNKNOWN",
-  normalizedErrorCode: "TIMEOUT",
+  normalizedErrorCode: code("TIMEOUT"),
 };
 
 function service(
@@ -109,6 +126,8 @@ async function seedSubmittingAttempt(
     readonly organizationId?: string;
     readonly videoProjectId?: string;
     readonly reserve?: boolean;
+    /** Rewrites the seeded request's kind, to reach the entitlement matrix. */
+    readonly requestKind?: "INITIAL" | "USER_REGENERATION";
   } = {},
 ) {
   const organizationId = options.organizationId ?? ORG_A;
@@ -176,6 +195,16 @@ async function seedSubmittingAttempt(
     ctx(),
   );
   if (request === null) throw new Error("request not created");
+
+  if (options.requestKind === "USER_REGENERATION") {
+    // A post-delivery regeneration. Reached by rewriting the seeded row rather
+    // than driving the regeneration admission path, which needs a delivered
+    // video this suite has no interest in producing.
+    await prisma.sceneGenerationRequest.update({
+      where: { id: request.id },
+      data: { kind: "USER_REGENERATION", userRegenerationOrdinal: 1 },
+    });
+  }
 
   const admitted = await repos.attempts.admit(
     organizationId,
@@ -279,7 +308,7 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       const outcome = await service().recordObservation({
         organizationId: ORG_A,
         attemptId: attempt.id,
-        observation: { kind: "DEFINITIVELY_REJECTED", retryable, normalizedErrorCode: "E" },
+        observation: { kind: "DEFINITIVELY_REJECTED", retryable, normalizedErrorCode: code("E") },
         context: ctx(),
       });
       expect(outcome).toMatchObject({ kind: "APPLIED" });
@@ -385,28 +414,37 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       expect(heldAfter.state).toBe("RECONCILIATION_HOLD");
     });
 
-    it("does not re-stamp providerAcceptedAt on an accepted replay", async () => {
-      // The provider reference is persisted exactly once. A replay that
-      // re-stamped it would move the record of when the provider took the work.
+    it("stamps providerAcceptedAt from the service clock and never re-stamps it", async () => {
+      // The caller cannot supply this instant — the observation has no field
+      // for it — so it comes from the clock read after the lock. A replay on a
+      // later clock must not move it: that would rewrite when money started
+      // being spent.
       const { attempt } = await seedSubmittingAttempt("accreplay");
-      await service().recordObservation({
+      const acceptedAt = (BOUNDARY + 4_000) as EpochMillis;
+      await service(prisma, createFixedSubmissionClock(acceptedAt)).recordObservation({
         organizationId: ORG_A,
         attemptId: attempt.id,
         observation: ACCEPTED,
         context: ctx(),
       });
       const first = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(first.providerAcceptedAt?.getTime()).toBe(acceptedAt);
 
-      await service().recordObservation({
+      const replayed = await service(
+        prisma,
+        createFixedSubmissionClock((BOUNDARY + 99_000) as EpochMillis),
+      ).recordObservation({
         organizationId: ORG_A,
         attemptId: attempt.id,
-        observation: { ...ACCEPTED, providerAcceptedAt: (BOUNDARY + 99_000) as EpochMillis },
+        observation: ACCEPTED,
         context: ctx(),
       });
+      expect(replayed).toEqual({ kind: "REPLAYED", attemptId: attempt.id });
+
       const second = await prisma.sceneGeneration.findUniqueOrThrow({
         where: { id: attempt.id },
       });
-      expect(second.providerAcceptedAt?.getTime()).toBe(first.providerAcceptedAt?.getTime());
+      expect(second.providerAcceptedAt?.getTime()).toBe(acceptedAt);
       expect(second.stateVersion).toBe(first.stateVersion);
     });
   });
@@ -521,8 +559,17 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       const b = await prisma.sceneGeneration.findUniqueOrThrow({
         where: { id: swept.attempt.id },
       });
+      // The deadline is boundary-derived, so the two routes agree on it even
+      // though one of them looked hours later. That is what stops a delayed
+      // sweeper granting itself a longer window than a prompt observer.
       expect(b.reconciliationDeadlineAt?.getTime()).toBe(a.reconciliationDeadlineAt?.getTime());
-      expect(b.reconciliationStartedAt?.getTime()).toBe(a.reconciliationStartedAt?.getTime());
+      // The *start* is a different fact — when each route first durably
+      // concluded it did not know — so it does not agree, and must not.
+      expect(b.reconciliationStartedAt?.getTime()).not.toBe(
+        a.reconciliationStartedAt?.getTime(),
+      );
+      expect(a.reconciliationStartedAt?.getTime()).toBe(BOUNDARY);
+      expect(b.reconciliationStartedAt?.getTime()).toBe(STALE_AT + 3_600_000);
     });
 
     it("labels the recovery event distinctly from a direct observation", async () => {
@@ -708,6 +755,426 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
     });
   });
 
+  describe("replay identity is provider reality, not landing state", () => {
+    // The correction this round turned on. An accepted attempt whose execution
+    // has moved on has not contradicted its acceptance, and refusing there
+    // would demand a human adjudicate a duplicate delivery of unchanged news.
+    const advanced = [
+      "PROCESSING",
+      "PROVIDER_SUCCEEDED",
+      "OUTPUT_INGESTING",
+      "OUTPUT_VERIFIED",
+    ] as const;
+
+    async function acceptThenAdvance(suffix: string, state: (typeof advanced)[number]) {
+      const seeded = await seedSubmittingAttempt(suffix);
+      await service().recordObservation({
+        organizationId: ORG_A,
+        attemptId: seeded.attempt.id,
+        observation: ACCEPTED,
+        context: ctx(),
+      });
+      if (state !== "PROCESSING") {
+        await prisma.sceneGeneration.update({
+          where: { id: seeded.attempt.id },
+          data: { orchestrationState: state },
+        });
+      }
+      return seeded;
+    }
+
+    it.each(advanced)("replays the same acceptance at %s", async (state) => {
+      const { attempt } = await acceptThenAdvance(`adv${state.slice(0, 6)}`, state);
+      const before = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      const eventsBefore = (
+        await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)
+      ).length;
+
+      expect(
+        await service(
+          prisma,
+          createFixedSubmissionClock((BOUNDARY + 9 * 60 * 60 * 1000) as EpochMillis),
+        ).recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: ACCEPTED,
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "REPLAYED", attemptId: attempt.id });
+
+      // Zero rows, zero events. The attempt is not dragged backwards.
+      const after = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      expect(after.orchestrationState).toBe(state);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.providerAcceptedAt?.getTime()).toBe(before.providerAcceptedAt?.getTime());
+      expect(
+        (await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)).length,
+      ).toBe(eventsBefore);
+    });
+
+    it.each(advanced)("still conflicts on a different reference at %s", async (state) => {
+      const { attempt } = await acceptThenAdvance(`rv${state.slice(0, 6)}`, state);
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: { ...ACCEPTED, providerPredictionId: "pred_rival" },
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "CONFLICTING_OBSERVATION", reason: "PROVIDER_REFERENCE_MISMATCH" });
+      expect(
+        (await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } }))
+          .providerPredictionId,
+      ).toBe("pred_live");
+    });
+
+    it("replays uncertainty after the reconciliation window was exhausted", async () => {
+      // RECONCILIATION_EXHAUSTED says the window closed while provider reality
+      // was still unknown — a later fact about how long nobody found out, not a
+      // contradiction of the original observation.
+      const { attempt } = await seedSubmittingAttempt("exhausted");
+      await service().recordObservation({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        observation: UNKNOWN,
+        context: ctx(),
+      });
+      await prisma.sceneGeneration.update({
+        where: { id: attempt.id },
+        data: { orchestrationState: "RECONCILIATION_EXHAUSTED" },
+      });
+      const before = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      const eventsBefore = (
+        await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)
+      ).length;
+
+      expect(
+        await service(
+          prisma,
+          createFixedSubmissionClock((BOUNDARY + 40 * 60 * 60 * 1000) as EpochMillis),
+        ).recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "REPLAYED", attemptId: attempt.id });
+
+      const after = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      // Never dragged back to RECONCILIATION_PENDING, and no timestamp moved.
+      expect(after.orchestrationState).toBe("RECONCILIATION_EXHAUSTED");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.reconciliationStartedAt?.getTime()).toBe(
+        before.reconciliationStartedAt?.getTime(),
+      );
+      expect(after.reconciliationDeadlineAt?.getTime()).toBe(
+        before.reconciliationDeadlineAt?.getTime(),
+      );
+      expect(
+        (await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)).length,
+      ).toBe(eventsBefore);
+    });
+  });
+
+  describe("the two reconciliation instants are different facts", () => {
+    it("starts uncertainty at the clock and deadlines it from the boundary", async () => {
+      const { attempt } = await seedSubmittingAttempt("twoinstants");
+      const swept = (STALE_AT + 3 * 60 * 60 * 1000) as EpochMillis;
+      await service(prisma, createFixedSubmissionClock(swept)).enterUncertaintyForStaleSubmitting(
+        {
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          normalizedErrorCode: null,
+          context: ctx(),
+        },
+      );
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      // When the system first durably concluded it did not know — hours after
+      // the boundary, and not backdated to it.
+      expect(row.reconciliationStartedAt?.getTime()).toBe(swept);
+      expect(row.reconciliationStartedAt?.getTime()).not.toBe(BOUNDARY);
+      // The deadline is a different fact and does not move with the clock.
+      expect(row.reconciliationDeadlineAt?.getTime()).toBe(
+        BOUNDARY + POLICY.reconciliationWindowMs,
+      );
+    });
+
+    it("persists an already-past deadline rather than inventing a live one", async () => {
+      // Whether that uncertainty is exhausted is Phase 2G-2's decision.
+      const { attempt } = await seedSubmittingAttempt("pastdeadline");
+      const wayLate = (BOUNDARY + 30 * 60 * 60 * 1000) as EpochMillis;
+      expect(
+        (
+          await service(
+            prisma,
+            createFixedSubmissionClock(wayLate),
+          ).enterUncertaintyForStaleSubmitting({
+            organizationId: ORG_A,
+            attemptId: attempt.id,
+            normalizedErrorCode: null,
+            context: ctx(),
+          })
+        ).kind,
+      ).toBe("APPLIED");
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.reconciliationDeadlineAt?.getTime()).toBe(
+        BOUNDARY + POLICY.reconciliationWindowMs,
+      );
+      expect(row.reconciliationDeadlineAt!.getTime()).toBeLessThan(wayLate);
+      expect(row.orchestrationState).toBe("RECONCILIATION_PENDING");
+    });
+
+    it("does not move reconciliationStartedAt on a replay from a later clock", async () => {
+      const { attempt } = await seedSubmittingAttempt("startstable");
+      const first = (BOUNDARY + 60_000) as EpochMillis;
+      await service(prisma, createFixedSubmissionClock(first)).recordObservation({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        observation: UNKNOWN,
+        context: ctx(),
+      });
+      expect(
+        await service(
+          prisma,
+          createFixedSubmissionClock((BOUNDARY + 5 * 60 * 60 * 1000) as EpochMillis),
+        ).recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "REPLAYED", attemptId: attempt.id });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.reconciliationStartedAt?.getTime()).toBe(first);
+    });
+  });
+
+  describe("entitlement anomalies are durable, never a refusal", () => {
+    /**
+     * Read the anomaly back from the database alone.
+     *
+     * Deliberately goes through persistence rather than the service's return
+     * value: a crash between commit and the caller reading that value must not
+     * erase the only record that an anomaly existed.
+     */
+    async function anomalyOf(attemptId: string): Promise<unknown> {
+      const history = await repositories(prisma).events.listForAggregate(
+        ORG_A,
+        "ATTEMPT",
+        attemptId,
+      );
+      return history.at(-1)?.safeMetadata["entitlementAnomaly"];
+    }
+
+    it("calls USER_REGENERATION over a CONSUMED reservation normal", async () => {
+      const { attempt, job } = await seedSubmittingAttempt("regencons", {
+        requestKind: "USER_REGENERATION",
+      });
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: job.id },
+        data: { state: "CONSUMED", consumedAt: new Date() },
+      });
+      const before = await reservationOf(job.id);
+
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toMatchObject({ kind: "APPLIED", entitlementAnomaly: "NONE" });
+
+      const after = await reservationOf(job.id);
+      expect(after.state).toBe("CONSUMED");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(await anomalyOf(attempt.id)).toBe("NONE");
+    });
+
+    it("records INITIAL over a CONSUMED reservation as an anomaly, and still writes", async () => {
+      const { attempt, job } = await seedSubmittingAttempt("initcons");
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: job.id },
+        data: { state: "CONSUMED", consumedAt: new Date() },
+      });
+      const before = await reservationOf(job.id);
+
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toMatchObject({
+        kind: "APPLIED",
+        entitlementAnomaly: "INITIAL_RESERVATION_ALREADY_CONSUMED",
+      });
+
+      const after = await reservationOf(job.id);
+      expect(after.state).toBe("CONSUMED");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(
+        (await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } }))
+          .orchestrationState,
+      ).toBe("RECONCILIATION_PENDING");
+      // Cold-read: reconstructable from the database alone, with no live
+      // process left to report it.
+      expect(await anomalyOf(attempt.id)).toBe("INITIAL_RESERVATION_ALREADY_CONSUMED");
+    });
+
+    it("records a missing reservation durably", async () => {
+      const { attempt } = await seedSubmittingAttempt("anomnores", { reserve: false });
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toMatchObject({ kind: "APPLIED", entitlementAnomaly: "RESERVATION_MISSING" });
+      expect(await anomalyOf(attempt.id)).toBe("RESERVATION_MISSING");
+    });
+
+    it("records a released reservation durably", async () => {
+      const { attempt, job } = await seedSubmittingAttempt("anomrel");
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: job.id },
+        data: { state: "RELEASED", releasedAt: new Date() },
+      });
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: UNKNOWN,
+          context: ctx(),
+        }),
+      ).toMatchObject({ kind: "APPLIED", entitlementAnomaly: "RESERVATION_RELEASED" });
+      expect((await reservationOf(job.id)).state).toBe("RELEASED");
+      expect(await anomalyOf(attempt.id)).toBe("RESERVATION_RELEASED");
+    });
+
+    it("labels the reservation hold with its own event type", async () => {
+      // The attempt event says what a provider did; this says a customer's
+      // entitlement was suspended because nobody could say what the provider
+      // did. An operator querying entitlement suspensions must not have to know
+      // which attempt-side route caused each one.
+      const { attempt, job } = await seedSubmittingAttempt("holdevt");
+      await service().recordObservation({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        observation: UNKNOWN,
+        context: ctx({ eventType: "CALLER_CHOSEN" }),
+      });
+      const reservationHistory = await repositories(prisma).events.listForAggregate(
+        ORG_A,
+        "RESERVATION",
+        `genres_holdevt`,
+      );
+      const hold = reservationHistory.filter((e) => e.toState === "RECONCILIATION_HOLD");
+      expect(hold).toHaveLength(1);
+      expect(hold[0]?.eventType).toBe(SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE);
+      expect(hold[0]?.eventType).not.toBe(SUBMISSION_OUTCOME_EVENT_TYPE);
+      expect(hold[0]?.eventType).not.toBe("CALLER_CHOSEN");
+
+      // And the attempt's own event keeps its own label.
+      const attemptHistory = await repositories(prisma).events.listForAggregate(
+        ORG_A,
+        "ATTEMPT",
+        attempt.id,
+      );
+      expect(attemptHistory.at(-1)?.eventType).toBe(SUBMISSION_OUTCOME_EVENT_TYPE);
+      expect((await reservationOf(job.id)).state).toBe("RECONCILIATION_HOLD");
+    });
+
+    it("writes no reservation event when no reservation transition happened", async () => {
+      const { attempt } = await seedSubmittingAttempt("noholdevt");
+      await service().recordObservation({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        observation: ACCEPTED,
+        context: ctx(),
+      });
+      const reservationHistory = await repositories(prisma).events.listForAggregate(
+        ORG_A,
+        "RESERVATION",
+        `genres_noholdevt`,
+      );
+      expect(
+        reservationHistory.filter((e) => e.eventType === SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE),
+      ).toHaveLength(0);
+      expect(await anomalyOf(attempt.id)).toBe("NONE");
+    });
+  });
+
+  describe("hostile diagnostic codes never reach the database", () => {
+    it.each([
+      ["a signed URL", "https://signed.example/path?token=SECRET"],
+      ["a bearer credential", "Bearer secret-token"],
+      ["a customer prompt", "a sunlit living room, cinematic"],
+      ["raw provider text", "Provider returned 429: too many requests"],
+      ["a line break", "TIMEOUT\nAuthorization: Bearer leaked"],
+    ])("refuses %s and writes nothing", async (label, hostile) => {
+      const { attempt } = await seedSubmittingAttempt(`hostile${label.length}`);
+      expect(
+        await service().recordObservation({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          observation: {
+            kind: "SUBMISSION_UNKNOWN",
+            normalizedErrorCode: hostile as SubmissionDiagnosticCode,
+          },
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("SUBMITTING");
+      expect(row.normalizedErrorCode).toBeNull();
+    });
+
+    it("refuses hostile text on the stale-recovery route too", async () => {
+      const { attempt } = await seedSubmittingAttempt("hostilestale");
+      expect(
+        await service(
+          prisma,
+          createFixedSubmissionClock(STALE_AT),
+        ).enterUncertaintyForStaleSubmitting({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          normalizedErrorCode: "Bearer secret-token" as SubmissionDiagnosticCode,
+          context: ctx(),
+        }),
+      ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+      expect(
+        (await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } }))
+          .orchestrationState,
+      ).toBe("SUBMITTING");
+    });
+
+    it("persists a well-formed code unchanged", async () => {
+      const { attempt } = await seedSubmittingAttempt("goodcode");
+      await service().recordObservation({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: code("CONNECTION_RESET") },
+        context: ctx(),
+      });
+      expect(
+        (await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } }))
+          .normalizedErrorCode,
+      ).toBe("CONNECTION_RESET");
+    });
+  });
+
   describe("concurrency", () => {
     it("lets exactly one of two identical acceptances apply; the other replays", async () => {
       const { attempt } = await seedSubmittingAttempt("raceacc");
@@ -796,26 +1263,42 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       }
     });
 
-    it("lets a direct unknown and a stale sweep agree rather than conflict", async () => {
+    it("lets a direct unknown and a stale sweep agree, on two different clocks", async () => {
+      // The clocks differ deliberately. Now that `reconciliationStartedAt` comes
+      // from each worker's own clock, the two routes no longer compute an
+      // identical row — so the property being tested is sharper than before:
+      // replay identity is *provider reality*, and bookkeeping about when each
+      // worker happened to learn it must not turn the loser into a conflict.
       const { attempt } = await seedSubmittingAttempt("racestale");
-      const late = createFixedSubmissionClock((STALE_AT + 60_000) as EpochMillis);
+      const T1 = (STALE_AT + 60_000) as EpochMillis;
+      const T2 = (STALE_AT + 7 * 60 * 1000) as EpochMillis;
+      expect(T1).not.toBe(T2);
+
       const results = await Promise.all([
-        service(prisma, late).recordObservation({
+        service(prisma, createFixedSubmissionClock(T1)).recordObservation({
           organizationId: ORG_A,
           attemptId: attempt.id,
           observation: UNKNOWN,
           context: ctx(),
         }),
-        service(other, late).enterUncertaintyForStaleSubmitting({
+        service(other, createFixedSubmissionClock(T2)).enterUncertaintyForStaleSubmitting({
           organizationId: ORG_A,
           attemptId: attempt.id,
           normalizedErrorCode: null,
           context: ctx(),
         }),
       ]);
-      // Both routes compute identical durable state, so the loser replays
-      // rather than conflicting.
       expect(results.map((r) => r.kind).sort()).toEqual(["APPLIED", "REPLAYED"]);
+
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      // The start belongs to whichever route committed first, whole — never a
+      // blend, and never overwritten by the loser.
+      expect([T1, T2]).toContain(row.reconciliationStartedAt?.getTime());
+      // The deadline is identical whichever won, because it is boundary-derived.
+      expect(row.reconciliationDeadlineAt?.getTime()).toBe(
+        BOUNDARY + POLICY.reconciliationWindowMs,
+      );
+
       const history = await repositories(prisma).events.listForAggregate(
         ORG_A,
         "ATTEMPT",

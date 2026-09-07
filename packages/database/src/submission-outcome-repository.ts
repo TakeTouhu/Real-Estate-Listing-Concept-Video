@@ -6,6 +6,7 @@ import {
   type EpochMillis,
   type GenerationAttemptState,
   type ReservationOutcomeFacts,
+  type SceneGenerationRequestKind,
   type SubmissionOutcomeFacts,
   type SubmissionOutcomeRepository,
   type SubmissionOutcomeSession,
@@ -138,6 +139,14 @@ interface AttemptRow {
   providerPredictionId: string | null;
   reconciliationStartedAt: Date | null;
   reconciliationDeadlineAt: Date | null;
+  /**
+   * The parent logical request's kind, joined here rather than accepted from a
+   * caller. It is what separates a correct `CONSUMED` reservation — a
+   * post-delivery `USER_REGENERATION` — from an `INITIAL` request standing on a
+   * spent unit, and a caller able to assert it could relabel an entitlement
+   * anomaly as routine.
+   */
+  requestKind: SceneGenerationRequestKind | null;
 }
 
 /** The attempt, tenant-scoped through its own chain. */
@@ -154,7 +163,8 @@ async function loadAttempt(
            a."submissionBoundaryEnteredAt" AS "submissionBoundaryEnteredAt",
            a."providerPredictionId"        AS "providerPredictionId",
            a."reconciliationStartedAt"     AS "reconciliationStartedAt",
-           a."reconciliationDeadlineAt"    AS "reconciliationDeadlineAt"
+           a."reconciliationDeadlineAt"    AS "reconciliationDeadlineAt",
+           r."kind"::text                  AS "requestKind"
       FROM "scene_generations" a
       JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
       JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
@@ -193,6 +203,10 @@ export function createSubmissionOutcomeRepository(
             // Missing, cross-tenant, or a legacy row that predates the
             // orchestration axis entirely.
             if (row === null || row.orchestrationState === null) return null;
+            // An orchestrated attempt always has a logical request — the
+            // all-or-none CHECK guarantees it — so a null here is a row that
+            // predates the axis, answered the same way as a missing one.
+            if (row.requestKind === null) return null;
 
             const attempt: AttemptSubmissionFacts = {
               attemptId: row.attemptId,
@@ -205,10 +219,15 @@ export function createSubmissionOutcomeRepository(
               reconciliationStartedAt: MS(row.reconciliationStartedAt),
               reconciliationDeadlineAt: MS(row.reconciliationDeadlineAt),
             };
-            return { attempt, reservation };
+            return { attempt, reservation, requestKind: row.requestKind };
           },
 
-          async apply({ expectedVersion, write, context }): Promise<ApplyOutcomeResult> {
+          async apply({
+            expectedVersion,
+            write,
+            context,
+            reservationEventType,
+          }): Promise<ApplyOutcomeResult> {
             // Defence in depth over the domain: the pairing of certainty,
             // state and provider reference is a database CHECK as well, and a
             // write that would violate it is a defect worth failing loudly on
@@ -294,7 +313,13 @@ export function createSubmissionOutcomeRepository(
                 aggregateId: reservation.id,
                 fromState: "RESERVED",
                 toState: "RECONCILIATION_HOLD",
-                context,
+                // The reservation's own label. The attempt event says what a
+                // provider did; this says a customer's entitlement was
+                // suspended because nobody could say what the provider did.
+                // Reusing the attempt's label would make entitlement
+                // suspensions unqueryable without knowing which attempt-side
+                // route caused each one.
+                context: { ...context, eventType: reservationEventType },
               });
             }
 
