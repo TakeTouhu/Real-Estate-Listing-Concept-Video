@@ -736,3 +736,22 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       RBAC, and organization scoping (Phase 1).
 - [ ] Introduce OpenTelemetry exporters; the Phase 0 logger is a local
       structured logger with redaction only.
+
+## Phase 4C-3B-2G-1 — production stale-`SUBMITTING` threshold
+
+`staleSubmittingAfterMs` — how long an attempt may sit at the provider boundary
+before it is presumed lost — is **unresolved**. No default ships, deliberately:
+the value depends on real provider latency distributions nobody has measured, and
+a plausible-looking constant is how a guess becomes policy.
+
+Too short and an ordinary slow provider response is mistaken for a dead worker,
+converting a live paid submission into permanent uncertainty. Too long and a
+genuinely crashed submission holds its reservation hostage.
+
+Resolving it needs: observed p99 submission latency per provider and model, and a
+decision about how much uncertainty the Safety Guard should carry while waiting.
+A production caller must supply a validated `ReconciliationPolicy`; the domain
+refuses to invent one. Tests use fixtures.
+
+The reconciliation window itself is settled: configurable, at most 24 hours, and
+the stale threshold must be **strictly** less than it.

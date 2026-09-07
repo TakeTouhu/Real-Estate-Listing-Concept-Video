@@ -3,6 +3,168 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2G-1: Submission outcome persistence and uncertainty entry
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2g1-completion.md`. Phase
+4C-3B-2F-1 ended at the paid boundary; this phase writes down what happened on
+the other side of it. **No provider is contacted anywhere in this phase** —
+there is no HTTP client, no polling and no reconciliation request — and no
+database migration was required.
+
+### Added
+
+- **A provider-neutral submission observation.** `ACCEPTED`,
+  `DEFINITIVELY_REJECTED` and `SUBMISSION_UNKNOWN`, carrying no HTTP status, no
+  provider error body, no vendor enum — and no timestamp and no free text either.
+  An adapter translates its own vocabulary into one of the three and this layer
+  never learns which provider it was talking to. `SUBMISSION_UNKNOWN` is not a
+  failure mode of the other two: it is what must be recorded whenever the
+  platform cannot *prove* which of them happened, and rounding it to either is
+  how a provider gets paid for work the platform believes it never ordered. No
+  current adapter reaches `DEFINITIVELY_REJECTED` for a remote rate limit —
+  WaveSpeed 429 and a fal status with no provider reference both map to
+  `SUBMISSION_UNKNOWN` — because neither establishes that the provider did not
+  begin billable work.
+- **Three durable destinations from the boundary.**
+  `SUBMITTING + PRE_SUBMISSION` becomes `PROCESSING + ACCEPTED`,
+  `FAILED_RETRYABLE`/`FAILED_TERMINAL + DEFINITIVELY_REJECTED`, or
+  `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`. The provider reference is
+  persisted exactly once and never overwritten.
+- **Replay identified by provider reality, not by where the attempt landed.** An
+  observation matching the record returns `REPLAYED` — a success, not a soft
+  failure — with no second event, no timestamp moved and no deadline extended.
+  Identity compares the certainty, the provider reference, and whether the
+  recorded state is one that certainty can *explain*; it never requires the
+  attempt to still be where the first application put it. So the same `ACCEPTED`
+  replays at `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING` and
+  `OUTPUT_VERIFIED`, and the same `SUBMISSION_UNKNOWN` replays at both
+  `RECONCILIATION_PENDING` and `RECONCILIATION_EXHAUSTED` — an accepted
+  generation whose execution moved on has not contradicted its acceptance, and an
+  exhausted window is a later fact about how long nobody found out rather than a
+  revision of the original observation. `normalizedErrorCode` and the
+  reconciliation timestamps are excluded from identity too: they are the
+  platform's own bookkeeping, not what the provider did.
+- **Conflicting observations that fail closed.** A different provider reference,
+  a different certainty, or a different terminal state refuses with
+  `PROVIDER_REFERENCE_MISMATCH`, `CERTAINTY_MISMATCH` or
+  `TERMINAL_STATE_MISMATCH` and writes nothing. Overwriting would discard the
+  ability to ask the provider about a reference the platform may still owe money
+  against.
+- **Two reconciliation instants, only one of them from the boundary.**
+  `reconciliationDeadlineAt` stays `submissionBoundaryEnteredAt + window`, which
+  is what makes replay incapable of extending a deadline, gives a delayed sweeper
+  *less* remaining time rather than more, and lets the two entry routes agree on
+  the deadline whichever wins their race. `reconciliationStartedAt` is a
+  different fact — when the system first durably concluded it did not know — and
+  comes from the post-lock clock; deriving it from the boundary backdated
+  operational history by however long an attempt sat abandoned. An already-past
+  deadline is persisted as-is, because whether that uncertainty is exhausted
+  belongs to Phase 2G-2.
+- **The acceptance instant read from the platform's own clock.** The `ACCEPTED`
+  observation has no `providerAcceptedAt` field: no frozen provider contract
+  establishes an authoritative provider-side acceptance timestamp, so a
+  caller-supplied one would be an unverified, freely backdatable claim about when
+  money started being spent. One clock read per decision serves the staleness
+  judgement, the acceptance instant and the uncertainty start.
+- **A reconciliation window capped at 24 hours, whose validation authority
+  cannot be copied.** Two weaker boundaries came first and are worth recording. A
+  structural type let an unchecked literal reach the service. A phantom
+  `unique symbol` brand then stopped the literal but not a *copy* — TypeScript's
+  spread type carries the phantom property, so
+  `{ ...policy, reconciliationWindowMs: 86_400_001 }` was still a
+  `ReconciliationPolicy` with no cast anywhere, and the brand proved only that
+  some value had once been validated rather than that the numbers being consumed
+  still were. A ceiling a spread can raise is not a ceiling.
+  `ReconciliationPolicy` is now an opaque class with ECMAScript private state: a
+  real `#validated` field that no spread copies at either the type or the value
+  level, a private constructor so `validateReconciliationPolicy` is the only way
+  in, and getters over private fields so the validated numbers are readable and
+  unwritable. Compile-time coverage proves that spreading, cloning, overriding or
+  faithfully copying a genuine policy all lose its authority, and that a raw
+  config cannot reach `SubmissionOutcomeDeps`, the evaluator, or any deadline
+  derivation. `Object.assign` keeps the type by construction of its lib
+  signature — stated rather than hidden — and is refused, along with any explicit
+  cast, by a runtime `#validated in value` check at service construction: defence
+  in depth proving provenance, never a second copy of the bounds. There is
+  deliberately **no shipped stale-`SUBMITTING` default**, and the stale threshold
+  must be positive and **strictly** less than the window. Nothing is clamped and
+  nothing is defaulted: silently repairing an operator's number would hide the
+  mistake and make the persisted deadline disagree with the configuration in
+  force.
+- **Diagnostics reduced to a closed application-owned vocabulary.**
+  `normalizedErrorCode` is now a member of `["TIMEOUT", "CONNECTION_RESET",
+  "LOCAL_CONFIGURATION"]`, checked at runtime by *membership* rather than shape.
+  The previous syntactic rule looked like a boundary while admitting
+  `SECRET_TOKEN_ABC123`, `APIKEY1234567890` and `ACCESS_KEY_123456789` unchanged
+  — safe syntax is not trusted provenance, and a credential spelled in capitals
+  is still a credential. This is ADR-0031 §4 applied literally: external input
+  may influence which classification the application picks, never supply the
+  value. Anything else — a signed URL, a bearer credential, a prompt, a raw
+  provider body, a stack trace, or a well-formed code the application does not
+  own — is `OBSERVATION_MALFORMED` with no attempt write, no reservation write
+  and no event, and is deliberately distinguished from no code at all. No HTTP
+  status and no vendor string is a member.
+- **Stale-`SUBMITTING` recovery without any re-POST.** One abandoned attempt
+  becomes durable `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`, judged at-or-
+  after its threshold on an injected clock read *inside* the lock — a judgement
+  made before waiting for the lock could declare an attempt lost that a worker
+  finished while the transaction queued. It never returns to `QUEUED`: the
+  provider may already hold and bill for the request, so re-arming it would buy
+  the same work twice.
+- **The reservation moved in the same commit, and only when it should be.**
+  `RESERVED → RECONCILIATION_HOLD` for uncertainty, with its own event.
+  `CONSUMED` stays consumed — a post-delivery `USER_REGENERATION` runs against a
+  `CONSUMED` reservation by contract, and suspending it would re-open an
+  entitlement the customer already used. `RELEASED` stays released. An **absent**
+  reservation is an anomaly and explicitly not a refusal: losing the fact that a
+  provider took work because a bookkeeping row is missing is the more expensive
+  mistake by far.
+- **Entitlement anomalies that are said out loud.** "Must not block the write"
+  was not the same as "must not mention", and the first draft did the second by
+  accident. A closed classification — `NONE`, `RESERVATION_MISSING`,
+  `RESERVATION_RELEASED`, `RESERVATION_RESERVING`,
+  `INITIAL_RESERVATION_ALREADY_CONSUMED`, `RESERVATION_STATE_INCONSISTENT` — is
+  written into the outcome's transition-event metadata in the same transaction,
+  so a crash after commit cannot erase the only record that money was spent
+  against bookkeeping that did not add up. Telling the valid `CONSUMED` from the
+  anomalous one needs the parent request's kind, which is joined from the
+  persisted chain and never caller-supplied.
+- **A reservation event type of its own.** `RESERVED → RECONCILIATION_HOLD`
+  writes `SUBMISSION_UNCERTAINTY_HOLD`, not either attempt-side label: the two
+  events describe different facts, and an operator querying entitlement
+  suspensions should not have to know which attempt-side route caused each one.
+  When no reservation transition occurs, no reservation event is written.
+- **The Phase 2F-1 lock order, preserved exactly.** Organization+cycle advisory
+  lock, then the reservation row, then the attempt compare-and-set — the same
+  three in the same order, differing only in taking the reservation `FOR UPDATE`
+  because uncertainty may suspend it rather than merely read it. Same order,
+  stronger mode, no deadlock cycle, and no process-local mutex anywhere.
+
+### Changed
+
+- `isCoherentAttemptRecord` now accepts `DEFINITIVELY_REJECTED` paired with
+  `FAILED_RETRYABLE` as well as `FAILED_TERMINAL`. Both are definitive
+  rejections; the flag decides only whether a *new* attempt row may be admitted,
+  never whether this row may be re-POSTed. The database CHECK never constrained
+  the pairing, so no migration follows.
+- `submissionCertainty` and `entitlementAnomaly` join the transition-metadata
+  allowlist so an outcome event can carry the certainty it recorded and the state
+  of the entitlement it landed against. Both are closed vocabulary values, never
+  provider or customer text.
+- `appendEvent` in the orchestration repositories is exported as
+  `appendGenerationEvent`, so this phase reuses one event-append implementation
+  rather than growing a second.
+
+### Not in this phase
+
+No provider call, no polling, no webhook, no live provider enabled, no fal or Veo
+production activation, no output ingestion, no composition, no upscale, no
+payment integration, no Stripe. No credit settlement — `RECONCILIATION_HOLD`
+suspends, it does not settle. No `SYSTEM_RECOVERY` attempt is created, no
+regeneration right is consumed and no customer quota is touched on any path.
+Both entry points are dormant domain services with no caller: no API route, no
+worker loop, no scheduler.
+
 ## [Unreleased] — Phase 4C-3B-2F-1: Dormant paid submission authorization gate
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2f1-completion.md`. One

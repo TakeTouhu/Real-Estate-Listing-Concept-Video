@@ -522,6 +522,121 @@ and ADR-0020.
   pause does. `SUBMISSION_UNKNOWN` can never re-arm and stale `SUBMITTING` is
   never a retry. No migration was required, customer quota is untouched on every
   path, and fal and Veo remain production-disabled.
+- **Phase 4C-3B-2G-1** — see GitHub for its lifecycle. Adds submission outcome
+  persistence and uncertainty entry: the other side of the boundary Phase
+  4C-3B-2F-1 stopped at. One provider-neutral service writes down what happened
+  to one attempt that has already crossed `QUEUED → SUBMITTING`, and — like the
+  gate before it — contacts no provider at all. There is no HTTP client, no
+  polling and no reconciliation request in its dependency graph; it records news
+  a caller already learned rather than going and asking, and reconciliation that
+  polls is a later phase.
+
+  The observation it accepts is `ACCEPTED`, `DEFINITIVELY_REJECTED` or
+  `SUBMISSION_UNKNOWN`, with no HTTP status, provider error body or vendor enum
+  anywhere in it. The third arm is not a failure mode of the other two: it is
+  what must be recorded whenever the platform cannot *prove* which of them
+  happened, and rounding it to the convenient answer is how a provider gets paid
+  for work the platform believes it never ordered. Those three become
+  `PROCESSING + ACCEPTED`, `FAILED_RETRYABLE`/`FAILED_TERMINAL +
+  DEFINITIVELY_REJECTED`, and `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`.
+
+  The expensive decisions are all about the *second* arrival of the same news. A
+  matching observation returns `REPLAYED` — a success, not a soft failure, since
+  a caller retrying on any non-`APPLIED` answer would loop forever on its own
+  earlier success — and writes nothing at all. A differing one refuses and writes
+  nothing: a second provider reference is never allowed to overwrite the first,
+  because the discarded one may still name work the platform owes money for.
+  Identity is compared on certainty, reference and state, deliberately not on the
+  normalized error code, which is the platform's own classification rather than
+  anything the provider did.
+
+  Corrected after CTO review. Three of the first draft's claims were wrong.
+  Replay identity compared the *landing state*, which turned an entirely ordinary
+  sequence — accept, then proceed to `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING`,
+  `OUTPUT_VERIFIED` — into a false conflict whenever the same acceptance arrived
+  again. It now compares provider reality only: the certainty, the provider
+  reference, and whether the recorded state is one that certainty can explain, so
+  a duplicate delivery of unchanged news replays instead of demanding a human
+  adjudicate it. `RECONCILIATION_EXHAUSTED` replays the same way — an exhausted
+  window is a later fact about how long nobody found out, not a revision of the
+  original observation — and the row is never dragged back to
+  `RECONCILIATION_PENDING`. A differing provider reference still conflicts
+  everywhere, and for a definitive rejection so does a retryable-versus-terminal
+  disagreement, because there the landing state *is* provider reality.
+
+  Only the reconciliation *deadline* is boundary-derived. That is what makes a
+  replay incapable of extending it, gives a delayed sweeper less remaining time
+  rather than more, and lets the two entry routes agree on it whichever wins
+  their race. `reconciliationStartedAt` is a different fact — when the system
+  first durably concluded it did not know — and deriving it from the boundary
+  backdated operational history by however long an attempt sat abandoned; it now
+  comes from the post-lock clock, as does `providerAcceptedAt`, whose caller-
+  supplied field was removed outright because no frozen provider contract
+  establishes an authoritative provider-side acceptance instant and an unverified
+  one is freely backdatable. One clock read per decision serves all three.
+
+  The window is configurable and capped at twenty-four hours, the ceiling being
+  the Phase 2E default itself rather than a second constant that could drift from
+  it. There is deliberately **no** shipped stale-`SUBMITTING` default: the
+  fifteen minutes the first draft invented was never anyone's policy, and the
+  real value depends on provider latency nobody has measured. A production caller
+  supplies a validated policy whose stale threshold is strictly less than the
+  window — at equality an attempt becomes stale exactly when its deadline
+  arrives, entering uncertainty already expired. The unresolved value is recorded
+  in `docs/decisions/TODO.md`. Staleness is judged at-or-after the threshold on
+  an injected clock read *inside* the lock, because a judgement made before
+  waiting for the lock could declare an attempt lost that a worker finished while
+  the transaction queued. Stale recovery never returns a row to `QUEUED`: the
+  provider may already hold and bill for the request, so re-arming it would buy
+  the same work twice.
+
+  Two boundaries were then found to be guards in name only, and the policy one
+  took two goes to fix. Its validator was correct but nothing forced callers
+  through it: while the consumed type was structural, an object with a window
+  past the twenty-four-hour ceiling reached the service unchecked because it
+  happened to have the right two fields. A phantom `unique symbol` brand fixed
+  the literal and missed the copy — TypeScript's spread type carries the phantom
+  property, so spreading a genuine policy and overwriting its window produced
+  something still typed as a validated policy, with no cast. The brand proved
+  that some value had once passed the validator, not that the numbers being
+  consumed still had. The policy is now an opaque class with real private state:
+  a `#validated` field no spread copies, a private constructor so the validator
+  is the only way in, and getters so the numbers cannot be edited in place.
+  Compile-time coverage proves spreading, cloning, overriding or even faithfully
+  copying a policy all lose its authority, and a runtime `#validated in value`
+  check at service construction catches the explicit casts types cannot stop. And `normalizedErrorCode`, having first accepted a bare
+  string, was narrowed only by *syntax*, which admitted `SECRET_TOKEN_ABC123` and
+  `APIKEY1234567890` unchanged. Safe syntax is not trusted provenance: a shape
+  predicate proves how a value is spelled and says nothing about where it came
+  from. It is now a closed application-owned vocabulary — `TIMEOUT`,
+  `CONNECTION_RESET`, `LOCAL_CONFIGURATION` — checked by membership, with no HTTP
+  status and no vendor string admitted, and anything else refused with nothing
+  written.
+
+  Uncertainty suspends `RESERVED → RECONCILIATION_HOLD` in the same commit;
+  certainty does not. `CONSUMED` stays consumed, because a post-delivery
+  `USER_REGENERATION` runs against a consumed reservation by contract and
+  suspending it would re-open an entitlement the customer already used. A missing
+  reservation is an anomaly and explicitly not a refusal — losing the fact that a
+  provider took work because a bookkeeping row is absent is the more expensive
+  mistake by far. But "must not block" is not "must not mention", and the first
+  draft did the second by accident: a missing or released reservation produced an
+  ordinary success and vanished. A closed anomaly classification is now written
+  into the outcome's transition event in the same transaction, so a crash after
+  commit cannot erase the only record that money was spent against bookkeeping
+  that did not add up. Telling a valid post-delivery `CONSUMED` from an `INITIAL`
+  request standing on a spent unit needs the parent request's kind, joined from
+  the persisted chain rather than accepted from a caller who could otherwise
+  relabel an anomaly as routine. The reservation's own transition writes
+  `SUBMISSION_UNCERTAINTY_HOLD` rather than reusing an attempt-side label,
+  because the two events describe different facts. The Phase 2F-1 lock order is preserved exactly: advisory lock
+  on organization and cycle, then the reservation row, then the attempt
+  compare-and-set, differing only in taking the row `FOR UPDATE` because this may
+  suspend the entitlement the gate merely reads. Same order, stronger mode, no
+  deadlock cycle, no process-local mutex. No migration was required, no customer
+  quota is touched on any path, no `SYSTEM_RECOVERY` attempt is created, no
+  regeneration right is consumed, and both entry points remain dormant domain
+  services with no route, no worker loop and no caller.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
