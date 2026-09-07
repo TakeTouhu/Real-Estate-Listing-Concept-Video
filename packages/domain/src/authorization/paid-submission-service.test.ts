@@ -94,6 +94,7 @@ function permittingFacts(): PaidSubmissionFactsSnapshot {
       inFlightCostYen: yen(0),
       nextProjectedCostYen: yen(100),
     },
+    exposureVerified: true,
     billingCycleKey: "2026-09",
   };
 }

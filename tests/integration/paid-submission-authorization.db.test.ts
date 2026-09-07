@@ -1104,6 +1104,387 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     });
   });
 
+  describe("the reservation row lock", () => {
+    /**
+     * The race the cost-admission lock alone does not close.
+     *
+     * That lock orders two *authorizations* against one billing cycle. It says
+     * nothing about a third party changing the reservation those
+     * authorizations depend on, so without a row lock this is legal:
+     *
+     * ```text
+     * T1  lock cycle → read reservation RESERVED → gate permits
+     * T2                UPDATE reservation → RELEASED, commit
+     * T1  arm QUEUED → SUBMITTING, commit
+     * ```
+     *
+     * The paid boundary is crossed after the hold that authorized it stopped
+     * authorizing it, and nothing later can undo that: the provider may already
+     * have been paid.
+     *
+     * Each test below holds the reservation UPDATE open in a second connection,
+     * starts an authorization, and asserts it is *still blocked* — that is what
+     * makes it a proof rather than a hopeful race. Removing the row lock makes
+     * both fail.
+     */
+    async function raceReservationInto(
+      suffix: string,
+      nextState: "RELEASED" | "RECONCILIATION_HOLD",
+    ) {
+      const chain = await seedAuthorizableChain(prisma, suffix);
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const writer = other.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`
+            UPDATE "generation_reservations"
+               SET "state" = ${nextState}::"GenerationReservationState",
+                   "stateVersion" = "stateVersion" + 1,
+                   "releasedAt" = CASE WHEN ${nextState} = 'RELEASED'
+                                       THEN NOW() ELSE "releasedAt" END
+             WHERE "generationJobId" = ${chain.job.id}
+          `;
+          await held;
+        },
+        { timeout: 20_000 },
+      );
+
+      // `finally` rather than a bare call: a failed assertion must still let
+      // the writer commit. A test that leaves a transaction holding this row
+      // blocks every later test's cleanup on the same table, which turns one
+      // failure into a suite that appears to hang.
+      let stillBlocked: boolean;
+      try {
+        await breathe(4);
+        const blocked = settled(authorize(prisma, chain.attempt.id));
+        await breathe();
+        stillBlocked = !blocked.done();
+        release();
+        await writer;
+        // Asserted after the release so the diagnosis is a plain failure.
+        expect(stillBlocked).toBe(true);
+        return { chain, outcome: await blocked.value };
+      } finally {
+        release();
+      }
+    }
+
+    it("refuses when a concurrent release commits first", async () => {
+      const { chain, outcome } = await raceReservationInto("racerel", "RELEASED");
+      expect(outcome).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_RELEASED",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: chain.attempt.id },
+      });
+      expect(row.orchestrationState).toBe("QUEUED");
+      expect(row.submissionBoundaryEnteredAt).toBeNull();
+    });
+
+    it("refuses when a concurrent reconciliation hold commits first", async () => {
+      const { chain, outcome } = await raceReservationInto("racehold", "RECONCILIATION_HOLD");
+      expect(outcome).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_ON_RECONCILIATION_HOLD",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: chain.attempt.id },
+      });
+      expect(row.orchestrationState).toBe("QUEUED");
+      expect(row.submissionBoundaryEnteredAt).toBeNull();
+    });
+
+    it("blocks a concurrent reservation transition while the authorization holds the row", async () => {
+      // The inverse ordering, and the half the two races above cannot prove.
+      // They show the authorization waits for a reservation writer; this shows
+      // a reservation writer waits for the authorization — which is what makes
+      // the window closed in both directions rather than merely narrowed.
+      //
+      // Driven through the real `withCostAdmission`, whose callback runs inside
+      // the transaction *after* both locks are taken. Re-issuing the lock SQL
+      // here would test a copy of the query rather than the one production uses.
+      const chain = await seedAuthorizableChain(prisma, "raceinv");
+
+      let finishAuthorization!: () => void;
+      const authorizationHeld = new Promise<void>((resolve) => {
+        finishAuthorization = resolve;
+      });
+      const holder = createPaidSubmissionAuthorizationRepository(prisma).withCostAdmission(
+        { organizationId: ORG_A, attemptId: chain.attempt.id },
+        async () => {
+          await authorizationHeld;
+          return null;
+        },
+      );
+
+      let stillBlocked: boolean;
+      let writer!: ReturnType<typeof settled<number>>;
+      try {
+        await breathe(4);
+        writer = settled(
+          other.$executeRaw`
+            UPDATE "generation_reservations"
+               SET "state" = 'RECONCILIATION_HOLD'::"GenerationReservationState"
+             WHERE "generationJobId" = ${chain.job.id}
+          `,
+        );
+        await breathe();
+        // Blocked on the shared row lock the authorization is still holding.
+        stillBlocked = !writer.done();
+      } finally {
+        finishAuthorization();
+      }
+      await holder;
+      expect(stillBlocked).toBe(true);
+      // Released at commit, so the transition proceeds — the lock lasts exactly
+      // as long as the transaction and no longer.
+      await writer.value;
+      const after = await prisma.generationReservation.findFirstOrThrow({
+        where: { generationJobId: chain.job.id },
+      });
+      expect(after.state).toBe("RECONCILIATION_HOLD");
+    });
+
+    it("does not block a post-delivery regeneration on a CONSUMED reservation", async () => {
+      // The row lock must not regress the accepted regeneration path. A
+      // CONSUMED reservation is terminal and nothing is contending for it.
+      const chain = await seedAuthorizableChain(prisma, "lockregen");
+      await prisma.sceneGenerationRequest.update({
+        where: { id: chain.request.id },
+        data: { state: "DELIVERED", deliveredAt: new Date() },
+      });
+      await prisma.sceneGeneration.update({
+        where: { id: chain.attempt.id },
+        data: {
+          state: "SUCCEEDED",
+          orchestrationState: "OUTPUT_VERIFIED",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_lockregen",
+          providerAcceptedAt: new Date(),
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      const regen = await repositories(prisma).requests.admitUserRegeneration(
+        ORG_A,
+        {
+          id: "genreq_lockregen2",
+          generationSceneId: chain.scene.id,
+          requestedByUserId: "usr_itest",
+        },
+        ctx(),
+      );
+      if (regen.kind !== "ADMITTED") throw new Error(`regeneration: ${regen.kind}`);
+      const admitted = await repositories(prisma).attempts.admit(
+        ORG_A,
+        {
+          id: "sgen_lockregen2",
+          generationSceneRequestId: regen.request.id,
+          providerName: "wavespeed",
+          providerModelId: "wavespeed-ai/open-video/image-to-video",
+          requestModelKey: "wavespeed-open-video",
+          requestRenderedPrompt: "a sunlit living room, cinematic, slow pan",
+          requestNativeGenerationResolution: "1080p",
+          requestResolutionNormalization: "NONE",
+          requestNativeMeetsTarget: true,
+          pricingSnapshotId: "price_sgen_lockregen2",
+          pricingSnapshot: snapshotFor(5),
+          fxSnapshot: FX,
+        },
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`attempt: ${admitted.kind}`);
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: chain.job.id },
+        data: { state: "CONSUMED", consumedAt: new Date() },
+      });
+
+      expect((await authorize(prisma, admitted.attempt.id)).kind).toBe("AUTHORIZED");
+    });
+  });
+
+  describe("historical exposure snapshot integrity", () => {
+    /**
+     * A sibling's stored price feeds the same Safety Guard equation the
+     * candidate's does.
+     *
+     * Verifying the candidate and trusting every previous term leaves the sum
+     * exactly as forgeable as it was before: edit one `PROCESSING` sibling's
+     * planning cost from ¥5,000 to ¥10 and roughly ¥4,990 of real exposure
+     * silently leaves the cycle, against a candidate whose own snapshot is
+     * flawless.
+     */
+    async function siblingIn(
+      suffix: string,
+      state: string,
+      certainty: string,
+    ): Promise<Awaited<ReturnType<typeof seedAuthorizableChain>>> {
+      const sibling = await seedAuthorizableChain(prisma, suffix, { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: state as never,
+          submissionCertainty: certainty as never,
+          submissionBoundaryEnteredAt: new Date(),
+          ...(certainty === "ACCEPTED"
+            ? { providerPredictionId: `pred_${suffix}`, providerAcceptedAt: new Date() }
+            : {}),
+          ...(state === "RECONCILIATION_PENDING"
+            ? {
+                reconciliationStartedAt: new Date(),
+                reconciliationDeadlineAt: new Date("2026-09-11T00:00:00.000Z"),
+              }
+            : {}),
+        },
+      });
+      return sibling;
+    }
+
+    it("refuses when a tampered in-flight sibling understates the cycle", async () => {
+      const sibling = await siblingIn("expproc", "PROCESSING", "ACCEPTED");
+      // Only the amount, to another perfectly representable safe integer.
+      // Provider, model, contract key and fingerprint are all untouched.
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { estimatedPlanningCostMicroUsd: 10n },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "expproccand");
+      expect(await authorize(prisma, candidate.attempt.id)).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: candidate.attempt.id },
+      });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("refuses when a tampered settled sibling understates the cycle", async () => {
+      const sibling = await siblingIn("expsett", "OUTPUT_VERIFIED", "ACCEPTED");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { estimatedPlanningCostMicroUsd: 10n },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "expsettcand");
+      expect(await authorize(prisma, candidate.attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("refuses when an uncertain sibling's fingerprint no longer matches", async () => {
+      const sibling = await siblingIn("expunc", "RECONCILIATION_PENDING", "SUBMISSION_UNKNOWN");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { contractFingerprint: "some-other-contract" },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "expunccand");
+      expect(await authorize(prisma, candidate.attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("refuses when a sibling's referenced FX snapshot is gone", async () => {
+      const sibling = await siblingIn("expfx", "PROCESSING", "ACCEPTED");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { fxSnapshotId: null },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "expfxcand");
+      const outcome = await authorize(prisma, candidate.attempt.id);
+      expect(outcome).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+      // And not blamed on the candidate's own perfectly valid rate.
+      if (outcome.kind !== "PRICING_INELIGIBLE") throw new Error("expected pricing");
+      expect(outcome.reason).not.toBe("PRICING_FX_SNAPSHOT_MISSING");
+      expect(outcome.reason).not.toBe("PRICING_FX_SNAPSHOT_INVALID");
+    });
+
+    it("refuses when a sibling's persisted amount is unrepresentable", async () => {
+      const sibling = await siblingIn("expbig", "PROCESSING", "ACCEPTED");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { estimatedPlanningCostMicroUsd: BigInt(Number.MAX_SAFE_INTEGER) + 1n },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "expbigcand");
+      expect(await authorize(prisma, candidate.attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("counts a verified RECONCILIATION_EXHAUSTED sibling and refuses a tampered one", async () => {
+      // Both halves of the accepted correction, in one place: an exhausted
+      // reconciliation still contributes its verified cost as uncertain
+      // exposure, and a tampered one fails the authorization closed rather than
+      // quietly leaving the cycle.
+      const sibling = await siblingIn("expexh", "RECONCILIATION_EXHAUSTED", "SUBMISSION_UNKNOWN");
+      const candidate = await seedAuthorizableChain(prisma, "expexhcand");
+      // Tight: the sibling's ¥234 is the difference between the two answers.
+      const revenue = yen(15_000 + FIVE_SECOND_YEN + Math.floor(TWENTY_SECOND_YEN / 2));
+      expect((await authorize(prisma, candidate.attempt.id, ORG_A, revenue)).kind).toBe(
+        "SAFETY_GUARD_HARD_PAUSE",
+      );
+
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { billableSeconds: 99 },
+      });
+      expect(await authorize(prisma, candidate.attempt.id, ORG_A, revenue)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("requires no snapshot reproduction from a definitively rejected sibling", async () => {
+      // It contributes zero provider exposure, so its historical price is not
+      // part of the equation. Demanding reproduction would turn an attempt the
+      // provider refused into cost purely because its rate card is no longer
+      // reconstructible.
+      const sibling = await seedAuthorizableChain(prisma, "exprej", { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: "FAILED_TERMINAL",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { estimatedPlanningCostMicroUsd: 10n, contractFingerprint: "nonsense" },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "exprejcand");
+      expect((await authorize(prisma, candidate.attempt.id)).kind).toBe("AUTHORIZED");
+    });
+
+    it("contributes a valid sibling's re-derived cost, not its stored column", async () => {
+      // The positive case: verification must not change the arithmetic for an
+      // untampered row. The sibling's ¥234 is what makes this hard-pause.
+      const sibling = await siblingIn("expok", "PROCESSING", "ACCEPTED");
+      const candidate = await seedAuthorizableChain(prisma, "expokcand");
+      const revenue = yen(15_000 + FIVE_SECOND_YEN + Math.floor(TWENTY_SECOND_YEN / 2));
+      expect((await authorize(prisma, candidate.attempt.id, ORG_A, revenue)).kind).toBe(
+        "SAFETY_GUARD_HARD_PAUSE",
+      );
+
+      // Resolve the sibling to nothing, and the same candidate fits.
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: { submissionCertainty: "DEFINITIVELY_REJECTED", providerPredictionId: null },
+      });
+      expect((await authorize(prisma, candidate.attempt.id, ORG_A, revenue)).kind).toBe(
+        "AUTHORIZED",
+      );
+    });
+  });
+
   describe("concurrency", () => {
     it("lets exactly one of two workers arm the same attempt", async () => {
       const { attempt } = await seedAuthorizableChain(prisma, "casrace");

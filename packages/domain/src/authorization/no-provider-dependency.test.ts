@@ -133,6 +133,7 @@ describe("the authorization module has no provider or network dependency", () =>
                   inFlightCostYen: yen(0),
                   nextProjectedCostYen: yen(100),
                 },
+                exposureVerified: true,
                 billingCycleKey: "2026-09",
               };
             },

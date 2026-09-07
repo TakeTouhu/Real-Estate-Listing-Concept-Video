@@ -129,6 +129,15 @@ export interface PricingGateFacts {
 export interface CommercialGateFacts {
   readonly billingCycleRevenueYen: Yen | null;
   readonly exposure: ProviderCostExposure;
+  /**
+   * Whether every cost-bearing attempt already contributing to this cycle
+   * reproduced from its own persisted snapshot.
+   *
+   * `false` means the exposure total below is known to be wrong by an unknown
+   * amount, which makes the guard's comparison meaningless. It is a refusal,
+   * not a smaller number.
+   */
+  readonly exposureVerified: boolean;
 }
 
 export interface PaidSubmissionGateFacts {
@@ -414,6 +423,17 @@ export function evaluatePaidSubmissionGate(
   }
 
   // ---- 5. The abnormal-cost Safety Guard ---------------------------------
+  //
+  // Every term of the exposure sum must have reproduced, not just the
+  // candidate's. Verifying one price and trusting the rest leaves the equation
+  // as forgeable as it was: understate one in-flight sibling and the guard sees
+  // headroom that does not exist.
+  if (!commercial.exposureVerified) {
+    return refuse({
+      kind: "PRICING_INELIGIBLE",
+      reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+    });
+  }
   if (commercial.billingCycleRevenueYen === null) {
     return refuse({
       kind: "SAFETY_GUARD_HARD_PAUSE",

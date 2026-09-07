@@ -105,6 +105,7 @@ function facts(overrides: {
         inFlightCostYen: yen(0),
         nextProjectedCostYen: yen(100),
       },
+      exposureVerified: true,
     },
   };
   return {
@@ -535,6 +536,48 @@ describe("the paid submission gate", () => {
         kind: "PRICING_INELIGIBLE",
         reason: integrityFailure,
       });
+    });
+  });
+
+  describe("historical exposure integrity", () => {
+    it("refuses when a sibling's cost snapshot could not be reproduced", () => {
+      // Verifying the candidate's own price and trusting every previous price
+      // in the same equation leaves the equation as forgeable as it was.
+      const decision = evaluatePaidSubmissionGate(
+        facts({ commercial: { exposureVerified: false } }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("refuses on unverifiable exposure even when the cycle looks affordable", () => {
+      // The tempting shortcut is to let it through when the visible total is
+      // comfortable. The visible total is precisely what is not trustworthy.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          commercial: {
+            billingCycleRevenueYen: yen(1_000_000),
+            exposureVerified: false,
+          },
+        }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome.kind).toBe("PRICING_INELIGIBLE");
+    });
+
+    it("does not blame the candidate's own pricing for a sibling's failure", () => {
+      // An operator following `PRICING_FX_SNAPSHOT_INVALID` would inspect this
+      // attempt's rate and find nothing wrong with it.
+      const decision = evaluatePaidSubmissionGate(
+        facts({ commercial: { exposureVerified: false } }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      if (decision.outcome.kind !== "PRICING_INELIGIBLE") throw new Error("expected pricing");
+      expect(decision.outcome.reason).not.toBe("PRICING_FX_SNAPSHOT_INVALID");
+      expect(decision.outcome.reason).not.toBe("PRICING_SNAPSHOT_NOT_REPRODUCIBLE");
     });
   });
 

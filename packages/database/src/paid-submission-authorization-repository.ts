@@ -7,7 +7,6 @@ import {
   createProviderPricingCatalog,
   isTargetOutputResolution,
   persistedIntegerToNumber,
-  persistedMicroUsd,
   riskProfileKeyForQualityTier,
   validateFxSnapshot,
   verifyPersistedPricingSnapshot,
@@ -17,7 +16,6 @@ import {
   type FxSnapshot,
   type GenerationAttemptState,
   type JobGateFacts,
-  type MicroUsd,
   type PaidSubmissionAuthorizationRepository,
   type PaidSubmissionAuthorizationSession,
   type PaidSubmissionFactsSnapshot,
@@ -111,6 +109,63 @@ async function billingCycleKeyForAttempt(
   return rows[0]?.billingCycleKey ?? null;
 }
 
+/**
+ * Hold the entitlement that authorizes this attempt still, for the whole
+ * transaction.
+ *
+ * The cost-admission lock orders two *authorizations* against one cycle. It
+ * says nothing about a third party changing the reservation those
+ * authorizations depend on, and that leaves a legal and expensive race:
+ *
+ * ```text
+ * T1  lock cycle → read reservation RESERVED → gate permits
+ * T2                UPDATE reservation → RELEASED (or RECONCILIATION_HOLD)
+ * T2                commit
+ * T1  arm QUEUED → SUBMITTING → commit
+ * ```
+ *
+ * The paid boundary is crossed after the hold that authorized it stopped
+ * authorizing it. Nothing later can undo that: the provider may already have
+ * been paid.
+ *
+ * `FOR SHARE`, not `FOR UPDATE`. The authorization does not modify the
+ * reservation — it must only be sure nobody else does while it decides — and a
+ * shared lock blocks every state-changing `UPDATE`/`DELETE` on that row until
+ * this transaction commits or rolls back, which is exactly the guarantee
+ * needed. Two authorizations against the same reservation are not in conflict
+ * with each other; the cost lock already serializes those, and the attempt CAS
+ * is the final authority. Taking `FOR UPDATE` would serialize readers against
+ * each other for no correctness gain.
+ *
+ * Tenant-scoped through the whole chain — attempt → request → scene → job →
+ * reservation — so the row locked is provably the one belonging to this
+ * attempt's job, and a cross-tenant id locks nothing and returns nothing.
+ *
+ * **Lock ordering.** `cost-admission advisory lock → reservation row lock →
+ * attempt CAS`. Every future workflow that mutates reservation state as part of
+ * submission reconciliation or entitlement release must take these in the same
+ * order.
+ */
+async function lockReservationForAttempt(
+  tx: Tx,
+  organizationId: string,
+  attemptId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT res."id"
+      FROM "scene_generations" a
+      JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
+      JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+      JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+      JOIN "generation_reservations" res ON res."generationJobId" = j."id"
+     WHERE a."id" = ${attemptId}
+       AND p."organizationId" = ${organizationId}
+       FOR SHARE OF res
+  `;
+  return rows.length > 0;
+}
+
 interface AttemptRow {
   attemptId: string;
   orchestrationState: GenerationAttemptState | null;
@@ -197,11 +252,19 @@ interface SnapshotRow {
   fxSnapshotId: string | null;
 }
 
-interface ExposureRow {
+/**
+ * One cost-bearing sibling, with its complete snapshot.
+ *
+ * The whole snapshot, not just the amount. A sibling's stored planning cost
+ * feeds the same Safety Guard equation the candidate's does, so verifying one
+ * and trusting the other leaves the equation exactly as forgeable as before —
+ * corrupt a `PROCESSING` sibling's cost from ¥5,000 to ¥10 and a candidate with
+ * a flawless snapshot authorizes against ¥4,990 of exposure that quietly
+ * vanished.
+ */
+interface ExposureRow extends SnapshotRow {
   orchestrationState: GenerationAttemptState;
   submissionCertainty: SubmissionCertainty | null;
-  estimatedPlanningCostMicroUsd: bigint;
-  fxSnapshotId: string | null;
 }
 
 /**
@@ -228,18 +291,22 @@ async function loadExposure(
   organizationId: string,
   billingCycleKey: string,
   excludeAttemptId: string,
-  toYen: (microUsdAmount: bigint, fxSnapshotId: string | null) => Promise<Yen | null>,
+  verifiedPlanningCostYen: (snapshot: SnapshotRow) => Promise<Yen | null>,
 ): Promise<{
   settledEstimated: Yen;
   uncertain: Yen;
   inFlight: Yen;
-  unconvertible: boolean;
+  unverifiable: boolean;
 }> {
   const rows = await tx.$queryRaw<ExposureRow[]>`
     SELECT a."orchestrationState"::text  AS "orchestrationState",
            a."submissionCertainty"::text AS "submissionCertainty",
-           ps."estimatedPlanningCostMicroUsd",
-           ps."fxSnapshotId"
+           ps."id", ps."sceneGenerationId", ps."pricingVersion", ps."provider",
+           ps."contractKey", ps."contractFingerprint", ps."identityJson",
+           ps."stablePriceReferenceJson", ps."riskProfileKey", ps."riskBufferBps",
+           ps."requestedSeconds", ps."billableSeconds",
+           ps."estimatedStableCostMicroUsd", ps."estimatedPlanningCostMicroUsd",
+           ps."pricingEffectiveAtEpochMs", ps."fxSnapshotId"
       FROM "scene_generations" a
       JOIN "generation_pricing_snapshots" ps ON ps."sceneGenerationId" = a."id"
       JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
@@ -265,20 +332,29 @@ async function loadExposure(
   let settledEstimated = 0;
   let uncertain = 0;
   let inFlight = 0;
-  let unconvertible = false;
+  let unverifiable = false;
   for (const row of rows) {
     // A legacy row with no certainty has not crossed any boundary this phase
     // knows about; `PRE_SUBMISSION` is both the schema default and the
     // conservative reading for a state that already passed the prefilter.
     const certainty: SubmissionCertainty = row.submissionCertainty ?? "PRE_SUBMISSION";
     const category = classifyProviderCostExposure(row.orchestrationState, certainty);
+    // A definitively rejected attempt contributes nothing, so nothing about its
+    // historical price needs to reproduce. Requiring reproduction here would
+    // turn an attempt the provider refused into cost purely because its rate
+    // card is no longer reconstructible.
     if (category === "NONE" || category === "KNOWN_ACTUAL") continue;
 
-    const amount = await toYen(row.estimatedPlanningCostMicroUsd, row.fxSnapshotId);
+    // The sibling's own snapshot, re-derived through the same verifier the
+    // candidate goes through. Trusting the stored amount here would leave the
+    // Safety Guard equation exactly as forgeable as it was before the candidate
+    // was protected: every term of a sum has to be verified, not one of them.
+    const amount = await verifiedPlanningCostYen(row);
     if (amount === null) {
-      // An exposure that cannot be converted is not zero. Marking it here makes
-      // the gate fail closed rather than quietly under-counting the guard.
-      unconvertible = true;
+      // Not zero, and not skipped. A cost-bearing sibling whose snapshot cannot
+      // be reproduced means the cycle total is unknown, and an unknown total
+      // must not authorize a payment.
+      unverifiable = true;
       continue;
     }
     if (category === "SETTLED_ESTIMATED") settledEstimated += amount;
@@ -289,7 +365,7 @@ async function loadExposure(
     settledEstimated: yen(settledEstimated),
     uncertain: yen(uncertain),
     inFlight: yen(inFlight),
-    unconvertible,
+    unverifiable,
   };
 }
 
@@ -373,6 +449,73 @@ function contractFor(snapshot: SnapshotRow): {
   return { contract: contract ?? null, generationMode, audioMode };
 }
 
+/** The persisted row, in the shape the domain verifier consumes. */
+function persistedFacts(snapshot: SnapshotRow): PersistedPricingSnapshotFacts {
+  return {
+    sceneGenerationId: snapshot.sceneGenerationId,
+    pricingVersion: snapshot.pricingVersion,
+    provider: snapshot.provider,
+    contractKey: snapshot.contractKey,
+    contractFingerprint: snapshot.contractFingerprint,
+    identityJson: snapshot.identityJson,
+    stablePriceReferenceJson: snapshot.stablePriceReferenceJson,
+    riskProfileKey: snapshot.riskProfileKey,
+    riskBufferBps: snapshot.riskBufferBps,
+    requestedSeconds: snapshot.requestedSeconds,
+    billableSeconds: snapshot.billableSeconds,
+    estimatedStableCostMicroUsd: snapshot.estimatedStableCostMicroUsd,
+    estimatedPlanningCostMicroUsd: snapshot.estimatedPlanningCostMicroUsd,
+    pricingEffectiveAtEpochMs: snapshot.pricingEffectiveAtEpochMs,
+    fxSnapshotId: snapshot.fxSnapshotId,
+  };
+}
+
+type VerifiedCost =
+  | { readonly ok: true; readonly yen: Yen }
+  | { readonly ok: false; readonly reason: PricingAuthorizationFailure };
+
+/**
+ * One snapshot's planning cost in yen, or why it cannot be trusted.
+ *
+ * **The single path for every amount that enters the Safety Guard equation.**
+ * The candidate's own cost and every cost-bearing sibling's go through exactly
+ * this function, because verifying one term of a sum and trusting the rest
+ * leaves the sum as forgeable as it was: a `PROCESSING` sibling whose stored
+ * planning cost is edited from ¥5,000 to ¥10 removes ¥4,990 of real exposure
+ * from a cycle whose candidate snapshot is flawless.
+ *
+ * Note what is deliberately *not* checked here: whether the contract is
+ * eligible **now**. That is a different question with a different answer.
+ * Current stable/list eligibility is required of the candidate, because the
+ * candidate is about to be priced and paid for. A sibling has already been
+ * priced; the only question about it is whether its persisted historical
+ * snapshot reproduces exactly. A rate card that expired last month still
+ * describes real money that was really committed, and erasing that cost
+ * because the card lapsed would understate the cycle in precisely the
+ * situation — a provider price change mid-incident — where the guard matters
+ * most.
+ */
+async function verifiedPlanningCostYen(tx: Tx, snapshot: SnapshotRow): Promise<VerifiedCost> {
+  if (snapshot.fxSnapshotId === null) {
+    return { ok: false, reason: "PRICING_FX_SNAPSHOT_MISSING" };
+  }
+  const fx = await loadFxSnapshot(tx, snapshot.fxSnapshotId);
+  if (fx === null) return { ok: false, reason: "PRICING_FX_SNAPSHOT_INVALID" };
+
+  const { contract } = contractFor(snapshot);
+  const verified = verifyPersistedPricingSnapshot({
+    persisted: persistedFacts(snapshot),
+    contract,
+    fx,
+  });
+  if (!verified.ok) return { ok: false, reason: verified.reason };
+
+  // The re-derived amount, never the stored column.
+  const converted = convertMicroUsdToYen(verified.snapshot.estimatedPlanningCostMicroUsd, fx);
+  if (!converted.ok) return { ok: false, reason: "PRICING_AMOUNT_UNREPRESENTABLE" };
+  return { ok: true, yen: converted.value };
+}
+
 export function createPaidSubmissionAuthorizationRepository(
   prisma: PrismaClient,
 ): PaidSubmissionAuthorizationRepository {
@@ -391,6 +534,14 @@ export function createPaidSubmissionAuthorizationRepository(
         // The gate refuses such an attempt on the reservation rule; a stable
         // per-organization key keeps the lock discipline uniform meanwhile.
         await acquireCostAdmissionLock(tx, input.organizationId, cycleKey ?? "unreserved");
+
+        // Then the reservation row itself, before any fact that depends on it
+        // is read. The advisory lock orders two authorizations against one
+        // cycle; it does nothing about a release or a reconciliation hold
+        // landing between this gate's decision and its commit. `false` means
+        // there is no reservation to lock — the gate refuses such an attempt on
+        // the reservation rule a few statements later.
+        await lockReservationForAttempt(tx, input.organizationId, input.attemptId);
 
         const session: PaidSubmissionAuthorizationSession = {
           async loadFacts(): Promise<PaidSubmissionFactsSnapshot | null> {
@@ -456,20 +607,6 @@ export function createPaidSubmissionAuthorizationRepository(
                     reservedHighQualityUnits: reservationRow.reservedHighQualityUnits,
                   };
 
-            /** Micro-USD to yen through the attempt's own persisted rate. */
-            const toYen = async (
-              amountMicroUsd: bigint,
-              fxSnapshotId: string | null,
-            ): Promise<Yen | null> => {
-              if (fxSnapshotId === null) return null;
-              const amount: MicroUsd | null = persistedMicroUsd(amountMicroUsd);
-              if (amount === null) return null;
-              const fx = await loadFxSnapshot(tx, fxSnapshotId);
-              if (fx === null) return null;
-              const converted = convertMicroUsdToYen(amount, fx);
-              return converted.ok ? converted.value : null;
-            };
-
             let pricing: PricingGateFacts;
             if (snapshot === null) {
               pricing = {
@@ -485,48 +622,21 @@ export function createPaidSubmissionAuthorizationRepository(
               };
             } else {
               const { contract, generationMode, audioMode } = contractFor(snapshot);
-              const fx =
-                snapshot.fxSnapshotId === null
-                  ? null
-                  : await loadFxSnapshot(tx, snapshot.fxSnapshotId);
-              const fxFailure: "MISSING" | "INVALID" | null =
-                snapshot.fxSnapshotId === null ? "MISSING" : fx === null ? "INVALID" : null;
+              // The same verifier every sibling goes through: the whole row
+              // re-derived, and the re-derived amount used.
+              const verified = await verifiedPlanningCostYen(tx, snapshot);
 
-              // The whole row, re-derived through the pricing domain. Only the
-              // amount that survives that is allowed to become exposure.
-              let integrityFailure: PricingAuthorizationFailure | null = null;
-              let plannedCostYen: Yen | null = null;
-              if (fxFailure === null) {
-                const persisted: PersistedPricingSnapshotFacts = {
-                  sceneGenerationId: snapshot.sceneGenerationId,
-                  pricingVersion: snapshot.pricingVersion,
-                  provider: snapshot.provider,
-                  contractKey: snapshot.contractKey,
-                  contractFingerprint: snapshot.contractFingerprint,
-                  identityJson: snapshot.identityJson,
-                  stablePriceReferenceJson: snapshot.stablePriceReferenceJson,
-                  riskProfileKey: snapshot.riskProfileKey,
-                  riskBufferBps: snapshot.riskBufferBps,
-                  requestedSeconds: snapshot.requestedSeconds,
-                  billableSeconds: snapshot.billableSeconds,
-                  estimatedStableCostMicroUsd: snapshot.estimatedStableCostMicroUsd,
-                  estimatedPlanningCostMicroUsd: snapshot.estimatedPlanningCostMicroUsd,
-                  pricingEffectiveAtEpochMs: snapshot.pricingEffectiveAtEpochMs,
-                  fxSnapshotId: snapshot.fxSnapshotId,
-                };
-                const verified = verifyPersistedPricingSnapshot({ persisted, contract, fx });
-                if (verified.ok) {
-                  const converted = convertMicroUsdToYen(
-                    verified.snapshot.estimatedPlanningCostMicroUsd,
-                    // Verified above; `fxFailure === null` implies a rate.
-                    fx as FxSnapshot,
-                  );
-                  if (converted.ok) plannedCostYen = converted.value;
-                  else integrityFailure = "PRICING_AMOUNT_UNREPRESENTABLE";
-                } else {
-                  integrityFailure = verified.reason;
-                }
-              }
+              // FX failures keep their own field so the gate can report them
+              // with their own reasons; everything else is an integrity verdict.
+              const fxFailure: "MISSING" | "INVALID" | null = verified.ok
+                ? null
+                : verified.reason === "PRICING_FX_SNAPSHOT_MISSING"
+                  ? "MISSING"
+                  : verified.reason === "PRICING_FX_SNAPSHOT_INVALID"
+                    ? "INVALID"
+                    : null;
+              const integrityFailure: PricingAuthorizationFailure | null =
+                verified.ok || fxFailure !== null ? null : verified.reason;
 
               pricing = {
                 snapshotBoundToAttempt: snapshot.sceneGenerationId === row.attemptId,
@@ -542,7 +652,7 @@ export function createPaidSubmissionAuthorizationRepository(
                 identityGenerationMode: generationMode,
                 identityAudioMode: audioMode,
                 integrityFailure,
-                plannedCostYen,
+                plannedCostYen: verified.ok ? verified.yen : null,
                 fxFailure,
                 pricingSnapshotId: snapshot.id,
               };
@@ -556,13 +666,17 @@ export function createPaidSubmissionAuthorizationRepository(
               inFlightCostYen: yen(0),
               nextProjectedCostYen: pricing.plannedCostYen ?? yen(0),
             };
+            let exposureVerified = true;
             if (cycle !== null) {
               const aggregated = await loadExposure(
                 tx,
                 input.organizationId,
                 cycle,
                 input.attemptId,
-                toYen,
+                async (sibling) => {
+                  const verified = await verifiedPlanningCostYen(tx, sibling);
+                  return verified.ok ? verified.yen : null;
+                },
               );
               exposure = {
                 // Nothing persists what a provider actually billed, so this is
@@ -574,14 +688,22 @@ export function createPaidSubmissionAuthorizationRepository(
                 inFlightCostYen: aggregated.inFlight,
                 nextProjectedCostYen: pricing.plannedCostYen ?? yen(0),
               };
-              if (aggregated.unconvertible) {
-                // Some existing exposure could not be valued. Refuse rather
-                // than authorize against a total known to be short.
-                pricing = { ...pricing, fxFailure: pricing.fxFailure ?? "INVALID" };
-              }
+              // Reported separately from the candidate's own pricing. A
+              // sibling's broken snapshot is not evidence about this attempt's
+              // FX rate, and labelling it that way would send an operator to
+              // the wrong row.
+              exposureVerified = !aggregated.unverifiable;
             }
 
-            return { attempt, job, reservation, pricing, exposure, billingCycleKey: cycle };
+            return {
+              attempt,
+              job,
+              reservation,
+              pricing,
+              exposure,
+              exposureVerified,
+              billingCycleKey: cycle,
+            };
           },
 
           async arm({ expectedVersion, context }): Promise<ArmResult> {

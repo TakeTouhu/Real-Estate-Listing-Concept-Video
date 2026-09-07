@@ -26,6 +26,8 @@ export interface PaidSubmissionFactsSnapshot {
   readonly reservation: ReservationGateFacts | null;
   readonly pricing: PricingGateFacts;
   readonly exposure: ProviderCostExposure;
+  /** False when a cost-bearing sibling's snapshot could not be reproduced. */
+  readonly exposureVerified: boolean;
   /** The cycle this attempt's cost is attributed to, from its reservation. */
   readonly billingCycleKey: string | null;
 }

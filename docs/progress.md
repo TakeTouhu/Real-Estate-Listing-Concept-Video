@@ -494,9 +494,18 @@ and ADR-0020.
   charge, and an accepted attempt whose execution has finished is carried
   conservatively at its planning estimate until an actual-cost ingestion path
   replaces it. It is aggregated per organization and billing cycle from each
-  attempt's own immutable snapshot, and an organization+cycle advisory lock makes
-  the cost admission a serialized decision rather than two workers reading the
-  same stale total. The financial basis of every authorization — policy
+  attempt's own immutable snapshot — each re-derived through the same verifier
+  the candidate goes through, because verifying one term of the Safety Guard sum
+  and trusting the rest leaves the sum as forgeable as it was — and a sibling
+  that cannot reproduce refuses the authorization rather than being skipped or
+  counted as zero. Siblings are checked for reproducibility, never for current
+  eligibility: an expired rate card still describes money that was really
+  committed. An organization+cycle advisory lock makes the cost admission a
+  serialized decision rather than two workers reading the same stale total, and
+  a `FOR SHARE` lock on the attempt's own reservation row, held to commit, stops
+  a release or reconciliation hold landing between the decision and the
+  compare-and-set. The canonical order is advisory lock, then reservation row,
+  then attempt CAS. The financial basis of every authorization — policy
   versions, guard state, cycle revenue, all five exposure components, projected
   profit and both floors — is written into the `QUEUED → SUBMITTING` transition
   event in the same transaction as the compare-and-set, so a boundary crossed

@@ -73,7 +73,21 @@ export type PricingAuthorizationFailure =
    */
   | "PRICING_AMOUNT_UNREPRESENTABLE"
   | "PRICING_FX_SNAPSHOT_MISSING"
-  | "PRICING_FX_SNAPSHOT_INVALID";
+  | "PRICING_FX_SNAPSHOT_INVALID"
+  /**
+   * A *different* attempt's cost snapshot — one already contributing exposure
+   * to this billing cycle — could not be reproduced, so the cycle total the
+   * Safety Guard would judge is unknown.
+   *
+   * Reported separately from every reason above, all of which describe the
+   * candidate's own pricing. A sibling's broken snapshot says nothing about
+   * this attempt's FX rate or contract, and labelling it as one would send an
+   * operator to the wrong row. It is still a refusal: an unknown total must not
+   * authorize a payment, and skipping the unverifiable sibling — or counting it
+   * as zero — is exactly how understated exposure authorizes a call that should
+   * have hard-paused.
+   */
+  | "PRICING_EXPOSURE_SNAPSHOT_INVALID";
 
 /** Why the abnormal-cost guard refuses. */
 export type SafetyGuardAuthorizationFailure =

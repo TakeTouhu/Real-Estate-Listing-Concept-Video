@@ -130,7 +130,11 @@ export function createPaidSubmissionAuthorizationService(
             job: facts.job,
             reservation: facts.reservation,
             pricing: facts.pricing,
-            commercial: { billingCycleRevenueYen, exposure: facts.exposure },
+            commercial: {
+              billingCycleRevenueYen,
+              exposure: facts.exposure,
+              exposureVerified: facts.exposureVerified,
+            },
           });
           if (decision.kind === "REFUSED") return decision.outcome;
 

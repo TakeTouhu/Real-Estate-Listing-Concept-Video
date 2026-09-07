@@ -18,6 +18,16 @@ The dormant paid submission authorization gate. Base:
 > lock rather than from the caller; the financial basis of every authorization
 > is persisted with its transition event; and persisted `BIGINT` money is
 > range-checked before it is narrowed.
+>
+> **Revision 3 — final integrity corrections.** Revision 2
+> (`1b4c3ea978ac7763e323d54750e12df4dd01b1f7`) was not approved. Two integrity
+> defects remained, both of which allowed a paid boundary to be crossed on a
+> fact that was no longer true:
+>
+> | Defect | Correction |
+> | --- | --- |
+> | The `GenerationReservation` row was read without a row lock, so a release or reconciliation hold could commit between the gate's decision and its CAS | A tenant-scoped `FOR SHARE` row lock on the exact reservation, taken after the cost lock and held to commit |
+> | `loadExposure` trusted each sibling's stored `estimatedPlanningCostMicroUsd`, so one edited row could remove real exposure from the guard | Every cost-bearing sibling goes through the same `verifyPersistedPricingSnapshot` the candidate does; a sibling that cannot reproduce fails the authorization closed |
 
 One provider-neutral service answers exactly one question:
 
@@ -233,6 +243,54 @@ pricingEffectiveAtEpochMs · fxSnapshotId
 The value that becomes exposure is the **re-derived** planning cost, not the
 stored column. No pricing arithmetic is duplicated in the repository: it reads
 rows, and the pricing domain does the maths.
+
+### Historical exposure integrity — a separate responsibility
+
+**Correction.** Revision 2 protected the candidate and left `loadExposure`
+reading each sibling's stored `estimatedPlanningCostMicroUsd` and converting it
+directly. That is not a smaller version of the same protection; it is a hole in
+the same equation:
+
+```text
+existing PROCESSING sibling, real planning cost ¥5,000
+stored amount edited to a valid safe integer worth ¥10
+        ↓
+Safety Guard sees ~¥4,990 less exposure than exists
+        ↓
+a candidate with a flawless snapshot authorizes a call that should hard-pause
+```
+
+Verifying one term of a sum and trusting the rest leaves the sum exactly as
+forgeable as before. Every cost-bearing sibling — `IN_FLIGHT`, `UNCERTAIN` and
+`SETTLED_ESTIMATED` alike — now goes through **the same**
+`verifiedPlanningCostYen`, which loads the complete snapshot, resolves the
+contract by its persisted identity, and calls the same
+`verifyPersistedPricingSnapshot` the candidate goes through. Candidate and
+sibling share one verifier and one arithmetic path; they are not forked.
+
+**Two different questions, deliberately.** Current pricing *eligibility* is
+required of the candidate — it is about to be priced and paid for. A sibling has
+already been priced, and the only question about it is whether its persisted
+historical snapshot reproduces exactly. A contract that expired last month still
+describes real money that was really committed, and erasing that cost because
+the rate card lapsed would understate the cycle in precisely the situation — a
+provider price change during an incident — where the guard matters most. So no
+sibling is ever evaluated against the current authorization instant.
+
+**Failure is closed, and correctly attributed.** A cost-bearing sibling with a
+missing snapshot, an unresolvable historical contract, a fingerprint mismatch, a
+non-reproducible row, a tampered amount, an unrepresentable `BIGINT` or a
+missing/invalid referenced FX snapshot is **not** skipped and **not** counted as
+zero. The authorization refuses with `PRICING_EXPOSURE_SNAPSHOT_INVALID` — a
+distinct reason under `PRICING_INELIGIBLE`, separate from every reason that
+describes the candidate's own pricing, because a sibling's broken snapshot says
+nothing about this attempt's FX rate and labelling it that way would send an
+operator to the wrong row.
+
+A `DEFINITIVELY_REJECTED` sibling is exempt, and that is deliberate: it
+contributes zero provider exposure, so its historical price is not part of the
+equation. Requiring reproduction from it would turn an attempt the provider
+refused into cost purely because its rate card is no longer reconstructible.
 
 ### Persisted money at the `BIGINT` boundary
 
@@ -463,6 +521,37 @@ The Phase 4C-3B-2E compare-and-set remains the final authority. Two workers
 evaluating the same valid attempt produce exactly one `AUTHORIZED`; the loser
 gets `LOST_CONCURRENCY` and is never handed permission to POST. Nothing retries.
 
+### The reservation row
+
+**Correction.** The cost-admission lock orders two *authorizations* against one
+cycle. It says nothing about a third party changing the reservation those
+authorizations depend on, and that left a legal race:
+
+```text
+T1  lock cycle → read reservation RESERVED → gate permits
+T2                UPDATE reservation → RELEASED (or RECONCILIATION_HOLD)
+T2                commit
+T1  arm QUEUED → SUBMITTING → commit
+```
+
+The paid boundary is crossed after the hold that authorized it stopped
+authorizing it, and nothing later can undo that — the provider may already have
+been paid.
+
+A **tenant-scoped `FOR SHARE` row lock** on the exact reservation reached
+through attempt → request → scene → job → reservation is now taken immediately
+after the cost-admission lock, before any fact that depends on it is read, and
+held until the transaction commits or rolls back.
+
+`FOR SHARE` rather than `FOR UPDATE`: the authorization does not modify the
+reservation, it only needs to be certain nobody else does while it decides, and
+a shared lock blocks every state-changing `UPDATE`/`DELETE` on that row for the
+lifetime of the transaction. Two authorizations against one reservation are not
+in conflict with each other — the cost lock already orders those, and the
+attempt CAS is the final authority — so `FOR UPDATE` would serialize readers
+against each other for no correctness gain. A mutation weakening it to
+`FOR KEY SHARE`, which does *not* block a state update, is in the ledger.
+
 ### Same organization and billing cycle
 
 A PostgreSQL **transaction-scoped advisory lock** keyed on
@@ -483,7 +572,17 @@ Scoped to organization **and** cycle, never globally — one tenant's incident m
 not pause another, and last month's exposure must not block this month's work.
 Both are asserted by test.
 
-**Lock ordering.** This is the outermost lock in the system. The Phase 4C-3B-2E
+**Lock ordering.** The canonical order is:
+
+```text
+organization + cycle cost-admission advisory lock
+  → GenerationReservation row lock
+    → Attempt arm CAS
+```
+
+Every future workflow that mutates reservation state as part of submission
+reconciliation or entitlement release must take these in the same order. The
+advisory lock is the outermost lock in the system. The Phase 4C-3B-2E
 locks — `scene_generation_requests` (attempt admission), `generation_scenes`
 (regeneration admission) and `video_projects` (job creation) — are each taken
 inside their own transactions and are never held while this one is acquired,
@@ -508,12 +607,32 @@ are then genuinely contending, and the lock is what orders them.
 
 Verified by removing the lock: both concurrency tests fail.
 
+The reservation race is proven in **both directions**, because either alone
+leaves half the window open:
+
+- **A writer wins first.** A second connection opens a transaction, updates the
+  reservation to `RELEASED` (and separately to `RECONCILIATION_HOLD`) and holds
+  it uncommitted. The authorization is started and asserted to be *still
+  blocked* — that is what makes it a proof rather than a hopeful race. On
+  commit it refuses with `RESERVATION_RELEASED` / `RESERVATION_ON_
+  RECONCILIATION_HOLD`, and the attempt is still `QUEUED` with no
+  `submissionBoundaryEnteredAt`.
+- **The authorization wins first.** Driven through the real `withCostAdmission`,
+  whose callback runs inside the transaction after both locks are taken, so a
+  concurrent reservation `UPDATE` is asserted blocked and then completes once
+  the authorization commits. Re-issuing the lock SQL in the test would have
+  proven a copy of the query rather than the one production uses.
+
+All three fail when the row lock is removed; the post-delivery regeneration path
+against a terminal `CONSUMED` reservation is asserted not to regress.
+
 ### The successful flow, in order
 
 ```text
 begin transaction
   → resolve the reservation's immutable billing cycle
   → acquire the organization + cycle cost-admission lock
+  → lock this attempt's GenerationReservation row (FOR SHARE)
   → load the authoritative gate facts (attempt chain, reservation,
       verified pricing snapshot, cycle exposure)
   → read the authorization instant from the clock
@@ -644,15 +763,15 @@ Before any real paid submission:
    test-enforced parity; a single authority at the correct dependency level
    would be better.
 
-## Mutation ledger — 64/64 killed
+## Mutation ledger — 72/74 killed
 
 Every mutation targets an **executed** artefact — the pure gate, the routing
-table, the exposure classifier, the pricing-integrity verifier, the persisted-
-money helper, the authorization service, or the persistence that feeds them —
-and each removes exactly one rule the gate is supposed to enforce, or restores
-exactly one rule this correction round removed. The harness applies a mutation,
-runs the gated suites, restores the file, and asserts the restore is
-byte-identical.
+table, the exposure classifier, the pricing-integrity verifier, the
+persisted-money helper, the reservation row lock, the authorization service, or
+the persistence that feeds them — and each removes exactly one rule the gate is
+supposed to enforce, or restores exactly one rule a correction round removed.
+The harness applies a mutation, runs the gated suites, restores the file, and
+asserts the restore is byte-identical.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -673,7 +792,7 @@ byte-identical.
 | G11 | a snapshot bound to another attempt is accepted | KILLED | 4 failing unit tests |
 | G12 | the FX failure check is removed | KILLED | 5 failing unit tests |
 | H10 | the pricing integrity verdict is ignored by the gate | KILLED | 6 failing unit tests |
-| H10b | the repository stops re-deriving the persisted snapshot | KILLED | 11 failing db tests |
+| H10b | the repository stops re-deriving any persisted snapshot | KILLED | 70 failing db tests |
 | H9 | the contract fingerprint check is removed | KILLED | 4 failing unit tests |
 | H11 | a tampered planning cost is accepted | KILLED | 3 failing unit tests |
 | H11b | a tampered stable cost is accepted | KILLED | 3 failing unit tests |
@@ -682,7 +801,17 @@ byte-identical.
 | H11e | the stable price reference is no longer compared | KILLED | 3 failing unit tests |
 | H17 | a persisted BIGINT is narrowed before its range is checked | KILLED | 6 failing unit tests |
 | H17b | an unrepresentable micro-USD amount is no longer refused | KILLED | 3 failing unit tests |
-| H17c | the repository narrows exposure amounts without a range check | KILLED | 4 failing db tests |
+| R1 | the reservation row lock is removed | KILLED | 6 failing db tests |
+| R2 | the reservation row lock is taken after the facts are read | KILLED | 6 failing db tests |
+| R3 | the reservation lock no longer blocks a state-changing writer | KILLED | 6 failing db tests |
+| R4b | the reservation lock is no longer tenant scoped | **SURVIVED** | 0 failing tests |
+| R5b | the reservation lock targets a row that is not this attempt's | KILLED | 6 failing db tests |
+| E1 | sibling exposure uses the raw persisted planning cost | KILLED | 31 failing db tests |
+| E2 | an unverifiable sibling is silently skipped | KILLED | 11 failing db tests |
+| E3 | an unverifiable sibling is counted as zero cost | KILLED | 11 failing db tests |
+| E4 | the gate ignores the exposure verification verdict | KILLED | 6 failing unit tests |
+| E5 | a definitively rejected sibling must reproduce its price | **SURVIVED** | 0 failing tests |
+| H17c | the repository narrows a persisted amount without a range check | KILLED | 5 failing unit tests |
 | G22 | the routing provider check is removed | KILLED | 8 failing unit tests |
 | G23 | the routing provider-model-id check is removed | KILLED | 8 failing unit tests |
 | G24 | the routing model-key check is removed | KILLED | 7 failing unit tests |
@@ -720,6 +849,63 @@ byte-identical.
 | G31 | the lost CAS is reported as authorized | KILLED | 3 failing unit tests |
 | G32b | the customer reservation is consumed on authorization | KILLED | 7 failing db tests |
 | G33 | the cost-admission lock is removed | KILLED | 5 failing db tests |
+
+### The two survivors, and why they stay
+
+**R4b — the tenant predicate on the reservation lock query.** Widening
+`p."organizationId" = $org` to `OR TRUE` changes nothing observable, and the
+reason is structural rather than a coverage gap: the lock query already pins one
+row through `a."id" = $attemptId` and the attempt → request → scene → job →
+reservation join, and attempt ids are unique. Tenant isolation for this
+authorization is enforced a few statements later by `loadAttemptChain`, whose
+own predicate **is** proven — `G36` removes it and dies against four database
+tests, and a cross-tenant attempt is answered `ATTEMPT_NOT_FOUND` before the
+reservation matters at all.
+
+The predicate stays as defence in depth. Removing it would make this query's
+safety depend on a *different* function keeping its predicate, which is exactly
+the coupling that breaks quietly during a refactor. `R5b` proves the row being
+locked is the right one: pointing the join at a reservation that is not this
+job's kills against six database tests.
+
+**E5 — the `NONE`/`KNOWN_ACTUAL` guard in the exposure loop.** Removing it
+changes nothing because no row that classifies to `NONE` can reach the loop: the
+SQL prefilter already excludes `DEFINITIVELY_REJECTED`, and every other `NONE`
+combination requires `PRE_SUBMISSION` at a state that is not always-cost-exposed,
+which the prefilter also excludes. The branch is unreachable given the current
+query.
+
+The behaviour the CTO brief asks for — a definitively rejected sibling is *not*
+required to reproduce its historical price — is delivered and is tested
+(`requires no snapshot reproduction from a definitively rejected sibling`), and
+the exclusion carrying it is proven independently: `H6b` removes
+`DEFINITIVELY_REJECTED` from the prefilter and dies against four unit tests.
+The guard is kept because it fails in the safe direction — without it, a row the
+prefilter ever wrongly admitted would have its cost silently *added* — and
+because the classifier, not the prefilter, is the documented authority on
+categories. Manufacturing a test for a branch no production path can reach would
+be evidence about nothing.
+
+### A mutation that measured the wrong thing this round
+
+**R4** (the predecessor of `R4b`) was reported KILLED by the typechecker. That
+was not evidence: dropping the `WHERE` clause left `organizationId` unused, so
+TypeScript failed on an unused parameter rather than on anything about tenant
+scoping. Re-aimed as `R4b`, which keeps the parameter used and neutralises only
+the predicate — and then survives, for the structural reason above. **R5** was
+likewise mis-aimed: joining `ON TRUE` locks a *superset* of reservations, which
+is over-locking rather than a defect, so it could not fail. `R5b` locks a row
+that is genuinely not this attempt's and dies.
+
+### A test defect this round found
+
+The first run of the reservation-race mutations took roughly 45 minutes each.
+The cause was in the new tests, not the harness: on a failed assertion they left
+a transaction holding the reservation row for its full 20-second budget, and
+every later test's `beforeEach` cleanup then blocked behind it on the same
+table. The holders now release in a `finally` and the assertion is made after
+the release, so a failure is a plain failure. The same mutated suite now runs in
+about ten seconds and still kills the same three tests.
 
 ### Mutations that measured the wrong thing
 
@@ -772,12 +958,12 @@ extraction is unchanged in this round.
 | --- | --- |
 | `pnpm typecheck` | Pass |
 | `pnpm lint` | Pass |
-| `pnpm test` | Pass — 83 files, 2,114 tests |
+| `pnpm test` | Pass — 83 files, 2,117 tests |
 | `pnpm build` | Pass |
-| `pnpm test:db` | Pass — 17 files, 404 tests |
+| `pnpm test:db` | Pass — 17 files, 416 tests |
 | Prisma drift check | `No difference detected.` |
 | Database migration | **None required** — the merged Phase 4C-3B-2E schema already carries everything |
-| Mutation ledger | 64/64 killed, 0 survived |
+| Mutation ledger | 72/74 killed; 2 documented redundancies |
 
 The two persisted facts this round newly reads — `SceneGenerationRequest.kind`
 and `userRegenerationOrdinal` — already exist on the merged Phase 4C-3B-2E

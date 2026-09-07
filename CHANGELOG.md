@@ -63,6 +63,25 @@ database migration was required.
 - **An organization + billing-cycle cost-admission lock**, so two authorizations
   cannot both plan against the same stale exposure. A transaction-scoped
   PostgreSQL advisory lock: no table, no migration, released on commit.
+- **A tenant-scoped `FOR SHARE` lock on the attempt's `GenerationReservation`**,
+  taken after the cost lock and held to commit. The advisory lock orders two
+  authorizations; it does nothing about a release or reconciliation hold landing
+  between a gate's decision and its compare-and-set, which would cross the paid
+  boundary on an entitlement that had already stopped authorizing it. The
+  canonical order is `cost-admission advisory lock → reservation row lock →
+  attempt CAS`.
+- **Historical exposure integrity.** Every cost-bearing sibling contributing to
+  the cycle goes through the same `verifyPersistedPricingSnapshot` as the
+  candidate, and its re-derived amount is what enters the Safety Guard. Trusting
+  a sibling's stored cost left the equation as forgeable as before — one edited
+  row removes real exposure from a cycle whose candidate snapshot is flawless. A
+  sibling that cannot reproduce refuses the authorization with the distinct
+  reason `PRICING_EXPOSURE_SNAPSHOT_INVALID`; it is never skipped and never
+  counted as zero. Siblings are checked for *reproducibility*, never for current
+  eligibility: an expired rate card still describes real money that was really
+  committed. A `DEFINITIVELY_REJECTED` sibling is exempt — it contributes zero
+  exposure, so requiring reproduction would turn an attempt the provider refused
+  into cost purely because its rate card is no longer reconstructible.
 
 ### Changed
 
