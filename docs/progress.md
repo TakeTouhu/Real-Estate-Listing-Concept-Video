@@ -457,6 +457,71 @@ and ADR-0020.
   rather than repaired: live PostgreSQL reports the covered fields and never the
   index name, and the two partial indexes involved cover the same column, so no
   honest classifier exists.
+- **Phase 4C-3B-2F-1** — see GitHub for its lifecycle. Adds the dormant paid
+  submission authorization gate: one provider-neutral service that decides
+  whether one persisted attempt may cross `QUEUED → SUBMITTING`, and calls no
+  provider at all. Its whole input is an organization, an attempt id and a
+  transition context; provider, model, pricing, cost, risk profile, reserved
+  units, billing cycle, state, certainty, duration, target resolution, request
+  kind and regeneration ordinal are loaded from the persistence graph rather
+  than accepted, because two caller-controlled copies of a persisted fact
+  eventually disagree and this is the wrong place to find out. The authorization
+  instant is not caller input either: it comes from an injected clock read after
+  the cost-admission lock, so a request that waited behind a long queue is judged
+  at the time it reached the front rather than the time it joined — a caller able
+  to pick the instant could authorize against a contract that had expired. The
+  decision is a closed union with no arm carrying a raw error, and `AUTHORIZED`
+  carries no reusable token: what it reports is the state the database already
+  committed. A pure evaluator holds the policy, so every branch of the
+  money-spending rule is testable without spending any.
+
+  Reservation authorization depends on the request kind as well as the
+  reservation state. A customer's regeneration right is sold with the original
+  video and exercised after it has been delivered, by which time the reservation
+  is `CONSUMED` by design and no further customer unit is owed — so `CONSUMED`
+  authorizes a `USER_REGENERATION` and refuses an `INITIAL` request, while
+  `RESERVING`, `RELEASED` and `RECONCILIATION_HOLD` refuse for both. The
+  persisted `PricingSnapshot` is verified in full rather than in part: the
+  contract fingerprint is compared, then the whole snapshot is re-derived through
+  the same calculation admission ran and every immutable commercial fact
+  compared, so a stored cost amount is never trusted because a neighbouring
+  binding column looked right. Persisted `BIGINT` money is range-checked before
+  it is narrowed, and an unrepresentable amount refuses rather than throwing.
+
+  Exposure is classified over both execution state and submission certainty, not
+  state alone: an exhausted reconciliation stays uncertain because the window
+  closing resolves the customer's entitlement and nothing about the provider's
+  charge, and an accepted attempt whose execution has finished is carried
+  conservatively at its planning estimate until an actual-cost ingestion path
+  replaces it. It is aggregated per organization and billing cycle from each
+  attempt's own immutable snapshot — each re-derived through the same verifier
+  the candidate goes through, because verifying one term of the Safety Guard sum
+  and trusting the rest leaves the sum as forgeable as it was — and a sibling
+  that cannot reproduce refuses the authorization rather than being skipped or
+  counted as zero. Which siblings are enumerated does not depend on whether a
+  pricing row exists for them: an attempt whose snapshot is missing entirely is
+  still seen and still classified, because letting the pricing table decide
+  visibility hid exactly the corruption the verification exists to catch. Siblings are checked for reproducibility, never for current
+  eligibility: an expired rate card still describes money that was really
+  committed. An organization+cycle advisory lock makes the cost admission a
+  serialized decision rather than two workers reading the same stale total, and
+  a `FOR SHARE` lock on the attempt's own reservation row, held to commit, stops
+  a release or reconciliation hold landing between the decision and the
+  compare-and-set. The canonical order is advisory lock, then reservation row,
+  then attempt CAS. The financial basis of every authorization — policy
+  versions, guard state, cycle revenue, all five exposure components, projected
+  profit and both floors — is written into the `QUEUED → SUBMITTING` transition
+  event in the same transaction as the compare-and-set, so a boundary crossed
+  under `WARNING` is reconstructable from the database alone.
+
+  `NO_NEGATIVE_UNIT_ECONOMICS` is deliberately not a runtime check. It is a
+  sellability decision belonging to route commercial certification and plan
+  configuration, made before work is offered; running it at submission time
+  would refuse a rendition somebody had already bought because a margin moved
+  after the sale. A Safety Guard warning does not block either; only a hard
+  pause does. `SUBMISSION_UNKNOWN` can never re-arm and stale `SUBMITTING` is
+  never a retry. No migration was required, customer quota is untouched on every
+  path, and fal and Veo remain production-disabled.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

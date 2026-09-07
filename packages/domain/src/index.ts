@@ -16,3 +16,5 @@ export * from "./storyboard/index";
 export * from "./generation/index";
 export * from "./orchestration/index";
 export * from "./pricing/index";
+
+export * from "./authorization/index";

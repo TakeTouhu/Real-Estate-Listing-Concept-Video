@@ -3,6 +3,119 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2F-1: Dormant paid submission authorization gate
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2f1-completion.md`. One
+provider-neutral service decides whether one persisted attempt may cross
+`QUEUED → SUBMITTING`. **No provider is called anywhere in this phase**, and no
+database migration was required.
+
+### Added
+
+- **A closed paid submission authorization outcome.** `AUTHORIZED`,
+  `ATTEMPT_NOT_FOUND`, `ATTEMPT_NOT_ARMABLE`, `RESERVATION_INVALID`,
+  `PRICING_INELIGIBLE`, `SAFETY_GUARD_HARD_PAUSE`,
+  `ROUTING_NOT_AUTHORIZED`, `LOST_CONCURRENCY` — each failure carrying a closed
+  reason vocabulary, none carrying a raw database or provider error.
+  `AUTHORIZED` carries no reusable token: what it reports is the state the
+  database already committed.
+- **A pure gate evaluator.** `evaluatePaidSubmissionGate(facts)` holds no
+  database handle, no provider client and no clock, so the rule that decides
+  whether money may be spent is exhaustively testable without spending any.
+- **Minimal caller authority.** The whole input is
+  `{ organizationId, attemptId, context }`; provider, model, pricing, cost, risk
+  profile, reserved units, billing cycle, state, certainty, quality tier,
+  duration, target resolution, request kind, regeneration ordinal and request
+  hash are all loaded through the tenant-scoped persistence graph. The
+  authorization instant is read from an injected clock, not supplied — a caller
+  able to choose it could authorize against a contract that had expired.
+- **Request-kind-aware reservation authorization.** `RESERVED` authorizes any
+  request; `CONSUMED` authorizes a `USER_REGENERATION` only. A customer's
+  regeneration right is sold with the original video and exercised after it has
+  been delivered, by which time the reservation is `CONSUMED` by design and no
+  further customer unit is owed. `RESERVING`, `RELEASED` and
+  `RECONCILIATION_HOLD` refuse for both kinds.
+- **Complete `PricingSnapshot` integrity verification.**
+  `verifyPersistedPricingSnapshot` compares the contract fingerprint, then
+  re-derives the whole snapshot through the same `createPricingSnapshot`
+  admission ran and compares every immutable commercial fact. A stored cost
+  amount is never trusted because a neighbouring binding column looked right.
+- **A persistence-boundary money conversion.** `persistedMicroUsd` range-checks
+  a `BIGINT` before narrowing it, so an unrepresentable amount refuses as
+  `PRICING_AMOUNT_UNREPRESENTABLE` rather than throwing
+  `PricingArithmeticError` out of an ordinary authorization.
+- **A durable authorization record.** The financial basis of every
+  authorization — policy versions, guard state, billing cycle and revenue, all
+  five exposure components, projected contribution profit, both floors and the
+  pricing snapshot identity — is written into the `QUEUED → SUBMITTING`
+  transition event inside the same transaction as the compare-and-set, under
+  the fixed event type `PAID_SUBMISSION_AUTHORIZED`. A `WARNING` authorization
+  is reconstructable from persistence alone.
+- **A provider-neutral routing authorization table** binding quality tier,
+  provider, provider model id, model key, native tier, target resolution,
+  generation mode and audio mode. `HIGH_QUALITY` has no authorized route.
+- **A canonical provider-cost exposure classifier** over *both* execution state
+  and submission certainty: known actual (never returned today), settled
+  estimated, uncertain, in-flight and none. State alone is not the question —
+  `FAILED_TERMINAL` says the work is over and nothing about whether the provider
+  was paid. `RECONCILIATION_EXHAUSTED` stays uncertain: exhausting the window
+  resolves the customer's entitlement and nothing about the provider's charge.
+- **An organization + billing-cycle cost-admission lock**, so two authorizations
+  cannot both plan against the same stale exposure. A transaction-scoped
+  PostgreSQL advisory lock: no table, no migration, released on commit.
+- **A tenant-scoped `FOR SHARE` lock on the attempt's `GenerationReservation`**,
+  taken after the cost lock and held to commit. The advisory lock orders two
+  authorizations; it does nothing about a release or reconciliation hold landing
+  between a gate's decision and its compare-and-set, which would cross the paid
+  boundary on an entitlement that had already stopped authorizing it. The
+  canonical order is `cost-admission advisory lock → reservation row lock →
+  attempt CAS`.
+- **Historical exposure integrity.** Every cost-bearing sibling contributing to
+  the cycle goes through the same `verifyPersistedPricingSnapshot` as the
+  candidate, and its re-derived amount is what enters the Safety Guard. Trusting
+  a sibling's stored cost left the equation as forgeable as before — one edited
+  row removes real exposure from a cycle whose candidate snapshot is flawless. A
+  sibling that cannot reproduce refuses the authorization with the distinct
+  reason `PRICING_EXPOSURE_SNAPSHOT_INVALID`; it is never skipped and never
+  counted as zero. Siblings are checked for *reproducibility*, never for current
+  eligibility: an expired rate card still describes real money that was really
+  committed. A `DEFINITIVELY_REJECTED` sibling is exempt — it contributes zero
+  exposure, so requiring reproduction would turn an attempt the provider refused
+  into cost purely because its rate card is no longer reconstructible.
+  Enumeration of cost-bearing siblings is **independent of snapshot
+  existence**: the exposure query left-joins the pricing table, so an attempt
+  with no pricing row is still seen, still classified, and — if it is
+  cost-bearing — still refuses. An inner join let snapshot absence decide
+  visibility, which meant the one corruption most likely to matter was the one
+  that disappeared.
+
+### Changed
+
+- `ALLOWED_TRANSITION_METADATA_KEYS` gained twelve authorization-record keys.
+  Every one is a yen integer, a closed-vocabulary value or a version string; no
+  prompt, provider payload, credential or signed URL is among them.
+- `armProviderBoundary`'s body was extracted into
+  `armProviderBoundaryWithin(tx, input)` so the gate can hold one transaction
+  across its cost-admission lock, its fact reads and the compare-and-set. The
+  public method is unchanged in behaviour.
+
+### Not included
+
+No real fal or Veo POST, no new WaveSpeed paid orchestration, no polling, no
+reconciliation worker, no stale-`SUBMITTING` recovery, no output ingestion, no
+composition, no upscale, no entitlement consumption, no payment gateway, no
+Stripe, no add-on purchasing, no UI. No live fal, WaveSpeed, Veo, FX or
+payment-provider lookup. The shipped billing-cycle revenue reader reports "no
+authoritative figure", which fails the gate closed — the dormant gate authorizes
+nothing at all until the billing layer supplies one.
+
+`NO_NEGATIVE_UNIT_ECONOMICS` is deliberately **not** a runtime check. It is a
+sellability decision belonging to route commercial certification and plan
+configuration, made before work is offered to a customer; running it at
+submission time would refuse a rendition somebody had already bought because a
+margin moved after the sale. It is recorded as a Phase 4C-3B-2F-2 activation
+prerequisite, and the per-scene revenue port that fed it has been removed.
+
 ## [Unreleased] — Phase 4C-3B-2E: Generation orchestration and audit state
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2e-completion.md`. Persistence

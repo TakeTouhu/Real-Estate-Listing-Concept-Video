@@ -368,8 +368,18 @@ describe("transition metadata cannot carry a prompt or a credential", () => {
    * passing.
    */
   it("allowlists nothing that looks like a secret or free text", () => {
-    const suspicious = /prompt|secret|token|credential|password|authorization|url|body|payload|response/i;
-    const offenders = ALLOWED_TRANSITION_METADATA_KEYS.filter((key) => suspicious.test(key));
+    // Substring families: anything whose *name* contains one of these is
+    // carrying free text or a credential whatever else it is called.
+    const suspicious = /prompt|secret|token|credential|password|url|body|payload|response/i;
+    // `authorization` is checked as a whole key rather than as a substring.
+    // The danger is a captured `Authorization` header; a compound like
+    // `authorizationPolicyVersion` is a version identifier, and banning the
+    // word outright would push a legitimate audit key into a worse name
+    // without making a leak any less likely.
+    const headerLike = new Set(["authorization", "auth", "cookie"]);
+    const offenders = ALLOWED_TRANSITION_METADATA_KEYS.filter(
+      (key) => suspicious.test(key) || headerLike.has(key.toLowerCase()),
+    );
     expect(offenders).toEqual([]);
   });
 
