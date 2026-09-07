@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
+import type { TransitionContext } from "../orchestration/ports";
 import { createProviderPricingCatalog } from "../pricing/provider-pricing-catalog";
 import type { ProviderPricingContract } from "../pricing/provider-pricing-contract";
-import { epochMillisFromDate, yen, type Yen } from "../pricing/units";
-import { createPaidSubmissionAuthorizationService } from "./paid-submission-service";
+import { epochMillisFromDate, yen, type EpochMillis, type Yen } from "../pricing/units";
+import { createFixedAuthorizationClock, type AuthorizationClock } from "./clock";
+import { AUTHORIZATION_POLICY_VERSION } from "./gate";
+import {
+  createPaidSubmissionAuthorizationService,
+  PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
+} from "./paid-submission-service";
+import { ROUTING_POLICY_VERSION } from "./routing";
 import type {
   ArmResult,
   BillingCycleRevenueReader,
   PaidSubmissionAuthorizationRepository,
   PaidSubmissionFactsSnapshot,
-  SceneRevenueReader,
 } from "./ports";
 
 /**
@@ -55,6 +61,8 @@ function permittingFacts(): PaidSubmissionFactsSnapshot {
       requestTargetOutputResolution: "1080p",
       requestDurationSeconds: 5,
       pricingContractKey: "wavespeed:wavespeed-open-video:2026-09-02.1",
+      requestKind: "INITIAL",
+      requestUserRegenerationOrdinal: null,
     },
     job: {
       id: "genjob_svc",
@@ -74,11 +82,14 @@ function permittingFacts(): PaidSubmissionFactsSnapshot {
       contract: CONTRACT,
       identityGenerationMode: "image-to-video",
       identityAudioMode: "none",
+      integrityFailure: null,
       plannedCostYen: yen(100),
       fxFailure: null,
+      pricingSnapshotId: "gps_svc",
     },
     exposure: {
       knownActualCostYen: yen(0),
+      settledEstimatedCostYen: yen(0),
       uncertainCostYen: yen(0),
       inFlightCostYen: yen(0),
       nextProjectedCostYen: yen(100),
@@ -87,21 +98,44 @@ function permittingFacts(): PaidSubmissionFactsSnapshot {
   };
 }
 
+interface Harness {
+  readonly calls: { arm: number; clock: number; factsLoaded: number };
+  readonly armedContexts: TransitionContext[];
+  readonly service: ReturnType<typeof createPaidSubmissionAuthorizationService>;
+}
+
 function serviceWith(
   arm: () => Promise<ArmResult>,
-  facts: PaidSubmissionFactsSnapshot | null = permittingFacts(),
-  cycleYen: Yen | null = yen(49_800),
-  sceneYen: Yen | null = yen(3_320),
-) {
-  const calls = { arm: 0 };
+  options: {
+    facts?: PaidSubmissionFactsSnapshot | null;
+    cycleYen?: Yen | null;
+    clock?: AuthorizationClock;
+    /** Called after the lock is taken and before facts are loaded. */
+    onLock?: () => void;
+  } = {},
+): Harness {
+  const facts = options.facts === undefined ? permittingFacts() : options.facts;
+  const cycleYen = options.cycleYen === undefined ? yen(49_800) : options.cycleYen;
+  const calls = { arm: 0, clock: 0, factsLoaded: 0 };
+  const armedContexts: TransitionContext[] = [];
+  const baseClock = options.clock ?? createFixedAuthorizationClock(AT);
+  const clock: AuthorizationClock = {
+    now() {
+      calls.clock += 1;
+      return baseClock.now();
+    },
+  };
   const authorization: PaidSubmissionAuthorizationRepository = {
     async withCostAdmission(_input, run) {
+      options.onLock?.();
       return run({
         async loadFacts() {
+          calls.factsLoaded += 1;
           return facts;
         },
-        async arm() {
+        async arm(input) {
           calls.arm += 1;
+          armedContexts.push(input.context);
           return arm();
         },
       });
@@ -112,37 +146,35 @@ function serviceWith(
       return cycleYen;
     },
   };
-  const sceneRevenue: SceneRevenueReader = {
-    async revenueYen() {
-      return sceneYen;
-    },
-  };
   return {
     calls,
+    armedContexts,
     service: createPaidSubmissionAuthorizationService({
       authorization,
       billingCycleRevenue,
-      sceneRevenue,
+      clock,
     }),
   };
 }
 
-const CONTEXT = {
-  actorType: "SYSTEM" as const,
+const CONTEXT: TransitionContext = {
+  actorType: "SYSTEM",
   actorUserId: null,
   correlationId: "corr_svc",
   causationId: null,
   reasonCode: null,
-  eventType: "TEST",
+  eventType: "CALLER_CHOSEN",
   metadata: sanitizeTransitionMetadata({}),
 };
 
-function authorize(service: ReturnType<typeof serviceWith>["service"]) {
+function authorize(
+  service: Harness["service"],
+  context: TransitionContext = CONTEXT,
+) {
   return service.authorize({
     organizationId: "org_svc",
     attemptId: "sgen_svc",
-    authorizationInstant: AT,
-    context: CONTEXT,
+    context,
   });
 }
 
@@ -185,8 +217,7 @@ describe("the authorization service's translation of the boundary result", () =>
     // called — not called and rolled back, but never called.
     const { service, calls } = serviceWith(
       async () => ({ kind: "ARMED", stateVersion: 4 }),
-      permittingFacts(),
-      null,
+      { cycleYen: null },
     );
     const outcome = await authorize(service);
     expect(outcome).toMatchObject({ kind: "SAFETY_GUARD_HARD_PAUSE" });
@@ -196,7 +227,7 @@ describe("the authorization service's translation of the boundary result", () =>
   it("answers a missing or cross-tenant attempt without reaching the boundary", async () => {
     const { service, calls } = serviceWith(
       async () => ({ kind: "ARMED", stateVersion: 4 }),
-      null,
+      { facts: null },
     );
     expect(await authorize(service)).toEqual({ kind: "ATTEMPT_NOT_FOUND" });
     expect(calls.arm).toBe(0);
@@ -204,31 +235,176 @@ describe("the authorization service's translation of the boundary result", () =>
 
   it("carries a Safety Guard warning out with the authorization", async () => {
     // WARNING does not block, and it is not swallowed either.
-    const { service } = serviceWith(
-      async () => ({ kind: "ARMED", stateVersion: 4 }),
-      permittingFacts(),
+    const { service } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
       // Revenue chosen so profit lands between the ¥15,000 and ¥20,000 floors.
-      yen(19_900),
-    );
+      cycleYen: yen(19_900),
+    });
     const outcome = await authorize(service);
     if (outcome.kind !== "AUTHORIZED") throw new Error("expected AUTHORIZED");
     expect(outcome.safetyGuardWarning?.state).toBe("WARNING");
   });
+});
 
-  it("treats an unknown scene revenue as worth nothing rather than assuming", async () => {
-    // Fail closed: any positive provider cost against unknown revenue is
-    // negative worst-case economics.
-    const { service, calls } = serviceWith(
-      async () => ({ kind: "ARMED", stateVersion: 4 }),
-      permittingFacts(),
-      yen(49_800),
-      null,
-    );
-    const outcome = await authorize(service);
-    expect(outcome).toMatchObject({
-      kind: "PROFITABILITY_REJECTED",
-      reason: "NEGATIVE_WORST_CASE_UNIT_ECONOMICS",
+describe("the authorization clock", () => {
+  it("is read after the cost-admission lock, not before it", async () => {
+    // A request that waited behind a long queue must be judged at the time it
+    // reached the front. Reading before the lock is how a contract that expired
+    // during the wait still authorizes a payment.
+    const order: string[] = [];
+    const { service } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
+      onLock: () => order.push("lock"),
+      clock: {
+        now(): EpochMillis {
+          order.push("clock");
+          return AT;
+        },
+      },
     });
-    expect(calls.arm).toBe(0);
+    await authorize(service);
+    expect(order).toEqual(["lock", "clock"]);
+  });
+
+  it("refuses a contract that expired while the request waited for the lock", async () => {
+    // A contract whose window closes at noon. The request arrived before then
+    // and reached the front of the cost lock after — evaluated at the instant it
+    // joined the queue it is eligible, evaluated at the instant it was actually
+    // decided it is not, and the second is the honest one.
+    const closesAt = epochMillisFromDate(new Date("2026-09-10T12:00:00.000Z"));
+    const closing: ProviderPricingContract = { ...CONTRACT, effectiveUntil: closesAt };
+    const beforeClose = epochMillisFromDate(new Date("2026-09-10T11:59:00.000Z"));
+    const afterClose = epochMillisFromDate(new Date("2026-09-10T12:01:00.000Z"));
+    const withClosing: PaidSubmissionFactsSnapshot = {
+      ...permittingFacts(),
+      pricing: { ...permittingFacts().pricing, contract: closing },
+    };
+
+    // The same facts, decided a minute earlier, do authorize — so the refusal
+    // below is the clock and nothing else about this fixture.
+    const early = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
+      facts: withClosing,
+      clock: createFixedAuthorizationClock(beforeClose),
+    });
+    expect((await authorize(early.service)).kind).toBe("AUTHORIZED");
+
+    const late = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
+      facts: withClosing,
+      clock: createFixedAuthorizationClock(afterClose),
+    });
+    const outcome = await authorize(late.service);
+    expect(outcome).toEqual({
+      kind: "PRICING_INELIGIBLE",
+      reason: "PRICING_CONTRACT_EXPIRED",
+    });
+    expect(late.calls.arm).toBe(0);
+  });
+
+  it("reads the instant exactly once for one decision", async () => {
+    // Two reads could straddle an expiry and let two parts of one decision
+    // disagree about when "now" is.
+    const { service, calls } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }));
+    await authorize(service);
+    expect(calls.clock).toBe(1);
+  });
+});
+
+describe("the durable authorization record", () => {
+  it("writes the financial basis into the transition the CAS commits", async () => {
+    const { service, armedContexts } = serviceWith(
+      async () => ({ kind: "ARMED", stateVersion: 4 }),
+      {
+        facts: {
+          ...permittingFacts(),
+          exposure: {
+            knownActualCostYen: yen(0),
+            settledEstimatedCostYen: yen(1_100),
+            uncertainCostYen: yen(2_200),
+            inFlightCostYen: yen(3_300),
+            nextProjectedCostYen: yen(100),
+          },
+        },
+      },
+    );
+    await authorize(service);
+    expect(armedContexts).toHaveLength(1);
+    expect(armedContexts[0]!.metadata).toMatchObject({
+      authorizationPolicyVersion: AUTHORIZATION_POLICY_VERSION,
+      routingPolicyVersion: ROUTING_POLICY_VERSION,
+      safetyGuardState: "SAFE",
+      billingCycleRevenueYen: 49_800,
+      knownActualCostYen: 0,
+      settledEstimatedCostYen: 1_100,
+      uncertainCostYen: 2_200,
+      inFlightCostYen: 3_300,
+      nextProjectedCostYen: 100,
+      projectedContributionProfitYen: 43_100,
+      warningFloorYen: 20_000,
+      hardPauseFloorYen: 15_000,
+      pricingSnapshotId: "gps_svc",
+    });
+  });
+
+  it("labels the event itself, rather than trusting the caller's label", async () => {
+    // The label is what an audit query selects on. A caller able to write
+    // something else could make a paid authorization indistinguishable from any
+    // other transition — not necessarily on purpose; a copied context is enough.
+    const { service, armedContexts } = serviceWith(
+      async () => ({ kind: "ARMED", stateVersion: 4 }),
+    );
+    await authorize(service);
+    expect(armedContexts[0]!.eventType).toBe(PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE);
+    expect(armedContexts[0]!.eventType).not.toBe(CONTEXT.eventType);
+  });
+
+  it("keeps the caller's actor, correlation and causation", async () => {
+    // Who asked and why is the caller's to say; only the label and the money
+    // are overridden.
+    const { service, armedContexts } = serviceWith(
+      async () => ({ kind: "ARMED", stateVersion: 4 }),
+    );
+    await authorize(service, {
+      ...CONTEXT,
+      actorType: "USER",
+      actorUserId: "usr_1",
+      causationId: "evt_parent",
+      reasonCode: "MANUAL_RETRY",
+    });
+    expect(armedContexts[0]).toMatchObject({
+      actorType: "USER",
+      actorUserId: "usr_1",
+      correlationId: "corr_svc",
+      causationId: "evt_parent",
+      reasonCode: "MANUAL_RETRY",
+    });
+  });
+
+  it("overwrites a caller-supplied guard state rather than merging it", async () => {
+    // A caller that pre-seeded a friendlier figure into its own authorization
+    // record would make the record worthless exactly when it matters.
+    const { service, armedContexts } = serviceWith(
+      async () => ({ kind: "ARMED", stateVersion: 4 }),
+    );
+    await authorize(service, {
+      ...CONTEXT,
+      metadata: sanitizeTransitionMetadata({
+        safetyGuardState: "SAFE",
+        nextProjectedCostYen: 0,
+      }),
+    });
+    expect(armedContexts[0]!.metadata).toMatchObject({
+      safetyGuardState: "SAFE",
+      nextProjectedCostYen: 100,
+    });
+  });
+
+  it("records WARNING when the guard warned", async () => {
+    const { service, armedContexts } = serviceWith(
+      async () => ({ kind: "ARMED", stateVersion: 4 }),
+      { cycleYen: yen(19_900) },
+    );
+    await authorize(service);
+    expect(armedContexts[0]!.metadata).toMatchObject({
+      safetyGuardState: "WARNING",
+      billingCycleRevenueYen: 19_900,
+    });
   });
 });

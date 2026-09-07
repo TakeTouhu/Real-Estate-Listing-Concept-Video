@@ -14,7 +14,7 @@ database migration was required.
 
 - **A closed paid submission authorization outcome.** `AUTHORIZED`,
   `ATTEMPT_NOT_FOUND`, `ATTEMPT_NOT_ARMABLE`, `RESERVATION_INVALID`,
-  `PRICING_INELIGIBLE`, `PROFITABILITY_REJECTED`, `SAFETY_GUARD_HARD_PAUSE`,
+  `PRICING_INELIGIBLE`, `SAFETY_GUARD_HARD_PAUSE`,
   `ROUTING_NOT_AUTHORIZED`, `LOST_CONCURRENCY` — each failure carrying a closed
   reason vocabulary, none carrying a raw database or provider error.
   `AUTHORIZED` carries no reusable token: what it reports is the state the
@@ -23,23 +23,52 @@ database migration was required.
   database handle, no provider client and no clock, so the rule that decides
   whether money may be spent is exhaustively testable without spending any.
 - **Minimal caller authority.** The whole input is
-  `{ organizationId, attemptId, authorizationInstant, context }`; provider,
-  model, pricing, cost, risk profile, reserved units, billing cycle, state,
-  certainty, quality tier, duration, target resolution and request hash are all
-  loaded through the tenant-scoped persistence graph.
+  `{ organizationId, attemptId, context }`; provider, model, pricing, cost, risk
+  profile, reserved units, billing cycle, state, certainty, quality tier,
+  duration, target resolution, request kind, regeneration ordinal and request
+  hash are all loaded through the tenant-scoped persistence graph. The
+  authorization instant is read from an injected clock, not supplied — a caller
+  able to choose it could authorize against a contract that had expired.
+- **Request-kind-aware reservation authorization.** `RESERVED` authorizes any
+  request; `CONSUMED` authorizes a `USER_REGENERATION` only. A customer's
+  regeneration right is sold with the original video and exercised after it has
+  been delivered, by which time the reservation is `CONSUMED` by design and no
+  further customer unit is owed. `RESERVING`, `RELEASED` and
+  `RECONCILIATION_HOLD` refuse for both kinds.
+- **Complete `PricingSnapshot` integrity verification.**
+  `verifyPersistedPricingSnapshot` compares the contract fingerprint, then
+  re-derives the whole snapshot through the same `createPricingSnapshot`
+  admission ran and compares every immutable commercial fact. A stored cost
+  amount is never trusted because a neighbouring binding column looked right.
+- **A persistence-boundary money conversion.** `persistedMicroUsd` range-checks
+  a `BIGINT` before narrowing it, so an unrepresentable amount refuses as
+  `PRICING_AMOUNT_UNREPRESENTABLE` rather than throwing
+  `PricingArithmeticError` out of an ordinary authorization.
+- **A durable authorization record.** The financial basis of every
+  authorization — policy versions, guard state, billing cycle and revenue, all
+  five exposure components, projected contribution profit, both floors and the
+  pricing snapshot identity — is written into the `QUEUED → SUBMITTING`
+  transition event inside the same transaction as the compare-and-set, under
+  the fixed event type `PAID_SUBMISSION_AUTHORIZED`. A `WARNING` authorization
+  is reconstructable from persistence alone.
 - **A provider-neutral routing authorization table** binding quality tier,
   provider, provider model id, model key, native tier, target resolution,
   generation mode and audio mode. `HIGH_QUALITY` has no authorized route.
-- **Canonical provider-cost exposure state sets** — known actual (empty),
-  uncertain (`RECONCILIATION_PENDING`) and in-flight (`SUBMITTING`,
-  `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING`) — disjoint by
-  construction, in one module no repository duplicates.
+- **A canonical provider-cost exposure classifier** over *both* execution state
+  and submission certainty: known actual (never returned today), settled
+  estimated, uncertain, in-flight and none. State alone is not the question —
+  `FAILED_TERMINAL` says the work is over and nothing about whether the provider
+  was paid. `RECONCILIATION_EXHAUSTED` stays uncertain: exhausting the window
+  resolves the customer's entitlement and nothing about the provider's charge.
 - **An organization + billing-cycle cost-admission lock**, so two authorizations
   cannot both plan against the same stale exposure. A transaction-scoped
   PostgreSQL advisory lock: no table, no migration, released on commit.
 
 ### Changed
 
+- `ALLOWED_TRANSITION_METADATA_KEYS` gained twelve authorization-record keys.
+  Every one is a yen integer, a closed-vocabulary value or a version string; no
+  prompt, provider payload, credential or signed URL is among them.
 - `armProviderBoundary`'s body was extracted into
   `armProviderBoundaryWithin(tx, input)` so the gate can hold one transaction
   across its cost-admission lock, its fact reads and the compare-and-set. The
@@ -50,9 +79,17 @@ database migration was required.
 No real fal or Veo POST, no new WaveSpeed paid orchestration, no polling, no
 reconciliation worker, no stale-`SUBMITTING` recovery, no output ingestion, no
 composition, no upscale, no entitlement consumption, no payment gateway, no
-Stripe, no add-on purchasing, no UI. The shipped revenue readers report "no
+Stripe, no add-on purchasing, no UI. No live fal, WaveSpeed, Veo, FX or
+payment-provider lookup. The shipped billing-cycle revenue reader reports "no
 authoritative figure", which fails the gate closed — the dormant gate authorizes
-nothing at all until the billing layer supplies them.
+nothing at all until the billing layer supplies one.
+
+`NO_NEGATIVE_UNIT_ECONOMICS` is deliberately **not** a runtime check. It is a
+sellability decision belonging to route commercial certification and plan
+configuration, made before work is offered to a customer; running it at
+submission time would refuse a rendition somebody had already bought because a
+margin moved after the sale. It is recorded as a Phase 4C-3B-2F-2 activation
+prerequisite, and the per-scene revenue port that fed it has been removed.
 
 ## [Unreleased] — Phase 4C-3B-2E: Generation orchestration and audit state
 

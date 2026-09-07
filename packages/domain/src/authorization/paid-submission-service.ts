@@ -1,5 +1,7 @@
-import { yen } from "../pricing/units";
-import { evaluatePaidSubmissionGate } from "./gate";
+import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
+import type { TransitionContext } from "../orchestration/ports";
+import { evaluatePaidSubmissionGate, type PaidSubmissionAuthorizationAudit } from "./gate";
+import { ROUTING_POLICY_VERSION } from "./routing";
 import type {
   AuthorizePaidSubmissionInput,
   PaidSubmissionAuthorizationDeps,
@@ -20,8 +22,10 @@ import type { PaidSubmissionAuthorizationOutcome } from "./types";
  * ```text
  * open the organization+cycle cost-admission lock
  *   → load every fact from the persistence graph
+ *   → read the authorization instant from the clock
  *   → evaluate the pure gate
  *   → if permitted, compare-and-set QUEUED → SUBMITTING
+ *     with the authorization record attached to its event
  *   → commit
  * → return AUTHORIZED
  * ```
@@ -32,10 +36,64 @@ import type { PaidSubmissionAuthorizationOutcome } from "./types";
  * `AUTHORIZED` before that commit would hand out permission to spend money on
  * the strength of a decision that had not yet been recorded.
  *
+ * The instant is read *after* the lock, not before it and not by the caller. A
+ * request that waited behind a long queue must be judged at the time it reached
+ * the front: pricing eligibility is a function of time, and evaluating with a
+ * stale instant is how an expired contract authorizes a payment.
+ *
  * On every refusal the attempt is left exactly as it was. A gate that says no
  * has not discovered anything about the provider, so writing a provider-state
  * transition would be manufacturing history for something that did not happen.
  */
+
+/**
+ * The event type a paid authorization writes, fixed here.
+ *
+ * Not caller-supplied. The label on the one event that records permission to
+ * spend money is what an audit query selects on, and a caller able to write
+ * something else could make a paid authorization indistinguishable from any
+ * other transition — not necessarily on purpose, but a copied context object is
+ * enough.
+ */
+export const PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE = "PAID_SUBMISSION_AUTHORIZED";
+
+/**
+ * Attach the authorization record to the caller's context.
+ *
+ * Actor, correlation and causation stay as the caller supplied them — who asked
+ * and why is theirs to say. The event type and the financial facts are not: they
+ * are overwritten, and any caller-supplied value under the same keys is
+ * replaced rather than merged, so a caller cannot pre-seed a friendlier guard
+ * state into its own authorization record.
+ */
+function withAuthorizationRecord(
+  context: TransitionContext,
+  audit: PaidSubmissionAuthorizationAudit,
+  billingCycleKey: string | null,
+): TransitionContext {
+  return {
+    ...context,
+    eventType: PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
+    metadata: sanitizeTransitionMetadata({
+      ...context.metadata,
+      billingCycleKey,
+      authorizationPolicyVersion: audit.authorizationPolicyVersion,
+      routingPolicyVersion: ROUTING_POLICY_VERSION,
+      safetyGuardState: audit.safetyGuard.state,
+      billingCycleRevenueYen: audit.billingCycleRevenueYen,
+      knownActualCostYen: audit.exposure.knownActualCostYen,
+      settledEstimatedCostYen: audit.exposure.settledEstimatedCostYen,
+      uncertainCostYen: audit.exposure.uncertainCostYen,
+      inFlightCostYen: audit.exposure.inFlightCostYen,
+      nextProjectedCostYen: audit.exposure.nextProjectedCostYen,
+      projectedContributionProfitYen: audit.safetyGuard.projectedContributionProfitYen,
+      warningFloorYen: audit.safetyGuard.thresholds.warningFloorYen,
+      hardPauseFloorYen: audit.safetyGuard.thresholds.hardPauseFloorYen,
+      pricingSnapshotId: audit.pricingSnapshotId,
+    }),
+  };
+}
+
 export function createPaidSubmissionAuthorizationService(
   deps: PaidSubmissionAuthorizationDeps,
 ) {
@@ -51,9 +109,13 @@ export function createPaidSubmissionAuthorizationService(
           // distinguishable denial would confirm another tenant's row exists.
           if (facts === null) return { kind: "ATTEMPT_NOT_FOUND" };
 
-          // Revenue is read through ports because nothing persists it yet, and
-          // both are `null` today — which fails closed inside the gate rather
-          // than defaulting to a number nobody published.
+          // Read once, inside the lock, and used for every time-dependent part
+          // of this decision. Two reads could straddle a contract's expiry.
+          const authorizationInstant = deps.clock.now();
+
+          // Revenue is read through a port because nothing persists it yet, and
+          // it is `null` today — which fails closed inside the gate rather than
+          // defaulting to a number nobody published.
           const billingCycleRevenueYen =
             facts.billingCycleKey === null
               ? null
@@ -61,32 +123,28 @@ export function createPaidSubmissionAuthorizationService(
                   organizationId: input.organizationId,
                   billingCycleKey: facts.billingCycleKey,
                 });
-          const sceneRevenueYen = await deps.sceneRevenue.revenueYen({
-            organizationId: input.organizationId,
-            generationJobId: facts.job.id,
-          });
 
           const decision = evaluatePaidSubmissionGate({
-            authorizationInstant: input.authorizationInstant,
+            authorizationInstant,
             attempt: facts.attempt,
             job: facts.job,
             reservation: facts.reservation,
             pricing: facts.pricing,
-            commercial: {
-              billingCycleRevenueYen,
-              exposure: facts.exposure,
-              // A scene with no known revenue is worth nothing to the
-              // worst-case check, which makes any positive provider cost
-              // negative economics — the fail-closed direction.
-              sceneRevenueYen: sceneRevenueYen ?? yen(0),
-            },
+            commercial: { billingCycleRevenueYen, exposure: facts.exposure },
           });
           if (decision.kind === "REFUSED") return decision.outcome;
 
-          // Only now, and only inside the same transaction and lock.
+          // Only now, and only inside the same transaction and lock. The
+          // authorization record commits atomically with the state change, so
+          // there is no window in which the boundary is crossed and the reason
+          // it was allowed is not yet written down.
           const armed = await session.arm({
             expectedVersion: decision.expectedStateVersion,
-            context: input.context,
+            context: withAuthorizationRecord(
+              input.context,
+              decision.audit,
+              facts.billingCycleKey,
+            ),
           });
           if (armed.kind === "LOST") return { kind: "LOST_CONCURRENCY" };
           if (armed.kind === "REFUSED_BY_BOUNDARY") {

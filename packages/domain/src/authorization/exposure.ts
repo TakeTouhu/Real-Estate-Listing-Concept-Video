@@ -1,104 +1,177 @@
 import { deepFreeze } from "@app/shared";
 import { yen, type Yen } from "../pricing/units";
-import type { GenerationAttemptState } from "../orchestration/types";
+import type { GenerationAttemptState, SubmissionCertainty } from "../orchestration/types";
 
 /**
- * Which attempts are costing money right now, in one place.
+ * Which attempts are costing money, in one place.
  *
- * Every repository that aggregates provider-cost exposure reads these sets
- * rather than writing its own state list. A duplicated list is how an attempt
- * ends up counted twice, or — much worse — not at all: the Safety Guard is only
- * as honest as the states it remembers to look at, and a list copied into a
- * second query drifts the first time a state is added.
+ * Every repository that aggregates provider-cost exposure classifies through
+ * {@link classifyProviderCostExposure} rather than writing its own state list. A
+ * duplicated list is how an attempt ends up counted twice, or — much worse — not
+ * at all: the Safety Guard is only as honest as the states it remembers to look
+ * at, and a list copied into a second query drifts the first time a state is
+ * added.
  *
- * The three categories are disjoint **by construction**, asserted by a test.
- * An attempt contributes to exactly one of them, so no arithmetic here can
- * double-count and none can silently drop a state.
+ * **Execution state alone is not the question.** An attempt's cost depends on
+ * whether it crossed the provider boundary, and that is `submissionCertainty`,
+ * a separate axis. `FAILED_TERMINAL` says the work is over; it says nothing
+ * about whether the provider was paid, and the same state covers both "the
+ * provider ran it and billed us, then the output failed validation" and "the
+ * provider refused it outright". Classifying on state alone would treat those
+ * identically and silently drop the first from the guard.
+ *
+ * The categories are disjoint by construction — one call, one answer — so no
+ * arithmetic here can double-count and none can silently drop a pair.
  */
 
-/**
- * Cost that is already known to have been incurred.
- *
- * Deliberately **empty**, and that is a statement rather than an oversight.
- * Phase 4C-3B-2E persists an *estimate* — `estimatedPlanningCostMicroUsd` — and
- * nothing anywhere persists what a provider actually billed. Treating the
- * estimate as actual would put a projection into the field a margin review
- * reads as fact, and the difference between those two is the entire point of
- * having both.
- *
- * So known actual cost is modelled as an explicit input that is currently
- * always zero, sourced from nothing. Production activation requires the
- * provider-outcome ingestion path that would populate it; until then the Safety
- * Guard runs on estimates alone and the completion report says so.
- */
-export const KNOWN_ACTUAL_COST_ATTEMPT_STATES: readonly GenerationAttemptState[] = deepFreeze(
-  [] as const,
-);
+/** Which bucket one attempt's provider cost belongs to. */
+export type ProviderCostExposureCategory =
+  | "KNOWN_ACTUAL"
+  | "SETTLED_ESTIMATED"
+  | "UNCERTAIN"
+  | "IN_FLIGHT"
+  | "NONE";
 
 /**
- * Attempts whose acceptance by the provider is unresolved.
+ * States that carry cost regardless of what certainty says.
  *
- * `RECONCILIATION_PENDING` is the state the platform enters when it does not
- * know whether a submission was accepted, and the honest assumption is that it
- * was: an attempt that may have been billed must be carried as exposure until
- * reconciliation says otherwise. Releasing it because a worker restarted, or
- * because the deadline passed without an answer, would make a crash look like
- * a refund.
+ * At these states the attempt is either at the provider or unresolved with it,
+ * so no certainty value makes the money go away — including a certainty column
+ * that disagrees with the state, which is a corruption to survive
+ * conservatively rather than a reason to stop counting.
  *
- * `RECONCILIATION_EXHAUSTED` is deliberately **not** here. It is a terminal
- * state reached after the reconciliation policy has run out of ways to find
- * out, and whatever it concluded belongs in actual cost, not in a category
- * named for open questions. Counting it as uncertain forever would hold
- * exposure against an organization with no path to release it.
+ * Exported so a persistence prefilter can narrow before classifying, never so a
+ * caller can classify with it. {@link isPotentiallyCostExposed} is the predicate
+ * a query must mirror, and a test proves the mirror covers everything the
+ * classifier counts.
  */
-export const UNCERTAIN_COST_ATTEMPT_STATES: readonly GenerationAttemptState[] = deepFreeze([
-  "RECONCILIATION_PENDING",
-] as const);
-
-/**
- * Attempts at or past the provider boundary whose cost lifecycle is unfinished.
- *
- * `SUBMITTING` counts from the instant the boundary commits, before any HTTP
- * call is made. That is the conservative direction and the only safe one: an
- * attempt that crashed mid-POST is indistinguishable from one that never sent,
- * and the difference is a charge.
- *
- * `PROCESSING` and `PROVIDER_SUCCEEDED` are unambiguously billable — the
- * provider has the work. `OUTPUT_INGESTING` still counts because the provider's
- * charge does not depend on whether the platform finished copying the result.
- *
- * `OUTPUT_VERIFIED`, `FAILED_TERMINAL`, `FAILED_RETRYABLE` and
- * `CANCELLED_PRE_SUBMISSION` are absent. The first three have finished their
- * cost lifecycle — what they cost is settled and belongs to actual cost once
- * that path exists — and the last never crossed the boundary at all.
- *
- * `RECONCILIATION_PENDING` is absent **because it is uncertain**, not because
- * it is free. Listing it in both sets is the double-count this separation
- * exists to prevent.
- */
-export const IN_FLIGHT_COST_ATTEMPT_STATES: readonly GenerationAttemptState[] = deepFreeze([
+export const ALWAYS_COST_EXPOSED_ATTEMPT_STATES: readonly GenerationAttemptState[] = deepFreeze([
   "SUBMITTING",
   "PROCESSING",
   "PROVIDER_SUCCEEDED",
   "OUTPUT_INGESTING",
+  "RECONCILIATION_PENDING",
+  "RECONCILIATION_EXHAUSTED",
 ] as const);
 
-/** Every state that contributes provider-cost exposure, in one list. */
-export const COST_EXPOSED_ATTEMPT_STATES: readonly GenerationAttemptState[] = deepFreeze([
-  ...UNCERTAIN_COST_ATTEMPT_STATES,
-  ...IN_FLIGHT_COST_ATTEMPT_STATES,
+/**
+ * Certainties that carry cost at any other state.
+ *
+ * `ACCEPTED` means the provider took the work; whatever happened afterwards, it
+ * was billed. `SUBMISSION_UNKNOWN` means nobody can say — and an attempt that
+ * may have been billed must be carried until something establishes it was not.
+ */
+export const COST_BEARING_SUBMISSION_CERTAINTIES: readonly SubmissionCertainty[] = deepFreeze([
+  "ACCEPTED",
+  "SUBMISSION_UNKNOWN",
 ] as const);
+
+/**
+ * The prefilter a persistence query mirrors: could this pair cost anything?
+ *
+ * Deliberately wider than the classifier. A prefilter that is too narrow drops
+ * exposure before anything can classify it; one that is slightly too wide costs
+ * a row that classifies to `NONE`.
+ */
+export function isPotentiallyCostExposed(
+  state: GenerationAttemptState,
+  certainty: SubmissionCertainty,
+): boolean {
+  if (certainty === "DEFINITIVELY_REJECTED") return false;
+  return (
+    ALWAYS_COST_EXPOSED_ATTEMPT_STATES.includes(state) ||
+    COST_BEARING_SUBMISSION_CERTAINTIES.includes(certainty)
+  );
+}
+
+/**
+ * Which exposure bucket one attempt belongs to, from both of its axes.
+ *
+ * The rules, in the order they are applied:
+ *
+ * 1. `DEFINITIVELY_REJECTED` is the one certainty that zeroes cost anywhere.
+ *    The provider refused the submission; there is nothing to bill. It is the
+ *    only negative fact strong enough to override the state.
+ * 2. Reconciliation states are uncertain by definition — the platform tried to
+ *    find out and could not. `RECONCILIATION_EXHAUSTED` included: exhausting the
+ *    reconciliation window resolves the *customer's* entitlement, and resolves
+ *    nothing at all about what the provider charged. Treating it as zero because
+ *    the state is terminal would make giving up look like a refund.
+ * 3. At or past the boundary with an unfinished lifecycle: in flight.
+ * 4. Everything else is decided by certainty. `ACCEPTED` is settled estimated
+ *    cost — the work crossed, the estimate is the best figure that exists.
+ *    `SUBMISSION_UNKNOWN` is uncertain. `PRE_SUBMISSION` never crossed, and is
+ *    the only way a terminal attempt costs nothing.
+ *
+ * Nothing here returns `KNOWN_ACTUAL`, and that is a statement rather than an
+ * omission: no persisted field anywhere records what a provider actually
+ * billed. The category exists in the type so that the ingestion path which will
+ * populate it has a place to put its answer, and so the Safety Guard's
+ * arithmetic does not have to change on the day it arrives.
+ */
+export function classifyProviderCostExposure(
+  state: GenerationAttemptState,
+  certainty: SubmissionCertainty,
+): ProviderCostExposureCategory {
+  if (certainty === "DEFINITIVELY_REJECTED") return "NONE";
+
+  switch (state) {
+    case "RECONCILIATION_PENDING":
+    case "RECONCILIATION_EXHAUSTED":
+      return "UNCERTAIN";
+    case "SUBMITTING":
+    case "PROCESSING":
+    case "PROVIDER_SUCCEEDED":
+    case "OUTPUT_INGESTING":
+      return "IN_FLIGHT";
+    case "QUEUED":
+    case "CANCELLED_PRE_SUBMISSION":
+    case "OUTPUT_VERIFIED":
+    case "FAILED_RETRYABLE":
+    case "FAILED_TERMINAL":
+      return certainty === "PRE_SUBMISSION"
+        ? "NONE"
+        : certainty === "ACCEPTED"
+          ? "SETTLED_ESTIMATED"
+          : "UNCERTAIN";
+    default: {
+      // A new attempt state must not inherit whichever branch happened to be
+      // last. This fails the build instead.
+      const unreachable: never = state;
+      return unreachable;
+    }
+  }
+}
 
 /**
  * The provider-cost exposure of one organization's billing cycle.
  *
  * Every component is a yen amount and every one is named, because a single
  * total is unauditable: when the guard pauses an organization, the operator
- * needs to see which category moved.
+ * needs to see which category moved. All five are persisted with the
+ * authorization event for exactly that reason.
  */
 export interface ProviderCostExposure {
-  /** Actually incurred. Currently always zero — see the constant above. */
+  /**
+   * Actually incurred, as the provider billed it.
+   *
+   * Currently always zero, sourced from nothing. Phase 4C-3B-2E persists an
+   * *estimate* and nothing persists an actual, and writing an estimate into
+   * this field would put a projection where a margin review reads a fact.
+   * Production activation requires the provider-cost ingestion path that
+   * populates it — and that path replaces {@link settledEstimatedCostYen} for
+   * the same attempts, rather than adding to it.
+   */
   readonly knownActualCostYen: Yen;
+  /**
+   * Attempts that finished their lifecycle after crossing the boundary, still
+   * valued at their immutable planning estimate.
+   *
+   * Conservative and explicitly **not** actual cost. The alternative was to drop
+   * them the moment their execution ended, which would let a cycle's real spend
+   * disappear from the guard one attempt at a time while the money stayed spent.
+   */
+  readonly settledEstimatedCostYen: Yen;
   /** Attempts whose acceptance is unresolved, at their planning estimate. */
   readonly uncertainCostYen: Yen;
   /** Attempts at or past the boundary, at their planning estimate. */
@@ -111,6 +184,7 @@ export interface ProviderCostExposure {
 export function totalProviderCostExposureYen(exposure: ProviderCostExposure): Yen {
   return yen(
     exposure.knownActualCostYen +
+      exposure.settledEstimatedCostYen +
       exposure.uncertainCostYen +
       exposure.inFlightCostYen +
       exposure.nextProjectedCostYen,

@@ -27,6 +27,16 @@ import type { TargetOutputResolution } from "../generation/model-catalog";
  * table has to preserve rather than blur.
  */
 
+/**
+ * The version of the route table below.
+ *
+ * Persisted with every authorization event. Which routes the product sold on a
+ * given day is not reconstructible from the current source, so a decision found
+ * in transition history needs the table's version alongside it to be readable
+ * at all. Bump it whenever a route is added, removed or altered.
+ */
+export const ROUTING_POLICY_VERSION = "2026-09-07.1";
+
 /** A route's identity: the eight facts an attempt persists about where it goes. */
 export interface RouteAuthorizationFacts {
   readonly qualityTier: GenerationQualityTier;

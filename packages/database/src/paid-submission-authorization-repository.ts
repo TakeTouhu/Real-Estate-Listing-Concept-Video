@@ -1,27 +1,34 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
-  COST_EXPOSED_ATTEMPT_STATES,
-  IN_FLIGHT_COST_ATTEMPT_STATES,
-  UNCERTAIN_COST_ATTEMPT_STATES,
+  ALWAYS_COST_EXPOSED_ATTEMPT_STATES,
+  COST_BEARING_SUBMISSION_CERTAINTIES,
+  classifyProviderCostExposure,
   convertMicroUsdToYen,
   createProviderPricingCatalog,
   isTargetOutputResolution,
-  microUsd,
+  persistedIntegerToNumber,
+  persistedMicroUsd,
   riskProfileKeyForQualityTier,
   validateFxSnapshot,
+  verifyPersistedPricingSnapshot,
   yen,
   type ArmResult,
   type AttemptGateFacts,
   type FxSnapshot,
   type GenerationAttemptState,
   type JobGateFacts,
+  type MicroUsd,
   type PaidSubmissionAuthorizationRepository,
   type PaidSubmissionAuthorizationSession,
   type PaidSubmissionFactsSnapshot,
+  type PersistedPricingSnapshotFacts,
+  type PricingAuthorizationFailure,
   type PricingGateFacts,
   type ProviderCostExposure,
   type ProviderPricingContract,
   type ReservationGateFacts,
+  type SceneGenerationRequestKind,
+  type SubmissionCertainty,
   type Yen,
 } from "@app/domain";
 import { armProviderBoundaryWithin } from "./orchestration-repositories";
@@ -32,6 +39,12 @@ import { armProviderBoundaryWithin } from "./orchestration-repositories";
  * Everything one decision reads, and the serialization point that makes two
  * decisions safe, in one place. There is no provider client here and no HTTP:
  * this module reads rows and runs one compare-and-set.
+ *
+ * It also performs no pricing arithmetic. Amounts are read, range-checked at the
+ * `BIGINT` boundary, and handed to the domain's `verifyPersistedPricingSnapshot`,
+ * which re-derives the whole snapshot through the same calculation admission
+ * used. A repository that recomputed a cost here would become a second pricing
+ * authority, and the two would drift.
  */
 
 type Tx = Prisma.TransactionClient;
@@ -110,6 +123,8 @@ interface AttemptRow {
   requestTargetOutputResolution: string | null;
   requestDurationSeconds: number | null;
   pricingContractKey: string | null;
+  requestKind: SceneGenerationRequestKind;
+  userRegenerationOrdinal: number | null;
   jobId: string;
   qualityTier: "NORMAL" | "HIGH_QUALITY";
   requiredVideoUnits: number;
@@ -122,6 +137,11 @@ interface AttemptRow {
  * attempt → request → scene → job → project, with the project's organization
  * as the predicate. A cross-tenant id joins nothing and returns no row, which
  * the caller reports identically to a missing one.
+ *
+ * The parent request's `kind` and `userRegenerationOrdinal` come from here and
+ * from nowhere else. They decide whether a `CONSUMED` reservation may stand
+ * behind this attempt, which makes them exactly the kind of fact a caller must
+ * not be able to assert.
  */
 async function loadAttemptChain(
   tx: Tx,
@@ -140,6 +160,8 @@ async function loadAttemptChain(
            a."requestTargetOutputResolution"     AS "requestTargetOutputResolution",
            a."requestDurationSeconds"            AS "requestDurationSeconds",
            a."pricingContractKey"                AS "pricingContractKey",
+           r."kind"::text                        AS "requestKind",
+           r."userRegenerationOrdinal"           AS "userRegenerationOrdinal",
            j."id"                                AS "jobId",
            j."qualityTier"::text                 AS "qualityTier",
            j."requiredVideoUnits"                AS "requiredVideoUnits",
@@ -155,13 +177,29 @@ async function loadAttemptChain(
   return rows[0] ?? null;
 }
 
+/** The complete persisted pricing snapshot, every column the verifier needs. */
 interface SnapshotRow {
+  id: string;
   sceneGenerationId: string;
+  pricingVersion: string;
   provider: string;
   contractKey: string;
-  requestedSeconds: number;
-  riskProfileKey: string;
+  contractFingerprint: string;
   identityJson: Prisma.JsonValue;
+  stablePriceReferenceJson: Prisma.JsonValue;
+  riskProfileKey: string;
+  riskBufferBps: number;
+  requestedSeconds: number;
+  billableSeconds: number;
+  estimatedStableCostMicroUsd: bigint;
+  estimatedPlanningCostMicroUsd: bigint;
+  pricingEffectiveAtEpochMs: bigint;
+  fxSnapshotId: string | null;
+}
+
+interface ExposureRow {
+  orchestrationState: GenerationAttemptState;
+  submissionCertainty: SubmissionCertainty | null;
   estimatedPlanningCostMicroUsd: bigint;
   fxSnapshotId: string | null;
 }
@@ -169,13 +207,21 @@ interface SnapshotRow {
 /**
  * Aggregate this organization and cycle's provider-cost exposure.
  *
- * Grouped by orchestration state so the three categories stay separable, and
- * summed from each attempt's own immutable planning snapshot rather than from
- * any current price. What an in-flight attempt exposes is what it was costed at
- * when it was admitted; a later catalog change must not silently restate it.
+ * Summed from each attempt's own immutable planning snapshot rather than from
+ * any current price. What an attempt exposes is what it was costed at when it
+ * was admitted; a later catalog change must not silently restate it.
  *
  * Scoped to the organization *and* the cycle its reservation named — never
  * globally, so one tenant's incident cannot pause another.
+ *
+ * The `WHERE` clause is a **prefilter**, mirroring
+ * `isPotentiallyCostExposed` from the exposure module and built from the two
+ * constants that module exports. It narrows; it does not classify. Every row it
+ * returns is bucketed by `classifyProviderCostExposure`, which is the single
+ * authority on which category an attempt belongs to — including the rows that
+ * classify to `NONE`, which the prefilter is deliberately loose enough to let
+ * through. A parity test proves the prefilter never excludes anything the
+ * classifier would have counted.
  */
 async function loadExposure(
   tx: Tx,
@@ -183,15 +229,15 @@ async function loadExposure(
   billingCycleKey: string,
   excludeAttemptId: string,
   toYen: (microUsdAmount: bigint, fxSnapshotId: string | null) => Promise<Yen | null>,
-): Promise<{ uncertain: Yen; inFlight: Yen; unconvertible: boolean }> {
-  const rows = await tx.$queryRaw<
-    {
-      orchestrationState: GenerationAttemptState;
-      estimatedPlanningCostMicroUsd: bigint;
-      fxSnapshotId: string | null;
-    }[]
-  >`
-    SELECT a."orchestrationState"::text AS "orchestrationState",
+): Promise<{
+  settledEstimated: Yen;
+  uncertain: Yen;
+  inFlight: Yen;
+  unconvertible: boolean;
+}> {
+  const rows = await tx.$queryRaw<ExposureRow[]>`
+    SELECT a."orchestrationState"::text  AS "orchestrationState",
+           a."submissionCertainty"::text AS "submissionCertainty",
            ps."estimatedPlanningCostMicroUsd",
            ps."fxSnapshotId"
       FROM "scene_generations" a
@@ -204,13 +250,30 @@ async function loadExposure(
      WHERE p."organizationId" = ${organizationId}
        AND res."billingCycleKey" = ${billingCycleKey}
        AND a."id" <> ${excludeAttemptId}
-       AND a."orchestrationState"::text = ANY(${[...COST_EXPOSED_ATTEMPT_STATES]}::text[])
+       AND a."orchestrationState" IS NOT NULL
+       AND COALESCE(a."submissionCertainty"::text, 'PRE_SUBMISSION') <> 'DEFINITIVELY_REJECTED'
+       AND (
+             a."orchestrationState"::text = ANY(${[
+               ...ALWAYS_COST_EXPOSED_ATTEMPT_STATES,
+             ]}::text[])
+          OR COALESCE(a."submissionCertainty"::text, 'PRE_SUBMISSION') = ANY(${[
+               ...COST_BEARING_SUBMISSION_CERTAINTIES,
+             ]}::text[])
+       )
   `;
 
+  let settledEstimated = 0;
   let uncertain = 0;
   let inFlight = 0;
   let unconvertible = false;
   for (const row of rows) {
+    // A legacy row with no certainty has not crossed any boundary this phase
+    // knows about; `PRE_SUBMISSION` is both the schema default and the
+    // conservative reading for a state that already passed the prefilter.
+    const certainty: SubmissionCertainty = row.submissionCertainty ?? "PRE_SUBMISSION";
+    const category = classifyProviderCostExposure(row.orchestrationState, certainty);
+    if (category === "NONE" || category === "KNOWN_ACTUAL") continue;
+
     const amount = await toYen(row.estimatedPlanningCostMicroUsd, row.fxSnapshotId);
     if (amount === null) {
       // An exposure that cannot be converted is not zero. Marking it here makes
@@ -218,37 +281,59 @@ async function loadExposure(
       unconvertible = true;
       continue;
     }
-    if ((UNCERTAIN_COST_ATTEMPT_STATES as readonly string[]).includes(row.orchestrationState)) {
-      uncertain += amount;
-    } else if (
-      (IN_FLIGHT_COST_ATTEMPT_STATES as readonly string[]).includes(row.orchestrationState)
-    ) {
-      inFlight += amount;
-    }
+    if (category === "SETTLED_ESTIMATED") settledEstimated += amount;
+    else if (category === "UNCERTAIN") uncertain += amount;
+    else inFlight += amount;
   }
-  return { uncertain: yen(uncertain), inFlight: yen(inFlight), unconvertible };
+  return {
+    settledEstimated: yen(settledEstimated),
+    uncertain: yen(uncertain),
+    inFlight: yen(inFlight),
+    unconvertible,
+  };
 }
 
-/** Load and validate one persisted FX snapshot through the canonical path. */
+/**
+ * Load and validate one persisted FX snapshot through the canonical path.
+ *
+ * The rate's integer columns are range-checked before they are narrowed, for
+ * the same reason the money columns are: a `BIGINT` beyond the safe-integer
+ * range is a corrupt financial fact, and narrowing it first would produce a
+ * plausible-looking rate that silently mis-converts every amount it touches.
+ */
 async function loadFxSnapshot(tx: Tx, id: string): Promise<FxSnapshot | null> {
   const row = await tx.fxRateSnapshot.findUnique({ where: { id } });
   if (row === null) return null;
+  const numerator = persistedIntegerToNumber(BigInt(row.rateNumerator));
+  const denominator = persistedIntegerToNumber(BigInt(row.rateDenominator));
+  const effectiveAt = persistedIntegerToNumber(BigInt(row.effectiveAtEpochMs));
+  if (numerator === null || denominator === null || effectiveAt === null) return null;
   const candidate: FxSnapshot = {
     id: row.id,
     baseCurrency: row.baseCurrency,
     quoteCurrency: row.quoteCurrency,
-    rateNumerator: Number(row.rateNumerator),
-    rateDenominator: Number(row.rateDenominator),
-    effectiveAt: Number(row.effectiveAtEpochMs) as never,
+    rateNumerator: numerator,
+    rateDenominator: denominator,
+    effectiveAt: effectiveAt as never,
     sourceReference: row.sourceReference,
   } as FxSnapshot;
   const validated = validateFxSnapshot(candidate);
   return validated.ok ? validated.value : null;
 }
 
-function contractFor(
-  snapshot: SnapshotRow,
-): { contract: ProviderPricingContract | null; generationMode: string; audioMode: string } {
+/**
+ * Resolve the contract this snapshot was priced against, by its own identity.
+ *
+ * Identity resolution alone is not proof of sameness — that is what the
+ * verifier's fingerprint comparison is for — but it is how the right candidate
+ * is found in the first place. Resolving by the *attempt's* provider and model
+ * instead would hand the verifier whatever the catalog sells today.
+ */
+function contractFor(snapshot: SnapshotRow): {
+  contract: ProviderPricingContract | null;
+  generationMode: string;
+  audioMode: string;
+} {
   const identity = snapshot.identityJson as {
     provider?: unknown;
     pricingModelKey?: unknown;
@@ -258,35 +343,34 @@ function contractFor(
     durationBillingRuleId?: unknown;
     pricingVersion?: unknown;
   } | null;
-  const fields = [
-    identity?.provider,
-    identity?.pricingModelKey,
-    identity?.generationMode,
-    identity?.nativeTier,
-    identity?.audioMode,
-    identity?.durationBillingRuleId,
-    identity?.pricingVersion,
-  ];
-  if (fields.some((f) => typeof f !== "string")) {
+  const provider = identity?.provider;
+  const pricingModelKey = identity?.pricingModelKey;
+  const generationMode = identity?.generationMode;
+  const nativeTier = identity?.nativeTier;
+  const audioMode = identity?.audioMode;
+  const durationBillingRuleId = identity?.durationBillingRuleId;
+  const pricingVersion = identity?.pricingVersion;
+  if (
+    typeof provider !== "string" ||
+    typeof pricingModelKey !== "string" ||
+    typeof generationMode !== "string" ||
+    typeof nativeTier !== "string" ||
+    typeof audioMode !== "string" ||
+    typeof durationBillingRuleId !== "string" ||
+    typeof pricingVersion !== "string"
+  ) {
     return { contract: null, generationMode: "", audioMode: "" };
   }
-  // Resolved by the snapshot's *own* frozen identity, so the contract judged
-  // here is the one this attempt was admitted against — not whatever the
-  // catalog would return for its provider and model today.
   const contract = createProviderPricingCatalog().findByIdentity({
-    provider: identity!.provider as string,
-    pricingModelKey: identity!.pricingModelKey as string,
-    generationMode: identity!.generationMode as string,
-    nativeTier: identity!.nativeTier as string,
-    audioMode: identity!.audioMode as string,
-    durationBillingRuleId: identity!.durationBillingRuleId as string,
-    pricingVersion: identity!.pricingVersion as string,
+    provider,
+    pricingModelKey,
+    generationMode,
+    nativeTier,
+    audioMode,
+    durationBillingRuleId,
+    pricingVersion,
   });
-  return {
-    contract: contract ?? null,
-    generationMode: identity!.generationMode as string,
-    audioMode: identity!.audioMode as string,
-  };
+  return { contract: contract ?? null, generationMode, audioMode };
 }
 
 export function createPaidSubmissionAuthorizationRepository(
@@ -315,9 +399,14 @@ export function createPaidSubmissionAuthorizationRepository(
             if (row === null || row.orchestrationState === null) return null;
 
             const snapshotRows = await tx.$queryRaw<SnapshotRow[]>`
-              SELECT ps."sceneGenerationId", ps."provider", ps."contractKey",
-                     ps."requestedSeconds", ps."riskProfileKey", ps."identityJson",
-                     ps."estimatedPlanningCostMicroUsd", ps."fxSnapshotId"
+              SELECT ps."id", ps."sceneGenerationId", ps."pricingVersion",
+                     ps."provider", ps."contractKey", ps."contractFingerprint",
+                     ps."identityJson", ps."stablePriceReferenceJson",
+                     ps."riskProfileKey", ps."riskBufferBps",
+                     ps."requestedSeconds", ps."billableSeconds",
+                     ps."estimatedStableCostMicroUsd",
+                     ps."estimatedPlanningCostMicroUsd",
+                     ps."pricingEffectiveAtEpochMs", ps."fxSnapshotId"
                 FROM "generation_pricing_snapshots" ps
                WHERE ps."sceneGenerationId" = ${input.attemptId}
             `;
@@ -344,6 +433,8 @@ export function createPaidSubmissionAuthorizationRepository(
                 : null,
               requestDurationSeconds: row.requestDurationSeconds,
               pricingContractKey: row.pricingContractKey,
+              requestKind: row.requestKind,
+              requestUserRegenerationOrdinal: row.userRegenerationOrdinal,
             };
             const job: JobGateFacts = {
               id: row.jobId,
@@ -371,9 +462,11 @@ export function createPaidSubmissionAuthorizationRepository(
               fxSnapshotId: string | null,
             ): Promise<Yen | null> => {
               if (fxSnapshotId === null) return null;
+              const amount: MicroUsd | null = persistedMicroUsd(amountMicroUsd);
+              if (amount === null) return null;
               const fx = await loadFxSnapshot(tx, fxSnapshotId);
               if (fx === null) return null;
-              const converted = convertMicroUsdToYen(microUsd(Number(amountMicroUsd)), fx);
+              const converted = convertMicroUsdToYen(amount, fx);
               return converted.ok ? converted.value : null;
             };
 
@@ -385,15 +478,56 @@ export function createPaidSubmissionAuthorizationRepository(
                 contract: null,
                 identityGenerationMode: "",
                 identityAudioMode: "",
+                integrityFailure: null,
                 plannedCostYen: null,
                 fxFailure: null,
+                pricingSnapshotId: null,
               };
             } else {
               const { contract, generationMode, audioMode } = contractFor(snapshot);
-              const plannedCostYen = await toYen(
-                snapshot.estimatedPlanningCostMicroUsd,
-                snapshot.fxSnapshotId,
-              );
+              const fx =
+                snapshot.fxSnapshotId === null
+                  ? null
+                  : await loadFxSnapshot(tx, snapshot.fxSnapshotId);
+              const fxFailure: "MISSING" | "INVALID" | null =
+                snapshot.fxSnapshotId === null ? "MISSING" : fx === null ? "INVALID" : null;
+
+              // The whole row, re-derived through the pricing domain. Only the
+              // amount that survives that is allowed to become exposure.
+              let integrityFailure: PricingAuthorizationFailure | null = null;
+              let plannedCostYen: Yen | null = null;
+              if (fxFailure === null) {
+                const persisted: PersistedPricingSnapshotFacts = {
+                  sceneGenerationId: snapshot.sceneGenerationId,
+                  pricingVersion: snapshot.pricingVersion,
+                  provider: snapshot.provider,
+                  contractKey: snapshot.contractKey,
+                  contractFingerprint: snapshot.contractFingerprint,
+                  identityJson: snapshot.identityJson,
+                  stablePriceReferenceJson: snapshot.stablePriceReferenceJson,
+                  riskProfileKey: snapshot.riskProfileKey,
+                  riskBufferBps: snapshot.riskBufferBps,
+                  requestedSeconds: snapshot.requestedSeconds,
+                  billableSeconds: snapshot.billableSeconds,
+                  estimatedStableCostMicroUsd: snapshot.estimatedStableCostMicroUsd,
+                  estimatedPlanningCostMicroUsd: snapshot.estimatedPlanningCostMicroUsd,
+                  pricingEffectiveAtEpochMs: snapshot.pricingEffectiveAtEpochMs,
+                  fxSnapshotId: snapshot.fxSnapshotId,
+                };
+                const verified = verifyPersistedPricingSnapshot({ persisted, contract, fx });
+                if (verified.ok) {
+                  const converted = convertMicroUsdToYen(
+                    verified.snapshot.estimatedPlanningCostMicroUsd,
+                    // Verified above; `fxFailure === null` implies a rate.
+                    fx as FxSnapshot,
+                  );
+                  if (converted.ok) plannedCostYen = converted.value;
+                  else integrityFailure = "PRICING_AMOUNT_UNREPRESENTABLE";
+                } else {
+                  integrityFailure = verified.reason;
+                }
+              }
+
               pricing = {
                 snapshotBoundToAttempt: snapshot.sceneGenerationId === row.attemptId,
                 // Defence in depth over the persisted row: provider, contract
@@ -407,19 +541,17 @@ export function createPaidSubmissionAuthorizationRepository(
                 contract,
                 identityGenerationMode: generationMode,
                 identityAudioMode: audioMode,
+                integrityFailure,
                 plannedCostYen,
-                fxFailure:
-                  snapshot.fxSnapshotId === null
-                    ? "MISSING"
-                    : plannedCostYen === null
-                      ? "INVALID"
-                      : null,
+                fxFailure,
+                pricingSnapshotId: snapshot.id,
               };
             }
 
             const cycle = cycleKey;
             let exposure: ProviderCostExposure = {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(0),
               inFlightCostYen: yen(0),
               nextProjectedCostYen: pricing.plannedCostYen ?? yen(0),
@@ -437,6 +569,7 @@ export function createPaidSubmissionAuthorizationRepository(
                 // structurally zero rather than an estimate wearing the name of
                 // an actual. See the exposure module.
                 knownActualCostYen: yen(0),
+                settledEstimatedCostYen: aggregated.settledEstimated,
                 uncertainCostYen: aggregated.uncertain,
                 inFlightCostYen: aggregated.inFlight,
                 nextProjectedCostYen: pricing.plannedCostYen ?? yen(0),

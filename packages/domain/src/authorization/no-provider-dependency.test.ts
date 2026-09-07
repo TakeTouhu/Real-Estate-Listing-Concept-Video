@@ -3,11 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { epochMillisFromDate, yen } from "../pricing/units";
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
+import { createFixedAuthorizationClock } from "./clock";
 import { createPaidSubmissionAuthorizationService } from "./paid-submission-service";
-import {
-  createUnavailableBillingCycleRevenueReader,
-  createUnavailableSceneRevenueReader,
-} from "./revenue";
+import { createUnavailableBillingCycleRevenueReader } from "./revenue";
 import type { PaidSubmissionAuthorizationRepository } from "./ports";
 
 /**
@@ -102,6 +100,8 @@ describe("the authorization module has no provider or network dependency", () =>
                   requestTargetOutputResolution: "720p",
                   requestDurationSeconds: 5,
                   pricingContractKey: "fal:minimax-h3-max:2026-09-02.1",
+                  requestKind: "INITIAL",
+                  requestUserRegenerationOrdinal: null,
                 },
                 job: {
                   id: "genjob_no_net",
@@ -121,11 +121,14 @@ describe("the authorization module has no provider or network dependency", () =>
                   contract: null,
                   identityGenerationMode: "image-to-video",
                   identityAudioMode: "none",
+                  integrityFailure: null,
                   plannedCostYen: yen(100),
                   fxFailure: null,
+                  pricingSnapshotId: "gps_no_net",
                 },
                 exposure: {
                   knownActualCostYen: yen(0),
+                  settledEstimatedCostYen: yen(0),
                   uncertainCostYen: yen(0),
                   inFlightCostYen: yen(0),
                   nextProjectedCostYen: yen(100),
@@ -144,13 +147,14 @@ describe("the authorization module has no provider or network dependency", () =>
       const service = createPaidSubmissionAuthorizationService({
         authorization,
         billingCycleRevenue: createUnavailableBillingCycleRevenueReader(),
-        sceneRevenue: createUnavailableSceneRevenueReader(),
+        clock: createFixedAuthorizationClock(
+          epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z")),
+        ),
       });
 
       const outcome = await service.authorize({
         organizationId: "org_no_net",
         attemptId: "sgen_no_net",
-        authorizationInstant: epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z")),
         context: {
           actorType: "SYSTEM",
           actorUserId: null,
@@ -184,11 +188,16 @@ describe("the authorization module has no provider or network dependency", () =>
         billingCycleKey: "2026-09",
       }),
     ).resolves.toBeNull();
-    await expect(
-      createUnavailableSceneRevenueReader().revenueYen({
-        organizationId: "org",
-        generationJobId: "job",
-      }),
-    ).resolves.toBeNull();
+  });
+
+  it("reads wall time only through the injected clock", () => {
+    // `Date.now()` scattered through domain logic makes a decision untestable
+    // and lets two parts of it disagree about when "now" is. The one legitimate
+    // reader is the system clock factory.
+    for (const { name, text } of authorizationSources()) {
+      if (name === "clock.ts") continue;
+      expect(`${name}: ${text.includes("Date.now(")}`).toBe(`${name}: false`);
+      expect(`${name}: ${text.includes("new Date(")}`).toBe(`${name}: false`);
+    }
   });
 });

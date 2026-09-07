@@ -1,15 +1,19 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  AUTHORIZATION_POLICY_VERSION,
+  createFixedAuthorizationClock,
   createPaidSubmissionAuthorizationService,
   createPricingSnapshot,
   createProviderPricingCatalog,
   epochMillisFromDate,
+  PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
+  ROUTING_POLICY_VERSION,
   yen,
+  type AuthorizationClock,
   type BillingCycleRevenueReader,
   type FxSnapshot,
   type PricingSnapshot,
-  type SceneRevenueReader,
   type Yen,
 } from "@app/domain";
 import { createPaidSubmissionAuthorizationRepository } from "@app/database";
@@ -49,12 +53,12 @@ const AT = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
  * Planning cost in yen for the fixture's two scene lengths.
  *
  * OpenVideo bills $0.06/second; NORMAL_AI adds a 30% risk buffer; the fixture
- * FX rate is ¥150/USD. 5s → $0.39 → ¥58, and 20s → $1.56 → ¥234. Written out
- * because several tests need revenue tight enough to discriminate, and a
- * generous round number would make them pass against an implementation that
- * counted the wrong things.
+ * FX rate is ¥150/USD. 5s → $0.39 → ¥58.5, rounded half away from zero to ¥59;
+ * 20s → $1.56 → ¥234 exactly. Written out because several tests need revenue
+ * tight enough to discriminate, and a generous round number would make them
+ * pass against an implementation that counted the wrong things.
  */
-const FIVE_SECOND_YEN = 58;
+const FIVE_SECOND_YEN = 59;
 const TWENTY_SECOND_YEN = 234;
 const CYCLE = "2026-09";
 const FX_ID = "fx_paidgate";
@@ -70,29 +74,24 @@ const FX: FxSnapshot = {
   sourceReference: "itest",
 };
 
-/** Revenue readers standing in for the billing layer that does not exist yet. */
-function revenueReaders(cycleYen: Yen | null, sceneYen: Yen | null) {
-  const billingCycleRevenue: BillingCycleRevenueReader = {
+/** The billing-cycle revenue reader standing in for a layer that does not exist. */
+function revenueReader(cycleYen: Yen | null): BillingCycleRevenueReader {
+  return {
     async revenueYen() {
       return cycleYen;
     },
   };
-  const sceneRevenue: SceneRevenueReader = {
-    async revenueYen() {
-      return sceneYen;
-    },
-  };
-  return { billingCycleRevenue, sceneRevenue };
 }
 
 function service(
   client: PrismaClient,
   cycleYen: Yen | null = yen(49_800),
-  sceneYen: Yen | null = yen(3_320),
+  clock: AuthorizationClock = createFixedAuthorizationClock(AT),
 ) {
   return createPaidSubmissionAuthorizationService({
     authorization: createPaidSubmissionAuthorizationRepository(client),
-    ...revenueReaders(cycleYen, sceneYen),
+    billingCycleRevenue: revenueReader(cycleYen),
+    clock,
   });
 }
 
@@ -226,13 +225,14 @@ async function authorize(
   attemptId: string,
   organizationId = ORG_A,
   cycleYen: Yen | null = yen(49_800),
-  sceneYen: Yen | null = yen(3_320),
+  clock: AuthorizationClock = createFixedAuthorizationClock(AT),
 ) {
-  return service(client, cycleYen, sceneYen).authorize({
+  return service(client, cycleYen, clock).authorize({
     organizationId,
     attemptId,
-    authorizationInstant: AT,
-    context: ctx({ eventType: "PAID_SUBMISSION_AUTHORIZED" }),
+    // Deliberately a label the service must overwrite: the event type on a paid
+    // authorization is not the caller's to choose.
+    context: ctx({ eventType: "CALLER_CHOSEN" }),
   });
 }
 
@@ -299,8 +299,11 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         [null, "QUEUED"],
         ["QUEUED", "SUBMITTING"],
       ]);
-      // The existing mechanism, not a second audit table.
-      expect(history[1]?.eventType).toBe("PAID_SUBMISSION_AUTHORIZED");
+      // The existing mechanism, not a second audit table — and the label is the
+      // service's, not the caller's: `authorize` deliberately passes
+      // `CALLER_CHOSEN` and it does not survive.
+      expect(history[1]?.eventType).toBe(PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE);
+      expect(history[1]?.eventType).not.toBe("CALLER_CHOSEN");
     });
 
     it("does not consume the customer's reservation", async () => {
@@ -326,11 +329,230 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     });
   });
 
+  describe("post-delivery user regeneration", () => {
+    /**
+     * The correction this block exists for.
+     *
+     * A customer's regeneration right is sold with the original video. By the
+     * time they use it, the original has been delivered and the reservation is
+     * `CONSUMED` — that is the *expected* state, not a corruption — and the
+     * regeneration consumes no further customer unit because its provider cost
+     * is internal. Refusing every `CONSUMED` reservation denies work that has
+     * already been paid for.
+     *
+     * `RESERVED → CONSUMED` is a reserved edge (Transaction G, unimplemented),
+     * so the delivered world is constructed directly here rather than through a
+     * transition that does not exist yet.
+     */
+    async function consumeReservation(jobId: string): Promise<void> {
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: jobId },
+        data: { state: "CONSUMED", consumedAt: new Date() },
+      });
+    }
+
+    async function regenerationAttempt(
+      suffix: string,
+      chain: Awaited<ReturnType<typeof seedAuthorizableChain>>,
+    ) {
+      const repos = repositories(prisma);
+      // The delivered world this regeneration exists in. The original request
+      // is DELIVERED and its attempt SUCCEEDED — which also releases the
+      // active-request identity, exactly as it would in production: the
+      // partial unique index holds `(videoProjectId, requestHash)` only while
+      // an attempt is still live, so a regeneration after delivery is admitted
+      // and a duplicate submission during one is not.
+      await prisma.sceneGenerationRequest.update({
+        where: { id: chain.request.id },
+        data: { state: "DELIVERED", deliveredAt: new Date() },
+      });
+      await prisma.sceneGeneration.update({
+        where: { id: chain.attempt.id },
+        data: {
+          state: "SUCCEEDED",
+          orchestrationState: "OUTPUT_VERIFIED",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: `pred_${suffix}_original`,
+          providerAcceptedAt: new Date(),
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      const regen = await repos.requests.admitUserRegeneration(
+        ORG_A,
+        {
+          id: `genreq_${suffix}`,
+          generationSceneId: chain.scene.id,
+          requestedByUserId: "usr_itest",
+        },
+        ctx(),
+      );
+      if (regen.kind !== "ADMITTED") throw new Error(`regeneration: ${regen.kind}`);
+
+      const admitted = await repos.attempts.admit(
+        ORG_A,
+        {
+          id: `sgen_${suffix}`,
+          generationSceneRequestId: regen.request.id,
+          providerName: "wavespeed",
+          providerModelId: "wavespeed-ai/open-video/image-to-video",
+          requestModelKey: "wavespeed-open-video",
+          requestRenderedPrompt: "a sunlit living room, cinematic, slow pan",
+          requestNativeGenerationResolution: "1080p",
+          requestResolutionNormalization: "NONE",
+          requestNativeMeetsTarget: true,
+          pricingSnapshotId: `price_sgen_${suffix}`,
+          pricingSnapshot: snapshotFor(5),
+          fxSnapshot: FX,
+        },
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`attempt: ${admitted.kind}`);
+      return { request: regen.request, attempt: admitted.attempt };
+    }
+
+    /**
+     * A second attempt on a request, which the repository derives as
+     * `SYSTEM_RECOVERY`.
+     *
+     * The kind is not a caller input — it is computed from the attempts that
+     * already exist — so a recovery attempt is produced by failing the first one
+     * and admitting another, exactly as a real retry would.
+     */
+    async function systemRecoveryAttempt(suffix: string, requestId: string, firstId: string) {
+      await prisma.sceneGeneration.update({
+        where: { id: firstId },
+        data: {
+          state: "FAILED_TERMINAL",
+          orchestrationState: "FAILED_TERMINAL",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          // A certainty other than PRE_SUBMISSION means the boundary was
+          // crossed, and a database CHECK enforces that pairing.
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      const admitted = await repositories(prisma).attempts.admit(
+        ORG_A,
+        {
+          id: `sgen_${suffix}`,
+          generationSceneRequestId: requestId,
+          providerName: "wavespeed",
+          providerModelId: "wavespeed-ai/open-video/image-to-video",
+          requestModelKey: "wavespeed-open-video",
+          requestRenderedPrompt: "a sunlit living room, cinematic, slow pan",
+          requestNativeGenerationResolution: "1080p",
+          requestResolutionNormalization: "NONE",
+          requestNativeMeetsTarget: true,
+          pricingSnapshotId: `price_sgen_${suffix}`,
+          pricingSnapshot: snapshotFor(5),
+          fxSnapshot: FX,
+        },
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`recovery attempt: ${admitted.kind}`);
+      return admitted.attempt;
+    }
+
+    it("authorizes a regeneration against a CONSUMED reservation", async () => {
+      const chain = await seedAuthorizableChain(prisma, "regenok");
+      const regen = await regenerationAttempt("regenok2", chain);
+      await consumeReservation(chain.job.id);
+
+      const outcome = await authorize(prisma, regen.attempt.id);
+      if (outcome.kind !== "AUTHORIZED") {
+        throw new Error(`expected AUTHORIZED, got ${JSON.stringify(outcome)}`);
+      }
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: regen.attempt.id },
+      });
+      expect(row.orchestrationState).toBe("SUBMITTING");
+    });
+
+    it("consumes no further customer unit and creates no second reservation", async () => {
+      // The provider cost of a regeneration is internal. If authorizing one
+      // moved a customer's units — or minted a new hold to move — the customer
+      // would be charged twice for a right they bought once.
+      const chain = await seedAuthorizableChain(prisma, "regennc");
+      const regen = await regenerationAttempt("regennc2", chain);
+      await consumeReservation(chain.job.id);
+
+      const before = await prisma.generationReservation.findFirstOrThrow({
+        where: { generationJobId: chain.job.id },
+      });
+      const countBefore = await prisma.generationReservation.count({
+        where: { generationJobId: chain.job.id },
+      });
+
+      expect((await authorize(prisma, regen.attempt.id)).kind).toBe("AUTHORIZED");
+
+      const after = await prisma.generationReservation.findFirstOrThrow({
+        where: { generationJobId: chain.job.id },
+      });
+      expect(after.state).toBe("CONSUMED");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.reservedTotalVideoUnits).toBe(before.reservedTotalVideoUnits);
+      expect(after.reservedHighQualityUnits).toBe(before.reservedHighQualityUnits);
+      expect(
+        await prisma.generationReservation.count({ where: { generationJobId: chain.job.id } }),
+      ).toBe(countBefore);
+    });
+
+    it("refuses an INITIAL request against a CONSUMED reservation", async () => {
+      // The other half of the rule. Units already spent on a delivered video
+      // cannot fund a fresh rendition nobody paid for.
+      const chain = await seedAuthorizableChain(prisma, "initcons");
+      await consumeReservation(chain.job.id);
+      const outcome = await authorize(prisma, chain.attempt.id);
+      expect(outcome).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_CONSUMED",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: chain.attempt.id },
+      });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("authorizes a SYSTEM_RECOVERY attempt under a regeneration request", async () => {
+      // A platform retry inherits the parent request's reservation semantics.
+      // It is not a second customer regeneration and must not be judged as one.
+      const chain = await seedAuthorizableChain(prisma, "sysrec");
+      const regen = await regenerationAttempt("sysrec2", chain);
+      const recovery = await systemRecoveryAttempt(
+        "sysrec3",
+        regen.request.id,
+        regen.attempt.id,
+      );
+      expect(recovery.attemptKind).toBe("SYSTEM_RECOVERY");
+      await consumeReservation(chain.job.id);
+
+      const outcome = await authorize(prisma, recovery.id);
+      expect(outcome.kind).toBe("AUTHORIZED");
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: recovery.id } });
+      expect(row.orchestrationState).toBe("SUBMITTING");
+    });
+
+    it("still refuses a regeneration whose reservation was released", async () => {
+      // The exemption is narrow: `CONSUMED` and nothing else. A released hold
+      // means the entitlement itself is gone, and a regeneration right cannot
+      // outlive the entitlement it was sold with.
+      const chain = await seedAuthorizableChain(prisma, "regenrel");
+      const regen = await regenerationAttempt("regenrel2", chain);
+      await prisma.generationReservation.updateMany({
+        where: { generationJobId: chain.job.id },
+        data: { state: "RELEASED", releasedAt: new Date() },
+      });
+      expect(await authorize(prisma, regen.attempt.id)).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_RELEASED",
+      });
+    });
+  });
+
   describe("refusals leave the attempt exactly as it was", () => {
     it("does not move an attempt the guard hard-pauses", async () => {
       // ¥49,800 revenue against a projected profit below the ¥15,000 floor.
       const { attempt } = await seedAuthorizableChain(prisma, "hp");
-      const outcome = await authorize(prisma, attempt.id, ORG_A, yen(1_000), yen(3_320));
+      const outcome = await authorize(prisma, attempt.id, ORG_A, yen(1_000));
       expect(outcome.kind).toBe("SAFETY_GUARD_HARD_PAUSE");
 
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
@@ -341,7 +563,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
     it("writes no transition history for a state change that did not happen", async () => {
       const { attempt } = await seedAuthorizableChain(prisma, "nohist");
-      await authorize(prisma, attempt.id, ORG_A, yen(1_000), yen(3_320));
+      await authorize(prisma, attempt.id, ORG_A, yen(1_000));
       const history = await repositories(prisma).events.listForAggregate(
         ORG_A,
         "ATTEMPT",
@@ -354,7 +576,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
     it("refuses without an authoritative billing-cycle revenue", async () => {
       const { attempt } = await seedAuthorizableChain(prisma, "norev");
-      const outcome = await authorize(prisma, attempt.id, ORG_A, null, yen(3_320));
+      const outcome = await authorize(prisma, attempt.id, ORG_A, null);
       expect(outcome).toMatchObject({
         kind: "SAFETY_GUARD_HARD_PAUSE",
         reason: "BILLING_CYCLE_REVENUE_UNAVAILABLE",
@@ -555,6 +777,330 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const outcome = await authorize(prisma, candidate.attempt.id, ORG_A, revenue);
       // Last month's exposure must not block this month's work.
       expect(outcome.kind).toBe("AUTHORIZED");
+    });
+  });
+
+  describe("exposure by state and submission certainty", () => {
+    /**
+     * Whether a sibling's provider cost survives in the guard.
+     *
+     * Each case seeds a 20-second sibling in one (state, certainty) pair and
+     * asks the same question with revenue tight enough that ¥234 decides it.
+     * `counted: true` means the pair must hard-pause the candidate; `false`
+     * means it must not. A generous cycle would pass either way, which is how
+     * the earlier version of this suite missed the states below entirely.
+     */
+    async function exposesCost(
+      suffix: string,
+      state: string,
+      certainty: string,
+    ): Promise<boolean> {
+      const sibling = await seedAuthorizableChain(prisma, `${suffix}s`, { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: state as never,
+          submissionCertainty: certainty as never,
+          submissionBoundaryEnteredAt: new Date(),
+          // A database CHECK requires a provider reference whenever the
+          // provider accepted the work, and reconciliation timestamps whenever
+          // an attempt is reconciling. Satisfying them here keeps the fixture a
+          // state the system could actually reach.
+          ...(certainty === "ACCEPTED"
+            ? { providerPredictionId: `pred_${suffix}`, providerAcceptedAt: new Date() }
+            : {}),
+          ...(state === "RECONCILIATION_PENDING"
+            ? {
+                reconciliationStartedAt: new Date(),
+                reconciliationDeadlineAt: new Date("2026-09-11T00:00:00.000Z"),
+              }
+            : {}),
+        },
+      });
+      const candidate = await seedAuthorizableChain(prisma, `${suffix}c`);
+      // Just enough headroom for the candidate alone. The sibling's ¥234 is the
+      // difference between authorizing and hard-pausing.
+      const revenue = yen(15_000 + FIVE_SECOND_YEN + Math.floor(TWENTY_SECOND_YEN / 2));
+      const outcome = await authorize(prisma, candidate.attempt.id, ORG_A, revenue);
+      return outcome.kind === "SAFETY_GUARD_HARD_PAUSE";
+    }
+
+    it("counts an unresolved reconciliation", async () => {
+      expect(await exposesCost("uncr", "RECONCILIATION_PENDING", "SUBMISSION_UNKNOWN")).toBe(
+        true,
+      );
+    });
+
+    it("still counts a reconciliation that ran out of ways to find out", async () => {
+      // The window closing resolves the customer's entitlement and nothing
+      // about what the provider charged. Zeroing it here would let giving up
+      // look like a refund, and would understate every cycle with an incident.
+      expect(await exposesCost("exha", "RECONCILIATION_EXHAUSTED", "SUBMISSION_UNKNOWN")).toBe(
+        true,
+      );
+    });
+
+    it("counts an accepted attempt whose output was verified", async () => {
+      // Its execution lifecycle finished; the money did not come back.
+      expect(await exposesCost("outv", "OUTPUT_VERIFIED", "ACCEPTED")).toBe(true);
+    });
+
+    it("counts an accepted attempt that failed terminally", async () => {
+      expect(await exposesCost("ftac", "FAILED_TERMINAL", "ACCEPTED")).toBe(true);
+    });
+
+    it("counts an accepted attempt that failed retryably", async () => {
+      expect(await exposesCost("frac", "FAILED_RETRYABLE", "ACCEPTED")).toBe(true);
+    });
+
+    it("counts nothing for a definitively rejected attempt", async () => {
+      // The provider refused the submission. There is nothing to bill, and this
+      // is the one certainty strong enough to say so.
+      expect(await exposesCost("rejd", "FAILED_TERMINAL", "DEFINITIVELY_REJECTED")).toBe(false);
+    });
+
+    it("counts nothing for an attempt cancelled before the boundary", async () => {
+      expect(await exposesCost("canc", "CANCELLED_PRE_SUBMISSION", "PRE_SUBMISSION")).toBe(
+        false,
+      );
+    });
+
+    it("counts nothing for a sibling still queued", async () => {
+      expect(await exposesCost("qued", "QUEUED", "PRE_SUBMISSION")).toBe(false);
+    });
+  });
+
+  describe("persisted pricing integrity", () => {
+    it("refuses a tampered planning cost while every binding field agrees", async () => {
+      // Provider, model key, contract key and risk profile are untouched, so
+      // nothing that checks bindings notices. The number that decides how much
+      // Safety Guard headroom this attempt consumes has been rewritten to
+      // almost nothing, and only re-deriving the snapshot catches it.
+      const { attempt } = await seedAuthorizableChain(prisma, "tamper");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { estimatedPlanningCostMicroUsd: 1n },
+      });
+      expect(await authorize(prisma, attempt.id)).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("refuses a tampered stable cost", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "tampst");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { estimatedStableCostMicroUsd: 7n },
+      });
+      expect(await authorize(prisma, attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+    });
+
+    it("refuses tampered billable seconds", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "tampbs");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { billableSeconds: 99 },
+      });
+      expect(await authorize(prisma, attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+    });
+
+    it("refuses a tampered risk buffer", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "tamprb");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { riskBufferBps: 1 },
+      });
+      expect(await authorize(prisma, attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+    });
+
+    it("refuses a moved pricing instant", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "tampat");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { pricingEffectiveAtEpochMs: 0n },
+      });
+      expect(await authorize(prisma, attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+    });
+
+    it("refuses a tampered stable price reference", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "tampsp");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: {
+          stablePriceReferenceJson: { kind: "PER_SECOND", unitPriceMicroUsdPerSecond: 1 },
+        },
+      });
+      expect(await authorize(prisma, attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_SNAPSHOT_NOT_REPRODUCIBLE",
+      });
+    });
+
+    it("refuses a same-identity contract with a different fingerprint", async () => {
+      // The identity resolves perfectly and the commercial content underneath
+      // it has changed. Resolving by identity and calling it the same contract
+      // is a guess; the fingerprint is what makes it a check.
+      const { attempt } = await seedAuthorizableChain(prisma, "fprint");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { contractFingerprint: "some-other-contract" },
+      });
+      expect(await authorize(prisma, attempt.id)).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_CONTRACT_FINGERPRINT_MISMATCH",
+      });
+    });
+
+    it("fails closed on a persisted amount too large to represent exactly", async () => {
+      // `Number(bigint)` would narrow this into a plausible-looking figure, and
+      // `microUsd()` would throw `PricingArithmeticError` out of an ordinary
+      // authorization — a 500 rather than a refusal, skipping every audit path.
+      const { attempt } = await seedAuthorizableChain(prisma, "bigint");
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: attempt.id },
+        data: { estimatedPlanningCostMicroUsd: BigInt(Number.MAX_SAFE_INTEGER) + 1n },
+      });
+      expect(await authorize(prisma, attempt.id)).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_AMOUNT_UNREPRESENTABLE",
+      });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("fails closed on an unrepresentable amount in another attempt's exposure", async () => {
+      // The candidate's own snapshot is fine; a sibling's is not. Skipping the
+      // sibling would authorize against a cycle total known to be short.
+      const sibling = await seedAuthorizableChain(prisma, "bigsib", { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_bigsib",
+          providerAcceptedAt: new Date(),
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      await prisma.generationPricingSnapshot.update({
+        where: { sceneGenerationId: sibling.attempt.id },
+        data: { estimatedPlanningCostMicroUsd: BigInt(Number.MAX_SAFE_INTEGER) + 1n },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "bigcand");
+      expect(await authorize(prisma, candidate.attempt.id)).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+      });
+    });
+  });
+
+  describe("the durable authorization record", () => {
+    /** Read back through a connection that shares nothing with the writer. */
+    async function reloadBoundaryEvent(attemptId: string) {
+      const events = await other.generationTransitionEvent.findMany({
+        where: { aggregateType: "ATTEMPT", aggregateId: attemptId, toState: "SUBMITTING" },
+      });
+      expect(events).toHaveLength(1);
+      return events[0]!;
+    }
+
+    it("reconstructs a SAFE authorization from persistence alone", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "auditsafe");
+      expect((await authorize(prisma, attempt.id)).kind).toBe("AUTHORIZED");
+
+      const event = await reloadBoundaryEvent(attempt.id);
+      expect(event.eventType).toBe(PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE);
+      expect(event.fromState).toBe("QUEUED");
+      expect(event.safeMetadata).toMatchObject({
+        authorizationPolicyVersion: AUTHORIZATION_POLICY_VERSION,
+        routingPolicyVersion: ROUTING_POLICY_VERSION,
+        safetyGuardState: "SAFE",
+        billingCycleKey: CYCLE,
+        billingCycleRevenueYen: 49_800,
+        knownActualCostYen: 0,
+        settledEstimatedCostYen: 0,
+        uncertainCostYen: 0,
+        inFlightCostYen: 0,
+        nextProjectedCostYen: FIVE_SECOND_YEN,
+        projectedContributionProfitYen: 49_800 - FIVE_SECOND_YEN,
+        warningFloorYen: 20_000,
+        hardPauseFloorYen: 15_000,
+      });
+      expect((event.safeMetadata as Record<string, unknown>).pricingSnapshotId).toBe(
+        `price_sgen_auditsafe`,
+      );
+    });
+
+    it("reconstructs a WARNING authorization from persistence alone", async () => {
+      // The correction this test exists for: a warning that lives only in the
+      // returned object is gone the moment the process handling the call dies,
+      // and the boundary was still crossed. Nothing here reads a return value.
+      const sibling = await seedAuthorizableChain(prisma, "warnsib", { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: "RECONCILIATION_EXHAUSTED",
+          submissionCertainty: "SUBMISSION_UNKNOWN",
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      const candidate = await seedAuthorizableChain(prisma, "warncand");
+      // Profit lands between the ¥15,000 hard floor and the ¥20,000 warning
+      // floor once both the sibling and the candidate are counted.
+      const revenue = yen(19_900 + TWENTY_SECOND_YEN + FIVE_SECOND_YEN);
+      expect((await authorize(prisma, candidate.attempt.id, ORG_A, revenue)).kind).toBe(
+        "AUTHORIZED",
+      );
+
+      const event = await reloadBoundaryEvent(candidate.attempt.id);
+      const metadata = event.safeMetadata as Record<string, unknown>;
+      expect(metadata).toMatchObject({
+        safetyGuardState: "WARNING",
+        billingCycleRevenueYen: revenue,
+        // The exhausted reconciliation is in the record as uncertain exposure,
+        // which is also what made the guard warn.
+        uncertainCostYen: TWENTY_SECOND_YEN,
+        settledEstimatedCostYen: 0,
+        nextProjectedCostYen: FIVE_SECOND_YEN,
+        projectedContributionProfitYen: 19_900,
+        hardPauseFloorYen: 15_000,
+        warningFloorYen: 20_000,
+      });
+    });
+
+    it("writes no prompt, provider payload or credential into the record", async () => {
+      // Transition history is the most widely pasted table in an incident. The
+      // allowlist is what keeps a customer's prompt out of it, and this is the
+      // check that the authorization record did not smuggle one past.
+      const { attempt } = await seedAuthorizableChain(prisma, "auditsafe2");
+      await authorize(prisma, attempt.id);
+      const event = await reloadBoundaryEvent(attempt.id);
+      const keys = Object.keys(event.safeMetadata as Record<string, unknown>);
+      for (const forbidden of [
+        "compiledPrompt",
+        "renderedPrompt",
+        "prompt",
+        "providerRequest",
+        "providerResponse",
+        "apiKey",
+        "signedUrl",
+      ]) {
+        expect(keys).not.toContain(forbidden);
+      }
     });
   });
 

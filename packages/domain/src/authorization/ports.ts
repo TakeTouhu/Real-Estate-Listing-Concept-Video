@@ -1,4 +1,4 @@
-import type { EpochMillis, Yen } from "../pricing/units";
+import type { Yen } from "../pricing/units";
 import type { TransitionContext } from "../orchestration/ports";
 import type {
   AttemptGateFacts,
@@ -6,6 +6,7 @@ import type {
   PricingGateFacts,
   ReservationGateFacts,
 } from "./gate";
+import type { AuthorizationClock } from "./clock";
 import type { ProviderCostExposure } from "./exposure";
 import type { PaidSubmissionAuthorizationOutcome } from "./types";
 
@@ -51,21 +52,17 @@ export interface BillingCycleRevenueReader {
 }
 
 /**
- * Revenue attributable to one scene, for the unit-economics check.
+ * There is deliberately no per-scene revenue reader.
  *
- * Separate from cycle revenue and equally unsourced today. The worst-case
- * profitability question is per-scene — three paid attempts against what that
- * scene earned — and dividing cycle revenue by a scene count would be an
- * average, which is exactly what `NO_NEGATIVE_UNIT_ECONOMICS` refuses to plan
- * against.
+ * An earlier draft had one, to feed a runtime `NO_NEGATIVE_UNIT_ECONOMICS`
+ * check. That check has been removed from this gate: whether a route is
+ * profitable to sell is decided when the route is commercially certified and
+ * when a plan is configured, not when a customer asks for the rendition they
+ * already bought. Keeping the port would have kept the temptation, and there is
+ * no honest source for the figure either — dividing subscription revenue by a
+ * scene count produces an average, which is precisely what a worst-case check
+ * must not plan against.
  */
-export interface SceneRevenueReader {
-  /** `null` when no authoritative figure exists. */
-  revenueYen(input: {
-    readonly organizationId: string;
-    readonly generationJobId: string;
-  }): Promise<Yen | null>;
-}
 
 /**
  * The serialized cost-admission boundary.
@@ -114,14 +111,23 @@ export type ArmResult =
 export interface PaidSubmissionAuthorizationDeps {
   readonly authorization: PaidSubmissionAuthorizationRepository;
   readonly billingCycleRevenue: BillingCycleRevenueReader;
-  readonly sceneRevenue: SceneRevenueReader;
+  /** Read inside the lock. See {@link AuthorizationClock}. */
+  readonly clock: AuthorizationClock;
 }
 
-/** The whole caller-supplied input. Every other fact is loaded. */
+/**
+ * The whole caller-supplied input. Every other fact is loaded or measured.
+ *
+ * There is no authorization instant here, and its absence is a control rather
+ * than a simplification: the instant decides pricing eligibility, so a caller
+ * that could choose it could authorize against a contract that expired. The
+ * `context` a caller supplies carries actor, correlation and causation — who
+ * asked and why — and the service overrides its `eventType`, because the label
+ * on a paid authorization event is not the caller's to write either.
+ */
 export interface AuthorizePaidSubmissionInput {
   readonly organizationId: string;
   readonly attemptId: string;
-  readonly authorizationInstant: EpochMillis;
   readonly context: TransitionContext;
 }
 

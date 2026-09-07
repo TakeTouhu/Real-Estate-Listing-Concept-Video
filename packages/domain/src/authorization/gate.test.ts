@@ -10,7 +10,11 @@ import { createProviderPricingCatalog } from "../pricing/provider-pricing-catalo
 import type { ProviderPricingContract } from "../pricing/provider-pricing-contract";
 import { safetyGuardThresholds } from "../pricing/safety-guard";
 import { epochMillisFromDate, yen, type Yen } from "../pricing/units";
-import { evaluatePaidSubmissionGate, type PaidSubmissionGateFacts } from "./gate";
+import {
+  AUTHORIZATION_POLICY_VERSION,
+  evaluatePaidSubmissionGate,
+  type PaidSubmissionGateFacts,
+} from "./gate";
 import { H3_MAX_PROVIDER_MODEL_ID } from "./routing";
 
 /**
@@ -66,6 +70,8 @@ function facts(overrides: {
       requestTargetOutputResolution: "720p",
       requestDurationSeconds: 5,
       pricingContractKey: "fal:minimax-h3-max:2026-09-02.1",
+      requestKind: "INITIAL",
+      requestUserRegenerationOrdinal: null,
     },
     job: {
       id: "genjob_gate",
@@ -85,18 +91,20 @@ function facts(overrides: {
       contract: H3_MAX,
       identityGenerationMode: "image-to-video",
       identityAudioMode: "none",
+      integrityFailure: null,
       plannedCostYen: yen(100),
       fxFailure: null,
+      pricingSnapshotId: "gps_gate",
     },
     commercial: {
       billingCycleRevenueYen: yen(49_800),
       exposure: {
         knownActualCostYen: yen(0),
+        settledEstimatedCostYen: yen(0),
         uncertainCostYen: yen(0),
         inFlightCostYen: yen(0),
         nextProjectedCostYen: yen(100),
       },
-      sceneRevenueYen: yen(3_320),
     },
   };
   return {
@@ -199,6 +207,36 @@ describe("the paid submission gate", () => {
     });
   });
 
+  describe("request kind coherence", () => {
+    it("refuses a USER_REGENERATION carrying no ordinal", () => {
+      // The kind selects the permissive reservation branch, so an incoherent
+      // pair must not be able to reach it. A regeneration with no ordinal is
+      // not a request the entitlement rules ever produced.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: null },
+          reservation: { state: "CONSUMED" },
+        }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome).toEqual({
+        kind: "ATTEMPT_NOT_ARMABLE",
+        reason: "REQUEST_REGENERATION_ORDINAL_INVALID",
+      });
+    });
+
+    it("refuses an INITIAL request carrying an ordinal", () => {
+      const decision = evaluatePaidSubmissionGate(
+        facts({ attempt: { requestKind: "INITIAL", requestUserRegenerationOrdinal: 1 } }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome).toEqual({
+        kind: "ATTEMPT_NOT_ARMABLE",
+        reason: "REQUEST_REGENERATION_ORDINAL_INVALID",
+      });
+    });
+  });
+
   describe("reservation", () => {
     it("refuses when no reservation exists", () => {
       const decision = evaluatePaidSubmissionGate(facts({ reservation: null }));
@@ -211,10 +249,112 @@ describe("the paid submission gate", () => {
 
     const nonReserved = GENERATION_RESERVATION_STATES.filter((s) => s !== "RESERVED");
 
-    it.each(nonReserved.map((s) => [s] as const))("refuses a %s reservation", (state) => {
-      const decision = evaluatePaidSubmissionGate(facts({ reservation: { state } }));
+    it.each(nonReserved.map((s) => [s] as const))(
+      "refuses a %s reservation behind an INITIAL request",
+      (state) => {
+        const decision = evaluatePaidSubmissionGate(facts({ reservation: { state } }));
+        if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+        expect(decision.outcome.kind).toBe("RESERVATION_INVALID");
+      },
+    );
+
+    /**
+     * The post-delivery regeneration contract, which is the reason a `CONSUMED`
+     * reservation is not universally invalid.
+     *
+     * A customer's regeneration right is sold with the original video. By the
+     * time they use it the original has been delivered and its unit is spent —
+     * `CONSUMED` is the *expected* state, not a corruption — and the
+     * regeneration consumes no further customer unit, because its provider cost
+     * is internal. Refusing here would deny work that has already been paid for.
+     */
+    it("permits a post-delivery USER_REGENERATION against a CONSUMED reservation", () => {
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 1 },
+          reservation: { state: "CONSUMED" },
+        }),
+      );
+      expect(decision.kind).toBe("PERMITTED");
+    });
+
+    it("refuses an INITIAL request against a CONSUMED reservation", () => {
+      // The other half of the same rule. Units already spent on a delivered
+      // video cannot fund a fresh rendition nobody paid for.
+      const decision = evaluatePaidSubmissionGate(
+        facts({ reservation: { state: "CONSUMED" } }),
+      );
       if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
-      expect(decision.outcome.kind).toBe("RESERVATION_INVALID");
+      expect(decision.outcome).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_CONSUMED",
+      });
+    });
+
+    it("permits a USER_REGENERATION against a still-RESERVED reservation", () => {
+      // A regeneration requested before the original was delivered. The hold is
+      // still standing, and that is no less valid than a consumed one.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 2 },
+          reservation: { state: "RESERVED" },
+        }),
+      );
+      expect(decision.kind).toBe("PERMITTED");
+    });
+
+    it.each(["RESERVING", "RELEASED", "RECONCILIATION_HOLD"] as const)(
+      "refuses a %s reservation even for a USER_REGENERATION",
+      (state) => {
+        // The regeneration exemption is narrow: it covers `CONSUMED` and
+        // nothing else. A released hold means the entitlement itself is gone,
+        // and a reconciliation hold means an earlier submission's fate is
+        // unresolved — neither becomes acceptable because the request is a
+        // regeneration.
+        const decision = evaluatePaidSubmissionGate(
+          facts({
+            attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 1 },
+            reservation: { state },
+          }),
+        );
+        if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+        expect(decision.outcome.kind).toBe("RESERVATION_INVALID");
+      },
+    );
+
+    it("refuses a regeneration whose reservation belongs to another job", () => {
+      // The exemption is for *this* job's consumed reservation, never for any
+      // consumed reservation that happens to exist.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 1 },
+          reservation: { state: "CONSUMED", generationJobId: "genjob_someone_else" },
+        }),
+      );
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome).toEqual({
+        kind: "RESERVATION_INVALID",
+        reason: "RESERVATION_JOB_MISMATCH",
+      });
+    });
+
+    it("covers every reservation state exactly once", () => {
+      // The admissibility table is exhaustive over the enum; this is the
+      // runtime half of that, so a state added to the union cannot be answered
+      // by an undefined lookup.
+      for (const state of GENERATION_RESERVATION_STATES) {
+        const decision = evaluatePaidSubmissionGate(
+          facts({
+            attempt: { requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 1 },
+            reservation: { state },
+          }),
+        );
+        if (decision.kind === "REFUSED") {
+          expect(decision.outcome.kind).toBe("RESERVATION_INVALID");
+        } else {
+          expect(["RESERVED", "CONSUMED"]).toContain(state);
+        }
+      }
     });
 
     it("names RECONCILIATION_HOLD specifically", () => {
@@ -380,19 +520,108 @@ describe("the paid submission gate", () => {
       if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
       expect(decision.outcome).toEqual({ kind: "PRICING_INELIGIBLE", reason });
     });
+
+    it.each([
+      ["PRICING_CONTRACT_FINGERPRINT_MISMATCH"],
+      ["PRICING_SNAPSHOT_NOT_REPRODUCIBLE"],
+      ["PRICING_AMOUNT_UNREPRESENTABLE"],
+    ] as const)("refuses when the snapshot fails integrity with %s", (integrityFailure) => {
+      // Every binding field can agree perfectly while the stored cost is a
+      // fabrication. The re-derivation is the only check that catches that, and
+      // its verdict is reported verbatim rather than flattened to one reason.
+      const decision = evaluatePaidSubmissionGate(facts({ pricing: { integrityFailure } }));
+      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+      expect(decision.outcome).toEqual({
+        kind: "PRICING_INELIGIBLE",
+        reason: integrityFailure,
+      });
+    });
   });
 
-  describe("profitability", () => {
-    it("refuses negative worst-case unit economics", () => {
-      // Three paid attempts at ¥2,000 against ¥3,320 of scene revenue loses
-      // money for any customer who uses what they were sold.
+  describe("the durable authorization record", () => {
+    it("carries every figure the Safety Guard decided on", () => {
+      // These are written into the transition event before the CAS commits, so
+      // an authorization found in history can be re-judged without the process
+      // that made it. A missing component here is a decision nobody can audit.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          commercial: {
+            exposure: {
+              knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(1_100),
+              uncertainCostYen: yen(2_200),
+              inFlightCostYen: yen(3_300),
+              nextProjectedCostYen: yen(100),
+            },
+          },
+        }),
+      );
+      if (decision.kind !== "PERMITTED") throw new Error("expected PERMITTED");
+      expect(decision.audit.authorizationPolicyVersion).toBe(AUTHORIZATION_POLICY_VERSION);
+      expect(decision.audit.billingCycleRevenueYen).toBe(49_800);
+      expect(decision.audit.pricingSnapshotId).toBe("gps_gate");
+      expect(decision.audit.exposure).toEqual({
+        knownActualCostYen: 0,
+        settledEstimatedCostYen: 1_100,
+        uncertainCostYen: 2_200,
+        inFlightCostYen: 3_300,
+        nextProjectedCostYen: 100,
+      });
+      // 49,800 − (1,100 + 2,200 + 3,300 + 100)
+      expect(decision.audit.safetyGuard.projectedContributionProfitYen).toBe(43_100);
+      expect(decision.audit.safetyGuard.state).toBe("SAFE");
+      expect(decision.audit.safetyGuard.thresholds).toEqual({
+        warningFloorYen: 20_000,
+        hardPauseFloorYen: 15_000,
+      });
+    });
+
+    it("records WARNING in the same record it records SAFE in", () => {
+      // A warning that only ever reaches a return value is lost on a crash.
+      const decision = evaluatePaidSubmissionGate(
+        facts({
+          commercial: {
+            exposure: {
+              knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
+              uncertainCostYen: yen(0),
+              inFlightCostYen: yen(31_000),
+              nextProjectedCostYen: yen(100),
+            },
+          },
+        }),
+      );
+      if (decision.kind !== "PERMITTED") throw new Error("expected PERMITTED");
+      expect(decision.audit.safetyGuard.state).toBe("WARNING");
+      expect(decision.safetyGuardWarning?.state).toBe("WARNING");
+    });
+  });
+
+  describe("profitability is not a runtime block", () => {
+    /**
+     * `NO_NEGATIVE_UNIT_ECONOMICS` is a sellability rule, and this gate is not
+     * where it belongs.
+     *
+     * The question it answers — would three paid attempts against this scene's
+     * revenue lose money? — has to be answered *before* the route is certified
+     * and the plan is configured, because by the time a customer submits, the
+     * work is already sold. Asking it here converts a margin that moved after
+     * the sale into a refusal to render, which is exactly the restriction on
+     * normal contractual usage the frozen principle forbids. It also has no
+     * honest input: no per-scene revenue is persisted, and dividing a
+     * subscription by a scene count produces an average, which is the one thing
+     * a worst-case check must not plan against.
+     */
+    it("authorizes a contracted request whose worst case loses money", () => {
+      // Three attempts at ¥2,000 against any plausible per-scene revenue is
+      // deeply negative. It authorizes anyway: the customer bought this.
       const decision = evaluatePaidSubmissionGate(
         facts({
           pricing: { plannedCostYen: yen(2_000) },
           commercial: {
-            sceneRevenueYen: yen(3_320),
             exposure: {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(0),
               inFlightCostYen: yen(0),
               nextProjectedCostYen: yen(2_000),
@@ -400,76 +629,46 @@ describe("the paid submission gate", () => {
           },
         }),
       );
-      if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
-      expect(decision.outcome).toEqual({
-        kind: "PROFITABILITY_REJECTED",
-        reason: "NEGATIVE_WORST_CASE_UNIT_ECONOMICS",
-      });
-    });
-
-    it("permits a thin but positive margin", () => {
-      // 3 × ¥1,000 against ¥3,320 is a 9.6% contribution margin — far below the
-      // 70% internal floor and 75% target, and explicitly NOT a reason to deny
-      // a customer work they already bought. The margin target is a pricing
-      // review, never a generation block.
-      const decision = evaluatePaidSubmissionGate(
-        facts({
-          pricing: { plannedCostYen: yen(1_000) },
-          commercial: {
-            sceneRevenueYen: yen(3_320),
-            exposure: {
-              knownActualCostYen: yen(0),
-              uncertainCostYen: yen(0),
-              inFlightCostYen: yen(0),
-              nextProjectedCostYen: yen(1_000),
-            },
-          },
-        }),
-      );
       expect(decision.kind).toBe("PERMITTED");
     });
 
-    it("permits exact break-even", () => {
-      // Break-even is not a loss. Refusing it would be a different rule than the
-      // one that was frozen, and the boundary is where a mutation would hide.
-      const decision = evaluatePaidSubmissionGate(
-        facts({
-          pricing: { plannedCostYen: yen(1_000) },
-          commercial: {
-            sceneRevenueYen: yen(3_000),
-            exposure: {
-              knownActualCostYen: yen(0),
-              uncertainCostYen: yen(0),
-              inFlightCostYen: yen(0),
-              nextProjectedCostYen: yen(1_000),
-            },
-          },
-        }),
-      );
-      expect(decision.kind).toBe("PERMITTED");
+    it("has no outcome arm that could report a profitability refusal", () => {
+      // The union is closed, so this is a compile-time fact as much as a
+      // runtime one. Asserted anyway across the whole refusal surface: if a
+      // margin rule were reintroduced, some input below would reach it.
+      const inputs: PaidSubmissionGateFacts[] = [
+        facts({ pricing: { plannedCostYen: yen(1) } }),
+        facts({ pricing: { plannedCostYen: yen(2_000) } }),
+        facts({ pricing: { plannedCostYen: yen(10_000) } }),
+      ];
+      for (const input of inputs) {
+        const decision = evaluatePaidSubmissionGate(input);
+        if (decision.kind === "REFUSED") {
+          expect(decision.outcome.kind).not.toBe("PROFITABILITY_REJECTED");
+        }
+      }
     });
 
-    it("prices the worst case at three paid attempts, not one", () => {
-      // A single attempt at ¥1,500 is comfortably profitable against ¥3,320;
-      // the three the entitlement sells are not. Planning against one is how a
-      // product looks profitable while every customer who uses their rights
-      // loses money.
+    it("still refuses on abnormal cost, which is a different question", () => {
+      // Removing the margin rule does not remove the cost lever. The Safety
+      // Guard fires on a cycle whose projected profit has collapsed, which is
+      // an incident signal rather than a thin-margin one.
       const decision = evaluatePaidSubmissionGate(
         facts({
-          pricing: { plannedCostYen: yen(1_500) },
+          pricing: { plannedCostYen: yen(40_000) },
           commercial: {
-            sceneRevenueYen: yen(3_320),
             exposure: {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(0),
               inFlightCostYen: yen(0),
-              nextProjectedCostYen: yen(1_500),
+              nextProjectedCostYen: yen(40_000),
             },
           },
         }),
       );
       if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
-      expect(decision.outcome.kind).toBe("PROFITABILITY_REJECTED");
+      expect(decision.outcome.kind).toBe("SAFETY_GUARD_HARD_PAUSE");
     });
   });
 
@@ -481,6 +680,7 @@ describe("the paid submission gate", () => {
         billingCycleRevenueYen: revenue,
         exposure: {
           knownActualCostYen: yen(0),
+          settledEstimatedCostYen: yen(0),
           uncertainCostYen: yen(0),
           inFlightCostYen: yen(others),
           nextProjectedCostYen: candidate,
@@ -560,6 +760,7 @@ describe("the paid submission gate", () => {
             billingCycleRevenueYen: STANDARD,
             exposure: {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(0),
               inFlightCostYen: yen(34_700),
               nextProjectedCostYen: yen(200),
@@ -581,6 +782,7 @@ describe("the paid submission gate", () => {
             billingCycleRevenueYen: STANDARD,
             exposure: {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(34_800),
               inFlightCostYen: yen(0),
               nextProjectedCostYen: yen(100),
@@ -599,6 +801,7 @@ describe("the paid submission gate", () => {
             billingCycleRevenueYen: STANDARD,
             exposure: {
               knownActualCostYen: yen(0),
+              settledEstimatedCostYen: yen(0),
               uncertainCostYen: yen(0),
               inFlightCostYen: yen(34_800),
               nextProjectedCostYen: yen(100),

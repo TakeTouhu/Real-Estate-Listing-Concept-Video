@@ -43,6 +43,29 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
   "sceneGenerationRequestId",
   "stateVersion",
   "totalVideoUnits",
+
+  /**
+   * The paid submission authorization record.
+   *
+   * Every one is a yen integer, a closed-vocabulary value or a version string —
+   * no customer or provider text — and together they are the whole financial
+   * basis of one decision to cross the provider boundary. They are written with
+   * the `QUEUED → SUBMITTING` event so that the conditions under which money was
+   * authorized are reconstructable from persistence alone, without the process
+   * that made the call still being alive to report them.
+   */
+  "authorizationPolicyVersion",
+  "routingPolicyVersion",
+  "safetyGuardState",
+  "billingCycleRevenueYen",
+  "knownActualCostYen",
+  "settledEstimatedCostYen",
+  "uncertainCostYen",
+  "inFlightCostYen",
+  "nextProjectedCostYen",
+  "projectedContributionProfitYen",
+  "warningFloorYen",
+  "hardPauseFloorYen",
 ];
 
 /**

@@ -11,6 +11,16 @@ import type { RoutingAuthorizationFailure } from "./routing";
 export type ReservationAuthorizationFailure =
   | "RESERVATION_MISSING"
   | "RESERVATION_NOT_HELD"
+  /**
+   * The customer's units are already spent, and this request is not entitled to
+   * spend nothing.
+   *
+   * Only an `INITIAL` request is refused for this. A post-delivery
+   * `USER_REGENERATION` runs against a `CONSUMED` reservation *by design* — the
+   * regeneration right was sold with the original video and consumes no further
+   * customer unit — so refusing it here would deny a customer work they have
+   * already paid for.
+   */
   | "RESERVATION_CONSUMED"
   | "RESERVATION_RELEASED"
   | "RESERVATION_ON_RECONCILIATION_HOLD"
@@ -42,11 +52,28 @@ export type PricingAuthorizationFailure =
   | "PRICING_SNAPSHOT_MISSING"
   | "PRICING_SNAPSHOT_NOT_FOR_ATTEMPT"
   | "PRICING_SNAPSHOT_BINDING_INVALID"
+  /**
+   * A contract with this exact seven-dimensional identity exists, and it is not
+   * the contract this snapshot was priced against. Price, verification,
+   * duration policy, promotion or effective window has changed underneath a
+   * stable identity — the case `contractFingerprint` exists to catch.
+   */
+  | "PRICING_CONTRACT_FINGERPRINT_MISMATCH"
+  /**
+   * The persisted row cannot be reproduced by re-running the pricing
+   * calculation over its own frozen inputs. Some immutable commercial fact —
+   * most consequentially a stored cost amount — no longer matches what the
+   * contract it names would produce.
+   */
+  | "PRICING_SNAPSHOT_NOT_REPRODUCIBLE"
+  /**
+   * A persisted `BIGINT` money column is outside the range that can be
+   * represented exactly. Refused as a corrupt financial fact rather than
+   * narrowed into a wrong number or thrown as an arithmetic defect.
+   */
+  | "PRICING_AMOUNT_UNREPRESENTABLE"
   | "PRICING_FX_SNAPSHOT_MISSING"
   | "PRICING_FX_SNAPSHOT_INVALID";
-
-/** Why the worst case this attempt commits to is not sellable. */
-export type ProfitabilityAuthorizationFailure = "NEGATIVE_WORST_CASE_UNIT_ECONOMICS";
 
 /** Why the abnormal-cost guard refuses. */
 export type SafetyGuardAuthorizationFailure =
@@ -69,6 +96,14 @@ export type { RoutingAuthorizationFailure };
  * database already committed — the attempt is `SUBMITTING` at this version —
  * because a reusable capability object handed to a caller is a second source of
  * truth, and the one that can authorize a POST twice.
+ *
+ * There is deliberately **no** `PROFITABILITY_REJECTED` arm. `NO_NEGATIVE_UNIT_
+ * ECONOMICS` is a sellability decision — it belongs to route commercial
+ * certification and plan configuration, before a customer is ever offered the
+ * work — and not a runtime lever for refusing a rendition somebody has already
+ * bought. Turning a per-scene margin calculation into a customer-facing refusal
+ * would restrict normal contractual usage on internal cost pressure, which the
+ * frozen business principle forbids.
  */
 export type PaidSubmissionAuthorizationOutcome =
   | {
@@ -96,10 +131,6 @@ export type PaidSubmissionAuthorizationOutcome =
       readonly reason: PricingAuthorizationFailure;
     }
   | {
-      readonly kind: "PROFITABILITY_REJECTED";
-      readonly reason: ProfitabilityAuthorizationFailure;
-    }
-  | {
       readonly kind: "SAFETY_GUARD_HARD_PAUSE";
       readonly reason: SafetyGuardAuthorizationFailure;
       readonly decision: SafetyGuardDecision;
@@ -116,4 +147,11 @@ export type AttemptArmabilityFailure =
   | "ATTEMPT_ALREADY_SUBMITTED"
   | "ATTEMPT_SUBMISSION_UNCERTAIN"
   | "ATTEMPT_CERTAINTY_NOT_PRE_SUBMISSION"
-  | "ATTEMPT_FACTS_INCOMPLETE";
+  | "ATTEMPT_FACTS_INCOMPLETE"
+  /**
+   * The parent request's kind and regeneration ordinal contradict each other:
+   * an `INITIAL` request carrying an ordinal, or a `USER_REGENERATION` carrying
+   * none. The reservation rule below branches on that kind, so an incoherent
+   * pair must refuse before it can select the more permissive branch.
+   */
+  | "REQUEST_REGENERATION_ORDINAL_INVALID";
