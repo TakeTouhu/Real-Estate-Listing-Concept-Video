@@ -82,6 +82,12 @@ database migration was required.
   committed. A `DEFINITIVELY_REJECTED` sibling is exempt — it contributes zero
   exposure, so requiring reproduction would turn an attempt the provider refused
   into cost purely because its rate card is no longer reconstructible.
+  Enumeration of cost-bearing siblings is **independent of snapshot
+  existence**: the exposure query left-joins the pricing table, so an attempt
+  with no pricing row is still seen, still classified, and — if it is
+  cost-bearing — still refuses. An inner join let snapshot absence decide
+  visibility, which meant the one corruption most likely to matter was the one
+  that disappeared.
 
 ### Changed
 

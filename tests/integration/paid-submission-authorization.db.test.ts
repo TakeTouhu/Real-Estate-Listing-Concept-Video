@@ -1442,6 +1442,92 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       });
     });
 
+    /**
+     * A cost-bearing sibling whose pricing row is *gone*.
+     *
+     * Distinct from a tampered one, and it used to be invisible: an inner join
+     * against `generation_pricing_snapshots` let snapshot existence decide
+     * whether the attempt appeared at all, so a `PROCESSING`/`ACCEPTED` sibling
+     * with no snapshot was never classified, contributed zero, and left
+     * `exposureVerified` true. Fail-open, in the one calculation that decides
+     * whether to spend money.
+     *
+     * Phase 4C-3B-2E requires exactly one snapshot from `SUBMITTING` onward and
+     * enforces it inside the admission transaction, but it is a cross-table
+     * invariant no database CHECK can express — so the paid boundary is where
+     * its absence has to be caught.
+     */
+    async function siblingWithoutSnapshot(
+      suffix: string,
+      state: string,
+      certainty: string,
+    ): Promise<Awaited<ReturnType<typeof seedAuthorizableChain>>> {
+      const sibling = await siblingIn(suffix, state, certainty);
+      // Raw delete: no production path removes a snapshot, which is exactly why
+      // its absence has to be treated as corruption rather than as a state the
+      // system can reach on purpose.
+      await prisma.$executeRaw`
+        DELETE FROM "generation_pricing_snapshots"
+         WHERE "sceneGenerationId" = ${sibling.attempt.id}
+      `;
+      return sibling;
+    }
+
+    it.each([
+      ["an in-flight", "PROCESSING", "ACCEPTED", "misproc"],
+      ["an uncertain", "RECONCILIATION_PENDING", "SUBMISSION_UNKNOWN", "misunc"],
+      ["an exhausted-reconciliation", "RECONCILIATION_EXHAUSTED", "SUBMISSION_UNKNOWN", "misexh"],
+      ["a settled-estimated", "OUTPUT_VERIFIED", "ACCEPTED", "missett"],
+    ] as const)(
+      "refuses when %s sibling has no pricing snapshot at all",
+      async (_label, state, certainty, suffix) => {
+        await siblingWithoutSnapshot(suffix, state, certainty);
+        const candidate = await seedAuthorizableChain(prisma, `${suffix}cand`);
+        expect(await authorize(prisma, candidate.attempt.id)).toEqual({
+          kind: "PRICING_INELIGIBLE",
+          reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+        });
+        const row = await prisma.sceneGeneration.findUniqueOrThrow({
+          where: { id: candidate.attempt.id },
+        });
+        expect(row.orchestrationState).toBe("QUEUED");
+        expect(row.submissionBoundaryEnteredAt).toBeNull();
+      },
+    );
+
+    it("refuses on a missing snapshot even when the cycle looks affordable", async () => {
+      // The tempting shortcut is to let it through when the visible total is
+      // comfortable. The visible total is precisely what is missing a term.
+      await siblingWithoutSnapshot("misrich", "PROCESSING", "ACCEPTED");
+      const candidate = await seedAuthorizableChain(prisma, "misrichcand");
+      expect(await authorize(prisma, candidate.attempt.id, ORG_A, yen(1_000_000))).toMatchObject({
+        kind: "PRICING_INELIGIBLE",
+        reason: "PRICING_EXPOSURE_SNAPSHOT_INVALID",
+      });
+    });
+
+    it("evaluates a candidate normally past a definitively rejected sibling with no snapshot", async () => {
+      // The classifier stays authoritative. A submission the provider *refused*
+      // contributes zero exposure, so missing historical pricing for it is not
+      // a reason to refuse — turning it into cost would invent money nobody
+      // ever owed.
+      const sibling = await seedAuthorizableChain(prisma, "misrej", { seconds: 20 });
+      await prisma.sceneGeneration.update({
+        where: { id: sibling.attempt.id },
+        data: {
+          orchestrationState: "FAILED_TERMINAL",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          submissionBoundaryEnteredAt: new Date(),
+        },
+      });
+      await prisma.$executeRaw`
+        DELETE FROM "generation_pricing_snapshots"
+         WHERE "sceneGenerationId" = ${sibling.attempt.id}
+      `;
+      const candidate = await seedAuthorizableChain(prisma, "misrejcand");
+      expect((await authorize(prisma, candidate.attempt.id)).kind).toBe("AUTHORIZED");
+    });
+
     it("requires no snapshot reproduction from a definitively rejected sibling", async () => {
       // It contributes zero provider exposure, so its historical price is not
       // part of the equation. Demanding reproduction would turn an attempt the

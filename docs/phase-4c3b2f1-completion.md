@@ -28,6 +28,15 @@ The dormant paid submission authorization gate. Base:
 > | --- | --- |
 > | The `GenerationReservation` row was read without a row lock, so a release or reconciliation hold could commit between the gate's decision and its CAS | A tenant-scoped `FOR SHARE` row lock on the exact reservation, taken after the cost lock and held to commit |
 > | `loadExposure` trusted each sibling's stored `estimatedPlanningCostMicroUsd`, so one edited row could remove real exposure from the guard | Every cost-bearing sibling goes through the same `verifyPersistedPricingSnapshot` the candidate does; a sibling that cannot reproduce fails the authorization closed |
+>
+> **Revision 4 — missing-snapshot integrity.** Revision 3
+> (`5ab2a35067478fb9afb03c522d285edc25efe39e`) was not approved. Revision 3's
+> claim that a **missing** sibling snapshot failed closed was **wrong**: the
+> exposure query joined `generation_pricing_snapshots` with an inner join, so a
+> cost-bearing attempt with no pricing row was filtered out of the result set
+> before anything could classify it — unseen, contributing zero, with
+> `exposureVerified` still true. Enumeration is now independent of snapshot
+> existence.
 
 One provider-neutral service answers exactly one question:
 
@@ -276,6 +285,43 @@ describes real money that was really committed, and erasing that cost because
 the rate card lapsed would understate the cycle in precisely the situation — a
 provider price change during an incident — where the guard matters most. So no
 sibling is ever evaluated against the current authorization instant.
+
+### Enumeration is independent of snapshot existence
+
+**Correction.** Revision 3 verified every sibling snapshot it could *see*, and
+an inner join decided what it could see:
+
+```sql
+JOIN "generation_pricing_snapshots" ps ON ps."sceneGenerationId" = a."id"
+```
+
+A `PROCESSING`/`ACCEPTED` attempt whose pricing row was absent therefore never
+reached the classifier at all. It contributed zero, `exposureVerified` stayed
+true, and the authorization proceeded — fail-open, in the one calculation that
+decides whether to spend money, and precisely the corruption the verification
+was added to catch.
+
+Phase 4C-3B-2E requires exactly one snapshot from `SUBMITTING` onward and
+enforces it inside the admission transaction, but it is a cross-table invariant
+no database `CHECK` can express. The paid boundary is where its absence has to
+be detected.
+
+The join is now `LEFT`, every snapshot column is nullable in the row type, and
+the order is fixed:
+
+```text
+enumerate potentially cost-bearing siblings   ← no pricing table involved
+  → classify on state + submission certainty
+  → category NONE?  → no snapshot required, contributes zero
+  → otherwise       → require exactly one snapshot
+                    → reproduce it through the shared verifier
+                    → convert and add to its category
+```
+
+Snapshot presence never decides visibility. `snapshotOf` narrows all-or-nothing:
+a row with some columns present and others missing is not a partially usable
+snapshot, it is a corrupt one, and it fails closed exactly as an absent one
+does.
 
 **Failure is closed, and correctly attributed.** A cost-bearing sibling with a
 missing snapshot, an unresolvable historical contract, a fingerprint mismatch, a
@@ -763,15 +809,15 @@ Before any real paid submission:
    test-enforced parity; a single authority at the correct dependency level
    would be better.
 
-## Mutation ledger — 72/74 killed
+## Mutation ledger — 76/79 killed
 
 Every mutation targets an **executed** artefact — the pure gate, the routing
-table, the exposure classifier, the pricing-integrity verifier, the
-persisted-money helper, the reservation row lock, the authorization service, or
-the persistence that feeds them — and each removes exactly one rule the gate is
-supposed to enforce, or restores exactly one rule a correction round removed.
-The harness applies a mutation, runs the gated suites, restores the file, and
-asserts the restore is byte-identical.
+table, the exposure classifier and its enumeration query, the pricing-integrity
+verifier, the persisted-money helper, the reservation row lock, the
+authorization service, or the persistence that feeds them. Each removes exactly
+one rule the gate is supposed to enforce, or restores exactly one rule a
+correction round removed. The harness applies a mutation, runs the gated suites,
+restores the file, and asserts the restore is byte-identical.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -792,7 +838,7 @@ asserts the restore is byte-identical.
 | G11 | a snapshot bound to another attempt is accepted | KILLED | 4 failing unit tests |
 | G12 | the FX failure check is removed | KILLED | 5 failing unit tests |
 | H10 | the pricing integrity verdict is ignored by the gate | KILLED | 6 failing unit tests |
-| H10b | the repository stops re-deriving any persisted snapshot | KILLED | 70 failing db tests |
+| H10b | the repository stops re-deriving any persisted snapshot | KILLED | 76 failing db tests |
 | H9 | the contract fingerprint check is removed | KILLED | 4 failing unit tests |
 | H11 | a tampered planning cost is accepted | KILLED | 3 failing unit tests |
 | H11b | a tampered stable cost is accepted | KILLED | 3 failing unit tests |
@@ -807,9 +853,14 @@ asserts the restore is byte-identical.
 | R4b | the reservation lock is no longer tenant scoped | **SURVIVED** | 0 failing tests |
 | R5b | the reservation lock targets a row that is not this attempt's | KILLED | 6 failing db tests |
 | E1 | sibling exposure uses the raw persisted planning cost | KILLED | 31 failing db tests |
-| E2 | an unverifiable sibling is silently skipped | KILLED | 11 failing db tests |
+| E2 | an unverifiable sibling is silently skipped | KILLED | 16 failing db tests |
 | E3 | an unverifiable sibling is counted as zero cost | KILLED | 11 failing db tests |
 | E4 | the gate ignores the exposure verification verdict | KILLED | 6 failing unit tests |
+| M1 | an inner join hides a sibling with no pricing snapshot | KILLED | 8 failing db tests |
+| M2 | a cost-bearing sibling with no snapshot is silently skipped | KILLED | 8 failing db tests |
+| M3 | a partially present sibling snapshot is treated as usable | KILLED | 1 package(s) fail typecheck |
+| M4 | a missing sibling snapshot no longer reaches the classifier | KILLED | 8 failing db tests |
+| M5 | a definitively rejected sibling is required to have a snapshot | **SURVIVED** | 0 failing tests |
 | E5 | a definitively rejected sibling must reproduce its price | **SURVIVED** | 0 failing tests |
 | H17c | the repository narrows a persisted amount without a range check | KILLED | 5 failing unit tests |
 | G22 | the routing provider check is removed | KILLED | 8 failing unit tests |
@@ -850,7 +901,12 @@ asserts the restore is byte-identical.
 | G32b | the customer reservation is consumed on authorization | KILLED | 7 failing db tests |
 | G33 | the cost-admission lock is removed | KILLED | 5 failing db tests |
 
-### The two survivors, and why they stay
+The key mutation for this round, `M1`, restores the inner join and dies against
+eight database tests. `M2` (skip a snapshot-less sibling instead of refusing)
+and `M4` (filter snapshot-less rows out before the classifier) each die against
+the same eight.
+
+### The three survivors, and why they stay
 
 **R4b — the tenant predicate on the reservation lock query.** Widening
 `p."organizationId" = $org` to `OR TRUE` changes nothing observable, and the
@@ -867,6 +923,15 @@ safety depend on a *different* function keeping its predicate, which is exactly
 the coupling that breaks quietly during a refactor. `R5b` proves the row being
 locked is the right one: pointing the join at a reservation that is not this
 job's kills against six database tests.
+
+**M5 — requiring a snapshot from a definitively rejected sibling.** The same
+unreachability as `E5` below, seen from the other side: the mutation makes the
+`NONE` branch demand a snapshot, and no `DEFINITIVELY_REJECTED` row reaches that
+branch because the SQL prefilter excludes it first. The behaviour the correction
+asks for — a rejected submission contributes zero even with no pricing row — is
+delivered and tested (`evaluates a candidate normally past a definitively
+rejected sibling with no snapshot`), and the exclusion carrying it is proven by
+`H6b`.
 
 **E5 — the `NONE`/`KNOWN_ACTUAL` guard in the exposure loop.** Removing it
 changes nothing because no row that classifies to `NONE` can reach the loop: the
@@ -886,7 +951,17 @@ because the classifier, not the prefilter, is the documented authority on
 categories. Manufacturing a test for a branch no production path can reach would
 be evidence about nothing.
 
-### A mutation that measured the wrong thing this round
+### A mutation killed only by the typechecker
+
+**M3 — the all-or-nothing narrowing in `snapshotOf`.** Reported KILLED by
+typecheck, and it is not possible to write a behavioural version. Every column
+of `generation_pricing_snapshots` is `NOT NULL`, so a `LEFT JOIN` yields either
+all of them or none — a *partially* present snapshot is a shape the schema
+prevents. The per-column narrowing is what makes the row type honest for
+TypeScript, and TypeScript is genuinely the thing enforcing it. Recorded as a
+typecheck kill rather than dressed up as behavioural evidence.
+
+### A mutation that measured the wrong thing in an earlier round
 
 **R4** (the predecessor of `R4b`) was reported KILLED by the typechecker. That
 was not evidence: dropping the `WHERE` clause left `organizationId` unused, so
@@ -960,10 +1035,10 @@ extraction is unchanged in this round.
 | `pnpm lint` | Pass |
 | `pnpm test` | Pass — 83 files, 2,117 tests |
 | `pnpm build` | Pass |
-| `pnpm test:db` | Pass — 17 files, 416 tests |
+| `pnpm test:db` | Pass — 17 files, 422 tests |
 | Prisma drift check | `No difference detected.` |
 | Database migration | **None required** — the merged Phase 4C-3B-2E schema already carries everything |
-| Mutation ledger | 72/74 killed; 2 documented redundancies |
+| Mutation ledger | 76/79 killed; 3 documented redundancies |
 
 The two persisted facts this round newly reads — `SceneGenerationRequest.kind`
 and `userRegenerationOrdinal` — already exist on the merged Phase 4C-3B-2E

@@ -498,7 +498,10 @@ and ADR-0020.
   the candidate goes through, because verifying one term of the Safety Guard sum
   and trusting the rest leaves the sum as forgeable as it was — and a sibling
   that cannot reproduce refuses the authorization rather than being skipped or
-  counted as zero. Siblings are checked for reproducibility, never for current
+  counted as zero. Which siblings are enumerated does not depend on whether a
+  pricing row exists for them: an attempt whose snapshot is missing entirely is
+  still seen and still classified, because letting the pricing table decide
+  visibility hid exactly the corruption the verification exists to catch. Siblings are checked for reproducibility, never for current
   eligibility: an expired rate card still describes money that was really
   committed. An organization+cycle advisory lock makes the cost admission a
   serialized decision rather than two workers reading the same stale total, and

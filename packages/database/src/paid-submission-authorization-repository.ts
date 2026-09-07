@@ -262,9 +262,86 @@ interface SnapshotRow {
  * a flawless snapshot authorizes against ¥4,990 of exposure that quietly
  * vanished.
  */
-interface ExposureRow extends SnapshotRow {
+/**
+ * One potentially cost-bearing sibling, and its snapshot **if one exists**.
+ *
+ * Every snapshot column is nullable here, and that is the correction this
+ * shape exists for. An inner join would have made the pricing row decide
+ * whether the *attempt* is visible at all, so an attempt sitting in
+ * `PROCESSING` with `ACCEPTED` and no snapshot vanished from the result set —
+ * unclassified, contributing zero, with `exposureVerified` still true. That is
+ * a fail-open financial defect in the exact shape the guard exists to catch.
+ *
+ * Phase 4C-3B-2E requires exactly one snapshot from `SUBMITTING` onward and
+ * enforces it transactionally, but it cannot be a cross-table database CHECK.
+ * The paid boundary is therefore where its absence has to be detected.
+ */
+interface ExposureRow {
   orchestrationState: GenerationAttemptState;
   submissionCertainty: SubmissionCertainty | null;
+  id: string | null;
+  sceneGenerationId: string | null;
+  pricingVersion: string | null;
+  provider: string | null;
+  contractKey: string | null;
+  contractFingerprint: string | null;
+  identityJson: Prisma.JsonValue | null;
+  stablePriceReferenceJson: Prisma.JsonValue | null;
+  riskProfileKey: string | null;
+  riskBufferBps: number | null;
+  requestedSeconds: number | null;
+  billableSeconds: number | null;
+  estimatedStableCostMicroUsd: bigint | null;
+  estimatedPlanningCostMicroUsd: bigint | null;
+  pricingEffectiveAtEpochMs: bigint | null;
+  fxSnapshotId: string | null;
+}
+
+/**
+ * The snapshot carried by an exposure row, or `null` when the row has none.
+ *
+ * Narrowing is all-or-nothing on the columns the verifier needs. A row with
+ * some of them present and others missing is not a partially usable snapshot;
+ * it is a corrupt one, and it fails closed exactly as an absent one does.
+ */
+function snapshotOf(row: ExposureRow): SnapshotRow | null {
+  if (
+    row.id === null ||
+    row.sceneGenerationId === null ||
+    row.pricingVersion === null ||
+    row.provider === null ||
+    row.contractKey === null ||
+    row.contractFingerprint === null ||
+    row.identityJson === null ||
+    row.stablePriceReferenceJson === null ||
+    row.riskProfileKey === null ||
+    row.riskBufferBps === null ||
+    row.requestedSeconds === null ||
+    row.billableSeconds === null ||
+    row.estimatedStableCostMicroUsd === null ||
+    row.estimatedPlanningCostMicroUsd === null ||
+    row.pricingEffectiveAtEpochMs === null
+  ) {
+    return null;
+  }
+  return {
+    id: row.id,
+    sceneGenerationId: row.sceneGenerationId,
+    pricingVersion: row.pricingVersion,
+    provider: row.provider,
+    contractKey: row.contractKey,
+    contractFingerprint: row.contractFingerprint,
+    identityJson: row.identityJson,
+    stablePriceReferenceJson: row.stablePriceReferenceJson,
+    riskProfileKey: row.riskProfileKey,
+    riskBufferBps: row.riskBufferBps,
+    requestedSeconds: row.requestedSeconds,
+    billableSeconds: row.billableSeconds,
+    estimatedStableCostMicroUsd: row.estimatedStableCostMicroUsd,
+    estimatedPlanningCostMicroUsd: row.estimatedPlanningCostMicroUsd,
+    pricingEffectiveAtEpochMs: row.pricingEffectiveAtEpochMs,
+    fxSnapshotId: row.fxSnapshotId,
+  };
 }
 
 /**
@@ -308,7 +385,10 @@ async function loadExposure(
            ps."estimatedStableCostMicroUsd", ps."estimatedPlanningCostMicroUsd",
            ps."pricingEffectiveAtEpochMs", ps."fxSnapshotId"
       FROM "scene_generations" a
-      JOIN "generation_pricing_snapshots" ps ON ps."sceneGenerationId" = a."id"
+      -- LEFT, deliberately. Snapshot existence must never decide whether an
+      -- attempt is visible to the classifier: a cost-bearing attempt with no
+      -- pricing row has to be *seen* and refused, not silently filtered away.
+      LEFT JOIN "generation_pricing_snapshots" ps ON ps."sceneGenerationId" = a."id"
       JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
       JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
       JOIN "generation_jobs" j ON j."id" = s."generationJobId"
@@ -345,11 +425,21 @@ async function loadExposure(
     // card is no longer reconstructible.
     if (category === "NONE" || category === "KNOWN_ACTUAL") continue;
 
+    // Only now, after the attempt has been classified as cost-bearing, does
+    // the snapshot matter — and now its absence is itself the finding. Phase
+    // 4C-3B-2E requires exactly one from `SUBMITTING` onward; a cost-bearing
+    // attempt without one means the cycle total cannot be known.
+    const snapshot = snapshotOf(row);
+    if (snapshot === null) {
+      unverifiable = true;
+      continue;
+    }
+
     // The sibling's own snapshot, re-derived through the same verifier the
     // candidate goes through. Trusting the stored amount here would leave the
     // Safety Guard equation exactly as forgeable as it was before the candidate
     // was protected: every term of a sum has to be verified, not one of them.
-    const amount = await verifiedPlanningCostYen(row);
+    const amount = await verifiedPlanningCostYen(snapshot);
     if (amount === null) {
       // Not zero, and not skipped. A cost-bearing sibling whose snapshot cannot
       // be reproduced means the cycle total is unknown, and an unknown total
