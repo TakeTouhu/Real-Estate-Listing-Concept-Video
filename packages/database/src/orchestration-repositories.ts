@@ -1185,6 +1185,141 @@ function pricingSnapshotData(
   };
 }
 
+/**
+ * The provider-call authorization boundary, as a function over an open
+ * transaction.
+ *
+ * Extracted from the repository method rather than duplicated so the paid
+ * submission gate can hold one transaction across its cost-admission lock,
+ * its fact reads and this CAS. Two transactions would reopen exactly the
+ * window the lock exists to close: the gate would release its serialization
+ * point before the attempt actually moved, and a second authorizer could
+ * decide against the same exposure. The public method is unchanged in
+ * behaviour — it opens a transaction and calls this.
+ */
+export async function armProviderBoundaryWithin(
+  tx: Tx,
+  input: {
+    readonly organizationId: string;
+    readonly id: string;
+    readonly expectedVersion: number;
+    readonly context: TransitionContext;
+  },
+): Promise<ArmProviderBoundaryOutcome> {
+  const attempt = await tx.sceneGeneration.findFirst({
+    where: { id: input.id, ...attemptScope(input.organizationId) },
+    select: {
+      ...ATTEMPT_SELECT,
+      requestModelKey: true,
+      requestDurationSeconds: true,
+      requestNativeGenerationResolution: true,
+      generationSceneRequest: {
+        select: {
+          generationScene: {
+            select: { generationJob: { select: { qualityTier: true } } },
+          },
+        },
+      },
+    },
+  });
+  if (attempt === null || attempt.generationSceneRequest === null) {
+    return { kind: "LOST" };
+  }
+
+  const snapshot = await tx.generationPricingSnapshot.findUnique({
+    where: { sceneGenerationId: input.id },
+    select: {
+      sceneGenerationId: true,
+      provider: true,
+      contractKey: true,
+      requestedSeconds: true,
+      riskProfileKey: true,
+      identityJson: true,
+    },
+  });
+  if (snapshot === null) return { kind: "MISSING_PRICING_SNAPSHOT" };
+  if (snapshot.sceneGenerationId !== attempt.id) {
+    return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_NOT_FOR_ATTEMPT" };
+  }
+
+  // The identity is read back from the stored row rather than recomputed,
+  // so a snapshot corrupted after admission is caught here rather than
+  // trusted because admission once approved it.
+  const identity = snapshot.identityJson as {
+    pricingModelKey?: unknown;
+    nativeTier?: unknown;
+    generationMode?: unknown;
+    audioMode?: unknown;
+  } | null;
+  if (
+    typeof identity?.pricingModelKey !== "string" ||
+    typeof identity.nativeTier !== "string" ||
+    typeof identity.generationMode !== "string" ||
+    typeof identity.audioMode !== "string" ||
+    attempt.pricingContractKey === null ||
+    attempt.requestDurationSeconds === null ||
+    attempt.requestNativeGenerationResolution === null
+  ) {
+    return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_MISSING" };
+  }
+
+  const mismatch = checkPricingBinding({
+    snapshot: {
+      provider: snapshot.provider,
+      contractKey: snapshot.contractKey,
+      requestedSeconds: snapshot.requestedSeconds,
+      riskProfileKey: snapshot.riskProfileKey,
+      identity: {
+        pricingModelKey: identity.pricingModelKey,
+        nativeTier: identity.nativeTier,
+        generationMode: identity.generationMode,
+        audioMode: identity.audioMode,
+      },
+    },
+    attemptProvider: attempt.providerName,
+    attemptModelKey: attempt.requestModelKey,
+    attemptNativeTier: attempt.requestNativeGenerationResolution,
+    sceneDurationSeconds: attempt.requestDurationSeconds,
+    jobQualityTier: attempt.generationSceneRequest.generationScene.generationJob.qualityTier,
+    attemptContractKey: attempt.pricingContractKey,
+  });
+  if (mismatch !== null) {
+    return { kind: "PRICING_BINDING_INVALID", reason: mismatch };
+  }
+
+  const { count } = await tx.sceneGeneration.updateMany({
+    where: {
+      id: input.id,
+      orchestrationState: "QUEUED",
+      stateVersion: input.expectedVersion,
+      ...attemptScope(input.organizationId),
+    },
+    data: {
+      orchestrationState: "SUBMITTING",
+      stateVersion: { increment: 1 },
+      submissionBoundaryEnteredAt: new Date(),
+    },
+  });
+  if (count === 0) return { kind: "LOST" };
+
+  await appendEvent(tx, {
+    organizationId: input.organizationId,
+    aggregateType: "ATTEMPT",
+    aggregateId: input.id,
+    fromState: "QUEUED",
+    toState: "SUBMITTING",
+    context: input.context,
+  });
+
+  const row = await tx.sceneGeneration.findFirst({
+    where: { id: input.id, ...attemptScope(input.organizationId) },
+    select: ATTEMPT_SELECT,
+  });
+  if (row === null) {
+    throw new AppError("INTERNAL_ERROR", "Attempt vanished inside its own arm transaction");
+  }
+  return { kind: "ARMED", attempt: toAttempt(row) };}
+
 export function createSceneGenerationAttemptRepository(
   prisma: PrismaClient,
 ): SceneGenerationAttemptRepository {
@@ -1444,121 +1579,7 @@ export function createSceneGenerationAttemptRepository(
      * another provider's price.
      */
     async armProviderBoundary(input): Promise<ArmProviderBoundaryOutcome> {
-      return prisma.$transaction(async (tx): Promise<ArmProviderBoundaryOutcome> => {
-        const attempt = await tx.sceneGeneration.findFirst({
-          where: { id: input.id, ...attemptScope(input.organizationId) },
-          select: {
-            ...ATTEMPT_SELECT,
-            requestModelKey: true,
-            requestDurationSeconds: true,
-            requestNativeGenerationResolution: true,
-            generationSceneRequest: {
-              select: {
-                generationScene: {
-                  select: { generationJob: { select: { qualityTier: true } } },
-                },
-              },
-            },
-          },
-        });
-        if (attempt === null || attempt.generationSceneRequest === null) {
-          return { kind: "LOST" };
-        }
-
-        const snapshot = await tx.generationPricingSnapshot.findUnique({
-          where: { sceneGenerationId: input.id },
-          select: {
-            sceneGenerationId: true,
-            provider: true,
-            contractKey: true,
-            requestedSeconds: true,
-            riskProfileKey: true,
-            identityJson: true,
-          },
-        });
-        if (snapshot === null) return { kind: "MISSING_PRICING_SNAPSHOT" };
-        if (snapshot.sceneGenerationId !== attempt.id) {
-          return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_NOT_FOR_ATTEMPT" };
-        }
-
-        // The identity is read back from the stored row rather than recomputed,
-        // so a snapshot corrupted after admission is caught here rather than
-        // trusted because admission once approved it.
-        const identity = snapshot.identityJson as {
-          pricingModelKey?: unknown;
-          nativeTier?: unknown;
-          generationMode?: unknown;
-          audioMode?: unknown;
-        } | null;
-        if (
-          typeof identity?.pricingModelKey !== "string" ||
-          typeof identity.nativeTier !== "string" ||
-          typeof identity.generationMode !== "string" ||
-          typeof identity.audioMode !== "string" ||
-          attempt.pricingContractKey === null ||
-          attempt.requestDurationSeconds === null ||
-          attempt.requestNativeGenerationResolution === null
-        ) {
-          return { kind: "PRICING_BINDING_INVALID", reason: "SNAPSHOT_MISSING" };
-        }
-
-        const mismatch = checkPricingBinding({
-          snapshot: {
-            provider: snapshot.provider,
-            contractKey: snapshot.contractKey,
-            requestedSeconds: snapshot.requestedSeconds,
-            riskProfileKey: snapshot.riskProfileKey,
-            identity: {
-              pricingModelKey: identity.pricingModelKey,
-              nativeTier: identity.nativeTier,
-              generationMode: identity.generationMode,
-              audioMode: identity.audioMode,
-            },
-          },
-          attemptProvider: attempt.providerName,
-          attemptModelKey: attempt.requestModelKey,
-          attemptNativeTier: attempt.requestNativeGenerationResolution,
-          sceneDurationSeconds: attempt.requestDurationSeconds,
-          jobQualityTier: attempt.generationSceneRequest.generationScene.generationJob.qualityTier,
-          attemptContractKey: attempt.pricingContractKey,
-        });
-        if (mismatch !== null) {
-          return { kind: "PRICING_BINDING_INVALID", reason: mismatch };
-        }
-
-        const { count } = await tx.sceneGeneration.updateMany({
-          where: {
-            id: input.id,
-            orchestrationState: "QUEUED",
-            stateVersion: input.expectedVersion,
-            ...attemptScope(input.organizationId),
-          },
-          data: {
-            orchestrationState: "SUBMITTING",
-            stateVersion: { increment: 1 },
-            submissionBoundaryEnteredAt: new Date(),
-          },
-        });
-        if (count === 0) return { kind: "LOST" };
-
-        await appendEvent(tx, {
-          organizationId: input.organizationId,
-          aggregateType: "ATTEMPT",
-          aggregateId: input.id,
-          fromState: "QUEUED",
-          toState: "SUBMITTING",
-          context: input.context,
-        });
-
-        const row = await tx.sceneGeneration.findFirst({
-          where: { id: input.id, ...attemptScope(input.organizationId) },
-          select: ATTEMPT_SELECT,
-        });
-        if (row === null) {
-          throw new AppError("INTERNAL_ERROR", "Attempt vanished inside its own arm transaction");
-        }
-        return { kind: "ARMED", attempt: toAttempt(row) };
-      });
+      return prisma.$transaction((tx) => armProviderBoundaryWithin(tx, input));
     },
 
     /**

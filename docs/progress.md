@@ -457,6 +457,30 @@ and ADR-0020.
   rather than repaired: live PostgreSQL reports the covered fields and never the
   index name, and the two partial indexes involved cover the same column, so no
   honest classifier exists.
+- **Phase 4C-3B-2F-1** — see GitHub for its lifecycle. Adds the dormant paid
+  submission authorization gate: one provider-neutral service that decides
+  whether one persisted attempt may cross `QUEUED → SUBMITTING`, and calls no
+  provider at all. Its whole input is an organization, an attempt id and an
+  instant; provider, model, pricing, cost, risk profile, reserved units, billing
+  cycle, state, certainty, duration and target resolution are loaded from the
+  persistence graph rather than accepted, because two caller-controlled copies
+  of a persisted fact eventually disagree and this is the wrong place to find
+  out. The decision is a closed union with no arm carrying a raw error, and
+  `AUTHORIZED` carries no reusable token — what it reports is the state the
+  database already committed. A pure evaluator holds the policy, so every branch
+  of the money-spending rule is testable without spending any. Reservation,
+  pricing eligibility, worst-case unit economics and the Safety Guard are all
+  the existing Phase 2D/2E contracts called rather than reimplemented: a margin
+  below the internal target is a pricing review and never a customer-generation
+  block, a Safety Guard warning does not block either, and only genuinely
+  negative worst-case economics or a hard pause refuse. Exposure is aggregated
+  per organization and billing cycle from each attempt's own immutable planning
+  snapshot, with uncertain and in-flight states kept disjoint so nothing is
+  double-counted or dropped, and an organization+cycle advisory lock makes the
+  cost admission a serialized decision rather than two workers reading the same
+  stale total. `SUBMISSION_UNKNOWN` can never re-arm and stale `SUBMITTING` is
+  never a retry. No migration was required, customer quota is untouched, and fal
+  and Veo remain production-disabled.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

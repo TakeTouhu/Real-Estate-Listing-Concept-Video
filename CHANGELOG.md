@@ -3,6 +3,57 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2F-1: Dormant paid submission authorization gate
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2f1-completion.md`. One
+provider-neutral service decides whether one persisted attempt may cross
+`QUEUED → SUBMITTING`. **No provider is called anywhere in this phase**, and no
+database migration was required.
+
+### Added
+
+- **A closed paid submission authorization outcome.** `AUTHORIZED`,
+  `ATTEMPT_NOT_FOUND`, `ATTEMPT_NOT_ARMABLE`, `RESERVATION_INVALID`,
+  `PRICING_INELIGIBLE`, `PROFITABILITY_REJECTED`, `SAFETY_GUARD_HARD_PAUSE`,
+  `ROUTING_NOT_AUTHORIZED`, `LOST_CONCURRENCY` — each failure carrying a closed
+  reason vocabulary, none carrying a raw database or provider error.
+  `AUTHORIZED` carries no reusable token: what it reports is the state the
+  database already committed.
+- **A pure gate evaluator.** `evaluatePaidSubmissionGate(facts)` holds no
+  database handle, no provider client and no clock, so the rule that decides
+  whether money may be spent is exhaustively testable without spending any.
+- **Minimal caller authority.** The whole input is
+  `{ organizationId, attemptId, authorizationInstant, context }`; provider,
+  model, pricing, cost, risk profile, reserved units, billing cycle, state,
+  certainty, quality tier, duration, target resolution and request hash are all
+  loaded through the tenant-scoped persistence graph.
+- **A provider-neutral routing authorization table** binding quality tier,
+  provider, provider model id, model key, native tier, target resolution,
+  generation mode and audio mode. `HIGH_QUALITY` has no authorized route.
+- **Canonical provider-cost exposure state sets** — known actual (empty),
+  uncertain (`RECONCILIATION_PENDING`) and in-flight (`SUBMITTING`,
+  `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING`) — disjoint by
+  construction, in one module no repository duplicates.
+- **An organization + billing-cycle cost-admission lock**, so two authorizations
+  cannot both plan against the same stale exposure. A transaction-scoped
+  PostgreSQL advisory lock: no table, no migration, released on commit.
+
+### Changed
+
+- `armProviderBoundary`'s body was extracted into
+  `armProviderBoundaryWithin(tx, input)` so the gate can hold one transaction
+  across its cost-admission lock, its fact reads and the compare-and-set. The
+  public method is unchanged in behaviour.
+
+### Not included
+
+No real fal or Veo POST, no new WaveSpeed paid orchestration, no polling, no
+reconciliation worker, no stale-`SUBMITTING` recovery, no output ingestion, no
+composition, no upscale, no entitlement consumption, no payment gateway, no
+Stripe, no add-on purchasing, no UI. The shipped revenue readers report "no
+authoritative figure", which fails the gate closed — the dormant gate authorizes
+nothing at all until the billing layer supplies them.
+
 ## [Unreleased] — Phase 4C-3B-2E: Generation orchestration and audit state
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2e-completion.md`. Persistence

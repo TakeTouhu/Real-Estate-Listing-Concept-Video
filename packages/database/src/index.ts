@@ -7,3 +7,4 @@ export { createPrismaStoryboardRepositories } from "./storyboard-repositories";
 export { createPrismaSceneGenerationRepository } from "./generation-repositories";
 export { createPrismaSceneGenerationExecutionRepository } from "./generation-execution-repository";
 export * from "./orchestration-repositories";
+export { createPaidSubmissionAuthorizationRepository } from "./paid-submission-authorization-repository";
