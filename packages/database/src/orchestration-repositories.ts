@@ -246,7 +246,15 @@ const ACTIVE_ORCHESTRATION_STATES = [
  * established, and taking it from the decoration would let a caller relabel
  * whose history an event joins.
  */
-async function appendEvent(
+/**
+ * Append one transition event.
+ *
+ * Exported so Phase 4C-3B-2G-1's submission-outcome repository writes history
+ * through the *same* function rather than a second copy. Two implementations of
+ * "append an event" drift, and the one that drifts is the one that stops
+ * sanitizing metadata.
+ */
+export async function appendGenerationEvent(
   tx: Tx,
   input: {
     readonly organizationId: string;
@@ -658,7 +666,7 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
             state: "CREATED",
           },
         });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "JOB",
           aggregateId: row.id,
@@ -705,7 +713,7 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
         });
         if (count === 0) return { kind: "LOST" as const };
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId: input.organizationId,
           aggregateType: "JOB",
           aggregateId: input.id,
@@ -792,7 +800,7 @@ export function createGenerationReservationRepository(
             stateVersion: 0,
           },
         });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "RESERVATION",
           aggregateId: created.id,
@@ -808,7 +816,7 @@ export function createGenerationReservationRepository(
         if (held.count === 0) {
           throw new AppError("INTERNAL_ERROR", "Reservation vanished inside its own creation");
         }
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "RESERVATION",
           aggregateId: created.id,
@@ -819,7 +827,7 @@ export function createGenerationReservationRepository(
         const reservation = await tx.generationReservation.findUniqueOrThrow({
           where: { id: created.id },
         });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "JOB",
           aggregateId: input.generationJobId,
@@ -888,7 +896,7 @@ export function createGenerationReservationRepository(
         });
         if (count === 0) return { kind: "LOST" as const };
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId: input.organizationId,
           aggregateType: "RESERVATION",
           aggregateId: input.id,
@@ -919,7 +927,7 @@ export function createGenerationSceneRepository(prisma: PrismaClient): Generatio
 
       return prisma.$transaction(async (tx) => {
         const row = await tx.generationScene.create({ data: { ...scene, state: "PENDING" } });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "SCENE",
           aggregateId: row.id,
@@ -965,7 +973,7 @@ export function createGenerationSceneRepository(prisma: PrismaClient): Generatio
         });
         if (count === 0) return { kind: "LOST" as const };
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId: input.organizationId,
           aggregateType: "SCENE",
           aggregateId: input.id,
@@ -1007,7 +1015,7 @@ export function createSceneGenerationRequestRepository(
             state: "PENDING",
           },
         });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "SCENE_REQUEST",
           aggregateId: row.id,
@@ -1077,7 +1085,7 @@ export function createSceneGenerationRequestRepository(
             state: "PENDING",
           },
         });
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "SCENE_REQUEST",
           aggregateId: row.id,
@@ -1138,7 +1146,7 @@ export function createSceneGenerationRequestRepository(
         });
         if (count === 0) return { kind: "LOST" as const };
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId: input.organizationId,
           aggregateType: "SCENE_REQUEST",
           aggregateId: input.id,
@@ -1302,7 +1310,7 @@ export async function armProviderBoundaryWithin(
   });
   if (count === 0) return { kind: "LOST" };
 
-  await appendEvent(tx, {
+  await appendGenerationEvent(tx, {
     organizationId: input.organizationId,
     aggregateType: "ATTEMPT",
     aggregateId: input.id,
@@ -1513,7 +1521,7 @@ export function createSceneGenerationAttemptRepository(
           data: pricingSnapshotData(input.pricingSnapshotId, attempt.id, snapshot),
         });
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "ATTEMPT",
           aggregateId: attempt.id,
@@ -1536,7 +1544,7 @@ export function createSceneGenerationAttemptRepository(
               "Scene request moved during its own first attempt admission",
             );
           }
-          await appendEvent(tx, {
+          await appendGenerationEvent(tx, {
             organizationId,
             aggregateType: "SCENE_REQUEST",
             aggregateId: request.id,
@@ -1626,7 +1634,7 @@ export function createSceneGenerationAttemptRepository(
         });
         if (count === 0) return { kind: "LOST" as const };
 
-        await appendEvent(tx, {
+        await appendGenerationEvent(tx, {
           organizationId: input.organizationId,
           aggregateType: "ATTEMPT",
           aggregateId: input.id,

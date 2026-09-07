@@ -522,6 +522,63 @@ and ADR-0020.
   pause does. `SUBMISSION_UNKNOWN` can never re-arm and stale `SUBMITTING` is
   never a retry. No migration was required, customer quota is untouched on every
   path, and fal and Veo remain production-disabled.
+- **Phase 4C-3B-2G-1** — see GitHub for its lifecycle. Adds submission outcome
+  persistence and uncertainty entry: the other side of the boundary Phase
+  4C-3B-2F-1 stopped at. One provider-neutral service writes down what happened
+  to one attempt that has already crossed `QUEUED → SUBMITTING`, and — like the
+  gate before it — contacts no provider at all. There is no HTTP client, no
+  polling and no reconciliation request in its dependency graph; it records news
+  a caller already learned rather than going and asking, and reconciliation that
+  polls is a later phase.
+
+  The observation it accepts is `ACCEPTED`, `DEFINITIVELY_REJECTED` or
+  `SUBMISSION_UNKNOWN`, with no HTTP status, provider error body or vendor enum
+  anywhere in it. The third arm is not a failure mode of the other two: it is
+  what must be recorded whenever the platform cannot *prove* which of them
+  happened, and rounding it to the convenient answer is how a provider gets paid
+  for work the platform believes it never ordered. Those three become
+  `PROCESSING + ACCEPTED`, `FAILED_RETRYABLE`/`FAILED_TERMINAL +
+  DEFINITIVELY_REJECTED`, and `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`.
+
+  The expensive decisions are all about the *second* arrival of the same news. A
+  matching observation returns `REPLAYED` — a success, not a soft failure, since
+  a caller retrying on any non-`APPLIED` answer would loop forever on its own
+  earlier success — and writes nothing at all. A differing one refuses and writes
+  nothing: a second provider reference is never allowed to overwrite the first,
+  because the discarded one may still name work the platform owes money for.
+  Identity is compared on certainty, reference and state, deliberately not on the
+  normalized error code, which is the platform's own classification rather than
+  anything the provider did.
+
+  Every reconciliation timestamp is anchored to `submissionBoundaryEnteredAt`
+  rather than to now, and three properties fall out of that one choice without
+  being separately enforced: a replay cannot extend a deadline, a direct
+  observation and a stale sweep hours apart produce byte-identical rows so their
+  race is benign rather than a source of two deadlines for one uncertainty, and a
+  retry cannot buy time against the bound on how long an unresolved charge is
+  carried. The window is configurable and capped at twenty-four hours, the
+  ceiling being the Phase 2E default itself rather than a second constant that
+  could drift from it. Staleness is judged at-or-after a fifteen-minute
+  threshold, on an injected clock read once *inside* the lock — a judgement made
+  before waiting for the lock could declare an attempt lost that a worker
+  finished while the transaction queued. Stale recovery never returns a row to
+  `QUEUED`: the provider may already hold and bill for the request, so re-arming
+  it would buy the same work twice.
+
+  Uncertainty suspends `RESERVED → RECONCILIATION_HOLD` in the same commit;
+  certainty does not. `CONSUMED` stays consumed, because a post-delivery
+  `USER_REGENERATION` runs against a consumed reservation by contract and
+  suspending it would re-open an entitlement the customer already used. A missing
+  reservation is an anomaly and explicitly not a refusal — losing the fact that a
+  provider took work because a bookkeeping row is absent is the more expensive
+  mistake by far. The Phase 2F-1 lock order is preserved exactly: advisory lock
+  on organization and cycle, then the reservation row, then the attempt
+  compare-and-set, differing only in taking the row `FOR UPDATE` because this may
+  suspend the entitlement the gate merely reads. Same order, stronger mode, no
+  deadlock cycle, no process-local mutex. No migration was required, no customer
+  quota is touched on any path, no `SYSTEM_RECOVERY` attempt is created, no
+  regeneration right is consumed, and both entry points remain dormant domain
+  services with no route, no worker loop and no caller.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

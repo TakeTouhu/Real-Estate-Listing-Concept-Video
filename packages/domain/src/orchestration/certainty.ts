@@ -111,7 +111,12 @@ export function isCoherentAttemptRecord(input: {
         input.state !== "SUBMITTING"
       );
     case "DEFINITIVELY_REJECTED":
-      return input.state === "FAILED_TERMINAL";
+      // Both terminal shapes. The provider refused the work and will not bill
+      // for it either way; the difference is only whether a *new* attempt row
+      // may be admitted for the same request. A rate limit is a definitive
+      // rejection that permits another try; a malformed request is one that
+      // does not. Neither ever re-POSTs this row.
+      return input.state === "FAILED_TERMINAL" || input.state === "FAILED_RETRYABLE";
     case "SUBMISSION_UNKNOWN":
       // Unknown acceptance can only be pending resolution, resolved into a
       // known execution path, or given up on.

@@ -3,6 +3,95 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2G-1: Submission outcome persistence and uncertainty entry
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2g1-completion.md`. Phase
+4C-3B-2F-1 ended at the paid boundary; this phase writes down what happened on
+the other side of it. **No provider is contacted anywhere in this phase** —
+there is no HTTP client, no polling and no reconciliation request — and no
+database migration was required.
+
+### Added
+
+- **A provider-neutral submission observation.** `ACCEPTED`,
+  `DEFINITIVELY_REJECTED` and `SUBMISSION_UNKNOWN`, carrying no HTTP status, no
+  provider error body and no vendor enum. An adapter translates its own
+  vocabulary into one of the three and this layer never learns which provider it
+  was talking to. `SUBMISSION_UNKNOWN` is not a failure mode of the other two: it
+  is what must be recorded whenever the platform cannot *prove* which of them
+  happened, and rounding it to either is how a provider gets paid for work the
+  platform believes it never ordered.
+- **Three durable destinations from the boundary.**
+  `SUBMITTING + PRE_SUBMISSION` becomes `PROCESSING + ACCEPTED`,
+  `FAILED_RETRYABLE`/`FAILED_TERMINAL + DEFINITIVELY_REJECTED`, or
+  `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`. The provider reference is
+  persisted exactly once and never overwritten.
+- **Replay that writes nothing.** An observation matching the record returns
+  `REPLAYED` — a success, not a soft failure — with no second event, no timestamp
+  moved and no deadline extended. Identity is compared on certainty, provider
+  reference and state; `normalizedErrorCode` is deliberately excluded, because
+  two workers describing the same rejection differently have not disagreed about
+  what the provider did.
+- **Conflicting observations that fail closed.** A different provider reference,
+  a different certainty, or a different terminal state refuses with
+  `PROVIDER_REFERENCE_MISMATCH`, `CERTAINTY_MISMATCH` or
+  `TERMINAL_STATE_MISMATCH` and writes nothing. Overwriting would discard the
+  ability to ask the provider about a reference the platform may still owe money
+  against.
+- **Deadlines anchored to `submissionBoundaryEnteredAt`.** Never `now`, never a
+  caller-supplied instant. That single choice is what makes replay incapable of
+  extending a deadline, makes the direct and stale-sweep entry routes produce
+  byte-identical rows so their race is benign, and stops a retry buying time
+  against the bound on how long an unresolved charge is carried.
+- **A configurable reconciliation window, capped at 24 hours.** The ceiling *is*
+  the Phase 2E default rather than a second constant that could drift from it. A
+  stale-`SUBMITTING` threshold (15 minutes by default) must be positive and no
+  longer than the window. `validateReconciliationPolicy` answers rather than
+  throws: a bad value is an operator mistake, not a programming defect.
+- **Stale-`SUBMITTING` recovery without any re-POST.** One abandoned attempt
+  becomes durable `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`, judged at-or-
+  after its threshold on an injected clock read *inside* the lock — a judgement
+  made before waiting for the lock could declare an attempt lost that a worker
+  finished while the transaction queued. It never returns to `QUEUED`: the
+  provider may already hold and bill for the request, so re-arming it would buy
+  the same work twice.
+- **The reservation moved in the same commit, and only when it should be.**
+  `RESERVED → RECONCILIATION_HOLD` for uncertainty, with its own event.
+  `CONSUMED` stays consumed — a post-delivery `USER_REGENERATION` runs against a
+  `CONSUMED` reservation by contract, and suspending it would re-open an
+  entitlement the customer already used. `RELEASED` stays released. An **absent**
+  reservation is an anomaly and explicitly not a refusal: losing the fact that a
+  provider took work because a bookkeeping row is missing is the more expensive
+  mistake by far.
+- **The Phase 2F-1 lock order, preserved exactly.** Organization+cycle advisory
+  lock, then the reservation row, then the attempt compare-and-set — the same
+  three in the same order, differing only in taking the reservation `FOR UPDATE`
+  because uncertainty may suspend it rather than merely read it. Same order,
+  stronger mode, no deadlock cycle, and no process-local mutex anywhere.
+
+### Changed
+
+- `isCoherentAttemptRecord` now accepts `DEFINITIVELY_REJECTED` paired with
+  `FAILED_RETRYABLE` as well as `FAILED_TERMINAL`. Both are definitive
+  rejections; the flag decides only whether a *new* attempt row may be admitted,
+  never whether this row may be re-POSTed. The database CHECK never constrained
+  the pairing, so no migration follows.
+- `submissionCertainty` joins the transition-metadata allowlist so an outcome
+  event can carry the certainty it recorded.
+- `appendEvent` in the orchestration repositories is exported as
+  `appendGenerationEvent`, so this phase reuses one event-append implementation
+  rather than growing a second.
+
+### Not in this phase
+
+No provider call, no polling, no webhook, no live provider enabled, no fal or Veo
+production activation, no output ingestion, no composition, no upscale, no
+payment integration, no Stripe. No credit settlement — `RECONCILIATION_HOLD`
+suspends, it does not settle. No `SYSTEM_RECOVERY` attempt is created, no
+regeneration right is consumed and no customer quota is touched on any path.
+Both entry points are dormant domain services with no caller: no API route, no
+worker loop, no scheduler.
+
 ## [Unreleased] — Phase 4C-3B-2F-1: Dormant paid submission authorization gate
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2f1-completion.md`. One

@@ -42,6 +42,12 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
   "requestOrdinal",
   "sceneGenerationRequestId",
   "stateVersion",
+  /**
+   * The provider-reality axis, recorded with the outcome that established it.
+   * A closed vocabulary value — `ACCEPTED`, `DEFINITIVELY_REJECTED`,
+   * `SUBMISSION_UNKNOWN` — never provider text.
+   */
+  "submissionCertainty",
   "totalVideoUnits",
 
   /**
