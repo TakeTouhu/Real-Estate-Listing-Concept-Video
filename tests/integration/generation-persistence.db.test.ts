@@ -273,16 +273,44 @@ describe.skipIf(!HAS_DB)("provenance columns carry no foreign key", () => {
     expect(row.assetId).toBe("ast_never_existed");
   });
 
-  it("declares a foreign key only for the video project", async () => {
-    const constraints = await prisma.$queryRawUnsafe<{ column_name: string }[]>(
-      `SELECT kcu.column_name
+  /**
+   * The provenance columns carry no foreign key, and every key that does exist
+   * is RESTRICT.
+   *
+   * Phase 4C-3B-2E added a second foreign key — `generationSceneRequestId`,
+   * pointing at the logical request an attempt belongs to. That is not a
+   * provenance column and is not subject to the reasoning above: a scene
+   * generation request is generation history itself, never deleted by
+   * recomposition or retention, and the key stops an attempt from being
+   * orphaned from the request that authorized it.
+   *
+   * So the assertion states the property it always meant rather than a count:
+   * the two provenance columns are absent from the key set, and no key
+   * cascades.
+   */
+  it("keeps provenance columns free of foreign keys, and cascades from none", async () => {
+    const constraints = await prisma.$queryRawUnsafe<
+      { column_name: string; delete_rule: string }[]
+    >(
+      `SELECT kcu.column_name, rc.delete_rule
          FROM information_schema.table_constraints tc
          JOIN information_schema.key_column_usage kcu
            ON tc.constraint_name = kcu.constraint_name
+         JOIN information_schema.referential_constraints rc
+           ON tc.constraint_name = rc.constraint_name
         WHERE tc.table_name = 'scene_generations'
           AND tc.constraint_type = 'FOREIGN KEY'`,
     );
-    expect(constraints.map((c) => c.column_name)).toEqual(["videoProjectId"]);
+    const columns = constraints.map((c) => c.column_name).sort();
+
+    expect(columns).not.toContain("sourceStoryboardSceneId");
+    expect(columns).not.toContain("assetId");
+    expect(columns).toEqual(["generationSceneRequestId", "videoProjectId"]);
+    // A cascade from either parent would erase the record of a paid call, and
+    // SET NULL would orphan it just as quietly.
+    for (const constraint of constraints) {
+      expect(constraint.delete_rule).toBe("RESTRICT");
+    }
   });
 });
 

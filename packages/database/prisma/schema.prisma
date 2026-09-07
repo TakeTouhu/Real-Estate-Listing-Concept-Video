@@ -173,46 +173,46 @@ model Session {
 }
 
 model Property {
-  id            String         @id
+  id             String         @id
   organizationId String
-  name          String
-  propertyType  PropertyType
-  addressMasked String?
-  description   String?
-  status        PropertyStatus @default(ACTIVE)
-  createdBy     String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  assets        MediaAsset[]
-  videoProjects VideoProject[]
+  name           String
+  propertyType   PropertyType
+  addressMasked  String?
+  description    String?
+  status         PropertyStatus @default(ACTIVE)
+  createdBy      String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  assets         MediaAsset[]
+  videoProjects  VideoProject[]
 
   @@index([organizationId, status])
   @@map("properties")
 }
 
 model MediaAsset {
-  id                 String           @id
-  organizationId     String
-  propertyId         String
-  storageKey         String           @unique
-  originalFilename   String
-  mimeType           String?
-  sizeBytes          Int?
-  width              Int?
-  height             Int?
-  sha256             String?
-  perceptualHash     String?
-  status             MediaAssetStatus @default(PENDING_UPLOAD)
-  failureReason      String?
-  thumbnailKey       String?
-  createdBy          String
+  id                  String            @id
+  organizationId      String
+  propertyId          String
+  storageKey          String            @unique
+  originalFilename    String
+  mimeType            String?
+  sizeBytes           Int?
+  width               Int?
+  height              Int?
+  sha256              String?
+  perceptualHash      String?
+  status              MediaAssetStatus  @default(PENDING_UPLOAD)
+  failureReason       String?
+  thumbnailKey        String?
+  createdBy           String
   deletionRequestedAt DateTime?
-  retentionExpiresAt DateTime?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  property           Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  analysis           AssetAnalysis?
-  scenes             StoryboardScene[]
+  retentionExpiresAt  DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  property            Property          @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  analysis            AssetAnalysis?
+  scenes              StoryboardScene[]
 
   // Referenced by storyboard_scenes so a scene and its project must belong to
   // the same property — and therefore the same organization — by construction.
@@ -223,21 +223,21 @@ model MediaAsset {
 }
 
 model AssetAnalysis {
-  id              String         @id
-  organizationId  String
-  assetId         String         @unique
-  provider        String
-  status          AnalysisStatus @default(PENDING)
-  roomType        RoomType?
-  confidence      Float?
-  qualityScore    Float?
-  brightnessScore Float?
-  blurScore       Float?
-  duplicateGroup  String?
-  detectedObjects Json           @default("[]")
-  safetyFlags     Json           @default("[]")
-  suggestedOrder  Int?
-  failureReason   String?
+  id               String         @id
+  organizationId   String
+  assetId          String         @unique
+  provider         String
+  status           AnalysisStatus @default(PENDING)
+  roomType         RoomType?
+  confidence       Float?
+  qualityScore     Float?
+  brightnessScore  Float?
+  blurScore        Float?
+  duplicateGroup   String?
+  detectedObjects  Json           @default("[]")
+  safetyFlags      Json           @default("[]")
+  suggestedOrder   Int?
+  failureReason    String?
   /// Reviewer's corrected room classification. Null means the analyzer's
   /// `roomType` stands; the analyzer's value is never overwritten (ADR-0015).
   roomTypeOverride RoomType?
@@ -248,14 +248,14 @@ model AssetAnalysis {
   orderOverride    Int?
   correctedBy      String?
   correctedAt      DateTime?
-  analysisRevision Int           @default(1)
-  reviewStatus    ReviewStatus   @default(UNREVIEWED)
-  reviewNote      String?
-  reviewedBy      String?
-  reviewedAt      DateTime?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  asset           MediaAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  analysisRevision Int            @default(1)
+  reviewStatus     ReviewStatus   @default(UNREVIEWED)
+  reviewNote       String?
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  asset            MediaAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
   @@index([organizationId, duplicateGroup])
@@ -328,6 +328,7 @@ model VideoProject {
   property               Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   scenes                 StoryboardScene[]
   generations            SceneGeneration[]
+  generationJobs         GenerationJob[]
 
   @@unique([id, propertyId])
   @@index([organizationId, propertyId])
@@ -388,21 +389,21 @@ enum SceneGenerationState {
 /// Tenant scope is inherited through VideoProject, never denormalized — the
 /// same model storyboard_scenes uses.
 model SceneGeneration {
-  id                      String               @id
-  videoProjectId          String
+  id                                String                     @id
+  videoProjectId                    String
   /// Provenance only — no FK. Recomposition replaces storyboard scenes.
-  sourceStoryboardSceneId String
+  sourceStoryboardSceneId           String
   /// Provenance only — no FK. Assets may be removed under retention policy.
-  assetId                 String
+  assetId                           String
   /// Which analysis revision the scene was composed from. Not request identity.
-  sourceAnalysisRevision  Int
+  sourceAnalysisRevision            Int
   /// Local idempotency identity: sha256 digest of the generation request facts.
   /// Unique per project across ACTIVE states only — enforced by the partial
   /// unique index added by raw SQL in the migration.
-  requestHash             String
+  requestHash                       String
   /// Internal only. Which provider and model the request was addressed to.
-  providerName            String
-  providerModelId         String
+  providerName                      String
+  providerModelId                   String
   /// --- Immutable request snapshot (ADR-0018) ---------------------------------
   /// Everything needed to rebuild the exact admitted provider request without
   /// dereferencing the storyboard scene (recomposition deletes it) or reading
@@ -412,12 +413,12 @@ model SceneGeneration {
   /// those are never backfilled, because fabricating a snapshot from today's
   /// storyboard would forge a request that was never admitted.
   /// Customer-authored text. Never logged, audited, or put on a queue payload.
-  requestCompiledPrompt   String?
+  requestCompiledPrompt             String?
   /// The scene's own allocated duration, not the project total.
-  requestDurationSeconds  Int?
+  requestDurationSeconds            Int?
   /// Null is a legitimate request value here, not only a legacy marker.
-  requestCameraMotion     String?
-  requestAspectRatio      String?
+  requestCameraMotion               String?
+  requestAspectRatio                String?
   /// --- V1 identity, never written again (ADR-0034) ---------------------------
   /// The ambiguous single `resolution` used before the request identity was
   /// versioned. Retained, not dropped: the rows carrying it were hashed over it,
@@ -425,7 +426,7 @@ model SceneGeneration {
   /// was admitted for, and rewriting it into the V2 columns would be a guess
   /// about which of its two meanings applied. A CHECK constraint requires it to
   /// be null on every V2 row, so no row can carry both vocabularies.
-  requestResolution       String?
+  requestResolution                 String?
   /// --- V2 delivery snapshot (ADR-0034) ---------------------------------------
   /// Which model was selected, what the customer was promised, what the provider
   /// is asked to generate, and how the two are reconciled. All-or-none, enforced
@@ -433,42 +434,439 @@ model SceneGeneration {
   /// deliberately NOT backfilled. requestNativeMeetsTarget is frozen rather than
   /// re-derived so a later catalog correction cannot restate what an approved
   /// attempt promised.
-  requestModelKey                  String?
-  requestTargetOutputResolution    String?
+  requestModelKey                   String?
+  requestTargetOutputResolution     String?
   requestNativeGenerationResolution String?
-  requestResolutionNormalization   String?
-  requestNativeMeetsTarget         Boolean?
+  requestResolutionNormalization    String?
+  requestNativeMeetsTarget          Boolean?
   /// The exact provider prompt produced at admission, submitted verbatim.
   /// Frozen so a renderer change cannot alter an already-admitted attempt.
   /// Customer-authored text. Never logged, audited, or put on a queue payload.
-  requestRenderedPrompt   String?
-  state                   SceneGenerationState @default(QUEUED)
+  requestRenderedPrompt             String?
+  state                             SceneGenerationState       @default(QUEUED)
+  /// --- Phase 4C-3B-2E orchestration linkage --------------------------------
+  /// Every column below is NULLABLE, and that is a migration decision rather
+  /// than a modelling one. Rows admitted before this phase have no logical
+  /// request, no attempt ordinal and no recorded certainty, and there is no way
+  /// to find out what they were: a legacy row in `SUBMITTING` might have been
+  /// accepted or might never have been sent. Backfilling any of these would
+  /// write a guess into the permanent record of a possibly-paid call.
+  ///
+  /// Newly admitted attempts populate them, and a CHECK constraint requires the
+  /// whole orchestration set together — so a row is either fully legacy or
+  /// fully orchestrated, never half of each.
+  ///
+  /// The parent logical request. NULL means "admitted before orchestration".
+  generationSceneRequestId          String?
+  /// Scoped to the parent request, starting at 1, never reused.
+  attemptOrdinal                    Int?
+  attemptKind                       GenerationAttemptKind?
+  /// Whether the provider accepted this attempt. Separate from every execution
+  /// state, and the reason `providerPredictionId` can be trusted: a database
+  /// CHECK requires ACCEPTED whenever a prediction id is present.
+  submissionCertainty               SubmissionCertainty?
+  /// The pricing contract this attempt was admitted against, copied from its
+  /// snapshot at admission and never supplied by a caller. It is what lets the
+  /// provider boundary check that the cost decision belongs to *this* attempt
+  /// rather than merely existing somewhere.
+  pricingContractKey                String?
+  /// The orchestration execution state. A separate column from `state` rather
+  /// than a rewrite of it: legacy rows keep the legacy vocabulary, because
+  /// relabelling a historical state is a claim nobody can verify now.
+  orchestrationState                GenerationAttemptState?
+  stateVersion                      Int                        @default(0)
+  /// When this attempt crossed into SUBMITTING. Set exactly once. A row with
+  /// this set has been at the provider boundary and must never return to QUEUED.
+  submissionBoundaryEnteredAt       DateTime?
+  providerAcceptedAt                DateTime?
+  reconciliationStartedAt           DateTime?
+  /// Frozen when uncertainty begins, never recomputed from current config, so a
+  /// later change to the reconciliation window cannot move an old deadline.
+  reconciliationDeadlineAt          DateTime?
+  reconciliationResolvedAt          DateTime?
   /// Internal only. Non-null exactly when a provider prediction is known.
   /// Never exposed to a customer (ADR-0016).
-  providerPredictionId    String?
-  submittedAt             DateTime?
-  lastPolledAt            DateTime?
+  providerPredictionId              String?
+  submittedAt                       DateTime?
+  lastPolledAt                      DateTime?
   /// Normalized execution diagnostics. Internal only; never a customer message.
   /// Not provider-only: a pre-provider preflight refusal is persisted as its
   /// exact reason code with a null message (ADR-0027).
-  normalizedErrorCode     String?
-  normalizedErrorMessage  String?
+  normalizedErrorCode               String?
+  normalizedErrorMessage            String?
   /// Managed-storage key for the copied output. Null until Phase 4D. A
   /// temporary provider URL is deliberately never persisted.
-  outputStorageKey        String?
-  createdAt               DateTime             @default(now())
-  updatedAt               DateTime             @updatedAt
+  outputStorageKey                  String?
+  createdAt                         DateTime                   @default(now())
+  updatedAt                         DateTime                   @updatedAt
   /// RESTRICT, not Cascade. A generation may record a paid provider attempt, so
   /// a future physical project deletion must resolve retention policy
   /// deliberately rather than silently erasing history through a cascade that
   /// happened to be in the schema. No physical deletion path exists today, so
   /// this changes no current behaviour (docs/decisions/TODO.md).
-  videoProject            VideoProject         @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  videoProject                      VideoProject               @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  /// RESTRICT again: the logical request must not be deletable while a provider
+  /// attempt against it exists.
+  generationSceneRequest            SceneGenerationRequest?    @relation(fields: [generationSceneRequestId], references: [id], onDelete: Restrict)
+  pricingSnapshot                   GenerationPricingSnapshot?
 
+  @@unique([generationSceneRequestId, attemptOrdinal])
   @@index([videoProjectId])
   @@index([state])
+  @@index([generationSceneRequestId])
   // At most one ACTIVE attempt per (videoProjectId, requestHash) is enforced by
   // a partial unique index added by raw SQL in the migration: Prisma cannot
   // express `WHERE` on an index. See docs/migration-notes.md.
   @@map("scene_generations")
+}
+
+// ===========================================================================
+// Phase 4C-3B-2E — generation orchestration and audit state
+//
+// Six new tables and a certainty axis on the existing attempt row. The shape is
+// driven by one accounting rule that the previous schema could not express:
+//
+//   a customer video unit is not a provider attempt
+//
+// One entitlement can produce an initial generation, up to two user
+// regenerations, and any number of system recovery attempts. Collapsing those
+// into one row makes every provider outage look like a customer charge, and
+// makes "how many times did we pay for this?" unanswerable after the fact.
+// ===========================================================================
+
+enum GenerationQualityTier {
+  NORMAL
+  HIGH_QUALITY
+}
+
+enum GenerationJobState {
+  CREATED
+  RESERVING
+  RESERVED
+  GENERATING
+  SCENES_READY
+  COMPOSITION_PENDING
+  COMPOSING
+  DELIVERABLE_VALIDATING
+  DELIVERABLE_READY
+  REVISING
+  FAILED_TERMINAL
+  CANCELLED
+}
+
+enum GenerationReservationState {
+  RESERVING
+  RESERVED
+  RECONCILIATION_HOLD
+  CONSUMED
+  RELEASED
+}
+
+enum GenerationSceneState {
+  PENDING
+  GENERATING
+  READY
+  REVISING
+  FAILED_TERMINAL
+  CANCELLED
+}
+
+enum SceneGenerationRequestKind {
+  INITIAL
+  USER_REGENERATION
+}
+
+enum SceneGenerationRequestState {
+  PENDING
+  GENERATING
+  DELIVERED
+  FAILED_TERMINAL
+  CANCELLED
+}
+
+enum GenerationAttemptKind {
+  PRIMARY
+  SYSTEM_RECOVERY
+}
+
+/// Whether the provider accepted an attempt — an axis of its own, never
+/// derivable from execution state. `SUBMISSION_UNKNOWN` is the case that proves
+/// the separation: the attempt may be running and billable, or may never have
+/// reached the provider, and one execution state covers both.
+enum SubmissionCertainty {
+  PRE_SUBMISSION
+  ACCEPTED
+  DEFINITIVELY_REJECTED
+  SUBMISSION_UNKNOWN
+}
+
+/// The execution lifecycle of one provider attempt, in the orchestration
+/// vocabulary. Deliberately a **separate enum** from the legacy
+/// `SceneGenerationState`: legacy rows keep their own vocabulary and are never
+/// relabelled, because renaming a historical state is a claim about what
+/// happened that nobody can verify now.
+enum GenerationAttemptState {
+  QUEUED
+  SUBMITTING
+  PROCESSING
+  RECONCILIATION_PENDING
+  PROVIDER_SUCCEEDED
+  OUTPUT_INGESTING
+  OUTPUT_VERIFIED
+  FAILED_RETRYABLE
+  FAILED_TERMINAL
+  RECONCILIATION_EXHAUSTED
+  CANCELLED_PRE_SUBMISSION
+}
+
+enum GenerationTransitionAggregateType {
+  JOB
+  RESERVATION
+  SCENE
+  SCENE_REQUEST
+  ATTEMPT
+  DELIVERABLE
+}
+
+enum GenerationTransitionActorType {
+  USER
+  SYSTEM
+  WORKER
+  ADMIN
+  RECONCILIATION_WORKER
+}
+
+/// One customer video lifecycle.
+///
+/// RESTRICT on the project, matching `SceneGeneration`: a job can hold a
+/// consumed entitlement and a paid provider history, so a project deletion must
+/// resolve retention deliberately rather than cascading it away.
+model GenerationJob {
+  id                          String                 @id
+  videoProjectId              String
+  requestedByUserId           String
+  qualityTier                 GenerationQualityTier
+  /// The product deliverable class, matching video_projects.resolution.
+  /// The output configuration snapshotted from the VideoProject when this
+  /// lifecycle began, and never read from the project again. Project settings
+  /// are mutable; an attempt admitted three days later must be generated for
+  /// what the customer started. A CHECK restricts the resolution to the closed
+  /// product vocabulary, the same one video_projects carries.
+  targetOutputResolution      String
+  targetAspectRatio           String
+  requestedDurationSeconds    Int
+  /// Entitlement arithmetic, frozen at creation. High-quality units sit INSIDE
+  /// the total; they are never additional.
+  requiredVideoUnits          Int
+  requiredHighQualityUnits    Int
+  state                       GenerationJobState     @default(CREATED)
+  stateVersion                Int                    @default(0)
+  /// Set when a deliverable version exists. No FK in this phase: the
+  /// deliverable table is deferred, and a nullable pointer is honest about that.
+  currentDeliverableVersionId String?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+  videoProject                VideoProject           @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  reservation                 GenerationReservation?
+  scenes                      GenerationScene[]
+
+  @@index([videoProjectId])
+  @@index([state])
+  @@map("generation_jobs")
+}
+
+/// One customer entitlement hold, one per job.
+///
+/// The billing cycle is frozen here and never recomputed. A job reserved on
+/// 30 September and delivered on 1 October consumes September: the allowance
+/// was committed when the platform began spending on the customer's behalf.
+model GenerationReservation {
+  id                       String                     @id
+  generationJobId          String                     @unique
+  billingCycleKey          String
+  billingCycleStartedAt    DateTime
+  billingCycleEndsAt       DateTime
+  reservedTotalVideoUnits  Int
+  reservedHighQualityUnits Int
+  state                    GenerationReservationState @default(RESERVING)
+  stateVersion             Int                        @default(0)
+  reservedAt               DateTime                   @default(now())
+  consumedAt               DateTime?
+  releasedAt               DateTime?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
+  generationJob            GenerationJob              @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
+
+  @@index([billingCycleKey])
+  @@map("generation_reservations")
+}
+
+/// One logical scene inside one job.
+///
+/// `sourceStoryboardSceneId` and `sourceAssetId` are provenance and carry NO
+/// foreign key, for exactly the reason `SceneGeneration` gives: recomposition
+/// deletes and recreates storyboard scenes, and retention removes assets. A
+/// cascade from either would erase paid history on an ordinary user action, and
+/// a restrict would block recomposition (ADR-0016).
+model GenerationScene {
+  id                        String                   @id
+  generationJobId           String
+  position                  Int
+  /// Provenance only — no FK. Recomposition replaces storyboard scenes.
+  sourceStoryboardSceneId   String
+  /// Provenance only — no FK. Assets may be removed under retention policy.
+  sourceAssetId             String
+  sourceAnalysisRevision    Int
+  snapshotDurationSeconds   Int
+  snapshotCameraMotion      String?
+  /// Customer-authored text. Never logged, audited, or placed in transition
+  /// metadata — the same secrecy rule as SceneGeneration.requestCompiledPrompt.
+  snapshotCompiledPrompt    String?
+  state                     GenerationSceneState     @default(PENDING)
+  stateVersion              Int                      @default(0)
+  /// The delivered request currently selected for this scene. No FK: it points
+  /// into a child table, and a circular required reference would make insertion
+  /// order load-bearing.
+  /// The delivered request currently selected for this scene. Constrained by a
+  /// composite foreign key to `(id, generationSceneId)` on the request, so a
+  /// non-null value can only ever name a request belonging to THIS scene --
+  /// a nonexistent id and another scene's id are both rejected by PostgreSQL.
+  currentDeliveredRequestId String?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+  generationJob             GenerationJob            @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
+  requests                  SceneGenerationRequest[] @relation("SceneRequests")
+  currentDeliveredRequest   SceneGenerationRequest?  @relation("SceneCurrentDelivered", fields: [currentDeliveredRequestId, id], references: [id, generationSceneId], onDelete: Restrict)
+
+  @@unique([generationJobId, position])
+  @@index([generationJobId])
+  @@map("generation_scenes")
+}
+
+/// One customer-visible request for a new rendition of a scene.
+///
+/// NOT a provider invocation. A provider failure creates another
+/// `SceneGeneration` under this row; it does not create another of these, which
+/// is what keeps a provider outage from consuming a customer's regeneration
+/// right.
+model SceneGenerationRequest {
+  id                      String                      @id
+  generationSceneId       String
+  kind                    SceneGenerationRequestKind
+  /// NULL for INITIAL, 1 or 2 for USER_REGENERATION. Both halves are enforced
+  /// by a CHECK constraint, so a third regeneration cannot be inserted even by
+  /// a caller that skipped the domain.
+  userRegenerationOrdinal Int?
+  state                   SceneGenerationRequestState @default(PENDING)
+  stateVersion            Int                         @default(0)
+  requestedByUserId       String?
+  createdAt               DateTime                    @default(now())
+  deliveredAt             DateTime?
+  failedAt                DateTime?
+  generationScene         GenerationScene             @relation("SceneRequests", fields: [generationSceneId], references: [id], onDelete: Restrict)
+  currentForScenes        GenerationScene[]           @relation("SceneCurrentDelivered")
+  attempts                SceneGeneration[]
+
+  /// The composite key the scene's `currentDeliveredRequestId` points through,
+  /// so a scene can only ever name a request that belongs to it.
+  @@unique([id, generationSceneId])
+  @@index([generationSceneId])
+  @@map("scene_generation_requests")
+}
+
+/// The immutable provider-cost decision for exactly one attempt.
+///
+/// Monetary values are BIGINT, never floating point. The values come from the
+/// domain's `PricingSnapshot` verbatim: nothing here recomputes a price, and no
+/// update or delete path exists, because this row is the record of what the
+/// platform believed a call would cost when it authorized the call.
+model GenerationPricingSnapshot {
+  id                            String          @id
+  sceneGenerationId             String          @unique
+  pricingVersion                String
+  provider                      String
+  contractKey                   String
+  /// Encodes the contract's complete commercial content, not just its identity,
+  /// so two contracts sharing an identity but differing in price or policy are
+  /// distinguishable in the record.
+  contractFingerprint           String
+  identityJson                  Json
+  stablePriceReferenceJson      Json
+  riskProfileKey                String
+  riskBufferBps                 Int
+  requestedSeconds              Int
+  billableSeconds               Int
+  estimatedStableCostMicroUsd   BigInt
+  estimatedPlanningCostMicroUsd BigInt
+  pricingEffectiveAtEpochMs     BigInt
+  fxSnapshotId                  String?
+  createdAt                     DateTime        @default(now())
+  sceneGeneration               SceneGeneration @relation(fields: [sceneGenerationId], references: [id], onDelete: Restrict)
+  fxSnapshot                    FxRateSnapshot? @relation(fields: [fxSnapshotId], references: [id], onDelete: Restrict)
+
+  @@index([contractKey])
+  @@map("generation_pricing_snapshots")
+}
+
+/// An audited exchange rate, immutable once written.
+///
+/// A rational, never a decimal: a rate stored as a float cannot be re-checked
+/// exactly, and a profitability figure that cannot say which rate produced it
+/// cannot be re-derived at all. RESTRICT from pricing snapshots, so a rate that
+/// priced a paid attempt cannot be deleted out from under it.
+model FxRateSnapshot {
+  id                 String                      @id
+  baseCurrency       String
+  quoteCurrency      String
+  rateNumerator      BigInt
+  rateDenominator    BigInt
+  effectiveAtEpochMs BigInt
+  sourceReference    String?
+  createdAt          DateTime                    @default(now())
+  pricingSnapshots   GenerationPricingSnapshot[]
+
+  @@map("fx_rate_snapshots")
+}
+
+/// Append-only machine transition history.
+///
+/// Separate from `AuditLog` on purpose. `AuditLog` answers "what did a person
+/// do?" and is read by support and compliance; this answers "what did the
+/// machine do?" and is read during an incident. Pushing every polling
+/// transition into the first would bury the customer-visible events that table
+/// exists for.
+///
+/// There is no update or delete path anywhere in the repository layer.
+model GenerationTransitionEvent {
+  id             String                            @id
+  /// Operational tenant scope, immutable, supplied by the scoped orchestration
+  /// operation that appends the event -- never read out of `safeMetadata`.
+  /// Carried here so history can be queried safely without reconstructing
+  /// ownership from a polymorphic `aggregateId`. Deliberately NOT a foreign key
+  /// with a cascade: paid history must not be deletable through an org row.
+  organizationId String
+  aggregateType  GenerationTransitionAggregateType
+  aggregateId    String
+  /// Per-aggregate, starting at 1. Unique with the aggregate, so a gap or a
+  /// duplicate is a detectable defect rather than a silent reordering.
+  sequence       Int
+  fromState      String?
+  toState        String
+  eventType      String
+  actorType      GenerationTransitionActorType
+  actorUserId    String?
+  reasonCode     String?
+  /// Opaque. Groups every operation caused by one user request.
+  correlationId  String
+  causationId    String?
+  /// Allowlisted keys only. Prompts, provider payloads, URLs and credentials
+  /// are rejected before they reach this column.
+  safeMetadata   Json                              @default("{}")
+  createdAt      DateTime                          @default(now())
+
+  @@unique([aggregateType, aggregateId, sequence])
+  @@index([organizationId])
+  @@index([aggregateId])
+  @@index([correlationId])
+  @@map("generation_transition_events")
 }

@@ -20,5 +20,12 @@ export * from "./pricing-eligibility";
 export * from "./pricing-snapshot";
 export * from "./profitability";
 export * from "./safety-guard";
-export type { Bps, MicroUsd, Yen } from "./units";
+export type { Bps, EpochMillis, MicroUsd, Yen } from "./units";
 export { bps, microUsd, yen } from "./units";
+/**
+ * The instant constructors, exported because `createPricingSnapshot` *requires*
+ * an `EpochMillis` and the brand makes one unconstructable from outside this
+ * module. Withholding them would leave the snapshot API callable only by a
+ * caller willing to cast, which is the one thing the brand exists to prevent.
+ */
+export { epochMillis, epochMillisFromDate } from "./units";
