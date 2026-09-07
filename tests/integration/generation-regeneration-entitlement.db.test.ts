@@ -29,6 +29,20 @@ import {
 const prisma = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 const repos = HAS_DB ? repositories(prisma) : (null as unknown as ReturnType<typeof repositories>);
 
+/** The parts of a Prisma error worth pinning: class, code and metadata. */
+function errorShape(error: unknown): {
+  name: string;
+  code?: string;
+  meta?: Record<string, unknown>;
+} {
+  const e = error as {
+    code?: string;
+    meta?: Record<string, unknown>;
+    constructor: { name: string };
+  };
+  return { name: e.constructor.name, code: e.code, meta: e.meta };
+}
+
 describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () => {
   beforeEach(async () => {
     await wipeOrchestration(prisma);
@@ -186,10 +200,10 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   });
 
   it("does not report an unrelated unique violation as an active regeneration", async () => {
-    // The narrow half of the same translation. Prisma reports every unique
-    // violation as P2002, and translating all of them would turn an unrelated
-    // collision into a cheerful "someone else is already doing this" — the kind
-    // of mistranslation that hides a real defect for months.
+    // Nothing translates a database error into a business outcome any more, and
+    // this is what that has to mean in practice: an unrelated collision reaches
+    // the caller as the error it is, rather than as a cheerful "someone else is
+    // already doing this" that would hide a real defect for months.
     const { scene } = await seedChain(prisma, "regendup");
     const first = await admitRegen(scene.id, "genreq_dup");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
@@ -197,7 +211,98 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
 
     // Nothing is in flight, so the entitlement check passes and the id itself
     // is what collides.
-    await expect(admitRegen(scene.id, "genreq_dup")).rejects.toThrow();
+    const outcome = await admitRegen(scene.id, "genreq_dup").then(
+      (value) => value.kind,
+      (error: unknown) => (error as { code?: string }).code,
+    );
+    expect(outcome).toBe("P2002");
+    expect(outcome).not.toBe("REGENERATION_ALREADY_ACTIVE");
+  });
+
+  /**
+   * Why there is no error classifier here at all.
+   *
+   * The previous implementation caught the insert and asked whether the
+   * violated constraint was `scene_generation_requests_active_key`. This
+   * records what live PostgreSQL actually reports, and it settles two things at
+   * once: that question has no answer, and the classifier never fired.
+   *
+   * Prisma surfaces the *covered fields*, never the index name — the same
+   * lesson `generation-persistence.db.test.ts` already pinned for
+   * `scene_generations_active_request_key`. Worse for this case: the active
+   * index and the INITIAL index both cover `generationSceneId`, so their
+   * violations are byte-identical in the error. A classifier narrow enough to
+   * be honest is not constructible, and a broad one would report "a
+   * regeneration is already in flight" for a duplicate initial request.
+   *
+   * That is why admission serializes on the parent scene instead — see
+   * `generation-concurrency.db.test.ts`.
+   */
+  it("records that the active and INITIAL indexes are indistinguishable in Prisma's error", async () => {
+    const { scene } = await seedChain(prisma, "shape");
+    const admitted = await admitRegen(scene.id, "genreq_shape_a");
+    if (admitted.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+
+    // A distinct id and a distinct ordinal, so only the *active* index can
+    // refuse this row.
+    const activeKey = await prisma.sceneGenerationRequest
+      .create({
+        data: {
+          id: "genreq_shape_b",
+          generationSceneId: scene.id,
+          kind: "USER_REGENERATION",
+          userRegenerationOrdinal: 2,
+          requestedByUserId: "usr_itest",
+          state: "PENDING",
+        },
+      })
+      .then(() => null, errorShape);
+
+    expect(activeKey?.name).toBe("PrismaClientKnownRequestError");
+    expect(activeKey?.code).toBe("P2002");
+    expect(activeKey?.meta).toMatchObject({
+      modelName: "SceneGenerationRequest",
+      target: ["generationSceneId"],
+    });
+    // The hand-written index name is NOT what Prisma surfaces, so a classifier
+    // keyed on it could never have fired.
+    expect(JSON.stringify(activeKey?.meta)).not.toContain(
+      "scene_generation_requests_active_key",
+    );
+
+    // And the INITIAL index — a different rule entirely — is reported the same
+    // way, which is what makes a narrow classifier impossible.
+    const initialKey = await prisma.sceneGenerationRequest
+      .create({
+        data: {
+          id: "genreq_shape_c",
+          generationSceneId: scene.id,
+          kind: "INITIAL",
+          userRegenerationOrdinal: null,
+          requestedByUserId: "usr_itest",
+          state: "PENDING",
+        },
+      })
+      .then(() => null, errorShape);
+
+    expect(initialKey?.code).toBe("P2002");
+    expect(initialKey?.meta).toEqual(activeKey?.meta);
+
+    // A primary-key collision does differ, which is the only reason the two
+    // above being equal is evidence rather than an artefact of the helper.
+    const primaryKey = await prisma.sceneGenerationRequest
+      .create({
+        data: {
+          id: "genreq_shape_a",
+          generationSceneId: scene.id,
+          kind: "USER_REGENERATION",
+          userRegenerationOrdinal: 2,
+          requestedByUserId: "usr_itest",
+          state: "FAILED_TERMINAL",
+        },
+      })
+      .then(() => null, errorShape);
+    expect(primaryKey?.meta).toMatchObject({ target: ["id"] });
   });
 
   it("records when a request was delivered and when one failed", async () => {

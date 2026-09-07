@@ -124,6 +124,31 @@ ingestion, composition, entitlement ledger or payment.
   through the pricing domain's own canonical check, and a same-id rate whose
   content differs is a conflict rather than a cache hit.
 
+### Corrected after final concurrency review
+
+- **Attempt admission serializes on its parent `SceneGenerationRequest`.** It
+  read the request, its siblings and the derived attempt kind before writing, so
+  two callers could both observe the same pre-insert state. The unique indexes
+  let only one through, but the loser surfaced a raw `P2002` instead of the
+  `ATTEMPT_ALREADY_ACTIVE` its caller is written against. Transaction C now takes
+  `SELECT … FOR UPDATE` on the tenant-scoped request row before its first read;
+  both partial unique indexes remain as database defence in depth.
+- **User-regeneration admission serializes on its parent `GenerationScene`, and
+  the error classifier is gone.** It asked whether a `P2002` came from
+  `scene_generation_requests_active_key`; live PostgreSQL reports the covered
+  *fields* and never the index name, so it could not fire — and the active and
+  INITIAL indexes cover the same column, so their violations are
+  indistinguishable and no honest classifier is constructible. The ordering is
+  fixed instead of the error interpreted, the catch arm became unreachable, and
+  it was removed rather than kept as unverified defence. The observed error
+  shape is pinned by a test.
+- **`GenerationJob.create` snapshots the project's output settings inside its own
+  transaction, under `SELECT … FOR SHARE`.** The read happened before the
+  transaction opened, so a job could be durably created *after* a settings
+  change while permanently carrying the settings from before it — invisible
+  afterwards, because the row looks internally consistent. A concurrent update
+  now blocks until the job commits, making either ordering a real serialization.
+
 ### Legacy
 
 No existing row was updated. Every new column on `scene_generations` is nullable

@@ -120,24 +120,107 @@ function isReservedEdge(
 }
 
 /**
- * Is this the active-regeneration index refusing a second in-flight request?
+ * Serialize the callers competing over one aggregate, before anyone reads it.
  *
- * Matched narrowly. Prisma reports every unique violation as `P2002`, and
- * translating them all would turn an unrelated collision — a duplicate id, a
- * future constraint — into a cheerful "someone else is already doing this",
- * which is the kind of mistranslation that hides a real defect for months.
+ * Read-then-decide-then-insert is not a decision under concurrency: two
+ * transactions can both read the same pre-insert state, both conclude they may
+ * proceed, and then race at the index. The index does hold — one insert wins —
+ * but the loser learns it through a raw uniqueness error rather than through
+ * the outcome union its caller is written against, and a caller handling
+ * `AdmitGenerationAttemptOutcome` does not handle `P2002`.
+ *
+ * Translating that error afterwards was tried and is not possible here. Live
+ * PostgreSQL reports a partial-index violation as `P2002` with
+ * `meta.target = ["generationSceneId"]` — the covered *fields*, never the index
+ * name — and `scene_generation_requests_active_key` and
+ * `scene_generation_requests_initial_key` cover the same column, so the two are
+ * indistinguishable in the error. A classifier over that shape cannot be
+ * narrow: it would report "a regeneration is already in flight" for a duplicate
+ * INITIAL request. The evidence is pinned by a test rather than described here.
+ *
+ * So the ordering is fixed instead of the error interpreted. `FOR UPDATE` on
+ * the parent row makes the second caller wait until the first has committed,
+ * and its re-read then sees the state the first one left. The partial unique
+ * indexes stay exactly as they are: this makes the *contract* correct, and they
+ * remain the database's own defence against any writer that never took the
+ * lock.
+ *
+ * `FOR UPDATE OF` names the aliased table so only the parent row is locked —
+ * the joins exist to prove tenancy in the same statement, not to lock the whole
+ * chain. A cross-tenant or missing id locks nothing and returns no row, which
+ * every caller treats exactly as "not found".
  */
-function isActiveRegenerationConflict(error: unknown): boolean {
-  if ((error as { code?: unknown }).code !== "P2002") return false;
-  const target = (error as { meta?: { target?: unknown } }).meta?.target;
-  // A partial index reports its own name rather than a field list.
-  if (typeof target === "string") {
-    return target === "scene_generation_requests_active_key";
-  }
-  if (Array.isArray(target)) {
-    return target.map(String).includes("scene_generation_requests_active_key");
-  }
-  return false;
+async function lockSceneRequestForTenant(
+  tx: Tx,
+  organizationId: string,
+  generationSceneRequestId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT r."id"
+      FROM "scene_generation_requests" r
+      JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+      JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+     WHERE r."id" = ${generationSceneRequestId}
+       AND p."organizationId" = ${organizationId}
+       FOR UPDATE OF r
+  `;
+  return rows.length > 0;
+}
+
+/** The same serialization, on the scene a regeneration request would join. */
+async function lockSceneForTenant(
+  tx: Tx,
+  organizationId: string,
+  generationSceneId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT s."id"
+      FROM "generation_scenes" s
+      JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+     WHERE s."id" = ${generationSceneId}
+       AND p."organizationId" = ${organizationId}
+       FOR UPDATE OF s
+  `;
+  return rows.length > 0;
+}
+
+/**
+ * The project's output configuration, read under a lock that outlasts the read.
+ *
+ * `FOR SHARE`, not `FOR UPDATE`: the job does not modify the project, and two
+ * jobs admitted at once against the same project are not in conflict — but a
+ * concurrent *update* to those settings is. A shared lock blocks the writer
+ * until this job has committed, which is the whole point: the snapshot is
+ * immutable and the source is not, so without it a job can be durably created
+ * after a settings change while carrying the settings from before it. Nobody
+ * could tell afterwards, because the job looks internally consistent.
+ *
+ * The row returned is the latest committed version. A writer that got there
+ * first is waited out and its value is what gets snapshotted; a writer that
+ * arrives second waits for this commit. Either order is a real serialization;
+ * what cannot happen is a snapshot of a version already superseded.
+ */
+async function lockProjectOutputConfig(
+  tx: Tx,
+  organizationId: string,
+  videoProjectId: string,
+): Promise<{ targetOutputResolution: string; aspectRatio: string } | null> {
+  // `resolution` is the physical column; `targetOutputResolution` is the Prisma
+  // field mapped onto it. Raw SQL sees the table, not the model, and a stale
+  // alias here fails loudly at runtime rather than silently — which is how this
+  // one was caught.
+  const rows = await tx.$queryRaw<
+    { targetOutputResolution: string; aspectRatio: string }[]
+  >`
+    SELECT p."resolution" AS "targetOutputResolution", p."aspectRatio"
+      FROM "video_projects" p
+     WHERE p."id" = ${videoProjectId}
+       AND p."organizationId" = ${organizationId}
+       FOR SHARE
+  `;
+  return rows[0] ?? null;
 }
 
 /** Attempt states in which the provider may hold and bill for this attempt. */
@@ -543,23 +626,24 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
       const units = requiredUnitsFor(job.qualityTier, job.requestedDurationSeconds);
       if (!units.ok) return { kind: "DURATION_NOT_SUPPORTED" };
 
-      // Ownership is proved before anything is written, and the write itself
-      // carries the derived facts rather than the caller's.
-      // The output configuration is snapshotted here and never read from the
-      // project again. Project settings are mutable; an attempt admitted three
-      // days later must be generated for what the customer started.
-      const project = await prisma.videoProject.findFirst({
-        where: { id: job.videoProjectId, organizationId },
-        select: { id: true, targetOutputResolution: true, aspectRatio: true },
-      });
-      if (project === null) return { kind: "PROJECT_NOT_FOUND" };
-      // The project's value was validated when it was written; this refuses
-      // rather than widening the product vocabulary a second time.
-      if (!isTargetOutputResolution(project.targetOutputResolution)) {
-        return { kind: "PROJECT_NOT_FOUND" };
-      }
+      return prisma.$transaction(async (tx): Promise<CreateGenerationJobOutcome> => {
+        // Ownership and the output configuration are established in one locked
+        // read, *inside* this transaction. Read outside it — as this was — the
+        // sequence is: observe the project, another transaction changes it and
+        // commits, and this one then durably creates an immutable job carrying
+        // settings the project no longer has. The job looks internally
+        // consistent forever afterwards, so nothing downstream can notice.
+        //
+        // Snapshotted here and never read from the project again: an attempt
+        // admitted three days later must render what the customer started.
+        const project = await lockProjectOutputConfig(tx, organizationId, job.videoProjectId);
+        if (project === null) return { kind: "PROJECT_NOT_FOUND" };
+        // The project's value was validated when it was written; this refuses
+        // rather than widening the product vocabulary a second time.
+        if (!isTargetOutputResolution(project.targetOutputResolution)) {
+          return { kind: "PROJECT_NOT_FOUND" };
+        }
 
-      return prisma.$transaction(async (tx) => {
         const row = await tx.generationJob.create({
           data: {
             id: job.id,
@@ -944,9 +1028,17 @@ export function createSceneGenerationRequestRepository(
      * them here makes the entitlement independent of how careful the call site
      * was.
      *
-     * Two concurrent admissions both derive the same next ordinal. The partial
-     * unique index on active regenerations is what stops both from committing:
-     * the second violates it and its whole transaction rolls back.
+     * Two concurrent admissions are serialized on the scene, not settled at the
+     * index. Both would otherwise derive the same next ordinal from the same
+     * pre-insert state, and the loser would learn the truth as a raw `P2002`
+     * its caller has no case for. Locking the scene first makes the second
+     * caller wait, re-read, and find the regeneration the first one committed.
+     *
+     * There is deliberately no error translation here any more. Live PostgreSQL
+     * cannot tell the caller which partial index refused a row — see
+     * `lockSceneForTenant` — so a classifier over that error could not be
+     * narrow, and a broad one would report "already in flight" for an unrelated
+     * collision.
      */
     async admitUserRegeneration(
       organizationId: string,
@@ -954,12 +1046,13 @@ export function createSceneGenerationRequestRepository(
       context: TransitionContext,
     ): Promise<AdmitUserRegenerationOutcome> {
       return prisma.$transaction(async (tx): Promise<AdmitUserRegenerationOutcome> => {
-        const scene = await tx.generationScene.findFirst({
-          where: { id: input.generationSceneId, ...sceneScope(organizationId) },
-          select: { id: true },
-        });
-        if (scene === null) return { kind: "SCENE_NOT_FOUND" };
+        // Tenancy and serialization in one statement, before anything is read.
+        if (!(await lockSceneForTenant(tx, organizationId, input.generationSceneId))) {
+          return { kind: "SCENE_NOT_FOUND" };
+        }
 
+        // Read *after* the lock: this is the authoritative sibling set, not a
+        // snapshot another admission may already have invalidated.
         const siblings = await tx.sceneGenerationRequest.findMany({
           where: { generationSceneId: input.generationSceneId },
           select: { kind: true, state: true },
@@ -974,30 +1067,16 @@ export function createSceneGenerationRequestRepository(
         const ordinal = nextUserRegenerationOrdinal(siblings);
         if (ordinal === null) return { kind: "ENTITLEMENT_EXHAUSTED" };
 
-        // A genuine concurrent race gets past the check above: both
-        // transactions read the same siblings before either commits. The
-        // partial index settles it, and the loser's P2002 is an expected
-        // business outcome — the caller asked for something another request is
-        // already doing — not a database defect. Only that exact violation is
-        // translated; anything else propagates unchanged.
-        let row;
-        try {
-          row = await tx.sceneGenerationRequest.create({
-            data: {
-              id: input.id,
-              generationSceneId: input.generationSceneId,
-              kind: "USER_REGENERATION",
-              userRegenerationOrdinal: ordinal,
-              requestedByUserId: input.requestedByUserId,
-              state: "PENDING",
-            },
-          });
-        } catch (error) {
-          if (isActiveRegenerationConflict(error)) {
-            return { kind: "REGENERATION_ALREADY_ACTIVE" };
-          }
-          throw error;
-        }
+        const row = await tx.sceneGenerationRequest.create({
+          data: {
+            id: input.id,
+            generationSceneId: input.generationSceneId,
+            kind: "USER_REGENERATION",
+            userRegenerationOrdinal: ordinal,
+            requestedByUserId: input.requestedByUserId,
+            state: "PENDING",
+          },
+        });
         await appendEvent(tx, {
           organizationId,
           aggregateType: "SCENE_REQUEST",
@@ -1131,9 +1210,27 @@ export function createSceneGenerationAttemptRepository(
       context: TransitionContext,
     ): Promise<AdmitGenerationAttemptOutcome> {
       return prisma.$transaction(async (tx): Promise<AdmitGenerationAttemptOutcome> => {
-        // The parent request, and through it every fact this attempt must not
-        // be told. A caller-supplied copy of any of these could disagree with
-        // the scene it claims to render.
+        // Serialize on the parent request *before* reading anything about it.
+        //
+        // Everything below — the request's state, its siblings, the attempt
+        // kind and ordinal derived from them — is a decision about what already
+        // exists, and two callers reading the same pre-insert state both
+        // conclude they may file the first attempt. The unique indexes let only
+        // one through, but the loser surfaced a raw uniqueness error instead of
+        // `ATTEMPT_ALREADY_ACTIVE`, which is the outcome its caller is written
+        // against. With the lock the second caller waits, then re-reads and
+        // sees the attempt the first one committed.
+        //
+        // Tenancy is proved in the same statement, so a cross-tenant id locks
+        // nothing and is indistinguishable from a missing one.
+        if (!(await lockSceneRequestForTenant(tx, organizationId, input.generationSceneRequestId))) {
+          return { kind: "REQUEST_NOT_FOUND" };
+        }
+
+        // The authoritative read, *after* the lock: the parent request and
+        // through it every fact this attempt must not be told. A caller-supplied
+        // copy of any of these could disagree with the scene it claims to
+        // render.
         const request = await tx.sceneGenerationRequest.findFirst({
           where: { id: input.generationSceneRequestId, ...requestScope(organizationId) },
           select: {
@@ -1201,6 +1298,11 @@ export function createSceneGenerationAttemptRepository(
         // caller could otherwise make the first attempt a SYSTEM_RECOVERY, or
         // file a second PRIMARY — and after the fact the ordinal alone cannot
         // say which of two "first" attempts was really first.
+        //
+        // Read under the parent lock taken at the top, so "what already exists"
+        // is settled rather than sampled. A competing admission has either
+        // committed its attempt and is visible here, or has not yet acquired
+        // the lock and will read this one.
         const siblings = await tx.sceneGeneration.findMany({
           where: { generationSceneRequestId: request.id },
           select: { attemptOrdinal: true, orchestrationState: true },

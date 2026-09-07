@@ -446,7 +446,17 @@ and ADR-0020.
   a transition that never happened; a concurrent regeneration race returns a
   business outcome instead of a raw database error; and an exchange rate named
   by a pricing snapshot is persisted, validated and conflict-checked inside the
-  same commit.
+  same commit. Corrected once more after the concurrency review: attempt
+  admission, user-regeneration admission and job creation each now serialize on
+  the row they decide from — the parent request, the parent scene and the video
+  project — because each previously read state, concluded it could proceed, and
+  only then wrote, so two callers could both act on the same pre-write
+  observation. The unique indexes always held; what did not was the outcome
+  contract, and in the job's case the immutability of a snapshot whose source is
+  mutable. The Prisma error classifier for concurrent regenerations was removed
+  rather than repaired: live PostgreSQL reports the covered fields and never the
+  index name, and the two partial indexes involved cover the same column, so no
+  honest classifier exists.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

@@ -438,6 +438,110 @@ whenever the snapshot names one, validated through the pricing domain's own
 already exists is compared field by field; a same-id rate with different content
 is `FX_SNAPSHOT_CONFLICT`, not a cache hit. Nothing updates an existing rate.
 
+## Corrections applied after the final concurrency review
+
+Three defects, one shape: **a decision read before it was serialized.** Each
+site read some state, concluded it could proceed, and only then wrote — so two
+callers could both read the same pre-write state and both conclude the same
+thing. The unique indexes did hold, every time. What did not hold was the
+*contract*: the loser learned the truth as a raw `P2002` its caller has no case
+for, or, in the job's case, learned nothing at all and stored a stale fact.
+
+### Transaction C now serializes on the parent `SceneGenerationRequest`
+
+```text
+begin
+→ lock the tenant-scoped request row          (SELECT … FOR UPDATE OF r)
+→ re-read request / scene / job authoritatively
+→ inspect sibling attempts
+→ derive kind, ordinal and canonical requestHash
+→ validate pricing and FX
+→ create attempt + pricing snapshot
+→ PENDING → GENERATING when PRIMARY
+→ append events
+→ commit
+```
+
+The lock is taken **before** the first read, not after. Tenancy is proved in
+the same statement by joining scene → job → project, so a cross-tenant id locks
+nothing and returns no row — indistinguishable from a missing one, as
+everywhere else. `FOR UPDATE OF r` names the alias so only the request row is
+locked; the joins exist to prove ownership, not to lock the chain.
+
+The second caller now waits, re-reads, sees the attempt the first one
+committed, and returns `ATTEMPT_ALREADY_ACTIVE`. Both partial unique indexes
+are untouched: this makes the contract correct, and they remain the database's
+own defence against a writer that never took the lock.
+
+### User regeneration serializes on the parent `GenerationScene`, and the error
+classifier is gone
+
+The classifier asked whether a `P2002` came from
+`scene_generation_requests_active_key`. Live PostgreSQL was consulted rather
+than memory, and it settles the question twice over:
+
+| Violation | class | code | `meta.modelName` | `meta.target` |
+| --- | --- | --- | --- | --- |
+| `…_active_key` | `PrismaClientKnownRequestError` | `P2002` | `SceneGenerationRequest` | `["generationSceneId"]` |
+| `…_initial_key` | `PrismaClientKnownRequestError` | `P2002` | `SceneGenerationRequest` | `["generationSceneId"]` |
+| primary key | `PrismaClientKnownRequestError` | `P2002` | `SceneGenerationRequest` | `["id"]` |
+
+Prisma reports the **covered fields, never the index name** — the same lesson
+`generation-persistence.db.test.ts` already pinned for
+`scene_generations_active_request_key`, which is why the previous classifier
+could never fire at all. And the two partial indexes cover the *same column*,
+so their violations are byte-identical: a classifier narrow enough to be honest
+is not constructible, and a broad one would announce "a regeneration is already
+in flight" for a duplicate INITIAL request.
+
+So the ordering is fixed instead of the error interpreted. The scene row is
+locked first, the sibling set is read after it, and the loser returns
+`REGENERATION_ALREADY_ACTIVE` from the ordinary path. The catch arm is
+therefore unreachable by the production method and was **removed** rather than
+retained as unverified defence. An unrelated collision now reaches the caller
+as the `P2002` it is, which a test asserts directly.
+
+### `GenerationJob.create` snapshots the project inside its own transaction
+
+The project's `targetOutputResolution` and `aspectRatio` were read *before* the
+transaction opened, leaving the ordering:
+
+```text
+read project settings A
+→ another transaction commits settings B
+→ create immutable job carrying A, durably, after B
+```
+
+Nothing downstream could ever notice, because the job looks internally
+consistent. The read moved inside the transaction and takes `SELECT … FOR
+SHARE` on the project row. Shared rather than exclusive because two jobs
+admitted against one project are not in conflict, but a concurrent settings
+*update* is: it blocks until the job commits. Either order is now a real
+serialization — A wins and the job snapshots A, or B wins and the job snapshots
+B — and the forbidden third case cannot occur.
+
+`targetOutputResolution` and `targetAspectRatio` remain immutable job facts,
+and Transaction C still never re-reads the project.
+
+### How these are tested
+
+Not by launching two calls and hoping. Measured directly, they do not overlap:
+eight simultaneous admissions and two independent client pools each completed
+strictly one after another, so a naive race test passes against an
+implementation with no locking at all and proves nothing.
+
+The overlap is therefore **constructed**. A second client opens a transaction,
+takes the same lock the repository takes, and holds it. The repository call is
+started and asserted to be *still blocked* after a real interval. The holder
+then mutates the row the repository is about to decide from, and commits. An
+implementation that read before locking is now working from a state that no
+longer exists — which is the defect, made deterministic.
+
+Each of the eight mutations in the Q-series removes or reorders exactly one of
+these serialization points, and all eight die. **Q8** is the one worth naming:
+it keeps the project read inside the transaction but drops the lock, and still
+fails — so the tests measure the serialization, not merely the read's location.
+
 ## Verification
 
 | Gate | Result |
@@ -446,7 +550,7 @@ is `FX_SNAPSHOT_CONFLICT`, not a cache hit. Nothing updates an existing rate.
 | `pnpm lint` | Pass |
 | `pnpm test` | Pass — 76 files, 1,967 tests (158 orchestration) |
 | `pnpm build` | Pass |
-| `pnpm test:db` | Pass — 15 files, 352 tests |
+| `pnpm test:db` | Pass — 16 files, 358 tests |
 | Migration on an empty database | Pass |
 | Migration with legacy rows present | Pass — 6 tests |
 | Migration on `revt_empty` | Pass |
@@ -469,18 +573,21 @@ hash, contract fingerprint, estimated cost, submission certainty, absence of a
 provider reference, reconciliation deadline, and the last transition sequence.
 It also asserts that re-arming the uncertain attempt returns `LOST`.
 
-## Mutation ledger — 74/76 killed
+## Mutation ledger — 81/82 killed
 
-Seventy-six mutations: the two earlier rounds re-run against this head, plus
-twenty-eight aimed at the admission corrections. **Every one targets an
-executed artefact** — the migration SQL that builds the database, or the
-TypeScript that runs. A mutation editing only `schema.prisma` is inert, because
-the database is built by applying migrations; that error was made once in the
-first round and is not repeated.
+Eighty-two mutations: every earlier round re-run against this head, plus eight
+aimed at the concurrency corrections. **Every one targets an executed
+artefact** — the migration SQL that builds the database, or the TypeScript that
+runs. A mutation editing only `schema.prisma` is inert, because the database is
+built by applying migrations; that error was made once in the first round and
+is not repeated.
 
-Four entries carry a `b` suffix. Those are re-aimed replacements for mutations
-that did not measure what they claimed to, and both the original miss and the
-correction are described below rather than quietly dropped.
+Entries with a `b` suffix are re-aimed replacements for mutations that did not
+measure what they claimed to. Both the original miss and the correction are
+described below rather than quietly dropped. Two mutations from the previous
+round — `P20` and `P21` — no longer exist: they targeted the error classifier,
+and the classifier is gone. `Q5` and `Q6` replace them by *reinstating* the two
+classifier shapes and proving the suite refuses both.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -505,10 +612,10 @@ correction are described below rather than quietly dropped.
 | M23b | the failure of a request is no longer timestamped | KILLED | 3 failing db tests |
 | N1 | the active-request index reverts to the legacy-only predicate | KILLED | 7 failing db tests |
 | N2 | the orchestration active set wrongly includes terminal states | KILLED | 17 failing db tests |
-| N3 | the INITIAL partial unique index is removed | KILLED | 3 failing db tests |
+| N3 | the INITIAL partial unique index is removed | KILLED | 4 failing db tests |
 | N4 | a failed regeneration ordinal becomes permanently unique again | KILLED | 3 failing db tests |
-| N5 | the active user-regeneration uniqueness is removed | KILLED | 3 failing db tests |
-| N6 | organizationId is dropped from the job transition CAS | KILLED | 7 failing db tests |
+| N5 | the active user-regeneration uniqueness is removed | KILLED | 4 failing db tests |
+| N6 | organizationId is dropped from the job transition CAS | KILLED | 4 failing db tests |
 | N7 | the tenant predicate is dropped from the provider boundary CAS | **SURVIVED** | 0 failing tests |
 | N8 | the tenant predicate is dropped from attempt reads | KILLED | 4 failing db tests |
 | N9 | transition-event reads stop filtering by organization | KILLED | 4 failing db tests |
@@ -521,7 +628,7 @@ correction are described below rather than quietly dropped.
 | N16 | the 90-second product ceiling is removed | KILLED | 4 failing db tests |
 | N17 | the job unit-tier CHECK becomes a mere inequality | KILLED | 5 failing db tests |
 | N18 | the NORMAL/HIGH_QUALITY derivation CHECK is removed | KILLED | 5 failing db tests |
-| N19 | job admission stops deriving units from the pricing contract | KILLED | 140 failing db tests |
+| N19 | job admission stops deriving units from the pricing contract | KILLED | 149 failing db tests |
 | N20 | requiredUnitsFor reimplements ceil instead of delegating | KILLED | 9 failing unit tests |
 | N21 | GENERATING -> CANCELLED is re-enabled on the job | KILLED | 4 failing unit tests |
 | N22 | GENERATING -> CANCELLED is re-enabled on the scene request | KILLED | 4 failing unit tests |
@@ -538,7 +645,7 @@ correction are described below rather than quietly dropped.
 | P4b | the attempt duration stops coming from the GenerationScene | KILLED | 29 failing db tests |
 | P5 | the attempt target resolution stops coming from the GenerationJob | KILLED | 5 failing db tests |
 | P6 | the attempt aspect ratio stops coming from the GenerationJob | KILLED | 5 failing db tests |
-| P7 | attempt kind stops being derived from the attempts that exist | KILLED | 24 failing db tests |
+| P7 | attempt kind stops being derived from the attempts that exist | KILLED | 28 failing db tests |
 | P8 | a second PRIMARY attempt becomes storable | KILLED | 8 failing db tests |
 | P9 | PRIMARY admission stops moving the request PENDING -> GENERATING | KILLED | 12 failing db tests |
 | P10 | the active-attempt-per-request index is removed | KILLED | 4 failing db tests |
@@ -551,65 +658,72 @@ correction are described below rather than quietly dropped.
 | P17 | the generic Job RESERVING -> RESERVED bypass is restored | KILLED | 4 failing db tests |
 | P18 | the generic Request GENERATING -> DELIVERED bypass is restored | KILLED | 4 failing db tests |
 | P19 | the generic Reservation -> CONSUMED bypass is restored | KILLED | 4 failing db tests |
-| P20b | a raw P2002 leaks from a concurrent user-regeneration admission | **SURVIVED** | 0 failing tests |
-| P21 | any unique violation is reported as an active regeneration | KILLED | 3 failing db tests |
 | P22 | an FX rate with the same id but different content is accepted | KILLED | 4 failing db tests |
 | P23 | the FX rate a snapshot names is never persisted | KILLED | 4 failing db tests |
-| P24 | the concurrent-attempt guard is removed from admission | KILLED | 4 failing db tests |
+| P24 | the concurrent-attempt guard is removed from admission | KILLED | 9 failing db tests |
 | P25 | a finished request admits a new paid attempt | KILLED | 6 failing db tests |
-| P26 | the job's output configuration is no longer snapshotted from the project | KILLED | 4 failing db tests |
+| P26 | the job's output configuration is no longer snapshotted from the project | KILLED | 8 failing db tests |
 | P27 | the job target-resolution vocabulary is no longer closed at the database | KILLED | 4 failing db tests |
 | P28 | a scene with no compiled prompt is admitted anyway | KILLED | 4 failing db tests |
+| Q1 | Transaction C parent-request serialization removed | KILLED | 4 failing db tests |
+| Q2 | Transaction C lock acquired after sibling inspection | KILLED | 5 failing db tests |
+| Q3 | concurrent attempt loser leaks P2002 (no lock, index only) | KILLED | 9 failing db tests |
+| Q4 | user-regeneration parent-scene serialization removed | KILLED | 4 failing db tests |
+| Q5 | conflict classifier keyed on the guessed index name is reinstated | KILLED | 4 failing db tests |
+| Q6 | conflict classifier accepts a generic P2002 | KILLED | 3 failing db tests |
+| Q7 | GenerationJob project read moved outside its transaction | KILLED | 4 failing db tests |
+| Q8 | GenerationJob project lock removed but read kept in-transaction | KILLED | 4 failing db tests |
 
-### Four mutations that measured the wrong thing, and what they found
+### The Q-series, and why Q8 is the one that matters
 
-**M22 and M23 survived, and were right to.** They removed the `consumedAt` and
-`deliveredAt` writes from the generic transition methods — and nothing failed,
-because after this round's atomic-primitive correction *neither branch can
-execute*. Both edges into `CONSUMED` belong to Transaction G and
-`GENERATING → DELIVERED` to Transaction F, so the generic methods refuse them
-before reaching the write. The branches were removed: a write that cannot run is
-not a rule, it is a claim the code makes about itself, and those two timestamps
-belong to the commits that actually spend and release a customer's units.
-**M22b** and **M23b** replace them, aimed at the sibling writes that *are*
-reachable — `releasedAt` and `failedAt` — and both die.
+Each Q mutation removes or reorders exactly one serialization point. All eight
+die.
 
-**P4 was aimed badly by the author.** It replaced the scene's duration with the
-literal `5`, which is exactly the fixture scene's duration, so the mutation was
-a no-op and its survival said nothing. **P4b** uses `7` and dies against 29
-tests.
+**Q8** is the discriminating one. It keeps the project read *inside* the
+transaction and removes only the `FOR SHARE` lock — and still fails. Without it,
+"the read moved into the transaction" and "the read is serialized against a
+concurrent writer" would be indistinguishable, and only the second is the
+actual fix. **Q2** does the same job for Transaction C: it keeps the lock but
+takes it *after* the sibling inspection, which is the plausible half-fix, and
+that dies too.
 
-**P20 was killed by the typechecker, which is not the evidence wanted.**
-Deleting the whole catch arm left `isActiveRegenerationConflict` unreferenced,
-so `tsc` failed before any behaviour was observed. **P20b** removes only the
-translation and keeps the reference — and it survives. See below.
+**Q5** and **Q6** are the classifier, reinstated in its two possible forms.
+`Q5` keys on the index name — the shape live PostgreSQL never produces, so the
+translation silently never fires and the loser's `P2002` escapes. `Q6` accepts
+any `P2002`, so an unrelated collision is reported as "a regeneration is already
+in flight". Both are caught, which is the evidence that removing the classifier
+was the right call rather than a convenient one.
 
-### Two survivors, reported rather than papered over
+### Mutations that measured the wrong thing, and what they found
+
+**M22 and M23 survived an earlier round, and were right to.** They removed the
+`consumedAt` and `deliveredAt` writes, and nothing failed — because after the
+atomic-primitive correction neither branch could execute. Both edges into
+`CONSUMED` belong to Transaction G and `GENERATING → DELIVERED` to Transaction
+F, so the generic methods refuse them before reaching the write. The branches
+were removed. **M22b** and **M23b** replace them, aimed at the reachable
+siblings `releasedAt` and `failedAt`, and both die.
+
+**P4 was aimed badly by the author** — it replaced the scene's duration with the
+literal `5`, which is exactly the fixture's own duration, so the mutation was a
+no-op and its survival said nothing. **P4b** uses `7` and dies against 29 tests.
+
+**P20 was killed by the typechecker rather than by behaviour**, because deleting
+the catch arm left its helper unreferenced. It has been retired along with the
+classifier it targeted; `Q1`, `Q3` and `Q4` now cover that ground behaviourally.
+
+### The one survivor
 
 **N7 — the tenant predicate in the provider-boundary CAS.**
 `armProviderBoundary` loads the attempt with a tenant-scoped `findFirst`
 **inside its transaction** and returns `LOST` when it finds nothing. The
-predicate in the CAS `where` is therefore a second, redundant copy of a check
-that has already decided the outcome; removing it changes no behaviour any test
-can observe, and **N8**, which removes the scoped read itself, dies immediately.
+predicate in the CAS `where` is a second, redundant copy of a check that has
+already decided the outcome; removing it changes no behaviour any test can
+observe, and **N8**, which removes the scoped read itself, dies immediately.
 The requirement that tenant scope share the CAS's transactional decision is met
-by that read. The redundant predicate is kept as defence in depth.
-
-**P20b — the concurrent-regeneration translation.** The catch arm turns the
-losing transaction's unique violation into `REGENERATION_ALREADY_ACTIVE`. It
-survives because the suite cannot deterministically reach it: the in-transaction
-pre-check and the partial index share the same predicate, so only a genuine
-interleave — one process reading before another commits — lands in the catch.
-That was probed directly rather than assumed: eight simultaneous admissions on
-one scene, and then two admissions through two independent `PrismaClient`
-instances with separate pools, all serialized and were answered by the
-pre-check. The arm is real production defence for two API processes and is kept;
-its narrow half is separately proven, because **P21** — translating *every*
-`P2002` — dies against a test that admits a duplicate id and requires the error
-to propagate.
-
-Manufacturing a test for either would be evidence about nothing, which is the
-same error M16 taught in the first round.
+by that read. The redundant predicate is kept as defence in depth, exactly as
+previously authorized. Manufacturing a test for it would be evidence about
+nothing.
 
 ## Paid gate — still blocked
 
