@@ -809,6 +809,33 @@ The Prisma checks are run against `packages/database/prisma/schema.prisma`, whic
 is where the schema actually lives; the root `prisma/` directory holds only a
 README pointing there.
 
+### One CI failure, investigated
+
+The duplicate **push** run on this exact SHA failed its `database` job once
+(attempt 1), while the **pull-request** run on the same SHA passed. The failing
+assertions were all in `tests/integration/paid-submission-authorization.db.test.ts`
+— the Phase 4C-3B-2F-1 suite, untouched by this revision — and one of them was
+`PrismaClientInitializationError: Environment variable not found: DATABASE_URL`,
+which no application change can cause.
+
+It was infrastructural, and re-running the failed job on the same commit passed
+every step. Four independent pieces of evidence:
+
+| Check | Result |
+| --- | --- |
+| Same SHA, PR run's `database` job | Success |
+| Same SHA, push run re-run (attempt 2) | Success, all steps |
+| Locally, `paid-submission-authorization.db.test.ts` × 3 | 64/64 each time |
+| Locally, full `pnpm test:db` | 481/481 |
+
+**The underlying fragility is real and worth naming**, even though it is not this
+phase's defect. Those 2F-1 tests assert "still blocked" by sleeping on a wall
+clock (`breathe()`) and then checking that a promise has not settled. Under a
+loaded runner — two CI runs for one commit, each with its own Postgres service
+container — the sleep can elapse before the blocked transaction has even reached
+the lock. That is a latent flake in an already-merged suite, recorded here rather
+than quietly re-run into green.
+
 ### Suite breakdown
 
 | Suite | Tests |
