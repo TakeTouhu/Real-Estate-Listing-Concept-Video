@@ -590,11 +590,22 @@ and ADR-0020.
   provider may already hold and bill for the request, so re-arming it would buy
   the same work twice.
 
-  `normalizedErrorCode` accepted a bare string and persisted it, which re-opened
-  the channel ADR-0031 closed — a signed URL, an `Authorization` header, a
-  customer prompt or a raw provider body could all be written into a field that
-  is dumped into tickets. It is now a validated short application code, and
-  anything else is a closed refusal with nothing written.
+  Two boundaries were then found to be guards in name only. The reconciliation
+  policy had a correct validator that nothing forced callers through: while the
+  consumed type was structural, an object with a window past the twenty-four-hour
+  ceiling reached the service unchecked because it happened to have the right two
+  fields. Raw and validated are now different types, the latter branded with a
+  `unique symbol` no literal can produce, so the validator is the only
+  construction site and every consumer — the dependency set, the evaluator and
+  all three derivations — takes the branded type; compile-time coverage proves a
+  raw object cannot enter. And `normalizedErrorCode`, having first accepted a bare
+  string, was narrowed only by *syntax*, which admitted `SECRET_TOKEN_ABC123` and
+  `APIKEY1234567890` unchanged. Safe syntax is not trusted provenance: a shape
+  predicate proves how a value is spelled and says nothing about where it came
+  from. It is now a closed application-owned vocabulary — `TIMEOUT`,
+  `CONNECTION_RESET`, `LOCAL_CONFIGURATION` — checked by membership, with no HTTP
+  status and no vendor string admitted, and anything else refused with nothing
+  written.
 
   Uncertainty suspends `RESERVED → RECONCILIATION_HOLD` in the same commit;
   certainty does not. `CONSUMED` stays consumed, because a post-delivery

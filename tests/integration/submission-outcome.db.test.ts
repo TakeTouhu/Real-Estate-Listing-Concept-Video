@@ -7,6 +7,7 @@ import {
   createSubmissionOutcomeService,
   epochMillisFromDate,
   parseSubmissionDiagnosticCode,
+  validateReconciliationPolicy,
   staleSubmittingBoundary,
   STALE_SUBMISSION_RECOVERY_EVENT_TYPE,
   SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE,
@@ -16,6 +17,7 @@ import {
   type PricingSnapshot,
   type ProviderSubmissionObservation,
   type ReconciliationPolicy,
+  type ReconciliationPolicyConfig,
   type SubmissionClock,
   type SubmissionDiagnosticCode,
 } from "@app/domain";
@@ -54,16 +56,30 @@ const other = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 /** A third pool, used only to hold a lock while the other two contend for it. */
 const blocker = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
+
+/**
+ * The only way a test may obtain a policy.
+ *
+ * Fixtures go through the same validator production callers do, so a test can
+ * never exercise the phase against a policy the type system would refuse in
+ * production — which is the whole point of the validated type.
+ */
+function validatedPolicy(config: ReconciliationPolicyConfig): ReconciliationPolicy {
+  const result = validateReconciliationPolicy(config);
+  if (!result.ok) throw new Error(`invalid test policy: ${result.reason}`);
+  return result.policy;
+}
+
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 /**
  * A fixture, not a product policy. There is deliberately no shipped default
  * stale-`SUBMITTING` threshold: how long an attempt may sit at the boundary
  * before it is presumed lost is a production-activation decision.
  */
-const POLICY: ReconciliationPolicy = {
+const POLICY: ReconciliationPolicy = validatedPolicy({
   reconciliationWindowMs: 24 * 60 * 60 * 1000,
   staleSubmittingAfterMs: 15 * 60 * 1000,
-};
+});
 
 /** Codes exist only by passing the safe-code boundary. */
 function code(value: string): SubmissionDiagnosticCode {
@@ -308,7 +324,7 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       const outcome = await service().recordObservation({
         organizationId: ORG_A,
         attemptId: attempt.id,
-        observation: { kind: "DEFINITIVELY_REJECTED", retryable, normalizedErrorCode: code("E") },
+        observation: { kind: "DEFINITIVELY_REJECTED", retryable, normalizedErrorCode: code("LOCAL_CONFIGURATION") },
         context: ctx(),
       });
       expect(outcome).toMatchObject({ kind: "APPLIED" });
@@ -1117,13 +1133,34 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
 
   describe("hostile diagnostic codes never reach the database", () => {
     it.each([
+      // Obviously unsafe: caught by the old syntactic rule too.
       ["a signed URL", "https://signed.example/path?token=SECRET"],
       ["a bearer credential", "Bearer secret-token"],
       ["a customer prompt", "a sunlit living room, cinematic"],
       ["raw provider text", "Provider returned 429: too many requests"],
       ["a line break", "TIMEOUT\nAuthorization: Bearer leaked"],
+      ["a JSON body", '{"error":{"token":"abc"}}'],
+      ["a stack trace", "at Object.<anonymous> (/srv/app/index.js:41:11)"],
+      ["a control character", "TIMEOUT\u0000secret"],
+      // Code-shaped, and admitted outright by the old syntactic rule. These are
+      // the reason membership replaced shape: every one is a credential or a
+      // customer identifier spelled exactly like a real classification.
+      ["a token spelled like a code", "SECRET_TOKEN_ABC123"],
+      ["an API key spelled like a code", "APIKEY1234567890"],
+      ["an access key spelled like a code", "ACCESS_KEY_123456789"],
+      ["a customer identifier", "CUSTOMER_PRIVATE_ID_98765"],
+      ["a plausible but unowned code", "UNKNOWN_CODE_NOT_IN_CATALOG"],
     ])("refuses %s and writes nothing", async (label, hostile) => {
-      const { attempt } = await seedSubmittingAttempt(`hostile${label.length}`);
+      const suffix = `h${label.replace(/[^a-z]/gi, "").slice(0, 12).toLowerCase()}`;
+      const { attempt, job } = await seedSubmittingAttempt(suffix);
+      const reservationBefore = await reservationOf(job.id);
+      const before = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      const eventsBefore = (
+        await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)
+      ).length;
+
       expect(
         await service().recordObservation({
           organizationId: ORG_A,
@@ -1136,12 +1173,22 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
         }),
       ).toEqual({ kind: "OBSERVATION_MALFORMED" });
 
+      // Attempt unchanged, reservation unchanged, zero new events, and the
+      // diagnostic field never touched.
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
       expect(row.orchestrationState).toBe("SUBMITTING");
+      expect(row.submissionCertainty).toBe("PRE_SUBMISSION");
+      expect(row.stateVersion).toBe(before.stateVersion);
       expect(row.normalizedErrorCode).toBeNull();
+      const reservationAfter = await reservationOf(job.id);
+      expect(reservationAfter.state).toBe(reservationBefore.state);
+      expect(reservationAfter.stateVersion).toBe(reservationBefore.stateVersion);
+      expect(
+        (await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", attempt.id)).length,
+      ).toBe(eventsBefore);
     });
 
-    it("refuses hostile text on the stale-recovery route too", async () => {
+    it("refuses a code-shaped secret on the stale-recovery route too", async () => {
       const { attempt } = await seedSubmittingAttempt("hostilestale");
       expect(
         await service(
@@ -1150,7 +1197,7 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
         ).enterUncertaintyForStaleSubmitting({
           organizationId: ORG_A,
           attemptId: attempt.id,
-          normalizedErrorCode: "Bearer secret-token" as SubmissionDiagnosticCode,
+          normalizedErrorCode: "SECRET_TOKEN_ABC123" as SubmissionDiagnosticCode,
           context: ctx(),
         }),
       ).toEqual({ kind: "OBSERVATION_MALFORMED" });

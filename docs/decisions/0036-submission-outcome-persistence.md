@@ -162,20 +162,90 @@ when money started being spent — backdatable and future-datable at will. A rep
 never re-stamps it. A future provider contract exposing a separately verified
 provider timestamp is a different decision.
 
-### 3c. Diagnostics are short application codes, never text
+### 3c. A validator is not a boundary — only the validated type may be consumed
 
-`normalizedErrorCode` accepted a bare `string` and persisted it directly, which
-re-opened the channel ADR-0031 closed: a signed URL, an `Authorization` header, a
-customer prompt or a raw provider body could all be written into a field that is
-dumped into tickets and pasted into chat.
+Bounds that are checked by a function nobody is forced to call are documentation,
+not enforcement. While the consumed policy type was structural, this compiled and
+ran:
 
-Codes are now a validated value object — SCREAMING_SNAKE ASCII, starting with a
-letter, at most 48 characters — so no secret, URL or sentence fits through. A
-malformed code is a closed refusal (`OBSERVATION_MALFORMED`) with no attempt
-write, no reservation write and no event; it is deliberately distinguished from
-"no diagnosis offered", because silently dropping a malformed code would persist
-the outcome while discarding the evidence that a caller tried to put a secret in
-the audit trail. `null` is always acceptable and always honest.
+```ts
+{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
+```
+
+A window past the 24-hour ceiling, reaching the service without ever meeting the
+validator, because it happened to have the right two fields.
+
+So the raw and the checked shapes are now different types:
+
+```ts
+interface ReconciliationPolicyConfig { … }              // what an operator writes
+type ReconciliationPolicy = Readonly<{ … }> & ValidatedReconciliationPolicyBrand;
+```
+
+The brand is a `unique symbol` property no object literal can produce, so
+`validateReconciliationPolicy` is the only construction site. Every consumer in
+this phase — `SubmissionOutcomeDeps.policy`, `decideSubmissionOutcome`,
+`reconciliationDeadlineFor`, `staleSubmittingBoundary`, `isStaleSubmitting` —
+takes the validated type, so a raw object is a compile error at the call site
+rather than an out-of-range deadline discovered in production. Tests obtain
+policies only through the validator, so no test can exercise the phase against a
+policy production would refuse.
+
+Values pass through unchanged. Nothing is clamped and nothing is defaulted:
+silently repairing an operator's number would hide the mistake rather than report
+it, and would make the persisted deadline disagree with the configuration
+somebody believes is in force.
+
+### 3d. Diagnostics are a closed application-owned vocabulary, never text
+
+`normalizedErrorCode` has now failed two boundaries, and the second failure is
+the instructive one.
+
+The first accepted a bare `string`, which was plainly a raw-text channel.
+
+The second narrowed the *syntax* — SCREAMING_SNAKE, bounded length — and looked
+like a boundary while admitting every one of these unchanged:
+
+```text
+SECRET_TOKEN_ABC123
+APIKEY1234567890
+ACCESS_KEY_123456789
+CUSTOMER_PRIVATE_ID_98765
+```
+
+**Safe syntax is not trusted provenance.** A shape predicate proves how a value is
+spelled and says nothing about where it came from; a secret that happens to be
+spelled in capitals is still a secret. This is ADR-0031 §4 again — structural
+validation proves a shape and can never prove provenance.
+
+The value is therefore a closed catalog the application owns:
+
+```ts
+const SUBMISSION_DIAGNOSTIC_CODES = ["TIMEOUT", "CONNECTION_RESET", "LOCAL_CONFIGURATION"] as const;
+```
+
+External input may influence **which** member is chosen; it may never supply the
+value. The runtime guard checks *membership*, not shape, so
+`UNKNOWN_CODE_NOT_IN_CATALOG` is refused despite being well-formed by every
+syntactic measure. No HTTP status and no vendor string is a member: a status is
+external data about one exchange rather than an application classification, and
+copying `429` in would smuggle the provider's vocabulary through the boundary
+that exists to keep it out.
+
+The set is small on purpose, and each member earns its place from this phase's
+own semantics: `TIMEOUT` (in flight, no answer — the canonical route into
+`SUBMISSION_UNKNOWN`), `CONNECTION_RESET` (the transport died mid-exchange, which
+an operator triaging a spike wants distinguished from silence), and
+`LOCAL_CONFIGURATION` (the platform could not attempt the call at all — the only
+member describing this system rather than the exchange, and the only one
+actionable without asking the provider anything). An adapter that cannot honestly
+place a failure passes `null`, which is always allowed and always truthful.
+
+An unrecognized code is a closed refusal (`OBSERVATION_MALFORMED`) with no
+attempt write, no reservation write and no event, and is deliberately
+distinguished from "no diagnosis offered": silently dropping it would persist the
+outcome while discarding the evidence that a caller tried to write something of
+its own choosing into the audit trail.
 
 ### 4. Uncertainty is never resolved by returning to `QUEUED`
 

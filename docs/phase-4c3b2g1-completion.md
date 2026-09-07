@@ -21,6 +21,18 @@ Submission outcome persistence and uncertainty entry. Base:
 > `SUBMISSION_UNCERTAINTY_HOLD` rather than reusing an attempt-side label, and
 > the stale threshold must be **strictly** less than the reconciliation window.
 
+> **Revision 3 — final corrections.** Revision 2
+> (`c21f10f2cc5d258d6efcbb8fdded6d9823d1bd9c`) was not approved. Two of its
+> boundaries were guards in name only:
+>
+> | Superseded claim | Correction |
+> | --- | --- |
+> | A validated reconciliation policy is enforced | It was *validatable*, not enforced. `{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }` satisfied the consumed type and reached the service without ever meeting the validator. Raw and validated are now different types, and only the branded one is consumed |
+> | `normalizedErrorCode` is safely narrowed | Syntactic narrowing is not a boundary. `SECRET_TOKEN_ABC123`, `APIKEY1234567890` and `ACCESS_KEY_123456789` all satisfied `^[A-Z][A-Z0-9_]*$`. It is now a closed application-owned catalog, checked by membership |
+>
+> The lesson both share: **a validator existing is not enforcement, and safe
+> syntax is not trusted provenance.**
+
 Phase 4C-3B-2F-1 ended at the paid boundary: it decided whether an attempt was
 allowed to cross, moved it `QUEUED → SUBMITTING`, and stopped. Nothing then knew
 how to write down what happened next. This phase supplies exactly that, and
@@ -63,6 +75,9 @@ type ProviderSubmissionObservation =
       normalizedErrorCode: SubmissionDiagnosticCode | null;
     }
   | { kind: "SUBMISSION_UNKNOWN"; normalizedErrorCode: SubmissionDiagnosticCode | null };
+
+// where SubmissionDiagnosticCode is a member of a closed application catalog,
+// not a string that merely looks like one.
 ```
 
 No HTTP status, no provider error body, no vendor enum, no provider name. An
@@ -71,10 +86,12 @@ layer never learns which provider it was talking to. That is what lets the
 persistence rules be written once and exercised in full without a provider
 existing.
 
-There is no timestamp and no free-text field. A caller able to name the
-acceptance instant could backdate paid submission history; a caller able to write
-free text into the diagnostic field could put a signed URL or a customer prompt
-into the most widely read table in an incident.
+There is no timestamp, and no field a caller may fill with a value of its own
+choosing. A caller able to name the acceptance instant could backdate paid
+submission history; a caller able to supply the diagnostic value — even one
+shaped like a code — could put a credential or a customer identifier into the
+most widely read table in an incident, so it may only *select* from a closed
+application-owned vocabulary.
 
 `retryable` says only whether a *new* attempt row may be admitted for the same
 request. It never means this row may be re-POSTed. Nothing in this phase ever
@@ -218,6 +235,58 @@ unverified claim about when money started being spent — backdatable and
 future-datable at will. The clock is read once per decision, not once per field.
 A replay never re-stamps it.
 
+## A validator is not a boundary
+
+Revision 2 shipped a correct validator and then let callers bypass it, because
+the type the service consumed was structural. This compiled and ran:
+
+```ts
+{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
+```
+
+A window one millisecond past the 24-hour ceiling, reaching
+`SubmissionOutcomeDeps` without ever meeting `validateReconciliationPolicy`,
+because it happened to have the right two fields. The bounds were documented
+rather than enforced — the same failure mode as "we agreed not to do that".
+
+Raw and checked are now separate types:
+
+```ts
+interface ReconciliationPolicyConfig {          // what an operator writes
+  readonly reconciliationWindowMs: number;
+  readonly staleSubmittingAfterMs: number;
+}
+
+type ReconciliationPolicy =                     // what the phase consumes
+  Readonly<{ reconciliationWindowMs: number; staleSubmittingAfterMs: number }> &
+  ValidatedReconciliationPolicyBrand;
+```
+
+The brand is a `unique symbol` property that no object literal can produce, so
+`validateReconciliationPolicy` is the only construction site in the codebase.
+Every consumer takes the validated type:
+
+| Consumer | Accepts |
+| --- | --- |
+| `SubmissionOutcomeDeps.policy` | `ReconciliationPolicy` only |
+| `decideSubmissionOutcome` | `ReconciliationPolicy` only |
+| `reconciliationDeadlineFor` | `ReconciliationPolicy` only |
+| `staleSubmittingBoundary` | `ReconciliationPolicy` only |
+| `isStaleSubmitting` | `ReconciliationPolicy` only |
+
+`policy-nominality.test.ts` proves this at compile time rather than describing
+it: each case carries a `@ts-expect-error`, so the suite **fails to compile** if
+any of those lines ever starts type-checking. A positive control passes a
+validated policy through the same call sites, so the assertions are about
+provenance and not about the calls being broken.
+
+Test fixtures obtain policies only through the validator, so no test can exercise
+this phase against a policy production would refuse.
+
+Nothing is clamped and nothing is defaulted. Silently repairing an operator's
+number would hide the mistake rather than report it, and would make the persisted
+deadline disagree with the configuration somebody believes is in force.
+
 ## Window policy — and the threshold that is deliberately absent
 
 | Setting | Shipped default | Bound |
@@ -252,36 +321,72 @@ whether to refuse startup or fall back. It never silently falls back to a
 hard-coded threshold. Production wiring is out of scope: the phase is dormant and
 has no caller.
 
-## Diagnostics are short application codes, never text
+## Diagnostics are a closed vocabulary, because safe syntax is not provenance
+
+This boundary has now failed twice, and the second failure is the instructive one.
 
 Revision 1 accepted `normalizedErrorCode: string | null` and persisted it
-directly. That re-opened the channel ADR-0031 closed — a caller could write a
-signed URL, an `Authorization` header, a customer prompt, a raw provider body or
-a stack trace into a field that is dumped into tickets and pasted into chat.
+directly — plainly a raw-text channel, and exactly what ADR-0031 closed.
 
-The repository had no reusable safe application error-code value object at an
-allowed dependency level (`@app/shared` has none, and `ProviderError` lives in
-`@app/video-providers`, which domain may not import), so a minimal
-provider-neutral one is introduced:
+Revision 2 narrowed the *syntax* — SCREAMING_SNAKE ASCII, at most 48 characters —
+and that looked like a boundary while admitting every one of these unchanged:
 
 ```text
-SCREAMING_SNAKE_CASE, ASCII only
-starts with an uppercase letter
-at most 48 characters
+SECRET_TOKEN_ABC123
+APIKEY1234567890
+ACCESS_KEY_123456789
+CUSTOMER_PRIVATE_ID_98765
 ```
 
-A signed URL has `:` and `/`. A bearer token has a space and lowercase. A prompt
-has spaces. A stack trace has newlines. None survive, and none can be smuggled
-through by being long. The type is branded, so a bare `string` cannot be assigned
-where a code is required — and the boundary re-checks at runtime anyway, because
-a cast is exactly what a caller in a hurry writes.
+A shape predicate proves how a value is *spelled*. It can say nothing about where
+the value came from, and a credential that happens to be spelled in capitals is
+still a credential. ADR-0031 §4 recorded this same lesson when structural
+validation of `ProviderError` let a hostile object choose both public diagnostic
+strings outright: **structural validation proves a shape; it can never prove
+provenance.**
 
-A malformed code is a closed refusal — `OBSERVATION_MALFORMED`, no attempt write,
-no reservation write, no event — and is deliberately distinguished from "no
-diagnosis offered". Silently dropping it would persist the outcome while
-discarding the evidence that a caller tried to put a secret in the audit trail.
-`null` is always acceptable and always honest. The same contract applies to the
-stale-recovery route.
+The value is now a closed catalog the application owns:
+
+```ts
+const SUBMISSION_DIAGNOSTIC_CODES = [
+  "TIMEOUT",
+  "CONNECTION_RESET",
+  "LOCAL_CONFIGURATION",
+] as const;
+```
+
+External input may influence **which** member is chosen; it may never supply the
+value. Each member earns its place from this phase's own semantics, not from any
+vendor's error list:
+
+| Code | Why this phase needs it |
+| --- | --- |
+| `TIMEOUT` | In flight, no answer in time — the canonical route into `SUBMISSION_UNKNOWN`. The provider may hold the request, may be executing it, may already have billed it |
+| `CONNECTION_RESET` | The transport died mid-exchange. Distinguished from a timeout because an operator triaging a spike wants to know which, though it establishes just as little |
+| `LOCAL_CONFIGURATION` | The platform could not attempt the call at all — a missing credential, an unroutable base URL, a disabled provider. The only member describing *this system*, and the only one actionable without asking the provider anything |
+
+No HTTP status is a member and no vendor string is. A status is external data
+about one exchange rather than an application classification, and copying `429`
+in would smuggle the provider's vocabulary through the boundary that exists to
+keep it out. A test asserts no member contains a digit or a vendor name.
+
+The runtime guard checks **membership, not shape** — the union type stops a bare
+string being assigned, and a cast is exactly what a caller in a hurry writes. So
+`UNKNOWN_CODE_NOT_IN_CATALOG` is refused despite being well-formed by every
+syntactic measure, and so is `SECRET_TOKEN_ABC123`.
+
+An unrecognized code is a closed refusal — `OBSERVATION_MALFORMED`, no attempt
+write, no reservation write, no event, `normalizedErrorCode` untouched — and is
+deliberately distinguished from "no diagnosis offered". Silently dropping it
+would persist the outcome while discarding the evidence that a caller tried to
+write something of its own choosing into the audit trail. `null` is always
+acceptable and always honest. The same contract applies to the stale-recovery
+route.
+
+An adapter that cannot honestly place a failure in this vocabulary passes `null`.
+Growing the catalog on contact with providers would stop it being
+application-owned, so adding a member is a deliberate act with a reason — which
+is the property a closed set has and a regex does not.
 
 ## Staleness is at-or-after, on an injected clock
 
@@ -530,10 +635,10 @@ source of a fact the caller already holds.
 
 ```text
 packages/domain/src/submission/
-├── diagnostic-code.ts        the safe short-code boundary for normalizedErrorCode
+├── diagnostic-code.ts        the closed application-owned diagnostic vocabulary
 ├── entitlement-anomaly.ts    the closed anomaly vocabulary and its classifier
 ├── observation.ts            provider-neutral normalized observation
-├── reconciliation-window.ts  window + stale policy, validation, deadline derivation
+├── reconciliation-window.ts  the validated policy type, its validator, deadline derivation
 ├── outcome.ts                the pure evaluator (APPLY / REPLAY / CONFLICT / …)
 ├── ports.ts                  clock, repository, closed result union
 └── service.ts                two entry points, one rule set
@@ -549,6 +654,9 @@ without submitting anything.
 
 A static test asserts that no file under `submission/` imports a provider
 package or a transport, and that none of them calls `Date.now()` directly.
+`policy-nominality.test.ts` adds a compile-time layer to the same idea: it fails
+to compile if a raw policy object ever becomes assignable where a validated one
+is required.
 
 ## Schema
 
@@ -589,18 +697,17 @@ rather than growing a second.
   dormant and has no caller; a production caller must supply a validated policy,
   and the value itself is unresolved (`docs/decisions/TODO.md`).
 
-## Mutation ledger — 56/56 killed
+## Mutation ledger — 61/61 killed
 
 Every mutation removes exactly one rule this phase is supposed to enforce, from
 an artefact that actually executes. A mutation is *killed* when the suites fail,
 and each is restored byte-identically before the next runs. The `C` series
-targets the rules this correction round introduced; the `P` series preserves the
+targets the rules the correction rounds introduced; the `P` series preserves the
 first round's coverage against the rewritten sources.
 
-Revision 1's ledger reported 44/51 with seven survivors, all of them redundant
-defences in the persistence layer. Three of those survivors are gone because the
-code they guarded was rewritten; the rest were re-aimed at behaviour that is now
-reachable. **No survivor remains, and none was retired by deleting the mutation.**
+The `C5` series was re-aimed at the closed catalog — the old syntactic mutations
+no longer describe anything the code does — and the `C7` series is new, covering
+the validated-policy nominal boundary.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -617,19 +724,24 @@ reachable. **No survivor remains, and none was retired by deleting the mutation.
 | C2c | a replay rewrites reconciliationStartedAt | KILLED | 10 failing unit tests |
 | C4a | the acceptance instant is taken from the boundary, not the clock | KILLED | 4 failing unit tests |
 | C4b | caller-controlled providerAcceptedAt is restored | KILLED | 3 failing unit tests |
-| C3a | a fifteen-minute production stale default is reintroduced | KILLED | 3 failing unit tests |
-| C3b | a stale threshold equal to the window is accepted | KILLED | 3 failing unit tests |
-| C3c | the 24-hour reconciliation ceiling is removed | KILLED | 4 failing unit tests |
-| C3d | the ceiling drifts to 48 hours | KILLED | 3 failing unit tests |
+| C3a | a fifteen-minute production stale default is reintroduced | KILLED | 6 failing unit tests |
+| C3b | a stale threshold equal to the window is accepted | KILLED | 6 failing unit tests |
+| C3c | the 24-hour reconciliation ceiling is removed | KILLED | 7 failing unit tests |
+| C3d | the ceiling drifts to 48 hours | KILLED | 6 failing unit tests |
 | C3e | the stale threshold becomes strictly-after instead of at-or-after | KILLED | 10 failing unit tests |
-| C3f | a non-positive reconciliation window is accepted | KILLED | 6 failing unit tests |
-| C3g | a non-positive stale threshold is accepted | KILLED | 3 failing unit tests |
-| C3h | the deadline is computed from the stale threshold | KILLED | 3 failing unit tests |
-| C5a | any string is accepted as a diagnostic code | KILLED | 27 failing unit tests |
-| C5b | the length bound is removed | KILLED | 3 failing unit tests |
-| C5c | whitespace becomes an acceptable code character | KILLED | 4 failing unit tests |
-| C5d | the observation stops validating the code at all | KILLED | 10 failing unit tests |
-| C5e | a malformed code is silently dropped instead of refused | KILLED | 22 failing unit tests |
+| C3f | a non-positive reconciliation window is accepted | KILLED | 9 failing unit tests |
+| C3g | a non-positive stale threshold is accepted | KILLED | 9 failing unit tests |
+| C3h | the deadline is computed from the stale threshold | KILLED | 8 failing unit tests |
+| C5a | closed membership is replaced by the old regex shape test | KILLED | 19 failing unit tests |
+| C5b | an unknown well-shaped code is admitted to the catalog | KILLED | 7 failing unit tests |
+| C5c | a code-shaped secret is admitted to the catalog | KILLED | 8 failing unit tests |
+| C5g | the runtime membership check is removed entirely | KILLED | 61 failing unit tests |
+| C7a | the validated-policy brand is removed, so a raw object is a policy | KILLED | 1 package fails typecheck (see note) |
+| C7b | the brand is made optional, which is the same hole with more words | KILLED | 1 package(s) fail typecheck |
+| C7c | the config type is accepted wherever a policy is | KILLED | 2 package(s) fail typecheck |
+| C7d | an out-of-range window is clamped instead of refused | KILLED | 7 failing unit tests |
+| C5d | the observation stops validating the code at all | KILLED | 34 failing unit tests |
+| C5e | a malformed code is silently dropped instead of refused | KILLED | 27 failing unit tests |
 | C5f | a blank provider reference is accepted as an acceptance | KILLED | 3 failing unit tests |
 | C6a | INITIAL over a CONSUMED reservation is treated as normal | KILLED | 6 failing unit tests |
 | C6b | a missing reservation is no longer flagged | KILLED | 8 failing unit tests |
@@ -661,13 +773,20 @@ reachable. **No survivor remains, and none was retired by deleting the mutation.
 | P19 | the retryable flag stops selecting the failure state | KILLED | 7 failing unit tests |
 | P20 | an attempt with no boundary instant is treated as stale | KILLED | 3 failing unit tests |
 
-The three previously typecheck-only kills (`R3`, `R4`, `R13`) do not appear:
-their re-aimed forms were absorbed into the persistence mutations above, which
-are killed behaviourally. The lock-mode and lock-key survivors (`R2`, `R3b`,
-`R14`) are no longer measured separately — `P11`, removing the reservation row
-lock outright, kills four database tests, and the mode question it left open is
-discussed under **Concurrency and lock order** rather than being presented as
-test-backed.
+**One honest note on `C7a`.** In the batch run it was reported as killed by four
+database tests, which was noise: re-running it in isolation kills it by
+**typecheck**, and the database suite passes 59/59 against unmutated code. The
+batch attribution came from state left by the preceding mutation's database run,
+not from the mutation itself. The kill is real — removing the brand makes every
+`@ts-expect-error` in `policy-nominality.test.ts` unused, which is a compile
+error — but the detector named in the batch output was wrong, so it is corrected
+here rather than quoted.
+
+`C7a`, `C7b` and `C7c` are killed at compile time by design. The nominal boundary
+*is* a type-level guarantee, so a compile failure is the correct and only honest
+detector for removing it — this is not a case of a behavioural rule that the
+suites happen to miss. `pnpm typecheck` passing on unmutated code, with every
+`@ts-expect-error` directive used, is the positive half of that proof.
 
 ## Verification
 
@@ -679,12 +798,12 @@ graph.
 | --- | --- |
 | `pnpm typecheck` | Pass (all packages and apps) |
 | `pnpm lint` | Pass (0 problems) |
-| `pnpm test` | Pass — 87 files, **2246 tests** |
+| `pnpm test` | Pass — 88 files, **2300 tests** |
 | `pnpm build` | Pass (Next.js production build) |
-| `pnpm test:db` | Pass — 18 files, **473 tests** |
+| `pnpm test:db` | Pass — 18 files, **481 tests** |
 | `prisma migrate diff` schema ↔ live database | `No difference detected` |
 | `prisma migrate diff` migrations ↔ schema | `No difference detected` |
-| Mutation ledger | **56/56 killed, 0 survivors** |
+| Mutation ledger | **61/61 killed, 0 survivors** |
 
 The Prisma checks are run against `packages/database/prisma/schema.prisma`, which
 is where the schema actually lives; the root `prisma/` directory holds only a
@@ -696,9 +815,10 @@ README pointing there.
 | --- | --- |
 | `packages/domain/src/submission/outcome.test.ts` | 58 |
 | `packages/domain/src/submission/service.test.ts` | 33 |
-| `packages/domain/src/submission/diagnostic-code.test.ts` | 29 |
+| `packages/domain/src/submission/diagnostic-code.test.ts` | 58 |
+| `packages/domain/src/submission/policy-nominality.test.ts` | 25 |
 | `packages/domain/src/submission/entitlement-anomaly.test.ts` | 9 |
-| `tests/integration/submission-outcome.db.test.ts` | 51 |
+| `tests/integration/submission-outcome.db.test.ts` | 59 |
 
 The database suite covers the three outcomes; replay exactness (no second event,
 no timestamp moved, no `providerAcceptedAt` re-stamped); same-reference
@@ -709,7 +829,10 @@ reconciliation instants and an already-past deadline; every conflict reason;
 stale recovery at and one millisecond before its threshold; the full reservation
 matrix including an absent reservation; the entitlement-anomaly matrix
 cold-read back from transition-event metadata; the reservation hold's own event
-type; hostile diagnostic codes refused with nothing written; no-quota /
+type; hostile diagnostic codes refused with nothing written — thirteen of them,
+including five that the previous syntactic rule admitted, each asserting the
+attempt, the reservation, the event count and `normalizedErrorCode` all
+unchanged; no-quota /
 no-recovery-attempt / no-regeneration-consumed; cross-tenant isolation in both
 directions; and six concurrency races — including the direct-versus-stale race
 run on **two different clocks**.

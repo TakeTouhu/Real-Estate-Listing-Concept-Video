@@ -35,7 +35,8 @@ import { DEFAULT_RECONCILIATION_WINDOW_MS } from "../orchestration/certainty";
 export const MAX_RECONCILIATION_WINDOW_MS = DEFAULT_RECONCILIATION_WINDOW_MS;
 
 /**
- * There is deliberately no default stale-`SUBMITTING` threshold.
+ * There is deliberately no default stale-`SUBMITTING` threshold, and no way to
+ * skip validating one.
  *
  * How long an attempt may sit at the boundary before it is presumed lost is a
  * production-activation decision that depends on real provider latency
@@ -51,10 +52,57 @@ export const MAX_RECONCILIATION_WINDOW_MS = DEFAULT_RECONCILIATION_WINDOW_MS;
  * The unresolved production value is tracked in `docs/decisions/TODO.md`.
  */
 
-export interface ReconciliationPolicy {
+/**
+ * What an operator writes down: two numbers, unchecked.
+ *
+ * This is the *input* type. It is deliberately structural and deliberately
+ * useless on its own — nothing in this phase accepts it, and it exists only to
+ * name the shape a caller hands to the validator.
+ */
+export interface ReconciliationPolicyConfig {
   readonly reconciliationWindowMs: number;
   readonly staleSubmittingAfterMs: number;
 }
+
+declare const VALIDATED_RECONCILIATION_POLICY: unique symbol;
+
+/**
+ * The nominal marker that separates a checked policy from a plausible object.
+ *
+ * A `unique symbol` property that no literal can produce, so the only way to
+ * obtain a `ReconciliationPolicy` is to pass through
+ * `validateReconciliationPolicy`.
+ */
+export interface ValidatedReconciliationPolicyBrand {
+  readonly [VALIDATED_RECONCILIATION_POLICY]: true;
+}
+
+/**
+ * A policy that has been checked, and can prove it.
+ *
+ * Having a validator is not the same as enforcing one. While the consumed type
+ * was structural, this compiled and ran:
+ *
+ * ```ts
+ * { reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
+ * ```
+ *
+ * — a window past the 24-hour ceiling, reaching the service without ever meeting
+ * the validator, because it happened to have the right two fields. The bounds
+ * were documented rather than enforced, which is the same failure mode as
+ * "we agreed not to do that".
+ *
+ * The brand makes the check unavoidable rather than conventional. Every consumer
+ * in this phase — `SubmissionOutcomeDeps`, `decideSubmissionOutcome`,
+ * `reconciliationDeadlineFor`, `staleSubmittingBoundary`, `isStaleSubmitting` —
+ * takes this type, so a raw object is a compile error at the call site rather
+ * than an out-of-range deadline discovered in production.
+ */
+export type ReconciliationPolicy = Readonly<{
+  reconciliationWindowMs: number;
+  staleSubmittingAfterMs: number;
+}> &
+  ValidatedReconciliationPolicyBrand;
 
 export type ReconciliationPolicyResult =
   | { readonly ok: true; readonly policy: ReconciliationPolicy }
@@ -74,10 +122,9 @@ export type ReconciliationPolicyFailure =
  * caller decides whether to refuse startup or fall back. Throwing here would
  * turn a typo in an environment variable into a crash with no closed outcome.
  */
-export function validateReconciliationPolicy(input: {
-  readonly reconciliationWindowMs: number;
-  readonly staleSubmittingAfterMs: number;
-}): ReconciliationPolicyResult {
+export function validateReconciliationPolicy(
+  input: ReconciliationPolicyConfig,
+): ReconciliationPolicyResult {
   const { reconciliationWindowMs, staleSubmittingAfterMs } = input;
   if (!Number.isSafeInteger(reconciliationWindowMs) || reconciliationWindowMs <= 0) {
     return { ok: false, reason: "RECONCILIATION_WINDOW_NOT_POSITIVE" };
@@ -95,7 +142,14 @@ export function validateReconciliationPolicy(input: {
   if (staleSubmittingAfterMs >= reconciliationWindowMs) {
     return { ok: false, reason: "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE" };
   }
-  return { ok: true, policy: { reconciliationWindowMs, staleSubmittingAfterMs } };
+  // The one place the brand is applied, and the only reason this cast exists:
+  // every path to it has just been checked. Values are passed through
+  // unchanged — never clamped, never defaulted — because silently repairing an
+  // operator's number would hide the mistake rather than report it.
+  return {
+    ok: true,
+    policy: { reconciliationWindowMs, staleSubmittingAfterMs } as ReconciliationPolicy,
+  };
 }
 
 /**

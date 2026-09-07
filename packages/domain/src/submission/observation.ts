@@ -27,11 +27,12 @@ import {
  * nothing, and all of them belong here rather than being rounded to the
  * convenient answer.
  *
- * **What a caller may not supply:** a timestamp, and free text. Both were
- * removed deliberately. A caller able to name the acceptance instant could
- * backdate or future-date paid submission history; a caller able to write free
- * text into the diagnostic field could put a signed URL or a customer prompt
- * into the most widely read table in an incident.
+ * **What a caller may not supply:** a timestamp, and a diagnostic value of its
+ * own choosing. A caller able to name the acceptance instant could backdate or
+ * future-date paid submission history. A caller able to supply the diagnostic
+ * text — even text shaped like a code — could put a credential or a customer
+ * identifier into the most widely read table in an incident, so it may only
+ * *select* from a closed application-owned vocabulary.
  */
 export type ProviderSubmissionObservation =
   | {
@@ -89,11 +90,12 @@ export function isWellFormedObservation(
     // present" check while naming nothing the provider could be asked about.
     return observation.providerPredictionId.trim().length > 0;
   }
-  // Defence in depth over the branded type. The brand stops a bare string being
+  // Defence in depth over the union type. It stops a bare string being
   // *assigned* here, which a caller inside this repository cannot bypass without
   // an explicit cast — but a cast is exactly what a caller in a hurry writes, and
-  // the value ends up in an audit table either way. Re-checking at the boundary
-  // costs one regex and removes the cast as an attack.
+  // the value ends up in an audit table either way. The re-check is membership
+  // in the closed catalog, not a shape test: `SECRET_TOKEN_ABC123` is spelled
+  // like a code and is still not one.
   return (
     observation.normalizedErrorCode === null ||
     isSubmissionDiagnosticCode(observation.normalizedErrorCode)

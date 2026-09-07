@@ -1,79 +1,91 @@
+import { deepFreeze } from "@app/shared";
+
 /**
- * A submission diagnostic code that is safe to persist, by construction.
+ * The closed set of things this phase is willing to write down about *why* a
+ * submission ended the way it did.
  *
- * The field it guards, `normalizedErrorCode`, is read far more widely than the
+ * The field this guards, `normalizedErrorCode`, is read far more widely than the
  * row it lives on: it is dumped into tickets, pasted into chat, and exported to
- * whoever is debugging. Accepting a bare `string` there re-opened the channel
- * ADR-0031 closed — a caller could have written a signed URL, an `Authorization`
- * header, a customer's prompt or a raw provider body into it, and every one of
- * those has been observed in provider error text in the wild.
+ * whoever is debugging. Two earlier attempts at guarding it were both wrong, and
+ * the second failure is the interesting one.
  *
- * The rule ADR-0031 settled is that external input may influence only *which*
- * closed classification the application picks; it may never supply the text. A
- * fully closed enum would be the strictest reading, but the vocabulary of
- * submission diagnostics is still being discovered across adapters, and freezing
- * it now would push adapters toward reusing an ill-fitting member rather than
- * naming what happened. So the boundary here is a **shape** narrow enough that no
- * secret, URL or sentence can fit through it:
+ * The first accepted a bare `string`, which was plainly a raw-text channel.
+ *
+ * The second narrowed the *syntax* — SCREAMING_SNAKE, bounded length — and that
+ * looked like a boundary while not being one. Every one of these satisfies it:
  *
  * ```text
- * SCREAMING_SNAKE_CASE, ASCII only
- * starts with an uppercase letter
- * at most 48 characters
+ * SECRET_TOKEN_ABC123
+ * APIKEY1234567890
+ * ACCESS_KEY_123456789
+ * CUSTOMER_PRIVATE_ID_98765
  * ```
  *
- * A signed URL has `:` and `/`. A bearer token has a space and lowercase. A
- * prompt has spaces. A stack trace has newlines. A raw provider body has
- * punctuation. None of them survive, and none of them can be smuggled through by
- * being long, because length is bounded too.
+ * **Safe syntax is not trusted provenance.** A shape predicate proves how a value
+ * is spelled; it can say nothing about where the value came from, and a secret
+ * that happens to be spelled in capitals is still a secret. This is the same
+ * lesson ADR-0031 §4 recorded when structural validation of `ProviderError` let a
+ * hostile object choose both public diagnostic strings outright.
  *
- * This is a narrowing of what may be *written down*, not an assertion that the
- * value is meaningful. An adapter that cannot name a failure in this vocabulary
- * passes `null`, which is always allowed and always honest.
+ * So the rule is the one ADR-0031 settled, applied literally: external input may
+ * influence **which** application-owned classification is chosen, and may never
+ * supply the value. The vocabulary below is that set of classifications. It is
+ * small on purpose — an adapter that cannot honestly place a failure in it
+ * passes `null`, which is always allowed and always truthful.
  */
-
-/** Codes are short application identifiers, never text. */
-export const MAX_SUBMISSION_DIAGNOSTIC_CODE_LENGTH = 48;
 
 /**
- * Anchored, and deliberately without `\s` or `.` anywhere in it.
+ * Every code this phase may persist.
  *
- * `[A-Z]` first so a code can never be empty, start with an underscore, or be a
- * bare number that reads as an HTTP status — which would invite adapters to
- * write `429` and call it a classification.
+ * Deliberately three, and deliberately not a taxonomy of provider errors. Each
+ * member exists because *this phase's own persistence rules* need to distinguish
+ * it, not because some vendor emits it:
+ *
+ * - `TIMEOUT` — the submission was in flight and no answer arrived in time. This
+ *   is the canonical route into `SUBMISSION_UNKNOWN`: the provider may hold the
+ *   request, may be executing it, may already have billed it.
+ * - `CONNECTION_RESET` — the connection died mid-exchange. Distinguished from a
+ *   timeout because it says the transport failed rather than that nobody
+ *   answered, and an operator triaging a spike wants to know which. It
+ *   establishes just as little about what the provider did.
+ * - `LOCAL_CONFIGURATION` — the platform could not even attempt the call: a
+ *   missing credential, an unroutable base URL, a disabled provider. The only
+ *   member that describes *this system* rather than the exchange, and the only
+ *   one that is actionable without asking the provider anything.
+ *
+ * No HTTP status is a member, and no vendor string is. A status is external data
+ * about one exchange, not an application classification, and copying `429` in
+ * here would smuggle the provider's vocabulary through the boundary that exists
+ * to keep it out. Adding a member is a deliberate act with a reason, which is
+ * the property a closed set has and a regex does not.
  */
-const SUBMISSION_DIAGNOSTIC_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+export const SUBMISSION_DIAGNOSTIC_CODES = deepFreeze([
+  "TIMEOUT",
+  "CONNECTION_RESET",
+  "LOCAL_CONFIGURATION",
+] as const);
+
+export type SubmissionDiagnosticCode = (typeof SUBMISSION_DIAGNOSTIC_CODES)[number];
 
 /**
- * A code the application owns, validated at the boundary.
+ * Membership in the catalog, checked at runtime.
  *
- * Branded so a bare `string` cannot be assigned where one of these is required:
- * the only way to obtain the type is to pass through the validator, which is the
- * whole point of having it.
+ * The union type stops a bare string being *assigned*, which a caller inside
+ * this repository cannot bypass without an explicit cast — and a cast is exactly
+ * what a caller in a hurry writes. So the boundary re-checks, and it checks
+ * membership rather than shape: `UNKNOWN_CODE_NOT_IN_CATALOG` is well-formed by
+ * any syntactic measure and is still refused, because being well-spelled is not
+ * evidence of being application-owned.
  */
-export type SubmissionDiagnosticCode = string & {
-  readonly __brand: "SubmissionDiagnosticCode";
-};
-
-/** Whether this value may be persisted as a diagnostic code. */
 export function isSubmissionDiagnosticCode(
   value: unknown,
 ): value is SubmissionDiagnosticCode {
-  if (typeof value !== "string") return false;
-  if (value.length === 0 || value.length > MAX_SUBMISSION_DIAGNOSTIC_CODE_LENGTH) {
-    return false;
-  }
-  return SUBMISSION_DIAGNOSTIC_CODE_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    (SUBMISSION_DIAGNOSTIC_CODES as readonly string[]).includes(value)
+  );
 }
 
-/**
- * Narrow a caller-supplied value, or refuse.
- *
- * `null` in, `null` out: an absent diagnosis is always acceptable. Anything else
- * that is not a valid code returns `null` *as a refusal signal* only through
- * `parseSubmissionDiagnosticCode`'s result type — this function is the total
- * predicate-backed narrowing used where the caller has already validated.
- */
 export type SubmissionDiagnosticCodeResult =
   | { readonly ok: true; readonly code: SubmissionDiagnosticCode | null }
   | { readonly ok: false };
@@ -82,10 +94,10 @@ export type SubmissionDiagnosticCodeResult =
  * The one entry point callers use.
  *
  * Distinguishes "no diagnosis offered" (`ok`, `code: null`) from "a diagnosis was
- * offered and it is not something we are willing to write down" (`!ok`). Those
- * must not collapse into one answer: silently dropping a malformed code would
- * persist an outcome while discarding the evidence that a caller tried to put a
- * secret in the audit trail.
+ * offered and it is not one this application owns" (`!ok`). Those must not
+ * collapse into one answer: silently dropping an unrecognized code would persist
+ * the outcome while discarding the evidence that a caller tried to write
+ * something of its own choosing into the audit trail.
  */
 export function parseSubmissionDiagnosticCode(
   value: string | null | undefined,

@@ -13,6 +13,7 @@ import {
   staleSubmittingBoundary,
   validateReconciliationPolicy,
   type ReconciliationPolicy,
+  type ReconciliationPolicyConfig,
 } from "./reconciliation-window";
 import { parseSubmissionDiagnosticCode, type SubmissionDiagnosticCode } from "./diagnostic-code";
 
@@ -25,6 +26,20 @@ import { parseSubmissionDiagnosticCode, type SubmissionDiagnosticCode } from "./
  * from plain objects.
  */
 
+
+/**
+ * The only way a test may obtain a policy.
+ *
+ * Fixtures go through the same validator production callers do, so a test can
+ * never exercise the phase against a policy the type system would refuse in
+ * production — which is the whole point of the validated type.
+ */
+function validatedPolicy(config: ReconciliationPolicyConfig): ReconciliationPolicy {
+  const result = validateReconciliationPolicy(config);
+  if (!result.ok) throw new Error(`invalid test policy: ${result.reason}`);
+  return result.policy;
+}
+
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 
 /**
@@ -35,10 +50,10 @@ const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
  * decision that depends on provider latency nobody has measured. These numbers
  * are chosen for arithmetic that is easy to read.
  */
-const POLICY: ReconciliationPolicy = {
+const POLICY: ReconciliationPolicy = validatedPolicy({
   reconciliationWindowMs: 24 * 60 * 60 * 1000,
   staleSubmittingAfterMs: 15 * 60 * 1000,
-};
+});
 
 /** Codes must pass the safe-code boundary to exist at all. */
 function code(value: string): SubmissionDiagnosticCode {
@@ -69,12 +84,12 @@ const ACCEPTED: ProviderSubmissionObservation = {
 const REJECTED_TERMINAL: ProviderSubmissionObservation = {
   kind: "DEFINITIVELY_REJECTED",
   retryable: false,
-  normalizedErrorCode: code("INVALID_REQUEST"),
+  normalizedErrorCode: code("LOCAL_CONFIGURATION"),
 };
 const REJECTED_RETRYABLE: ProviderSubmissionObservation = {
   kind: "DEFINITIVELY_REJECTED",
   retryable: true,
-  normalizedErrorCode: code("RATE_LIMITED"),
+  normalizedErrorCode: code("CONNECTION_RESET"),
 };
 const UNKNOWN: ProviderSubmissionObservation = {
   kind: "SUBMISSION_UNKNOWN",

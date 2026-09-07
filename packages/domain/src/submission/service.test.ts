@@ -13,7 +13,9 @@ import {
 } from "./ports";
 import {
   staleSubmittingBoundary,
+  validateReconciliationPolicy,
   type ReconciliationPolicy,
+  type ReconciliationPolicyConfig,
 } from "./reconciliation-window";
 import {
   STALE_SUBMISSION_RECOVERY_EVENT_TYPE,
@@ -33,12 +35,26 @@ import {
  * reads, which label it writes, and what it refuses to touch.
  */
 
+
+/**
+ * The only way a test may obtain a policy.
+ *
+ * Fixtures go through the same validator production callers do, so a test can
+ * never exercise the phase against a policy the type system would refuse in
+ * production — which is the whole point of the validated type.
+ */
+function validatedPolicy(config: ReconciliationPolicyConfig): ReconciliationPolicy {
+  const result = validateReconciliationPolicy(config);
+  if (!result.ok) throw new Error(`invalid test policy: ${result.reason}`);
+  return result.policy;
+}
+
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 /** A fixture. There is deliberately no shipped production stale threshold. */
-const POLICY: ReconciliationPolicy = {
+const POLICY: ReconciliationPolicy = validatedPolicy({
   reconciliationWindowMs: 24 * 60 * 60 * 1000,
   staleSubmittingAfterMs: 15 * 60 * 1000,
-};
+});
 const STALE_AT = staleSubmittingBoundary(BOUNDARY, POLICY);
 
 function atBoundary(overrides: Partial<AttemptSubmissionFacts> = {}): AttemptSubmissionFacts {

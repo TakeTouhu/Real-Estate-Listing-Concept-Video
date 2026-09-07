@@ -66,24 +66,35 @@ database migration was required.
   caller-supplied one would be an unverified, freely backdatable claim about when
   money started being spent. One clock read per decision serves the staleness
   judgement, the acceptance instant and the uncertainty start.
-- **A configurable reconciliation window, capped at 24 hours, and no invented
-  stale threshold.** The ceiling *is* the Phase 2E default rather than a second
-  constant that could drift from it. There is deliberately **no shipped
-  stale-`SUBMITTING` default**: the value depends on provider latency nobody has
-  measured, and a plausible-looking constant is how a guess becomes policy. A
-  production caller supplies a validated policy in which the stale threshold is
-  positive and **strictly** less than the window — at equality an attempt would
-  become stale exactly when its deadline arrived, entering uncertainty that was
-  already expired. `validateReconciliationPolicy` answers rather than throws, and
-  never falls back to a hard-coded threshold.
-- **Diagnostics narrowed to short application codes.** `normalizedErrorCode` is a
-  validated value object — SCREAMING_SNAKE ASCII, at most 48 characters — rather
-  than a bare string. A signed URL, an `Authorization` header, a customer prompt,
-  a raw provider body and a stack trace are all refused as
-  `OBSERVATION_MALFORMED` with no attempt write, no reservation write and no
-  event, which keeps ADR-0031's rule intact: external input may influence which
-  closed classification the application picks, never supply the text. A refused
-  code is deliberately distinguished from no code at all.
+- **A reconciliation window capped at 24 hours, with the validated type enforced
+  rather than merely offered.** Having a validator is not the same as enforcing
+  one: while the consumed type was structural,
+  `{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }` reached
+  the service without ever meeting the validator, because it happened to have the
+  right two fields. Raw (`ReconciliationPolicyConfig`) and checked
+  (`ReconciliationPolicy`) are now different types, the latter carrying a
+  `unique symbol` brand no object literal can produce, so
+  `validateReconciliationPolicy` is the only construction site and every consumer
+  takes the branded type. Compile-time coverage proves a raw object cannot reach
+  `SubmissionOutcomeDeps`, the evaluator, or any deadline derivation. There is
+  deliberately **no shipped stale-`SUBMITTING` default** — the value depends on
+  provider latency nobody has measured — and the stale threshold must be positive
+  and **strictly** less than the window. Nothing is clamped and nothing is
+  defaulted: silently repairing an operator's number would hide the mistake and
+  make the persisted deadline disagree with the configuration in force.
+- **Diagnostics reduced to a closed application-owned vocabulary.**
+  `normalizedErrorCode` is now a member of `["TIMEOUT", "CONNECTION_RESET",
+  "LOCAL_CONFIGURATION"]`, checked at runtime by *membership* rather than shape.
+  The previous syntactic rule looked like a boundary while admitting
+  `SECRET_TOKEN_ABC123`, `APIKEY1234567890` and `ACCESS_KEY_123456789` unchanged
+  — safe syntax is not trusted provenance, and a credential spelled in capitals
+  is still a credential. This is ADR-0031 §4 applied literally: external input
+  may influence which classification the application picks, never supply the
+  value. Anything else — a signed URL, a bearer credential, a prompt, a raw
+  provider body, a stack trace, or a well-formed code the application does not
+  own — is `OBSERVATION_MALFORMED` with no attempt write, no reservation write
+  and no event, and is deliberately distinguished from no code at all. No HTTP
+  status and no vendor string is a member.
 - **Stale-`SUBMITTING` recovery without any re-POST.** One abandoned attempt
   becomes durable `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`, judged at-or-
   after its threshold on an injected clock read *inside* the lock — a judgement
