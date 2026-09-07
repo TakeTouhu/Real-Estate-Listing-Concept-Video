@@ -235,57 +235,99 @@ unverified claim about when money started being spent — backdatable and
 future-datable at will. The clock is read once per decision, not once per field.
 A replay never re-stamps it.
 
-## A validator is not a boundary
+## Validation authority must not be copyable
 
-Revision 2 shipped a correct validator and then let callers bypass it, because
-the type the service consumed was structural. This compiled and ran:
+Revision 2 shipped a correct validator that callers could bypass, because the
+consumed type was structural. Revision 3 added a phantom `unique symbol` brand,
+which fixed the literal and missed the copy:
 
 ```ts
-{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
+const validated = validateReconciliationPolicy({ … });
+if (!validated.ok) throw new Error();
+
+const corrupted = { ...validated.policy, reconciliationWindowMs: 86_400_001 };
+const accepted: ReconciliationPolicy = corrupted;   // compiled. no cast.
 ```
 
-A window one millisecond past the 24-hour ceiling, reaching
-`SubmissionOutcomeDeps` without ever meeting `validateReconciliationPolicy`,
-because it happened to have the right two fields. The bounds were documented
-rather than enforced — the same failure mode as "we agreed not to do that".
+A phantom brand is only a type-level property, and TypeScript's spread type
+copies it with everything else. So the brand proved that *some* value had once
+passed the validator — not that the numbers being consumed were still the
+validated ones. **A ceiling a spread can raise is not a ceiling.**
 
-Raw and checked are now separate types:
+### The representation
 
 ```ts
-interface ReconciliationPolicyConfig {          // what an operator writes
-  readonly reconciliationWindowMs: number;
-  readonly staleSubmittingAfterMs: number;
+export class ReconciliationPolicy {
+  readonly #validated: true;                 // real private state, not a phantom
+  readonly #reconciliationWindowMs: number;
+  readonly #staleSubmittingAfterMs: number;
+
+  private constructor(…) { … }               // the only construction site is validate()
+
+  get reconciliationWindowMs(): number { return this.#reconciliationWindowMs; }
+  get staleSubmittingAfterMs(): number { return this.#staleSubmittingAfterMs; }
+
+  static isPolicy(value: unknown): value is ReconciliationPolicy {
+    return typeof value === "object" && value !== null && #validated in value;
+  }
+
+  static validate(input: ReconciliationPolicyConfig): ReconciliationPolicyResult { … }
 }
-
-type ReconciliationPolicy =                     // what the phase consumes
-  Readonly<{ reconciliationWindowMs: number; staleSubmittingAfterMs: number }> &
-  ValidatedReconciliationPolicyBrand;
 ```
 
-The brand is a `unique symbol` property that no object literal can produce, so
-`validateReconciliationPolicy` is the only construction site in the codebase.
-Every consumer takes the validated type:
+**Why a spread cannot preserve authority.** `#validated` is a real private field,
+not a declared property type. It is not an own enumerable property, so
+`{ ...policy }` does not copy it — at runtime the spread copies *nothing at all*,
+because the accessors live on the prototype — and TypeScript's spread type omits
+private state as well. The reconstructed object is therefore not a
+`ReconciliationPolicy`, at compile time or at run time, and no cast was needed to
+discover that.
 
-| Consumer | Accepts |
+The numbers are getters over private fields, so they are readable, unwritable and
+impossible to edit in place. The constructor is `private`, so there is no second
+way in; `validateReconciliationPolicy` delegates to `validate` and remains the
+one entry point callers use.
+
+### What no longer compiles
+
+Each case in `policy-nominality.test.ts` starts from a *genuinely validated*
+policy — not a literal — and is guarded by `@ts-expect-error`, so the suite fails
+to compile if any of them ever type-checks again:
+
+| Reconstruction | Result |
 | --- | --- |
-| `SubmissionOutcomeDeps.policy` | `ReconciliationPolicy` only |
-| `decideSubmissionOutcome` | `ReconciliationPolicy` only |
-| `reconciliationDeadlineFor` | `ReconciliationPolicy` only |
-| `staleSubmittingBoundary` | `ReconciliationPolicy` only |
-| `isStaleSubmitting` | `ReconciliationPolicy` only |
+| `{ ...policy, reconciliationWindowMs: MAX + 1 }` | not assignable |
+| `{ ...policy, staleSubmittingAfterMs: policy.reconciliationWindowMs }` | not assignable |
+| `{ ...policy, staleSubmittingAfterMs: -1 }` | not assignable |
+| `{ ...policy, reconciliationWindowMs: 1.5 }` and `MAX_SAFE_INTEGER + 2` | not assignable |
+| `{ ...policy }` — a faithful copy | not assignable |
+| `new ReconciliationPolicy(60_000, 10_000)` | constructor is private |
+| `policy.reconciliationWindowMs = …` | no setter; throws under ESM strict mode |
 
-`policy-nominality.test.ts` proves this at compile time rather than describing
-it: each case carries a `@ts-expect-error`, so the suite **fails to compile** if
-any of those lines ever starts type-checking. A positive control passes a
-validated policy through the same call sites, so the assertions are about
-provenance and not about the calls being broken.
+Verified discriminating: type-checked against Revision 3's implementation, six of
+these `@ts-expect-error` directives report **unused** — meaning those exact lines
+compiled there. That is the bug, reproduced.
 
-Test fixtures obtain policies only through the validator, so no test can exercise
-this phase against a policy production would refuse.
+### The one honest gap, and the runtime defence
 
-Nothing is clamped and nothing is defaulted. Silently repairing an operator's
-number would hide the mistake rather than report it, and would make the persisted
-deadline disagree with the configuration somebody believes is in force.
+`Object.assign` is typed as returning an *intersection* of its sources, so
+`Object.assign({}, policy, { … })` keeps the policy type by construction of the
+lib signature. No compile-time boundary catches it, and the test says so plainly
+rather than claiming otherwise. Spread — what ordinary code actually writes —
+does not behave this way.
+
+For that case, and for any explicit `as unknown as ReconciliationPolicy`, the
+runtime check refuses the value. `createSubmissionOutcomeService` asks
+`isReconciliationPolicy(deps.policy)` once at construction and throws
+`INTERNAL_ERROR` otherwise — a forged policy is a programming defect, not a
+business outcome.
+
+The check is `#validated in value`, the ergonomic-brand idiom: true only for
+objects this class constructed, unfakeable by any structural copy, and — unlike
+`instanceof` — not defeated when two realms each load their own copy of the
+module. It is **defence in depth, not the validation**: it proves provenance
+rather than re-deriving the bounds, because a second copy of the bounds is a
+second thing to drift from the first.
 
 ## Window policy — and the threshold that is deliberately absent
 
@@ -697,17 +739,17 @@ rather than growing a second.
   dormant and has no caller; a production caller must supply a validated policy,
   and the value itself is unresolved (`docs/decisions/TODO.md`).
 
-## Mutation ledger — 61/61 killed
+## Mutation ledger — 52/52 killed
 
 Every mutation removes exactly one rule this phase is supposed to enforce, from
 an artefact that actually executes. A mutation is *killed* when the suites fail,
-and each is restored byte-identically before the next runs. The `C` series
-targets the rules the correction rounds introduced; the `P` series preserves the
-first round's coverage against the rewritten sources.
+and each is restored byte-identically before the next runs.
 
-The `C5` series was re-aimed at the closed catalog — the old syntactic mutations
-no longer describe anything the code does — and the `C7` series is new, covering
-the validated-policy nominal boundary.
+The `C7` series is re-aimed at the opaque class, replacing the phantom-brand
+mutations that no longer describe anything the code does. The count fell from 61
+to 52 because several Revision 3 mutations targeted validator statements that
+moved into the class and are now covered by fewer, sharper anchors — not because
+coverage was dropped.
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -736,22 +778,13 @@ the validated-policy nominal boundary.
 | C5b | an unknown well-shaped code is admitted to the catalog | KILLED | 7 failing unit tests |
 | C5c | a code-shaped secret is admitted to the catalog | KILLED | 8 failing unit tests |
 | C5g | the runtime membership check is removed entirely | KILLED | 61 failing unit tests |
-| C7a | the validated-policy brand is removed, so a raw object is a policy | KILLED | 1 package fails typecheck (see note) |
-| C7b | the brand is made optional, which is the same hole with more words | KILLED | 1 package(s) fail typecheck |
-| C7c | the config type is accepted wherever a policy is | KILLED | 2 package(s) fail typecheck |
-| C7d | an out-of-range window is clamped instead of refused | KILLED | 7 failing unit tests |
-| C5d | the observation stops validating the code at all | KILLED | 34 failing unit tests |
-| C5e | a malformed code is silently dropped instead of refused | KILLED | 27 failing unit tests |
-| C5f | a blank provider reference is accepted as an acceptance | KILLED | 3 failing unit tests |
-| C6a | INITIAL over a CONSUMED reservation is treated as normal | KILLED | 6 failing unit tests |
-| C6b | a missing reservation is no longer flagged | KILLED | 8 failing unit tests |
-| C6c | a released reservation is no longer flagged | KILLED | 6 failing unit tests |
-| C6d | a reservation still being taken is no longer flagged | KILLED | 3 failing unit tests |
-| C6e | the anomaly is returned but never written down | KILLED | 8 failing unit tests |
-| C6f | the request kind is taken from the caller's metadata | KILLED | 3 failing unit tests |
-| C6g | the reservation hold event reuses the attempt event type | KILLED | 4 failing unit tests |
-| C6h | the repository ignores the reservation event type | KILLED | 4 failing db tests |
-| C6i | the repository stops loading the request kind | KILLED | 4 failing db tests |
+| C7a | the private nominal identity is removed | KILLED | 10 failing unit tests |
+| C7b | the numbers become public own properties, so a spread copies them | KILLED | 6 failing unit tests |
+| C7c | an unchecked public factory is introduced | KILLED | 3 failing unit tests |
+| C7d | the constructor becomes public | KILLED | 1 package(s) fail typecheck |
+| C7e | an out-of-range window is clamped instead of refused | KILLED | 7 failing unit tests |
+| C7f | the runtime nominal check at the service boundary is removed | KILLED | 4 failing unit tests |
+| C7g | the runtime nominal check accepts anything object-shaped | KILLED | 11 failing unit tests |
 | P1 | an exact replay re-applies instead of replaying | KILLED | 5 failing unit tests |
 | P2 | SUBMISSION_UNKNOWN returns the attempt to QUEUED | KILLED | 5 failing unit tests |
 | P3 | uncertainty stops suspending the reservation | KILLED | 3 failing unit tests |
@@ -773,20 +806,21 @@ the validated-policy nominal boundary.
 | P19 | the retryable flag stops selecting the failure state | KILLED | 7 failing unit tests |
 | P20 | an attempt with no boundary instant is treated as stale | KILLED | 3 failing unit tests |
 
-**One honest note on `C7a`.** In the batch run it was reported as killed by four
-database tests, which was noise: re-running it in isolation kills it by
-**typecheck**, and the database suite passes 59/59 against unmutated code. The
-batch attribution came from state left by the preceding mutation's database run,
-not from the mutation itself. The kill is real — removing the brand makes every
-`@ts-expect-error` in `policy-nominality.test.ts` unused, which is a compile
-error — but the detector named in the batch output was wrong, so it is corrected
-here rather than quoted.
+Two of these survived their first aiming and were fixed rather than excused:
 
-`C7a`, `C7b` and `C7c` are killed at compile time by design. The nominal boundary
-*is* a type-level guarantee, so a compile failure is the correct and only honest
-detector for removing it — this is not a case of a behavioural rule that the
-suites happen to miss. `pnpm typecheck` passing on unmutated code, with every
-`@ts-expect-error` directive used, is the positive half of that proof.
+- **`C7b`** first added an unused public field, which removes no guard — the
+  identity is `#validated`, not the storage — so nothing could see it. Re-aimed
+  at making `reconciliationWindowMs` a public own property, which genuinely lets
+  a spread copy a validated number, it kills 6 tests.
+- **`C7c`** adds an unchecked `static unchecked(w, s)` factory. Nothing calls it,
+  so no behavioural test could ever see it appear. That is a real gap, closed by
+  an API-surface test asserting the class's statics are exactly
+  `{validate, isPolicy}` and its prototype exactly two getters with no setters. A
+  new construction path now fails at the moment it is added.
+
+`C7a`, `C7d` and `C7f`/`C7g` cover the rest of the boundary: removing the private
+nominal identity, making the constructor public, and removing or defeating the
+runtime check.
 
 ## Verification
 
@@ -798,12 +832,12 @@ graph.
 | --- | --- |
 | `pnpm typecheck` | Pass (all packages and apps) |
 | `pnpm lint` | Pass (0 problems) |
-| `pnpm test` | Pass — 88 files, **2300 tests** |
+| `pnpm test` | Pass — 88 files, **2315 tests** |
 | `pnpm build` | Pass (Next.js production build) |
 | `pnpm test:db` | Pass — 18 files, **481 tests** |
 | `prisma migrate diff` schema ↔ live database | `No difference detected` |
 | `prisma migrate diff` migrations ↔ schema | `No difference detected` |
-| Mutation ledger | **61/61 killed, 0 survivors** |
+| Mutation ledger | **52/52 killed, 0 survivors** |
 
 The Prisma checks are run against `packages/database/prisma/schema.prisma`, which
 is where the schema actually lives; the root `prisma/` directory holds only a
@@ -843,7 +877,7 @@ than quietly re-run into green.
 | `packages/domain/src/submission/outcome.test.ts` | 58 |
 | `packages/domain/src/submission/service.test.ts` | 33 |
 | `packages/domain/src/submission/diagnostic-code.test.ts` | 58 |
-| `packages/domain/src/submission/policy-nominality.test.ts` | 25 |
+| `packages/domain/src/submission/policy-nominality.test.ts` | 40 |
 | `packages/domain/src/submission/entitlement-anomaly.test.ts` | 9 |
 | `tests/integration/submission-outcome.db.test.ts` | 59 |
 

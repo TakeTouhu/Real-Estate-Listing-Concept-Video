@@ -162,34 +162,61 @@ when money started being spent — backdatable and future-datable at will. A rep
 never re-stamps it. A future provider contract exposing a separately verified
 provider timestamp is a different decision.
 
-### 3c. A validator is not a boundary — only the validated type may be consumed
+### 3c. Validation authority must not be copyable
 
-Bounds that are checked by a function nobody is forced to call are documentation,
-not enforcement. While the consumed policy type was structural, this compiled and
-ran:
+This boundary took three attempts, and the middle one is the instructive failure.
+
+**Attempt one** consumed a plain structural type, so an unchecked literal with
+the right two fields reached the service without ever meeting the validator:
 
 ```ts
 { reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
 ```
 
-A window past the 24-hour ceiling, reaching the service without ever meeting the
-validator, because it happened to have the right two fields.
-
-So the raw and the checked shapes are now different types:
+**Attempt two** added a phantom `unique symbol` brand. That stopped a literal —
+and nothing else. A phantom brand is only a type-level property, and TypeScript's
+spread type copies it along with everything else:
 
 ```ts
-interface ReconciliationPolicyConfig { … }              // what an operator writes
-type ReconciliationPolicy = Readonly<{ … }> & ValidatedReconciliationPolicyBrand;
+const corrupted = { ...policy, reconciliationWindowMs: 86_400_001 };
+const accepted: ReconciliationPolicy = corrupted;   // compiled, no cast
 ```
 
-The brand is a `unique symbol` property no object literal can produce, so
-`validateReconciliationPolicy` is the only construction site. Every consumer in
-this phase — `SubmissionOutcomeDeps.policy`, `decideSubmissionOutcome`,
-`reconciliationDeadlineFor`, `staleSubmittingBoundary`, `isStaleSubmitting` —
-takes the validated type, so a raw object is a compile error at the call site
-rather than an out-of-range deadline discovered in production. Tests obtain
-policies only through the validator, so no test can exercise the phase against a
-policy production would refuse.
+So the brand proved that *some* value had once passed the validator, not that the
+numbers being consumed were still the validated ones. **A ceiling a spread can
+raise is not a ceiling.**
+
+**The invariant that was actually needed:** copying a policy's public values must
+not copy its validation authority.
+
+`ReconciliationPolicy` is therefore a class with ECMAScript private state:
+
+- `#validated` is a real private field, not a phantom property. `{ ...policy }`
+  does not copy it — at runtime the spread copies nothing at all, since the
+  accessors live on the prototype — and TypeScript's spread type omits it. A
+  reconstructed object is simply not a `ReconciliationPolicy`.
+- the constructor is `private`, so `ReconciliationPolicy.validate` (reached
+  through `validateReconciliationPolicy`) is the only construction site.
+- the numbers are exposed as getters over private fields: readable, unwritable,
+  and impossible to edit in place.
+
+Every consumer takes this type — `SubmissionOutcomeDeps.policy`,
+`decideSubmissionOutcome`, `reconciliationDeadlineFor`, `staleSubmittingBoundary`,
+`isStaleSubmitting`. Tests obtain policies only through the validator.
+
+One narrow gap is stated rather than hidden: `Object.assign` is typed as
+returning an *intersection* of its sources, so its result keeps the policy type
+by construction of the lib signature. Spread — what ordinary code writes — does
+not behave that way. For `Object.assign`, and for any explicit
+`as unknown as ReconciliationPolicy`, the runtime nominal check is what refuses
+the value.
+
+That check is `#validated in value`, the ergonomic-brand idiom: true only for
+objects this class constructed, unfakeable by any structural copy, and — unlike
+`instanceof` — not defeated by two realms each loading their own copy of the
+module. It runs once at service construction. It is **defence in depth, not the
+validation**: it proves provenance rather than re-deriving the bounds, because a
+second copy of the bounds would be a second thing to drift.
 
 Values pass through unchanged. Nothing is clamped and nothing is defaulted:
 silently repairing an operator's number would hide the mistake rather than report

@@ -56,53 +56,13 @@ export const MAX_RECONCILIATION_WINDOW_MS = DEFAULT_RECONCILIATION_WINDOW_MS;
  * What an operator writes down: two numbers, unchecked.
  *
  * This is the *input* type. It is deliberately structural and deliberately
- * useless on its own — nothing in this phase accepts it, and it exists only to
+ * useless on its own — nothing in this phase consumes it, and it exists only to
  * name the shape a caller hands to the validator.
  */
 export interface ReconciliationPolicyConfig {
   readonly reconciliationWindowMs: number;
   readonly staleSubmittingAfterMs: number;
 }
-
-declare const VALIDATED_RECONCILIATION_POLICY: unique symbol;
-
-/**
- * The nominal marker that separates a checked policy from a plausible object.
- *
- * A `unique symbol` property that no literal can produce, so the only way to
- * obtain a `ReconciliationPolicy` is to pass through
- * `validateReconciliationPolicy`.
- */
-export interface ValidatedReconciliationPolicyBrand {
-  readonly [VALIDATED_RECONCILIATION_POLICY]: true;
-}
-
-/**
- * A policy that has been checked, and can prove it.
- *
- * Having a validator is not the same as enforcing one. While the consumed type
- * was structural, this compiled and ran:
- *
- * ```ts
- * { reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }
- * ```
- *
- * — a window past the 24-hour ceiling, reaching the service without ever meeting
- * the validator, because it happened to have the right two fields. The bounds
- * were documented rather than enforced, which is the same failure mode as
- * "we agreed not to do that".
- *
- * The brand makes the check unavoidable rather than conventional. Every consumer
- * in this phase — `SubmissionOutcomeDeps`, `decideSubmissionOutcome`,
- * `reconciliationDeadlineFor`, `staleSubmittingBoundary`, `isStaleSubmitting` —
- * takes this type, so a raw object is a compile error at the call site rather
- * than an out-of-range deadline discovered in production.
- */
-export type ReconciliationPolicy = Readonly<{
-  reconciliationWindowMs: number;
-  staleSubmittingAfterMs: number;
-}> &
-  ValidatedReconciliationPolicyBrand;
 
 export type ReconciliationPolicyResult =
   | { readonly ok: true; readonly policy: ReconciliationPolicy }
@@ -115,41 +75,149 @@ export type ReconciliationPolicyFailure =
   | "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE";
 
 /**
- * Validate a configured policy, returning a result rather than throwing.
+ * A policy that has been checked, and whose authority cannot be copied.
  *
- * Configuration arrives from outside the process and a bad value is an
- * operator mistake, not a programming defect — so it is answerable, and the
- * caller decides whether to refuse startup or fall back. Throwing here would
- * turn a typo in an environment variable into a crash with no closed outcome.
+ * Two earlier attempts at this boundary each failed one step short, and the
+ * second failure is the one worth recording.
+ *
+ * The first consumed a plain structural type, so an unchecked object literal
+ * with the right two fields reached the service without ever meeting the
+ * validator.
+ *
+ * The second added a phantom `unique symbol` brand. That stopped a *literal*
+ * from claiming to be a policy — but a phantom brand is only a type-level
+ * property, and TypeScript's spread type copies it along with everything else:
+ *
+ * ```ts
+ * const corrupted = { ...policy, reconciliationWindowMs: 86_400_001 };
+ * const accepted: ReconciliationPolicy = corrupted;   // compiled, no cast
+ * ```
+ *
+ * So the brand proved only that *some* value had once passed the validator, not
+ * that the numbers being consumed were still the validated ones. A ceiling that
+ * a spread can raise is not a ceiling.
+ *
+ * This is a class with ECMAScript private state instead, because that makes the
+ * invalid state hard to *represent* rather than repeatedly detected:
+ *
+ * - `#validated` is a real private field, not a phantom property. It is not an
+ *   own enumerable property, so `{ ...policy }` does not copy it — at runtime it
+ *   copies nothing at all, since the accessors live on the prototype — and
+ *   TypeScript's spread type omits it too. A reconstructed object is therefore
+ *   not a `ReconciliationPolicy`, and no cast was needed to find that out.
+ * - the constructor is `private`, so the only construction site is
+ *   `validateReconciliationPolicy` below.
+ * - the numbers are readable and unwritable, through getters over private
+ *   fields, so consumers read validated values and nobody can assign new ones.
+ *
+ * The invariant, stated plainly: **copying the policy's public values does not
+ * copy its validation authority.**
+ */
+export class ReconciliationPolicy {
+  /**
+   * The nominal identity. Its type is irrelevant; its privacy is the point.
+   *
+   * A `#` field is part of the class's identity to TypeScript and absent from
+   * every structural copy, which is exactly the property the phantom brand
+   * lacked.
+   */
+  readonly #validated: true;
+
+  readonly #reconciliationWindowMs: number;
+  readonly #staleSubmittingAfterMs: number;
+
+  private constructor(reconciliationWindowMs: number, staleSubmittingAfterMs: number) {
+    this.#validated = true;
+    this.#reconciliationWindowMs = reconciliationWindowMs;
+    this.#staleSubmittingAfterMs = staleSubmittingAfterMs;
+  }
+
+  get reconciliationWindowMs(): number {
+    return this.#reconciliationWindowMs;
+  }
+
+  get staleSubmittingAfterMs(): number {
+    return this.#staleSubmittingAfterMs;
+  }
+
+  /**
+   * The runtime nominal check, asked of the private field itself.
+   *
+   * `#validated in value` is the ergonomic-brand idiom: it is true only for
+   * objects this class constructed, cannot be faked by any structural copy, and
+   * — unlike `instanceof` — does not quietly fail when two realms each load
+   * their own copy of the module.
+   */
+  static isPolicy(value: unknown): value is ReconciliationPolicy {
+    return typeof value === "object" && value !== null && #validated in value;
+  }
+
+  /**
+   * Validate a configured policy, returning a result rather than throwing.
+   *
+   * The only construction site in the codebase. It is a static member rather
+   * than a free function so that the constructor can stay `private`;
+   * `validateReconciliationPolicy` below is the name callers use, and it
+   * delegates here.
+   *
+   * Configuration arrives from outside the process and a bad value is an
+   * operator mistake, not a programming defect — so it is answerable, and the
+   * caller decides whether to refuse startup or fall back. Throwing here would
+   * turn a typo in an environment variable into a crash with no closed outcome.
+   */
+  static validate(input: ReconciliationPolicyConfig): ReconciliationPolicyResult {
+    const { reconciliationWindowMs, staleSubmittingAfterMs } = input;
+    if (!Number.isSafeInteger(reconciliationWindowMs) || reconciliationWindowMs <= 0) {
+      return { ok: false, reason: "RECONCILIATION_WINDOW_NOT_POSITIVE" };
+    }
+    if (reconciliationWindowMs > MAX_RECONCILIATION_WINDOW_MS) {
+      return { ok: false, reason: "RECONCILIATION_WINDOW_TOO_LONG" };
+    }
+    if (!Number.isSafeInteger(staleSubmittingAfterMs) || staleSubmittingAfterMs <= 0) {
+      return { ok: false, reason: "STALE_THRESHOLD_NOT_POSITIVE" };
+    }
+    // Strictly before, not at-or-before. At equality the attempt becomes stale
+    // exactly when its reconciliation deadline arrives, so the uncertainty it
+    // enters is already expired — a window that exists only as an instant.
+    // Beyond equality is worse still. Both are the same defect, both refused.
+    if (staleSubmittingAfterMs >= reconciliationWindowMs) {
+      return { ok: false, reason: "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE" };
+    }
+    // Values are passed through unchanged. Nothing is clamped and nothing is
+    // defaulted: silently repairing an operator's number would hide the mistake
+    // rather than report it, and would make the persisted deadline disagree
+    // with the configuration somebody believes is in force.
+    return {
+      ok: true,
+      policy: new ReconciliationPolicy(reconciliationWindowMs, staleSubmittingAfterMs),
+    };
+  }
+}
+
+/**
+ * The canonical validator, and the only way to obtain a `ReconciliationPolicy`.
+ *
+ * A thin delegation so callers keep one obvious entry point while construction
+ * stays sealed inside the class.
  */
 export function validateReconciliationPolicy(
   input: ReconciliationPolicyConfig,
 ): ReconciliationPolicyResult {
-  const { reconciliationWindowMs, staleSubmittingAfterMs } = input;
-  if (!Number.isSafeInteger(reconciliationWindowMs) || reconciliationWindowMs <= 0) {
-    return { ok: false, reason: "RECONCILIATION_WINDOW_NOT_POSITIVE" };
-  }
-  if (reconciliationWindowMs > MAX_RECONCILIATION_WINDOW_MS) {
-    return { ok: false, reason: "RECONCILIATION_WINDOW_TOO_LONG" };
-  }
-  if (!Number.isSafeInteger(staleSubmittingAfterMs) || staleSubmittingAfterMs <= 0) {
-    return { ok: false, reason: "STALE_THRESHOLD_NOT_POSITIVE" };
-  }
-  // Strictly before, not at-or-before. At equality the attempt becomes stale
-  // exactly when its reconciliation deadline arrives, so the uncertainty it
-  // enters is already expired — a window that exists only as an instant. Beyond
-  // equality is worse still. Both are the same defect and both are refused.
-  if (staleSubmittingAfterMs >= reconciliationWindowMs) {
-    return { ok: false, reason: "STALE_THRESHOLD_NOT_BEFORE_RECONCILIATION_DEADLINE" };
-  }
-  // The one place the brand is applied, and the only reason this cast exists:
-  // every path to it has just been checked. Values are passed through
-  // unchanged — never clamped, never defaulted — because silently repairing an
-  // operator's number would hide the mistake rather than report it.
-  return {
-    ok: true,
-    policy: { reconciliationWindowMs, staleSubmittingAfterMs } as ReconciliationPolicy,
-  };
+  return ReconciliationPolicy.validate(input);
+}
+
+/**
+ * A runtime nominal check, for the one thing types cannot stop.
+ *
+ * An explicit `as unknown as ReconciliationPolicy` defeats any compile-time
+ * boundary, so the service construction boundary asks at runtime as well. This
+ * is defence in depth and **not** the validation itself: it proves the value was
+ * built by the class, and the class only builds values that passed `validate`.
+ * Identity plus provenance, rather than re-deriving the numbers — which would
+ * be a second validator to drift from the first.
+ */
+export function isReconciliationPolicy(value: unknown): value is ReconciliationPolicy {
+  return ReconciliationPolicy.isPolicy(value);
 }
 
 /**

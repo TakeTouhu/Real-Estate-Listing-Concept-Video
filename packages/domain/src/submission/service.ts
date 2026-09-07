@@ -4,6 +4,8 @@ import { decideSubmissionOutcome, isRecoverableStaleSubmitting } from "./outcome
 import type { SubmissionOutcomeDecision } from "./outcome";
 import type { ProviderSubmissionObservation } from "./observation";
 import { classifyEntitlementAnomaly, type EntitlementAnomaly } from "./entitlement-anomaly";
+import { isReconciliationPolicy } from "./reconciliation-window";
+import { AppError } from "@app/shared";
 import type {
   EnterUncertaintyForStaleInput,
   RecordSubmissionObservationInput,
@@ -98,6 +100,19 @@ function translate(
 }
 
 export function createSubmissionOutcomeService(deps: SubmissionOutcomeDeps) {
+  // Types cannot stop `as unknown as ReconciliationPolicy`, so the one
+  // construction boundary asks at runtime too. This is defence in depth, not
+  // the validation: it proves the policy was built by the validator rather than
+  // re-deriving its numbers, because a second copy of the bounds here is a
+  // second thing to drift. A forged policy is a programming defect, so it
+  // throws rather than returning a business outcome.
+  if (!isReconciliationPolicy(deps.policy)) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "Submission outcome service requires a validated reconciliation policy",
+    );
+  }
+
   /** The shared body: load, decide, and only then write. */
   async function record(
     input: {

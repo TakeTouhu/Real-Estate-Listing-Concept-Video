@@ -590,15 +590,21 @@ and ADR-0020.
   provider may already hold and bill for the request, so re-arming it would buy
   the same work twice.
 
-  Two boundaries were then found to be guards in name only. The reconciliation
-  policy had a correct validator that nothing forced callers through: while the
-  consumed type was structural, an object with a window past the twenty-four-hour
-  ceiling reached the service unchecked because it happened to have the right two
-  fields. Raw and validated are now different types, the latter branded with a
-  `unique symbol` no literal can produce, so the validator is the only
-  construction site and every consumer — the dependency set, the evaluator and
-  all three derivations — takes the branded type; compile-time coverage proves a
-  raw object cannot enter. And `normalizedErrorCode`, having first accepted a bare
+  Two boundaries were then found to be guards in name only, and the policy one
+  took two goes to fix. Its validator was correct but nothing forced callers
+  through it: while the consumed type was structural, an object with a window
+  past the twenty-four-hour ceiling reached the service unchecked because it
+  happened to have the right two fields. A phantom `unique symbol` brand fixed
+  the literal and missed the copy — TypeScript's spread type carries the phantom
+  property, so spreading a genuine policy and overwriting its window produced
+  something still typed as a validated policy, with no cast. The brand proved
+  that some value had once passed the validator, not that the numbers being
+  consumed still had. The policy is now an opaque class with real private state:
+  a `#validated` field no spread copies, a private constructor so the validator
+  is the only way in, and getters so the numbers cannot be edited in place.
+  Compile-time coverage proves spreading, cloning, overriding or even faithfully
+  copying a policy all lose its authority, and a runtime `#validated in value`
+  check at service construction catches the explicit casts types cannot stop. And `normalizedErrorCode`, having first accepted a bare
   string, was narrowed only by *syntax*, which admitted `SECRET_TOKEN_ABC123` and
   `APIKEY1234567890` unchanged. Safe syntax is not trusted provenance: a shape
   predicate proves how a value is spelled and says nothing about where it came

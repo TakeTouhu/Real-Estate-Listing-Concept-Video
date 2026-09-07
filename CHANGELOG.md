@@ -66,22 +66,31 @@ database migration was required.
   caller-supplied one would be an unverified, freely backdatable claim about when
   money started being spent. One clock read per decision serves the staleness
   judgement, the acceptance instant and the uncertainty start.
-- **A reconciliation window capped at 24 hours, with the validated type enforced
-  rather than merely offered.** Having a validator is not the same as enforcing
-  one: while the consumed type was structural,
-  `{ reconciliationWindowMs: 86_400_001, staleSubmittingAfterMs: 1_000 }` reached
-  the service without ever meeting the validator, because it happened to have the
-  right two fields. Raw (`ReconciliationPolicyConfig`) and checked
-  (`ReconciliationPolicy`) are now different types, the latter carrying a
-  `unique symbol` brand no object literal can produce, so
-  `validateReconciliationPolicy` is the only construction site and every consumer
-  takes the branded type. Compile-time coverage proves a raw object cannot reach
-  `SubmissionOutcomeDeps`, the evaluator, or any deadline derivation. There is
-  deliberately **no shipped stale-`SUBMITTING` default** — the value depends on
-  provider latency nobody has measured — and the stale threshold must be positive
-  and **strictly** less than the window. Nothing is clamped and nothing is
-  defaulted: silently repairing an operator's number would hide the mistake and
-  make the persisted deadline disagree with the configuration in force.
+- **A reconciliation window capped at 24 hours, whose validation authority
+  cannot be copied.** Two weaker boundaries came first and are worth recording. A
+  structural type let an unchecked literal reach the service. A phantom
+  `unique symbol` brand then stopped the literal but not a *copy* — TypeScript's
+  spread type carries the phantom property, so
+  `{ ...policy, reconciliationWindowMs: 86_400_001 }` was still a
+  `ReconciliationPolicy` with no cast anywhere, and the brand proved only that
+  some value had once been validated rather than that the numbers being consumed
+  still were. A ceiling a spread can raise is not a ceiling.
+  `ReconciliationPolicy` is now an opaque class with ECMAScript private state: a
+  real `#validated` field that no spread copies at either the type or the value
+  level, a private constructor so `validateReconciliationPolicy` is the only way
+  in, and getters over private fields so the validated numbers are readable and
+  unwritable. Compile-time coverage proves that spreading, cloning, overriding or
+  faithfully copying a genuine policy all lose its authority, and that a raw
+  config cannot reach `SubmissionOutcomeDeps`, the evaluator, or any deadline
+  derivation. `Object.assign` keeps the type by construction of its lib
+  signature — stated rather than hidden — and is refused, along with any explicit
+  cast, by a runtime `#validated in value` check at service construction: defence
+  in depth proving provenance, never a second copy of the bounds. There is
+  deliberately **no shipped stale-`SUBMITTING` default**, and the stale threshold
+  must be positive and **strictly** less than the window. Nothing is clamped and
+  nothing is defaulted: silently repairing an operator's number would hide the
+  mistake and make the persisted deadline disagree with the configuration in
+  force.
 - **Diagnostics reduced to a closed application-owned vocabulary.**
   `normalizedErrorCode` is now a member of `["TIMEOUT", "CONNECTION_RESET",
   "LOCAL_CONFIGURATION"]`, checked at runtime by *membership* rather than shape.
