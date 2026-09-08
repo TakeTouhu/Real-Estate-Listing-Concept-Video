@@ -3,6 +3,137 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-1: Provider completion and managed output persistence
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2h1-completion.md` and
+ADR-0038. Phase 4C-3B-2G-2 left an attempt able to reach `PROCESSING + ACCEPTED`
+and never able to leave it; this phase records what happens afterwards and
+nothing more. **No provider is contacted anywhere in this phase** — no HTTP
+client, no polling, no webhook ingestion, no storage client, no scheduler — and
+nothing is downloaded, uploaded, composed, delivered or charged. One additive
+database migration was required.
+
+### Added
+
+- **Five states that mean five different things.** `PROCESSING + ACCEPTED`
+  becomes `PROVIDER_SUCCEEDED`, `FAILED_RETRYABLE` or `FAILED_TERMINAL`; a
+  success then becomes `OUTPUT_INGESTING` and finally `OUTPUT_VERIFIED`. A
+  provider finishing, a copy landing and bytes being proved are three separate
+  facts, and collapsing any two of them leaves a situation the row cannot
+  describe: a provider output lives at a temporary URL for hours, so an attempt
+  that records success and stops has recorded a fact that expires. Every edge is
+  the committed attempt state machine's — no second transition table exists.
+- **A closed, provider-neutral completion contract.** Two arms only: `SUCCEEDED
+  {}` and `FAILED { retryable, diagnosticCode }`. The success arm carries no
+  payload at all, not even a location, because a phase that cannot name where a
+  provider's copy lives cannot leak one. No provider URL, output URL, response
+  body, HTTP status, vendor status string, raw error, credential, prompt or
+  stack trace anywhere. The diagnostic reuses Phase 2G-1's closed catalog
+  unchanged and unexpanded.
+- **A derived, application-owned storage key.**
+  `managedGenerationOutputKey({ organizationId, attemptId })` is computed from
+  application identifiers alone — never a provider URL, provider file name,
+  customer file name or external path. The same attempt always derives the same
+  key, which is what makes an interrupted copy resumable over its own object, and
+  there is no parameter through which a caller could point a verification record
+  at an object the attempt does not own.
+- **An integrity receipt that proves bytes and carries nothing else.**
+  `{ sha256, sizeBytes }` — no storage key, no provider URL, no raw bytes, no
+  MIME type. The digest must be exactly 64 lowercase hex characters with **no
+  silent normalization**: uppercase is refused rather than lowercased, because
+  accepting two spellings of one digest is how an equality check starts reporting
+  identical bytes as a corrupted output. The size must be positive, integral,
+  finite and safe; zero is refused explicitly, since a zero-byte object is not a
+  small video but a failed copy that happened to create the destination. No
+  maximum is invented.
+- **Immutable verified-output metadata, enforced by the database.** Three
+  additive nullable columns — `outputSha256`, `outputSizeBytes`,
+  `outputVerifiedAt` — join the existing `outputStorageKey`, and a CHECK requires
+  all four on any row whose `orchestrationState` is `OUTPUT_VERIFIED`. An exact
+  replay returns `REPLAYED` and changes nothing; a receipt describing different
+  bytes returns `CONFLICTING_OUTPUT` and the stored metadata is never
+  overwritten. `outputVerifiedAt` is excluded from the comparison — it records
+  when *this platform* verified, and requiring a replaying caller's fresh instant
+  to match would make every replay after the first millisecond a conflict.
+- **Four service-owned event types.** `PROVIDER_COMPLETION_SUCCEEDED`,
+  `PROVIDER_COMPLETION_FAILED`, `OUTPUT_INGESTION_STARTED`, `OUTPUT_VERIFIED`,
+  never caller-chosen. Metadata gained `outputSha256`, `outputSizeBytes` and
+  `outputVerifiedAt` on the existing allowlist. `outputStorageKey` was
+  deliberately **not** added: where the object lives is answered by the row, and
+  transition history is the most widely read table in an incident.
+- **Bounded, advisory candidate discovery.** `findCompletionCandidates` returns
+  `{ organizationId, attemptId }` for one of three stages and nothing else — no
+  locks, no provider reference, no prompt, no output location — filtered to
+  `ACCEPTED` attempts so the completion path and the reconciliation path cannot
+  reach for the same row. The limit is validated by Phase 2G-2's canonical
+  validator, reused rather than restated, capped at 100 and refused rather than
+  clamped. No scheduler, daemon, cron, interval or timer exists in this phase.
+
+### Refused, deliberately
+
+- **A post-acceptance failure does not become `DEFINITIVELY_REJECTED`.** The
+  certainty stays `ACCEPTED` on both failure landings. `DEFINITIVELY_REJECTED` is
+  the one certainty the Safety Guard classifies at zero cost, so rewriting it
+  would record a provider that took the work, ran it and failed as having
+  declined it — the platform would forget a charge it owes, in exactly the
+  incident where cost matters most. The write type has a single field, so no
+  branch can write a certainty it cannot name.
+- **An ingestion failure is not a provider failure.** The state machine permits
+  `OUTPUT_INGESTING → FAILED_*`; this phase does not use it for a storage fault,
+  and the omission is structural — the completion precondition requires
+  `PROCESSING`, so no completion decision can land on a failure from
+  `OUTPUT_INGESTING` at all. An interrupted copy stays `OUTPUT_INGESTING` and is
+  resumable. Recording it as a provider failure would discard a paid,
+  still-retrievable render and attribute the platform's own bug to the vendor.
+- **`FAILED_RETRYABLE` retries nothing.** It records that a retry is
+  permissible. No replacement attempt is created and no `SYSTEM_RECOVERY` request
+  kind exists to create one with.
+- **Customer entitlement is untouched on every path.** No reservation is read for
+  its state, locked or written; there is no reservation handle in the persistence
+  module to misuse. No `RESERVED → CONSUMED`, no `RECONCILIATION_HOLD →
+  CONSUMED`, no unit decrement, no release, no charge. In particular a unit is
+  **not** released because an accepted execution later failed — the provider ran
+  the job and will bill for it.
+- **`OUTPUT_VERIFIED` is not delivery.** The logical request is not `DELIVERED`,
+  the scene is not `READY`, the job is not `SCENES_READY`, and no deliverable is
+  reachable by a customer. Those are review-gated decisions belonging to later
+  phases.
+- **Legacy rows are not reinterpreted.** A legacy `state = 'SUCCEEDED'` row is
+  not read as an orchestrated `PROVIDER_SUCCEEDED`, and nothing backfills a
+  certainty, a completion, a digest, a size or a verification timestamp.
+
+### Unchanged, deliberately
+
+- The Phase 2F-1 lock order is joined, not extended. The organization+cycle
+  advisory lock is still taken — a completion moves the organization's cycle
+  exposure between `IN_FLIGHT` and `SETTLED_ESTIMATED`, so an authorization
+  reading exposure mid-flight would decide on a stale total — on the same key and
+  at the same acquisition point as the three phases before it.
+- `classifyProviderCostExposure` and the attempt state machine already covered
+  every pairing and edge this phase produces and were **not modified**. No state
+  this phase can reach is ever classified `NONE`;
+  `RECONCILIATION_EXHAUSTED + SUBMISSION_UNKNOWN` stays `UNCERTAIN` and
+  `DEFINITIVELY_REJECTED` stays `NONE`.
+- Tenancy is proved at the compare-and-set with both clauses — the denormalized
+  `videoProjectId` and the `Attempt → Request → Scene → Job → VideoProject` chain
+  — exactly as frozen in Phases 2G-1 and 2G-2. A row whose column and chain
+  disagree is frozen rather than writable by whichever tenant a corruption
+  favours.
+- No paid provider activation. `FAL_KEY` is not enabled, the fal production
+  factory is not wired, the Veo production route is not opened, and the WaveSpeed
+  paid route stays closed.
+
+### Database
+
+- Migration `00000000000011_phase4c3b2h1_managed_output_integrity`: three
+  additive nullable columns and three CHECK constraints. No rename, no column
+  drop, no backfill, no destructive change. Every constraint keys on
+  `orchestrationState`, which is NULL on all pre-2E rows, and `IS DISTINCT FROM`
+  is null-safe — so legacy rows satisfy them unconditionally and no exception
+  logic exists. Verified from an empty database and from a database containing a
+  legacy row. `outputSizeBytes` is `BIGINT` rather than `INTEGER` because `int4`
+  would silently overflow at roughly 2 GiB on a value the validator accepted.
+
 ## [Unreleased] — Phase 4C-3B-2G-2: Reconciliation resolution and deadline exhaustion
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2g2-completion.md`. Phase

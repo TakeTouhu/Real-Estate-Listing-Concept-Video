@@ -571,3 +571,78 @@ to be rolled back with it.
   row were both accepted.
 - `tests/schema/resolution-identity-v2-migration.test.ts` parses the migration
   and asserts both the shape and the absence of every data-modifying statement.
+
+## Phase 4C-3B-2H-1 — `00000000000011_phase4c3b2h1_managed_output_integrity`
+
+Additive only: three nullable columns and three CHECK constraints on
+`scene_generations`. No `UPDATE`, `INSERT`, `DELETE`, `TRUNCATE`, `DROP`,
+`RENAME` or index. Safe against a populated database — adding a nullable column
+takes no table rewrite in PostgreSQL — and it cannot refuse to run.
+
+### Why it is required
+
+`outputStorageKey` already existed, but a key alone proves nothing. It says where
+the platform *believes* a copy of a generated video lives; it does not say the
+copy is complete, that it is the object the provider produced, or when anyone
+checked. An attempt could reach `OUTPUT_VERIFIED` with a key pointing at a
+half-written object and nothing in the row would contradict it.
+
+### What it does
+
+1. Adds `outputSha256 TEXT`, `outputSizeBytes BIGINT` and
+   `outputVerifiedAt TIMESTAMP(3)`, all nullable.
+2. `scene_generations_verified_output_metadata_check` — any row whose
+   `orchestrationState` is `OUTPUT_VERIFIED` must carry all four integrity facts
+   (`outputStorageKey`, `outputSha256`, `outputSizeBytes`, `outputVerifiedAt`).
+3. `scene_generations_output_sha256_format_check` — `NULL` or canonical
+   lowercase 64-character hex.
+4. `scene_generations_output_size_positive_check` — `NULL` or strictly positive.
+   Zero is refused explicitly: a zero-byte object is not a small video, it is a
+   failed copy that happened to create the destination.
+
+`BIGINT` rather than `INTEGER` because the domain admits any positive safe
+integer, and `int4` would silently overflow at roughly 2 GiB on a value the
+application validator had just accepted.
+
+### The legacy exception, stated exactly
+
+Every constraint keys on `orchestrationState`, which is NULL on every row
+admitted before Phase 4C-3B-2E, and `IS DISTINCT FROM` is null-safe — so those
+rows satisfy the verified-metadata constraint unconditionally and **no exception
+logic exists**. Nothing is backfilled. A legacy `state = 'SUCCEEDED'` row is not
+reinterpreted as an orchestrated `PROVIDER_SUCCEEDED`: inventing a digest, a
+size, a verification instant or an orchestration state for it would forge an
+integrity record nobody produced.
+
+### Rollback
+
+```sql
+ALTER TABLE "scene_generations"
+  DROP CONSTRAINT "scene_generations_verified_output_metadata_check",
+  DROP CONSTRAINT "scene_generations_output_sha256_format_check",
+  DROP CONSTRAINT "scene_generations_output_size_positive_check",
+  DROP COLUMN "outputVerifiedAt",
+  DROP COLUMN "outputSizeBytes",
+  DROP COLUMN "outputSha256";
+```
+
+This discards every managed-output integrity record, leaving verified rows with a
+storage key and no proof of what it points at. Safe only while no attempt has
+reached `OUTPUT_VERIFIED` under the orchestration vocabulary, and the application
+code must be rolled back with it.
+
+### Verification performed on this branch
+
+- `prisma migrate deploy` from an empty database: all eleven migrations applied.
+- `prisma migrate diff` schema → database and migrations → schema: both
+  **`No difference detected.`**
+- Applied to a database built from the ten prior migrations holding a legacy
+  generation row (`state = 'SUCCEEDED'`, `orchestrationState` NULL,
+  `outputStorageKey` populated): the row survived unchanged and all three new
+  columns are NULL.
+- Each constraint exercised directly against a migrated database, by raw writes
+  that bypass the service: clearing any one of the four facts on an
+  `OUTPUT_VERIFIED` row, an uppercase digest, a zero size and a negative size
+  were all rejected; a complete verified row and a legacy row were both accepted.
+  Non-hex and wrong-length digests are refused earlier, by the domain validator,
+  and are covered there rather than at the constraint.

@@ -198,7 +198,10 @@ erDiagram
     datetime lastPolledAt "nullable"
     string normalizedErrorCode "nullable, internal"
     string normalizedErrorMessage "nullable, internal"
-    string outputStorageKey "nullable until Phase 4D"
+    string outputStorageKey "nullable; derived from org+attempt, written at OUTPUT_VERIFIED"
+    string outputSha256 "nullable; CHECK canonical lowercase 64-hex"
+    bigint outputSizeBytes "nullable; CHECK > 0"
+    datetime outputVerifiedAt "nullable; the single post-lock verification instant"
     datetime createdAt
     datetime updatedAt
   }
@@ -329,10 +332,13 @@ two meanings applied is exactly the ambiguity ADR-0034 removes.
 - Raw passwords, raw session tokens, and raw invitation tokens — only salted
   scrypt hashes / SHA-256 hashes.
 - **Temporary provider output URLs** and signed URLs. A generation attempt never
-  stores a URL that expires: Phase 4D copies a completed output into managed
-  storage and persists `outputStorageKey`, so nothing later depends on a link
-  going stale. A live test asserts no `scene_generations` column name contains
-  `url`.
+  stores a URL that expires. Phase 4C-3B-2H-1 settled how the managed copy is
+  recorded instead: `outputStorageKey` is **derived** from the organization and
+  the attempt id — never from a provider URL, provider file name or customer
+  file name — and is written together with `outputSha256`, `outputSizeBytes` and
+  `outputVerifiedAt` when the copy is proved. A live test asserts no
+  `scene_generations` column name contains `url`. The copy itself, and the
+  hashing that produces the receipt, belong to a later phase.
 - Retry counters on `scene_generations` — no worker exists yet to have a retry
   policy, and a speculative column would be a guess at an unreviewed design.
 

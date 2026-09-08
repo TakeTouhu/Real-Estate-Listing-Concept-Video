@@ -494,9 +494,32 @@ model SceneGeneration {
   /// exact reason code with a null message (ADR-0027).
   normalizedErrorCode               String?
   normalizedErrorMessage            String?
-  /// Managed-storage key for the copied output. Null until Phase 4D. A
-  /// temporary provider URL is deliberately never persisted.
+  /// --- Managed output integrity (Phase 4C-3B-2H-1, ADR-0038) ----------------
+  /// Where the platform's own copy of the output lives, and what it is.
+  ///
+  /// All four are written together, exactly once, when an attempt reaches
+  /// OUTPUT_VERIFIED, and are immutable afterwards: a later receipt describing
+  /// different bytes is a discrepancy to surface rather than a correction to
+  /// apply. A CHECK constraint requires all four on any row whose
+  /// `orchestrationState` is OUTPUT_VERIFIED.
+  ///
+  /// Nullable because legacy rows have none of them and are never backfilled —
+  /// there is no honest way to invent a digest for bytes nobody hashed. The
+  /// constraint keys on `orchestrationState`, which is null on every legacy row,
+  /// so historical data stays valid without exception logic.
+  ///
+  /// The storage key is *derived* from the organization and attempt id, so the
+  /// same attempt always resolves to the same object and an interrupted copy can
+  /// be retried over itself. A temporary provider URL is deliberately never
+  /// persisted, here or anywhere.
   outputStorageKey                  String?
+  /// Canonical lowercase 64-character hex, enforced by CHECK.
+  outputSha256                      String?
+  /// BigInt rather than Int: the domain admits any positive safe integer, and
+  /// int4 would silently overflow at 2 GiB on a value the validator accepted.
+  outputSizeBytes                   BigInt?
+  /// One post-lock service clock instant. Never provider- or caller-supplied.
+  outputVerifiedAt                  DateTime?
   createdAt                         DateTime                   @default(now())
   updatedAt                         DateTime                   @updatedAt
   /// RESTRICT, not Cascade. A generation may record a paid provider attempt, so

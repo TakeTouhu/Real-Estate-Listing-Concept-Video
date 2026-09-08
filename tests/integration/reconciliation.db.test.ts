@@ -1708,7 +1708,17 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       });
       await prisma.sceneGeneration.update({
         where: { id: attemptId },
-        data: { orchestrationState: "OUTPUT_VERIFIED", stateVersion: { increment: 1 } },
+        data: {
+          orchestrationState: "OUTPUT_VERIFIED",
+          stateVersion: { increment: 1 },
+          // Phase 2H-1's CHECK requires a verified output to carry its
+          // integrity facts; this fixture advances the lifecycle rather than
+          // testing output metadata, so it supplies a coherent set.
+          outputStorageKey: `org/${ORG_A}/generations/${attemptId}/output.mp4`,
+          outputSha256: "a".repeat(64),
+          outputSizeBytes: BigInt(1024),
+          outputVerifiedAt: new Date(),
+        },
       });
       const before = await attemptRow(attemptId);
       expect(
