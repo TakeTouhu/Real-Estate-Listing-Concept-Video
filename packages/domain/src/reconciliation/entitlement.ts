@@ -15,6 +15,20 @@ import type { EntitlementAnomaly } from "../submission/entitlement-anomaly";
  * submission boundary a healthy reservation is `RESERVED`, while an attempt in
  * reconciliation has already had its hold suspended, so `RECONCILIATION_HOLD`
  * is the healthy state here and `RESERVED` is the surprise.
+ *
+ * ### The reservation is Job-scoped, and the attempt is not
+ *
+ * One `GenerationReservation` belongs to one `GenerationJob`, and a Job has many
+ * scenes, each of which can have its own attempt at the provider boundary. So
+ * several attempts can be durably unknown at once behind a *single* suspended
+ * hold. Restoring that hold the moment the first of them resolves would lift a
+ * Job-level suspension while the Job is still uncertain — the customer's unit
+ * would look usable while money may still be being spent on a sibling nobody can
+ * account for.
+ *
+ * That is why the restoring conclusions need one more persisted fact than the
+ * reservation's own state: how many *other* attempts in the same Job are still
+ * `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`.
  */
 
 /** What this conclusion should do to a suspended hold. */
@@ -23,33 +37,65 @@ export type ReservationAction =
   | "RESTORE"
   /** `RECONCILIATION_HOLD → RELEASED`. This path cannot continue. */
   | "RELEASE"
-  /** Touch nothing. */
+  /**
+   * Stay in `RECONCILIATION_HOLD`, deliberately.
+   *
+   * The hold is exactly where it should be and is *kept* there because another
+   * attempt in the same Job is still durably unknown. Distinct from `NONE`
+   * because it is a decision rather than the absence of one: this conclusion
+   * would have restored the hold, and the sibling is the reason it did not.
+   *
+   * Nothing is written for it — no state change, no version bump, and no
+   * reservation transition event, because no transition occurred. The reason it
+   * stayed is recorded on the *attempt's* event instead, as
+   * `remainingPendingUnknownAttempts`.
+   */
+  | "KEEP_HOLD"
+  /**
+   * Touch nothing, for a reason that has nothing to do with siblings.
+   *
+   * A correct post-delivery `CONSUMED` unit, a missing reservation, an already
+   * `RELEASED` one, or a state this phase did not put there.
+   */
   | "NONE";
 
 /**
  * Decide what happens to the reservation, from persisted facts only.
  *
- * Deliberately keyed on the **reservation's own state**, not the request kind.
- * Only a suspended hold moves, because only a suspended hold is a thing this
- * phase put there. A `CONSUMED` unit stays spent whoever owns it, a `RELEASED`
- * one stays gone, and a `RESERVED` one is already where a restore would put it.
- * That single rule delivers every case the brief enumerates without a matrix of
- * request kinds to get wrong:
+ * Keyed on the **reservation's own state** first, because only a suspended hold
+ * is a thing this phase put there. A `CONSUMED` unit stays spent whoever owns
+ * it, a `RELEASED` one stays gone, and a `RESERVED` one is already where a
+ * restore would put it. A post-delivery `USER_REGENERATION` reaches none of the
+ * moves for exactly that reason: its reservation is `CONSUMED`, so the action is
+ * `NONE` and the unit is never restored, released or spent again.
+ *
+ * Then, for the two conclusions that would *restore*, on whether this attempt
+ * was the last durably unknown one in its Job:
  *
  * ```text
- * accepted            → RESTORE   the work is running; the unit is live again
- * retryable rejection → RESTORE   a future recovery attempt may use this unit
- * terminal rejection  → RELEASE   this path cannot continue
- * exhaustion          → RELEASE   unknowable at the deadline; the customer is made whole
+ * accepted            + no unknown siblings → RESTORE    the Job is certain again
+ * accepted            + unknown siblings    → KEEP_HOLD  a sibling may still be costing money
+ * retryable rejection + no unknown siblings → RESTORE    a recovery attempt may use this unit
+ * retryable rejection + unknown siblings    → KEEP_HOLD
+ * terminal rejection                        → RELEASE    this path cannot continue
+ * exhaustion                                → RELEASE    the customer is made whole
  * ```
  *
- * A post-delivery `USER_REGENERATION` reaches none of them: its reservation is
- * `CONSUMED`, so the action is `NONE` and the unit is never restored, released
- * or spent again.
+ * The two releasing conclusions ignore siblings on purpose. Releasing is how the
+ * customer stops being charged for a question nobody could answer, and making
+ * that wait on an unrelated sibling would hold their money hostage to it. The
+ * asymmetry is deliberate and one-way: `RELEASED` is terminal, so a later
+ * conclusion from a sibling can never resurrect it.
  */
 export function reservationActionFor(input: {
   readonly reservationState: GenerationReservationState | null;
   readonly conclusion: "ACCEPTED" | "REJECTED_RETRYABLE" | "REJECTED_TERMINAL" | "EXHAUSTED";
+  /**
+   * How many *other* attempts in the same `GenerationJob` are still
+   * `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`, counted under the same lock
+   * that serializes this decision. Never supplied by a caller.
+   */
+  readonly otherPendingUnknownAttemptsInJob: number;
 }): ReservationAction {
   if (input.reservationState !== "RECONCILIATION_HOLD") return "NONE";
   switch (input.conclusion) {
@@ -59,7 +105,11 @@ export function reservationActionFor(input: {
       // failure actually retryable. Releasing here would hand the unit back and
       // leave a future SYSTEM_RECOVERY attempt with nothing to stand on — the
       // customer's request would be quietly unfinishable.
-      return "RESTORE";
+      //
+      // But only when this attempt was the last unknown one in its Job. The
+      // hold is Job-level; lifting it while a sibling is still unaccounted for
+      // would say the Job is certain when it is not.
+      return input.otherPendingUnknownAttemptsInJob === 0 ? "RESTORE" : "KEEP_HOLD";
     case "REJECTED_TERMINAL":
     case "EXHAUSTED":
       return "RELEASE";

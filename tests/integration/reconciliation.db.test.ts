@@ -1,13 +1,17 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFixedSubmissionClock,
   createPricingSnapshot,
   createProviderPricingCatalog,
+  createReconciliationMaintenance,
   createReconciliationService,
   createSubmissionOutcomeService,
   epochMillis,
   epochMillisFromDate,
+  MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE,
   parseSubmissionDiagnosticCode,
   validateReconciliationPolicy,
   RECONCILIATION_EXHAUSTED_EVENT_TYPE,
@@ -284,6 +288,87 @@ async function seedReconcilingAttempt(
   }
 
   return { job: created.job, scene, request, attemptId: admitted.attempt.id, organizationId };
+}
+
+/**
+ * Add a second scene, request and uncertain attempt to an existing Job.
+ *
+ * The whole point of the multi-scene fixture: both attempts hang off the *same*
+ * `GenerationJob`, so they share one `GenerationReservation` and one suspended
+ * hold. This is the shape in which restoring on the first conclusion would lift
+ * a Job-level suspension the Job has not earned.
+ */
+async function seedSiblingUncertainAttempt(
+  suffix: string,
+  job: { readonly id: string },
+  organizationId: string = ORG_A,
+) {
+  const repos = repositories(prisma);
+  const scene = await repos.scenes.create(
+    organizationId,
+    {
+      id: `genscene_${suffix}`,
+      generationJobId: job.id,
+      position: 1,
+      sourceStoryboardSceneId: STORYBOARD_SCENE,
+      sourceAssetId: ASSET_A,
+      sourceAnalysisRevision: 1,
+      snapshotDurationSeconds: 5,
+      snapshotCameraMotion: "SLOW_PAN",
+      snapshotCompiledPrompt: `a second room, cinematic (${suffix})`,
+    },
+    ctx(),
+  );
+  if (scene === null) throw new Error("sibling scene not created");
+
+  const request = await repos.requests.createInitial(
+    organizationId,
+    { id: `genreq_${suffix}`, generationSceneId: scene.id, requestedByUserId: "usr_itest" },
+    ctx(),
+  );
+  if (request === null) throw new Error("sibling request not created");
+
+  const admitted = await repos.attempts.admit(
+    organizationId,
+    {
+      id: `sgen_${suffix}`,
+      generationSceneRequestId: request.id,
+      providerName: "wavespeed",
+      providerModelId: "wavespeed-ai/open-video/image-to-video",
+      requestModelKey: "wavespeed-open-video",
+      requestRenderedPrompt: `a second room, cinematic, slow pan (${suffix})`,
+      requestNativeGenerationResolution: "1080p",
+      requestResolutionNormalization: "NONE",
+      requestNativeMeetsTarget: true,
+      pricingSnapshotId: `price_sgen_${suffix}`,
+      pricingSnapshot: snapshotFor(5),
+      fxSnapshot: FX,
+    },
+    ctx(),
+  );
+  if (admitted.kind !== "ADMITTED") throw new Error(`sibling attempt: ${admitted.kind}`);
+
+  const armed = await repos.attempts.armProviderBoundary({
+    organizationId,
+    id: admitted.attempt.id,
+    expectedVersion: admitted.attempt.stateVersion,
+    context: ctx(),
+  });
+  if (armed.kind !== "ARMED") throw new Error(`sibling arm: ${armed.kind}`);
+  await prisma.sceneGeneration.update({
+    where: { id: admitted.attempt.id },
+    data: { submissionBoundaryEnteredAt: new Date(BOUNDARY) },
+  });
+
+  const entered = await outcomes().recordObservation({
+    organizationId,
+    attemptId: admitted.attempt.id,
+    observation: { kind: "SUBMISSION_UNKNOWN", normalizedErrorCode: code("TIMEOUT") },
+    context: ctx(),
+  });
+  if (entered.kind !== "APPLIED") throw new Error(`sibling uncertainty: ${entered.kind}`);
+
+  return { scene, request, attemptId: admitted.attempt.id };
 }
 
 async function attemptRow(attemptId: string) {
@@ -766,6 +851,188 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
     });
   });
 
+  describe("a Job-scoped hold waits for its last unknown attempt", () => {
+    it("keeps the hold when the first of two siblings is accepted, and restores on the last", async () => {
+      const first = await seedReconcilingAttempt("sibA");
+      const second = await seedSiblingUncertainAttempt("sibB", first.job);
+      const reservation = await reservationOf(first.job.id);
+      expect(reservation.state).toBe("RECONCILIATION_HOLD");
+      const restoredBefore = (await reservationEvents(reservation.id)).filter(
+        (e) => e.eventType === RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+      ).length;
+
+      // First conclusion: the Job is still uncertain because of the sibling.
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId: first.attemptId,
+          observation: ACCEPTED,
+        }),
+      ).toMatchObject({ kind: "APPLIED" });
+
+      expect((await attemptRow(first.attemptId)).submissionCertainty).toBe("ACCEPTED");
+      const afterFirst = await reservationOf(first.job.id);
+      expect(afterFirst.state).toBe("RECONCILIATION_HOLD");
+      expect(afterFirst.stateVersion).toBe(reservation.stateVersion);
+      expect(
+        (await reservationEvents(reservation.id)).filter(
+          (e) => e.eventType === RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+        ),
+      ).toHaveLength(restoredBefore);
+      expect((await eventsFor(first.attemptId)).at(-1)?.safeMetadata).toMatchObject({
+        remainingPendingUnknownAttempts: 1,
+      });
+
+      // Second conclusion: nothing is unknown any more, so the unit comes back.
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId: second.attemptId,
+          observation: { kind: "ACCEPTED", providerPredictionId: "pred_sibling" },
+        }),
+      ).toMatchObject({ kind: "APPLIED" });
+
+      const afterSecond = await reservationOf(first.job.id);
+      expect(afterSecond.state).toBe("RESERVED");
+      expect(afterSecond.stateVersion).toBe(reservation.stateVersion + 1);
+      expect(
+        (await reservationEvents(reservation.id)).filter(
+          (e) => e.eventType === RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+        ),
+      ).toHaveLength(restoredBefore + 1);
+      expect((await eventsFor(second.attemptId)).at(-1)?.safeMetadata).toMatchObject({
+        remainingPendingUnknownAttempts: 0,
+      });
+    });
+
+    it("does the same when the first conclusion is a retryable rejection", async () => {
+      const first = await seedReconcilingAttempt("sibRetryA");
+      const second = await seedSiblingUncertainAttempt("sibRetryB", first.job);
+      const reservation = await reservationOf(first.job.id);
+
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId: first.attemptId,
+          observation: REJECTED_RETRYABLE,
+        }),
+      ).toMatchObject({ kind: "APPLIED" });
+      expect((await attemptRow(first.attemptId)).orchestrationState).toBe("FAILED_RETRYABLE");
+      // A retryable rejection would normally restore the unit for a recovery
+      // attempt. It still must not, while a sibling is unaccounted for.
+      expect((await reservationOf(first.job.id)).state).toBe("RECONCILIATION_HOLD");
+
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId: second.attemptId,
+          observation: REJECTED_RETRYABLE,
+        }),
+      ).toMatchObject({ kind: "APPLIED" });
+      const after = await reservationOf(first.job.id);
+      expect(after.state).toBe("RESERVED");
+      expect(after.stateVersion).toBe(reservation.stateVersion + 1);
+    });
+
+    it("releases on a terminal rejection even while a sibling is unknown", async () => {
+      // Deliberately asymmetric: releasing is how the customer stops paying for
+      // a question nobody answered, and RELEASED is terminal, so the sibling's
+      // later conclusion can never resurrect it.
+      const first = await seedReconcilingAttempt("sibTermA");
+      const second = await seedSiblingUncertainAttempt("sibTermB", first.job);
+
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId: first.attemptId,
+        observation: REJECTED_TERMINAL,
+      });
+      const released = await reservationOf(first.job.id);
+      expect(released.state).toBe("RELEASED");
+
+      // The sibling resolves as accepted, which would restore — and cannot.
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId: second.attemptId,
+        observation: { kind: "ACCEPTED", providerPredictionId: "pred_sibling" },
+      });
+      const after = await reservationOf(first.job.id);
+      expect(after.state).toBe("RELEASED");
+      expect(after.stateVersion).toBe(released.stateVersion);
+    });
+
+    it("releases on exhaustion even while a sibling is unknown", async () => {
+      const first = await seedReconcilingAttempt("sibExhA");
+      await seedSiblingUncertainAttempt("sibExhB", first.job);
+      expect(
+        await reconciliation(prisma, createFixedSubmissionClock(AFTER)).exhaustReconciliation({
+          organizationId: ORG_A,
+          attemptId: first.attemptId,
+          context: ctx(),
+        }),
+      ).toMatchObject({ kind: "EXHAUSTED" });
+      expect((await reservationOf(first.job.id)).state).toBe("RELEASED");
+    });
+
+    it("counts only siblings in the same Job", async () => {
+      // A different Job's uncertain attempt is not a reason to hold this Job's
+      // unit. The count is derived through Attempt → Request → Scene → Job.
+      const mine = await seedReconcilingAttempt("sibScopeA");
+      const elsewhere = await seedReconcilingAttempt("sibScopeB");
+      expect(elsewhere.job.id).not.toBe(mine.job.id);
+
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId: mine.attemptId,
+        observation: ACCEPTED,
+      });
+      expect((await reservationOf(mine.job.id)).state).toBe("RESERVED");
+      expect((await eventsFor(mine.attemptId)).at(-1)?.safeMetadata).toMatchObject({
+        remainingPendingUnknownAttempts: 0,
+      });
+      // The other Job's hold is untouched.
+      expect((await reservationOf(elsewhere.job.id)).state).toBe("RECONCILIATION_HOLD");
+    });
+
+    it("counts only siblings that are still durably unknown", async () => {
+      // A sibling that already concluded is not a reason to keep waiting.
+      const first = await seedReconcilingAttempt("sibDoneA");
+      const second = await seedSiblingUncertainAttempt("sibDoneB", first.job);
+      await prisma.sceneGeneration.update({
+        where: { id: second.attemptId },
+        data: {
+          orchestrationState: "FAILED_TERMINAL",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          stateVersion: { increment: 1 },
+        },
+      });
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId: first.attemptId,
+        observation: ACCEPTED,
+      });
+      expect((await reservationOf(first.job.id)).state).toBe("RESERVED");
+    });
+
+    it("never restores a post-delivery regeneration's spent unit, siblings or not", async () => {
+      const first = await seedReconcilingAttempt("sibRegen", {
+        requestKind: "USER_REGENERATION",
+      });
+      const before = await reservationOf(first.job.id);
+      expect(before.state).toBe("CONSUMED");
+      await seedSiblingUncertainAttempt("sibRegenB", first.job);
+
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId: first.attemptId,
+        observation: ACCEPTED,
+      });
+      const after = await reservationOf(first.job.id);
+      expect(after.state).toBe("CONSUMED");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.releasedAt).toBeNull();
+    });
+  });
+
   describe("replay and closure", () => {
     it("replays identical evidence with zero further mutation", async () => {
       const { attemptId, job } = await seedReconcilingAttempt("replay");
@@ -1124,6 +1391,60 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       expect(clockReads).toBe(2);
     });
 
+    it("restores a Job-scoped hold exactly once when two siblings resolve at once", async () => {
+      // Both conclusions would normally RESTORE. The sibling count is only
+      // authoritative because it is read inside the same organization+cycle
+      // serialization the two transactions contend on: whichever commits
+      // first, the other counts it as no longer unknown and finishes the job.
+      //
+      // No second lock namespace is introduced for this. The existing one
+      // already orders them.
+      const first = await seedReconcilingAttempt("raceSibA");
+      const second = await seedSiblingUncertainAttempt("raceSibB", first.job);
+      const reservation = await reservationOf(first.job.id);
+      expect(reservation.state).toBe("RECONCILIATION_HOLD");
+
+      const results = await Promise.all([
+        reconciliation(prisma).resolveReconciliation({
+          ...RESOLVE,
+          attemptId: first.attemptId,
+          observation: ACCEPTED,
+        }),
+        reconciliation(other).resolveReconciliation({
+          ...RESOLVE,
+          attemptId: second.attemptId,
+          observation: { kind: "ACCEPTED", providerPredictionId: "pred_sibling" },
+        }),
+      ]);
+      // Both are legitimate conclusions about different attempts; neither is a
+      // loser, and neither rejects.
+      expect(results.map((r) => r.kind)).toEqual(["APPLIED", "APPLIED"]);
+
+      expect((await attemptRow(first.attemptId)).submissionCertainty).toBe("ACCEPTED");
+      expect((await attemptRow(second.attemptId)).submissionCertainty).toBe("ACCEPTED");
+
+      const after = await reservationOf(first.job.id);
+      expect(after.state).toBe("RESERVED");
+      // Exactly one restore. Two would mean the hold was lifted, re-suspended
+      // and lifted again; a version bump of more than one would mean the
+      // second conclusion moved a reservation that was already restored.
+      expect(after.stateVersion).toBe(reservation.stateVersion + 1);
+      expect(
+        (await reservationEvents(reservation.id)).filter(
+          (e) => e.eventType === RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+        ),
+      ).toHaveLength(1);
+
+      // And the two attempt events between them tell the whole story: one saw a
+      // sibling outstanding, the other saw none.
+      const counts = [
+        (await eventsFor(first.attemptId)).at(-1)?.safeMetadata,
+        (await eventsFor(second.attemptId)).at(-1)?.safeMetadata,
+      ].map((m) => (m as { remainingPendingUnknownAttempts?: number } | undefined)
+        ?.remainingPendingUnknownAttempts);
+      expect([...counts].sort()).toEqual([0, 1]);
+    });
+
     it("serializes against a Phase 2F-1 cost admission on the same locks", async () => {
       // A conclusion moves an organization's cycle exposure in both directions,
       // so an authorization reading exposure while one lands would decide on a
@@ -1212,6 +1533,194 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       }
       expect((await reservationOf(job.id)).state).toBe("RELEASED");
       expect((await attemptRow(attemptId)).orchestrationState).toBe("PROCESSING");
+    });
+  });
+
+  describe("the release instant is the decision's own", () => {
+    it("stamps a terminal rejection's release with the injected clock", async () => {
+      // One clock read, after the locks, driving every timestamp the decision
+      // produces. A second wall-clock read in the repository would stamp the
+      // customer's release with an instant no lock was held for, and would drift
+      // from the resolution the same decision wrote.
+      const { attemptId, job } = await seedReconcilingAttempt("relterm");
+      await reconciliation(prisma, createFixedSubmissionClock(INSIDE)).resolveReconciliation({
+        ...RESOLVE,
+        attemptId,
+        observation: REJECTED_TERMINAL,
+      });
+      const reservation = await reservationOf(job.id);
+      expect(reservation.state).toBe("RELEASED");
+      expect(reservation.releasedAt?.getTime()).toBe(INSIDE);
+      expect((await attemptRow(attemptId)).reconciliationResolvedAt?.getTime()).toBe(INSIDE);
+    });
+
+    it("stamps an exhaustion's release with the injected clock, resolving nothing", async () => {
+      const { attemptId, job } = await seedReconcilingAttempt("relexh");
+      await reconciliation(prisma, createFixedSubmissionClock(AFTER)).exhaustReconciliation({
+        organizationId: ORG_A,
+        attemptId,
+        context: ctx(),
+      });
+      const reservation = await reservationOf(job.id);
+      expect(reservation.state).toBe("RELEASED");
+      expect(reservation.releasedAt?.getTime()).toBe(AFTER);
+      // Still no resolution instant. The release needed a time; nothing was
+      // resolved, and the two facts stay separate.
+      expect((await attemptRow(attemptId)).reconciliationResolvedAt).toBeNull();
+    });
+
+    it("ignores the process wall clock entirely", async () => {
+      // The injected instant is a fixture date, deliberately nowhere near the
+      // moment this test runs. A `new Date()` in the repository would land
+      // inside [wallBefore, wallAfter]; the decision's instant does not.
+      const { attemptId, job } = await seedReconcilingAttempt("relwall");
+      const wallBefore = Date.now();
+      await reconciliation(prisma, createFixedSubmissionClock(INSIDE)).resolveReconciliation({
+        ...RESOLVE,
+        attemptId,
+        observation: REJECTED_TERMINAL,
+      });
+      const wallAfter = Date.now();
+      const releasedAt = (await reservationOf(job.id)).releasedAt?.getTime() ?? 0;
+      expect(releasedAt).toBe(INSIDE);
+      const wouldBeWallClock = releasedAt >= wallBefore && releasedAt <= wallAfter;
+      expect(wouldBeWallClock).toBe(false);
+    });
+
+    it("names no unparameterized wall-clock read in the repository source", () => {
+      // A static guard, because the behavioural tests above only catch a wall
+      // clock used for a *persisted business* timestamp. This catches the
+      // reintroduction itself.
+      const source = readFileSync(
+        join(__dirname, "../../packages/database/src/reconciliation-repository.ts"),
+        "utf8",
+      );
+      expect(source.includes("new Date()")).toBe(false);
+      expect(source.includes("Date.now(")).toBe(false);
+      expect(source.includes("new Date(Date.now())")).toBe(false);
+      // Converting an explicit validated instant is the only permitted form.
+      expect(source.includes("new Date(write.decisionAt)")).toBe(true);
+    });
+  });
+
+  describe("a direct Phase 2G-1 outcome is not a reconciliation replay", () => {
+    it("refuses an attempt that reached ACCEPTED without ever becoming uncertain", async () => {
+      // Phase 2G-1 observed the provider response directly at the boundary. Same
+      // certainty, same reference, no reconciliation history — and no
+      // reconciliation to replay. Calling it REPLAYED would report success for
+      // an operation that never ran and hide a mis-routed caller.
+      const { attemptId, job } = await seedReconcilingAttempt("directacc", {
+        stopAtBoundary: true,
+      });
+      const applied = await outcomes().recordObservation({
+        organizationId: ORG_A,
+        attemptId,
+        observation: { kind: "ACCEPTED", providerPredictionId: "pred_direct" },
+        context: ctx(),
+      });
+      expect(applied.kind).toBe("APPLIED");
+
+      const before = await attemptRow(attemptId);
+      expect(before.submissionCertainty).toBe("ACCEPTED");
+      expect(before.reconciliationStartedAt).toBeNull();
+      expect(before.reconciliationDeadlineAt).toBeNull();
+      expect(before.reconciliationResolvedAt).toBeNull();
+
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId,
+          observation: { kind: "ACCEPTED", providerPredictionId: "pred_direct" },
+        }),
+      ).toEqual({ kind: "NOT_RECONCILING", reason: "ATTEMPT_NEVER_BECAME_UNCERTAIN" });
+
+      const after = await attemptRow(attemptId);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect((await reservationOf(job.id)).state).toBe("RESERVED");
+    });
+
+    it("refuses an attempt that reached a definitive rejection directly", async () => {
+      const { attemptId } = await seedReconcilingAttempt("directrej", {
+        stopAtBoundary: true,
+      });
+      await outcomes().recordObservation({
+        organizationId: ORG_A,
+        attemptId,
+        observation: {
+          kind: "DEFINITIVELY_REJECTED",
+          retryable: false,
+          normalizedErrorCode: code("LOCAL_CONFIGURATION"),
+        },
+        context: ctx(),
+      });
+      const before = await attemptRow(attemptId);
+      expect(before.submissionCertainty).toBe("DEFINITIVELY_REJECTED");
+      expect(before.reconciliationStartedAt).toBeNull();
+
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId,
+          observation: REJECTED_TERMINAL,
+        }),
+      ).toEqual({ kind: "NOT_RECONCILING", reason: "ATTEMPT_NEVER_BECAME_UNCERTAIN" });
+      expect((await attemptRow(attemptId)).stateVersion).toBe(before.stateVersion);
+    });
+
+    it("fails closed on a half-written reconciliation history", async () => {
+      const { attemptId } = await seedReconcilingAttempt("partialhist");
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId,
+        observation: ACCEPTED,
+      });
+      // Something erased the resolution instant while leaving the rest. The
+      // record cannot be believed in either direction.
+      await prisma.sceneGeneration.update({
+        where: { id: attemptId },
+        data: { reconciliationResolvedAt: null },
+      });
+      const before = await attemptRow(attemptId);
+      const events = (await eventsFor(attemptId)).length;
+
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId,
+          observation: ACCEPTED,
+        }),
+      ).toEqual({ kind: "NOT_RECONCILING", reason: "RECONCILIATION_HISTORY_INCOHERENT" });
+
+      const after = await attemptRow(attemptId);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      // Not repaired. A fabricated resolution instant is exactly what this
+      // phase refuses to invent everywhere else.
+      expect(after.reconciliationResolvedAt).toBeNull();
+      expect(await eventsFor(attemptId)).toHaveLength(events);
+    });
+
+    it("still replays a true reconciliation after downstream progress", async () => {
+      const { attemptId } = await seedReconcilingAttempt("truereplay");
+      await reconciliation().resolveReconciliation({
+        ...RESOLVE,
+        attemptId,
+        observation: ACCEPTED,
+      });
+      await prisma.sceneGeneration.update({
+        where: { id: attemptId },
+        data: { orchestrationState: "OUTPUT_VERIFIED", stateVersion: { increment: 1 } },
+      });
+      const before = await attemptRow(attemptId);
+      expect(
+        await reconciliation().resolveReconciliation({
+          ...RESOLVE,
+          attemptId,
+          observation: ACCEPTED,
+        }),
+      ).toEqual({ kind: "REPLAYED", attemptId });
+      const after = await attemptRow(attemptId);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.orchestrationState).toBe("OUTPUT_VERIFIED");
     });
   });
 
@@ -1354,6 +1863,37 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       }
     });
 
+    it.each([
+      ["zero", 0],
+      ["negative", -1],
+      ["fractional", 1.5],
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+      ["one over the maximum", MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE + 1],
+      ["an unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+    ])("refuses a %s limit at the repository boundary", async (_label, limit) => {
+      // These methods are public. A caller reaching them without the batch
+      // runner must not be able to put `Infinity` or 5000 into a SQL LIMIT, so
+      // the same canonical validator guards both boundaries.
+      const repo = createReconciliationRepository(prisma);
+      await expect(
+        repo.findDueReconciliationCandidates({ cutoff: AFTER, limit }),
+      ).rejects.toThrow(/between 1 and 100/);
+      await expect(
+        repo.findStaleSubmittingCandidates({ cutoff: AFTER, limit }),
+      ).rejects.toThrow(/between 1 and 100/);
+    });
+
+    it.each([1, MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE])(
+      "accepts the boundary limit %i",
+      async (limit) => {
+        const repo = createReconciliationRepository(prisma);
+        await expect(
+          repo.findDueReconciliationCandidates({ cutoff: AFTER, limit }),
+        ).resolves.toBeInstanceOf(Array);
+      },
+    );
+
     it("does not leak another organization's rows into the identifier list", async () => {
       // The organization id travels with each candidate precisely so the
       // caller must scope its next call; discovery is global by design and
@@ -1371,6 +1911,104 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
           context: ctx(),
         }),
       ).toEqual({ kind: "ATTEMPT_NOT_FOUND" });
+    });
+  });
+
+  describe("one maintenance batch, end to end", () => {
+    /** A runner wired to the real repositories and the real services. */
+    function maintenance(at: EpochMillis) {
+      return createReconciliationMaintenance({
+        reconciliation: createReconciliationRepository(prisma),
+        clock: createFixedSubmissionClock(at),
+        reconciliationService: reconciliation(prisma, createFixedSubmissionClock(at)),
+        submissionOutcomes: outcomes(prisma, at),
+        policy: POLICY,
+      });
+    }
+
+    it("makes an abandoned attempt uncertain and exhausts it in the same pass", async () => {
+      // The corrected assumption. Phase 2G-1 freezes the deadline at
+      // `submissionBoundaryEnteredAt + reconciliationWindow`, so an attempt
+      // discovered long after it was abandoned enters SUBMISSION_UNKNOWN with a
+      // deadline that has *already* elapsed. The due query in this same pass
+      // then finds it, and the exhaustion service — re-checking under its own
+      // lock and clock — closes it.
+      //
+      // That is correct, not a race to design around: the platform's bound on
+      // that uncertainty ran out before anyone noticed the attempt, and making
+      // the customer wait for another batch would extend a window that is over.
+      const { attemptId, job } = await seedReconcilingAttempt("samebatch", {
+        stopAtBoundary: true,
+      });
+      const boundaryRow = await attemptRow(attemptId);
+      expect(boundaryRow.orchestrationState).toBe("SUBMITTING");
+      expect(boundaryRow.submissionCertainty).toBe("PRE_SUBMISSION");
+
+      // Well past both the stale threshold and the frozen reconciliation window.
+      const at = epochMillis(BOUNDARY + POLICY.reconciliationWindowMs + 60_000);
+
+      const report = await maintenance(at).runOnce({ limit: 25, context: ctx() });
+      expect(report).toMatchObject({
+        discoveryNow: at,
+        staleCandidates: 1,
+        staleUncertaintyEntered: 1,
+        dueCandidates: 1,
+        exhausted: 1,
+        unchanged: 0,
+      });
+
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("RECONCILIATION_EXHAUSTED");
+      expect(row.submissionCertainty).toBe("SUBMISSION_UNKNOWN");
+      expect(row.reconciliationResolvedAt).toBeNull();
+      expect(row.providerPredictionId).toBeNull();
+      // The customer is made whole, and the release carries the decision's own
+      // instant rather than a wall-clock read.
+      const reservation = await reservationOf(job.id);
+      expect(reservation.state).toBe("RELEASED");
+      expect(reservation.releasedAt?.getTime()).toBe(at);
+    });
+
+    it("does not exhaust a freshly stale attempt whose window is still open", async () => {
+      // The same batch, a different clock. Here the deadline has not elapsed,
+      // so the due query does not match it and nothing artificially delays or
+      // artificially closes anything.
+      const { attemptId } = await seedReconcilingAttempt("samebatchopen", {
+        stopAtBoundary: true,
+      });
+      const at = epochMillis(BOUNDARY + POLICY.staleSubmittingAfterMs + 60_000);
+
+      const report = await maintenance(at).runOnce({ limit: 25, context: ctx() });
+      expect(report).toMatchObject({
+        staleCandidates: 1,
+        staleUncertaintyEntered: 1,
+        dueCandidates: 0,
+        exhausted: 0,
+      });
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("RECONCILIATION_PENDING");
+    });
+
+    it("leaves an attempt that has not sat at the boundary long enough", async () => {
+      const { attemptId } = await seedReconcilingAttempt("samebatchfresh", {
+        stopAtBoundary: true,
+      });
+      const at = epochMillis(BOUNDARY + POLICY.staleSubmittingAfterMs - 1);
+      expect(await maintenance(at).runOnce({ limit: 25, context: ctx() })).toMatchObject({
+        staleCandidates: 0,
+        dueCandidates: 0,
+      });
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("SUBMITTING");
+    });
+
+    it("refuses an invalid batch bound before touching the database", async () => {
+      const { attemptId } = await seedReconcilingAttempt("samebatchlimit", {
+        stopAtBoundary: true,
+      });
+      const at = epochMillis(BOUNDARY + POLICY.reconciliationWindowMs + 60_000);
+      await expect(
+        maintenance(at).runOnce({ limit: 0, context: ctx() }),
+      ).rejects.toThrow(/between 1 and 100/);
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("SUBMITTING");
     });
   });
 
@@ -1394,6 +2032,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       providerPredictionId: "pred_handbuilt",
       providerAcceptedAt: INSIDE,
       reconciliationResolvedAt: INSIDE,
+      decisionAt: INSIDE,
       reservationAction: "RESTORE",
     } as const;
 
@@ -1441,6 +2080,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
                 providerPredictionId: "pred_fabricated",
                 providerAcceptedAt: null,
                 reconciliationResolvedAt: INSIDE,
+                decisionAt: INSIDE,
                 reservationAction: "RELEASE",
               },
               reservationEventType: RECONCILIATION_HOLD_RELEASED_EVENT_TYPE,
@@ -1555,6 +2195,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
               providerPredictionId: null,
               providerAcceptedAt: null,
               reconciliationResolvedAt: null,
+              decisionAt: AFTER,
               reservationAction: "RELEASE",
             },
             reservationEventType: RECONCILIATION_HOLD_RELEASED_EVENT_TYPE,

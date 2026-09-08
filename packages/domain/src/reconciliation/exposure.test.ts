@@ -48,6 +48,7 @@ function writeForResolution(
     facts: FACTS,
     observation,
     reservationState: "RECONCILIATION_HOLD",
+    otherPendingUnknownAttemptsInJob: 0,
     now: INSIDE,
   });
   if (decision.kind !== "APPLY") throw new Error(`expected APPLY, got ${decision.kind}`);
@@ -58,6 +59,7 @@ function writeForExhaustion(): ReconciliationWrite {
   const decision = decideReconciliationExhaustion({
     facts: FACTS,
     reservationState: "RECONCILIATION_HOLD",
+    otherPendingUnknownAttemptsInJob: 0,
     now: AFTER,
   });
   if (decision.kind !== "APPLY") throw new Error(`expected APPLY, got ${decision.kind}`);

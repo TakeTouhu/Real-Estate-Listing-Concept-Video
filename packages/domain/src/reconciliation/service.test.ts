@@ -80,8 +80,13 @@ const ACCEPTED: ReconciliationResolutionObservation = {
 interface AppliedCall {
   expectedVersion: number;
   context: TransitionContext;
-  reservationEventType: string;
+  reservationEventType: string | null;
   write: { orchestrationState: string; reservationAction: string };
+  fullWrite: {
+    decisionAt: number;
+    providerAcceptedAt: number | null;
+    reconciliationResolvedAt: number | null;
+  };
 }
 
 function harness(
@@ -91,6 +96,7 @@ function harness(
     reservationState?: GenerationReservationState | null;
     requestKind?: SceneGenerationRequestKind;
     now?: EpochMillis;
+    otherPendingUnknownAttemptsInJob?: number;
     apply?: () => Promise<ApplyReconciliationResult>;
     due?: readonly ReconciliationCandidate[];
     stale?: readonly ReconciliationCandidate[];
@@ -115,6 +121,8 @@ function harness(
                 ? null
                 : { id: "genres_1", state: reservationState, stateVersion: 2 },
             requestKind: options.requestKind ?? "INITIAL",
+            otherPendingUnknownAttemptsInJob:
+              options.otherPendingUnknownAttemptsInJob ?? 0,
           };
         },
         async apply(input) {
@@ -126,6 +134,11 @@ function harness(
             write: {
               orchestrationState: input.write.orchestrationState,
               reservationAction: input.write.reservationAction,
+            },
+            fullWrite: {
+              decisionAt: input.write.decisionAt,
+              providerAcceptedAt: input.write.providerAcceptedAt,
+              reconciliationResolvedAt: input.write.reconciliationResolvedAt,
             },
           });
           return (options.apply ?? (async () => ({ kind: "APPLIED", stateVersion: 8 })))();
@@ -213,6 +226,9 @@ describe("resolving uncertainty", () => {
         orchestrationState: "PROCESSING",
         submissionCertainty: "ACCEPTED",
         providerPredictionId: "pred_found",
+        // Complete reconciliation history — this attempt really did go through
+        // reconciliation, so provider-reality replay rules apply.
+        reconciliationResolvedAt: INSIDE,
       }),
     });
     expect(await service.resolveReconciliation(resolveInput())).toEqual({
@@ -228,6 +244,9 @@ describe("resolving uncertainty", () => {
         orchestrationState: "PROCESSING",
         submissionCertainty: "ACCEPTED",
         providerPredictionId: "pred_found",
+        // Complete reconciliation history — this attempt really did go through
+        // reconciliation, so provider-reality replay rules apply.
+        reconciliationResolvedAt: INSIDE,
       }),
     });
     expect(
@@ -361,6 +380,9 @@ describe("exhausting a closed window", () => {
         orchestrationState: "PROCESSING",
         submissionCertainty: "ACCEPTED",
         providerPredictionId: "pred_found",
+        // Complete reconciliation history — this attempt really did go through
+        // reconciliation, so provider-reality replay rules apply.
+        reconciliationResolvedAt: INSIDE,
       }),
     });
     expect(await service.exhaustReconciliation(exhaustInput)).toEqual({
@@ -503,6 +525,144 @@ describe("event labels are service-owned", () => {
     const { service, applied } = harness({ reservationState: "CONSUMED" });
     await service.resolveReconciliation(resolveInput());
     expect(applied[0]?.write.reservationAction).toBe("NONE");
+  });
+});
+
+describe("a Job-scoped hold waits for its last unknown attempt", () => {
+  /**
+   * The reservation belongs to the Job; the attempt belongs to a scene. Several
+   * scenes can be at the provider boundary at once, so several attempts can be
+   * durably unknown behind one suspended hold.
+   */
+
+  it.each([
+    ["an acceptance", ACCEPTED],
+    [
+      "a retryable rejection",
+      { kind: "DEFINITIVELY_REJECTED", retryable: true, diagnosticCode: null },
+    ],
+  ] as const)("keeps the hold on %s while a sibling is unknown", async (_l, observation) => {
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 1,
+    });
+    const outcome = await service.resolveReconciliation(
+      resolveInput(observation as ReconciliationResolutionObservation),
+    );
+    expect(outcome).toMatchObject({ kind: "APPLIED" });
+    expect(applied[0]?.write.reservationAction).toBe("KEEP_HOLD");
+  });
+
+  it("passes no reservation event type for a kept hold", async () => {
+    // Nothing transitioned. An event here would put a transition in the log
+    // that never happened, and an operator counting entitlement suspensions
+    // would over-count every multi-scene Job.
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 2,
+    });
+    await service.resolveReconciliation(resolveInput());
+    expect(applied[0]?.reservationEventType).toBeNull();
+  });
+
+  it("restores once the last unknown sibling is gone", async () => {
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 0,
+    });
+    await service.resolveReconciliation(resolveInput());
+    expect(applied[0]?.write.reservationAction).toBe("RESTORE");
+    expect(applied[0]?.reservationEventType).toBe(RECONCILIATION_HOLD_RESTORED_EVENT_TYPE);
+  });
+
+  it("releases on a terminal rejection even while a sibling is unknown", async () => {
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 3,
+    });
+    await service.resolveReconciliation(
+      resolveInput({ kind: "DEFINITIVELY_REJECTED", retryable: false, diagnosticCode: null }),
+    );
+    expect(applied[0]?.write.reservationAction).toBe("RELEASE");
+    expect(applied[0]?.reservationEventType).toBe(RECONCILIATION_HOLD_RELEASED_EVENT_TYPE);
+  });
+
+  it("releases on exhaustion even while a sibling is unknown", async () => {
+    const { service, applied } = harness({
+      now: AFTER,
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 4,
+    });
+    await service.exhaustReconciliation(exhaustInput);
+    expect(applied[0]?.write.reservationAction).toBe("RELEASE");
+    expect(applied[0]?.reservationEventType).toBe(RECONCILIATION_HOLD_RELEASED_EVENT_TYPE);
+  });
+
+  it("records the remaining count on the attempt's own event", async () => {
+    // The only durable record of *why* the customer's unit was not handed back:
+    // a kept hold writes no reservation event, so the reason lives here.
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 2,
+    });
+    await service.resolveReconciliation(resolveInput());
+    expect(applied[0]?.context.metadata).toMatchObject({
+      remainingPendingUnknownAttempts: 2,
+    });
+  });
+
+  it("records zero when this was the last unknown attempt", async () => {
+    const { service, applied } = harness({
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 0,
+    });
+    await service.resolveReconciliation(resolveInput());
+    expect(applied[0]?.context.metadata).toMatchObject({
+      remainingPendingUnknownAttempts: 0,
+    });
+  });
+
+  it("records the count on the exhaustion path too", async () => {
+    const { service, applied } = harness({
+      now: AFTER,
+      reservationState: "RECONCILIATION_HOLD",
+      otherPendingUnknownAttemptsInJob: 1,
+    });
+    await service.exhaustReconciliation(exhaustInput);
+    expect(applied[0]?.context.metadata).toMatchObject({
+      remainingPendingUnknownAttempts: 1,
+    });
+  });
+
+  it("takes no sibling count from the caller", async () => {
+    expect(Object.keys(resolveInput()).sort()).toEqual([
+      "attemptId",
+      "context",
+      "observation",
+      "organizationId",
+    ]);
+  });
+});
+
+describe("every timestamp comes from the one decision instant", () => {
+  it("stamps acceptance and resolution from the same read as the decision", async () => {
+    const { service, applied } = harness({ reservationState: "RECONCILIATION_HOLD" });
+    await service.resolveReconciliation(resolveInput());
+    const write = applied[0]?.fullWrite;
+    expect(write?.decisionAt).toBe(INSIDE);
+    expect(write?.providerAcceptedAt).toBe(INSIDE);
+    expect(write?.reconciliationResolvedAt).toBe(INSIDE);
+  });
+
+  it("carries a decision instant through exhaustion, which resolves nothing", async () => {
+    // The release still needs a time. Reaching for a second wall-clock read in
+    // the persistence layer to get one would stamp the customer's release with
+    // an instant no lock was held for.
+    const { service, applied } = harness({ now: AFTER, reservationState: "RECONCILIATION_HOLD" });
+    await service.exhaustReconciliation(exhaustInput);
+    const write = applied[0]?.fullWrite;
+    expect(write?.decisionAt).toBe(AFTER);
+    expect(write?.reconciliationResolvedAt).toBeNull();
   });
 });
 

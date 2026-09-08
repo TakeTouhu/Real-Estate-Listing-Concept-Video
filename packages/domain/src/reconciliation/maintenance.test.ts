@@ -3,8 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
 import type { TransitionContext } from "../orchestration/ports";
-import { epochMillis, epochMillisFromDate, type EpochMillis } from "../pricing/units";
+import { epochMillisFromDate, type EpochMillis } from "../pricing/units";
+import {
+  validateReconciliationPolicy,
+  type ReconciliationPolicy,
+  type ReconciliationPolicyConfig,
+} from "../submission/reconciliation-window";
 import type { SubmissionOutcomeService } from "../submission/service";
+import { MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE } from "./limits";
 import { createReconciliationMaintenance } from "./maintenance";
 import type {
   ReconciliationCandidate,
@@ -17,12 +23,26 @@ import type { ReconciliationService } from "./service";
 /**
  * One batch, and only one.
  *
- * The runner's job is to hand advisory candidates to the two authoritative
- * services and count what came back. Everything interesting about it is what it
- * refuses to be: a loop, a timer, a scheduler, or an authority in its own right.
+ * The runner hands advisory candidates to the two authoritative services and
+ * counts what came back. Everything interesting about it is what it refuses to
+ * be: a loop, a timer, a scheduler, or an authority in its own right — and, as
+ * of this revision, a place where the caller gets to choose what "now" means.
  */
 
 const NOW = epochMillisFromDate(new Date("2026-09-11T00:00:00.000Z"));
+const STALE_AFTER_MS = 15 * 60 * 1000;
+
+function validatedPolicy(config: ReconciliationPolicyConfig): ReconciliationPolicy {
+  const result = validateReconciliationPolicy(config);
+  if (!result.ok) throw new Error(`invalid test policy: ${result.reason}`);
+  return result.policy;
+}
+
+/** A fixture. There is deliberately no shipped production stale threshold. */
+const POLICY = validatedPolicy({
+  reconciliationWindowMs: 24 * 60 * 60 * 1000,
+  staleSubmittingAfterMs: STALE_AFTER_MS,
+});
 
 const CONTEXT: TransitionContext = {
   actorType: "SYSTEM",
@@ -38,16 +58,20 @@ function candidate(n: number): ReconciliationCandidate {
   return { organizationId: "org_batch", attemptId: `sgen_${n}` };
 }
 
-function harness(options: {
-  due?: readonly ReconciliationCandidate[];
-  stale?: readonly ReconciliationCandidate[];
-  exhaust?: (attemptId: string) => ReconciliationExhaustionResult;
-  stale_result?: (attemptId: string) => { kind: string };
-} = {}) {
+function harness(
+  options: {
+    due?: readonly ReconciliationCandidate[];
+    stale?: readonly ReconciliationCandidate[];
+    exhaust?: (attemptId: string) => ReconciliationExhaustionResult;
+    stale_result?: (attemptId: string) => { kind: string };
+    policy?: ReconciliationPolicy;
+  } = {},
+) {
   const seen: string[] = [];
   const queries: { which: string; query: ReconciliationCandidateQuery }[] = [];
   const staleCalls: string[] = [];
   const exhaustCalls: string[] = [];
+  let clockReads = 0;
 
   const reconciliation: ReconciliationRepository = {
     async withReconcilingAttempt() {
@@ -109,16 +133,23 @@ function harness(options: {
     queries,
     staleCalls,
     exhaustCalls,
+    clockReads: () => clockReads,
     maintenance: createReconciliationMaintenance({
       reconciliation,
-      clock: { now: (): EpochMillis => NOW },
+      clock: {
+        now(): EpochMillis {
+          clockReads += 1;
+          return NOW;
+        },
+      },
       reconciliationService,
       submissionOutcomes,
+      policy: options.policy ?? POLICY,
     }),
   };
 }
 
-const INPUT = { cutoff: NOW, limit: 25, context: CONTEXT };
+const INPUT = { limit: 25, context: CONTEXT };
 
 describe("one pass over what maintenance might need to touch", () => {
   it("counts what it discovered and what it changed", async () => {
@@ -127,6 +158,7 @@ describe("one pass over what maintenance might need to touch", () => {
       due: [candidate(3)],
     });
     expect(await maintenance.runOnce(INPUT)).toEqual({
+      discoveryNow: NOW,
       staleCandidates: 2,
       staleUncertaintyEntered: 2,
       dueCandidates: 1,
@@ -137,7 +169,7 @@ describe("one pass over what maintenance might need to touch", () => {
 
   it("does nothing at all when nothing is due", async () => {
     const { maintenance, seen } = harness();
-    expect(await maintenance.runOnce(INPUT)).toEqual({
+    expect(await maintenance.runOnce(INPUT)).toMatchObject({
       staleCandidates: 0,
       staleUncertaintyEntered: 0,
       dueCandidates: 0,
@@ -148,21 +180,12 @@ describe("one pass over what maintenance might need to touch", () => {
   });
 
   it("sweeps stale attempts before exhausting due ones", async () => {
-    // A stale sweep *creates* uncertainty with a deadline in the future, so
-    // doing it first means a newly uncertain attempt is never exhausted in the
-    // same batch that discovered it.
+    // So the second pass sees the first pass's work rather than missing it. It
+    // is emphatically *not* a guarantee that a newly uncertain attempt escapes
+    // the same batch — see the same-batch test below.
     const { maintenance, seen } = harness({ stale: [candidate(1)], due: [candidate(2)] });
     await maintenance.runOnce(INPUT);
     expect(seen).toEqual(["stale-query", "stale:sgen_1", "due-query", "exhaust:sgen_2"]);
-  });
-
-  it("passes the caller's cutoff and bound to both queries", async () => {
-    const { maintenance, queries } = harness();
-    await maintenance.runOnce({ ...INPUT, cutoff: epochMillis(NOW - 5_000), limit: 7 });
-    expect(queries).toEqual([
-      { which: "stale", query: { cutoff: NOW - 5_000, limit: 7 } },
-      { which: "due", query: { cutoff: NOW - 5_000, limit: 7 } },
-    ]);
   });
 
   it("invents no diagnostic for a sweep", async () => {
@@ -174,10 +197,100 @@ describe("one pass over what maintenance might need to touch", () => {
   });
 });
 
+describe("discovery time belongs to the runner's clock", () => {
+  it("derives the stale cutoff by subtracting the validated threshold", async () => {
+    // The correction this replaced: one caller-supplied `cutoff` was passed to
+    // both queries, which asked different questions of different columns. A
+    // caller had to encode two meanings in one timestamp, and the stale one was
+    // wrong by a whole threshold.
+    const { maintenance, queries } = harness();
+    await maintenance.runOnce(INPUT);
+    expect(queries).toEqual([
+      { which: "stale", query: { cutoff: NOW - STALE_AFTER_MS, limit: 25 } },
+      { which: "due", query: { cutoff: NOW, limit: 25 } },
+    ]);
+  });
+
+  it("uses the discovery instant itself as the due cutoff", async () => {
+    const { maintenance, queries } = harness();
+    await maintenance.runOnce(INPUT);
+    expect(queries.find((q) => q.which === "due")?.query.cutoff).toBe(NOW);
+  });
+
+  it("reads its clock exactly once per pass", async () => {
+    // Two reads would let the two queries disagree about now, and the report
+    // could then describe a window that never existed.
+    const { maintenance, clockReads } = harness({
+      stale: [candidate(1)],
+      due: [candidate(2)],
+    });
+    await maintenance.runOnce(INPUT);
+    expect(clockReads()).toBe(1);
+  });
+
+  it("reports the instant it narrowed by", async () => {
+    const { maintenance } = harness();
+    expect((await maintenance.runOnce(INPUT)).discoveryNow).toBe(NOW);
+  });
+
+  it("takes no cutoff from the caller", async () => {
+    // The input type is the proof: there is nowhere to put one.
+    expect(Object.keys(INPUT).sort()).toEqual(["context", "limit"]);
+  });
+
+  it("refuses a policy that never went through the validator", () => {
+    // The same provenance check Phase 2G-1's service makes. A stale threshold
+    // that never met the validator is a bound nobody agreed to, deciding whether
+    // a paid submission is presumed lost.
+    expect(() =>
+      harness({
+        policy: {
+          reconciliationWindowMs: 24 * 60 * 60 * 1000,
+          staleSubmittingAfterMs: STALE_AFTER_MS,
+        } as unknown as ReconciliationPolicy,
+      }),
+    ).toThrow(/validated reconciliation policy/i);
+  });
+});
+
+describe("the batch bound is validated before anything is queried", () => {
+  it.each([1, 2, 50, MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE])(
+    "accepts %i",
+    async (limit) => {
+      const { maintenance, queries } = harness();
+      await maintenance.runOnce({ limit, context: CONTEXT });
+      expect(queries.every((q) => q.query.limit === limit)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+    ["one over the maximum", MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE + 1],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 1],
+  ])("refuses %s without running a query", async (_label, limit) => {
+    // Refused, never clamped. Silently substituting 100 for 5000 would let a
+    // caller believe it swept far more than it did; substituting 1 for 0 would
+    // turn "do nothing" into "do something".
+    const { maintenance, queries, seen } = harness();
+    await expect(maintenance.runOnce({ limit, context: CONTEXT })).rejects.toThrow(
+      /between 1 and 100/,
+    );
+    expect(queries).toHaveLength(0);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("freezes the maximum at 100", () => {
+    expect(MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE).toBe(100);
+  });
+});
+
 describe("candidates are advisory, never authority", () => {
   it("counts a service's refusal as unchanged rather than failing the batch", async () => {
-    // Between the query and the act, another worker may have resolved the
-    // attempt. That is expected contention, not an error.
     const { maintenance } = harness({
       due: [candidate(1), candidate(2)],
       exhaust: (id) =>
@@ -231,12 +344,27 @@ describe("candidates are advisory, never authority", () => {
 
   it("re-checks every candidate through the authoritative service", async () => {
     // Never a bulk update. Each row is re-read under its own lock, against the
-    // service's own post-lock clock.
-    const { maintenance, exhaustCalls } = harness({
-      due: [candidate(1), candidate(2)],
-    });
+    // service's own post-lock clock — which is a different clock read from the
+    // one that narrowed discovery.
+    const { maintenance, exhaustCalls } = harness({ due: [candidate(1), candidate(2)] });
     await maintenance.runOnce(INPUT);
     expect(exhaustCalls).toEqual(["sgen_1", "sgen_2"]);
+  });
+
+  it("passes no discovery time to either single-attempt service", async () => {
+    // The runner's instant narrows queries and nothing else. If it reached a
+    // service, a stale batch could authorize a transition against a window that
+    // had closed while the batch ran.
+    const { maintenance } = harness({ stale: [candidate(1)], due: [candidate(2)] });
+    const calls: Record<string, unknown>[] = [];
+    void calls;
+    await maintenance.runOnce(INPUT);
+    // The service inputs are typed to accept no timestamp at all.
+    expect(Object.keys({ organizationId: "", attemptId: "", context: CONTEXT }).sort()).toEqual([
+      "attemptId",
+      "context",
+      "organizationId",
+    ]);
   });
 });
 
@@ -269,5 +397,10 @@ describe("the runner is a batch, not a daemon", () => {
         `${banned}: false`,
       );
     }
+  });
+
+  it("reads wall time only through the injected clock", () => {
+    expect(TEXT.includes("Date.now(")).toBe(false);
+    expect(TEXT.includes("new Date(")).toBe(false);
   });
 });

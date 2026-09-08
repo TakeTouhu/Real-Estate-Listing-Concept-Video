@@ -38,6 +38,21 @@ export interface ReconciliationFacts {
   readonly reservation: ReconciliationReservationFacts | null;
   /** The parent logical request's kind, read through the persisted chain. */
   readonly requestKind: SceneGenerationRequestKind;
+  /**
+   * How many *other* attempts in the same `GenerationJob` are still
+   * `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`.
+   *
+   * The reservation is Job-scoped while an attempt is scene-scoped, so several
+   * attempts can be durably unknown behind one suspended hold. Restoring that
+   * hold when the first of them resolves would lift a Job-level suspension while
+   * the Job is still uncertain.
+   *
+   * Counted inside the same transaction, after the organization+cycle advisory
+   * lock, and derived through the persisted Attempt → Request → Scene → Job
+   * chain. Never supplied by a caller: a caller able to assert "no siblings"
+   * could unsuspend a customer's unit while money was still being spent.
+   */
+  readonly otherPendingUnknownAttemptsInJob: number;
 }
 
 /**
@@ -105,8 +120,12 @@ export interface ReconciliationSession {
     readonly expectedVersion: number;
     readonly write: ReconciliationWrite;
     readonly context: TransitionContext;
-    /** Service-owned, never caller-chosen. */
-    readonly reservationEventType: string;
+    /**
+     * Service-owned, never caller-chosen. `null` when the write moves no
+     * reservation — a `KEEP_HOLD` or a `NONE` — so the persistence has no label
+     * to append an event under, because no transition occurred.
+     */
+    readonly reservationEventType: string | null;
   }): Promise<ApplyReconciliationResult>;
 }
 

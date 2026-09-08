@@ -11,6 +11,7 @@ import {
   type ReconciliationSession,
   type ReconcilingAttemptFacts,
   type SceneGenerationRequestKind,
+  validateReconciliationMaintenanceLimit,
   type SubmissionCertainty,
 } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -158,6 +159,51 @@ interface AttemptRow {
   requestKind: SceneGenerationRequestKind | null;
 }
 
+/**
+ * How many *other* attempts in this attempt's Job are still durably unknown.
+ *
+ * The reservation is Job-scoped; an attempt is scene-scoped. Several scenes in
+ * one Job can be at the provider boundary at once, so several attempts can be
+ * `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN` behind a single suspended hold.
+ * Restoring that hold when the first of them resolves would lift a Job-level
+ * suspension while the Job is still uncertain.
+ *
+ * Counted here, inside the transaction and after the organization+cycle advisory
+ * lock, so it is authoritative for this decision: any concurrent conclusion on a
+ * sibling is serialized behind the same lock and therefore either already
+ * committed and visible, or still waiting and counted.
+ *
+ * Tenant-scoped like every other read, and derived through the persisted chain
+ * rather than the denormalized project column, so a sibling is only a sibling if
+ * it genuinely shares this attempt's Job.
+ */
+async function countOtherPendingUnknownAttemptsInJob(
+  tx: Tx,
+  organizationId: string,
+  attemptId: string,
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*) AS "count"
+      FROM "scene_generations" sibling
+      JOIN "scene_generation_requests" sr ON sr."id" = sibling."generationSceneRequestId"
+      JOIN "generation_scenes" ss ON ss."id" = sr."generationSceneId"
+     WHERE ss."generationJobId" = (
+             SELECT s."generationJobId"
+               FROM "scene_generations" a
+               JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
+               JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+               JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+               JOIN "video_projects" p ON p."id" = j."videoProjectId"
+              WHERE a."id" = ${attemptId}
+                AND p."organizationId" = ${organizationId}
+           )
+       AND sibling."id" <> ${attemptId}
+       AND sibling."orchestrationState" = 'RECONCILIATION_PENDING'::"GenerationAttemptState"
+       AND sibling."submissionCertainty" = 'SUBMISSION_UNKNOWN'::"SubmissionCertainty"
+  `;
+  return Number(rows[0]?.count ?? 0n);
+}
+
 /** The attempt, tenant-scoped through its own chain. */
 async function loadAttempt(
   tx: Tx,
@@ -226,7 +272,16 @@ export function createReconciliationRepository(
               reconciliationDeadlineAt: MS(row.reconciliationDeadlineAt),
               reconciliationResolvedAt: MS(row.reconciliationResolvedAt),
             };
-            return { attempt, reservation, requestKind: row.requestKind };
+            return {
+              attempt,
+              reservation,
+              requestKind: row.requestKind,
+              otherPendingUnknownAttemptsInJob: await countOtherPendingUnknownAttemptsInJob(
+                tx,
+                input.organizationId,
+                input.attemptId,
+              ),
+            };
           },
 
           async apply({
@@ -297,8 +352,15 @@ export function createReconciliationRepository(
             // moves: a CONSUMED unit stays spent, a RELEASED one stays gone, and
             // a RESERVED one is already where a restore would put it. The
             // decision made that call from the state read under this lock.
+            //
+            // `KEEP_HOLD` is deliberately excluded alongside `NONE`. It means
+            // the hold is correct where it is and stays there because a sibling
+            // attempt in the same Job is still unknown — nothing transitions, so
+            // nothing is written and no event is appended. The reason is on the
+            // attempt's own event instead, as `remainingPendingUnknownAttempts`.
             if (
-              write.reservationAction !== "NONE" &&
+              (write.reservationAction === "RESTORE" ||
+                write.reservationAction === "RELEASE") &&
               reservation !== null &&
               reservation.state === "RECONCILIATION_HOLD"
             ) {
@@ -318,7 +380,13 @@ export function createReconciliationRepository(
                 data: {
                   state: nextState,
                   stateVersion: { increment: 1 },
-                  ...(nextState === "RELEASED" ? { releasedAt: new Date() } : {}),
+                  // The decision's own instant, not a fresh wall-clock read.
+                  // A second read here would stamp the customer's release with
+                  // a time no lock was held for, and would drift from the
+                  // `reconciliationResolvedAt` written by the same decision.
+                  ...(nextState === "RELEASED"
+                    ? { releasedAt: new Date(write.decisionAt) }
+                    : {}),
                 },
               });
               if (moved.count === 0) {
@@ -328,6 +396,15 @@ export function createReconciliationRepository(
                 throw new AppError(
                   "INTERNAL_ERROR",
                   "Reservation moved while held under FOR UPDATE",
+                );
+              }
+              if (reservationEventType === null) {
+                // A move without a label is a defect, not a state to tolerate:
+                // an unlabelled entitlement transition is invisible to every
+                // audit query that selects on event type.
+                throw new AppError(
+                  "INTERNAL_ERROR",
+                  "Refusing to move a reservation without a transition label",
                 );
               }
               await appendGenerationEvent(tx, {
@@ -370,7 +447,12 @@ export function createReconciliationRepository(
       });
     },
 
-    async findDueReconciliationCandidates({ cutoff, limit }) {
+    async findDueReconciliationCandidates({ cutoff, limit: requested }) {
+      // Validated here as well as in the batch runner, because this method is
+      // public: a caller reaching it directly must not be able to put
+      // `Infinity`, a fraction or 5000 into a SQL LIMIT. One canonical
+      // validator, so the two boundaries cannot disagree about the bound.
+      const limit = validateReconciliationMaintenanceLimit(requested);
       // No lock, no transaction, identifiers only. Everything needed to *decide*
       // is deliberately absent, so a caller cannot mistake this for authority
       // and act on a row without the single-attempt service re-checking it.
@@ -391,7 +473,8 @@ export function createReconciliationRepository(
       `;
     },
 
-    async findStaleSubmittingCandidates({ cutoff, limit }) {
+    async findStaleSubmittingCandidates({ cutoff, limit: requested }) {
+      const limit = validateReconciliationMaintenanceLimit(requested);
       // The cutoff already encodes the caller's validated stale threshold, so
       // no threshold is recomputed — or invented — here. Phase 2G-1's service
       // still judges each row against its own post-lock clock and policy.

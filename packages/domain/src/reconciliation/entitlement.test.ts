@@ -45,7 +45,11 @@ describe("only a suspended hold ever moves", () => {
     ["REJECTED_TERMINAL", "RELEASE"],
     ["EXHAUSTED", "RELEASE"],
   ] as const)("%s moves a RECONCILIATION_HOLD to %s", (conclusion, action) => {
-    expect(reservationActionFor({ reservationState: "RECONCILIATION_HOLD", conclusion })).toBe(
+    expect(reservationActionFor({
+      reservationState: "RECONCILIATION_HOLD",
+      conclusion,
+      otherPendingUnknownAttemptsInJob: 0,
+    })).toBe(
       action,
     );
   });
@@ -54,14 +58,14 @@ describe("only a suspended hold ever moves", () => {
     "leaves a %s reservation alone under every conclusion",
     (reservationState) => {
       for (const conclusion of CONCLUSIONS) {
-        expect(reservationActionFor({ reservationState, conclusion })).toBe("NONE");
+        expect(reservationActionFor({ reservationState, conclusion, otherPendingUnknownAttemptsInJob: 0 })).toBe("NONE");
       }
     },
   );
 
   it("leaves a missing reservation alone under every conclusion", () => {
     for (const conclusion of CONCLUSIONS) {
-      expect(reservationActionFor({ reservationState: null, conclusion })).toBe("NONE");
+      expect(reservationActionFor({ reservationState: null, conclusion, otherPendingUnknownAttemptsInJob: 0 })).toBe("NONE");
     }
   });
 
@@ -71,12 +75,14 @@ describe("only a suspended hold ever moves", () => {
     // would become quietly unfinishable while looking healthy.
     expect(
       reservationActionFor({
+        otherPendingUnknownAttemptsInJob: 0,
         reservationState: "RECONCILIATION_HOLD",
         conclusion: "REJECTED_RETRYABLE",
       }),
     ).toBe("RESTORE");
     expect(
       reservationActionFor({
+        otherPendingUnknownAttemptsInJob: 0,
         reservationState: "RECONCILIATION_HOLD",
         conclusion: "REJECTED_TERMINAL",
       }),
@@ -88,10 +94,117 @@ describe("only a suspended hold ever moves", () => {
     // not. They are not charged for a question nobody could answer.
     expect(
       reservationActionFor({
+        otherPendingUnknownAttemptsInJob: 0,
         reservationState: "RECONCILIATION_HOLD",
         conclusion: "EXHAUSTED",
       }),
     ).toBe("RELEASE");
+  });
+});
+
+describe("a Job-scoped hold waits for its last unknown attempt", () => {
+  /**
+   * One reservation, many scenes. Several attempts in the same Job can be
+   * durably unknown behind a single suspended hold, so the first conclusion to
+   * arrive must not lift a Job-level suspension the Job has not earned.
+   */
+
+  it.each([
+    ["ACCEPTED", "ACCEPTED"],
+    ["a retryable rejection", "REJECTED_RETRYABLE"],
+  ] as const)("keeps the hold on %s while a sibling is still unknown", (_l, conclusion) => {
+    expect(
+      reservationActionFor({
+        reservationState: "RECONCILIATION_HOLD",
+        conclusion,
+        otherPendingUnknownAttemptsInJob: 1,
+      }),
+    ).toBe("KEEP_HOLD");
+  });
+
+  it.each([1, 2, 7])("keeps the hold for %i remaining unknown siblings", (remaining) => {
+    expect(
+      reservationActionFor({
+        reservationState: "RECONCILIATION_HOLD",
+        conclusion: "ACCEPTED",
+        otherPendingUnknownAttemptsInJob: remaining,
+      }),
+    ).toBe("KEEP_HOLD");
+  });
+
+  it.each([
+    ["ACCEPTED", "ACCEPTED"],
+    ["a retryable rejection", "REJECTED_RETRYABLE"],
+  ] as const)("restores on %s once it is the last unknown attempt", (_l, conclusion) => {
+    expect(
+      reservationActionFor({
+        reservationState: "RECONCILIATION_HOLD",
+        conclusion,
+        otherPendingUnknownAttemptsInJob: 0,
+      }),
+    ).toBe("RESTORE");
+  });
+
+  it.each([
+    ["a terminal rejection", "REJECTED_TERMINAL"],
+    ["exhaustion", "EXHAUSTED"],
+  ] as const)("releases on %s even while a sibling is still unknown", (_l, conclusion) => {
+    // Deliberately asymmetric. Releasing is how the customer stops being charged
+    // for a question nobody could answer; making that wait on an unrelated
+    // sibling would hold their money hostage to it. And the asymmetry is safe
+    // one-way: RELEASED is terminal, so a sibling's later conclusion can never
+    // resurrect it.
+    expect(
+      reservationActionFor({
+        reservationState: "RECONCILIATION_HOLD",
+        conclusion,
+        otherPendingUnknownAttemptsInJob: 3,
+      }),
+    ).toBe("RELEASE");
+  });
+
+  it("never returns KEEP_HOLD for a reservation that is not a suspended hold", () => {
+    // KEEP_HOLD says "the hold is right where it should be". A CONSUMED or
+    // RELEASED reservation is not a hold at all, and labelling it one would tell
+    // an operator a suspension exists that does not.
+    for (const reservationState of STATES.filter((s) => s !== "RECONCILIATION_HOLD")) {
+      for (const conclusion of CONCLUSIONS) {
+        expect(
+          reservationActionFor({
+            reservationState,
+            conclusion,
+            otherPendingUnknownAttemptsInJob: 5,
+          }),
+        ).toBe("NONE");
+      }
+    }
+    for (const conclusion of CONCLUSIONS) {
+      expect(
+        reservationActionFor({
+          reservationState: null,
+          conclusion,
+          otherPendingUnknownAttemptsInJob: 5,
+        }),
+      ).toBe("NONE");
+    }
+  });
+
+  it("still never asks for a consumption, whatever the sibling count", () => {
+    const actions = new Set<string>();
+    for (const remaining of [0, 1, 4]) {
+      for (const reservationState of [...STATES, null]) {
+        for (const conclusion of CONCLUSIONS) {
+          actions.add(
+            reservationActionFor({
+              reservationState,
+              conclusion,
+              otherPendingUnknownAttemptsInJob: remaining,
+            }),
+          );
+        }
+      }
+    }
+    expect([...actions].sort()).toEqual(["KEEP_HOLD", "NONE", "RELEASE", "RESTORE"]);
   });
 });
 
@@ -100,7 +213,11 @@ describe("a post-delivery regeneration never touches a unit", () => {
     // The regeneration right is sold with the original video and exercised
     // after delivery, when the unit is already spent. Restoring it would hand
     // the customer a unit they already used; consuming it would charge twice.
-    expect(reservationActionFor({ reservationState: "CONSUMED", conclusion })).toBe("NONE");
+    expect(reservationActionFor({
+      reservationState: "CONSUMED",
+      conclusion,
+      otherPendingUnknownAttemptsInJob: 0,
+    })).toBe("NONE");
     expect(
       classifyReconciliationEntitlement({
         requestKind: "USER_REGENERATION",

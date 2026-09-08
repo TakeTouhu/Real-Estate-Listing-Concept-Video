@@ -22,6 +22,22 @@ Reconciliation resolution and deadline exhaustion. Base:
 > The lesson both share: **a type is a promise about a value you constructed,
 > and neither of these boundaries constructs its own input.**
 
+> **Revision 3 — remaining CTO review corrections.** Revision 2
+> (`99fe6f4ef5a347ada850e9abda16da4bd9e86e39`) fixed those two and was not yet
+> approved. Four more blocking defects are corrected here:
+>
+> | Superseded claim | Correction |
+> | --- | --- |
+> | Reservation resolution depends only on the reservation's current state | `GenerationReservation` is **Job-scoped**. Several attempts in one Job can be durably unknown behind one suspended hold, and restoring on the first conclusion lifted a Job-level suspension while the Job was still uncertain. Restoring now requires the conclusion to leave **no other** `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN` attempt in the same Job |
+> | Any already-resolved attempt with matching provider reality is a replay | A direct Phase 2G-1 outcome lands on the same certainty with the same reference and *no reconciliation history*. Calling that `REPLAYED` reports success for an operation that never ran. A replay now requires all three reconciliation timestamps; partial history fails closed as `RECONCILIATION_HISTORY_INCOHERENT` |
+> | Every timestamp comes from the single post-lock clock read | The reservation's `releasedAt` did not — the repository called `new Date()`, stamping a customer's release with an instant no lock was held for. The decision now carries `decisionAt` and drives every timestamp from it |
+> | One caller-supplied `cutoff` narrows both maintenance queries | They ask different questions of different columns, so one timestamp had to mean two things — and the stale one was wrong by a whole threshold. The runner now owns discovery time and derives both cutoffs from a validated policy; the batch bound is validated at both boundaries and capped at 100 |
+>
+> Also corrected: the documented claim that a newly uncertain stale attempt always
+> has a future deadline. It does not — Phase 2G-1 freezes the deadline from the
+> submission boundary, so an attempt discovered late enters `SUBMISSION_UNKNOWN`
+> already past it and is legitimately exhausted in the same batch.
+
 Phase 4C-3B-2G-1 gave the platform a way to say "we do not know whether the
 provider took this work" and stopped there. An attempt landed in
 `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN`, its customer's unit was suspended
@@ -112,8 +128,8 @@ erDiagram
         int stateVersion "incremented"
     }
     GenerationReservation {
-        enum state "RECONCILIATION_HOLD to RESERVED or RELEASED only"
-        datetime releasedAt "set on release"
+        enum state "RECONCILIATION_HOLD to RESERVED only when no unknown sibling remains; to RELEASED on terminal rejection or exhaustion"
+        datetime releasedAt "set from the decision instant, never a wall clock"
     }
 ```
 
@@ -127,11 +143,12 @@ Both Prisma diffs report `No difference detected`.
 | File | Responsibility |
 | --- | --- |
 | `observation.ts` | The closed two-arm evidence contract and its well-formedness check |
-| `entitlement.ts` | What happens to the customer's unit, and how anomalous bookkeeping is labelled |
+| `entitlement.ts` | What happens to the customer's unit — including the Job-scoped `KEEP_HOLD` rule — and how anomalous bookkeeping is labelled |
 | `decide.ts` | Both pure evaluators — resolution and exhaustion |
 | `ports.ts` | Repository, session and clock; the two closed result unions |
 | `service.ts` | Lock/clock sequencing, the five event types, safe audit metadata |
-| `maintenance.ts` | One batch pass over stale and due candidates |
+| `limits.ts` | The frozen batch maximum and the one canonical limit validator |
+| `maintenance.ts` | One batch pass; owns discovery time, derives both cutoffs |
 
 ### Persistence — `packages/database/src/reconciliation-repository.ts`
 
@@ -141,10 +158,11 @@ One transaction, in the lock order Phase 2F-1 fixed and 2G-1 joined:
 organization + billing-cycle advisory lock
   → GenerationReservation row FOR UPDATE (null when absent — an anomaly, not a block)
   → authoritative attempt read, tenant-scoped through its own chain
+  → count of other durably unknown attempts in the same Job
   → post-lock clock
   → pure decision
   → attempt compare-and-set on {state, certainty, version}
-  → reservation mutation, only from RECONCILIATION_HOLD
+  → reservation mutation, only from RECONCILIATION_HOLD and only on RESTORE/RELEASE
   → append-only attempt + reservation events
   → COMMIT
 ```
@@ -189,8 +207,8 @@ All commands run at the delivered head.
 | --- | --- |
 | `pnpm typecheck` | Pass — all 10 projects |
 | `pnpm lint` | Pass — clean |
-| `pnpm test` | **2603 passed**, 95 files |
-| `pnpm test:db` (live PostgreSQL) | **538 passed**, 19 files |
+| `pnpm test` | **2659 passed**, 95 files |
+| `pnpm test:db` (live PostgreSQL) | **567 passed**, 19 files |
 | `pnpm build` | Pass — Next.js production build |
 | Prisma schema → database | `No difference detected` |
 | Prisma migrations → schema | `No difference detected` |
@@ -201,28 +219,82 @@ New tests added by this phase:
 
 | Suite | Tests |
 | --- | --- |
-| `reconciliation/decide.test.ts` | 62 |
-| `reconciliation/service.test.ts` | 50 |
-| `reconciliation/entitlement.test.ts` | 23 |
+| `reconciliation/decide.test.ts` | 75 |
+| `reconciliation/service.test.ts` | 62 |
+| `reconciliation/entitlement.test.ts` | 34 |
 | `reconciliation/observation.test.ts` | 65 |
-| `reconciliation/maintenance.test.ts` | 16 |
+| `reconciliation/maintenance.test.ts` | 32 |
 | `reconciliation/exposure.test.ts` | 10 |
-| `tests/integration/reconciliation.db.test.ts` | 56 |
+| `tests/integration/reconciliation.db.test.ts` | 85 |
 | `submission/observation.test.ts` (2G-1 hardening) | 52 |
-| **Total** | **288** |
+| **Total** | **344** |
 
-Unit total rose to **2603** from 2315 (+288, 95 files from 88); database total
-rose to **538** from 481 (+57, 19 files from 18). The Revision 2 corrections
-account for +114 unit tests (the two validators' hostile-input suites) and +4
-database tests (three cross-tenant boundary tests and one split-ownership test).
-No pre-existing test was modified or removed.
+Unit total rose to **2659** from 2315 (+344, 95 files from 88); database total
+rose to **567** from 481 (+86, 19 files from 18).
+
+- Revision 1 added 174 unit and 53 database tests.
+- Revision 2 added 114 unit (the two validators' hostile-input suites) and 4
+  database (three cross-tenant boundary tests, one split-ownership test).
+- Revision 3 added 56 unit and 29 database — the `KEEP_HOLD` matrix, the
+  reconciliation-history prerequisite, the decision-clock propagation, the
+  maintenance discovery-clock and bounded-limit suites, the multi-unknown Job
+  suite, the sibling concurrency race, the injected-release-time suite, and the
+  same-batch stale→exhaustion regression.
+
+No pre-existing test was modified or removed; the fixtures that changed did so
+because a replay now legitimately requires reconciliation history.
 
 ## Mutation ledger
 
-**Revision 2 total: 76 mutations, 74 killed, 2 survivors (both reported below).**
-The original 54 are unchanged and all still die; 22 more cover the corrections.
+**Revision 3 total: 106 mutations, 104 killed, 2 survivors (both reported below).**
 
-### Correction mutations (22 — 20 killed)
+| Ledger | Mutations | Killed |
+| --- | --- | --- |
+| Phase mutations (Revision 1) | 54 | 54 |
+| Issues 1–2 corrections (Revision 2) | 22 | 20 |
+| Issues 3–6 corrections (Revision 3) | 30 | 30 |
+| **Total** | **106** | **104** |
+
+All three ledgers were re-run at the Revision 3 head. Two anchors in the original
+54 (`M15`, `M16`, `M35`) were re-aimed at rewritten lines; the mutations they
+express are unchanged.
+
+### Issues 3–6 correction mutations (30 — all killed)
+
+| ID | Mutation | Result |
+| --- | --- | --- |
+| S01 | other pending UNKNOWN siblings ignored during RESTORE | KILLED |
+| S02 | first of two UNKNOWN siblings restores the reservation early | KILLED |
+| S03 | last UNKNOWN sibling fails to restore the reservation | KILLED |
+| S04 | a terminal rejection waits for siblings instead of releasing | KILLED |
+| S05 | `KEEP_HOLD` emits a reservation transition event | KILLED |
+| S06 | `KEEP_HOLD` moves the reservation anyway | KILLED |
+| S07 | `remainingPendingUnknownAttempts` omitted from audit metadata | KILLED |
+| S08 | the sibling count is dropped from the metadata allowlist | KILLED |
+| S09 | the sibling count includes attempts from other Jobs | KILLED |
+| S10 | the sibling count includes the attempt being resolved | KILLED |
+| S11 | the sibling count includes attempts that already concluded | KILLED |
+| R01 | a direct Phase 2G-1 ACCEPTED is treated as a reconciliation replay | KILLED |
+| R02 | partial reconciliation metadata accepted as a replay | KILLED |
+| R03 | history is not consulted at all before replaying | KILLED |
+| R04 | two of three history fields counts as complete | KILLED |
+| R05 | a partial history is silently repaired into an absent one | KILLED |
+| C01 | the reservation release uses the process wall clock | KILLED |
+| C02 | exhaustion sets a resolution instant merely to obtain a release time | KILLED |
+| C03 | the decision instant drifts from the acceptance instant | KILLED |
+| B01 | the stale cutoff uses `discoveryNow` rather than subtracting the threshold | KILLED |
+| B02 | the due cutoff uses the stale cutoff | KILLED |
+| B03 | the stale cutoff adds the threshold instead of subtracting it | KILLED |
+| B04 | the runner reads its clock once per query instead of once per pass | KILLED |
+| B05 | the maintenance upper bound is removed | KILLED |
+| B06 | a limit of 101 is accepted | KILLED |
+| B07 | a fractional limit is accepted | KILLED |
+| B08 | the limit is clamped instead of refused | KILLED |
+| B09 | the repository trusts the runner and skips its own validation | KILLED |
+| B10 | the runner validates the limit only after querying | KILLED |
+| B11 | the runner accepts a policy that never met the validator | KILLED |
+
+### Issues 1–2 correction mutations (22 — 20 killed)
 
 | ID | Mutation | Result | Detected by |
 | --- | --- | --- | --- |
@@ -445,6 +517,131 @@ The shared predicates live in `packages/domain/src/submission/untrusted.ts` and
 are used by both phases: two definitions of "a valid diagnostic field" would
 drift.
 
+## Revision 3 — the four corrected defects in detail
+
+### 3. A Job-scoped hold was restored by the first of several unknown attempts
+
+`GenerationReservation` belongs to a `GenerationJob`; an attempt belongs to a
+scene. A Job with several scenes can therefore have several attempts durably
+unknown behind one suspended hold. The first revision keyed the reservation action
+on the reservation's own state alone, so the first conclusion to arrive restored
+it — lifting a Job-level suspension while the Job was still uncertain, with the
+customer's unit reading as usable while money may still have been spent on a
+sibling nobody could account for.
+
+The decision now takes one more persisted fact:
+`otherPendingUnknownAttemptsInJob`, counted **inside the transaction, after the
+organization+cycle advisory lock**, through the `Attempt → Request → Scene → Job`
+chain. Never caller-supplied — a caller able to assert "no siblings" could
+unsuspend a unit while spending was still in flight.
+
+```text
+accepted / retryable rejection + no unknown siblings → RESTORE
+accepted / retryable rejection + unknown siblings    → KEEP_HOLD
+terminal rejection / exhaustion                      → RELEASE   (siblings ignored)
+not a suspended hold                                 → NONE
+```
+
+`KEEP_HOLD` is a fourth action rather than a reuse of `NONE`, because it is a
+decision rather than the absence of one: this conclusion *would* have restored the
+hold and deliberately did not. It writes nothing — no state change, no version
+bump, and **no reservation transition event**, since nothing transitioned. The
+reason is recorded on the attempt's own event as
+`remainingPendingUnknownAttempts`, a plain count rather than sibling identifiers.
+
+The releasing conclusions ignore siblings deliberately: releasing is how a
+customer stops being charged for a question nobody could answer. The asymmetry is
+one-way and therefore safe — `RELEASED` is terminal, so a sibling's later
+conclusion cannot resurrect it, and a live test asserts exactly that.
+
+The existing lock makes the count authoritative. Two sibling conclusions contend
+on the same organization+cycle advisory lock, so whichever commits first is either
+already visible to the other or still waiting and still counted. **No second lock
+namespace was introduced.**
+
+### 4. `REPLAYED` did not prove a reconciliation had happened
+
+Phase 2G-1 can land an attempt on `PROCESSING + ACCEPTED` directly from a provider
+response observed at the submission boundary: same certainty, same provider
+reference, all three reconciliation timestamps null. Comparing provider reality
+alone called that a replay of a reconciliation that never occurred — reporting
+success for an operation never performed, and masking a caller routing attempts to
+the wrong service.
+
+An already-resolved attempt is now classified by its history first:
+
+| History | Result |
+| --- | --- |
+| started, deadline and resolved all set | provider-reality replay rules apply |
+| all three null | `NOT_RECONCILING / ATTEMPT_NEVER_BECAME_UNCERTAIN` |
+| anything in between | `NOT_RECONCILING / RECONCILIATION_HISTORY_INCOHERENT` |
+
+Partial history fails closed with a distinct reason and the missing timestamps are
+**not repaired**. Fabricating a start or resolution instant is precisely the
+invention this phase refuses everywhere else.
+
+True advanced replay is preserved: a genuinely reconciled acceptance still replays
+at `PROCESSING`, `PROVIDER_SUCCEEDED`, `OUTPUT_INGESTING` and `OUTPUT_VERIFIED`,
+after the deadline, with no rollback, no timestamp rewrite and no new event. A
+different provider reference is still a conflict, and so is a retryable-versus-
+terminal disagreement.
+
+### 5. The reservation's release time came from the process wall clock
+
+The repository called `new Date()` for `releasedAt`. That stamps a customer's
+release with an instant no lock was held for, and lets it drift from the
+`reconciliationResolvedAt` the same decision wrote.
+
+The write now carries `decisionAt` — the single post-lock clock read — and every
+timestamp the decision produces comes from it:
+
+```text
+conclusive resolution → reconciliationResolvedAt = decisionAt
+accepted resolution   → providerAcceptedAt      = decisionAt
+reservation release   → releasedAt              = decisionAt
+exhaustion            → reconciliationResolvedAt stays null; decisionAt still exists
+```
+
+Exhaustion carries it precisely because it resolves nothing: the release needs a
+time, and obtaining one is not a reason to claim a certainty that was never
+regained. The repository now contains no unparameterized wall-clock read at all —
+`new Date(write.decisionAt)` is the only permitted form — and both a behavioural
+test (the injected instant is a fixture date, provably outside the window a
+`new Date()` would have produced) and a static source guard enforce it.
+
+### 6. Maintenance cutoff semantics and an unbounded batch contract
+
+One caller-supplied `cutoff` was passed to both discovery queries, which ask
+different questions of different columns. Every caller had to encode two meanings
+in one timestamp, and the stale one was wrong by a whole threshold.
+
+The runner now reads its clock **once per pass** and derives both:
+
+```text
+discoveryNow = clock.now()
+dueCutoff    = discoveryNow                                  reconciliationDeadlineAt <= dueCutoff
+staleCutoff  = discoveryNow - policy.staleSubmittingAfterMs  submissionBoundaryEnteredAt <= staleCutoff
+```
+
+The threshold comes from an opaque validated `ReconciliationPolicy`, checked for
+provenance exactly as Phase 2G-1's service checks it, and no production default is
+invented. `cutoff` is gone from `MaintenanceBatchInput`; the caller supplies only
+`limit` and `context`. The discovery instant is advisory — each single-attempt
+service still reads its own post-lock clock.
+
+`MAX_RECONCILIATION_MAINTENANCE_BATCH_SIZE` is frozen at 100, and one canonical
+validator guards both the runner and the two public repository methods, because a
+direct caller must not be able to put `Infinity`, a fraction or 5000 into a SQL
+`LIMIT`. Invalid values are **refused, never clamped**.
+
+**The same-batch claim is corrected.** The earlier documentation asserted that a
+newly uncertain stale attempt necessarily has a future deadline. It does not: the
+deadline is frozen at `submissionBoundaryEnteredAt + reconciliationWindow`, so an
+attempt discovered long after abandonment enters `SUBMISSION_UNKNOWN` already past
+it, is found by the due query in the same pass, and is legitimately exhausted
+there. That is not special-cased away — deferring it would extend a window that is
+already over. A live-PostgreSQL test drives exactly that path end to end.
+
 ## Concurrency, proved against live PostgreSQL
 
 | Race | Assertion |
@@ -455,6 +652,8 @@ drift.
 | Cross-phase serialization | A conclusion blocks behind a 2F-1 cost admission and lands afterwards |
 | Reservation writer contention | A conclusion blocks behind a reservation writer, then records provider reality without resurrecting the terminal hold |
 | Candidate discovery under load | Discovery takes no lock and returns while a conclusion holds one |
+| **Two siblings in one Job resolving at once** | Both apply; the Job-scoped hold is restored exactly once, `stateVersion` increments once, one `RECONCILIATION_HOLD_RESTORED` event, no rejected promises — and the two attempt events record remaining counts of 1 and 0 |
+| Same-batch stale → exhaustion | One `runOnce` makes an abandoned attempt uncertain and, its frozen deadline having already elapsed, exhausts it — ending `RECONCILIATION_EXHAUSTED + SUBMISSION_UNKNOWN` with `releasedAt` equal to the decision instant |
 
 The post-lock deadline race is the one that justifies the whole time-authority
 discipline. The clock read returns `INSIDE` before the resolver queues and

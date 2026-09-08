@@ -46,6 +46,17 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
    */
   "reconciliationResolvedAt",
   "retryable",
+  /**
+   * How many *other* attempts in the same `GenerationJob` were still durably
+   * unknown when this conclusion landed.
+   *
+   * A plain count, and deliberately not a list: sibling identifiers would put
+   * unrelated rows into an audit record, and the sanitizer refuses arrays
+   * anyway. It exists because a Job-scoped hold that stays suspended produces no
+   * reservation transition event — nothing moved — so this is the only durable
+   * record of *why* the customer's unit was not handed back yet.
+   */
+  "remainingPendingUnknownAttempts",
   "diagnosticCode",
   "generationJobId",
   "generationSceneId",

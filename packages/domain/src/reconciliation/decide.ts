@@ -48,6 +48,16 @@ export interface ReconciliationWrite {
   /** `null` for exhaustion, and only for exhaustion. */
   readonly reconciliationResolvedAt: EpochMillis | null;
   readonly reservationAction: ReservationAction;
+  /**
+   * The one instant this decision was made — the single post-lock clock read.
+   *
+   * Every timestamp the decision produces comes from here, including the
+   * reservation's `releasedAt`. Exhaustion carries it too, even though it
+   * deliberately stamps no `reconciliationResolvedAt`: the release still needs a
+   * time, and reaching for a second wall-clock read in the persistence layer to
+   * get one would put a timestamp in the record that no lock was held for.
+   */
+  readonly decisionAt: EpochMillis;
 }
 
 export type ReconciliationConflictReason =
@@ -63,7 +73,16 @@ export type ReconciliationConflictReason =
 export type NotReconcilingReason =
   | "ATTEMPT_NEVER_BECAME_UNCERTAIN"
   | "RECONCILIATION_METADATA_MISSING"
-  | "PROVIDER_REFERENCE_ALREADY_PRESENT";
+  | "PROVIDER_REFERENCE_ALREADY_PRESENT"
+  /**
+   * The attempt is resolved and its reconciliation history is partly written.
+   *
+   * Not a replay — no complete reconciliation is on file to replay. Not an
+   * ordinary never-reconciled attempt either, because something *did* start one.
+   * The record cannot be believed in either direction, so this fails closed
+   * rather than silently repairing the missing timestamps.
+   */
+  | "RECONCILIATION_HISTORY_INCOHERENT";
 
 export type ResolutionDecision =
   | { readonly kind: "APPLY"; readonly write: ReconciliationWrite }
@@ -123,6 +142,7 @@ function uncertaintyPrecondition(
 function writeFor(
   observation: ReconciliationResolutionObservation,
   reservationState: GenerationReservationState | null,
+  otherPendingUnknownAttemptsInJob: number,
   now: EpochMillis,
 ): ReconciliationWrite {
   switch (observation.kind) {
@@ -136,7 +156,12 @@ function writeFor(
         // acceptance" is the only honest thing either field can mean.
         providerAcceptedAt: now,
         reconciliationResolvedAt: now,
-        reservationAction: reservationActionFor({ reservationState, conclusion: "ACCEPTED" }),
+        decisionAt: now,
+        reservationAction: reservationActionFor({
+          reservationState,
+          conclusion: "ACCEPTED",
+          otherPendingUnknownAttemptsInJob,
+        }),
       };
     case "DEFINITIVELY_REJECTED":
       return {
@@ -145,14 +170,45 @@ function writeFor(
         providerPredictionId: null,
         providerAcceptedAt: null,
         reconciliationResolvedAt: now,
+        decisionAt: now,
         reservationAction: reservationActionFor({
           reservationState,
           // Retryable restores the unit so a future recovery attempt can stand
           // on it; terminal releases it because this path cannot continue.
           conclusion: observation.retryable ? "REJECTED_RETRYABLE" : "REJECTED_TERMINAL",
+          otherPendingUnknownAttemptsInJob,
         }),
       };
   }
+}
+
+/**
+ * Did this attempt actually go through reconciliation?
+ *
+ * Phase 2G-1 can land an attempt on `PROCESSING + ACCEPTED` directly, from a
+ * provider response observed at the submission boundary, with all three
+ * reconciliation timestamps null. Such an attempt has the same *certainty* and
+ * the same *provider reference* a reconciled one would have — so provider-reality
+ * comparison alone would call it a replay of a reconciliation that never
+ * happened, and report success for an operation that was never performed.
+ *
+ * ```text
+ * all three null      → never reconciled; this resolver has no business here
+ * all three non-null  → a real reconciliation; replay rules may apply
+ * anything between    → incoherent; fail closed, repair nothing
+ * ```
+ */
+type ReconciliationHistory = "COMPLETE" | "ABSENT" | "PARTIAL";
+
+function reconciliationHistoryOf(facts: ReconcilingAttemptFacts): ReconciliationHistory {
+  const present = [
+    facts.reconciliationStartedAt,
+    facts.reconciliationDeadlineAt,
+    facts.reconciliationResolvedAt,
+  ].filter((value) => value !== null).length;
+  if (present === 3) return "COMPLETE";
+  if (present === 0) return "ABSENT";
+  return "PARTIAL";
 }
 
 /**
@@ -206,9 +262,11 @@ export function decideReconciliationResolution(input: {
   readonly facts: ReconcilingAttemptFacts;
   readonly observation: ReconciliationResolutionObservation;
   readonly reservationState: GenerationReservationState | null;
+  /** Counted under the same lock. Never caller-supplied. */
+  readonly otherPendingUnknownAttemptsInJob: number;
   readonly now: EpochMillis;
 }): ResolutionDecision {
-  const { facts, observation, reservationState, now } = input;
+  const { facts, observation, reservationState, otherPendingUnknownAttemptsInJob, now } = input;
 
   if (!isWellFormedResolutionObservation(observation)) {
     return { kind: "MALFORMED_OBSERVATION" };
@@ -221,7 +279,7 @@ export function decideReconciliationResolution(input: {
     return { kind: "RECONCILIATION_CLOSED" };
   }
 
-  const write = writeFor(observation, reservationState, now);
+  const write = writeFor(observation, reservationState, otherPendingUnknownAttemptsInJob, now);
 
   // Already resolved: replay or conflict, never a second application — and
   // regardless of the deadline, which bounds acting, not remembering.
@@ -234,7 +292,19 @@ export function decideReconciliationResolution(input: {
     facts.submissionCertainty === "ACCEPTED" ||
     facts.submissionCertainty === "DEFINITIVELY_REJECTED"
   ) {
-    return matchesResolution(facts, write);
+    // Resolved — but resolved by *whom*? A Phase 2G-1 outcome observed directly
+    // at the submission boundary lands on the same certainty with the same
+    // provider reference and no reconciliation history at all. Calling that a
+    // reconciliation replay would report success for an operation that never
+    // ran, and would hide a caller routing attempts to the wrong service.
+    switch (reconciliationHistoryOf(facts)) {
+      case "COMPLETE":
+        return matchesResolution(facts, write);
+      case "ABSENT":
+        return { kind: "NOT_RECONCILING", reason: "ATTEMPT_NEVER_BECAME_UNCERTAIN" };
+      case "PARTIAL":
+        return { kind: "NOT_RECONCILING", reason: "RECONCILIATION_HISTORY_INCOHERENT" };
+    }
   }
 
   const missing = uncertaintyPrecondition(facts);
@@ -261,9 +331,11 @@ export function decideReconciliationResolution(input: {
 export function decideReconciliationExhaustion(input: {
   readonly facts: ReconcilingAttemptFacts;
   readonly reservationState: GenerationReservationState | null;
+  /** Counted under the same lock. Never caller-supplied. */
+  readonly otherPendingUnknownAttemptsInJob: number;
   readonly now: EpochMillis;
 }): ExhaustionDecision {
-  const { facts, reservationState, now } = input;
+  const { facts, reservationState, otherPendingUnknownAttemptsInJob, now } = input;
 
   if (
     facts.orchestrationState === "RECONCILIATION_EXHAUSTED" &&
@@ -292,7 +364,15 @@ export function decideReconciliationExhaustion(input: {
       // auditor would read to find out when certainty was regained. When the
       // platform gave up is recorded by the transition event's own timestamp.
       reconciliationResolvedAt: null,
-      reservationAction: reservationActionFor({ reservationState, conclusion: "EXHAUSTED" }),
+      // Carried even though nothing was resolved: the release still needs a
+      // time, and it must be *this* instant rather than a second wall-clock
+      // read taken somewhere no lock is held.
+      decisionAt: now,
+      reservationAction: reservationActionFor({
+        reservationState,
+        conclusion: "EXHAUSTED",
+        otherPendingUnknownAttemptsInJob,
+      }),
     },
   };
 }

@@ -74,6 +74,7 @@ function withReconciliationRecord(
     readonly reconciliationResolvedAt: number | null;
     readonly retryable: boolean | null;
     readonly diagnosticCode: string | null;
+    readonly remainingPendingUnknownAttempts: number;
   },
 ): TransitionContext {
   return {
@@ -93,15 +94,35 @@ function withReconciliationRecord(
       // *original* submission observation — overwriting it with a later finding
       // would erase why the attempt became uncertain in the first place.
       diagnosticCode: facts.diagnosticCode,
+      // Why the customer's hold is where it is. When a conclusion decides
+      // KEEP_HOLD there is no reservation event to carry the reason — nothing
+      // transitioned — so the count that caused it lives here, on the attempt's
+      // own event. A number, not sibling identifiers: the allowlist would refuse
+      // an array, and an operator needs to know *that* siblings remained, not
+      // which.
+      remainingPendingUnknownAttempts: facts.remainingPendingUnknownAttempts,
     }),
   };
 }
 
-/** Which reservation label a write's action implies, if any. */
-function reservationEventTypeFor(write: ReconciliationWrite): string {
-  return write.reservationAction === "RELEASE"
-    ? RECONCILIATION_HOLD_RELEASED_EVENT_TYPE
-    : RECONCILIATION_HOLD_RESTORED_EVENT_TYPE;
+/**
+ * Which reservation label a write's action implies, if any.
+ *
+ * `KEEP_HOLD` and `NONE` have none, and the difference matters: nothing
+ * transitioned, so appending an event would put a transition in the log that
+ * never happened. An operator counting entitlement suspensions would over-count
+ * every multi-scene Job.
+ */
+function reservationEventTypeFor(write: ReconciliationWrite): string | null {
+  switch (write.reservationAction) {
+    case "RELEASE":
+      return RECONCILIATION_HOLD_RELEASED_EVENT_TYPE;
+    case "RESTORE":
+      return RECONCILIATION_HOLD_RESTORED_EVENT_TYPE;
+    case "KEEP_HOLD":
+    case "NONE":
+      return null;
+  }
 }
 
 export function createReconciliationService(deps: ReconciliationDeps) {
@@ -133,6 +154,7 @@ export function createReconciliationService(deps: ReconciliationDeps) {
             facts: facts.attempt,
             observation: input.observation,
             reservationState: facts.reservation?.state ?? null,
+            otherPendingUnknownAttemptsInJob: facts.otherPendingUnknownAttemptsInJob,
             now,
           });
 
@@ -177,6 +199,7 @@ export function createReconciliationService(deps: ReconciliationDeps) {
                 reconciliationResolvedAt: decision.write.reconciliationResolvedAt,
                 retryable: accepted ? null : input.observation.retryable,
                 diagnosticCode: accepted ? null : input.observation.diagnosticCode,
+                remainingPendingUnknownAttempts: facts.otherPendingUnknownAttemptsInJob,
               },
             ),
           });
@@ -214,6 +237,7 @@ export function createReconciliationService(deps: ReconciliationDeps) {
           const decision = decideReconciliationExhaustion({
             facts: facts.attempt,
             reservationState: facts.reservation?.state ?? null,
+            otherPendingUnknownAttemptsInJob: facts.otherPendingUnknownAttemptsInJob,
             now,
           });
 
@@ -254,6 +278,7 @@ export function createReconciliationService(deps: ReconciliationDeps) {
                 reconciliationResolvedAt: null,
                 retryable: null,
                 diagnosticCode: null,
+                remainingPendingUnknownAttempts: facts.otherPendingUnknownAttemptsInJob,
               },
             ),
           });

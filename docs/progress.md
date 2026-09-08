@@ -675,11 +675,20 @@ and ADR-0020.
   what an auditor reads to find out when certainty was regained, and it never
   was; the transition event's own timestamp records when the platform gave up.
 
-  Entitlement is keyed on the reservation's own state, not the request kind, so
-  one rule covers every case: only a `RECONCILIATION_HOLD` moves, acceptance and
-  a retryable rejection restore it, a terminal rejection and exhaustion release
-  it, and a post-delivery `USER_REGENERATION` reaches none of them because its
-  unit is already spent. Restoring rather than releasing on a retryable rejection
+  Entitlement is keyed on the reservation's own state *and* on whether the Job
+  still has other durably unknown attempts. `GenerationReservation` is Job-scoped
+  while an attempt is scene-scoped, so several attempts can sit unknown behind one
+  suspended hold; restoring on the first conclusion would lift a Job-level
+  suspension while the Job is still uncertain, leaving the customer's unit reading
+  as usable while money may still be spent on a sibling nobody can account for.
+  Only a `RECONCILIATION_HOLD` moves; acceptance and a retryable rejection restore
+  it *only* when no other unknown attempt remains, and otherwise take the
+  deliberate `KEEP_HOLD` non-transition that writes nothing and appends no
+  reservation event. A terminal rejection and exhaustion release it regardless of
+  siblings — releasing is how the customer stops paying for a question nobody
+  answered, and `RELEASED` is terminal so a sibling's later conclusion cannot
+  resurrect it. A post-delivery `USER_REGENERATION` reaches none of them because
+  its unit is already spent. Restoring rather than releasing on a retryable rejection
   is what keeps such a rejection actually retryable; releasing would leave a
   future recovery attempt with nothing to stand on and the customer's request
   quietly unfinishable while looking healthy. Nothing here consumes a unit.
@@ -725,6 +734,25 @@ and ADR-0020.
   defects existed identically in merged Phase 2G-1 and are fixed in the same
   change** — the tenancy one being the more severe, since that repository is
   already reachable on `main`.
+
+  Four further review defects were corrected in the same PR. A `REPLAYED` answer
+  did not prove a reconciliation had happened, so a direct Phase 2G-1 outcome —
+  same certainty, same provider reference, no reconciliation history — was
+  reported as a replay of an operation that never ran; a replay now requires all
+  three reconciliation timestamps, and a half-written history fails closed rather
+  than being repaired. The reservation's `releasedAt` came from the process wall
+  clock rather than the decision's single post-lock instant, stamping a customer's
+  release with a time no lock was held for; the write now carries `decisionAt` and
+  every timestamp it produces comes from there. And the maintenance runner took
+  one caller-supplied cutoff for two queries that ask different questions of
+  different columns — it now reads its own clock once per pass, derives the stale
+  cutoff by subtracting a validated policy threshold and the due cutoff from the
+  instant itself, and validates its batch bound (maximum 100, refused rather than
+  clamped) at both the runner and the public repository methods. The claim that a
+  freshly stale attempt always has a future deadline was also wrong: the deadline
+  is frozen from the submission boundary, so an attempt discovered late enters
+  `SUBMISSION_UNKNOWN` already past it and is legitimately made unknown and
+  exhausted within a single batch.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

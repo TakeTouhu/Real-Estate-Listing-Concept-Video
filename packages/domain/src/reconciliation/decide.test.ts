@@ -73,16 +73,29 @@ function resolve(
   observation: ReconciliationResolutionObservation,
   now: EpochMillis,
   reservationState: GenerationReservationState | null = "RECONCILIATION_HOLD",
+  otherPendingUnknownAttemptsInJob = 0,
 ) {
-  return decideReconciliationResolution({ facts, observation, reservationState, now });
+  return decideReconciliationResolution({
+    facts,
+    observation,
+    reservationState,
+    otherPendingUnknownAttemptsInJob,
+    now,
+  });
 }
 
 function exhaust(
   facts: ReconcilingAttemptFacts,
   now: EpochMillis,
   reservationState: GenerationReservationState | null = "RECONCILIATION_HOLD",
+  otherPendingUnknownAttemptsInJob = 0,
 ) {
-  return decideReconciliationExhaustion({ facts, reservationState, now });
+  return decideReconciliationExhaustion({
+    facts,
+    reservationState,
+    otherPendingUnknownAttemptsInJob,
+    now,
+  });
 }
 
 describe("resolving to acceptance", () => {
@@ -96,6 +109,7 @@ describe("resolving to acceptance", () => {
         providerPredictionId: "pred_found",
         providerAcceptedAt: INSIDE,
         reconciliationResolvedAt: INSIDE,
+        decisionAt: INSIDE,
         reservationAction: "RESTORE",
       },
     });
@@ -242,6 +256,8 @@ describe("preconditions — a row that is not reconciling is not resolved", () =
 });
 
 describe("replay — the same conclusion, delivered twice", () => {
+  // Complete reconciliation history: started, deadline and resolved all set.
+  // Without all three this is a direct Phase 2G-1 outcome, not a reconciliation.
   const resolved = uncertain({
     orchestrationState: "PROCESSING",
     submissionCertainty: "ACCEPTED",
@@ -315,6 +331,195 @@ describe("replay — the same conclusion, delivered twice", () => {
   });
 });
 
+describe("a replay must prove a reconciliation actually happened", () => {
+  /**
+   * Phase 2G-1 can land an attempt on `PROCESSING + ACCEPTED` directly, from a
+   * provider response observed at the submission boundary — same certainty, same
+   * provider reference, and all three reconciliation timestamps null. Comparing
+   * provider reality alone would call that a replay of a reconciliation that
+   * never happened, reporting success for an operation never performed and
+   * hiding a caller that routed the attempt to the wrong service.
+   */
+
+  /** A direct Phase 2G-1 outcome: no reconciliation history whatsoever. */
+  function direct(overrides: Partial<ReconcilingAttemptFacts>): ReconcilingAttemptFacts {
+    return uncertain({
+      reconciliationStartedAt: null,
+      reconciliationDeadlineAt: null,
+      reconciliationResolvedAt: null,
+      ...overrides,
+    });
+  }
+
+  it("refuses a direct Phase 2G-1 acceptance rather than calling it a replay", () => {
+    expect(
+      resolve(
+        direct({
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+        }),
+        ACCEPTED,
+        INSIDE,
+      ),
+    ).toEqual({ kind: "NOT_RECONCILING", reason: "ATTEMPT_NEVER_BECAME_UNCERTAIN" });
+  });
+
+  it.each([
+    ["retryable", "FAILED_RETRYABLE", REJECTED_RETRYABLE],
+    ["terminal", "FAILED_TERMINAL", REJECTED_TERMINAL],
+  ] as const)("refuses a direct Phase 2G-1 %s rejection", (_l, state, observation) => {
+    expect(
+      resolve(
+        direct({ orchestrationState: state, submissionCertainty: "DEFINITIVELY_REJECTED" }),
+        observation,
+        INSIDE,
+      ),
+    ).toEqual({ kind: "NOT_RECONCILING", reason: "ATTEMPT_NEVER_BECAME_UNCERTAIN" });
+  });
+
+  it.each([
+    [
+      "resolved with no start",
+      { reconciliationStartedAt: null, reconciliationDeadlineAt: DEADLINE, reconciliationResolvedAt: INSIDE },
+    ],
+    [
+      "started and bounded but never resolved",
+      { reconciliationStartedAt: STARTED, reconciliationDeadlineAt: DEADLINE, reconciliationResolvedAt: null },
+    ],
+    [
+      "a start with nothing else",
+      { reconciliationStartedAt: STARTED, reconciliationDeadlineAt: null, reconciliationResolvedAt: null },
+    ],
+    [
+      "a deadline with nothing else",
+      { reconciliationStartedAt: null, reconciliationDeadlineAt: DEADLINE, reconciliationResolvedAt: null },
+    ],
+    [
+      "a resolution with nothing else",
+      { reconciliationStartedAt: null, reconciliationDeadlineAt: null, reconciliationResolvedAt: INSIDE },
+    ],
+  ] as const)("fails closed on partial history: %s", (_label, history) => {
+    // Neither a replay nor an ordinary never-reconciled attempt: something did
+    // start a reconciliation and the record cannot say what became of it. The
+    // timestamps are not silently repaired — a fabricated start or resolution is
+    // exactly the kind of invention this phase refuses everywhere else.
+    expect(
+      resolve(
+        uncertain({
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+          ...history,
+        }),
+        ACCEPTED,
+        INSIDE,
+      ),
+    ).toEqual({ kind: "NOT_RECONCILING", reason: "RECONCILIATION_HISTORY_INCOHERENT" });
+  });
+
+  it("writes nothing for either refusal", () => {
+    for (const decision of [
+      resolve(
+        direct({
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+        }),
+        ACCEPTED,
+        INSIDE,
+      ),
+      resolve(
+        uncertain({
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+          reconciliationResolvedAt: null,
+        }),
+        ACCEPTED,
+        INSIDE,
+      ),
+    ]) {
+      expect(Object.keys(decision).sort()).toEqual(["kind", "reason"]);
+    }
+  });
+
+  it("still replays a true reconciliation, including far downstream", () => {
+    const reconciled = uncertain({
+      submissionCertainty: "ACCEPTED",
+      providerPredictionId: "pred_found",
+      reconciliationResolvedAt: INSIDE,
+    });
+    for (const state of [
+      "PROCESSING",
+      "PROVIDER_SUCCEEDED",
+      "OUTPUT_INGESTING",
+      "OUTPUT_VERIFIED",
+    ] as const) {
+      expect(
+        resolve({ ...reconciled, orchestrationState: state }, ACCEPTED, AFTER),
+      ).toEqual({ kind: "REPLAY" });
+    }
+  });
+
+  it("still replays a true reconciled rejection, both shapes", () => {
+    expect(
+      resolve(
+        uncertain({
+          orchestrationState: "FAILED_RETRYABLE",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          reconciliationResolvedAt: INSIDE,
+        }),
+        REJECTED_RETRYABLE,
+        AFTER,
+      ),
+    ).toEqual({ kind: "REPLAY" });
+    expect(
+      resolve(
+        uncertain({
+          orchestrationState: "FAILED_TERMINAL",
+          submissionCertainty: "DEFINITIVELY_REJECTED",
+          reconciliationResolvedAt: INSIDE,
+        }),
+        REJECTED_TERMINAL,
+        AFTER,
+      ),
+    ).toEqual({ kind: "REPLAY" });
+  });
+
+  it("keeps a different provider reference a conflict on a true reconciliation", () => {
+    expect(
+      resolve(
+        uncertain({
+          orchestrationState: "OUTPUT_VERIFIED",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
+        }),
+        { kind: "ACCEPTED", providerPredictionId: "pred_other" },
+        INSIDE,
+      ),
+    ).toEqual({ kind: "CONFLICT", reason: "PROVIDER_REFERENCE_MISMATCH" });
+  });
+
+  it("checks history before the deadline, so a true replay stays true", () => {
+    // Ordering: proving the reconciliation happened comes first, and only then
+    // does provider-reality replay take precedence over the current deadline.
+    expect(
+      resolve(
+        uncertain({
+          orchestrationState: "PROCESSING",
+          submissionCertainty: "ACCEPTED",
+          providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
+        }),
+        ACCEPTED,
+        epochMillis(DEADLINE + 86_400_000),
+      ),
+    ).toEqual({ kind: "REPLAY" });
+  });
+});
+
 describe("conflict — two observers who cannot both be right", () => {
   it("refuses a different provider reference", () => {
     expect(
@@ -323,6 +528,7 @@ describe("conflict — two observers who cannot both be right", () => {
           orchestrationState: "PROCESSING",
           submissionCertainty: "ACCEPTED",
           providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
         }),
         { kind: "ACCEPTED", providerPredictionId: "pred_other" },
         INSIDE,
@@ -337,6 +543,7 @@ describe("conflict — two observers who cannot both be right", () => {
           orchestrationState: "PROCESSING",
           submissionCertainty: "ACCEPTED",
           providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
         }),
         REJECTED_TERMINAL,
         INSIDE,
@@ -350,6 +557,7 @@ describe("conflict — two observers who cannot both be right", () => {
         uncertain({
           orchestrationState: "FAILED_TERMINAL",
           submissionCertainty: "DEFINITIVELY_REJECTED",
+          reconciliationResolvedAt: INSIDE,
         }),
         ACCEPTED,
         INSIDE,
@@ -365,6 +573,7 @@ describe("conflict — two observers who cannot both be right", () => {
         uncertain({
           orchestrationState: "FAILED_TERMINAL",
           submissionCertainty: "DEFINITIVELY_REJECTED",
+          reconciliationResolvedAt: INSIDE,
         }),
         REJECTED_RETRYABLE,
         INSIDE,
@@ -378,6 +587,7 @@ describe("conflict — two observers who cannot both be right", () => {
         uncertain({
           orchestrationState: "FAILED_RETRYABLE",
           submissionCertainty: "DEFINITIVELY_REJECTED",
+          reconciliationResolvedAt: INSIDE,
         }),
         REJECTED_TERMINAL,
         INSIDE,
@@ -394,6 +604,7 @@ describe("conflict — two observers who cannot both be right", () => {
           orchestrationState: "SUBMITTING",
           submissionCertainty: "ACCEPTED",
           providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
         }),
         ACCEPTED,
         INSIDE,
@@ -440,6 +651,7 @@ describe("a malformed observation is refused before anything else is considered"
           orchestrationState: "PROCESSING",
           submissionCertainty: "ACCEPTED",
           providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
         }),
         { kind: "ACCEPTED", providerPredictionId: "  " },
         INSIDE,
@@ -485,7 +697,7 @@ describe("exhaustion", () => {
   });
 
   it("closes the attempt while leaving the question unanswered", () => {
-    expect(exhaust(uncertain(), DEADLINE)).toEqual({
+    expect(exhaust(uncertain(), AFTER)).toEqual({
       kind: "APPLY",
       write: {
         orchestrationState: "RECONCILIATION_EXHAUSTED",
@@ -493,6 +705,7 @@ describe("exhaustion", () => {
         providerPredictionId: null,
         providerAcceptedAt: null,
         reconciliationResolvedAt: null,
+        decisionAt: AFTER,
         reservationAction: "RELEASE",
       },
     });
@@ -520,6 +733,7 @@ describe("exhaustion", () => {
           orchestrationState: "PROCESSING",
           submissionCertainty: "ACCEPTED",
           providerPredictionId: "pred_found",
+          reconciliationResolvedAt: INSIDE,
         }),
         AFTER,
       ),

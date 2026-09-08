@@ -1,6 +1,9 @@
-import type { EpochMillis } from "../pricing/units";
+import { epochMillis, type EpochMillis } from "../pricing/units";
 import type { TransitionContext } from "../orchestration/ports";
+import { isReconciliationPolicy, type ReconciliationPolicy } from "../submission/reconciliation-window";
 import type { SubmissionOutcomeService } from "../submission/service";
+import { AppError } from "@app/shared";
+import { validateReconciliationMaintenanceLimit } from "./limits";
 import type { ReconciliationCandidate, ReconciliationDeps } from "./ports";
 import type { ReconciliationService } from "./service";
 
@@ -16,6 +19,25 @@ import type { ReconciliationService } from "./service";
  * *time* rather than about asking anyone anything: an attempt that sat at the
  * submission boundary too long, and an attempt whose reconciliation window
  * closed. Learning what a provider actually did is the later polling phase.
+ *
+ * ### Two cutoffs, one clock, neither of them the caller's
+ *
+ * The two queries ask different questions of different columns:
+ *
+ * ```text
+ * due    reconciliationDeadlineAt    <= discoveryNow
+ * stale  submissionBoundaryEnteredAt <= discoveryNow - policy.staleSubmittingAfterMs
+ * ```
+ *
+ * An earlier version took a single `cutoff` from the caller and passed it to
+ * both, which quietly required every caller to encode two different meanings in
+ * one timestamp — and got the stale one wrong by a whole threshold. The runner
+ * now reads its own clock **once** and derives both, from a validated policy it
+ * cannot invent.
+ *
+ * That clock read is advisory. It narrows which rows are worth asking about and
+ * decides nothing: each candidate goes to the single-attempt service, which
+ * re-reads the row under lock against its own post-lock clock.
  *
  * ### Candidates are advisory, never authority
  *
@@ -33,24 +55,35 @@ export interface MaintenanceBatchDeps extends ReconciliationDeps {
   readonly reconciliationService: ReconciliationService;
   /** Phase 2G-1's service. The authoritative stale transition, not a copy of it. */
   readonly submissionOutcomes: SubmissionOutcomeService;
+  /**
+   * The validated Phase 2G-1 policy, for the stale threshold only.
+   *
+   * The opaque type, not a raw config: a threshold that never met the validator
+   * would be a bound nobody agreed to, applied to a decision about whether a
+   * paid submission is presumed lost. No default is invented here, and none
+   * ships — how long an attempt may sit at the boundary is a production
+   * activation decision.
+   */
+  readonly policy: ReconciliationPolicy;
 }
 
 export interface MaintenanceBatchInput {
   /**
-   * Rows due at or before this instant are candidates.
+   * A hard bound per category. Validated before any query runs.
    *
-   * Supplied rather than read from a clock here, so a caller can run a batch
-   * over a deliberately conservative cutoff. It narrows discovery only; it never
-   * reaches the services, which each judge against their own post-lock clock.
+   * There is deliberately no `cutoff` here. Discovery time belongs to the
+   * runner's injected clock: a caller-supplied instant would let one caller
+   * sweep a window the policy never sanctioned, and it forced two different
+   * predicates to share one timestamp.
    */
-  readonly cutoff: EpochMillis;
-  /** A hard bound per category. Discovery is never unbounded. */
   readonly limit: number;
   readonly context: TransitionContext;
 }
 
 /** What one pass actually did, in closed counts rather than prose. */
 export interface MaintenanceBatchReport {
+  /** The single advisory instant both queries were narrowed by. */
+  readonly discoveryNow: EpochMillis;
   readonly staleCandidates: number;
   readonly staleUncertaintyEntered: number;
   readonly dueCandidates: number;
@@ -66,27 +99,53 @@ export interface MaintenanceBatchReport {
 }
 
 export function createReconciliationMaintenance(deps: MaintenanceBatchDeps) {
+  // The same provenance check Phase 2G-1's service makes. A policy is opaque and
+  // its constructor is private, so the only way to hold a non-policy here is an
+  // explicit cast — which is exactly what a caller in a hurry writes.
+  if (!isReconciliationPolicy(deps.policy)) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "Reconciliation maintenance requires a validated reconciliation policy",
+    );
+  }
+
   return {
     /**
      * Sweep attempts abandoned at the submission boundary, then attempts whose
      * reconciliation window has closed.
      *
-     * Stale first, deliberately: a stale sweep *creates* uncertainty with a
-     * deadline, and doing it before the exhaustion pass means a newly uncertain
-     * attempt is never accidentally exhausted in the same batch that discovered
-     * it — its deadline is in the future, so the second pass's own re-check
-     * declines it. The ordering is a courtesy to the reader; the correctness
-     * comes from each service re-checking under lock.
+     * Stale first, deliberately — but *not* because a newly uncertain attempt is
+     * safe from the second pass. It often is not: Phase 2G-1 freezes the
+     * deadline at `submissionBoundaryEnteredAt + reconciliationWindow`, so an
+     * attempt discovered long after it was abandoned can enter
+     * `SUBMISSION_UNKNOWN` with a deadline that has *already* elapsed. The due
+     * query in this same pass will then find it and the exhaustion service will
+     * close it, which is correct: the platform's bound on that uncertainty ran
+     * out before anyone noticed the attempt, and making the customer wait for
+     * another batch would extend a window that is already over.
+     *
+     * The ordering exists so the second pass sees the first pass's work rather
+     * than missing it. Correctness comes from each service re-checking under
+     * lock.
      */
     async runOnce(input: MaintenanceBatchInput): Promise<MaintenanceBatchReport> {
+      // Before any query. An invalid bound must never reach a SQL LIMIT, and it
+      // must not reach one after a partial sweep either.
+      const limit = validateReconciliationMaintenanceLimit(input.limit);
+
+      // Exactly one read. Two would let the two queries disagree about now, and
+      // a batch's own report could then describe a window that never existed.
+      const discoveryNow = deps.clock.now();
+      const staleCutoff = epochMillis(discoveryNow - deps.policy.staleSubmittingAfterMs);
+
       let staleUncertaintyEntered = 0;
       let exhausted = 0;
       let unchanged = 0;
 
       const stale: readonly ReconciliationCandidate[] =
         await deps.reconciliation.findStaleSubmittingCandidates({
-          cutoff: input.cutoff,
-          limit: input.limit,
+          cutoff: staleCutoff,
+          limit,
         });
 
       for (const candidate of stale) {
@@ -104,8 +163,8 @@ export function createReconciliationMaintenance(deps: MaintenanceBatchDeps) {
 
       const due: readonly ReconciliationCandidate[] =
         await deps.reconciliation.findDueReconciliationCandidates({
-          cutoff: input.cutoff,
-          limit: input.limit,
+          cutoff: discoveryNow,
+          limit,
         });
 
       for (const candidate of due) {
@@ -119,6 +178,7 @@ export function createReconciliationMaintenance(deps: MaintenanceBatchDeps) {
       }
 
       return {
+        discoveryNow,
         staleCandidates: stale.length,
         staleUncertaintyEntered,
         dueCandidates: due.length,
