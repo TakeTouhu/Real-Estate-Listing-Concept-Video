@@ -3,6 +3,113 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2G-2: Reconciliation resolution and deadline exhaustion
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2g2-completion.md`. Phase
+4C-3B-2G-1 could put an attempt into durable uncertainty and nothing knew how
+that ended; this phase supplies the exit and nothing more. **No provider is
+contacted anywhere in this phase** — no HTTP client, no polling, no webhook
+ingestion, no adapter — and no database migration was required.
+
+### Added
+
+- **Exactly three durable conclusions, and deliberately no fourth.**
+  `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN` becomes `PROCESSING + ACCEPTED`,
+  `FAILED_RETRYABLE`/`FAILED_TERMINAL + DEFINITIVELY_REJECTED`, or
+  `RECONCILIATION_EXHAUSTED + SUBMISSION_UNKNOWN`. There is no "still unknown"
+  write: the row already says that, with a deadline, and re-recording it would
+  be a mutation that changes nothing while claiming progress was made. Nothing
+  re-POSTs the attempt and no conclusion admits a replacement one — spending a
+  second unit of provider capacity is a decision for the recovery path, not a
+  side effect of writing down what happened to the first.
+- **A closed, provider-neutral evidence contract.** Two arms only:
+  `ACCEPTED { providerPredictionId }` and `DEFINITIVELY_REJECTED { retryable,
+  diagnosticCode }`. No HTTP status, no provider body, no vendor enum, no URL,
+  no credential, no prompt, no free text. The diagnostic reuses Phase 2G-1's
+  closed catalog unchanged and unexpanded, and is re-checked for membership at
+  the boundary because a cast is what a caller in a hurry writes. Only an
+  `ACCEPTED` observation may introduce a provider reference, and a blank one is
+  refused — a reference that names nothing is uncertainty, which is already what
+  the row says.
+- **Deadline exhaustion that stamps nothing.** When the window closes, the
+  attempt moves to `RECONCILIATION_EXHAUSTED`, the certainty stays
+  `SUBMISSION_UNKNOWN`, and `reconciliationResolvedAt` **stays null**. That field
+  is what an auditor reads to find out when certainty was regained; it never was.
+  When the platform gave up is recorded by the transition event's own timestamp.
+- **Post-lock time authority, and equality belongs to exhaustion.** The clock is
+  read once, after the locks are held and the facts are loaded. `now < deadline`
+  may resolve; `now >= deadline` is expired. The opposite reading would leave
+  exactly one instant in which both the resolver and the exhauster believed they
+  owned the row. The deadline is read from the row and never recomputed:
+  re-deriving it from current configuration would let a config change
+  retroactively move a bound that attempts already in flight were admitted under.
+- **Replay settled before the deadline is consulted.** A record of a resolution
+  is a true statement about the past and stays true forever, so a duplicate
+  delivery a day later returns `REPLAYED` rather than `DEADLINE_EXPIRED` —
+  answering otherwise would make a success look like a failure and invite the
+  caller to retry something already done. Identity is provider reality, so an
+  accepted attempt that has since reached `OUTPUT_VERIFIED` replays; the
+  compatibility table is Phase 2G-1's, imported rather than copied.
+- **Entitlement keyed on reservation state, not request kind.** Only a
+  `RECONCILIATION_HOLD` ever moves: acceptance and a *retryable* rejection
+  restore it to `RESERVED`, a terminal rejection and exhaustion release it. One
+  rule instead of a matrix, and it fails safe. Restoring on a retryable rejection
+  is what keeps such a rejection actually retryable — releasing would leave a
+  future recovery attempt with nothing to stand on and the customer's request
+  quietly unfinishable. A post-delivery `USER_REGENERATION` reaches none of the
+  moves because its unit is already `CONSUMED`. **Nothing in this phase consumes
+  a unit**; charging happens when a video is delivered, and nothing here delivers
+  one.
+- **Five event types across two aggregates**, service-owned and never
+  caller-chosen: `RECONCILIATION_RESOLVED_ACCEPTED`,
+  `RECONCILIATION_RESOLVED_REJECTED`, `RECONCILIATION_EXHAUSTED` on the attempt;
+  `RECONCILIATION_HOLD_RESTORED`, `RECONCILIATION_HOLD_RELEASED` on the
+  reservation. The attempt events say what a provider did; the reservation events
+  say what happened to a customer's entitlement as a result, so an operator
+  asking which units were handed back need not know which route caused each one.
+- **Bounded, lock-free candidate discovery** returning `{ organizationId,
+  attemptId }` and nothing else, ordered `reconciliationDeadlineAt ASC, id ASC`
+  so two workers agree on which rows they take. Everything needed to *decide* is
+  deliberately absent: candidates are advisory and every one goes back through
+  the single-attempt service, which re-reads under lock. A one-pass batch runner
+  is included; it does not loop, sleep, schedule itself, own a timer, or contact
+  a provider.
+- **Entitlement anomalies recorded, never a refusal.** A missing, released,
+  spent-`INITIAL` or out-of-band-restored reservation does not block the
+  conclusion — past the provider boundary, provider reality is persisted whether
+  or not the bookkeeping adds up. The anomaly is classified into Phase 2G-1's
+  vocabulary and written durably into the transition event, so a crash between
+  commit and the caller reading the return value cannot erase it. A terminal
+  reservation is never resurrected and no destructive transition is guessed at.
+
+### Fixed
+
+- **`PRE_SUBMISSION` was treated as a competing resolution.** The first draft of
+  the resolution evaluator sent any certainty other than `SUBMISSION_UNKNOWN` to
+  the conflict comparison, so an attempt still at `SUBMITTING + PRE_SUBMISSION`
+  — one that never became uncertain at all — was answered
+  `CONFLICTING_RESOLUTION / CERTAINTY_MISMATCH`. `PRE_SUBMISSION` is the absence
+  of a resolution, not a competing one; the answer sent an operator hunting a
+  second observer who does not exist when the truth was a mistyped attempt id.
+  Such a row now falls through to `NOT_RECONCILING /
+  ATTEMPT_NEVER_BECAME_UNCERTAIN`.
+
+### Unchanged, deliberately
+
+- The Phase 2F-1 lock order — organization+cycle advisory lock, then the
+  reservation row `FOR UPDATE`, then the attempt compare-and-set — is joined, not
+  extended. One order across three phases, no deadlock cycle, and no
+  process-local mutex anywhere: a second in-memory discipline would be correct on
+  one replica and useless across two.
+- `classifyProviderCostExposure` and `isCoherentAttemptRecord` already covered
+  every pairing this phase produces and were not modified. An exhausted attempt
+  still counts as `UNCERTAIN` provider cost — exhaustion resolves the customer's
+  entitlement and nothing about what the provider charged, and dropping it to
+  zero would make giving up look like a refund.
+- No paid provider activation. `FAL_KEY` is not enabled, the fal production
+  factory is not wired, the Veo production route is not opened, and the WaveSpeed
+  paid route stays closed.
+
 ## [Unreleased] — Phase 4C-3B-2G-1: Submission outcome persistence and uncertainty entry
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2g1-completion.md`. Phase

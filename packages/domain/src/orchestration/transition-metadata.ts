@@ -35,6 +35,18 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
    * written so that an anomaly survives the process that noticed it.
    */
   "entitlementAnomaly",
+  /**
+   * How an uncertain submission ended, recorded with the transition that ended
+   * it. `reconciliationResolvedAt` is absent on exhaustion by design — the
+   * event's own timestamp is when the platform stopped waiting, and a resolved
+   * instant would claim a certainty that was never regained. `retryable` and
+   * `diagnosticCode` are a boolean and a closed-vocabulary member; the code is
+   * the reconciliation evidence's classification, kept out of the attempt row so
+   * it cannot overwrite the original submission diagnostic.
+   */
+  "reconciliationResolvedAt",
+  "retryable",
+  "diagnosticCode",
   "generationJobId",
   "generationSceneId",
   "highQualityUnits",

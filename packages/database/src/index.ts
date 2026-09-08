@@ -9,3 +9,4 @@ export { createPrismaSceneGenerationExecutionRepository } from "./generation-exe
 export * from "./orchestration-repositories";
 export { createPaidSubmissionAuthorizationRepository } from "./paid-submission-authorization-repository";
 export { createSubmissionOutcomeRepository } from "./submission-outcome-repository";
+export { createReconciliationRepository } from "./reconciliation-repository";
