@@ -217,17 +217,20 @@ All commands run at the delivered head.
 
 New tests added by this phase:
 
-| Suite | Tests |
-| --- | --- |
-| `reconciliation/decide.test.ts` | 75 |
-| `reconciliation/service.test.ts` | 62 |
-| `reconciliation/entitlement.test.ts` | 34 |
-| `reconciliation/observation.test.ts` | 65 |
-| `reconciliation/maintenance.test.ts` | 32 |
-| `reconciliation/exposure.test.ts` | 10 |
-| `tests/integration/reconciliation.db.test.ts` | 85 |
-| `submission/observation.test.ts` (2G-1 hardening) | 52 |
-| **Total** | **344** |
+| Suite | Tests | Layer |
+| --- | --- | --- |
+| `reconciliation/decide.test.ts` | 75 | unit |
+| `reconciliation/service.test.ts` | 62 | unit |
+| `reconciliation/observation.test.ts` | 65 | unit |
+| `reconciliation/maintenance.test.ts` | 36 | unit |
+| `reconciliation/entitlement.test.ts` | 34 | unit |
+| `reconciliation/exposure.test.ts` | 10 | unit |
+| `submission/observation.test.ts` (2G-1 hardening, new file) | 52 | unit |
+| `submission/service.test.ts` (2G-1 hardening, added cases) | 10 | unit |
+| **Unit total** | **344** | |
+| `tests/integration/reconciliation.db.test.ts` | 85 | database |
+| `submission-outcome.db.test.ts` (2G-1 hardening, added case) | 1 | database |
+| **Database total** | **86** | |
 
 Unit total rose to **2659** from 2315 (+344, 95 files from 88); database total
 rose to **567** from 481 (+86, 19 files from 18).
