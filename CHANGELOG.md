@@ -3,6 +3,198 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2G-2: Reconciliation resolution and deadline exhaustion
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2g2-completion.md`. Phase
+4C-3B-2G-1 could put an attempt into durable uncertainty and nothing knew how
+that ended; this phase supplies the exit and nothing more. **No provider is
+contacted anywhere in this phase** — no HTTP client, no polling, no webhook
+ingestion, no adapter — and no database migration was required.
+
+### Added
+
+- **Exactly three durable conclusions, and deliberately no fourth.**
+  `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN` becomes `PROCESSING + ACCEPTED`,
+  `FAILED_RETRYABLE`/`FAILED_TERMINAL + DEFINITIVELY_REJECTED`, or
+  `RECONCILIATION_EXHAUSTED + SUBMISSION_UNKNOWN`. There is no "still unknown"
+  write: the row already says that, with a deadline, and re-recording it would
+  be a mutation that changes nothing while claiming progress was made. Nothing
+  re-POSTs the attempt and no conclusion admits a replacement one — spending a
+  second unit of provider capacity is a decision for the recovery path, not a
+  side effect of writing down what happened to the first.
+- **A closed, provider-neutral evidence contract.** Two arms only:
+  `ACCEPTED { providerPredictionId }` and `DEFINITIVELY_REJECTED { retryable,
+  diagnosticCode }`. No HTTP status, no provider body, no vendor enum, no URL,
+  no credential, no prompt, no free text. The diagnostic reuses Phase 2G-1's
+  closed catalog unchanged and unexpanded, and is re-checked for membership at
+  the boundary because a cast is what a caller in a hurry writes. Only an
+  `ACCEPTED` observation may introduce a provider reference, and a blank one is
+  refused — a reference that names nothing is uncertainty, which is already what
+  the row says.
+- **Deadline exhaustion that stamps nothing.** When the window closes, the
+  attempt moves to `RECONCILIATION_EXHAUSTED`, the certainty stays
+  `SUBMISSION_UNKNOWN`, and `reconciliationResolvedAt` **stays null**. That field
+  is what an auditor reads to find out when certainty was regained; it never was.
+  When the platform gave up is recorded by the transition event's own timestamp.
+- **Post-lock time authority, and equality belongs to exhaustion.** The clock is
+  read once, after the locks are held and the facts are loaded. `now < deadline`
+  may resolve; `now >= deadline` is expired. The opposite reading would leave
+  exactly one instant in which both the resolver and the exhauster believed they
+  owned the row. The deadline is read from the row and never recomputed:
+  re-deriving it from current configuration would let a config change
+  retroactively move a bound that attempts already in flight were admitted under.
+- **Replay requires proof that a reconciliation happened, then is settled before
+  the deadline is consulted.** An already-resolved attempt must carry all three
+  reconciliation timestamps before provider-reality replay rules apply: a direct
+  Phase 2G-1 outcome lands on the same certainty with the same reference and no
+  reconciliation history, and calling that `REPLAYED` would report success for an
+  operation that never ran. Partial history fails closed as
+  `RECONCILIATION_HISTORY_INCOHERENT` and is never silently repaired. Once proven,
+  a record of a resolution is a true statement about the past and stays true, so a
+  duplicate delivery a day later returns `REPLAYED` rather than
+  `DEADLINE_EXPIRED`, and a truly reconciled acceptance still replays at
+  `OUTPUT_VERIFIED`. The compatibility table is Phase 2G-1's, imported rather than
+  copied.
+- **Entitlement keyed on reservation state and the Job's remaining unknowns.**
+  `GenerationReservation` is Job-scoped while an attempt is scene-scoped, so
+  several attempts can be durably unknown behind one suspended hold. Only a
+  `RECONCILIATION_HOLD` ever moves, and it is restored to `RESERVED` only when the
+  current conclusion leaves **no other** `RECONCILIATION_PENDING +
+  SUBMISSION_UNKNOWN` attempt in the same Job — otherwise the action is
+  `KEEP_HOLD`, a deliberate non-transition that writes nothing and appends no
+  reservation event. A terminal rejection and exhaustion release the hold
+  regardless of siblings, because releasing is how a customer stops being charged
+  for a question nobody could answer, and `RELEASED` is terminal so a sibling's
+  later conclusion cannot resurrect it. Restoring on a retryable rejection is what
+  keeps such a rejection actually retryable. A post-delivery `USER_REGENERATION`
+  reaches none of the moves because its unit is already `CONSUMED`. **Nothing in
+  this phase consumes a unit.**
+- **Five event types across two aggregates**, service-owned and never
+  caller-chosen: `RECONCILIATION_RESOLVED_ACCEPTED`,
+  `RECONCILIATION_RESOLVED_REJECTED`, `RECONCILIATION_EXHAUSTED` on the attempt;
+  `RECONCILIATION_HOLD_RESTORED`, `RECONCILIATION_HOLD_RELEASED` on the
+  reservation. The attempt events say what a provider did; the reservation events
+  say what happened to a customer's entitlement as a result, so an operator
+  asking which units were handed back need not know which route caused each one.
+- **Bounded, lock-free candidate discovery** returning `{ organizationId,
+  attemptId }` and nothing else, ordered `reconciliationDeadlineAt ASC, id ASC`
+  so two workers agree on which rows they take. Everything needed to *decide* is
+  deliberately absent: candidates are advisory and every one goes back through
+  the single-attempt service, which re-reads under lock. The batch runner owns
+  discovery time — one clock read per pass, `dueCutoff = discoveryNow` and
+  `staleCutoff = discoveryNow - policy.staleSubmittingAfterMs` from a validated
+  opaque policy — and its bound is validated at both the runner and the
+  repository, capped at 100 and refused rather than clamped. It runs one pass; it
+  does not loop, sleep, schedule itself, own a timer, or contact a provider.
+- **Entitlement anomalies recorded, never a refusal.** A missing, released,
+  spent-`INITIAL` or out-of-band-restored reservation does not block the
+  conclusion — past the provider boundary, provider reality is persisted whether
+  or not the bookkeeping adds up. The anomaly is classified into Phase 2G-1's
+  vocabulary and written durably into the transition event, so a crash between
+  commit and the caller reading the return value cannot erase it. A terminal
+  reservation is never resurrected and no destructive transition is guessed at.
+
+### Fixed
+
+- **Tenancy was enforced at the read, not at the write.** The reconciliation
+  compare-and-set filtered on attempt id, state, certainty and version; the
+  organization was checked only by `loadFacts`, which `apply` never required to
+  have been called. A session opened for one organization could name another
+  tenant's attempt id and mutate that row, appending a transition event
+  attributed to the caller. Reproduced against the rejected head, where it
+  returned `APPLIED`. Tenancy now sits inside the compare-and-set itself — the
+  denormalized `videoProjectId` *and* the `Attempt → Request → Scene → Job →
+  VideoProject` chain must both agree — which also closes the check-then-act
+  window between the read and the write. The reservation mutation and the
+  post-update read carry the same scope. **The identical hole in merged Phase
+  2G-1's `submission-outcome-repository.ts` is fixed here too**, reproduced the
+  same way; it is the more severe of the two because that code is already on
+  `main`.
+- **The observation validators trusted a type at a boundary that constructs
+  nothing.** They took a typed union and behaved as though the type were a
+  runtime fact, which it is not: the values that reach them come from decoded
+  JSON, queue payloads, operator input and casts. `retryable: "false"` passed
+  validation and — being truthy — recorded `FAILED_RETRYABLE` and **restored the
+  customer's reserved unit**, the opposite of what the value said. A non-string
+  `providerPredictionId` threw out of `trim()`, so a validator answered with an
+  exception rather than a refusal. And every discriminant other than `ACCEPTED`
+  fell into the rejection branch, so an unrecognised arm could be recorded as a
+  definitive rejection of a paid submission. Both validators — this phase's and
+  merged Phase 2G-1's — now take `unknown`, prove they have a non-array object,
+  match the discriminant exhaustively by name, and check every required field's
+  type: `isBoolean` rather than truthiness, catalog membership rather than a
+  shape test, and `undefined` is not `null` because a field a sender omitted has
+  not been stated to be absent. Unrecognised discriminants are refused rather
+  than swept into an arm, and nothing throws — malformed evidence is an answer,
+  not an exception for a caller to wrap.
+- **A Job-scoped hold was restored by the first of several unknown attempts.**
+  The reservation belongs to the Job and the attempt to a scene, so the first
+  conclusion in a multi-scene Job lifted a Job-level suspension while the Job was
+  still uncertain — the customer's unit read as usable while money may still have
+  been spent on a sibling nobody could account for. Restoring now requires the
+  conclusion to leave no other durably unknown attempt in the same Job; otherwise
+  the action is the new `KEEP_HOLD`, which writes nothing and appends no
+  reservation event because nothing transitioned. The count is read inside the
+  transaction after the existing organization+cycle advisory lock, through the
+  persisted `Attempt → Request → Scene → Job` chain, and is never caller-supplied.
+  Its value is recorded on the attempt's own event as
+  `remainingPendingUnknownAttempts` — the only durable record of why the unit was
+  not handed back.
+- **`REPLAYED` did not prove a reconciliation had happened.** A direct Phase 2G-1
+  outcome lands on `PROCESSING + ACCEPTED` with the same provider reference and no
+  reconciliation history at all; comparing provider reality alone called that a
+  replay of a reconciliation that never occurred. A replay now requires all three
+  reconciliation timestamps, an absent history returns
+  `ATTEMPT_NEVER_BECAME_UNCERTAIN`, and a partial one fails closed as
+  `RECONCILIATION_HISTORY_INCOHERENT` without repairing anything.
+- **The reservation's release time came from the process wall clock.** The
+  repository called `new Date()` for `releasedAt`, stamping a customer's release
+  with an instant no lock was held for and letting it drift from the resolution
+  the same decision wrote. The write now carries `decisionAt` — the single
+  post-lock clock read — and drives `reconciliationResolvedAt`,
+  `providerAcceptedAt` and `releasedAt` from it. Exhaustion carries it too while
+  still stamping no resolution instant: needing a release time is not a reason to
+  claim a certainty never regained. The repository now contains no unparameterized
+  wall-clock read, enforced by a static guard.
+- **One caller-supplied `cutoff` narrowed two different maintenance queries.**
+  They ask different questions of different columns, so a caller had to encode two
+  meanings in one timestamp — and the stale one was wrong by a whole threshold.
+  The runner now reads its clock once per pass and derives both cutoffs itself
+  from a validated opaque policy. `cutoff` is gone from the batch input, and the
+  batch bound is validated by one canonical validator at both the runner and the
+  public repository methods, capped at 100 and refused rather than clamped.
+- **The documented same-batch behaviour was wrong.** A newly uncertain stale
+  attempt does *not* always have a future deadline: Phase 2G-1 freezes it from the
+  submission boundary, so an attempt discovered long after abandonment enters
+  `SUBMISSION_UNKNOWN` already past it. The due query in the same pass legitimately
+  finds it and the exhaustion service closes it, which is correct and is no longer
+  described otherwise or special-cased away.
+- **`PRE_SUBMISSION` was treated as a competing resolution.** The first draft of
+  the resolution evaluator sent any certainty other than `SUBMISSION_UNKNOWN` to
+  the conflict comparison, so an attempt still at `SUBMITTING + PRE_SUBMISSION`
+  — one that never became uncertain at all — was answered
+  `CONFLICTING_RESOLUTION / CERTAINTY_MISMATCH`. `PRE_SUBMISSION` is the absence
+  of a resolution, not a competing one; the answer sent an operator hunting a
+  second observer who does not exist when the truth was a mistyped attempt id.
+  Such a row now falls through to `NOT_RECONCILING /
+  ATTEMPT_NEVER_BECAME_UNCERTAIN`.
+
+### Unchanged, deliberately
+
+- The Phase 2F-1 lock order — organization+cycle advisory lock, then the
+  reservation row `FOR UPDATE`, then the attempt compare-and-set — is joined, not
+  extended. One order across three phases, no deadlock cycle, and no
+  process-local mutex anywhere: a second in-memory discipline would be correct on
+  one replica and useless across two.
+- `classifyProviderCostExposure` and `isCoherentAttemptRecord` already covered
+  every pairing this phase produces and were not modified. An exhausted attempt
+  still counts as `UNCERTAIN` provider cost — exhaustion resolves the customer's
+  entitlement and nothing about what the provider charged, and dropping it to
+  zero would make giving up look like a refund.
+- No paid provider activation. `FAL_KEY` is not enabled, the fal production
+  factory is not wired, the Veo production route is not opened, and the WaveSpeed
+  paid route stays closed.
+
 ## [Unreleased] — Phase 4C-3B-2G-1: Submission outcome persistence and uncertainty entry
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2g1-completion.md`. Phase

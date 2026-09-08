@@ -221,6 +221,21 @@ const STATES_COMPATIBLE_WITH_CERTAINTY: Record<
 } as const);
 
 /**
+ * Is this attempt in a state the recorded certainty can account for?
+ *
+ * Exported so Phase 4C-3B-2G-2's reconciliation replay asks the same question
+ * rather than copying the map. Two copies of a compatibility table drift the
+ * first time a state is added, and the drift shows up as a false conflict on a
+ * duplicate delivery — the exact defect this table was introduced to fix.
+ */
+export function isStateCompatibleWithCertainty(
+  certainty: SubmissionCertainty,
+  state: GenerationAttemptState,
+): boolean {
+  return STATES_COMPATIBLE_WITH_CERTAINTY[certainty][state];
+}
+
+/**
  * Everything the decision needs that is not on the attempt row.
  *
  * `now` is the single instant read from the injected clock after the lock was

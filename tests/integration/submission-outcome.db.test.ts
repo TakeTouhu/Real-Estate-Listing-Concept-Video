@@ -1457,4 +1457,55 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       ).toBe("RECONCILIATION_PENDING");
     });
   });
+
+  describe("the mutation boundary enforces tenancy by itself", () => {
+    it("refuses a cross-tenant apply made without ever reading the facts", async () => {
+      // `apply` is reachable without `loadFacts`, so the tenant-scoped read is
+      // an optional boundary rather than a real one. Before the organization
+      // predicate joined the compare-and-set, a caller holding a session for
+      // its own organization could name another tenant's attempt id, mutate
+      // that row, and append an event labelled with its own organization.
+      //
+      // Nothing below calls `loadFacts`; the version is read out of band,
+      // exactly as someone who knew an id would obtain it.
+      const { attempt, job } = await seedSubmittingAttempt("crosstenantapply");
+      const before = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      const reservationBefore = await reservationOf(job.id);
+
+      const applied = await createSubmissionOutcomeRepository(prisma).withAttemptOutcome(
+        { organizationId: ORG_B, attemptId: attempt.id },
+        async (session) =>
+          session.apply({
+            expectedVersion: before.stateVersion,
+            write: {
+              orchestrationState: "PROCESSING",
+              submissionCertainty: "ACCEPTED",
+              providerPredictionId: "pred_crosstenant",
+              providerAcceptedAt: BOUNDARY,
+              reconciliationStartedAt: null,
+              reconciliationDeadlineAt: null,
+              normalizedErrorCode: null,
+              holdReservation: false,
+            },
+            reservationEventType: SUBMISSION_UNCERTAINTY_HOLD_EVENT_TYPE,
+            context: ctx(),
+          }),
+      );
+      expect(applied).toEqual({ kind: "LOST" });
+
+      const after = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: attempt.id },
+      });
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.orchestrationState).toBe("SUBMITTING");
+      expect(after.submissionCertainty).toBe("PRE_SUBMISSION");
+      expect(after.providerPredictionId).toBeNull();
+      expect((await reservationOf(job.id)).stateVersion).toBe(reservationBefore.stateVersion);
+      expect(
+        await prisma.generationTransitionEvent.findMany({ where: { organizationId: ORG_B } }),
+      ).toHaveLength(0);
+    });
+  });
 });

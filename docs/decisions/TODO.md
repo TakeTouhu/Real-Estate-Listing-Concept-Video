@@ -755,3 +755,29 @@ refuses to invent one. Tests use fixtures.
 
 The reconciliation window itself is settled: configurable, at most 24 hours, and
 the stale threshold must be **strictly** less than it.
+
+## Phase 4C-3B-2G-2 — who supplies reconciliation evidence, and who runs the batch
+
+Two unresolved items, both deliberately left open rather than guessed at.
+
+**No producer exists for `ReconciliationResolutionObservation`.** The resolution
+service consumes conclusive evidence; nothing yet obtains it. The mechanism —
+provider polling, authenticated webhooks, an operator's manual determination, or
+some combination — is a later phase with a different dependency set. What is
+fixed is the *shape* it must normalize into: two closed arms carrying a provider
+reference or a retryability flag and a closed diagnostic code, with no HTTP
+status, provider body, vendor enum, URL, credential or free text. A producer that
+cannot express its finding in that shape has not established enough to resolve
+anything, and should not call.
+
+**Nothing schedules `runOnce`.** The batch runner exists and is deliberately not
+a daemon: it does not loop, sleep, schedule itself or own a timer. Deciding what
+does call it — cadence, concurrency across replicas, and what happens when a
+batch overruns its interval — is an operational decision with its own failure
+modes, and needs the stale-`SUBMITTING` threshold above resolved first, since the
+same batch sweeps on it.
+
+**Related and separate:** an exhausted attempt's provider cost stays `UNCERTAIN`
+permanently, and no path converts it. None honestly can without provider-side
+actual-cost ingestion. A cost-accounting pass over the audit record is the right
+owner; the lifecycle deliberately does not guess.

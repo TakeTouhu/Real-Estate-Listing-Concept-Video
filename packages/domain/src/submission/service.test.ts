@@ -29,6 +29,7 @@ import {
   parseSubmissionDiagnosticCode,
   type SubmissionDiagnosticCode,
 } from "./diagnostic-code";
+import type { ProviderSubmissionObservation } from "./observation";
 
 /**
  * The service's contract at the seams the database cannot reach: which clock it
@@ -670,6 +671,47 @@ describe("a malformed diagnostic code refuses before anything is written", () =>
           kind: "SUBMISSION_UNKNOWN",
           normalizedErrorCode: hostile as SubmissionDiagnosticCode,
         },
+        context: CONTEXT,
+      }),
+    ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+    expect(calls.apply).toBe(0);
+  });
+
+  it.each([
+    ["a non-string provider reference", { kind: "ACCEPTED", providerPredictionId: 123 }],
+    ["a null provider reference", { kind: "ACCEPTED", providerPredictionId: null }],
+    ["an unrecognised discriminant", { kind: "UNKNOWN" }],
+    ["a stringly-typed retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: "false",
+      normalizedErrorCode: null,
+    }],
+    ["a numeric retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: 1,
+      normalizedErrorCode: null,
+    }],
+    ["a null retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: null,
+      normalizedErrorCode: null,
+    }],
+    ["a bare string", "ACCEPTED"],
+    ["null", null],
+    ["an array", []],
+    ["an empty object", {}],
+  ])("refuses %s end to end, writing nothing", async (_label, hostile) => {
+    // Cast because that is how it arrives: an adapter decodes a provider
+    // response and asserts the union on the way in. Two of these used to get
+    // through — `retryable: "false"` was truthy and recorded FAILED_RETRYABLE
+    // while restoring the customer's unit, and a non-string reference threw out
+    // of the validator rather than being refused.
+    const { service, calls } = harness();
+    expect(
+      await service.recordObservation({
+        organizationId: "org_svc",
+        attemptId: "sgen_svc",
+        observation: hostile as unknown as ProviderSubmissionObservation,
         context: CONTEXT,
       }),
     ).toEqual({ kind: "OBSERVATION_MALFORMED" });

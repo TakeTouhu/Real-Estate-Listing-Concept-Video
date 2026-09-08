@@ -637,6 +637,122 @@ and ADR-0020.
   quota is touched on any path, no `SYSTEM_RECOVERY` attempt is created, no
   regeneration right is consumed, and both entry points remain dormant domain
   services with no route, no worker loop and no caller.
+- **Phase 4C-3B-2G-2** — see GitHub for its lifecycle. Adds the exit from
+  durable uncertainty. Phase 2G-1 could put an attempt into
+  `RECONCILIATION_PENDING + SUBMISSION_UNKNOWN` with a suspended hold and a
+  frozen deadline, and nothing knew how that ended — left alone it never would,
+  holding a customer's entitlement hostage indefinitely and carrying an
+  unresolvable charge in every exposure calculation forever. Two provider-neutral
+  operations end it: `resolveReconciliation` records conclusive evidence someone
+  else obtained, and `exhaustReconciliation` closes a window that ran out. **No
+  provider is contacted anywhere in this phase** — there is no HTTP client, no
+  polling loop and no way to add a transport without editing the port module —
+  and the layer that will one day produce that evidence does not exist yet, which
+  is the right order: the shape of the record is the constraint its producers
+  must satisfy rather than the reverse.
+
+  Exactly three durable conclusions, and deliberately no fourth. There is no
+  "still unknown" write, because the row already says that with a deadline and
+  re-recording it would be a mutation that changes nothing while claiming
+  progress was made. Nothing re-POSTs the attempt and no conclusion admits a
+  replacement one. The evidence contract is two closed arms carrying a provider
+  reference or a retryability flag and a Phase 2G-1 diagnostic code — no HTTP
+  status, no provider body, no vendor enum, no URL, no credential, no prompt, no
+  free text — and only an acceptance may introduce a provider reference, never
+  one synthesized from a request hash or a response.
+
+  The clock is read once, after the locks are held and the facts are loaded, and
+  the deadline is read from the row rather than recomputed: a resolver that
+  judged the window before queueing could authorize a resolution for a window
+  that closed while it waited, and re-deriving the bound from current
+  configuration would let a config change retroactively move a limit that
+  attempts already in flight were admitted under. Equality belongs to exhaustion,
+  because the opposite reading leaves exactly one instant in which both paths
+  believe they own the row. Replay is settled *before* the deadline is consulted:
+  a recorded resolution is a true statement about the past and stays true, so a
+  duplicate delivery a day later is a success rather than a failure the caller
+  would retry. Exhaustion stamps no resolution instant at all — that field is
+  what an auditor reads to find out when certainty was regained, and it never
+  was; the transition event's own timestamp records when the platform gave up.
+
+  Entitlement is keyed on the reservation's own state *and* on whether the Job
+  still has other durably unknown attempts. `GenerationReservation` is Job-scoped
+  while an attempt is scene-scoped, so several attempts can sit unknown behind one
+  suspended hold; restoring on the first conclusion would lift a Job-level
+  suspension while the Job is still uncertain, leaving the customer's unit reading
+  as usable while money may still be spent on a sibling nobody can account for.
+  Only a `RECONCILIATION_HOLD` moves; acceptance and a retryable rejection restore
+  it *only* when no other unknown attempt remains, and otherwise take the
+  deliberate `KEEP_HOLD` non-transition that writes nothing and appends no
+  reservation event. A terminal rejection and exhaustion release it regardless of
+  siblings — releasing is how the customer stops paying for a question nobody
+  answered, and `RELEASED` is terminal so a sibling's later conclusion cannot
+  resurrect it. A post-delivery `USER_REGENERATION` reaches none of them because
+  its unit is already spent. Restoring rather than releasing on a retryable rejection
+  is what keeps such a rejection actually retryable; releasing would leave a
+  future recovery attempt with nothing to stand on and the customer's request
+  quietly unfinishable while looking healthy. Nothing here consumes a unit.
+  Anomalous bookkeeping — missing, released, spent-`INITIAL`, or restored out of
+  band — is classified into the existing vocabulary and written durably into the
+  transition event rather than blocking the conclusion, and a terminal
+  reservation is never resurrected.
+
+  An exhausted attempt is terminal: late evidence answers
+  `RECONCILIATION_CLOSED` and writes nothing, because the customer has already
+  been told the platform stopped waiting and been made whole. Its provider cost
+  stays `UNCERTAIN` forever, which is the point — exhaustion resolves the
+  customer's entitlement and nothing at all about what the provider charged, and
+  dropping it to zero would let giving up look like a refund and understate
+  exactly the cycles in which an incident happened. Only a definitive rejection
+  removes exposure, because only there did the provider refuse the work.
+
+  Candidate discovery is bounded, takes no locks, and returns identifiers only,
+  so it cannot be mistaken for authority; every candidate goes back through the
+  single-attempt service, which re-reads under lock and against its own clock. A
+  one-pass batch runner exists and does not loop, sleep, schedule itself, own a
+  timer or contact a provider. The Phase 2F-1 lock order is joined unchanged —
+  advisory lock on organization and cycle, then the reservation row, then the
+  attempt compare-and-set — with no process-local mutex anywhere, since a second
+  in-memory discipline would be correct on one replica and useless across two. No
+  migration was required, no customer quota is touched on any path, no
+  `SYSTEM_RECOVERY` attempt is created, and both entry points remain dormant
+  domain services with no route, no worker loop and no scheduled caller.
+
+  Two defects found in CTO review were live rather than theoretical, and both
+  were reproduced before being fixed. Tenancy was enforced at the *read*, which
+  `apply` does not require, so a session opened for one organization could name
+  another tenant's attempt id and mutate that row while attributing the event to
+  itself; it now sits inside the compare-and-set, requiring the denormalized
+  project column and the ownership chain to agree, so a row whose two disagree is
+  frozen rather than writable by whichever tenant a corruption favours. And the
+  observation validators trusted a TypeScript union at a boundary that constructs
+  none of its own input: `retryable: "false"` is truthy, so it recorded
+  `FAILED_RETRYABLE` and handed the customer's reserved unit back on the strength
+  of a string saying the opposite, while a non-string provider reference threw
+  out of the validator and any unrecognised discriminant was treated as a
+  rejection. Both validators now take `unknown` and prove the shape. **Both
+  defects existed identically in merged Phase 2G-1 and are fixed in the same
+  change** — the tenancy one being the more severe, since that repository is
+  already reachable on `main`.
+
+  Four further review defects were corrected in the same PR. A `REPLAYED` answer
+  did not prove a reconciliation had happened, so a direct Phase 2G-1 outcome —
+  same certainty, same provider reference, no reconciliation history — was
+  reported as a replay of an operation that never ran; a replay now requires all
+  three reconciliation timestamps, and a half-written history fails closed rather
+  than being repaired. The reservation's `releasedAt` came from the process wall
+  clock rather than the decision's single post-lock instant, stamping a customer's
+  release with a time no lock was held for; the write now carries `decisionAt` and
+  every timestamp it produces comes from there. And the maintenance runner took
+  one caller-supplied cutoff for two queries that ask different questions of
+  different columns — it now reads its own clock once per pass, derives the stale
+  cutoff by subtracting a validated policy threshold and the due cutoff from the
+  instant itself, and validates its batch bound (maximum 100, refused rather than
+  clamped) at both the runner and the public repository methods. The claim that a
+  freshly stale attempt always has a future deadline was also wrong: the deadline
+  is frozen from the submission boundary, so an attempt discovered late enters
+  `SUBMISSION_UNKNOWN` already past it and is legitimately made unknown and
+  exhausted within a single batch.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

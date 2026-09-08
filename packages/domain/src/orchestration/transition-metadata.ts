@@ -35,6 +35,29 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
    * written so that an anomaly survives the process that noticed it.
    */
   "entitlementAnomaly",
+  /**
+   * How an uncertain submission ended, recorded with the transition that ended
+   * it. `reconciliationResolvedAt` is absent on exhaustion by design — the
+   * event's own timestamp is when the platform stopped waiting, and a resolved
+   * instant would claim a certainty that was never regained. `retryable` and
+   * `diagnosticCode` are a boolean and a closed-vocabulary member; the code is
+   * the reconciliation evidence's classification, kept out of the attempt row so
+   * it cannot overwrite the original submission diagnostic.
+   */
+  "reconciliationResolvedAt",
+  "retryable",
+  /**
+   * How many *other* attempts in the same `GenerationJob` were still durably
+   * unknown when this conclusion landed.
+   *
+   * A plain count, and deliberately not a list: sibling identifiers would put
+   * unrelated rows into an audit record, and the sanitizer refuses arrays
+   * anyway. It exists because a Job-scoped hold that stays suspended produces no
+   * reservation transition event — nothing moved — so this is the only durable
+   * record of *why* the customer's unit was not handed back yet.
+   */
+  "remainingPendingUnknownAttempts",
+  "diagnosticCode",
   "generationJobId",
   "generationSceneId",
   "highQualityUnits",
