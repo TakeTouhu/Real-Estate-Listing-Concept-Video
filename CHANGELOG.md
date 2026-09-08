@@ -84,6 +84,37 @@ ingestion, no adapter — and no database migration was required.
 
 ### Fixed
 
+- **Tenancy was enforced at the read, not at the write.** The reconciliation
+  compare-and-set filtered on attempt id, state, certainty and version; the
+  organization was checked only by `loadFacts`, which `apply` never required to
+  have been called. A session opened for one organization could name another
+  tenant's attempt id and mutate that row, appending a transition event
+  attributed to the caller. Reproduced against the rejected head, where it
+  returned `APPLIED`. Tenancy now sits inside the compare-and-set itself — the
+  denormalized `videoProjectId` *and* the `Attempt → Request → Scene → Job →
+  VideoProject` chain must both agree — which also closes the check-then-act
+  window between the read and the write. The reservation mutation and the
+  post-update read carry the same scope. **The identical hole in merged Phase
+  2G-1's `submission-outcome-repository.ts` is fixed here too**, reproduced the
+  same way; it is the more severe of the two because that code is already on
+  `main`.
+- **The observation validators trusted a type at a boundary that constructs
+  nothing.** They took a typed union and behaved as though the type were a
+  runtime fact, which it is not: the values that reach them come from decoded
+  JSON, queue payloads, operator input and casts. `retryable: "false"` passed
+  validation and — being truthy — recorded `FAILED_RETRYABLE` and **restored the
+  customer's reserved unit**, the opposite of what the value said. A non-string
+  `providerPredictionId` threw out of `trim()`, so a validator answered with an
+  exception rather than a refusal. And every discriminant other than `ACCEPTED`
+  fell into the rejection branch, so an unrecognised arm could be recorded as a
+  definitive rejection of a paid submission. Both validators — this phase's and
+  merged Phase 2G-1's — now take `unknown`, prove they have a non-array object,
+  match the discriminant exhaustively by name, and check every required field's
+  type: `isBoolean` rather than truthiness, catalog membership rather than a
+  shape test, and `undefined` is not `null` because a field a sender omitted has
+  not been stated to be absent. Unrecognised discriminants are refused rather
+  than swept into an arm, and nothing throws — malformed evidence is an answer,
+  not an exception for a caller to wrap.
 - **`PRE_SUBMISSION` was treated as a competing resolution.** The first draft of
   the resolution evaluator sent any certainty other than `SUBMISSION_UNKNOWN` to
   the conflict comparison, so an attempt still at `SUBMITTING + PRE_SUBMISSION`

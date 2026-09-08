@@ -239,6 +239,50 @@ Sharing the advisory key with paid authorization is deliberate: a conclusion
 moves an organization's cycle exposure in both directions, so an authorization
 reading exposure while one lands would decide on a total that is mid-flight.
 
+### 9a. Tenancy is proved at the mutation, not before it
+
+The compare-and-set carries the organization predicate itself. A tenant-scoped
+*read* is not a boundary when the write is reachable without it — and
+`ReconciliationSession.apply` is: a caller can hold a session and never call
+`loadFacts`. Proving tenancy in the same statement as the CAS also closes the
+check-then-act window in which a row could change hands between the two.
+
+Two clauses must both hold: the denormalized `videoProjectId` that the standard
+orchestration attempt repository scopes on, and the ownership chain
+`Attempt → Request → Scene → Job → VideoProject` that every read in this phase
+traverses. Requiring both means a row whose column and chain disagree — a bad
+backfill, a partial restore, a manual edit — is frozen rather than writable by
+whichever tenant the corruption happens to favour. Requiring the chain also
+excludes an attempt with no parent request: a legacy row predating the
+orchestration chain is not reconcilable, and treating it as anyone's tenant would
+be a guess.
+
+The same rule was applied retroactively to Phase 2G-1's outcome persistence,
+which had the identical shape.
+
+### 9b. Evidence is validated as unknown data
+
+The observation types are compile-time promises about values this layer does not
+construct. What will actually arrive is decoded JSON, a queue payload, an
+operator's determination, or a value someone cast on the way in. So both
+validators take `unknown` and prove the shape:
+
+- a non-null, non-array object;
+- a discriminant matched exhaustively **by name** — an unrecognised `kind` is
+  refused, never swept into an arm, because treating "something I do not
+  recognise" as "the provider refused it" would resolve a paid attempt and move a
+  customer's entitlement on a value nobody wrote a meaning for;
+- every required field checked by type. `retryable` is checked with
+  `typeof === "boolean"`, not for truthiness: `"false"` is truthy, and the
+  difference between believing it and proving it is whether a customer's unit is
+  restored or released. Diagnostics are checked for catalog membership, not
+  shape. `undefined` is not `null`, because a field a sender omitted has not been
+  stated to be absent.
+
+Nothing throws. Malformed evidence is an answer — `OBSERVATION_MALFORMED`, with
+the attempt, the reservation and the event log all untouched — not an exception
+for every caller to wrap.
+
 ### 10. Candidate discovery is advisory, and says so by what it returns
 
 `findDueReconciliationCandidates` and `findStaleSubmittingCandidates` return

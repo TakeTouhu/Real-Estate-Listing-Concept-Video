@@ -1,7 +1,10 @@
+import type { SubmissionDiagnosticCode } from "./diagnostic-code";
 import {
-  isSubmissionDiagnosticCode,
-  type SubmissionDiagnosticCode,
-} from "./diagnostic-code";
+  isBoolean,
+  isDiagnosticCodeOrNull,
+  isNonBlankString,
+  isPlainRecord,
+} from "./untrusted";
 
 /**
  * What a caller reports having learned about one submission, normalized.
@@ -81,23 +84,42 @@ export type ProviderSubmissionObservation =
       readonly normalizedErrorCode: SubmissionDiagnosticCode | null;
     };
 
-/** Whether an observation is structurally usable at all. */
+/**
+ * Whether an arbitrary value is a usable observation.
+ *
+ * Takes `unknown`, deliberately. The union above is a compile-time promise, and
+ * the values that actually arrive here come from decoded JSON, a queue payload,
+ * an operator's determination, a cast, or a provider adapter written later —
+ * none of which `tsc` checked. An earlier version trusted the type and had two
+ * holes because of it: a non-string `providerPredictionId` threw inside
+ * `trim()`, and *every* discriminant other than `ACCEPTED` fell into the
+ * rejection branch with `retryable` never examined, so `retryable: "false"` was
+ * truthy, recorded `FAILED_RETRYABLE`, and handed the customer's reserved unit
+ * back on the strength of a string.
+ *
+ * So the discriminant is matched exhaustively against the three known arms —
+ * an unrecognised `kind` is `false`, never "probably a rejection" — and every
+ * required field is proved. Malformed input returns `false`; it never throws,
+ * because a caller that must wrap a validator in try/catch has been handed the
+ * same problem back.
+ */
 export function isWellFormedObservation(
-  observation: ProviderSubmissionObservation,
-): boolean {
-  if (observation.kind === "ACCEPTED") {
-    // A blank reference is worse than a missing one: it satisfies every "is it
-    // present" check while naming nothing the provider could be asked about.
-    return observation.providerPredictionId.trim().length > 0;
+  value: unknown,
+): value is ProviderSubmissionObservation {
+  if (!isPlainRecord(value)) return false;
+
+  switch (value.kind) {
+    case "ACCEPTED":
+      return isNonBlankString(value.providerPredictionId);
+    case "DEFINITIVELY_REJECTED":
+      // `retryable` decides `FAILED_RETRYABLE` versus `FAILED_TERMINAL`, and
+      // with it whether the customer's unit is restored or released. It is
+      // checked as a boolean rather than for truthiness precisely because the
+      // cheap reading is the one that gives a unit away.
+      return isBoolean(value.retryable) && isDiagnosticCodeOrNull(value.normalizedErrorCode);
+    case "SUBMISSION_UNKNOWN":
+      return isDiagnosticCodeOrNull(value.normalizedErrorCode);
+    default:
+      return false;
   }
-  // Defence in depth over the union type. It stops a bare string being
-  // *assigned* here, which a caller inside this repository cannot bypass without
-  // an explicit cast — but a cast is exactly what a caller in a hurry writes, and
-  // the value ends up in an audit table either way. The re-check is membership
-  // in the closed catalog, not a shape test: `SECRET_TOKEN_ABC123` is spelled
-  // like a code and is still not one.
-  return (
-    observation.normalizedErrorCode === null ||
-    isSubmissionDiagnosticCode(observation.normalizedErrorCode)
-  );
 }

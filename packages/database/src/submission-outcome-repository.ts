@@ -33,6 +33,34 @@ const MS = (value: Date | null): EpochMillis | null =>
   value === null ? null : (value.getTime() as EpochMillis);
 
 /**
+ * The tenant predicate for an attempt, carried into every mutation.
+ *
+ * `apply` is reachable without `loadFacts`, so the tenant-scoped read is not a
+ * boundary — it is an optional one. A caller holding a session for its own
+ * organization could otherwise name another tenant's attempt id and mutate that
+ * row, appending an event labelled with its own organization. Proving tenancy
+ * in the same statement as the compare-and-set also closes the check-then-act
+ * window between the read and the write.
+ *
+ * Two clauses that must agree: the denormalized `videoProjectId` the standard
+ * orchestration attempt repository scopes on, and the ownership chain
+ * `Attempt → Request → Scene → Job → VideoProject` that every read in this file
+ * traverses. A row whose two disagree refuses the write rather than being
+ * mutated under a tenancy only half of it supports.
+ */
+const attemptScope = (organizationId: string) => ({
+  videoProject: { organizationId },
+  generationSceneRequest: {
+    generationScene: { generationJob: { videoProject: { organizationId } } },
+  },
+});
+
+/** The same ownership chain, from the reservation side. */
+const reservationScope = (organizationId: string) => ({
+  generationJob: { videoProject: { organizationId } },
+});
+
+/**
  * The cost-admission lock, taken first and for the same reason Phase
  * 4C-3B-2F-1 takes it.
  *
@@ -248,6 +276,7 @@ export function createSubmissionOutcomeRepository(
             const { count } = await tx.sceneGeneration.updateMany({
               where: {
                 id: input.attemptId,
+                ...attemptScope(input.organizationId),
                 // The boundary state and the version together. Anything else
                 // means another writer resolved this attempt first.
                 orchestrationState: "SUBMITTING",
@@ -289,6 +318,7 @@ export function createSubmissionOutcomeRepository(
               const moved = await tx.generationReservation.updateMany({
                 where: {
                   id: reservation.id,
+                  ...reservationScope(input.organizationId),
                   state: "RESERVED",
                   stateVersion: reservation.stateVersion,
                 },
@@ -333,7 +363,7 @@ export function createSubmissionOutcomeRepository(
             });
 
             const row = await tx.sceneGeneration.findFirst({
-              where: { id: input.attemptId },
+              where: { id: input.attemptId, ...attemptScope(input.organizationId) },
               select: { stateVersion: true },
             });
             if (row === null) {

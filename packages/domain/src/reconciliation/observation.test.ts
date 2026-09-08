@@ -161,3 +161,156 @@ describe("the contract carries no provider detail", () => {
     ]);
   });
 });
+
+
+describe("the validator treats its input as unknown, because it is", () => {
+  /**
+   * The union is a compile-time promise about a value this layer did not
+   * construct. Everything below type-checks its way in through a cast, decoded
+   * JSON, or a queue payload — which is exactly how it will arrive in
+   * production, since the producers do not exist yet and will not be written by
+   * the person who wrote this contract.
+   */
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 42],
+    ["a string", "ACCEPTED"],
+    ["an array", []],
+    ["an array shaped like a tuple", ["ACCEPTED", "pred_x"]],
+    // An array is an object and indexes cleanly, so without an explicit
+    // array check it reaches the discriminant switch as a value with
+    // properties. A JS producer building its result on an array would get
+    // here; JSON would not.
+    ["an array carrying a valid arm's properties", Object.assign([], {
+      kind: "ACCEPTED",
+      providerPredictionId: "pred_x",
+    })],
+    ["an empty object", {}],
+    ["an object with no kind", { providerPredictionId: "pred_x" }],
+  ])("refuses %s", (_label, value) => {
+    expect(isWellFormedResolutionObservation(value)).toBe(false);
+  });
+
+  it.each([
+    ["UNKNOWN", { kind: "UNKNOWN" }],
+    ["SUBMISSION_UNKNOWN", { kind: "SUBMISSION_UNKNOWN", diagnosticCode: null }],
+    ["a lowercase accepted", { kind: "accepted", providerPredictionId: "pred_x" }],
+    // The one that matters: an unrecognised arm carrying a body that would
+    // pass the rejection validation. A future provider adapter emitting a new
+    // kind must not have it silently recorded as a definitive rejection —
+    // resolving a paid attempt and moving a customer's unit on a name nobody
+    // wrote a meaning for.
+    ["a well-formed body under an unknown kind", {
+      kind: "UNKNOWN",
+      retryable: true,
+      diagnosticCode: null,
+    }],
+    ["a well-formed body under a 2G-1 arm", {
+      kind: "SUBMISSION_UNKNOWN",
+      retryable: false,
+      diagnosticCode: "TIMEOUT",
+    }],
+    ["a numeric kind", { kind: 1 }],
+    ["a null kind", { kind: null }],
+  ])("refuses the unrecognised discriminant %s rather than assuming rejection", (_l, value) => {
+    // The dangerous default. Sweeping an unrecognised kind into the rejection
+    // branch would resolve an uncertain attempt, move a customer's entitlement
+    // and close a paid submission on the strength of a value nobody wrote a
+    // meaning for. `SUBMISSION_UNKNOWN` is listed here on purpose: it is a
+    // valid Phase 2G-1 arm and deliberately *not* one of this phase's two.
+    expect(isWellFormedResolutionObservation(value)).toBe(false);
+  });
+
+  it.each([
+    ["a number", { kind: "ACCEPTED", providerPredictionId: 123 }],
+    ["null", { kind: "ACCEPTED", providerPredictionId: null }],
+    ["undefined", { kind: "ACCEPTED", providerPredictionId: undefined }],
+    ["missing", { kind: "ACCEPTED" }],
+    ["an object", { kind: "ACCEPTED", providerPredictionId: { id: "pred_x" } }],
+    ["an array", { kind: "ACCEPTED", providerPredictionId: ["pred_x"] }],
+    ["blank", { kind: "ACCEPTED", providerPredictionId: "   " }],
+  ])("refuses a provider reference that is %s, without throwing", (_label, value) => {
+    // The earlier version called `.trim()` on whatever it was given, so a
+    // non-string reference threw out of a validator instead of answering.
+    expect(() => isWellFormedResolutionObservation(value)).not.toThrow();
+    expect(isWellFormedResolutionObservation(value)).toBe(false);
+  });
+
+  it.each([
+    ['the string "false"', "false"],
+    ['the string "true"', "true"],
+    ["the number 1", 1],
+    ["the number 0", 0],
+    ["null", null],
+    ["undefined", undefined],
+    ["an object", {}],
+  ])("refuses a retryable flag that is %s", (_label, retryable) => {
+    // The specific hole this closes: `retryable: "false"` is truthy, so it
+    // recorded FAILED_RETRYABLE and handed the customer's reserved unit back
+    // for a retry — on the strength of a string that says the opposite.
+    expect(
+      isWellFormedResolutionObservation({
+        kind: "DEFINITIVELY_REJECTED",
+        retryable,
+        diagnosticCode: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a rejection with no retryable flag at all", () => {
+    expect(
+      isWellFormedResolutionObservation({
+        kind: "DEFINITIVELY_REJECTED",
+        diagnosticCode: null,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["a number", 429],
+    ["undefined", undefined],
+    ["missing", "__ABSENT__"],
+    ["an object", { code: "TIMEOUT" }],
+    ["an array", ["TIMEOUT"]],
+    ["lowercase", "timeout"],
+    ["padded", "TIMEOUT "],
+    ["a credential", "Bearer sk-live-abcdef"],
+    ["a signed URL", "https://p.example/o.mp4?X-Amz-Signature=SECRET"],
+    ["a retired code", "RATE_LIMITED"],
+  ])("refuses a diagnostic that is %s", (_label, diagnosticCode) => {
+    const observation: Record<string, unknown> =
+      diagnosticCode === "__ABSENT__"
+        ? { kind: "DEFINITIVELY_REJECTED", retryable: true }
+        : { kind: "DEFINITIVELY_REJECTED", retryable: true, diagnosticCode };
+    expect(isWellFormedResolutionObservation(observation)).toBe(false);
+  });
+
+  it("accepts the two well-formed shapes", () => {
+    // The guard must still let real evidence through, or the phase is a
+    // very safe way of doing nothing.
+    expect(
+      isWellFormedResolutionObservation({
+        kind: "ACCEPTED",
+        providerPredictionId: "pred_found",
+      }),
+    ).toBe(true);
+    expect(
+      isWellFormedResolutionObservation({
+        kind: "DEFINITIVELY_REJECTED",
+        retryable: false,
+        diagnosticCode: "TIMEOUT",
+      }),
+    ).toBe(true);
+  });
+
+  it("narrows the type for a caller that started from unknown", () => {
+    // The signature is a type guard, so a producer decoding JSON gets a checked
+    // value rather than having to assert one.
+    const decoded: unknown = JSON.parse('{"kind":"ACCEPTED","providerPredictionId":"pred_j"}');
+    if (!isWellFormedResolutionObservation(decoded)) throw new Error("expected well-formed");
+    const observation: ReconciliationResolutionObservation = decoded;
+    expect(observation.kind).toBe("ACCEPTED");
+  });
+});

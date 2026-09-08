@@ -1,7 +1,10 @@
+import type { SubmissionDiagnosticCode } from "../submission/diagnostic-code";
 import {
-  isSubmissionDiagnosticCode,
-  type SubmissionDiagnosticCode,
-} from "../submission/diagnostic-code";
+  isBoolean,
+  isDiagnosticCodeOrNull,
+  isNonBlankString,
+  isPlainRecord,
+} from "../submission/untrusted";
 
 /**
  * What a caller reports having *finally established* about a submission whose
@@ -66,17 +69,38 @@ export type ReconciliationResolutionObservation =
       readonly diagnosticCode: SubmissionDiagnosticCode | null;
     };
 
-/** Whether a resolution observation is structurally usable at all. */
+/**
+ * Whether an arbitrary value is usable resolution evidence.
+ *
+ * Takes `unknown`, for the same reason Phase 2G-1's validator does: the union
+ * above is a compile-time promise about a value this layer did not construct.
+ * The producers that will eventually call this — a polling loop, a webhook
+ * handler, an operator tool — will hand over decoded JSON or a queue payload,
+ * and a type assertion on the way in proves nothing about what arrived.
+ *
+ * Both arms are matched by name and every field is proved. An unrecognised
+ * `kind` is `false` rather than being swept into the rejection branch: treating
+ * "something I do not recognise" as "the provider refused it" would resolve an
+ * uncertain attempt, move a customer's entitlement, and close a paid submission
+ * on the strength of a value nobody wrote a meaning for.
+ *
+ * Never throws. Malformed evidence is an answer — `OBSERVATION_MALFORMED`, with
+ * nothing written — not an exception for a caller to handle.
+ */
 export function isWellFormedResolutionObservation(
-  observation: ReconciliationResolutionObservation,
-): boolean {
-  if (observation.kind === "ACCEPTED") {
-    return observation.providerPredictionId.trim().length > 0;
+  value: unknown,
+): value is ReconciliationResolutionObservation {
+  if (!isPlainRecord(value)) return false;
+
+  switch (value.kind) {
+    case "ACCEPTED":
+      return isNonBlankString(value.providerPredictionId);
+    case "DEFINITIVELY_REJECTED":
+      // Checked as a boolean, not for truthiness. `retryable: "false"` is
+      // truthy, and the difference between believing it and proving it is
+      // whether a customer's unit is restored for a retry or released.
+      return isBoolean(value.retryable) && isDiagnosticCodeOrNull(value.diagnosticCode);
+    default:
+      return false;
   }
-  // Membership in the closed catalog, re-checked at the boundary because a cast
-  // is what a caller in a hurry writes. A value spelled like a code is not one.
-  return (
-    observation.diagnosticCode === null ||
-    isSubmissionDiagnosticCode(observation.diagnosticCode)
-  );
 }

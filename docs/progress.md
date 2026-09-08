@@ -708,6 +708,23 @@ and ADR-0020.
   migration was required, no customer quota is touched on any path, no
   `SYSTEM_RECOVERY` attempt is created, and both entry points remain dormant
   domain services with no route, no worker loop and no scheduled caller.
+
+  Two defects found in CTO review were live rather than theoretical, and both
+  were reproduced before being fixed. Tenancy was enforced at the *read*, which
+  `apply` does not require, so a session opened for one organization could name
+  another tenant's attempt id and mutate that row while attributing the event to
+  itself; it now sits inside the compare-and-set, requiring the denormalized
+  project column and the ownership chain to agree, so a row whose two disagree is
+  frozen rather than writable by whichever tenant a corruption favours. And the
+  observation validators trusted a TypeScript union at a boundary that constructs
+  none of its own input: `retryable: "false"` is truthy, so it recorded
+  `FAILED_RETRYABLE` and handed the customer's reserved unit back on the strength
+  of a string saying the opposite, while a non-string provider reference threw
+  out of the validator and any unrecognised discriminant was treated as a
+  rejection. Both validators now take `unknown` and prove the shape. **Both
+  defects existed identically in merged Phase 2G-1 and are fixed in the same
+  change** — the tenancy one being the more severe, since that repository is
+  already reachable on `main`.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

@@ -38,6 +38,7 @@ import {
   ORG_A,
   ORG_B,
   PROJECT_A,
+  PROJECT_B,
   repositories,
   seedTenants,
   STORYBOARD_SCENE,
@@ -1484,6 +1485,129 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       expect(after.stateVersion).toBe(before.stateVersion);
       // No move, so no reservation event claiming one happened.
       expect(await reservationEvents(before.id)).toHaveLength(eventsBefore);
+    });
+
+    it("refuses a cross-tenant apply made without ever reading the facts", async () => {
+      // The mutation boundary must enforce tenancy by itself. `apply` is
+      // reachable without `loadFacts`, and the tenant-scoped read was the only
+      // other place the organization was checked — so a caller holding a
+      // session for its own organization could name another tenant's attempt
+      // id, mutate that row, and append an event labelled with its own org.
+      //
+      // Nothing here calls `loadFacts`. The version is read out of band, which
+      // is precisely what an attacker who knows an id would do.
+      const { attemptId, job } = await seedReconcilingAttempt("crosstenantapply");
+      const before = await attemptRow(attemptId);
+      const reservationBefore = await reservationOf(job.id);
+      const eventsBefore = (await eventsFor(attemptId)).length;
+      const reservationEventsBefore = (await reservationEvents(reservationBefore.id)).length;
+
+      const applied = await createReconciliationRepository(prisma).withReconcilingAttempt(
+        // Org B, attempt A.
+        { organizationId: ORG_B, attemptId },
+        async (session) =>
+          session.apply({
+            expectedVersion: before.stateVersion,
+            write: ACCEPTED_WRITE,
+            reservationEventType: RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+            context: ctx(),
+          }),
+      );
+      expect(applied).toEqual({ kind: "LOST" });
+
+      // The attempt is untouched.
+      const after = await attemptRow(attemptId);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.orchestrationState).toBe("RECONCILIATION_PENDING");
+      expect(after.submissionCertainty).toBe("SUBMISSION_UNKNOWN");
+      expect(after.providerPredictionId).toBeNull();
+      expect(after.providerAcceptedAt).toBeNull();
+      expect(after.reconciliationResolvedAt).toBeNull();
+
+      // The entitlement is untouched.
+      const reservationAfter = await reservationOf(job.id);
+      expect(reservationAfter.state).toBe("RECONCILIATION_HOLD");
+      expect(reservationAfter.stateVersion).toBe(reservationBefore.stateVersion);
+
+      // No event was appended under either organization.
+      expect(await eventsFor(attemptId)).toHaveLength(eventsBefore);
+      expect(await reservationEvents(reservationBefore.id)).toHaveLength(
+        reservationEventsBefore,
+      );
+      expect(await eventsFor(attemptId, ORG_B)).toHaveLength(0);
+      expect(
+        await prisma.generationTransitionEvent.findMany({ where: { organizationId: ORG_B } }),
+      ).toHaveLength(0);
+    });
+
+    it("refuses a cross-tenant exhaustion apply the same way", async () => {
+      const { attemptId, job } = await seedReconcilingAttempt("crosstenantexh");
+      const before = await attemptRow(attemptId);
+
+      const applied = await createReconciliationRepository(prisma).withReconcilingAttempt(
+        { organizationId: ORG_B, attemptId },
+        async (session) =>
+          session.apply({
+            expectedVersion: before.stateVersion,
+            write: {
+              orchestrationState: "RECONCILIATION_EXHAUSTED",
+              submissionCertainty: "SUBMISSION_UNKNOWN",
+              providerPredictionId: null,
+              providerAcceptedAt: null,
+              reconciliationResolvedAt: null,
+              reservationAction: "RELEASE",
+            },
+            reservationEventType: RECONCILIATION_HOLD_RELEASED_EVENT_TYPE,
+            context: ctx(),
+          }),
+      );
+      expect(applied).toEqual({ kind: "LOST" });
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("RECONCILIATION_PENDING");
+      expect((await reservationOf(job.id)).state).toBe("RECONCILIATION_HOLD");
+      expect(
+        await prisma.generationTransitionEvent.findMany({ where: { organizationId: ORG_B } }),
+      ).toHaveLength(0);
+    });
+
+    it("refuses a write when the denormalized project disagrees with the chain", async () => {
+      // The attempt carries a denormalized `videoProjectId` *and* hangs off a
+      // Request → Scene → Job → VideoProject chain. Every read in this phase
+      // traverses the chain; the standard attempt repository scopes on the
+      // column. If the two ever disagree — a bad backfill, a partial restore, a
+      // manual edit — trusting either alone lets one organization write a row
+      // the other owns. The CAS requires both, so a row like this is frozen
+      // rather than writable by whichever tenant the corruption favours.
+      const { attemptId, job } = await seedReconcilingAttempt("splitowner");
+      const before = await attemptRow(attemptId);
+      await prisma.$executeRaw`
+        UPDATE "scene_generations"
+           SET "videoProjectId" = ${PROJECT_B}
+         WHERE "id" = ${attemptId}
+      `;
+
+      const repo = createReconciliationRepository(prisma);
+      const attempt = (organizationId: string) =>
+        repo.withReconcilingAttempt({ organizationId, attemptId }, async (session) =>
+          session.apply({
+            expectedVersion: before.stateVersion,
+            write: ACCEPTED_WRITE,
+            reservationEventType: RECONCILIATION_HOLD_RESTORED_EVENT_TYPE,
+            context: ctx(),
+          }),
+        );
+
+      // The chain still says org A; the column now says org B. Neither may
+      // write, because neither can prove sole ownership.
+      expect(await attempt(ORG_A)).toEqual({ kind: "LOST" });
+      expect(await attempt(ORG_B)).toEqual({ kind: "LOST" });
+
+      const after = await attemptRow(attemptId);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.orchestrationState).toBe("RECONCILIATION_PENDING");
+      expect((await reservationOf(job.id)).state).toBe("RECONCILIATION_HOLD");
+      expect(
+        await prisma.generationTransitionEvent.findMany({ where: { organizationId: ORG_B } }),
+      ).toHaveLength(0);
     });
 
     it("refuses a write onto a row someone moved out of band", async () => {

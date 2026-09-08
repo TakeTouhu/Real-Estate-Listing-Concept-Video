@@ -266,6 +266,45 @@ describe("resolving uncertainty", () => {
     expect(calls.apply).toBe(0);
   });
 
+  it.each([
+    ["a non-string provider reference", { kind: "ACCEPTED", providerPredictionId: 123 }],
+    ["an unrecognised discriminant", { kind: "UNKNOWN" }],
+    ["a Phase 2G-1 arm this phase does not accept", {
+      kind: "SUBMISSION_UNKNOWN",
+      diagnosticCode: null,
+    }],
+    ["a stringly-typed retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: "false",
+      diagnosticCode: null,
+    }],
+    ["a numeric retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: 1,
+      diagnosticCode: null,
+    }],
+    ["a null retryable flag", {
+      kind: "DEFINITIVELY_REJECTED",
+      retryable: null,
+      diagnosticCode: null,
+    }],
+    ["a bare string", "ACCEPTED"],
+    ["null", null],
+    ["an array", []],
+  ])("refuses %s end to end, writing nothing", async (_label, hostile) => {
+    // Cast because that is exactly how it arrives: a producer decodes JSON or a
+    // queue payload and asserts the union on the way in. `retryable: "false"`
+    // is the expensive member of this list — truthy, so before the fix it
+    // recorded FAILED_RETRYABLE and handed the customer's unit back.
+    const { service, calls } = harness();
+    expect(
+      await service.resolveReconciliation(
+        resolveInput(hostile as unknown as ReconciliationResolutionObservation),
+      ),
+    ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+    expect(calls.apply).toBe(0);
+  });
+
   it("refuses hostile text smuggled in as a diagnostic code", async () => {
     const { service, calls } = harness();
     expect(

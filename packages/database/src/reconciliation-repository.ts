@@ -35,6 +35,34 @@ const MS = (value: Date | null): EpochMillis | null =>
   value === null ? null : (value.getTime() as EpochMillis);
 
 /**
+ * The tenant predicate for an attempt, carried into every mutation.
+ *
+ * Two clauses that must agree, because this phase relies on both. The first is
+ * the direct denormalized `videoProjectId` the standard orchestration attempt
+ * repository scopes on; the second is the ownership chain
+ * `Attempt → Request → Scene → Job → VideoProject` that every read in this file
+ * traverses — the reservation lock, the billing-cycle lookup and the
+ * authoritative attempt read all join through it.
+ *
+ * Requiring both means a row whose denormalized project disagrees with its
+ * chain refuses the write instead of being mutated under a tenancy that only
+ * half of it supports. It also excludes an attempt with no parent request at
+ * all: a legacy row that predates the orchestration chain is not reconcilable,
+ * and silently treating it as this tenant's would be a guess.
+ */
+const attemptScope = (organizationId: string) => ({
+  videoProject: { organizationId },
+  generationSceneRequest: {
+    generationScene: { generationJob: { videoProject: { organizationId } } },
+  },
+});
+
+/** The same ownership chain, from the reservation side. */
+const reservationScope = (organizationId: string) => ({
+  generationJob: { videoProject: { organizationId } },
+});
+
+/**
  * The cost-admission lock, taken first, with the key Phase 4C-3B-2F-1 chose.
  *
  * Reconciliation moves an organization's cycle exposure in both directions — a
@@ -226,6 +254,17 @@ export function createReconciliationRepository(
             const { count } = await tx.sceneGeneration.updateMany({
               where: {
                 id: input.attemptId,
+                // Tenancy, in the same statement as the compare-and-set.
+                //
+                // Not merely defence in depth: `apply` is reachable without
+                // `loadFacts`, and the tenant-scoped read is the *only* other
+                // place the organization was checked. A caller holding a
+                // session for its own organization could otherwise name another
+                // tenant's attempt id and mutate that row, appending an event
+                // labelled with its own organization. Proving it here rather
+                // than earlier also closes the check-then-act window between
+                // the read and the write.
+                ...attemptScope(input.organizationId),
                 // The uncertain state and the version together. Anything else
                 // means another writer ended this uncertainty first.
                 orchestrationState: "RECONCILIATION_PENDING",
@@ -268,6 +307,11 @@ export function createReconciliationRepository(
               const moved = await tx.generationReservation.updateMany({
                 where: {
                   id: reservation.id,
+                  // Tenancy again at the mutation, for the same reason. This
+                  // row was read tenant-scoped under the lock, so the clause is
+                  // redundant today — and it is the clause that stays correct
+                  // if a later caller ever supplies the reservation itself.
+                  ...reservationScope(input.organizationId),
                   state: "RECONCILIATION_HOLD",
                   stateVersion: reservation.stateVersion,
                 },
@@ -306,7 +350,10 @@ export function createReconciliationRepository(
             });
 
             const row = await tx.sceneGeneration.findFirst({
-              where: { id: input.attemptId },
+              // Scoped like every other access to this row. An unscoped read
+              // here would be a cross-tenant disclosure of a version number,
+              // small but free to avoid.
+              where: { id: input.attemptId, ...attemptScope(input.organizationId) },
               select: { stateVersion: true },
             });
             if (row === null) {
