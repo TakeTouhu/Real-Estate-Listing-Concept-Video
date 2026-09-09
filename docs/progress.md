@@ -888,6 +888,89 @@ and ADR-0020.
   may attach or normalize one; legacy keys that already carry a suffix are left
   exactly as they are, because rewriting them would be a claim about objects
   nobody re-examined.
+- **Phase 4C-3B-2H-2** — see GitHub for its lifecycle. Adds the layer that
+  decides which call to make, and still makes none. Phase 2H-1 defined every
+  state an accepted attempt can reach afterwards and left nothing to fill them
+  in; this phase supplies the orchestration between persisted attempt identity, a
+  provider status source, 2H-1's completion persistence, a managed-output
+  transfer port and 2H-1's output verification. **No provider is contacted, no
+  bytes are downloaded and no object storage is written**: there is no HTTP
+  client in the dependency graph, no provider adapter, no storage SDK, no
+  credential, no scheduler and no production caller — the last asserted by a
+  static test that walks every application, worker, database and adapter source.
+
+  Building the decisions before the transport is deliberate, because the
+  sequencing decisions are the expensive ones and every one of them is decidable
+  without a network. An attempt was admitted against a specific vendor and holds a
+  prediction id only that vendor issued, so provider identity comes from the
+  persisted row and never from `VIDEO_PROVIDER`, the default model, the catalog or
+  the routing policy — asking today's default about yesterday's prediction is a
+  lookup that fails, or, worse, one that succeeds against something unrelated.
+  Only the provider name, model id and prediction id reach the status source; no
+  organization, attempt id, prompt, request hash or pricing travels with them,
+  because every field that travels is a field the far side can log. Blank
+  persisted identity is refused rather than repaired: substituting a current
+  default asks the wrong vendor and rewriting the row invents history.
+
+  Three orderings carry the phase. Provider truth is recorded **before** output
+  acquisition is attempted, so a provider that finished is durably finished even
+  when the platform cannot currently reach the artifact — otherwise a transient
+  acquisition problem would leave a paid attempt reading as in-flight forever,
+  with an unfinished render indistinguishable from an unreachable one. A status
+  lookup that throws is not a provider failure: "I could not find out" says
+  nothing about the provider, and recording it as one would convert a network
+  blip into a terminal state for a paid render. And a transfer that throws, fails
+  transiently or returns nonsense leaves the attempt `OUTPUT_INGESTING` rather
+  than failing it — the committed state machine permits `OUTPUT_INGESTING →
+  FAILED_*` and this phase never uses it, because the render is still there, the
+  key is deterministic, and a later run picks it up. Recorded provider reality is
+  immutable in the same spirit: a late failure poll against a recorded success is
+  a discrepancy for a human, not an instruction to erase a charge the Safety Guard
+  is counting.
+
+  A provider's output location is a bearer credential with an expiry arriving as
+  external text, so it is carried in an opaque class with no way to read it back —
+  no getter, no `toString`, no `toJSON`, no enumeration, no spread — and all three
+  stringification hooks return a redaction marker so an accidental interpolation
+  prints `[redacted provider output locator]` rather than the credential. A raw
+  string URL is refused at the observation boundary: accepting one would let
+  vendor response text travel as an ordinary value and reduce locator secrecy to a
+  convention nobody can enforce. The extraction capability a real transfer adapter
+  will need is deliberately absent, to be reviewed alongside that adapter. Live
+  tests search real persisted rows, transition events and audit records for the
+  actual signature string rather than a placeholder.
+
+  No database transaction is open across external I/O, and that is structural
+  rather than disciplinary: the reader returns a plain value and the ports are
+  separate awaited calls, so there is no transaction handle in scope to hold. Two
+  live tests prove it from outside — while a fake blocks inside the poll, and
+  again inside the transfer, an independent connection runs a real 2H-1 mutation
+  taking the same advisory lock and commits. A mutation that leaves a
+  session-level lock held is caught by ten of those tests, so they detect the
+  defect rather than asserting a property that happens to hold.
+
+  Transfer is documented as **at least once**, not exactly once. Two runners can
+  both find an attempt already ingesting and both copy; the key is deterministic,
+  finalization is compare-and-set protected, verified metadata is immutable, and
+  no paid generation is repeated — the duplicate is bandwidth, not money. A lease
+  would buy a duplicate-free download at the price of a durable lock whose holder
+  can die. The cheap half is taken anyway: a runner transfers only if its own
+  begin-ingestion returned first application. `OUTPUT_INGESTING` is the exception
+  and the reason the state exists — an attempt already there does not re-claim the
+  transition, which is the crash-recovery path.
+
+  Polling writes nothing: no event for a still-running poll, no version bump, no
+  poll timestamp, no progress percentage, no poll-history table and no
+  transfer-attempt table. A still-running answer is the most common one a poller
+  gets, and recording each would bury real transitions in the table an operator
+  reads during an incident. The legacy WaveSpeed `getStatus` path is deliberately
+  not wired here: its mapping is provisional infrastructure written before the
+  provider-neutral certainty and completion axes existed, adopting it would freeze
+  it as the paid-orchestration contract by accident, and importing
+  `@app/video-providers` into the domain or database packages would put an HTTP
+  client behind an interface no test would think to check. No migration and no
+  schema change were needed; the three provider lookup facts were verified present
+  on the attempt row against the frozen baseline before implementation.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

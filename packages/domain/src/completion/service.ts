@@ -31,11 +31,19 @@ import type {
  * arrive as arguments; the dependency set is a repository and a clock. There is
  * no way to add a transport without editing the port module.
  *
- * **Nothing here touches customer entitlement.** No reservation is read, moved,
- * released or consumed on any path. A provider execution failure is not a reason
- * to hand a unit back — whether the customer's request can still be satisfied is
- * a question about the *request*, decided by a later phase with the whole Job in
- * view — and a verified output is not a delivery.
+ * **Nothing here touches customer entitlement.** No reservation *state* is read,
+ * moved, released or consumed on any path by this service. A provider execution
+ * failure is not a reason to hand a unit back — whether the customer's request
+ * can still be satisfied is a question about the *request*, decided by a later
+ * phase with the whole Job in view — and a verified output is not a delivery.
+ *
+ * One precision, because the earlier wording overstated its own scope: the
+ * persistence layer *does* read a single reservation column, `billingCycleKey`,
+ * and only to compute the advisory-lock key Phase 2F-1 established. That read
+ * takes no lock on the reservation row, writes nothing to it, and never consults
+ * its state or its remaining units — it exists so a completion and a paid
+ * authorization serialize in the same namespace rather than deciding on a total
+ * that is mid-flight. Entitlement is untouched; the lock namespace is shared.
  */
 
 /** Attempt-side event types. Service-owned; never caller-supplied. */

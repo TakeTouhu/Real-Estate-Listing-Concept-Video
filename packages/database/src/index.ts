@@ -11,3 +11,4 @@ export { createPaidSubmissionAuthorizationRepository } from "./paid-submission-a
 export { createSubmissionOutcomeRepository } from "./submission-outcome-repository";
 export { createReconciliationRepository } from "./reconciliation-repository";
 export { createCompletionRepository } from "./completion-repository";
+export { createProviderPollingContextReader } from "./provider-output-repository";
