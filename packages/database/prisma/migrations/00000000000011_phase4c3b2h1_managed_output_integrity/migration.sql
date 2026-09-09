@@ -57,10 +57,24 @@ ALTER TABLE "scene_generations"
   ADD CONSTRAINT "scene_generations_output_sha256_format_check"
   CHECK ("outputSha256" IS NULL OR "outputSha256" ~ '^[0-9a-f]{64}$');
 
--- 3. A size is positive or it is absent.
+-- 3. A size is inside the domain's range, or it is absent.
 --
 -- Zero is refused explicitly: a zero-byte object is not a small video, it is a
 -- failed copy that happened to create the destination.
+--
+-- The upper bound is 9007199254740991 — Number.MAX_SAFE_INTEGER — so that the
+-- column's range and the application's range are the *same* range. BIGINT is
+-- still correct, because the valid domain exceeds int4 by three orders of
+-- magnitude; what BIGINT alone got wrong was the other end. Above 2^53-1,
+-- reading the column into a JavaScript number is silently lossy: a stored
+-- 9007199254740993 comes back as ...992 and validates cleanly, so a value that
+-- was never written would be compared against a receipt as though it had been.
+-- Bounding it here means the impossible row cannot be created, and the
+-- repository refuses to narrow one anyway in case it meets a database this
+-- migration has not reached.
 ALTER TABLE "scene_generations"
   ADD CONSTRAINT "scene_generations_output_size_positive_check"
-  CHECK ("outputSizeBytes" IS NULL OR "outputSizeBytes" > 0);
+  CHECK (
+    "outputSizeBytes" IS NULL
+    OR ("outputSizeBytes" > 0 AND "outputSizeBytes" <= 9007199254740991)
+  );

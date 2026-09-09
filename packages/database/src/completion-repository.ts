@@ -1,6 +1,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
+  canTransitionAttempt,
   isCoherentAttemptRecord,
+  isSafePositiveByteCount,
+  isSha256Digest,
+  managedGenerationOutputKey,
   validateReconciliationMaintenanceLimit,
   type CompletingAttemptFacts,
   type CompletionCandidate,
@@ -32,6 +36,62 @@ type Tx = Prisma.TransactionClient;
 
 const MS = (value: Date | null): EpochMillis | null =>
   value === null ? null : (value.getTime() as EpochMillis);
+
+/**
+ * The largest byte count the domain admits, as the column's own type.
+ *
+ * The column is `BIGINT` because the valid range exceeds `int4`, and a database
+ * CHECK bounds it at this value so the two ranges are the same range. This
+ * constant is the JavaScript side of that agreement.
+ */
+const MAX_SAFE_BYTE_COUNT = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Narrow a persisted byte count, or refuse to.
+ *
+ * `Number(someBigint)` is lossy above 2^53-1 and silent about it: a stored
+ * 9007199254740993 would come back as ...992 and brand cleanly as a
+ * `SafePositiveByteCount`, so a corrupted row would be read as a valid one and
+ * an integrity comparison would then be made against a number that was never
+ * written. The CHECK constraint makes such a row impossible; this makes reading
+ * one impossible too, because a constraint added by a migration is not evidence
+ * about a database that migration has not been applied to.
+ *
+ * `INTERNAL_ERROR` rather than a validation failure: no customer input reaches
+ * here, so an out-of-range persisted value is a defect or a corrupted row, not
+ * something a caller did.
+ */
+function narrowPersistedByteCount(value: bigint | null): SafePositiveByteCount | null {
+  if (value === null) return null;
+  if (value <= 0n || value > MAX_SAFE_BYTE_COUNT) {
+    throw new AppError("INTERNAL_ERROR", "Persisted managed output size is outside the safe range");
+  }
+  const narrowed = Number(value);
+  // The domain's own predicate has the last word, so there is exactly one
+  // definition of a usable byte count rather than two that can drift.
+  if (!isSafePositiveByteCount(narrowed)) {
+    throw new AppError("INTERNAL_ERROR", "Persisted managed output size is not a usable byte count");
+  }
+  return narrowed;
+}
+
+/**
+ * Refuse a transition the committed state machine does not permit.
+ *
+ * The repository consults the domain's table rather than carrying one of its
+ * own. Two consequences: a session caller cannot talk this layer into an edge
+ * the domain never approved, and if an edge this phase depends on is ever
+ * removed from that table, the failure is loud here instead of silently
+ * changing what the persistence layer allows.
+ */
+function assertPermittedTransition(from: GenerationAttemptState, to: GenerationAttemptState): void {
+  if (!canTransitionAttempt(from, to)) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      `Refusing a transition the attempt state machine does not permit: ${from} → ${to}`,
+    );
+  }
+}
 
 /**
  * The tenant predicate, carried into every mutation.
@@ -204,18 +264,22 @@ export function createCompletionRepository(prisma: PrismaClient): CompletionRepo
               providerAcceptedAt: MS(row.providerAcceptedAt),
               outputStorageKey: row.outputStorageKey,
               outputSha256: row.outputSha256 as Sha256Digest | null,
-              // Safe: only positive safe integers are ever written, and the
-              // column's CHECK forbids anything else.
-              outputSizeBytes:
-                row.outputSizeBytes === null
-                  ? null
-                  : (Number(row.outputSizeBytes) as SafePositiveByteCount),
+              // Proved, not asserted. See `narrowPersistedByteCount`.
+              outputSizeBytes: narrowPersistedByteCount(row.outputSizeBytes),
               outputVerifiedAt: MS(row.outputVerifiedAt),
             };
             return { attempt };
           },
 
           async applyCompletion({ expectedVersion, write, context }) {
+            // The committed state machine decides, not this layer's assumption
+            // about what its caller produced. `applyCompletion` is reachable
+            // without the service — and reachable with an unsafe cast past the
+            // narrowed landing type — so a caller could otherwise ask for
+            // PROCESSING → OUTPUT_INGESTING and skip the state that records
+            // that a provider actually finished.
+            assertPermittedTransition("PROCESSING", write.orchestrationState);
+
             // Defence in depth over the domain: the pairing is a database CHECK
             // as well, and a write that would violate it is a defect worth
             // failing loudly on rather than reading back as a constraint error.
@@ -260,6 +324,8 @@ export function createCompletionRepository(prisma: PrismaClient): CompletionRepo
           },
 
           async applyBeginIngestion({ expectedVersion, context }) {
+            assertPermittedTransition("PROVIDER_SUCCEEDED", "OUTPUT_INGESTING");
+
             const { count } = await tx.sceneGeneration.updateMany({
               where: casWhere("PROVIDER_SUCCEEDED", expectedVersion),
               data: {
@@ -280,19 +346,49 @@ export function createCompletionRepository(prisma: PrismaClient): CompletionRepo
             return { kind: "APPLIED", stateVersion: await committedVersion() };
           },
 
-          async applyOutputVerification({ expectedVersion, write, context }) {
+          async applyOutputVerification({
+            expectedVersion,
+            outputSha256,
+            outputSizeBytes,
+            outputVerifiedAt,
+            context,
+          }) {
+            assertPermittedTransition("OUTPUT_INGESTING", "OUTPUT_VERIFIED");
+
+            // Derived here, from the identity this transaction was opened for —
+            // never received. There is no parameter to pass a key through, so a
+            // caller reaching this boundary directly cannot point a verification
+            // record at another attempt's object, a provider URL or an arbitrary
+            // path. The service derives the same key from the same two values,
+            // which is why the two always agree.
+            const derivedKey = managedGenerationOutputKey({
+              organizationId: input.organizationId,
+              attemptId: input.attemptId,
+            });
+
+            // The branded types are compile-time promises, and this boundary is
+            // reachable with a cast. Prove them before they reach a column an
+            // audit will treat as evidence — using the domain's own predicates,
+            // so there is one rule rather than a second, subtly different one.
+            if (!isSha256Digest(outputSha256) || !isSafePositiveByteCount(outputSizeBytes)) {
+              throw new AppError(
+                "INTERNAL_ERROR",
+                "Refusing to persist managed output integrity facts that are not valid",
+              );
+            }
+
             const { count } = await tx.sceneGeneration.updateMany({
               where: casWhere("OUTPUT_INGESTING", expectedVersion),
               data: {
                 orchestrationState: "OUTPUT_VERIFIED",
                 stateVersion: { increment: 1 },
-                outputStorageKey: write.outputStorageKey,
-                outputSha256: write.outputSha256,
-                outputSizeBytes: BigInt(write.outputSizeBytes),
+                outputStorageKey: derivedKey,
+                outputSha256,
+                outputSizeBytes: BigInt(outputSizeBytes),
                 // The decision's own instant, not a fresh wall-clock read. A
                 // second read here would stamp the verification with a time no
                 // lock was held for.
-                outputVerifiedAt: new Date(write.outputVerifiedAt),
+                outputVerifiedAt: new Date(outputVerifiedAt),
               },
             });
             if (count === 0) return { kind: "LOST" };

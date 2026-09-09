@@ -121,6 +121,67 @@ describe("the validator treats its input as unknown, because it is", () => {
     expect(isWellFormedCompletionObservation(observation)).toBe(false);
   });
 
+  it.each([
+    ["a provider output URL", "providerOutputUrl"],
+    ["an output URL", "outputUrl"],
+    ["a provider response", "providerResponse"],
+    ["a raw provider response", "rawProviderResponse"],
+    ["an authorization header", "authorization"],
+    ["a prompt", "prompt"],
+    ["an HTTP status", "httpStatus"],
+    ["an unremarkable unknown field", "note"],
+  ])("refuses a SUCCEEDED observation carrying %s", (_label, extra) => {
+    // The success arm has no fields. A value with a valid `kind` next to a
+    // provider payload is not this contract — it is a provider payload that
+    // happens to contain one. Accepting it while ignoring the extra widens the
+    // runtime trust boundary past the documented contract, and every later
+    // spread, log line and serialization inherits the wider one.
+    expect(
+      isWellFormedCompletionObservation({
+        kind: "SUCCEEDED",
+        [extra]: "https://provider.example/tmp/abc?sig=xyz",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["a provider output URL", "providerOutputUrl"],
+    ["a raw provider response", "rawProviderResponse"],
+    ["an HTTP status", "httpStatus"],
+    ["a vendor status string", "providerStatus"],
+    ["an unremarkable unknown field", "note"],
+  ])("refuses a FAILED observation carrying %s", (_label, extra) => {
+    expect(
+      isWellFormedCompletionObservation({
+        kind: "FAILED",
+        retryable: true,
+        diagnosticCode: null,
+        [extra]: "anything at all",
+      }),
+    ).toBe(false);
+  });
+
+  it("is not fooled by a field hidden from enumeration", () => {
+    const smuggled: Record<string, unknown> = { kind: "SUCCEEDED" };
+    Object.defineProperty(smuggled, "providerOutputUrl", {
+      value: "https://provider.example/tmp/abc",
+      enumerable: false,
+    });
+    expect(isWellFormedCompletionObservation(smuggled)).toBe(false);
+  });
+
+  it("does not refuse an ordinary object for inheriting Object.prototype", () => {
+    const ordinary = { kind: "SUCCEEDED" };
+    expect(typeof ordinary.hasOwnProperty).toBe("function");
+    expect(isWellFormedCompletionObservation(ordinary)).toBe(true);
+  });
+
+  it("does not accept a discriminant that exists only on a prototype", () => {
+    const inherited = Object.create({ kind: "SUCCEEDED" }) as Record<string, unknown>;
+    expect(inherited.kind).toBe("SUCCEEDED");
+    expect(isWellFormedCompletionObservation(inherited)).toBe(false);
+  });
+
   it("never throws on hostile input", () => {
     for (const hostile of [null, undefined, 1, "x", [], {}, { kind: "FAILED", retryable: {} }]) {
       expect(() => isWellFormedCompletionObservation(hostile)).not.toThrow();

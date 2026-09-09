@@ -105,6 +105,56 @@ describe("the verification receipt", () => {
     expect(isWellFormedVerificationReceipt(value)).toBe(false);
   });
 
+  it.each([
+    ["a storage key", "outputStorageKey"],
+    ["a bare storage key", "storageKey"],
+    ["a provider output URL", "providerOutputUrl"],
+    ["an output URL", "outputUrl"],
+    ["a MIME type", "mimeType"],
+    ["raw bytes", "rawBytes"],
+    ["a raw provider response", "rawProviderResponse"],
+    ["a prompt", "prompt"],
+    ["an authorization header", "authorization"],
+    ["an unremarkable unknown field", "note"],
+  ])("refuses an otherwise valid receipt carrying %s", (_label, extra) => {
+    // The two integrity facts are valid; the object is not a receipt. Accepting
+    // it and ignoring the extra would make the runtime boundary wider than the
+    // contract, and leave the next contributor one spread away from persisting
+    // a provider URL. Refusing it fails at the sender, where the bug is.
+    expect(
+      isWellFormedVerificationReceipt({
+        sha256: VALID,
+        sizeBytes: 4_194_304,
+        [extra]: "https://provider.example/tmp/abc?sig=xyz",
+      }),
+    ).toBe(false);
+  });
+
+  it("is not fooled by fields hidden from enumeration", () => {
+    const smuggled = { sha256: VALID, sizeBytes: 1 };
+    Object.defineProperty(smuggled, "providerOutputUrl", {
+      value: "https://provider.example/tmp/abc",
+      enumerable: false,
+    });
+    expect(isWellFormedVerificationReceipt(smuggled)).toBe(false);
+  });
+
+  it("does not refuse a plain object merely for having a prototype", () => {
+    // `Object.prototype` methods are inherited, not own, so an ordinary object
+    // literal is still a receipt. The rule is about smuggled *own* fields.
+    const ordinary = { sha256: VALID, sizeBytes: 1 };
+    expect(typeof ordinary.hasOwnProperty).toBe("function");
+    expect(isWellFormedVerificationReceipt(ordinary)).toBe(true);
+  });
+
+  it("does not accept a digest that exists only on a prototype", () => {
+    // The mirror case: a field reachable through the prototype chain is not one
+    // this object states, and inheriting a discriminant is not declaring one.
+    const inherited = Object.create({ sha256: VALID, sizeBytes: 1 }) as Record<string, unknown>;
+    expect(inherited.sha256).toBe(VALID);
+    expect(isWellFormedVerificationReceipt(inherited)).toBe(false);
+  });
+
   it("carries no location, no provider detail and no bytes", () => {
     const text = readFileSync(join(__dirname, "output.ts"), "utf8");
     const contract = text.slice(text.indexOf("export interface ManagedOutputVerificationReceipt"));
@@ -172,6 +222,20 @@ describe("the managed output key is derived, never supplied", () => {
         `${forbidden}: false`,
       );
     }
+  });
+
+  it("asserts no media format", () => {
+    // 2H-1 proves byte identity, not a container. The receipt establishes a
+    // SHA-256 and a byte count; it says nothing about MP4, a codec, a MIME type
+    // or whether the object plays. A key ending `.mp4` would assert a format
+    // nothing here verified, on a pipeline that is meant to stay
+    // provider-neutral. A later phase that actually validates a format may
+    // attach one; this one has no vocabulary to attach.
+    expect(key).toBe("org/org_1/generations/sgen_1/output");
+    for (const extension of [".mp4", ".webm", ".mov", ".mkv", ".m4v", ".bin"]) {
+      expect(`${extension}: ${key.endsWith(extension)}`).toBe(`${extension}: false`);
+    }
+    expect(key.split("/").at(-1)).not.toContain(".");
   });
 
   it.each([

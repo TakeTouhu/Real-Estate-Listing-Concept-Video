@@ -198,9 +198,9 @@ erDiagram
     datetime lastPolledAt "nullable"
     string normalizedErrorCode "nullable, internal"
     string normalizedErrorMessage "nullable, internal"
-    string outputStorageKey "nullable; derived from org+attempt, written at OUTPUT_VERIFIED"
+    string outputStorageKey "nullable; derived from org+attempt, extensionless; legacy repository may not write it on an orchestrated row"
     string outputSha256 "nullable; CHECK canonical lowercase 64-hex"
-    bigint outputSizeBytes "nullable; CHECK > 0"
+    bigint outputSizeBytes "nullable; CHECK > 0 AND <= Number.MAX_SAFE_INTEGER"
     datetime outputVerifiedAt "nullable; the single post-lock verification instant"
     datetime createdAt
     datetime updatedAt
@@ -336,9 +336,31 @@ two meanings applied is exactly the ambiguity ADR-0034 removes.
   recorded instead: `outputStorageKey` is **derived** from the organization and
   the attempt id — never from a provider URL, provider file name or customer
   file name — and is written together with `outputSha256`, `outputSizeBytes` and
-  `outputVerifiedAt` when the copy is proved. A live test asserts no
+  `outputVerifiedAt` when the copy is proved. Both the service and the
+  persistence boundary derive it independently; neither accepts one, so there is
+  no parameter through which a caller could supply a path. A live test asserts no
   `scene_generations` column name contains `url`. The copy itself, and the
   hashing that produces the receipt, belong to a later phase.
+- **A media-format claim on the managed key.** The key is extensionless. A
+  verification receipt proves a digest and a byte count; it does not prove an MP4
+  container, a codec or a MIME type, and no closed generated-video format
+  vocabulary exists to check one against. Legacy keys written before this phase
+  may carry a suffix and are left alone.
+
+## Written once, then immutable
+
+`outputStorageKey`, `outputSha256`, `outputSizeBytes` and `outputVerifiedAt` are
+written together exactly once, on `OUTPUT_INGESTING → OUTPUT_VERIFIED`, and never
+again.
+
+The database CHECKs make an *incomplete or malformed* verified row impossible —
+completeness, digest format, size range. They cannot make a *second* write
+impossible: a CHECK evaluates one row against one predicate and has no memory of
+what the row said before. That half is enforced by the application: the Phase 2H
+compare-and-set can only match an `OUTPUT_INGESTING` row, a re-presented receipt
+replays or conflicts rather than writing again, and the legacy tenant-facing
+`SceneGenerationRepository.update` may write `outputStorageKey` only on rows with
+`orchestrationState IS NULL`.
 - Retry counters on `scene_generations` — no worker exists yet to have a retry
   policy, and a speculative column would be a guess at an unreviewed design.
 

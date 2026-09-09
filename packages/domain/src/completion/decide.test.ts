@@ -9,6 +9,7 @@ import {
   decideFinalizeOutputVerification,
   decideProviderCompletion,
   type CompletingAttemptFacts,
+  type CompletionWrite,
 } from "./decide";
 import type { ProviderCompletionObservation } from "./observation";
 import {
@@ -576,5 +577,47 @@ describe("finalization replay and conflict", () => {
     ]) {
       expect(Object.keys(decision)).not.toContain("write");
     }
+  });
+});
+
+describe("the provider-completion landing state is a closed set", () => {
+  it("accepts the three landings this phase owns", () => {
+    for (const state of [
+      "PROVIDER_SUCCEEDED",
+      "FAILED_RETRYABLE",
+      "FAILED_TERMINAL",
+    ] as const) {
+      const write: CompletionWrite = { orchestrationState: state };
+      expect(write.orchestrationState).toBe(state);
+    }
+  });
+
+  it("cannot express a landing outside them", () => {
+    // Compile-time evidence, and the point of narrowing the type at all. With
+    // the wide `GenerationAttemptState`, a caller holding a session could
+    // construct this write and move a PROCESSING attempt straight past
+    // PROVIDER_SUCCEEDED — recording that a copy is under way for work nothing
+    // says finished. If the type is ever widened again, these stop erroring and
+    // this test fails.
+    // @ts-expect-error OUTPUT_INGESTING is not a provider-completion landing
+    const ingesting: CompletionWrite = { orchestrationState: "OUTPUT_INGESTING" };
+    // @ts-expect-error OUTPUT_VERIFIED is not a provider-completion landing
+    const verified: CompletionWrite = { orchestrationState: "OUTPUT_VERIFIED" };
+    // @ts-expect-error QUEUED is not a provider-completion landing
+    const queued: CompletionWrite = { orchestrationState: "QUEUED" };
+    expect([ingesting, verified, queued]).toHaveLength(3);
+  });
+
+  it("produces only those landings from the evaluator", () => {
+    const landings = new Set<string>();
+    for (const observation of [SUCCEEDED, FAILED_RETRYABLE, FAILED_TERMINAL]) {
+      const decision = complete(processing(), observation);
+      if (decision.kind === "APPLY") landings.add(decision.write.orchestrationState);
+    }
+    expect([...landings].sort()).toEqual([
+      "FAILED_RETRYABLE",
+      "FAILED_TERMINAL",
+      "PROVIDER_SUCCEEDED",
+    ]);
   });
 });

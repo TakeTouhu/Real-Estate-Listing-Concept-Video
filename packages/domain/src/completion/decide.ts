@@ -47,14 +47,30 @@ export interface CompletingAttemptFacts {
 }
 
 /**
+ * The three states a provider completion may land on, and no others.
+ *
+ * Narrower than `GenerationAttemptState` on purpose. The wide type made
+ * `CompletionWrite` a general-purpose state-setter: a caller holding a session
+ * could construct `{ orchestrationState: "OUTPUT_INGESTING" }` and move a
+ * `PROCESSING` attempt straight past `PROVIDER_SUCCEEDED`, skipping the state
+ * that says a provider actually finished. A closed type makes that write
+ * unspellable rather than merely wrong.
+ */
+export type ProviderCompletionLandingState =
+  | "PROVIDER_SUCCEEDED"
+  | "FAILED_RETRYABLE"
+  | "FAILED_TERMINAL";
+
+/**
  * The durable shape a provider completion produces.
  *
- * Only the execution state moves. Certainty, the provider reference and the
- * acceptance instant are absent from this type, which is the permission set:
- * no branch can write what it cannot name.
+ * Only the execution state moves, and only onto a landing this phase owns.
+ * Certainty, the provider reference and the acceptance instant are absent from
+ * this type, which is the permission set: no branch can write what it cannot
+ * name.
  */
 export interface CompletionWrite {
-  readonly orchestrationState: GenerationAttemptState;
+  readonly orchestrationState: ProviderCompletionLandingState;
 }
 
 /** The durable shape a verified managed output produces. */

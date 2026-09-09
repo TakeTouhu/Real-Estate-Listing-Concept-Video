@@ -257,8 +257,34 @@ export function createPrismaSceneGenerationRepository(
       // updateMany scopes the write by organization through the project
       // relation, so another tenant's row matches nothing rather than being
       // overwritten.
+
+      // A real key write — a string or an explicit null, as opposed to the
+      // `undefined` that means "leave alone" — may only touch a legacy row.
+      //
+      // Managed output on an orchestrated Attempt belongs exclusively to the
+      // Phase 2H persistence boundary, which writes the key together with the
+      // digest, the size and the verification instant, under a compare-and-set,
+      // with a transition event. This method can do none of that: it would move
+      // the key alone, leaving a verified row pointing at a different object
+      // while still claiming the digest and size of the old one — and the
+      // database CHECK would not notice, because all four fields are still
+      // non-null. That is the shape of a corrupted integrity record that reads
+      // as a healthy one.
+      //
+      // Legacy rows (`orchestrationState` NULL) keep the old behaviour intact:
+      // they predate the managed-output contract and nothing else can write
+      // their keys.
+      const writesOutputStorageKey = changes.outputStorageKey !== undefined;
+
       const changed = await prisma.sceneGeneration.updateMany({
-        where: { id, videoProject: { organizationId } },
+        where: {
+          id,
+          videoProject: { organizationId },
+          // Refused by not matching, so the caller gets this method's existing
+          // neutral answer and the row is left completely untouched. A distinct
+          // error here would be a new way to probe a row's orchestration status.
+          ...(writesOutputStorageKey ? { orchestrationState: null } : {}),
+        },
         data: {
           state: changes.state,
           providerPredictionId: changes.providerPredictionId,

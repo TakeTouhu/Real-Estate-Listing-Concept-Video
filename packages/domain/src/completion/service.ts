@@ -240,7 +240,14 @@ export function createProviderCompletionService(deps: CompletionDeps) {
 
           const applied = await session.applyOutputVerification({
             expectedVersion: facts.attempt.stateVersion,
-            write: decision.write,
+            // The integrity facts and the instant, and deliberately not the
+            // storage key: persistence derives that itself from the tenant and
+            // attempt it opened the transaction for, so no caller of that
+            // boundary — this service included — can choose where a
+            // verification record points.
+            outputSha256: decision.write.outputSha256,
+            outputSizeBytes: decision.write.outputSizeBytes,
+            outputVerifiedAt: decision.write.outputVerifiedAt,
             context: withCompletionRecord(input.context, OUTPUT_VERIFIED_EVENT_TYPE, {
               attemptId: facts.attempt.attemptId,
               submissionCertainty: facts.attempt.submissionCertainty,

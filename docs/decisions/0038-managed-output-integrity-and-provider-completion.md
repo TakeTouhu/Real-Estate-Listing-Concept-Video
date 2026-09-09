@@ -58,6 +58,35 @@ OUTPUT_INGESTING   → OUTPUT_VERIFIED    the bytes have been hashed and counted
 Every edge is the committed attempt state machine's; no second transition table
 exists anywhere in this phase, and the repository teaches the domain nothing.
 
+That dependency is **load-bearing rather than documentary**, in two layers.
+
+The completion write names a closed landing type:
+
+```ts
+type ProviderCompletionLandingState =
+  "PROVIDER_SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED_TERMINAL";
+```
+
+The wide `GenerationAttemptState` made `CompletionWrite` a general-purpose
+state-setter: a caller holding a session could construct
+`{ orchestrationState: "OUTPUT_INGESTING" }` and move a `PROCESSING` attempt
+straight past `PROVIDER_SUCCEEDED` — recording that a copy is under way for work
+nothing says finished. The closed type makes that unspellable.
+
+And the persistence boundary consults the committed table before any SQL, because
+a type is not a runtime guarantee at a boundary reachable with a cast:
+
+```text
+applyCompletion         canTransitionAttempt("PROCESSING", write.orchestrationState)
+applyBeginIngestion     canTransitionAttempt("PROVIDER_SUCCEEDED", "OUTPUT_INGESTING")
+applyOutputVerification canTransitionAttempt("OUTPUT_INGESTING", "OUTPUT_VERIFIED")
+```
+
+A refusal is `INTERNAL_ERROR` and loud. The last two check edges that always hold
+today, which is the point: if either is ever removed from the committed table,
+this phase fails immediately and visibly rather than continuing to perform a
+transition the domain no longer permits.
+
 `OUTPUT_VERIFIED` is **not** delivery. The logical request is not `DELIVERED`,
 the scene is not `READY`, the job is not `SCENES_READY`, and no deliverable is
 reachable by a customer. Those are review-gated decisions belonging to later
@@ -69,7 +98,7 @@ approval the product rules require.
 The recurring negative, and the reason the write type has exactly one field:
 
 ```ts
-interface CompletionWrite { readonly orchestrationState: GenerationAttemptState; }
+interface CompletionWrite { readonly orchestrationState: ProviderCompletionLandingState; }
 ```
 
 No branch can write `submissionCertainty`, the provider reference or the
@@ -120,24 +149,95 @@ unrecognised `kind` is refused rather than swept into `FAILED`, checks
 diagnostic for catalog membership. Nothing throws; malformed evidence is an
 answer, with zero mutation and zero events.
 
-### 4. The storage key is derived, never accepted
+### 3a. The runtime shapes are closed, not merely sufficient
+
+A validator that checks the fields it needs and ignores the rest accepts this:
+
+```ts
+{ kind: "SUCCEEDED", providerOutputUrl: "https://provider.example/tmp/abc?sig=…" }
+{ sha256: …, sizeBytes: …, outputStorageKey: …, rawProviderResponse: {…} }
+```
+
+Both carry fields the contract says do not exist. Neither would be persisted
+today — the write shapes have nowhere to put them and the metadata allowlist
+would drop them — but "not persisted today" is a property of three separate
+downstream decisions rather than of the boundary itself. The runtime trust
+boundary would be wider than the documented contract, and every later spread,
+log line, error report and serialization would inherit the wider one.
+
+So an unknown key makes the value **malformed**, in both contracts:
+
+```text
+SUCCEEDED observation   exactly { kind }
+FAILED observation      exactly { kind, retryable, diagnosticCode }
+verification receipt    exactly { sha256, sizeBytes }
+```
+
+Refused, never sanitized: dropping the extra field and accepting the object hides
+a bug at the sender, which is where it needs fixing. One shared helper implements
+the check for both contracts, over **own** properties — so a field hidden from
+enumeration is still caught, an inherited `Object.prototype` method is not
+mistaken for a smuggled field, and a discriminant that exists only on a prototype
+does not count as declared.
+
+### 4. The storage key is derived, never accepted — at both boundaries
 
 ```text
 managedGenerationOutputKey({ organizationId, attemptId })
-  → org/<organizationId>/generations/<attemptId>/output.mp4
+  → org/<organizationId>/generations/<attemptId>/output
 ```
 
 Application identifiers only. No provider URL, no provider file name, no
-customer file name, no prompt-derived text, no external path component. Two
-consequences, both load-bearing:
+customer file name, no prompt-derived text, no external path component. Three
+consequences, all load-bearing:
 
 - **The same attempt always derives the same key.** An interrupted copy is
   retried over its own object rather than scattering partial objects, which is
   what makes ingestion resumable at all.
 - **No caller can point a verification record at an object the attempt does not
-  own.** The key is computed inside the decision from the tenant and the attempt,
-  so a caller-supplied path is not merely rejected — there is no parameter for
-  one.
+  own.** The key is computed from the tenant and the attempt, so a caller-supplied
+  path is not merely rejected — there is no parameter for one.
+- **The key asserts no media format.** See §4a.
+
+The second point has to hold at the *persistence* boundary, not only at the
+service. `CompletionSession.applyOutputVerification` is reachable without the
+service — the same property that made tenancy a CAS-level concern in Phases 2G-1
+and 2G-2 — so a key parameter there would let any caller holding a session write
+an arbitrary path. It has none. The repository derives the key itself, inside the
+transaction, from the organization and attempt the transaction was opened for:
+
+```ts
+applyOutputVerification({ expectedVersion, outputSha256, outputSizeBytes,
+                          outputVerifiedAt, context })
+```
+
+The service derives the same key independently, for the replay comparison and to
+report to its own caller. The two always agree because both are pure functions of
+the same two identifiers, and neither takes the value from the other.
+
+The same reasoning applies to the integrity facts. `Sha256Digest` and
+`SafePositiveByteCount` are branded types, which is a compile-time promise about
+a value someone may have cast; the repository re-proves both with the domain's own
+predicates before either reaches a column an audit will treat as evidence. One
+rule, used twice — not a second, subtly different one.
+
+### 4a. The key carries no media-format extension
+
+An earlier revision ended the key `output.mp4`. Nothing in this phase verifies
+that.
+
+A receipt proves a SHA-256 digest and a byte count. It does not prove an MP4
+container, a codec, a MIME type, or that the object plays at all — and this
+repository has no closed generated-video format vocabulary to check one against.
+A key ending `.mp4` would assert a container nothing here established, on an
+object produced by a pipeline that is meant to stay provider-neutral and may one
+day return something else.
+
+So the key is extensionless. A later phase that actually validates a format may
+attach or normalize one; this phase has nothing to attach and does not invent a
+vocabulary in order to have something. Legacy keys that already carry a suffix
+are left exactly as they are — rewriting them would be a claim about objects
+nobody re-examined.
 
 ### 5. The receipt proves bytes, and carries nothing else
 
@@ -162,21 +262,53 @@ not a small video, it is a failed copy that happened to create the destination.
 No maximum is invented — the platform has no evidence about how large a
 legitimate output can be, and a guessed ceiling would reject real work.
 
-### 6. Verified output metadata is immutable, and the database enforces it
+### 6. Verified output metadata is immutable — and it is the application that makes it so
 
 Three additive nullable columns join the existing `outputStorageKey`:
 `outputSha256`, `outputSizeBytes`, `outputVerifiedAt`. All four are written
 together, exactly once, and never again.
 
+**Two different mechanisms, and it matters which does what.**
+
+The database CHECK constraints establish **completeness, format and range**:
+
 ```sql
-CHECK (
-  "orchestrationState" IS DISTINCT FROM 'OUTPUT_VERIFIED'
-  OR ("outputStorageKey" IS NOT NULL AND "outputSha256" IS NOT NULL
-      AND "outputSizeBytes" IS NOT NULL AND "outputVerifiedAt" IS NOT NULL)
-)
+-- completeness
+CHECK ("orchestrationState" IS DISTINCT FROM 'OUTPUT_VERIFIED'
+       OR ("outputStorageKey" IS NOT NULL AND "outputSha256" IS NOT NULL
+           AND "outputSizeBytes" IS NOT NULL AND "outputVerifiedAt" IS NOT NULL))
+-- format
+CHECK ("outputSha256" IS NULL OR "outputSha256" ~ '^[0-9a-f]{64}$')
+-- range
+CHECK ("outputSizeBytes" IS NULL
+       OR ("outputSizeBytes" > 0 AND "outputSizeBytes" <= 9007199254740991))
 ```
 
-**The legacy exception, stated exactly:** the constraint keys on
+None of those is a historical guarantee. A CHECK evaluates one row against one
+predicate; it has no memory of what the row said before, so it cannot tell a
+first write from a second. A verified row whose key is replaced with a different
+key still satisfies every constraint above — all four fields are still non-null,
+the digest is still canonical, the size is still in range — while now pointing at
+an object whose bytes nobody hashed.
+
+Immutability is therefore an **application** property, established by closing
+every mutation path:
+
+- the Phase 2H compare-and-set writes the four facts only on
+  `OUTPUT_INGESTING → OUTPUT_VERIFIED`, which a verified row can no longer match;
+- the finalize decision answers a re-presented receipt with `REPLAYED` (identical)
+  or `CONFLICTING_OUTPUT` (different), never a second write;
+- the legacy `SceneGenerationRepository.update` — the one remaining application
+  path that could set `outputStorageKey` — is scoped so that a key write matches
+  only rows with `orchestrationState IS NULL` (see §6a).
+
+The database's job is to make an *incomplete or malformed* verified row
+impossible. The application's job is to make a *second* one impossible. Stating
+the CHECK as the immutability mechanism would credit it with a guarantee it
+cannot give, and would leave the real hole — a key-only update — looking already
+covered.
+
+**The legacy exception, stated exactly:** the completeness constraint keys on
 `orchestrationState`, which is NULL on every row admitted before Phase 4C-3B-2E,
 and `IS DISTINCT FROM` is null-safe — so those rows satisfy it unconditionally
 and no exception logic exists. Nothing is backfilled. In particular a legacy
@@ -187,7 +319,13 @@ forge an integrity record nobody produced.
 
 `outputSizeBytes` is `BIGINT` rather than `INTEGER` because the domain admits any
 positive safe integer, and `int4` would silently overflow at roughly 2 GiB on a
-value the validator had just accepted.
+value the validator had just accepted. The *upper* bound is
+`Number.MAX_SAFE_INTEGER`, so the column's range and the application's range are
+the same range: above 2^53-1 a `BIGINT` read into a JavaScript number is silently
+lossy — a stored 9007199254740993 comes back as ...992 — and would then be
+compared against a receipt as though it were what was written. The repository
+refuses to narrow an out-of-range value regardless, because a constraint added by
+a migration says nothing about a database that migration has not reached.
 
 A second receipt describing different bytes is a **discrepancy to surface, not a
 correction to apply**: `CONFLICTING_OUTPUT`, with the stored metadata untouched.
@@ -195,6 +333,33 @@ An exact replay returns `REPLAYED` and changes nothing. `outputVerifiedAt` is
 deliberately excluded from the comparison — it records when *this platform*
 verified, and requiring a replaying caller's fresh instant to equal the stored
 one would make every replay after the first millisecond a conflict.
+
+### 6a. The legacy repository has no authority over managed output keys
+
+`SceneGenerationRepository.update` predates orchestration and can still set or
+clear `outputStorageKey` on a row its tenant owns. On an orchestrated Attempt
+that is a hole in the invariant above, and a quiet one: it moves the key alone —
+no version bump, no transition event, no new verification, and no constraint
+violation — leaving a verified row that reads as healthy and describes an object
+it never verified.
+
+So a **key write** (a string or an explicit `null`, as distinct from the absent
+field that means "leave alone") may match only rows with `orchestrationState IS
+NULL`. Managed output on an orchestrated Attempt belongs exclusively to the Phase
+2H persistence boundary, which writes all four facts together under a
+compare-and-set with an event.
+
+Three properties of the refusal:
+
+- **It is not silent.** The write matches nothing, so the caller gets this
+  method's existing not-found answer and the row is untouched. A distinct error
+  would be a new way to probe a row's orchestration status.
+- **It is scoped to the key.** Every other field this method has always been able
+  to update on an orchestrated row still updates. Blocking them would break the
+  legacy execution path for no invariant's sake.
+- **Legacy rows keep the old behaviour exactly.** They predate the managed-output
+  contract, nothing else writes their keys, and their keys may still carry a
+  historical `.mp4` suffix — which is left alone rather than rewritten.
 
 ### 7. An interrupted copy stays interrupted
 
@@ -351,3 +516,15 @@ object rather than a new one.
 **Letting a later receipt correct an earlier one.** Tempting for operability. It
 makes `OUTPUT_VERIFIED` mean "the last thing anyone said", which is not a proof,
 and it erases the disagreement that is the only signal something is wrong.
+
+**A database trigger to enforce immutability.** Considered once the CHECK was
+shown not to give it. Rejected because the mutation path it would have guarded —
+the legacy repository's key write — can be closed in the application, where the
+rule is visible to the people who have to keep it, and a trigger would have made
+the wording stronger without making the system safer. If a future path cannot be
+closed that way, this is the decision to revisit.
+
+**Keeping `.mp4` on the key "because it will be MP4 anyway".** Probably true
+today, of the one provider currently wired. It is still an assertion this phase
+does not verify, on a boundary whose entire purpose is to stay provider-neutral,
+and the cost of being wrong is a key that lies about its object.

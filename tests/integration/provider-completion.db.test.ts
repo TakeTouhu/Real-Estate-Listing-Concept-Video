@@ -23,12 +23,17 @@ import {
   type FxSnapshot,
   type ManagedOutputVerificationReceipt,
   type PricingSnapshot,
+  type ProviderCompletionLandingState,
   type ProviderCompletionObservation,
   type ReconciliationPolicy,
   type SubmissionClock,
   type SubmissionDiagnosticCode,
 } from "@app/domain";
-import { createCompletionRepository, createSubmissionOutcomeRepository } from "@app/database";
+import {
+  createCompletionRepository,
+  createPrismaSceneGenerationRepository,
+  createSubmissionOutcomeRepository,
+} from "@app/database";
 import {
   ASSET_A,
   ctx,
@@ -613,7 +618,12 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
     it("derives the key from the tenant and attempt, never from a caller", async () => {
       const { attemptId } = await seedVerifiedAttempt("verkey");
       const row = await attemptRow(attemptId);
-      expect(row.outputStorageKey).toBe(`org/${ORG_A}/generations/${attemptId}/output.mp4`);
+      // Spelled out rather than derived, so a change to the key shape has to be
+      // made deliberately here as well as in the deriving function.
+      expect(row.outputStorageKey).toBe(`org/${ORG_A}/generations/${attemptId}/output`);
+      // And it asserts no container format: the receipt proved a digest and a
+      // byte count, neither of which says anything about what the bytes are.
+      expect(row.outputStorageKey).not.toMatch(/\.[a-z0-9]+$/i);
     });
 
     it("appends one OUTPUT_VERIFIED event carrying integrity but no location", async () => {
@@ -861,16 +871,9 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
         async (session) =>
           session.applyOutputVerification({
             expectedVersion: before.stateVersion,
-            write: {
-              orchestrationState: "OUTPUT_VERIFIED",
-              outputStorageKey: managedGenerationOutputKey({
-                organizationId: ORG_B,
-                attemptId,
-              }),
-              outputSha256: SHA_B,
-              outputSizeBytes: SIZE_B,
-              outputVerifiedAt: VERIFIED_AT,
-            },
+            outputSha256: SHA_B,
+            outputSizeBytes: SIZE_B,
+            outputVerifiedAt: VERIFIED_AT,
             context: ctx(),
           }),
       );
@@ -969,6 +972,341 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
           observation: SUCCEEDED,
         }),
       ).toEqual({ kind: "ATTEMPT_NOT_FOUND" });
+    });
+  });
+
+  describe("the legacy repository has no authority over managed output keys", () => {
+    /**
+     * The tenant-facing repository predates orchestration and can still set an
+     * `outputStorageKey` on a row it owns. On an orchestrated Attempt that is a
+     * hole in verified-output immutability, and a quiet one: it moves the key
+     * alone, so a verified row ends up pointing at a different object while
+     * still carrying the digest and size of the old one — with no version bump,
+     * no event, and no CHECK violation, because all four fields are still
+     * non-null. The row reads as healthy and describes bytes nobody hashed.
+     */
+    const legacy = () => createPrismaSceneGenerationRepository(prisma);
+
+    /** Strip a seeded attempt back to a genuinely pre-orchestration row. */
+    async function makeLegacy(attemptId: string): Promise<void> {
+      await prisma.$executeRaw`
+        UPDATE "scene_generations"
+           SET "orchestrationState" = NULL,
+               "submissionCertainty" = NULL,
+               "generationSceneRequestId" = NULL,
+               "attemptOrdinal" = NULL,
+               "attemptKind" = NULL,
+               "pricingContractKey" = NULL,
+               "providerPredictionId" = NULL
+         WHERE "id" = ${attemptId}
+      `;
+    }
+
+    it("still sets a key on a genuinely legacy row", async () => {
+      const { attemptId } = await seedAcceptedProcessingAttempt("legkeyset");
+      await makeLegacy(attemptId);
+      const updated = await legacy().update(ORG_A, attemptId, {
+        outputStorageKey: "legacy/manual/key",
+      });
+      expect(updated.outputStorageKey).toBe("legacy/manual/key");
+    });
+
+    it("still clears a key on a genuinely legacy row", async () => {
+      const { attemptId } = await seedAcceptedProcessingAttempt("legkeyclr");
+      await makeLegacy(attemptId);
+      await legacy().update(ORG_A, attemptId, { outputStorageKey: "legacy/manual/key" });
+      const cleared = await legacy().update(ORG_A, attemptId, { outputStorageKey: null });
+      expect(cleared.outputStorageKey).toBeNull();
+    });
+
+    it.each(["PROVIDER_SUCCEEDED", "OUTPUT_INGESTING"] as const)(
+      "refuses a key write on an orchestrated %s attempt",
+      async (state) => {
+        const { attemptId } = await seedAcceptedProcessingAttempt(`legorch${state}`);
+        const svc = completion();
+        await svc.recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+        if (state === "OUTPUT_INGESTING") await svc.beginOutputIngestion({ ...BASE, attemptId });
+        const before = await attemptRow(attemptId);
+
+        await expect(
+          legacy().update(ORG_A, attemptId, { outputStorageKey: "attacker/key" }),
+        ).rejects.toThrow();
+        expect(await attemptRow(attemptId)).toEqual(before);
+      },
+    );
+
+    it("refuses to replace a verified output's key", async () => {
+      const { attemptId } = await seedVerifiedAttempt("legverrep");
+      const before = await attemptRow(attemptId);
+      expect(before.outputStorageKey).not.toBeNull();
+
+      await expect(
+        legacy().update(ORG_A, attemptId, { outputStorageKey: "org/other/generations/x/output" }),
+      ).rejects.toThrow();
+
+      const after = await attemptRow(attemptId);
+      // The whole integrity record, not just the key: a partial write here
+      // would be exactly the corruption this refusal exists to prevent.
+      expect(after.outputStorageKey).toBe(before.outputStorageKey);
+      expect(after.outputSha256).toBe(SHA_A);
+      expect(after.outputSizeBytes).toBe(BigInt(SIZE_A));
+      expect(after.outputVerifiedAt).toEqual(before.outputVerifiedAt);
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.orchestrationState).toBe("OUTPUT_VERIFIED");
+    });
+
+    it("refuses to clear a key on an orchestrated attempt that is not yet verified", async () => {
+      // The rule is "any key write on an orchestrated row", not "any non-null
+      // key write". On a verified row the completeness CHECK would catch a
+      // clear anyway, which makes that case a poor test of the rule: it passes
+      // whether or not the application refuses. Here the CHECK is silent — it
+      // constrains OUTPUT_VERIFIED rows only — so the refusal has to be the
+      // application's own, and a rule that guarded only non-null writes would
+      // let this through.
+      const { attemptId } = await seedAcceptedProcessingAttempt("legorchclr");
+      await completion().recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+      await prisma.sceneGeneration.update({
+        where: { id: attemptId },
+        data: { outputStorageKey: "stale/key/from/somewhere" },
+      });
+      const before = await attemptRow(attemptId);
+      expect(before.orchestrationState).toBe("PROVIDER_SUCCEEDED");
+
+      await expect(
+        legacy().update(ORG_A, attemptId, { outputStorageKey: null }),
+      ).rejects.toThrow();
+      expect((await attemptRow(attemptId)).outputStorageKey).toBe("stale/key/from/somewhere");
+    });
+
+    it("refuses to clear a verified output's key", async () => {
+      const { attemptId } = await seedVerifiedAttempt("legverclr");
+      const before = await attemptRow(attemptId);
+
+      await expect(
+        legacy().update(ORG_A, attemptId, { outputStorageKey: null }),
+      ).rejects.toThrow();
+      expect(await attemptRow(attemptId)).toEqual(before);
+    });
+
+    it("appends no event and touches nothing else when it refuses", async () => {
+      const { attemptId } = await seedVerifiedAttempt("legverevt");
+      const eventsBefore = (await eventsFor(attemptId)).length;
+      await expect(
+        legacy().update(ORG_A, attemptId, { outputStorageKey: "attacker/key" }),
+      ).rejects.toThrow();
+      expect(await eventsFor(attemptId)).toHaveLength(eventsBefore);
+    });
+
+    it("still updates unrelated fields on an orchestrated attempt", async () => {
+      // The refusal is scoped to the managed-output key. Blocking every field
+      // would break the legacy execution path for no invariant's sake.
+      const { attemptId } = await seedAcceptedProcessingAttempt("legunrel");
+      const updated = await legacy().update(ORG_A, attemptId, {
+        lastPolledAt: new Date("2026-09-10T01:00:00.000Z"),
+      });
+      expect(updated.lastPolledAt).toEqual(new Date("2026-09-10T01:00:00.000Z"));
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("PROCESSING");
+    });
+  });
+
+  describe("a persisted byte count stays inside the domain's range", () => {
+    const CHECK = "scene_generations_output_size_positive_check";
+
+    it.each([
+      ["accepts one byte", 1n, true],
+      ["accepts exactly Number.MAX_SAFE_INTEGER bytes", BigInt(Number.MAX_SAFE_INTEGER), true],
+      ["rejects one byte past the safe range", BigInt(Number.MAX_SAFE_INTEGER) + 1n, false],
+      ["rejects zero", 0n, false],
+      ["rejects a negative size", -1n, false],
+    ] as const)("the database %s", async (_label, size, accepted) => {
+      const { attemptId } = await seedAcceptedProcessingAttempt(`size${String(size)}`);
+      const write = prisma.sceneGeneration.update({
+        where: { id: attemptId },
+        data: { outputSizeBytes: size },
+      });
+      if (accepted) {
+        await expect(write).resolves.toBeTruthy();
+        expect((await attemptRow(attemptId)).outputSizeBytes).toBe(size);
+      } else {
+        await expect(write).rejects.toThrow();
+        expect((await attemptRow(attemptId)).outputSizeBytes).toBeNull();
+      }
+    });
+
+    it("refuses to read back a size the constraint would not have allowed", async () => {
+      // The CHECK makes such a row impossible to create. That is not the same
+      // as impossible to *meet*: a database restored from before this migration,
+      // or one an operator patched by hand, can still hold one. `Number()` on it
+      // is silently lossy — 2^53+1 comes back as 2^53 — so the reader would brand
+      // a value that was never written and compare a receipt against it. The
+      // repository refuses instead, and this drops the constraint to prove the
+      // refusal is the repository's own and not the database's.
+      const { attemptId } = await seedAcceptedProcessingAttempt("sizeread");
+      const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 2n;
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE "scene_generations" DROP CONSTRAINT "${CHECK}"`,
+      );
+      try {
+        await prisma.sceneGeneration.update({
+          where: { id: attemptId },
+          data: { outputSizeBytes: unsafe },
+        });
+        // Proof the row really is out of range and really would be narrowed
+        // wrongly by a naive read.
+        expect(BigInt(Number(unsafe))).not.toBe(unsafe);
+
+        await expect(
+          completion().recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED }),
+        ).rejects.toThrow(/safe range/);
+        expect((await attemptRow(attemptId)).orchestrationState).toBe("PROCESSING");
+      } finally {
+        await prisma.sceneGeneration.update({
+          where: { id: attemptId },
+          data: { outputSizeBytes: null },
+        });
+        await prisma.$executeRawUnsafe(
+          `ALTER TABLE "scene_generations"
+             ADD CONSTRAINT "${CHECK}"
+             CHECK ("outputSizeBytes" IS NULL
+                    OR ("outputSizeBytes" > 0 AND "outputSizeBytes" <= 9007199254740991))`,
+        );
+      }
+    });
+  });
+
+  describe("the persistence boundary enforces the committed state machine", () => {
+    it("refuses a completion write the state machine does not permit", async () => {
+      // `applyCompletion` is reachable without the service, and reachable with a
+      // cast past the narrowed landing type. Without this guard a caller could
+      // move PROCESSING straight to OUTPUT_INGESTING, skipping the state that
+      // records that a provider actually finished — and the row would then claim
+      // a copy is under way for work nothing says completed.
+      const { attemptId } = await seedAcceptedProcessingAttempt("smbypass");
+      const before = await attemptRow(attemptId);
+
+      await expect(
+        createCompletionRepository(prisma).withCompletingAttempt(
+          { organizationId: ORG_A, attemptId },
+          async (session) =>
+            session.applyCompletion({
+              expectedVersion: before.stateVersion,
+              write: {
+                orchestrationState: "OUTPUT_INGESTING",
+              } as unknown as { orchestrationState: ProviderCompletionLandingState },
+              context: ctx(),
+            }),
+        ),
+      ).rejects.toThrow(/does not permit/);
+
+      const after = await attemptRow(attemptId);
+      expect(after.orchestrationState).toBe("PROCESSING");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(
+        (await eventsFor(attemptId)).filter(
+          (e) => e.eventType === PROVIDER_COMPLETION_SUCCEEDED_EVENT_TYPE,
+        ),
+      ).toHaveLength(0);
+    });
+
+    it.each(["QUEUED", "OUTPUT_VERIFIED", "RECONCILIATION_PENDING"] as const)(
+      "refuses a completion write landing on %s",
+      async (target) => {
+        const { attemptId } = await seedAcceptedProcessingAttempt(`smbad${target}`);
+        const before = await attemptRow(attemptId);
+
+        await expect(
+          createCompletionRepository(prisma).withCompletingAttempt(
+            { organizationId: ORG_A, attemptId },
+            async (session) =>
+              session.applyCompletion({
+                expectedVersion: before.stateVersion,
+                write: { orchestrationState: target } as unknown as {
+                  orchestrationState: ProviderCompletionLandingState;
+                },
+                context: ctx(),
+              }),
+          ),
+        ).rejects.toThrow(/does not permit/);
+        expect((await attemptRow(attemptId)).orchestrationState).toBe("PROCESSING");
+      },
+    );
+
+    it.each(["PROVIDER_SUCCEEDED", "FAILED_RETRYABLE", "FAILED_TERMINAL"] as const)(
+      "still permits the landing %s the domain approves",
+      async (target) => {
+        const { attemptId } = await seedAcceptedProcessingAttempt(`smok${target}`);
+        const before = await attemptRow(attemptId);
+        const applied = await createCompletionRepository(prisma).withCompletingAttempt(
+          { organizationId: ORG_A, attemptId },
+          async (session) =>
+            session.applyCompletion({
+              expectedVersion: before.stateVersion,
+              write: { orchestrationState: target },
+              context: ctx(),
+            }),
+        );
+        expect(applied.kind).toBe("APPLIED");
+        expect((await attemptRow(attemptId)).orchestrationState).toBe(target);
+      },
+    );
+  });
+
+  describe("the persistence boundary derives the output key itself", () => {
+    it("persists the canonical key with no way for a caller to name one", async () => {
+      // There is no key parameter on `applyOutputVerification` — the compile-time
+      // proof of that is in the unit suite. This is the runtime half: what the
+      // row ends up holding is the key derived from the transaction's own tenant
+      // and attempt, not anything a caller could have influenced.
+      const { attemptId } = await seedAcceptedProcessingAttempt("derivekey");
+      const svc = completion();
+      await svc.recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+      await svc.beginOutputIngestion({ ...BASE, attemptId });
+      const before = await attemptRow(attemptId);
+
+      const applied = await createCompletionRepository(prisma).withCompletingAttempt(
+        { organizationId: ORG_A, attemptId },
+        async (session) =>
+          session.applyOutputVerification({
+            expectedVersion: before.stateVersion,
+            outputSha256: SHA_A,
+            outputSizeBytes: SIZE_A,
+            outputVerifiedAt: VERIFIED_AT,
+            context: ctx(),
+          }),
+      );
+      expect(applied.kind).toBe("APPLIED");
+      expect((await attemptRow(attemptId)).outputStorageKey).toBe(
+        managedGenerationOutputKey({ organizationId: ORG_A, attemptId }),
+      );
+    });
+
+    it("refuses integrity facts that are not valid, before any SQL", async () => {
+      const { attemptId } = await seedAcceptedProcessingAttempt("badfacts");
+      const svc = completion();
+      await svc.recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+      await svc.beginOutputIngestion({ ...BASE, attemptId });
+      const before = await attemptRow(attemptId);
+
+      for (const bad of [
+        { sha: "NOT-A-DIGEST" as unknown as typeof SHA_A, size: SIZE_A },
+        { sha: SHA_A, size: 0 as unknown as typeof SIZE_A },
+        { sha: SHA_A, size: (Number.MAX_SAFE_INTEGER + 2) as unknown as typeof SIZE_A },
+      ]) {
+        await expect(
+          createCompletionRepository(prisma).withCompletingAttempt(
+            { organizationId: ORG_A, attemptId },
+            async (session) =>
+              session.applyOutputVerification({
+                expectedVersion: before.stateVersion,
+                outputSha256: bad.sha,
+                outputSizeBytes: bad.size,
+                outputVerifiedAt: VERIFIED_AT,
+                context: ctx(),
+              }),
+          ),
+        ).rejects.toThrow(/not valid/);
+      }
+      expect(await attemptRow(attemptId)).toEqual(before);
     });
   });
 
@@ -1329,7 +1667,7 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
       expect(source.includes("new Date()")).toBe(false);
       expect(source.includes("Date.now(")).toBe(false);
       // Converting an explicit validated instant is the only permitted form.
-      expect(source.includes("new Date(write.outputVerifiedAt)")).toBe(true);
+      expect(source.includes("new Date(outputVerifiedAt)")).toBe(true);
       for (const banned of ["fetch(", "getObject(", "putObject(", "generationReservation"]) {
         expect(`${banned}: ${source.includes(banned)}`).toBe(`${banned}: false`);
       }

@@ -596,3 +596,110 @@ describe("the completion module has no provider, storage or scheduler dependency
     }
   });
 });
+
+describe("hostile evidence reaches no write and no event", () => {
+  /**
+   * The runtime contracts are closed, and this is where that closure is worth
+   * something: a payload carrying a provider URL next to a valid discriminant
+   * is refused *before* the row is touched, so the location never exists inside
+   * a transaction that could persist or log it.
+   */
+  it.each([
+    ["a provider output URL", { kind: "SUCCEEDED", providerOutputUrl: "https://p.example/o" }],
+    ["a raw provider response", { kind: "SUCCEEDED", rawProviderResponse: { status: 200 } }],
+    ["an authorization header", { kind: "SUCCEEDED", authorization: "Bearer sk-live-abc" }],
+    ["a prompt", { kind: "SUCCEEDED", prompt: "a sunlit living room" }],
+    [
+      "an unknown field on a failure",
+      { kind: "FAILED", retryable: true, diagnosticCode: null, providerStatus: "error" },
+    ],
+  ])("refuses a completion observation carrying %s", async (_label, observation) => {
+    const { service, calls } = harness();
+    expect(
+      await service.recordProviderCompletion({
+        ...base,
+        observation: observation as unknown as ProviderCompletionObservation,
+      }),
+    ).toEqual({ kind: "OBSERVATION_MALFORMED" });
+    expect(calls.apply).toBe(0);
+  });
+
+  it.each([
+    ["a storage key", { outputStorageKey: "org/other/generations/x/output" }],
+    ["a provider output URL", { providerOutputUrl: "https://p.example/o" }],
+    ["a MIME type", { mimeType: "video/mp4" }],
+    ["raw bytes", { rawBytes: "AAAA" }],
+    ["a raw provider response", { rawProviderResponse: { status: 200 } }],
+    ["a prompt", { prompt: "a sunlit living room" }],
+  ])("refuses a verification receipt carrying %s", async (_label, extra) => {
+    const { service, calls } = harness({
+      attempt: facts({ orchestrationState: "OUTPUT_INGESTING" }),
+    });
+    expect(
+      await service.finalizeOutputVerification({
+        ...base,
+        receipt: { ...RECEIPT, ...extra } as unknown as ManagedOutputVerificationReceipt,
+      }),
+    ).toEqual({ kind: "RECEIPT_MALFORMED" });
+    expect(calls.apply).toBe(0);
+  });
+});
+
+describe("the persistence boundary cannot be told where the output lives", () => {
+  it("is handed the integrity facts and the instant, and no key", async () => {
+    const { service, applied } = harness({
+      attempt: facts({ orchestrationState: "OUTPUT_INGESTING" }),
+    });
+    await service.finalizeOutputVerification({ ...base, receipt: RECEIPT });
+
+    const call = applied[0] as unknown as Record<string, unknown> | undefined;
+    expect(call?.op).toBe("verify");
+    // The harness records `write` when one is passed. There is none: the
+    // service hands over values, not a durable row shape containing a location.
+    expect(call?.write).toBeUndefined();
+  });
+
+  it("still reports the derived key to its own caller", async () => {
+    // The service knows the key — it derived one for the replay comparison —
+    // and returning it is useful. What changed is that persistence does not
+    // *receive* it, so no caller of that boundary can choose it.
+    const { service } = harness({ attempt: facts({ orchestrationState: "OUTPUT_INGESTING" }) });
+    expect(await service.finalizeOutputVerification({ ...base, receipt: RECEIPT })).toEqual({
+      kind: "APPLIED",
+      attemptId: "sgen_c",
+      stateVersion: 6,
+      outputStorageKey: KEY,
+      outputVerifiedAt: NOW,
+    });
+  });
+
+  it("offers no storage-key parameter at all", () => {
+    // Compile-time evidence, which is the strongest kind available here: the
+    // invalid state is unspellable rather than merely refused at runtime. If
+    // `outputStorageKey` is ever re-added to the port, this stops erroring and
+    // the test fails.
+    const probe = (session: CompletionSession) =>
+      session.applyOutputVerification({
+        expectedVersion: 1,
+        outputSha256: SHA,
+        outputSizeBytes: SIZE,
+        outputVerifiedAt: NOW,
+        context: CONTEXT,
+        // @ts-expect-error the persistence boundary accepts no storage key
+        outputStorageKey: "org/attacker/generations/x/output",
+      });
+    expect(typeof probe).toBe("function");
+  });
+
+  it("names no storage key in the apply contract's source", () => {
+    const text = readFileSync(join(__dirname, "ports.ts"), "utf8");
+    const contract = text.slice(text.indexOf("export interface ApplyOutputVerificationInput"));
+    const body = contract.slice(0, contract.indexOf("}"));
+    expect(body).toContain("outputSha256");
+    expect(body).toContain("outputSizeBytes");
+    expect(body).toContain("outputVerifiedAt");
+    for (const forbidden of ["outputStorageKey", "storageKey", "path", "url", "Url"]) {
+      expect(`${forbidden}: ${body.includes(forbidden)}`).toBe(`${forbidden}: false`);
+    }
+  });
+});

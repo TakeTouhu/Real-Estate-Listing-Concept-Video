@@ -1,5 +1,6 @@
 import type { SubmissionDiagnosticCode } from "../submission/diagnostic-code";
 import {
+  hasExactlyOwnKeys,
   isBoolean,
   isDiagnosticCodeOrNull,
   isPlainRecord,
@@ -99,16 +100,30 @@ export function isWellFormedCompletionObservation(
 
   switch (value.kind) {
     case "SUCCEEDED":
-      // No required fields, and deliberately no optional ones either: a success
-      // arm that could carry an output location is an output location that will
-      // eventually be persisted.
-      return true;
+      // `kind` and nothing else. The success arm has no fields at all, so a
+      // value carrying `providerOutputUrl` next to it is not this contract — it
+      // is a provider payload with the right discriminant, and accepting it
+      // (even while ignoring the extra) would make the runtime boundary wider
+      // than the contract every reader of this type relies on.
+      return hasExactlyOwnKeys(value, SUCCEEDED_COMPLETION_OBSERVATION_KEYS);
     case "FAILED":
       // Checked as a boolean, not for truthiness. `retryable: "false"` is
       // truthy, and the difference between believing it and proving it is
       // whether the request may be attempted again at all.
-      return isBoolean(value.retryable) && isDiagnosticCodeOrNull(value.diagnosticCode);
+      return (
+        hasExactlyOwnKeys(value, FAILED_COMPLETION_OBSERVATION_KEYS) &&
+        isBoolean(value.retryable) &&
+        isDiagnosticCodeOrNull(value.diagnosticCode)
+      );
     default:
       return false;
   }
 }
+
+/** The complete own-property set of each arm. Exhaustive, not a minimum. */
+export const SUCCEEDED_COMPLETION_OBSERVATION_KEYS: readonly string[] = ["kind"];
+export const FAILED_COMPLETION_OBSERVATION_KEYS: readonly string[] = [
+  "kind",
+  "retryable",
+  "diagnosticCode",
+];

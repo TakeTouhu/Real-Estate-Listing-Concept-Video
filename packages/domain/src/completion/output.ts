@@ -19,6 +19,7 @@
  */
 
 import { AppError } from "@app/shared";
+import { hasExactlyOwnKeys, isPlainRecord } from "../submission/untrusted";
 
 declare const sha256DigestBrand: unique symbol;
 declare const byteCountBrand: unique symbol;
@@ -106,13 +107,28 @@ export interface ManagedOutputVerificationReceipt {
   readonly sizeBytes: SafePositiveByteCount;
 }
 
-/** Whether an arbitrary value is a usable receipt. Accepts `unknown`. */
+/** The complete own-property set of a receipt. Exhaustive, not a minimum. */
+export const VERIFICATION_RECEIPT_KEYS: readonly string[] = ["sha256", "sizeBytes"];
+
+/**
+ * Whether an arbitrary value is a usable receipt. Accepts `unknown`.
+ *
+ * Exact keys, not merely the required ones. A value carrying `outputStorageKey`,
+ * `providerOutputUrl`, `mimeType` or a raw provider response alongside two valid
+ * integrity facts is not a receipt — it is a storage-layer payload with a
+ * receipt inside it. Those fields are exactly what this contract exists to keep
+ * out, and accepting the object while dropping them leaves the next contributor
+ * one spread away from persisting a provider URL.
+ */
 export function isWellFormedVerificationReceipt(
   value: unknown,
 ): value is ManagedOutputVerificationReceipt {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return isSha256Digest(record.sha256) && isSafePositiveByteCount(record.sizeBytes);
+  if (!isPlainRecord(value)) return false;
+  return (
+    hasExactlyOwnKeys(value, VERIFICATION_RECEIPT_KEYS) &&
+    isSha256Digest(value.sha256) &&
+    isSafePositiveByteCount(value.sizeBytes)
+  );
 }
 
 /**
@@ -132,6 +148,16 @@ export function isWellFormedVerificationReceipt(
  * name, no prompt, no customer file name, no opaque external path. A key built
  * from external text is a path traversal and a cross-tenant write waiting for
  * the first provider that returns something unexpected.
+ *
+ * **The key carries no media-format extension**, and that is a claim about what
+ * this phase actually knows. A verification receipt proves a SHA-256 digest and
+ * a byte count. It does not prove an MP4 container, a codec, a MIME type or
+ * that the bytes play at all — and there is no closed generated-video format
+ * vocabulary in this repository yet. A key ending `.mp4` would assert a
+ * container nothing here verified, on an object that a provider-neutral
+ * pipeline may one day produce in some other form. A later phase that actually
+ * validates a format may attach or normalize one; until then the key names the
+ * object and says nothing about its contents.
  */
 export function managedGenerationOutputKey(input: {
   readonly organizationId: string;
@@ -145,5 +171,5 @@ export function managedGenerationOutputKey(input: {
       "Managed output key requires a non-blank organization and attempt id",
     );
   }
-  return ["org", input.organizationId, "generations", input.attemptId, "output.mp4"].join("/");
+  return ["org", input.organizationId, "generations", input.attemptId, "output"].join("/");
 }

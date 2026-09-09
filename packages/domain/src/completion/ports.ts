@@ -9,10 +9,13 @@ import type {
   NotIngestibleReason,
   NotProcessingReason,
   OutputConflictReason,
-  OutputVerificationWrite,
 } from "./decide";
 import type { ProviderCompletionObservation } from "./observation";
-import type { ManagedOutputVerificationReceipt } from "./output";
+import type {
+  ManagedOutputVerificationReceipt,
+  SafePositiveByteCount,
+  Sha256Digest,
+} from "./output";
 
 /**
  * What recording a provider completion and a verified managed output needs from
@@ -105,11 +108,31 @@ export interface CompletionSession {
   }): Promise<ApplyCompletionResult>;
 
   /** `OUTPUT_INGESTING → OUTPUT_VERIFIED`, with the four integrity facts. */
-  applyOutputVerification(input: {
-    readonly expectedVersion: number;
-    readonly write: OutputVerificationWrite;
-    readonly context: TransitionContext;
-  }): Promise<ApplyCompletionResult>;
+  applyOutputVerification(input: ApplyOutputVerificationInput): Promise<ApplyCompletionResult>;
+}
+
+/**
+ * What persistence is told about a verified output — and, more importantly, what
+ * it is not told.
+ *
+ * **There is no storage key here.** The service derives one and the repository
+ * derives it again, independently, from the organization and attempt the
+ * transaction was opened for. That is not redundancy: this boundary is reachable
+ * without the service, exactly as the tenant mutation boundary was in Phases
+ * 2G-1 and 2G-2, so a key parameter here would let any caller holding a session
+ * point a verification record at an arbitrary path — another attempt's object, a
+ * provider URL, anything. Removing the parameter makes that state unspellable
+ * rather than merely refused.
+ *
+ * `outputVerifiedAt` is the service's single post-lock instant, carried as a
+ * value so the repository never reads a clock of its own.
+ */
+export interface ApplyOutputVerificationInput {
+  readonly expectedVersion: number;
+  readonly outputSha256: Sha256Digest;
+  readonly outputSizeBytes: SafePositiveByteCount;
+  readonly outputVerifiedAt: EpochMillis;
+  readonly context: TransitionContext;
 }
 
 export type ApplyCompletionResult =

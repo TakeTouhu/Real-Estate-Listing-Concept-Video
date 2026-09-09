@@ -596,13 +596,22 @@ half-written object and nothing in the row would contradict it.
    (`outputStorageKey`, `outputSha256`, `outputSizeBytes`, `outputVerifiedAt`).
 3. `scene_generations_output_sha256_format_check` — `NULL` or canonical
    lowercase 64-character hex.
-4. `scene_generations_output_size_positive_check` — `NULL` or strictly positive.
-   Zero is refused explicitly: a zero-byte object is not a small video, it is a
-   failed copy that happened to create the destination.
+4. `scene_generations_output_size_positive_check` — `NULL`, or strictly positive
+   **and** no greater than 9007199254740991. Zero is refused explicitly: a
+   zero-byte object is not a small video, it is a failed copy that happened to
+   create the destination.
 
 `BIGINT` rather than `INTEGER` because the domain admits any positive safe
 integer, and `int4` would silently overflow at roughly 2 GiB on a value the
-application validator had just accepted.
+application validator had just accepted. The upper bound is
+`Number.MAX_SAFE_INTEGER`, so the column's range and the application's range are
+the **same** range. What `BIGINT` alone got wrong was the other end: past 2^53-1,
+reading the column into a JavaScript number is silently lossy — a stored
+9007199254740993 comes back as ...992 and validates cleanly — so a value that was
+never written would be compared against an integrity receipt as though it had
+been. The repository refuses to narrow an out-of-range value regardless, because
+a constraint added by a migration is not evidence about a database that migration
+has not been applied to.
 
 ### The legacy exception, stated exactly
 
@@ -642,7 +651,30 @@ code must be rolled back with it.
   columns are NULL.
 - Each constraint exercised directly against a migrated database, by raw writes
   that bypass the service: clearing any one of the four facts on an
-  `OUTPUT_VERIFIED` row, an uppercase digest, a zero size and a negative size
-  were all rejected; a complete verified row and a legacy row were both accepted.
-  Non-hex and wrong-length digests are refused earlier, by the domain validator,
-  and are covered there rather than at the constraint.
+  `OUTPUT_VERIFIED` row, an uppercase digest, a zero size, a negative size and a
+  size of `Number.MAX_SAFE_INTEGER + 1` were all rejected; a size of exactly
+  `Number.MAX_SAFE_INTEGER`, a size of 1, a complete verified row and a legacy row
+  were all accepted. Non-hex and wrong-length digests are refused earlier, by the
+  domain validator, and are covered there rather than at the constraint.
+
+### What these constraints do and do not establish
+
+They establish **completeness** (an `OUTPUT_VERIFIED` row carries all four
+integrity facts), **format** (a canonical lowercase digest) and **range** (a byte
+count inside the domain's own bounds).
+
+They do **not** establish immutability, and the documentation must not claim they
+do. A CHECK evaluates one row against one predicate; it has no memory of what the
+row said before, so it cannot distinguish a first write from a second. A verified
+row whose `outputStorageKey` is replaced with a different key still satisfies
+every constraint here while pointing at an object whose bytes nobody hashed.
+
+Immutability of verified output is an **application** property: the Phase 2H
+compare-and-set writes the four facts only on
+`OUTPUT_INGESTING → OUTPUT_VERIFIED` (which a verified row can no longer match),
+the finalize decision answers a re-presented receipt with a replay or a conflict
+rather than a second write, and the legacy tenant-facing
+`SceneGenerationRepository.update` may write `outputStorageKey` only on rows with
+`orchestrationState IS NULL`. No trigger was added: the mutation path was
+closeable in the application, where the rule stays visible to the people who
+maintain it.

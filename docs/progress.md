@@ -808,15 +808,57 @@ and ADR-0020.
   zero-byte object is not a small video but a failed copy that happened to create
   the destination. No maximum is invented.
 
-  Verified output metadata is immutable and the database says so: a CHECK
-  requires all four facts on any `OUTPUT_VERIFIED` row. An exact replay changes
-  nothing; a receipt describing different bytes is a discrepancy to surface, not
-  a correction to apply. The verification instant is excluded from that
-  comparison — it records when *this platform* verified, and requiring a
-  replaying caller's fresh instant to match would make every replay after the
-  first millisecond a conflict. It comes from the service's single post-lock
-  clock read, never from a caller and never from a wall-clock read inside the
-  persistence layer.
+  Verified output metadata is immutable, by two mechanisms that do different
+  jobs. The database CHECKs establish completeness, format and range: all four
+  facts on any `OUTPUT_VERIFIED` row, a canonical lowercase digest, a size inside
+  the domain's own bounds. They cannot establish immutability at all — a CHECK
+  evaluates one row against one predicate and has no memory of what the row said
+  before, so a verified row whose key is swapped for a different key still
+  satisfies every one of them while pointing at bytes nobody hashed. Immutability
+  is an application property, established by closing the mutation paths: the
+  compare-and-set writes the four facts only on the ingesting-to-verified edge,
+  which a verified row can no longer match; an exact replay changes nothing; a
+  receipt describing different bytes is a discrepancy to surface rather than a
+  correction to apply; and the legacy tenant-facing repository — which predates
+  orchestration and could still set or clear the key on any row its tenant owned
+  — may now write a key only on rows with no orchestration state at all. That
+  last one was a real hole rather than a theoretical one: it moved the key alone,
+  with no version bump, no event and no constraint violation, leaving a verified
+  row that read as healthy and described an object it never verified. The
+  verification instant is excluded from the replay comparison — it records when
+  *this platform* verified, and requiring a replaying caller's fresh instant to
+  match would make every replay after the first millisecond a conflict. It comes
+  from the service's single post-lock clock read, never from a caller and never
+  from a wall-clock read inside the persistence layer.
+
+  Three narrower disciplines follow the same logic — put the guarantee where the
+  boundary actually is. The byte-count column is bounded above at
+  `Number.MAX_SAFE_INTEGER` as well as below at zero, because past 2^53-1 reading
+  a `BIGINT` into a JavaScript number is silently lossy and a stored
+  9007199254740993 would come back as ...992, validate cleanly, and be compared
+  against a receipt as though it were what was written; the repository refuses to
+  narrow an out-of-range value regardless, since a constraint added by a
+  migration says nothing about a database that migration has not reached. The
+  persistence boundary derives the storage key itself rather than receiving one,
+  because that boundary is reachable without the service — exactly as the tenant
+  boundary was in 2G-1 and 2G-2 — and a key parameter there would let any caller
+  holding a session write an arbitrary path; there is now no parameter to pass
+  one through. And the completion write names a closed landing type while all
+  three persistence operations consult the committed state machine before any
+  SQL, so the transition table is load-bearing rather than documentary: a caller
+  can no longer construct a write that moves `PROCESSING` straight to
+  `OUTPUT_INGESTING`, and if an edge this phase depends on is ever removed from
+  that table the failure is immediate and loud instead of a persistence layer
+  quietly performing a transition the domain no longer permits.
+
+  The runtime evidence contracts are closed rather than merely sufficient. A
+  completion observation or an integrity receipt carrying an unknown key — a
+  provider output URL, a raw provider response, a storage key, a MIME type, a
+  prompt — is malformed, not silently trimmed. Nothing would have persisted those
+  fields today, but that was a property of three separate downstream decisions
+  rather than of the boundary itself, and a runtime trust boundary wider than the
+  documented contract is inherited by every later spread, log line and
+  serialization. Refusing fails at the sender, which is where the bug is.
 
   Customer entitlement is untouched on every path, structurally: there is no
   reservation handle in the persistence module to misuse. Nothing consumes,
@@ -837,6 +879,15 @@ and ADR-0020.
   columns and three CHECKs, every one keyed on a column that is NULL on legacy
   rows, nothing backfilled, and a legacy `state = 'SUCCEEDED'` row deliberately
   not reinterpreted as an orchestrated success.
+
+  The managed output key is deliberately extensionless. An earlier revision ended
+  it `output.mp4`, which asserts a container this phase does not verify: a receipt
+  proves a SHA-256 and a byte count, not an MP4 wrapper, a codec, a MIME type or
+  that the object plays, and the repository has no closed generated-video format
+  vocabulary to check one against. A later phase that actually validates a format
+  may attach or normalize one; legacy keys that already carry a suffix are left
+  exactly as they are, because rewriting them would be a claim about objects
+  nobody re-examined.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in
