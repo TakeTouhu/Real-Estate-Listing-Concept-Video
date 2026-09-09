@@ -132,7 +132,15 @@ export interface RunProviderOutputAttemptInput {
 }
 
 export interface RunProviderOutputBatchInput {
-  /** A hard bound per stage, validated before any query runs. */
+  /**
+   * A **global** hard cap on unique attempts one invocation may process,
+   * validated before any query runs.
+   *
+   * Not a per-stage cap. Three stages each bounded at 100 would let one batch
+   * touch 300 rows while reporting a limit of 100 — and the three stages are
+   * not disjoint over the life of a batch, because processing an attempt can
+   * move it into a later stage.
+   */
   readonly limit: number;
   readonly context: TransitionContext;
 }
@@ -219,7 +227,20 @@ export type ContextInvalidReason =
 
 /** What one bounded pass did, in closed counts. Never in prose. */
 export interface ProviderOutputBatchReport {
+  /**
+   * How many **unique** attempts this invocation actually processed.
+   *
+   * Not how many rows the three queries returned. Discovery happens entirely
+   * before processing and is then deduplicated on `(organizationId, attemptId)`
+   * and capped at the global limit, so this is the size of the frozen set that
+   * was run — never larger than `limit`, and never counting one attempt twice.
+   */
   readonly candidates: number;
-  /** One entry per candidate, carrying only the closed result kind. */
+  /**
+   * One entry per processed attempt, carrying only the closed result kind.
+   *
+   * `results.length === candidates`, always: each selected attempt is run
+   * exactly once, so there is no attempt with two entries and none with zero.
+   */
   readonly results: readonly ProviderOutputRunResult["kind"][];
 }

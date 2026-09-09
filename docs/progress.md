@@ -959,6 +959,17 @@ and ADR-0020.
   and the reason the state exists — an attempt already there does not re-claim the
   transition, which is the crash-recovery path.
 
+  One batch invocation processes one unique attempt at most once. All three stage
+  queries run before any candidate is processed, and the union is deduplicated on
+  the tenant-qualified identity and capped at a global limit — because processing
+  an attempt is exactly what makes it eligible for a later stage, so interleaving
+  discovery with processing lets a batch reprocess its own work every time rather
+  than occasionally. The no-lock proofs use an explicit two-way barrier: the fake
+  signals that it has entered the external call and then waits to be released, so
+  the test never guesses with a timer whether the runner has got there — a guess
+  that fails in the direction that hides bugs, since a too-short wait means the
+  held lock is never contended and the test passes for the wrong reason.
+
   Polling writes nothing: no event for a still-running poll, no version bump, no
   poll timestamp, no progress percentage, no poll-history table and no
   transfer-attempt table. A still-running answer is the most common one a poller

@@ -22,6 +22,17 @@ production caller. One additive module; no migration and no schema change.
   otherwise get wrong or supply deliberately. `runProviderOutputBatchOnce` sweeps
   the three orchestrated stages once: it does not loop, sleep, schedule itself,
   own a timer, back off or retry.
+- **A batch cannot feed itself.** All three stages are discovered **before** any
+  candidate is processed; the union is then deduplicated on
+  `(organizationId, attemptId)` and capped at a **global** limit on unique
+  attempts, not a per-stage one. Interleaving discovery with processing lets a
+  batch reprocess its own work — deterministically, not occasionally: this batch
+  moves an attempt from `PROCESSING` to `PROVIDER_SUCCEEDED` and the stage query
+  it has not yet run finds the same row; or a transfer failure leaves an attempt
+  `OUTPUT_INGESTING` moments before the resumable query looks. Three stages each
+  bounded at 100 would also let one invocation touch 300 rows while reporting a
+  limit of 100. `report.candidates` is the size of the frozen selected set, and
+  `results.length === candidates` always.
 - **The persisted attempt is the only source of provider identity.** Never
   `VIDEO_PROVIDER`, the default model, the catalog's current selection or the
   routing policy. An attempt was admitted against a specific vendor and holds a

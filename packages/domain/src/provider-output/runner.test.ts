@@ -696,6 +696,124 @@ describe("one batch is one pass", () => {
     expect(report.results.every((r) => typeof r === "string")).toBe(true);
   });
 
+  it("discovers every stage before processing any candidate", async () => {
+    // The ordering is the correction. Discovering a stage, processing it, then
+    // discovering the next lets the batch feed itself: processing an attempt
+    // can move it into a later stage, and that stage's query — run afterwards —
+    // finds the same row again. Freezing the candidate set first makes that
+    // impossible rather than unlikely.
+    const h = harness({
+      candidates: {
+        AWAITING_PROVIDER_COMPLETION: [{ organizationId: ORG, attemptId: "sgen_1" }],
+        AWAITING_OUTPUT_INGESTION: [{ organizationId: ORG, attemptId: "sgen_2" }],
+      },
+      poll: async () => ({ kind: "IN_PROGRESS" }),
+    });
+    await h.runner.runProviderOutputBatchOnce({ limit: 10, context: CONTEXT });
+
+    const lastDiscover = h.order.lastIndexOf("discover:RESUMABLE_OUTPUT_INGESTION");
+    const firstWork = h.order.findIndex((o) => o === "load");
+    expect(lastDiscover).toBeGreaterThan(-1);
+    expect(firstWork).toBeGreaterThan(lastDiscover);
+  });
+
+  it("processes an attempt once when several stages return it", async () => {
+    const duplicated = [{ organizationId: ORG, attemptId: "sgen_dup" }];
+    const h = harness({
+      candidates: {
+        AWAITING_PROVIDER_COMPLETION: duplicated,
+        AWAITING_OUTPUT_INGESTION: duplicated,
+        RESUMABLE_OUTPUT_INGESTION: duplicated,
+      },
+      poll: async () => ({ kind: "IN_PROGRESS" }),
+    });
+    const report = await h.runner.runProviderOutputBatchOnce({ limit: 10, context: CONTEXT });
+    expect(report.candidates).toBe(1);
+    expect(report.results).toEqual(["STILL_PROCESSING"]);
+    expect(h.order.filter((o) => o === "poll")).toHaveLength(1);
+  });
+
+  it("distinguishes the same attempt id in two organizations", async () => {
+    // An attempt id alone is not an identity — ids are unique only within their
+    // own data — so the deduplication key is tenant-qualified.
+    const h = harness({
+      candidates: {
+        AWAITING_PROVIDER_COMPLETION: [
+          { organizationId: "org_a", attemptId: "sgen_same" },
+          { organizationId: "org_b", attemptId: "sgen_same" },
+        ],
+      },
+      poll: async () => ({ kind: "IN_PROGRESS" }),
+    });
+    const report = await h.runner.runProviderOutputBatchOnce({ limit: 10, context: CONTEXT });
+    expect(report.candidates).toBe(2);
+    expect(report.results).toHaveLength(2);
+  });
+
+  it("caps unique attempts globally rather than per stage", async () => {
+    // Three stages each bounded at 2 would let one invocation touch 6 rows
+    // while reporting a limit of 2.
+    const h = harness({
+      candidates: {
+        AWAITING_PROVIDER_COMPLETION: [
+          { organizationId: ORG, attemptId: "a1" },
+          { organizationId: ORG, attemptId: "a2" },
+        ],
+        AWAITING_OUTPUT_INGESTION: [
+          { organizationId: ORG, attemptId: "b1" },
+          { organizationId: ORG, attemptId: "b2" },
+        ],
+        RESUMABLE_OUTPUT_INGESTION: [
+          { organizationId: ORG, attemptId: "c1" },
+          { organizationId: ORG, attemptId: "c2" },
+        ],
+      },
+      poll: async () => ({ kind: "IN_PROGRESS" }),
+    });
+    const report = await h.runner.runProviderOutputBatchOnce({ limit: 2, context: CONTEXT });
+    expect(report.candidates).toBe(2);
+    expect(report.results).toHaveLength(2);
+    expect(h.order.filter((o) => o === "poll")).toHaveLength(2);
+  });
+
+  it("keeps candidates and results in step, always", async () => {
+    for (const limit of [1, 3, 5, 100]) {
+      const h = harness({
+        candidates: {
+          AWAITING_PROVIDER_COMPLETION: [
+            { organizationId: ORG, attemptId: "x1" },
+            { organizationId: ORG, attemptId: "x2" },
+          ],
+          AWAITING_OUTPUT_INGESTION: [
+            // One genuine duplicate and one new row, so both the dedupe and the
+            // cap are exercised at every limit.
+            { organizationId: ORG, attemptId: "x1" },
+            { organizationId: ORG, attemptId: "x3" },
+          ],
+        },
+        poll: async () => ({ kind: "IN_PROGRESS" }),
+      });
+      const report = await h.runner.runProviderOutputBatchOnce({ limit, context: CONTEXT });
+      expect(report.results).toHaveLength(report.candidates);
+      expect(report.candidates).toBeLessThanOrEqual(limit);
+      expect(report.candidates).toBe(Math.min(limit, 3));
+    }
+  });
+
+  it("preserves stage priority and query order when the cap bites", async () => {
+    const h = harness({
+      candidates: {
+        AWAITING_PROVIDER_COMPLETION: [{ organizationId: ORG, attemptId: "first" }],
+        AWAITING_OUTPUT_INGESTION: [{ organizationId: ORG, attemptId: "second" }],
+        RESUMABLE_OUTPUT_INGESTION: [{ organizationId: ORG, attemptId: "third" }],
+      },
+      poll: async () => ({ kind: "IN_PROGRESS" }),
+    });
+    await h.runner.runProviderOutputBatchOnce({ limit: 2, context: CONTEXT });
+    // Two polls, and they are the first two of the ordered union.
+    expect(h.order.filter((o) => o === "poll")).toHaveLength(2);
+  });
+
   it.each([
     ["zero", 0],
     ["negative", -1],

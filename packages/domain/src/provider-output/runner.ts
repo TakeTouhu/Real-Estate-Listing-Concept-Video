@@ -6,6 +6,7 @@ import { validateReconciliationMaintenanceLimit } from "../reconciliation/limits
 import { isNonBlankString } from "../submission/untrusted";
 import { TransientProviderOutputLocator } from "./locator";
 import { isWellFormedPollObservation, type ProviderPollObservation } from "./observation";
+import type { CompletionCandidate } from "../completion/index";
 import type {
   ContextInvalidReason,
   ProviderOutputBatchReport,
@@ -433,26 +434,54 @@ export function createProviderOutputRunner(deps: ProviderOutputDeps) {
       // rejects reaches the database through the other.
       const limit = validateReconciliationMaintenanceLimit(input.limit);
 
-      const results: ProviderOutputRunResult["kind"][] = [];
-      let candidates = 0;
-
+      // **All discovery happens before any processing.** Interleaving them —
+      // discover a stage, process it, discover the next — lets the batch feed
+      // itself: this batch moves an attempt from PROCESSING to
+      // PROVIDER_SUCCEEDED, and the next stage's query, run afterwards, finds
+      // the same attempt and processes it again. The same happens when a
+      // transfer failure leaves an attempt at OUTPUT_INGESTING just before the
+      // resumable query runs. Neither is a race with another worker; the batch
+      // does it to itself, deterministically, every time.
+      //
+      // So the candidate set is fixed first, against one moment, and processing
+      // works from that frozen list.
+      const discovered: CompletionCandidate[] = [];
       for (const stage of BATCH_STAGES) {
-        const found = await deps.polling.findOrchestrationCandidates({ stage, limit });
-        candidates += found.length;
-        for (const candidate of found) {
-          const result = await runOnce({
-            organizationId: candidate.organizationId,
-            attemptId: candidate.attemptId,
-            context: input.context,
-          });
-          // Only the closed kind is kept. A batch report is the thing most
-          // likely to be logged wholesale, so it must not be able to carry a
-          // provider error, a storage diagnostic or a locator.
-          results.push(result.kind);
-        }
+        discovered.push(...(await deps.polling.findOrchestrationCandidates({ stage, limit })));
       }
 
-      return { candidates, results };
+      // Deduplicated on the full tenant-qualified identity. An attempt id alone
+      // is not an identity — ids are only unique within their own data — and
+      // two organizations are two different rows however their ids compare.
+      // Order is preserved, so BATCH_STAGES priority and each query's own
+      // ordering decide who makes the cut when the limit bites.
+      const seen = new Set<string>();
+      const selected: CompletionCandidate[] = [];
+      for (const candidate of discovered) {
+        const identity = `${candidate.organizationId}\u0000${candidate.attemptId}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        selected.push(candidate);
+        // A **global** cap on unique attempts, not a per-stage one. Three
+        // stages each bounded at 100 would let one invocation touch 300 rows
+        // while reporting that its limit was 100.
+        if (selected.length === limit) break;
+      }
+
+      const results: ProviderOutputRunResult["kind"][] = [];
+      for (const candidate of selected) {
+        const result = await runOnce({
+          organizationId: candidate.organizationId,
+          attemptId: candidate.attemptId,
+          context: input.context,
+        });
+        // Only the closed kind is kept. A batch report is the thing most
+        // likely to be logged wholesale, so it must not be able to carry a
+        // provider error, a storage diagnostic or a locator.
+        results.push(result.kind);
+      }
+
+      return { candidates: selected.length, results };
     },
   };
 }

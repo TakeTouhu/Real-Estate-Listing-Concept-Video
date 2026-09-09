@@ -198,6 +198,15 @@ runs a real Phase 2H-1 mutation on the same attempt, taking the same
 organization+cycle advisory lock, and it commits. A runner holding that lock
 would make it queue instead.
 
+The synchronization is an explicit two-way barrier, and **no sleep is part of the
+mechanism**. The fake calls `signalEntered()` as the first statement of its body
+and then awaits `waitForRelease()`; the test awaits `entered`, runs its competing
+mutation, asserts the runner is still blocked, and calls `release()`. A timed
+wait would make the proof probabilistic in the direction that hides bugs — too
+short, and the assertion runs before the runner is inside the external call, so a
+held lock is never contended and the test passes for the wrong reason. A test
+timeout still exists, as a deadlock guard, which is a different job.
+
 ### 7. Transfer is at least once, and that is the contract
 
 Two runners can both find an attempt already `OUTPUT_INGESTING`, both reacquire a
@@ -238,15 +247,55 @@ For the same reason there is no poll-history table and no transfer-attempt table
 Neither is needed to make a decision, and both would grow without bound in
 proportion to how often a future runner happens to be scheduled.
 
-### 9. One pass is one pass
+### 9. One pass is one pass, and one attempt is one attempt
 
-`runProviderOutputBatchOnce` discovers bounded candidates for the three
-orchestrated stages and runs each once. It does not loop, sleep, schedule itself,
-own a timer, back off or retry. Discovery is Phase 2H-1's query, reused rather
-than reimplemented — a second one would be a second place for the certainty
-filter and the 1..100 limit rule to drift apart. `OUTPUT_VERIFIED` is not a
-candidate: it is finished, and polling it would be an outbound call with nothing
-to learn and a locator to leak.
+`runProviderOutputBatchOnce` does not loop, sleep, schedule itself, own a timer,
+back off or retry. Discovery is Phase 2H-1's query, reused rather than
+reimplemented — a second one would be a second place for the certainty filter and
+the 1..100 limit rule to drift apart. `OUTPUT_VERIFIED` is not a candidate: it is
+finished, and polling it would be an outbound call with nothing to learn and a
+locator to leak.
+
+**All three stages are discovered before any candidate is processed**, and the
+sequence is fixed:
+
+```text
+validate limit
+  → discover all three stages          (each individually bounded)
+  → ordered union, stage priority kept
+  → deduplicate on (organizationId, attemptId)
+  → take at most `limit` unique attempts   ← a GLOBAL cap
+  → run each selected attempt exactly once
+```
+
+Interleaving discovery with processing lets the batch **feed itself**, and not
+occasionally — deterministically:
+
+```text
+PROCESSING  → this batch records SUCCEEDED with no locator → PROVIDER_SUCCEEDED
+            → the AWAITING_OUTPUT_INGESTION query, run afterwards, finds it again
+
+PROVIDER_SUCCEEDED → this batch begins ingestion, transfer fails transiently
+                   → OUTPUT_INGESTING
+                   → the RESUMABLE_OUTPUT_INGESTION query finds it and transfers again
+```
+
+Neither is a race with another worker. The batch does it to itself, every time,
+because processing an attempt is exactly what makes it eligible for a later
+stage. Freezing the candidate set against one moment makes that impossible rather
+than unlikely.
+
+The deduplication key is the **full tenant-qualified identity**, not the attempt
+id: ids are unique only within their own data, and two organizations are two
+different rows however their ids compare.
+
+`limit` is a **global** cap on unique attempts per invocation, not a per-stage
+one. Three stages each bounded at 100 would let one batch touch 300 rows while
+reporting a limit of 100 — and the stages are not disjoint over the life of a
+batch, which is the same observation from the other side. The report follows:
+`candidates` is the size of the frozen selected set, and
+`results.length === candidates` always, because each selected attempt runs
+exactly once.
 
 Batch results carry only closed result kinds. A batch report is the thing most
 likely to be logged wholesale, so it must not be able to carry a provider error, a

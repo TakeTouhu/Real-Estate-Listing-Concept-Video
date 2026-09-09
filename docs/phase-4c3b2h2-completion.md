@@ -244,8 +244,18 @@ modified, weakened or removed.
 `recordProviderCompletion` on the same attempt — taking the same
 organization+cycle advisory lock — and it commits while the poll is still
 outstanding. The same test exists for `transferAndVerify` with a competing
-`finalizeOutputVerification`. Deterministic gates, not sleeps: the competing
-write either commits or it does not.
+`finalizeOutputVerification`.
+
+The synchronization is an explicit two-way barrier, with **no sleep anywhere in
+the mechanism**. `createBlockingGate()` gives the fake a `signalEntered()` it
+calls as the first statement of its body and a `waitForRelease()` it then awaits;
+the test awaits `entered` — which resolves only once the fake has provably begun
+— runs its competing mutation, asserts the runner is still blocked, and calls
+`release()`. An earlier revision used a timed `breathe(4)` to guess that the
+runner had reached the external call, which fails in the direction that hides
+bugs: too short, and the assertion runs before the runner is inside the call, so
+a held lock is never contended and the test passes for the wrong reason. Vitest's
+own timeout remains, as a deadlock guard — a different job from synchronization.
 
 That test is not decorative. Mutation **N29** makes the polling read leave a
 *session-level* advisory lock held, and ten database tests fail — so the suite
@@ -264,6 +274,15 @@ reservation untouched. A later run recovers it to `OUTPUT_VERIFIED`.
 **Crash resume.** An attempt parked at `OUTPUT_INGESTING` is picked up, its
 locator reacquired, transferred and finalized, with **no second
 `OUTPUT_INGESTION_STARTED` event** and no provider submission.
+
+**A batch cannot feed itself.** Discovery for all three stages completes before
+any candidate is processed, and the union is deduplicated on
+`(organizationId, attemptId)` and capped at the global limit. Without that, a
+batch that moves an attempt from `PROCESSING` to `PROVIDER_SUCCEEDED` would find
+the same row again in the stage query it had not yet run — and a transfer failure
+leaving an attempt at `OUTPUT_INGESTING` would be re-transferred by the resumable
+query moments later. Neither is a race with another worker; the batch did it to
+itself, deterministically, every time.
 
 **Concurrency.** Two runners on one `PROCESSING` attempt produce exactly one
 provider-completion event, exactly one ingestion event and **exactly one
@@ -390,17 +409,16 @@ transfer lease, no reservation mutation, no quota or regeneration-right
 consumption, no `SYSTEM_RECOVERY` attempt, no Scene/Request/Job delivery
 transition, and no paid provider activation.
 
-### One deviation from the brief, stated plainly
+### The omitted result arm — an accepted CTO clarification
 
-§30 lists `OUTPUT_INGESTION_STARTED` among the one-attempt result kinds. It is
-**not** in the delivered union. A run that starts ingestion always goes on to
-attempt the transfer in the same run — §17 and §18 require exactly that ordering
-— so every such run ends on an outcome describing what the transfer achieved:
-`OUTPUT_VERIFIED`, `TRANSFER_RETRYABLE_FAILURE`, `TRANSFER_SOURCE_FAILED`,
-`TRANSFER_OUTCOME_MALFORMED` or `OUTPUT_VERIFICATION_REPLAYED`. There is no path
-that could return `OUTPUT_INGESTION_STARTED`, and shipping an arm nothing returns
-would read as a reachable outcome and invite callers to handle a case that never
-arrives. The fact it was meant to convey — that ingestion began — is observable
-in the row and in the `OUTPUT_INGESTION_STARTED` transition event, both asserted
-by the database suite. If the CTO wants the arm restored as a distinct outcome,
-that implies deferring the transfer to a later run, which would contradict §17.
+The one-attempt result union has **18 kinds**, and `OUTPUT_INGESTION_STARTED` is
+not among them. The CTO accepted this omission on review: a run that starts
+ingestion always goes on to attempt the transfer in the same run, so every such
+run ends on an outcome describing what the transfer achieved —
+`OUTPUT_VERIFIED`, `OUTPUT_VERIFICATION_REPLAYED`, `TRANSFER_RETRYABLE_FAILURE`,
+`TRANSFER_SOURCE_FAILED` or `TRANSFER_OUTCOME_MALFORMED`. A standalone
+ingestion-start return value is unreachable given that sequence, and an arm no
+path can return reads as a reachable outcome and invites callers to handle a case
+that never arrives. The fact it would have conveyed is observable in the row and
+in the `OUTPUT_INGESTION_STARTED` transition event, both asserted by the database
+suite.

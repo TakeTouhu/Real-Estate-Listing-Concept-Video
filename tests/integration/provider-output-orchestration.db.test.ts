@@ -325,19 +325,34 @@ function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<
   return { done: () => finished, value };
 }
 
-async function breathe(times = 20): Promise<void> {
-  for (let i = 0; i < times; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
-/** A gate a fake can await, so a test controls exactly when external I/O ends. */
-function gate() {
-  let open!: () => void;
-  const held = new Promise<void>((resolve) => {
-    open = resolve;
+/**
+ * A two-way barrier around one external call.
+ *
+ * Both directions are explicit, and that is the whole point. `entered` resolves
+ * when the fake's body has *definitely* begun, so a test never has to guess —
+ * with a sleep or otherwise — whether the runner has reached the external call
+ * yet. `waitForRelease` then holds it there until the test says otherwise.
+ *
+ * A sleep would make these tests probabilistic in the direction that hides
+ * bugs: too short and the assertion runs before the runner is inside the call,
+ * so a held lock is never contended and the test passes for the wrong reason.
+ * Vitest's own timeout remains as a deadlock guard, which is a different job.
+ */
+function createBlockingGate() {
+  let signalEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    signalEntered = resolve;
   });
-  return { held, open: () => open() };
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    entered,
+    signalEntered: () => signalEntered(),
+    waitForRelease: () => released,
+    release: () => release(),
+  };
 }
 
 const BASE = { organizationId: ORG_A, context: ctx() };
@@ -725,19 +740,23 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       // organization+cycle advisory lock across a vendor's response time, and a
       // competing completion would queue behind it.
       const { attemptId } = await seedAcceptedProcessingAttempt("nolockpoll");
-      const g = gate();
+      const g = createBlockingGate();
 
       const blockedRun = settled(
         runner({
           source: fakeSource(async () => {
-            await g.held;
+            g.signalEntered();
+            await g.waitForRelease();
             return { kind: "IN_PROGRESS" };
           }),
           transfer: fakeTransfer(VERIFIED_A),
         }).runProviderOutputAttemptOnce({ ...BASE, attemptId }),
       );
 
-      await breathe(4);
+      // Not a sleep: this resolves only once the fake's body has actually run,
+      // so the assertions below are about a runner that is provably inside the
+      // external call rather than one that probably is.
+      await g.entered;
       expect(blockedRun.done()).toBe(false);
 
       // A real authoritative mutation on the same attempt, on another
@@ -752,26 +771,29 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       // held across the await.
       expect(blockedRun.done()).toBe(false);
 
-      g.open();
+      g.release();
       await blockedRun.value;
       expect((await attemptRow(attemptId)).orchestrationState).toBe("PROVIDER_SUCCEEDED");
     });
 
     it("lets an independent writer commit while the transfer is blocked", async () => {
       const { attemptId } = await seedSucceeded("nolocktransfer");
-      const g = gate();
+      const g = createBlockingGate();
 
       const blockedRun = settled(
         runner({
           source: fakeSource(SUCCEEDED_WITH),
           transfer: fakeTransfer(async () => {
-            await g.held;
+            g.signalEntered();
+            await g.waitForRelease();
             return { kind: "RETRYABLE_FAILURE" };
           }),
         }).runProviderOutputAttemptOnce({ ...BASE, attemptId }),
       );
 
-      await breathe(4);
+      // Resolves when the transfer body has begun — which also means the
+      // begin-ingestion transaction has already committed.
+      await g.entered;
       expect(blockedRun.done()).toBe(false);
       // The attempt is already ingesting: the begin transaction committed before
       // the transfer was awaited, which is itself part of the required ordering.
@@ -786,7 +808,7 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       expect(rivalWrite.kind).toBe("APPLIED");
       expect(blockedRun.done()).toBe(false);
 
-      g.open();
+      g.release();
       expect((await blockedRun.value).kind).toBe("TRANSFER_RETRYABLE_FAILURE");
       expect((await attemptRow(attemptId)).orchestrationState).toBe("OUTPUT_VERIFIED");
     });
@@ -835,25 +857,26 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       // of the same object.
       const { attemptId } = await seedSucceeded("claimlost");
       const transfer = fakeTransfer(VERIFIED_A);
-      const g = gate();
+      const g = createBlockingGate();
 
       const blocked = settled(
         runner({
           source: fakeSource(async () => {
-            await g.held;
+            g.signalEntered();
+            await g.waitForRelease();
             return { kind: "SUCCEEDED", outputLocator: locator() };
           }),
           transfer,
         }).runProviderOutputAttemptOnce({ ...BASE, attemptId }),
       );
 
-      await breathe(4);
-      // The rival wins the transition while this run is still outside the
-      // database, waiting on its status source.
+      await g.entered;
+      // The rival wins the transition while this run is provably still outside
+      // the database, waiting on its status source.
       const claimed = await completion(rival).beginOutputIngestion({ ...BASE, attemptId });
       expect(claimed.kind).toBe("APPLIED");
 
-      g.open();
+      g.release();
       expect(await blocked.value).toEqual({ kind: "INGESTION_ALREADY_CLAIMED" });
       expect(transfer.calls).toHaveLength(0);
       // One ingestion event, from the rival. Nothing was duplicated.
@@ -943,6 +966,124 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       expect(await attemptRow(verified.attemptId)).toEqual(verifiedBefore);
       for (const id of [processing.attemptId, succeeded.attemptId, ingesting.attemptId]) {
         expect(id).toBeTruthy();
+      }
+    });
+
+    it("polls an attempt once even when this batch moves it into a later stage", async () => {
+      // The defect this replaced: discovering a stage, processing it, then
+      // discovering the next let the batch feed itself. This attempt starts
+      // PROCESSING, this batch moves it to PROVIDER_SUCCEEDED, and the
+      // AWAITING_OUTPUT_INGESTION query — if it ran afterwards — would find the
+      // same row and process it a second time in the same invocation.
+      const { attemptId } = await seedAcceptedProcessingAttempt("dedupeproc");
+      const source = fakeSource(async () => ({ kind: "SUCCEEDED", outputLocator: null }));
+
+      const report = await runner({
+        source,
+        transfer: fakeTransfer(VERIFIED_A),
+      }).runProviderOutputBatchOnce({ limit: 50, context: ctx() });
+
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("PROVIDER_SUCCEEDED");
+      expect(source.asked).toHaveLength(1);
+      expect(report.candidates).toBe(1);
+      expect(report.results).toEqual(["OUTPUT_LOCATOR_UNAVAILABLE"]);
+    });
+
+    it("transfers an attempt once even when this batch moves it to ingesting", async () => {
+      // The same self-feeding defect through the other door: this batch begins
+      // ingestion, the transfer fails transiently, the row is left
+      // OUTPUT_INGESTING — and the resumable query, run afterwards, would have
+      // transferred it again in the same batch.
+      const { attemptId } = await seedSucceeded("dedupeingest");
+      const transfer = fakeTransfer(async () => ({ kind: "RETRYABLE_FAILURE" }));
+
+      const report = await runner({
+        source: fakeSource(SUCCEEDED_WITH),
+        transfer,
+      }).runProviderOutputBatchOnce({ limit: 50, context: ctx() });
+
+      expect((await attemptRow(attemptId)).orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(transfer.calls).toHaveLength(1);
+      expect(report.candidates).toBe(1);
+      expect(report.results).toEqual(["TRANSFER_RETRYABLE_FAILURE"]);
+    });
+
+    it("deduplicates an attempt returned by more than one stage", async () => {
+      // Discovery is three separate queries against one moment. Even without
+      // the batch moving anything, an attempt could appear twice if the stage
+      // predicates ever overlapped — so the union is deduplicated on the full
+      // tenant-qualified identity rather than trusting them to stay disjoint.
+      const { attemptId } = await seedSucceeded("dupstage");
+      const source = fakeSource(async () => ({ kind: "IN_PROGRESS" }));
+      const duplicated = { organizationId: ORG_A, attemptId };
+
+      const report = await createProviderOutputRunner({
+        polling: {
+          async loadPollingContext(input) {
+            return createProviderPollingContextReader(
+              prisma,
+              createCompletionRepository(prisma),
+            ).loadPollingContext(input);
+          },
+          // Every stage returns the same row, which is exactly what the
+          // deduplication exists to absorb.
+          async findOrchestrationCandidates() {
+            return [duplicated];
+          },
+        },
+        statusSource: source,
+        transfer: fakeTransfer(VERIFIED_A),
+        completion: completion(),
+      }).runProviderOutputBatchOnce({ limit: 50, context: ctx() });
+
+      expect(report.candidates).toBe(1);
+      expect(report.results).toHaveLength(1);
+      expect(source.asked).toHaveLength(1);
+    });
+
+    it("caps unique attempts globally, not per stage", async () => {
+      // Three stages each bounded at N would let one invocation touch 3N rows
+      // while reporting a limit of N. Two attempts exist, one per stage, and a
+      // limit of 1 must select exactly one of them.
+      const first = await seedAcceptedProcessingAttempt("globalcap1");
+      const second = await seedSucceeded("globalcap2");
+      const source = fakeSource(async () => ({ kind: "IN_PROGRESS" }));
+
+      const report = await runner({
+        source,
+        transfer: fakeTransfer(VERIFIED_A),
+      }).runProviderOutputBatchOnce({ limit: 1, context: ctx() });
+
+      expect(report.candidates).toBe(1);
+      expect(report.results).toHaveLength(1);
+      expect(source.asked).toHaveLength(1);
+      // Order follows BATCH_STAGES priority, so the PROCESSING candidate wins.
+      expect(source.asked[0]?.providerPredictionId).toBe("pred_globalcap1");
+      expect(first.attemptId).not.toBe(second.attemptId);
+      // The unselected attempt was never polled and never moved.
+      expect((await attemptRow(second.attemptId)).orchestrationState).toBe("PROVIDER_SUCCEEDED");
+    });
+
+    it("keeps candidates and results in step across a mixed batch", async () => {
+      const processing = await seedAcceptedProcessingAttempt("stepproc");
+      const succeeded = await seedSucceeded("stepsucc");
+      const ingesting = await seedSucceeded("stepingest", true);
+
+      const report = await runner({
+        source: fakeSource(SUCCEEDED_WITH),
+        transfer: fakeTransfer(VERIFIED_A),
+      }).runProviderOutputBatchOnce({ limit: 100, context: ctx() });
+
+      expect(report.candidates).toBe(3);
+      expect(report.results).toHaveLength(report.candidates);
+      // Three distinct attempts, each run exactly once, each reaching the end.
+      expect(report.results).toEqual([
+        "OUTPUT_VERIFIED",
+        "OUTPUT_VERIFIED",
+        "OUTPUT_VERIFIED",
+      ]);
+      for (const id of [processing.attemptId, succeeded.attemptId, ingesting.attemptId]) {
+        expect((await attemptRow(id)).orchestrationState).toBe("OUTPUT_VERIFIED");
       }
     });
 
