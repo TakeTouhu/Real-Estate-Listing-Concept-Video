@@ -974,6 +974,15 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           ...(state === "CANCELLED_PRE_SUBMISSION"
             ? {}
             : { submissionBoundaryEnteredAt: new Date() }),
+          // OUTPUT_VERIFIED now requires its integrity facts (Phase 2H-1).
+          ...(state === "OUTPUT_VERIFIED"
+            ? {
+                outputStorageKey: `org/${ORG_A}/generations/${first.id}/output.mp4`,
+                outputSha256: "a".repeat(64),
+                outputSizeBytes: BigInt(1024),
+                outputVerifiedAt: new Date(),
+              }
+            : {}),
         },
       });
 

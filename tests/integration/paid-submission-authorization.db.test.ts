@@ -375,6 +375,13 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           providerPredictionId: `pred_${suffix}_original`,
           providerAcceptedAt: new Date(),
           submissionBoundaryEnteredAt: new Date(),
+          // A verified managed output carries its integrity facts, and the
+          // Phase 2H-1 CHECK constraint enforces that. The fixture models a
+          // delivered attempt, so it now models a complete one.
+          outputStorageKey: `org/${ORG_A}/generations/${chain.attempt.id}/output.mp4`,
+          outputSha256: "a".repeat(64),
+          outputSizeBytes: BigInt(1024),
+          outputVerifiedAt: new Date(),
         },
       });
       const regen = await repos.requests.admitUserRegeneration(
@@ -808,6 +815,17 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           // state the system could actually reach.
           ...(certainty === "ACCEPTED"
             ? { providerPredictionId: `pred_${suffix}`, providerAcceptedAt: new Date() }
+            : {}),
+          // And Phase 2H-1 requires a verified managed output to carry its
+          // integrity facts, for the same reason: a state the system could
+          // actually reach.
+          ...(state === "OUTPUT_VERIFIED"
+            ? {
+                outputStorageKey: `org/${ORG_A}/generations/${sibling.attempt.id}/output.mp4`,
+                outputSha256: "a".repeat(64),
+                outputSizeBytes: BigInt(1024),
+                outputVerifiedAt: new Date(),
+              }
             : {}),
           ...(state === "RECONCILIATION_PENDING"
             ? {
@@ -1266,6 +1284,10 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           providerPredictionId: "pred_lockregen",
           providerAcceptedAt: new Date(),
           submissionBoundaryEnteredAt: new Date(),
+          outputStorageKey: `org/${ORG_A}/generations/${chain.attempt.id}/output.mp4`,
+          outputSha256: "a".repeat(64),
+          outputSizeBytes: BigInt(1024),
+          outputVerifiedAt: new Date(),
         },
       });
       const regen = await repositories(prisma).requests.admitUserRegeneration(
@@ -1331,6 +1353,17 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           submissionBoundaryEnteredAt: new Date(),
           ...(certainty === "ACCEPTED"
             ? { providerPredictionId: `pred_${suffix}`, providerAcceptedAt: new Date() }
+            : {}),
+          // And Phase 2H-1 requires a verified managed output to carry its
+          // integrity facts, for the same reason: a state the system could
+          // actually reach.
+          ...(state === "OUTPUT_VERIFIED"
+            ? {
+                outputStorageKey: `org/${ORG_A}/generations/${sibling.attempt.id}/output.mp4`,
+                outputSha256: "a".repeat(64),
+                outputSizeBytes: BigInt(1024),
+                outputVerifiedAt: new Date(),
+              }
             : {}),
           ...(state === "RECONCILIATION_PENDING"
             ? {

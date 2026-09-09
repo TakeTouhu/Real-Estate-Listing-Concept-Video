@@ -20,3 +20,4 @@ export * from "./pricing/index";
 export * from "./authorization/index";
 export * from "./submission/index";
 export * from "./reconciliation/index";
+export * from "./completion/index";

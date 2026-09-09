@@ -793,7 +793,18 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       if (state !== "PROCESSING") {
         await prisma.sceneGeneration.update({
           where: { id: seeded.attempt.id },
-          data: { orchestrationState: state },
+          data: {
+            orchestrationState: state,
+            // OUTPUT_VERIFIED now requires its integrity facts (Phase 2H-1).
+            ...(state === "OUTPUT_VERIFIED"
+              ? {
+                  outputStorageKey: `org/${ORG_A}/generations/${seeded.attempt.id}/output.mp4`,
+                  outputSha256: "a".repeat(64),
+                  outputSizeBytes: BigInt(1024),
+                  outputVerifiedAt: new Date(),
+                }
+              : {}),
+          },
         });
       }
       return seeded;

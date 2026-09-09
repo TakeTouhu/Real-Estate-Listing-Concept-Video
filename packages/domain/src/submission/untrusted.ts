@@ -32,6 +32,34 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
 }
 
 /**
+ * Exactly these own properties, no more and no fewer.
+ *
+ * The closed contracts at these boundaries say what a value *is*, and a value
+ * carrying `providerOutputUrl` alongside a valid `kind` is not one of them —
+ * it is a different value that happens to contain one. Accepting it and
+ * ignoring the extra makes the runtime trust boundary wider than the documented
+ * contract, and every subsequent spread, log line or serialization inherits the
+ * wider one. So an unknown key makes the value malformed rather than being
+ * dropped: refusing it fails at the sender, which is where the bug is.
+ *
+ * `getOwnPropertyNames` rather than `Object.keys`, so a non-enumerable
+ * smuggled field is caught too. Own properties only, so an inherited
+ * `Object.prototype` method is not mistaken for a smuggled field — and, in the
+ * other direction, a discriminant that exists only on a prototype does not
+ * count as present.
+ *
+ * Every field in every contract these guard is required, so "exactly these" is
+ * the whole rule; there is no optional-key case to get wrong.
+ */
+export function hasExactlyOwnKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  const own = Object.getOwnPropertyNames(value);
+  return own.length === allowed.length && own.every((key) => allowed.includes(key));
+}
+
+/**
  * A string with something in it.
  *
  * Blank is worse than missing: it satisfies every "is it present" check while

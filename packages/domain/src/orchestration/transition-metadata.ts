@@ -57,6 +57,21 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
    * record of *why* the customer's unit was not handed back yet.
    */
   "remainingPendingUnknownAttempts",
+  /**
+   * What a verified managed output is, and when the platform proved it.
+   *
+   * A content digest and a byte count: neither is customer content, a
+   * credential, or a location. They let the append-only log say *which* bytes
+   * were verified even if the row is later corrupted, which is the whole point
+   * of recording an integrity fact twice.
+   *
+   * `outputStorageKey` is deliberately absent. Where the object lives is
+   * answered by the row, and putting a location into the most widely read table
+   * in an incident is exactly the broadening this allowlist exists to prevent.
+   */
+  "outputSha256",
+  "outputSizeBytes",
+  "outputVerifiedAt",
   "diagnosticCode",
   "generationJobId",
   "generationSceneId",

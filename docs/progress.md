@@ -753,6 +753,141 @@ and ADR-0020.
   is frozen from the submission boundary, so an attempt discovered late enters
   `SUBMISSION_UNKNOWN` already past it and is legitimately made unknown and
   exhausted within a single batch.
+- **Phase 4C-3B-2H-1** — see GitHub for its lifecycle. Adds what happens to an
+  attempt *after* the provider takes it. Phase 2G-2 left an attempt able to reach
+  `PROCESSING + ACCEPTED` and never able to leave it: the provider would finish,
+  or fail, or produce an output nobody copied, and the row would say `PROCESSING`
+  forever. Three operations end that — `recordProviderCompletion`,
+  `beginOutputIngestion` and `finalizeOutputVerification` — and they define and
+  persist the contract without contacting anything. **No provider is contacted
+  and no object storage is written anywhere in this phase**: there is no HTTP
+  client in the dependency graph, no polling loop, no webhook route, no storage
+  client and no scheduler, and nothing is downloaded, uploaded, composed,
+  delivered or charged.
+
+  The phase exists to resist three collapses. A provider finishing is not the
+  platform having the video — a provider's output lives at a temporary URL for
+  hours, so an attempt that records success and stops has recorded a fact that
+  expires, and if the copy is folded into the same transition there is no state
+  left in which to describe a copy that failed. Having the video is not having
+  proved it: a transfer that stops at 80% leaves a real key pointing at a real
+  object of the wrong length, and nothing in a storage API distinguishes that
+  from success. And a copy failing is not the provider failing — the expensive
+  one, because the provider has already run the GPU job and will bill for it, so
+  recording an internal storage fault as a provider failure puts the platform's
+  own bug into the vendor's reliability record and, since a failure is terminal,
+  throws away an output still sitting there under a key the attempt could
+  re-derive. So `OUTPUT_INGESTING → FAILED_*` exists in the state machine and is
+  not used for that: an interrupted copy stays `OUTPUT_INGESTING`, which is what
+  makes it resumable, and the omission is structural rather than conventional
+  because the completion precondition requires `PROCESSING`.
+
+  Certainty never moves after acceptance. A post-acceptance execution failure
+  lands on `FAILED_RETRYABLE` or `FAILED_TERMINAL` with the certainty still
+  `ACCEPTED`, and the write type has exactly one field so no branch can write a
+  certainty it cannot name. Rewriting it to `DEFINITIVELY_REJECTED` would be the
+  most expensive mistake available here: that is the one certainty the Safety
+  Guard classifies at zero cost, so a provider that took the work, ran it and
+  failed would be recorded as having declined it, and the platform would forget a
+  charge it owes in exactly the incident where cost matters most. The existing
+  classifier already covered every pairing this phase produces and was not
+  modified — no state reachable here is ever classified `NONE`.
+
+  The completion evidence is two closed arms, `SUCCEEDED {}` and `FAILED
+  { retryable, diagnosticCode }`. The success arm carries no payload at all, not
+  even a location, because a phase that cannot name where a provider's copy lives
+  cannot leak one. The storage key is instead *derived* from the organization and
+  the attempt id, so the same attempt always resolves to the same object — which
+  is what lets a retry land on its own object rather than scattering partial ones
+  — and there is no parameter through which a caller could point a verification
+  record at an object the attempt does not own. The integrity receipt proves
+  bytes and carries nothing else: a 64-character lowercase hex digest, refused
+  rather than normalized when it is uppercase, since two spellings of one digest
+  is how an equality check starts reporting identical bytes as corruption; and a
+  positive safe integer byte count, with zero refused explicitly because a
+  zero-byte object is not a small video but a failed copy that happened to create
+  the destination. No maximum is invented.
+
+  Verified output metadata is immutable, by two mechanisms that do different
+  jobs. The database CHECKs establish completeness, format and range: all four
+  facts on any `OUTPUT_VERIFIED` row, a canonical lowercase digest, a size inside
+  the domain's own bounds. They cannot establish immutability at all — a CHECK
+  evaluates one row against one predicate and has no memory of what the row said
+  before, so a verified row whose key is swapped for a different key still
+  satisfies every one of them while pointing at bytes nobody hashed. Immutability
+  is an application property, established by closing the mutation paths: the
+  compare-and-set writes the four facts only on the ingesting-to-verified edge,
+  which a verified row can no longer match; an exact replay changes nothing; a
+  receipt describing different bytes is a discrepancy to surface rather than a
+  correction to apply; and the legacy tenant-facing repository — which predates
+  orchestration and could still set or clear the key on any row its tenant owned
+  — may now write a key only on rows with no orchestration state at all. That
+  last one was a real hole rather than a theoretical one: it moved the key alone,
+  with no version bump, no event and no constraint violation, leaving a verified
+  row that read as healthy and described an object it never verified. The
+  verification instant is excluded from the replay comparison — it records when
+  *this platform* verified, and requiring a replaying caller's fresh instant to
+  match would make every replay after the first millisecond a conflict. It comes
+  from the service's single post-lock clock read, never from a caller and never
+  from a wall-clock read inside the persistence layer.
+
+  Three narrower disciplines follow the same logic — put the guarantee where the
+  boundary actually is. The byte-count column is bounded above at
+  `Number.MAX_SAFE_INTEGER` as well as below at zero, because past 2^53-1 reading
+  a `BIGINT` into a JavaScript number is silently lossy and a stored
+  9007199254740993 would come back as ...992, validate cleanly, and be compared
+  against a receipt as though it were what was written; the repository refuses to
+  narrow an out-of-range value regardless, since a constraint added by a
+  migration says nothing about a database that migration has not reached. The
+  persistence boundary derives the storage key itself rather than receiving one,
+  because that boundary is reachable without the service — exactly as the tenant
+  boundary was in 2G-1 and 2G-2 — and a key parameter there would let any caller
+  holding a session write an arbitrary path; there is now no parameter to pass
+  one through. And the completion write names a closed landing type while all
+  three persistence operations consult the committed state machine before any
+  SQL, so the transition table is load-bearing rather than documentary: a caller
+  can no longer construct a write that moves `PROCESSING` straight to
+  `OUTPUT_INGESTING`, and if an edge this phase depends on is ever removed from
+  that table the failure is immediate and loud instead of a persistence layer
+  quietly performing a transition the domain no longer permits.
+
+  The runtime evidence contracts are closed rather than merely sufficient. A
+  completion observation or an integrity receipt carrying an unknown key — a
+  provider output URL, a raw provider response, a storage key, a MIME type, a
+  prompt — is malformed, not silently trimmed. Nothing would have persisted those
+  fields today, but that was a property of three separate downstream decisions
+  rather than of the boundary itself, and a runtime trust boundary wider than the
+  documented contract is inherited by every later spread, log line and
+  serialization. Refusing fails at the sender, which is where the bug is.
+
+  Customer entitlement is untouched on every path, structurally: there is no
+  reservation handle in the persistence module to misuse. Nothing consumes,
+  releases or decrements a unit, and in particular a unit is not handed back
+  because an accepted execution later failed — the provider ran the job and will
+  bill for it. `OUTPUT_VERIFIED` is not delivery either: the request is not
+  `DELIVERED`, the scene is not `READY`, the job is not `SCENES_READY`, and no
+  deliverable is reachable by a customer, because publishing AI output without
+  human review is exactly what the product rules forbid. The Phase 2F-1 lock
+  order is joined unchanged — the advisory lock is still taken because a
+  completion moves cycle exposure between `IN_FLIGHT` and `SETTLED_ESTIMATED`,
+  and an authorization reading exposure mid-flight would decide on a stale total.
+  Tenancy sits inside the compare-and-set with both clauses, as frozen in 2G-1
+  and 2G-2. Candidate discovery is advisory, bounded at 100, returns identifiers
+  only, and is filtered to accepted attempts so the completion path and the
+  reconciliation path cannot reach for the same row; there is no scheduler,
+  daemon, cron or timer. One additive migration was required — three nullable
+  columns and three CHECKs, every one keyed on a column that is NULL on legacy
+  rows, nothing backfilled, and a legacy `state = 'SUCCEEDED'` row deliberately
+  not reinterpreted as an orchestrated success.
+
+  The managed output key is deliberately extensionless. An earlier revision ended
+  it `output.mp4`, which asserts a container this phase does not verify: a receipt
+  proves a SHA-256 and a byte count, not an MP4 wrapper, a codec, a MIME type or
+  that the object plays, and the repository has no closed generated-video format
+  vocabulary to check one against. A later phase that actually validates a format
+  may attach or normalize one; legacy keys that already carry a suffix are left
+  exactly as they are, because rewriting them would be a claim about objects
+  nobody re-examined.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

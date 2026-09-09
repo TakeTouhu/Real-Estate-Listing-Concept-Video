@@ -3,6 +3,191 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-1: Provider completion and managed output persistence
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2h1-completion.md` and
+ADR-0038. Phase 4C-3B-2G-2 left an attempt able to reach `PROCESSING + ACCEPTED`
+and never able to leave it; this phase records what happens afterwards and
+nothing more. **No provider is contacted anywhere in this phase** — no HTTP
+client, no polling, no webhook ingestion, no storage client, no scheduler — and
+nothing is downloaded, uploaded, composed, delivered or charged. One additive
+database migration was required.
+
+### Added
+
+- **Five states that mean five different things.** `PROCESSING + ACCEPTED`
+  becomes `PROVIDER_SUCCEEDED`, `FAILED_RETRYABLE` or `FAILED_TERMINAL`; a
+  success then becomes `OUTPUT_INGESTING` and finally `OUTPUT_VERIFIED`. A
+  provider finishing, a copy landing and bytes being proved are three separate
+  facts, and collapsing any two of them leaves a situation the row cannot
+  describe: a provider output lives at a temporary URL for hours, so an attempt
+  that records success and stops has recorded a fact that expires. Every edge is
+  the committed attempt state machine's — no second transition table exists.
+- **A closed, provider-neutral completion contract.** Two arms only: `SUCCEEDED
+  {}` and `FAILED { retryable, diagnosticCode }`. The success arm carries no
+  payload at all, not even a location, because a phase that cannot name where a
+  provider's copy lives cannot leak one. No provider URL, output URL, response
+  body, HTTP status, vendor status string, raw error, credential, prompt or
+  stack trace anywhere. The diagnostic reuses Phase 2G-1's closed catalog
+  unchanged and unexpanded.
+- **A derived, application-owned storage key, at both boundaries.**
+  `managedGenerationOutputKey({ organizationId, attemptId })` is computed from
+  application identifiers alone — never a provider URL, provider file name,
+  customer file name or external path. The same attempt always derives the same
+  key, which is what makes an interrupted copy resumable over its own object.
+  Neither the service nor the persistence boundary *accepts* one: the repository
+  derives the key itself, inside the transaction, from the organization and
+  attempt it was opened for, so a caller reaching that boundary directly has no
+  parameter through which to name a path at all. It also re-proves the digest and
+  the byte count with the domain's own predicates before either reaches a column
+  an audit will treat as evidence.
+- **The key carries no media-format extension.** A receipt proves a digest and a
+  byte count; it does not prove an MP4 container, a codec, a MIME type or that
+  the object plays, and this repository has no closed generated-video format
+  vocabulary to check one against. A key ending `.mp4` would assert a container
+  nothing here verified, on a pipeline meant to stay provider-neutral. A later
+  phase that actually validates a format may attach one; legacy keys that already
+  carry a suffix are left exactly as they are.
+- **The state machine is load-bearing, not documentary.** The completion write
+  names a closed `ProviderCompletionLandingState` — `PROVIDER_SUCCEEDED`,
+  `FAILED_RETRYABLE`, `FAILED_TERMINAL` — so a session caller can no longer
+  construct a write that moves `PROCESSING` straight to `OUTPUT_INGESTING`,
+  skipping the state that records a provider actually finished. And because a
+  type is not a runtime guarantee at a boundary reachable with a cast, all three
+  persistence operations consult `canTransitionAttempt` before any SQL and fail
+  loudly on an edge the committed table does not permit.
+- **Closed runtime shapes, not merely sufficient ones.** A completion observation
+  or an integrity receipt carrying an unknown key — `providerOutputUrl`,
+  `rawProviderResponse`, `outputStorageKey`, `mimeType`, a prompt — is now
+  **malformed**, not silently trimmed. Accepting the object and dropping the
+  extra would make the runtime trust boundary wider than the documented contract
+  and leave every later spread, log line and serialization inheriting the wider
+  one; refusing it fails at the sender, where the bug is. One shared helper
+  checks own properties for both contracts, so a field hidden from enumeration is
+  caught while an inherited `Object.prototype` method is not mistaken for one.
+- **An integrity receipt that proves bytes and carries nothing else.**
+  `{ sha256, sizeBytes }` — no storage key, no provider URL, no raw bytes, no
+  MIME type. The digest must be exactly 64 lowercase hex characters with **no
+  silent normalization**: uppercase is refused rather than lowercased, because
+  accepting two spellings of one digest is how an equality check starts reporting
+  identical bytes as a corrupted output. The size must be positive, integral,
+  finite and safe; zero is refused explicitly, since a zero-byte object is not a
+  small video but a failed copy that happened to create the destination. No
+  maximum is invented.
+- **Immutable verified-output metadata — by two different mechanisms.** Three
+  additive nullable columns — `outputSha256`, `outputSizeBytes`,
+  `outputVerifiedAt` — join the existing `outputStorageKey`. The database
+  CHECKs establish **completeness, format and range**: all four facts on any
+  `OUTPUT_VERIFIED` row, a canonical lowercase digest, a size inside the domain's
+  own bounds. They cannot establish immutability, because a CHECK evaluates one
+  row against one predicate and has no memory of what the row said before.
+  **Immutability is an application property**, established by closing every
+  mutation path: the compare-and-set writes the four facts only on
+  `OUTPUT_INGESTING → OUTPUT_VERIFIED`, which a verified row can no longer match;
+  an exact replay returns `REPLAYED` and changes nothing; a receipt describing
+  different bytes returns `CONFLICTING_OUTPUT` and nothing is overwritten; and
+  the legacy repository can no longer write the key at all (below).
+  `outputVerifiedAt` is excluded from the comparison — it records when *this
+  platform* verified, and requiring a replaying caller's fresh instant to match
+  would make every replay after the first millisecond a conflict.
+- **Four service-owned event types.** `PROVIDER_COMPLETION_SUCCEEDED`,
+  `PROVIDER_COMPLETION_FAILED`, `OUTPUT_INGESTION_STARTED`, `OUTPUT_VERIFIED`,
+  never caller-chosen. Metadata gained `outputSha256`, `outputSizeBytes` and
+  `outputVerifiedAt` on the existing allowlist. `outputStorageKey` was
+  deliberately **not** added: where the object lives is answered by the row, and
+  transition history is the most widely read table in an incident.
+- **Bounded, advisory candidate discovery.** `findCompletionCandidates` returns
+  `{ organizationId, attemptId }` for one of three stages and nothing else — no
+  locks, no provider reference, no prompt, no output location — filtered to
+  `ACCEPTED` attempts so the completion path and the reconciliation path cannot
+  reach for the same row. The limit is validated by Phase 2G-2's canonical
+  validator, reused rather than restated, capped at 100 and refused rather than
+  clamped. No scheduler, daemon, cron, interval or timer exists in this phase.
+
+### Refused, deliberately
+
+- **A post-acceptance failure does not become `DEFINITIVELY_REJECTED`.** The
+  certainty stays `ACCEPTED` on both failure landings. `DEFINITIVELY_REJECTED` is
+  the one certainty the Safety Guard classifies at zero cost, so rewriting it
+  would record a provider that took the work, ran it and failed as having
+  declined it — the platform would forget a charge it owes, in exactly the
+  incident where cost matters most. The write type has a single field, so no
+  branch can write a certainty it cannot name.
+- **An ingestion failure is not a provider failure.** The state machine permits
+  `OUTPUT_INGESTING → FAILED_*`; this phase does not use it for a storage fault,
+  and the omission is structural — the completion precondition requires
+  `PROCESSING`, so no completion decision can land on a failure from
+  `OUTPUT_INGESTING` at all. An interrupted copy stays `OUTPUT_INGESTING` and is
+  resumable. Recording it as a provider failure would discard a paid,
+  still-retrievable render and attribute the platform's own bug to the vendor.
+- **`FAILED_RETRYABLE` retries nothing.** It records that a retry is
+  permissible. No replacement attempt is created and no `SYSTEM_RECOVERY` request
+  kind exists to create one with.
+- **Customer entitlement is untouched on every path.** No reservation is read for
+  its state, locked or written; there is no reservation handle in the persistence
+  module to misuse. No `RESERVED → CONSUMED`, no `RECONCILIATION_HOLD →
+  CONSUMED`, no unit decrement, no release, no charge. In particular a unit is
+  **not** released because an accepted execution later failed — the provider ran
+  the job and will bill for it.
+- **`OUTPUT_VERIFIED` is not delivery.** The logical request is not `DELIVERED`,
+  the scene is not `READY`, the job is not `SCENES_READY`, and no deliverable is
+  reachable by a customer. Those are review-gated decisions belonging to later
+  phases.
+- **Legacy rows are not reinterpreted.** A legacy `state = 'SUCCEEDED'` row is
+  not read as an orchestrated `PROVIDER_SUCCEEDED`, and nothing backfills a
+  certainty, a completion, a digest, a size or a verification timestamp.
+- **The legacy repository may no longer write a managed output key on an
+  orchestrated Attempt.** `SceneGenerationRepository.update` predates
+  orchestration and could still set or clear `outputStorageKey` on any row its
+  tenant owned — including a verified one. That moved the key alone: no version
+  bump, no transition event, no new verification, and no constraint violation,
+  leaving a verified row that read as healthy while describing an object it never
+  verified. A key write now matches only rows with `orchestrationState IS NULL`.
+  The refusal is the method's existing neutral not-found answer with the row
+  untouched (a distinct error would be a new way to probe orchestration status),
+  it is scoped to the key alone so every other legacy field still updates, and
+  genuinely legacy rows keep the old behaviour exactly.
+
+### Unchanged, deliberately
+
+- The Phase 2F-1 lock order is joined, not extended. The organization+cycle
+  advisory lock is still taken — a completion moves the organization's cycle
+  exposure between `IN_FLIGHT` and `SETTLED_ESTIMATED`, so an authorization
+  reading exposure mid-flight would decide on a stale total — on the same key and
+  at the same acquisition point as the three phases before it.
+- `classifyProviderCostExposure` and the attempt state machine already covered
+  every pairing and edge this phase produces and were **not modified**. No state
+  this phase can reach is ever classified `NONE`;
+  `RECONCILIATION_EXHAUSTED + SUBMISSION_UNKNOWN` stays `UNCERTAIN` and
+  `DEFINITIVELY_REJECTED` stays `NONE`.
+- Tenancy is proved at the compare-and-set with both clauses — the denormalized
+  `videoProjectId` and the `Attempt → Request → Scene → Job → VideoProject` chain
+  — exactly as frozen in Phases 2G-1 and 2G-2. A row whose column and chain
+  disagree is frozen rather than writable by whichever tenant a corruption
+  favours.
+- No paid provider activation. `FAL_KEY` is not enabled, the fal production
+  factory is not wired, the Veo production route is not opened, and the WaveSpeed
+  paid route stays closed.
+
+### Database
+
+- Migration `00000000000011_phase4c3b2h1_managed_output_integrity`: three
+  additive nullable columns and three CHECK constraints. No rename, no column
+  drop, no backfill, no destructive change. Every constraint keys on
+  `orchestrationState`, which is NULL on all pre-2E rows, and `IS DISTINCT FROM`
+  is null-safe — so legacy rows satisfy them unconditionally and no exception
+  logic exists. Verified from an empty database and from a database containing a
+  legacy row.
+- `outputSizeBytes` is `BIGINT` rather than `INTEGER` because `int4` would
+  silently overflow at roughly 2 GiB on a value the validator accepted — and it
+  is bounded **above** at `Number.MAX_SAFE_INTEGER`, so the column's range and
+  the application's range are the same range. Past 2^53-1, reading a `BIGINT`
+  into a JavaScript number is silently lossy: a stored 9007199254740993 comes
+  back as ...992 and validates cleanly, so a value that was never written would
+  be compared against a receipt as though it had been. The repository refuses to
+  narrow an out-of-range value regardless, because a constraint added by a
+  migration says nothing about a database that migration has not reached.
+
 ## [Unreleased] — Phase 4C-3B-2G-2: Reconciliation resolution and deadline exhaustion
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2g2-completion.md`. Phase
