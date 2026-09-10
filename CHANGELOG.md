@@ -3,6 +3,139 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-2: Dormant provider polling and output transfer orchestration
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2h2-completion.md` and
+ADR-0039. Phase 2H-1 defined every state an accepted attempt can reach and left
+nothing to fill them in; this phase writes the layer that decides which call to
+make — **still without making a single network request.** No HTTP client, no
+provider adapter, no storage client, no credentials, no scheduler, and no
+production caller. One additive module; no migration and no schema change.
+
+### Added
+
+- **A one-attempt runner and a one-pass batch runner**, both dormant.
+  `runProviderOutputAttemptOnce` takes an organization, an attempt id and an
+  operational context — and nothing else. State, certainty, provider, model,
+  prediction id, output location, storage key and receipt are all loaded or
+  derived internally, because each is a fact about the past a caller could
+  otherwise get wrong or supply deliberately. `runProviderOutputBatchOnce` sweeps
+  the three orchestrated stages once: it does not loop, sleep, schedule itself,
+  own a timer, back off or retry.
+- **A batch cannot feed itself.** All three stages are discovered **before** any
+  candidate is processed; the union is then deduplicated on
+  `(organizationId, attemptId)` and capped at a **global** limit on unique
+  attempts, not a per-stage one. Interleaving discovery with processing lets a
+  batch reprocess its own work — deterministically, not occasionally: this batch
+  moves an attempt from `PROCESSING` to `PROVIDER_SUCCEEDED` and the stage query
+  it has not yet run finds the same row; or a transfer failure leaves an attempt
+  `OUTPUT_INGESTING` moments before the resumable query looks. Three stages each
+  bounded at 100 would also let one invocation touch 300 rows while reporting a
+  limit of 100. `report.candidates` is the size of the frozen selected set, and
+  `results.length === candidates` always.
+- **The persisted attempt is the only source of provider identity.** Never
+  `VIDEO_PROVIDER`, the default model, the catalog's current selection or the
+  routing policy. An attempt was admitted against a specific vendor and holds a
+  prediction id only that vendor issued; asking today's default about it is a
+  lookup that fails, or — worse — one that succeeds against something unrelated.
+  Only `{ providerName, providerModelId, providerPredictionId }` reach the status
+  source: no organization, no attempt id, no prompt, no request hash, no pricing.
+  Blank persisted identity is **refused, not repaired**.
+- **An opaque `TransientProviderOutputLocator`.** A provider's output location is
+  a bearer credential with an expiry arriving as external text, so it lives in a
+  `#` private field with no way to read it back — no getter, no `toString`, no
+  `toJSON`, no enumeration, no spread. All three stringification hooks return a
+  redaction marker, so an accidental interpolation prints
+  `[redacted provider output locator]` rather than the credential. The extraction
+  capability a real transfer adapter will need is **deliberately absent**: it is
+  a network capability and will be reviewed together with the adapter.
+- **A raw string URL is refused at the observation boundary.** `outputLocator`
+  must be `null` or a locator this process built. Accepting a string would let a
+  vendor's response text travel through the orchestrator as an ordinary value —
+  spreadable, loggable, serializable — and locator secrecy would rest on nobody
+  ever doing any of those by accident.
+- **Two closed, provider-neutral contracts**, both validated as `unknown` with
+  exact own keys: `ProviderPollObservation` (`IN_PROGRESS` | `SUCCEEDED` |
+  `FAILED`) and `ManagedOutputTransferOutcome` (`VERIFIED` | `RETRYABLE_FAILURE`).
+  Neither may carry a provider URL, a raw response, an error message or a storage
+  diagnostic. The receipt travels to Phase 2H-1 as `unknown`, which stays the
+  single authority on digests and byte counts.
+
+### The orderings this phase exists to get right
+
+- **Provider truth is recorded before output acquisition matters.** A `SUCCEEDED`
+  poll persists the completion *first*, always; only then is the locator
+  consulted. A provider can be conclusively finished while the platform cannot
+  reach the artifact, and letting that suppress the render's existence would
+  leave a paid attempt reading as in-flight forever. A missing locator answers
+  `OUTPUT_LOCATOR_UNAVAILABLE` from an attempt that is nonetheless
+  `PROVIDER_SUCCEEDED`.
+- **A lookup failure is not a provider failure.** A status source that throws
+  answers `STATUS_SOURCE_FAILED` with nothing written. "I could not find out"
+  says nothing about the provider, and recording it as a failure would convert a
+  network blip into a terminal state for a paid render. Thrown values are never
+  inspected, logged or persisted — a vendor's error object can hold a signed URL,
+  a request body and an authorization header at once.
+- **A transfer failure is not a provider failure either.** A throw, a transient
+  failure or a malformed outcome all leave the attempt `OUTPUT_INGESTING`.
+  `OUTPUT_INGESTING → FAILED_*` exists in the committed state machine and this
+  phase never uses it: the render is still there, the key is deterministic, and a
+  later run picks it up.
+- **Recorded provider reality is immutable.** A late `FAILED` poll against a
+  recorded success is `PROVIDER_REALITY_CONFLICT`, not a correction; a late
+  `IN_PROGRESS` cannot move an attempt backwards.
+- **No database transaction is open across external I/O.** Structural rather than
+  disciplinary — the reader returns a plain value and the ports are separate
+  awaited calls, so there is no transaction handle in scope to hold. Two live
+  tests prove it from the outside: while a fake blocks inside the poll (and again
+  inside the transfer), an independent connection runs a real Phase 2H-1 mutation
+  on the same attempt, taking the same advisory lock, and it commits.
+
+### Refused, deliberately
+
+- **The legacy WaveSpeed `getStatus` path is not wired here.** Its status mapping
+  is provisional candidate infrastructure written before the provider-neutral
+  certainty and completion axes existed, and adopting it would freeze it as the
+  paid-orchestration contract by accident. Importing `@app/video-providers` into
+  `@app/domain` or `@app/database` would also put an HTTP client behind a domain
+  interface, where no test would think to look for one.
+- **Transfer is documented as at least once, not exactly once.** Two runners can
+  both find an attempt already ingesting and both copy. That is accepted: the key
+  is deterministic, finalization is compare-and-set protected, verified metadata
+  is immutable, and **no paid provider generation is repeated** — the duplicate is
+  bandwidth, not money. A lease would buy a duplicate-free download at the price
+  of a durable lock whose holder can die. The cheap half is still taken: a runner
+  transfers only if its own `beginOutputIngestion` returned first application.
+- **`OUTPUT_INGESTING` is resumable and does not re-claim the transition.** For an
+  attempt already there, the transition is not something to win but something
+  already true — that is the crash-recovery path.
+- **Polling writes nothing.** No event for `IN_PROGRESS`, no version bump, no
+  poll timestamp, no progress percentage, no poll-history table and no
+  transfer-attempt table. `IN_PROGRESS` is the most common answer a poller gets,
+  and recording each one would bury real transitions in the table an operator
+  reads during an incident.
+- **No paid submission and no cancellation are reachable.** Not "declined" —
+  unexpressible: neither port is among the module's dependencies.
+- **No entitlement, no delivery.** No reservation mutation, no quota consumption,
+  no regeneration right consumed, no `SYSTEM_RECOVERY` attempt, and no
+  `DELIVERED` / `READY` / `SCENES_READY` transition.
+
+### Changed
+
+- One comment-only correction in Phase 2H-1's completion service, authorized by
+  the 2H-1 merge review: it said "no reservation is read", which overstated its
+  scope. The service reads none; the persistence layer reads a single column,
+  `billingCycleKey`, solely to compute the Phase 2F-1 advisory-lock key — taking
+  no lock on the reservation row, writing nothing to it, and never consulting its
+  state or units. Behaviour is unchanged.
+
+### Database
+
+- **No migration and no schema change.** Phase 2H-1 already persists everything
+  this phase reads, and `providerName` / `providerModelId` / `providerPredictionId`
+  were verified present on the attempt row against the frozen baseline before
+  implementation. Both Prisma diffs report `No difference detected`.
+
 ## [Unreleased] — Phase 4C-3B-2H-1: Provider completion and managed output persistence
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2h1-completion.md` and
