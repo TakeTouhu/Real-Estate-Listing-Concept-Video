@@ -41,6 +41,35 @@ export type {
   FalH3MaxSubmissionDeps,
 } from "./fal/h3-max-provider";
 
+/**
+ * The dormant fal / H3 Max **completion status** adapter.
+ *
+ * Unlike everything above it, this one really does construct fal queue
+ * requests — so the accurate claim about the repository is not "there is no
+ * concrete polling implementation" but "the concrete polling implementation has
+ * no production composition, caller or credential". Exported for tests and
+ * review; the Phase 2H-2 runner it satisfies has no production caller either
+ * (ADR-0040).
+ */
+export { FalQueueCompletionStatusSource } from "./fal/queue-status-source";
+export type {
+  FalQueueStatusSourceConfig,
+  FalQueueStatusSourceDeps,
+} from "./fal/queue-status-source";
+export {
+  encodeFalQueueRequestId,
+  falQueueResponseUrl,
+  falQueueStatusUrl,
+  parseFalH3MaxOutputUrl,
+  parseFalQueueStatus,
+  isFalQueueErrorType,
+  FAL_ERROR_TYPE_DIAGNOSTIC,
+  FAL_ERROR_TYPE_RETRYABLE,
+  FAL_PROVIDER_NAME,
+  FAL_QUEUE_ERROR_TYPES,
+} from "./fal/queue-status-mapping";
+export type { FalQueueErrorType, FalQueueStatusFact } from "./fal/queue-status-mapping";
+
 export {
   OPEN_VIDEO_CAPABILITY,
   OPEN_VIDEO_OPTIONAL_REQUEST_FIELDS,

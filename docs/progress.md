@@ -982,6 +982,54 @@ and ADR-0020.
   client behind an interface no test would think to check. No migration and no
   schema change were needed; the three provider lookup facts were verified present
   on the attempt row against the frozen baseline before implementation.
+- **Phase 4C-3B-2H-3A** — see GitHub for its lifecycle. Adds the first *concrete*
+  implementation of Phase 2H-2's `ProviderCompletionStatusSource`: fal's
+  asynchronous Queue API for the MiniMax H3 Max image-to-video route, in
+  `packages/video-providers/src/fal/`. Detail in
+  `docs/phase-4c3b2h3a-completion.md` and ADR-0040.
+
+  **The dormancy claim changes here and is stated precisely.** After 2H-2 it was
+  true that the repository contained no concrete polling implementation; it now
+  contains one, which builds real `queue.fal.run` requests and would reach fal if
+  handed a credential and called. What is asserted instead — by a static suite,
+  not by description — is that it has no production composition: nothing
+  constructs it, nothing calls either 2H-2 runner, `FAL_KEY` is absent from the
+  environment schema and from every production source, `VIDEO_PROVIDER` still
+  accepts only `fake` and `wavespeed`, no scheduler exists, and neither test
+  suite can reach the network.
+
+  fal separates the lifecycle from the artifact across `/status` and `/response`,
+  and that separation is what lets the adapter be correct about money. One poll
+  makes at most one status request, and a result request only after a `COMPLETED`
+  status carrying no failure — no loop, no backoff, no sleep, no `subscribe`.
+  Once `COMPLETED` proves fal ran and will bill, the adapter is committed to
+  saying so: every way the result call can fail returns `SUCCEEDED` with a null
+  locator rather than `FAILED` or a throw, because letting output acquisition
+  suppress provider success would leave a paid attempt reading as in-flight
+  forever while the Safety Guard counted it. The mirror holds too — a status call
+  that throws, times out, returns non-2xx or returns something unreadable is
+  never a provider failure, and leaves state, version and certainty untouched.
+
+  Identity is validated before a URL exists, and the URL is then built from the
+  compiled-in model constant rather than the validated column, so a persisted
+  model id is validated and unused — even a weakened check could not turn a
+  database value into outbound authority. fal's own `response_url`, `status_url`
+  and `cancel_url` are never followed, redirects are manual on both calls so a
+  3xx cannot re-send the credential to a host fal's body chose, and the request
+  id is encoded as one path component with dots-only segments refused outright
+  because encoding cannot neutralize them.
+
+  Failure classification is a closed thirteen-value table matched by exact
+  membership — no prefix or substring matching, no HTTP status as a substitute,
+  and the human-readable `error` counted as a failure claim but never parsed.
+  Diagnostics reuse Phase 2G-1's three-member catalog unexpanded, so five entries
+  are `null`; the fal `error_type` itself never reaches the observation, the row
+  or the audit trail. An unclassifiable failure throws rather than guessing a
+  retryability, because both guesses are unrecoverable in opposite directions
+  while a refusal leaves the attempt `PROCESSING` and is fixed by a reviewed code
+  change. No migration and no schema change: nothing about fal's status, logs,
+  metrics, error text or output URL is persisted, and 2H-1's managed-output
+  verification remains the only authority for the digest, byte count and key.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

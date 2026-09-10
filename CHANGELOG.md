@@ -3,6 +3,75 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3A: Dormant fal Queue completion status adapter
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2h3a-completion.md` and
+ADR-0040. Adds the first **concrete** implementation of Phase 2H-2's
+`ProviderCompletionStatusSource` — fal's asynchronous Queue API for the MiniMax
+H3 Max image-to-video route. One additive module in
+`packages/video-providers/src/fal/`; no migration and no schema change.
+
+**The dormancy claim is narrower than the previous phase's, deliberately.** It is
+no longer true that the repository contains no concrete polling implementation.
+It contains one, and it would reach `queue.fal.run` if handed a credential and
+called. What is true — and asserted by a static suite rather than described — is
+that it has **no production composition, caller or credential wiring**.
+
+### Added
+
+- **`FalQueueCompletionStatusSource`**, translating fal's three published queue
+  states into the provider-neutral Phase 2H-2 observation. `IN_QUEUE` and
+  `IN_PROGRESS` both mean "still working"; `COMPLETED` means fal ran and will
+  bill.
+- **Two resources, in one direction, at most once each.** One status request per
+  poll, and a result request only after a `COMPLETED` status carrying no failure.
+  No loop, no backoff, no sleep, no `subscribe`, no client method that polls until
+  done — repetition belongs to Phase 2H-2's bounded, audited batch cadence.
+- **A closed thirteen-value fal error-type table**, matched by exact membership,
+  with its own retryability and a diagnostic drawn from Phase 2G-1's three-member
+  catalog **unexpanded**. Five entries map to `null`, which is the honest answer
+  rather than a gap.
+- **A live-PostgreSQL suite** running the real adapter through the real Phase
+  2H-2 runner and real Phase 2H-1 persistence over a scripted transport.
+
+### Security
+
+- **A persisted model id never becomes network authority.** Identity is compared
+  against the compiled-in constant *before* a URL exists, and the URL is then
+  built from that constant — so the column is validated and unused.
+- **Provider-returned URLs are not routing authority.** `response_url`,
+  `status_url` and `cancel_url` are never parsed or followed, and both calls use
+  `redirect: "manual"` so a 3xx cannot re-send `Authorization: Key …` to a host
+  fal's response body chose.
+- **The request id cannot alter the route.** Encoded as one path component, with
+  dots-only segments refused outright because encoding leaves them intact. The
+  persisted id is never rewritten.
+- **Nothing about the provider's result is persisted or exposed.** Not the status,
+  logs, metrics, `error_type`, human-readable `error`, `response_url`, output URL,
+  file name, content type or reported size. `?logs=1` is never sent. The output
+  URL exists only inside `TransientProviderOutputLocator`.
+
+### Changed
+
+- **Output acquisition can no longer suppress provider success.** Every failure
+  of the result call after a `COMPLETED` status — throw, timeout, non-2xx,
+  unreadable JSON, missing or blank `video.url` — returns `SUCCEEDED` with a null
+  locator, feeding Phase 2H-2's `OUTPUT_LOCATOR_UNAVAILABLE`. The alternative
+  leaves a paid attempt reading as in-flight forever.
+- **An unclassifiable fal failure fails closed.** A missing, blank, wrongly typed
+  or unknown `error_type` throws rather than guessing a retryability: guessing
+  spends a customer's unit again or abandons a render that would have succeeded,
+  while a refusal leaves the attempt `PROCESSING` and is fixed by a reviewed
+  change.
+
+### Not done
+
+No managed-output transfer implementation and no locator dereference; no
+production route, worker loop or scheduler; `FAL_KEY` still absent from the
+environment schema; fal and Veo paid execution disabled; WaveSpeed paid routing
+unchanged; no payment integration; no pricing or resolution change; no Scene
+delivery or Job readiness.
+
 ## [Unreleased] — Phase 4C-3B-2H-2: Dormant provider polling and output transfer orchestration
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2h2-completion.md` and
