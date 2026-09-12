@@ -348,7 +348,12 @@ describeDb("the fal status adapter through the Phase 2H-2 runner", () => {
         { organizationId: ORG_A, attemptId, context: ctx() },
       );
 
-      expect(http.sent.filter((r) => r.url.endsWith("/response"))).toHaveLength(0);
+      // Exactly one request, and it is the status resource. The result resource
+      // is the request itself, so "did it ask for the result" cannot be tested
+      // by a `/response` suffix — it is tested by the request count and the
+      // `/status` suffix being present on the only call made.
+      expect(http.sent).toHaveLength(1);
+      expect(http.sent[0]!.url.endsWith("/status")).toBe(true);
     });
   });
 

@@ -21,7 +21,7 @@ import {
 } from "./errors";
 import {
   encodeFalQueueRequestId,
-  falQueueResponseUrl,
+  falQueueResultUrl,
   falQueueStatusUrl,
   FAL_ERROR_TYPE_DIAGNOSTIC,
   FAL_ERROR_TYPE_RETRYABLE,
@@ -105,9 +105,10 @@ function normalizeStatusTransportError(error: unknown): ProviderError {
  *
  * ## Two calls, in one direction, at most once each
  *
- * fal's queue separates the lifecycle from the artifact: `/status` says whether
- * the render finished, `/response` returns what it produced. One `poll` makes
- * at most one of each, and the second only after the first proved success.
+ * fal's queue separates the lifecycle from the artifact. `/requests/{id}/status`
+ * says whether the render finished; `/requests/{id}` — the request itself, with
+ * no suffix — returns what it produced. One `poll` makes at most one of each,
+ * and the second only after the first proved success.
  * There is no loop, no backoff, no `sleep` and no call to fal's `subscribe`
  * helper — repetition is Phase 2H-2's batch cadence, which is bounded, audited
  * and interruptible, and an adapter that quietly polled until completion would
@@ -117,7 +118,7 @@ function normalizeStatusTransportError(error: unknown): ProviderError {
  *
  * Once `/status` returns `COMPLETED` with no failure, **fal has run and will
  * bill for the render**, and this adapter is committed to saying so. Every way
- * the subsequent `/response` call can go wrong — a throw, a timeout, a non-2xx,
+ * the subsequent result call can go wrong — a throw, a timeout, a non-2xx,
  * unreadable JSON, a missing `video.url`, a blank one — returns
  * `SUCCEEDED` with a `null` locator, never `FAILED` and never a throw.
  *
@@ -268,7 +269,7 @@ export class FalQueueCompletionStatusSource implements ProviderCompletionStatusS
   ): Promise<TransientProviderOutputLocator | null> {
     let response: HttpResponse;
     try {
-      response = await this.getOnce(falQueueResponseUrl(encodedRequestId));
+      response = await this.getOnce(falQueueResultUrl(encodedRequestId));
     } catch {
       return null;
     }

@@ -29,7 +29,10 @@ const REQUEST_ID = "764cabcf-b745-4b3e-ae38-1200304cf45b";
 const OUTPUT_URL = "https://fal.media/files/panda/abc.mp4?X-Fal-Signature=SECRETSIGNATURE";
 
 const STATUS_URL = `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${REQUEST_ID}/status`;
-const RESPONSE_URL = `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${REQUEST_ID}/response`;
+// The result resource is the request itself — no `/response` suffix. Written as
+// an independent literal rather than derived, so this file's expectations cannot
+// drift along with the function they check.
+const RESULT_URL = `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${REQUEST_ID}`;
 
 function ref(overrides: Partial<ProviderStatusLookupRef> = {}): ProviderStatusLookupRef {
   return {
@@ -240,7 +243,7 @@ describe("completed success with a usable output location", () => {
     if (observation.kind !== "SUCCEEDED") throw new Error("unreachable");
     expect(TransientProviderOutputLocator.isLocator(observation.outputLocator)).toBe(true);
 
-    expect(http.sent.map((r) => r.url)).toEqual([STATUS_URL, RESPONSE_URL]);
+    expect(http.sent.map((r) => r.url)).toEqual([STATUS_URL, RESULT_URL]);
     expect(http.sent.every((r) => r.method === "GET")).toBe(true);
     expect(http.sent.every((r) => r.body === undefined)).toBe(true);
     expect(http.sent.every((r) => r.redirect === "manual")).toBe(true);
@@ -334,7 +337,7 @@ describe("completed success where the location cannot be acquired", () => {
   it("does not retry the result request", async () => {
     const http = transport(ok({ status: "COMPLETED" }), { status: 503, body: "" });
     await source(http).poll(ref());
-    expect(http.sent.filter((r) => r.url === RESPONSE_URL)).toHaveLength(1);
+    expect(http.sent.filter((r) => r.url === RESULT_URL)).toHaveLength(1);
   });
 
   it("does not re-request the status after a failed result fetch", async () => {
@@ -555,7 +558,7 @@ describe("provider-supplied URLs are never routing authority", () => {
     );
     await source(http).poll(ref());
 
-    expect(http.sent.map((r) => r.url)).toEqual([STATUS_URL, RESPONSE_URL]);
+    expect(http.sent.map((r) => r.url)).toEqual([STATUS_URL, RESULT_URL]);
     for (const sent of http.sent) {
       expect(new URL(sent.url).origin).toBe("https://queue.fal.run");
       expect(sent.url).not.toContain("attacker.example");
@@ -570,7 +573,7 @@ describe("provider-supplied URLs are never routing authority", () => {
     await source(http).poll(ref());
     // Same host, different model — still not followed. A provider-chosen path
     // is provider-chosen authority regardless of where it points today.
-    expect(http.sent[1]!.url).toBe(RESPONSE_URL);
+    expect(http.sent[1]!.url).toBe(RESULT_URL);
   });
 
   it("never follows redirects on either call", async () => {

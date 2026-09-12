@@ -34,8 +34,8 @@ fal's queue publishes three lifecycle states — `IN_QUEUE`, `IN_PROGRESS`,
 resources:
 
 ```text
-GET https://queue.fal.run/{modelId}/requests/{requestId}/status
-GET https://queue.fal.run/{modelId}/requests/{requestId}/response
+status  GET https://queue.fal.run/{modelId}/requests/{requestId}/status
+result  GET https://queue.fal.run/{modelId}/requests/{requestId}
 ```
 
 The separation is not an inconvenience to paper over. It is the reason this
@@ -44,6 +44,37 @@ and will bill, and the second establishes only whether we can currently reach
 what it produced. Collapsing them — by using fal's `subscribe` helper, or by
 treating a failed artifact fetch as a failed render — would fuse two facts with
 different owners and different consequences.
+
+### The result resource has no `/response` suffix
+
+fal's current documentation is internally inconsistent on this point, and the
+inconsistency is worth recording because a future reader will otherwise "fix" it
+back the wrong way:
+
+- the current Queue **submit and status** examples expose a `response_url` whose
+  path ends in `/response`;
+- the current REST **Get the Result** example uses
+  `GET .../requests/{request_id}`, with no suffix;
+- the current official `fal-ai/fal-js` client's `queue.result()` constructs
+  `path: /requests/${requestId}`, also with no suffix.
+
+**The result operation and the SDK are treated as authoritative.** This adapter
+derives `/requests/{requestId}` and never appends `/response`.
+
+The first revision of this phase got that wrong, and the failure mode is worth
+naming because it is nearly silent. A `/response` suffix means every
+completed-success poll GETs a resource that does not exist, takes the non-2xx
+path, and answers `SUCCEEDED` with a `null` locator. Provider success is still
+recorded correctly and the attempt lands in `PROVIDER_SUCCEEDED` — so nothing
+looks broken — but output ingestion can never start, on every attempt, forever.
+The system would have looked like it was working and quietly delivered nothing.
+
+The resolution is deliberately **not** "follow `response_url`", even though the
+payload offers it and doing so would have been the shorter fix. That would trade
+a URL-derivation question for a routing-authority one, and hand a vendor's
+response body the power to choose where this application sends its credential.
+Section 6 below stands unchanged: the suffix is derived correctly, and the
+payload's URLs stay unread.
 
 ## Decision
 
@@ -80,7 +111,7 @@ round trip for a body that cannot be there.
 
 Once `/status` says `COMPLETED` with no failure, fal has run and will bill for
 the render, and the adapter is committed to saying so. Every way the subsequent
-`/response` call can go wrong — a throw, a local timeout, a non-2xx, unreadable
+result call can go wrong — a throw, a local timeout, a non-2xx, unreadable
 JSON, a missing `video.url`, a blank one — returns:
 
 ```ts

@@ -67,7 +67,7 @@ describe("the concrete fal status adapter has no production composition", () => 
         "FalQueueCompletionStatusSource",
         "FalH3MaxSubmissionProvider",
         "falQueueStatusUrl",
-        "falQueueResponseUrl",
+        "falQueueResultUrl",
       ]) {
         expect(`${name}:${banned}: ${code(text).includes(banned)}`).toBe(`${name}:${banned}: false`);
       }

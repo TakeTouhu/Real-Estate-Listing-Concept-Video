@@ -262,15 +262,45 @@ export function encodeFalQueueRequestId(requestId: string): string | null {
  * removed, a persisted model id still could not become outbound network
  * authority, because it is not what these functions read.
  *
- * fal's own `status_url` and `response_url` are never used for the same reason
- * one step further out — a provider-supplied URL is a provider-chosen host, and
- * a status poll that follows one is a request this application never authorized
- * carrying an `Authorization` header it did not choose the audience for.
+ * fal's own `status_url`, `response_url` and `cancel_url` are never used for the
+ * same reason one step further out — a provider-supplied URL is a
+ * provider-chosen host, and a poll that follows one is a request this
+ * application never authorized, carrying an `Authorization` header whose
+ * audience it did not choose.
+ *
+ * ## The result resource has no `/response` suffix
+ *
+ * The status resource ends in `/status`; the **result resource is the request
+ * itself**:
+ *
+ * ```text
+ * status  GET /{modelId}/requests/{requestId}/status
+ * result  GET /{modelId}/requests/{requestId}
+ * ```
+ *
+ * fal's current documentation is internally inconsistent about this, which is
+ * worth recording because it is the kind of thing that gets "fixed" back the
+ * wrong way. The submit and status payloads carry a `response_url` that ends in
+ * `/response`, while the current REST *Get the Result* operation and the current
+ * official `fal-ai/fal-js` client's `queue.result()` both address
+ * `/requests/{requestId}` with no suffix. The SDK and the result operation are
+ * treated as authoritative here.
+ *
+ * The resolution is deliberately **not** "follow `response_url`". Doing so would
+ * read as pragmatic and would quietly hand a vendor's response body the power to
+ * choose where this application sends its credential — trading a one-line URL
+ * question for a routing-authority one. The suffix is derived correctly instead,
+ * and the payload's URLs stay unread.
+ *
+ * A wrong suffix here is not a cosmetic defect. Every completed-success poll
+ * would GET a resource that does not exist, take the non-2xx path, and answer
+ * `SUCCEEDED` with a null locator — so provider success would be recorded
+ * correctly and output ingestion could never start, on every attempt, silently.
  */
 export function falQueueStatusUrl(encodedRequestId: string): string {
   return `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${encodedRequestId}/status`;
 }
 
-export function falQueueResponseUrl(encodedRequestId: string): string {
-  return `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${encodedRequestId}/response`;
+export function falQueueResultUrl(encodedRequestId: string): string {
+  return `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${encodedRequestId}`;
 }

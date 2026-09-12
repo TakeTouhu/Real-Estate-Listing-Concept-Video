@@ -36,14 +36,30 @@ has no production composition, caller, or credential wiring.**
 ## The fal contract implemented
 
 ```text
-GET https://queue.fal.run/minimax/h3-max/image-to-video/requests/{id}/status
-GET https://queue.fal.run/minimax/h3-max/image-to-video/requests/{id}/response
+status  GET https://queue.fal.run/minimax/h3-max/image-to-video/requests/{id}/status
+result  GET https://queue.fal.run/minimax/h3-max/image-to-video/requests/{id}
 ```
 
 Two resources, because fal separates the lifecycle from the artifact — and that
 separation is what lets this adapter be correct about money. The first call
 establishes whether fal ran and will bill. The second establishes only whether
 the platform can currently reach what it produced.
+
+**The result resource carries no `/response` suffix.** fal's current
+documentation is inconsistent here: the Queue submit and status payloads expose a
+`response_url` ending in `/response`, while the current REST *Get the Result*
+operation and the current official `fal-ai/fal-js` `queue.result()` both address
+`/requests/{id}`. The result operation and the SDK are authoritative for this
+adapter.
+
+The first revision of this phase appended `/response`, and the failure mode was
+nearly silent: every completed-success poll would have GET a nonexistent
+resource, taken the non-2xx path, and answered `SUCCEEDED` with a null locator.
+Provider success would still be recorded and the attempt would sit in
+`PROVIDER_SUCCEEDED`, so nothing would look broken — but output ingestion could
+never start, on every attempt. The fix derives the correct resource; it does
+**not** follow `response_url`, which would have traded a URL question for a
+routing-authority one.
 
 ```text
 IN_QUEUE                      → { kind: "IN_PROGRESS" }               1 request
@@ -60,7 +76,7 @@ identity or credential wrong  → throw → STATUS_SOURCE_FAILED          0 requ
 
 **Provider success is durable before output acquisition is attempted.** Once
 `/status` returns `COMPLETED` with no failure, fal has billed for the render.
-Every failure of the subsequent `/response` call — throw, local timeout, non-2xx,
+Every failure of the subsequent result call — throw, local timeout, non-2xx,
 unreadable JSON, missing `video.url`, blank `video.url` — returns `SUCCEEDED`
 with a `null` locator. Never `FAILED`, never a throw. Phase 2H-2 records the
 success, answers `OUTPUT_LOCATOR_UNAVAILABLE`, and a later poll may reacquire the
@@ -144,7 +160,7 @@ weakened or removed.
 
 ## Mutation ledger
 
-**21 mutations, 21 killed, no survivors.**
+**22 mutations, 22 killed, no survivors.**
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -157,7 +173,8 @@ weakened or removed.
 | N07 | Persisted model id becomes outbound URL authority | 6 |
 | N08 | Provider-returned `response_url` becomes outbound authority | 2 |
 | N09 | Request id not encoded as a single path component | 11 |
-| N10 | Provider logs requested from the status endpoint | 12 |
+| N10 | Provider logs requested from the status endpoint | 14 |
+| **N22** | **Result URL regains the nonexistent `/response` suffix** | **7** |
 | N11 | Human-readable error used for retry classification | 1 |
 | N12 | HTTP status alone classifies a provider execution failure | 13 |
 | N13 | `request_timeout` mapped non-retryable | 3 |
@@ -167,7 +184,7 @@ weakened or removed.
 | N17 | Raw output URL returned as a string instead of a nominal locator | 7 |
 | N18 | The locator discloses its raw value on serialization | 1 |
 | N19 | An automatic retry loop introduced inside the adapter | 10 |
-| N20 | A second status request issued per poll | 140 |
+| N20 | A second status request issued per poll | 141 |
 | N21 | A result request performed while the render is in progress | 5 |
 
 Counts are failures in **this phase's suites only**; several mutations would also

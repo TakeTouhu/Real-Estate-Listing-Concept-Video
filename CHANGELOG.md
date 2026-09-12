@@ -23,7 +23,11 @@ that it has **no production composition, caller or credential wiring**.
   states into the provider-neutral Phase 2H-2 observation. `IN_QUEUE` and
   `IN_PROGRESS` both mean "still working"; `COMPLETED` means fal ran and will
   bill.
-- **Two resources, in one direction, at most once each.** One status request per
+- **Two resources, in one direction, at most once each.** Status at
+  `/requests/{id}/status`, result at `/requests/{id}` — **no `/response`
+  suffix**, following fal's current REST Get the Result operation and
+  `fal-ai/fal-js` `queue.result()` rather than the `response_url` its submit and
+  status payloads expose. One status request per
   poll, and a result request only after a `COMPLETED` status carrying no failure.
   No loop, no backoff, no sleep, no `subscribe`, no client method that polls until
   done — repetition belongs to Phase 2H-2's bounded, audited batch cadence.

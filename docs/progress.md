@@ -998,8 +998,19 @@ and ADR-0020.
   accepts only `fake` and `wavespeed`, no scheduler exists, and neither test
   suite can reach the network.
 
-  fal separates the lifecycle from the artifact across `/status` and `/response`,
-  and that separation is what lets the adapter be correct about money. One poll
+  fal separates the lifecycle from the artifact — `/requests/{id}/status` for the
+  lifecycle, `/requests/{id}` for the artifact, with **no `/response` suffix** —
+  and that separation is what lets the adapter be correct about money. fal's own
+  documentation is inconsistent on the suffix: the submit and status payloads
+  carry a `response_url` ending in `/response`, while the current REST Get the
+  Result operation and the current official `fal-ai/fal-js` `queue.result()` both
+  address the request itself, and those are treated as authoritative. The first
+  revision of this phase appended `/response`, which would have made every
+  completed-success poll GET a nonexistent resource, take the non-2xx path and
+  answer SUCCEEDED with a null locator — provider success recorded correctly,
+  output ingestion never starting, on every attempt, silently. The correction
+  derives the right resource rather than following `response_url`, which would
+  have traded a URL question for a routing-authority one. One poll
   makes at most one status request, and a result request only after a `COMPLETED`
   status carrying no failure — no loop, no backoff, no sleep, no `subscribe`.
   Once `COMPLETED` proves fal ran and will bill, the adapter is committed to

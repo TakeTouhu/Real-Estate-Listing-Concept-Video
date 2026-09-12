@@ -58,7 +58,7 @@ export type {
 } from "./fal/queue-status-source";
 export {
   encodeFalQueueRequestId,
-  falQueueResponseUrl,
+  falQueueResultUrl,
   falQueueStatusUrl,
   parseFalH3MaxOutputUrl,
   parseFalQueueStatus,

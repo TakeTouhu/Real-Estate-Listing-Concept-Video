@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { SUBMISSION_DIAGNOSTIC_CODES } from "@app/domain";
-import { MINIMAX_H3_MAX_MODEL_ID } from "../catalog";
-import { FAL_QUEUE_BASE_URL } from "./h3-max-mapping";
+// Deliberately no `MINIMAX_H3_MAX_MODEL_ID` and no `FAL_QUEUE_BASE_URL` import:
+// the URL expectations below are written as full independent literals, so this
+// file cannot drift along with the constants it is checking.
 import {
   encodeFalQueueRequestId,
-  falQueueResponseUrl,
+  falQueueResultUrl,
   falQueueStatusUrl,
   FAL_ERROR_TYPE_DIAGNOSTIC,
   FAL_ERROR_TYPE_RETRYABLE,
@@ -367,16 +368,50 @@ describe("request-id path safety", () => {
 describe("queue resource derivation", () => {
   const ID = "764cabcf-b745-4b3e-ae38-1200304cf45b";
 
-  it("derives the status resource from the frozen host and model constant", () => {
+  /**
+   * The literals below are written out in full on purpose.
+   *
+   * Building the expectation from `FAL_QUEUE_BASE_URL` and
+   * `MINIMAX_H3_MAX_MODEL_ID` — as an earlier revision of this file did — pins
+   * nothing about those two values, because a drift moves both sides of the
+   * assertion together. More importantly it cannot pin the *suffix*, which is
+   * the part fal's own documentation is inconsistent about and the part this
+   * adapter got wrong. An independent literal is the only form of this test
+   * that can fail for the right reason.
+   */
+  it("addresses the status resource at /requests/{id}/status", () => {
     expect(falQueueStatusUrl(ID)).toBe(
-      `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${ID}/status`,
+      "https://queue.fal.run/minimax/h3-max/image-to-video/requests/" +
+        "764cabcf-b745-4b3e-ae38-1200304cf45b/status",
     );
   });
 
-  it("derives the result resource from the frozen host and model constant", () => {
-    expect(falQueueResponseUrl(ID)).toBe(
-      `${FAL_QUEUE_BASE_URL}/${MINIMAX_H3_MAX_MODEL_ID}/requests/${ID}/response`,
+  it("addresses the result resource at /requests/{id}, with no suffix", () => {
+    // fal's current REST *Get the Result* operation and the current official
+    // `fal-ai/fal-js` `queue.result()` both address the request itself. The
+    // `response_url` in fal's submit/status payloads ends in `/response` and is
+    // not what this adapter derives — see ADR-0040.
+    expect(falQueueResultUrl(ID)).toBe(
+      "https://queue.fal.run/minimax/h3-max/image-to-video/requests/" +
+        "764cabcf-b745-4b3e-ae38-1200304cf45b",
     );
+  });
+
+  it("never appends /response to the result resource", () => {
+    // Stated separately and negatively, because this is the exact defect: a
+    // `/response` suffix makes every completed-success poll GET a resource that
+    // does not exist, take the non-2xx path and answer SUCCEEDED with a null
+    // locator — so provider success is recorded correctly and output ingestion
+    // can never start, on every attempt, silently.
+    expect(falQueueResultUrl(ID).endsWith("/response")).toBe(false);
+    expect(falQueueResultUrl(ID)).not.toContain("/response");
+    expect(new URL(falQueueResultUrl(ID)).pathname.split("/").at(-1)).toBe(ID);
+  });
+
+  it("distinguishes the two resources by exactly the /status segment", () => {
+    // The result URL is a strict prefix of the status URL. Any other
+    // relationship between them means one of the two is wrong.
+    expect(falQueueStatusUrl(ID)).toBe(`${falQueueResultUrl(ID)}/status`);
   });
 
   it("never appends a logs query parameter", () => {
@@ -387,7 +422,7 @@ describe("queue resource derivation", () => {
   });
 
   it("targets fal's queue host and nothing else", () => {
-    for (const url of [falQueueStatusUrl(ID), falQueueResponseUrl(ID)]) {
+    for (const url of [falQueueStatusUrl(ID), falQueueResultUrl(ID)]) {
       expect(new URL(url).origin).toBe("https://queue.fal.run");
     }
   });
@@ -396,6 +431,6 @@ describe("queue resource derivation", () => {
     // The signature is the guarantee: there is no parameter through which a
     // persisted `providerModelId` could become part of the path.
     expect(falQueueStatusUrl.length).toBe(1);
-    expect(falQueueResponseUrl.length).toBe(1);
+    expect(falQueueResultUrl.length).toBe(1);
   });
 });
