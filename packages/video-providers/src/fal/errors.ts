@@ -91,3 +91,96 @@ export function falMissingCredentialError(): ProviderError {
     retryable: false,
   });
 }
+
+/**
+ * Status-poll failures.
+ *
+ * Every one of these is thrown, and every throw the Phase 2H-2 runner catches
+ * becomes `STATUS_SOURCE_FAILED` with **no** lifecycle mutation. That is the
+ * property the whole group exists to preserve: a poll that could not establish
+ * what fal did must leave the attempt exactly where it was, because "I could
+ * not find out" is not evidence about a paid render.
+ *
+ * The messages remain fixed text for the reason at the top of this file. In
+ * particular none of them may carry an unrecognized `error_type`, a response
+ * body, a URL or a request id — a diagnostic is read by more people than the
+ * row it describes.
+ */
+
+export function falStatusUnsupportedProviderError(): ProviderError {
+  return providerError({
+    kind: "UNSUPPORTED",
+    code: "FAL_STATUS_UNSUPPORTED_PROVIDER",
+    messageSanitized: "This status adapter answers only for fal-issued predictions",
+    retryable: false,
+  });
+}
+
+/**
+ * A persisted request id no URL may be built from.
+ *
+ * Blank, or a path-traversal segment. Not retryable, and deliberately not
+ * described further: the id is the untrustworthy part, so naming it in the
+ * message would put it exactly where it must not go.
+ */
+export function falStatusRequestIdUnusableError(): ProviderError {
+  return providerError({
+    kind: "INVALID_INPUT",
+    code: "FAL_STATUS_REQUEST_ID_UNUSABLE",
+    messageSanitized: "The persisted fal request id cannot address a queue resource",
+    retryable: false,
+  });
+}
+
+export function falStatusTimeout(): ProviderError {
+  return providerError({
+    kind: "TIMEOUT",
+    code: "FAL_STATUS_TIMEOUT",
+    messageSanitized: "The fal status request timed out",
+    retryable: true,
+  });
+}
+
+export function falStatusNetworkError(): ProviderError {
+  return providerError({
+    kind: "NETWORK",
+    code: "FAL_STATUS_NETWORK_ERROR",
+    messageSanitized: "Network error contacting fal for status",
+    retryable: true,
+  });
+}
+
+/**
+ * A 2xx status body this adapter will not act on.
+ *
+ * Malformed, or reporting a lifecycle state fal has not published. `retryable`
+ * is `true` because the *next* poll may well be readable — the attempt is
+ * untouched either way, so this only informs scheduling.
+ */
+export function falStatusResponseUnreadableError(): ProviderError {
+  return providerError({
+    kind: "PROVIDER",
+    code: "FAL_STATUS_RESPONSE_UNREADABLE",
+    messageSanitized: "The fal status response did not describe a known queue state",
+    retryable: true,
+  });
+}
+
+/**
+ * fal reported a failure this application cannot classify.
+ *
+ * Missing, blank, wrongly typed or simply not in the closed catalog. The one
+ * thing this must never do is pick a retryability: the two wrong answers are
+ * abandoning a render that would have succeeded on a second attempt, and
+ * spending a customer's unit again on a request that will fail identically.
+ * Refusing leaves the attempt `PROCESSING`, which is recoverable by updating
+ * the catalog; the guesses are not recoverable at all.
+ */
+export function falStatusFailureUnclassifiedError(): ProviderError {
+  return providerError({
+    kind: "PROVIDER",
+    code: "FAL_STATUS_FAILURE_UNCLASSIFIED",
+    messageSanitized: "fal reported a failure this application does not classify",
+    retryable: false,
+  });
+}
