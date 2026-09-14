@@ -1132,6 +1132,164 @@ describe("a stateful stream is captured once, so no getter is re-read during use
   });
 });
 
+describe("the malformed-OPEN cleanup path re-reads no raw top-level property", () => {
+  // The deferred Phase 3B-1 defect: on the malformed path the core re-read the
+  // raw `opened.kind` / `opened.stream`, so a stateful top-level getter could
+  // answer once during inspection and then throw or change, losing the cleanup
+  // candidate. The single inspection reads each top-level property once and the
+  // core acts only on the inspection — never the raw value — so the trap is
+  // never sprung and the originally observed stream is still closed.
+  const SECRET = "GETTER-SECRET s3://bucket?sig=SECRETSIGNATURE";
+
+  function malformedButClosable(onClose: () => void): Record<string, unknown> {
+    // A stream that is plainly invalid (a string body) but owns a live resource
+    // through a perfectly callable close.
+    return {
+      body: "not-bytes",
+      declaredSizeBytes: null,
+      close: async () => void onClose(),
+    };
+  }
+
+  function assertNoSecret(error: unknown): void {
+    const text = `${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`;
+    for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://", "second"]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect((error as Error).cause).toBeUndefined();
+  }
+
+  it("for a stateful top-level stream getter: reads it once, closes the observed stream once, raises the stream defect", async () => {
+    let streamReads = 0;
+    let closes = 0;
+    const stream = malformedButClosable(() => {
+      closes += 1;
+    });
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        get stream(): Record<string, unknown> {
+          streamReads += 1;
+          if (streamReads > 1) throw new Error(`${SECRET} second`);
+          return stream;
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(streamReads).toBe(1);
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.sessions).toHaveLength(0);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a stateful top-level kind getter: reads it once, closes the observed stream once, raises the fixed defect", async () => {
+    let kindReads = 0;
+    let closes = 0;
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        get kind(): string {
+          kindReads += 1;
+          if (kindReads > 1) throw new Error(`${SECRET} second`);
+          return "OPEN";
+        },
+        stream: malformedButClosable(() => {
+          closes += 1;
+        }),
+      }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(kindReads).toBe(1);
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.sessions).toHaveLength(0);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a throwing ownKeys trap over a valid stream: closes the stream once, raises the wrapper defect", async () => {
+    let closes = 0;
+    const validStream = {
+      body: (async function* () {
+        yield bytes(1);
+      })(),
+      declaredSizeBytes: null,
+      close: async () => void (closes += 1),
+    };
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () =>
+        new Proxy(
+          { kind: "OPEN", stream: validStream },
+          {
+            ownKeys(): never {
+              throw new Error(SECRET);
+            },
+          },
+        ),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it.each([
+    ["a string body", { body: "x", declaredSizeBytes: null }],
+    ["a bad declared size", { body: (async function* () {})(), declaredSizeBytes: -1 }],
+    [
+      "a throwing async-iterator getter",
+      {
+        body: {
+          get [Symbol.asyncIterator](): never {
+            throw new Error("SECRET-ITERATOR");
+          },
+        },
+        declaredSizeBytes: null,
+      },
+    ],
+  ])("closes a malformed-but-closable stream (%s) exactly once, then STREAM_MALFORMED", async (_label, shape) => {
+    let closes = 0;
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: { ...shape, close: async () => void (closes += 1) },
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(closes).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a stream whose close getter throws: no cleanup is attempted and nothing escapes", async () => {
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: {
+          body: "x",
+          declaredSizeBytes: null,
+          get close(): never {
+            throw new Error(SECRET);
+          },
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    assertNoSecret(error);
+    expect(sink.canonical.size).toBe(0);
+  });
+});
+
 describe("expected operational failures are retryable, never thrown", () => {
   it("returns RETRYABLE_FAILURE when open reports it, touching nothing", async () => {
     const { sink, run } = core({ chunks: [bytes(1)], open: "RETRYABLE" });
@@ -1180,6 +1338,90 @@ describe("expected operational failures are retryable, never thrown", () => {
       expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
       expect(Object.getOwnPropertyNames(outcome)).toEqual(["kind"]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a source stream interrupted mid-transfer is retryable, never a truncated output", () => {
+  it("yields one chunk, then the retry signal → exactly RETRYABLE_FAILURE, nothing published", async () => {
+    // The stream opens cleanly and delivers a chunk; the second pull throws the
+    // application-owned signal, as the fal adapter does when a body read rejects
+    // after a good HTTP status. This is an acquisition failure, not a defect.
+    const { source, sink, run } = core({
+      chunks: [bytes(1, 2, 3), bytes(4, 5, 6)],
+      signalRetryableAfterChunks: 1,
+    });
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    // The signal is not rethrown: the outcome is the transient arm, nothing more.
+    expect(Object.getOwnPropertyNames(outcome)).toEqual(["kind"]);
+
+    // The partial bytes that were staged before the interruption are discarded:
+    // nothing is committed, nothing becomes canonical, no receipt is produced.
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+    // Exactly one chunk was written before the interruption — and it went nowhere.
+    expect(sink.lastSession.writes).toBe(1);
+
+    // The source is still released exactly once, on this path as on every other.
+    expect(source.lastStream.closeCalls).toBe(1);
+  });
+
+  it("treats the signal on the very first pull as RETRYABLE_FAILURE, with nothing staged", async () => {
+    const { source, sink, run } = core({
+      chunks: [bytes(1, 2, 3)],
+      signalRetryableAfterChunks: 0,
+    });
+    expect(await run()).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(sink.lastSession.writes).toBe(0);
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+    expect(source.lastStream.closeCalls).toBe(1);
+  });
+
+  it("never hashes the partial bytes into a receipt or reports VERIFIED", async () => {
+    // A larger partial to make truncation unmistakable: 10 real bytes staged,
+    // then the interruption. A core that mistook the interruption for clean EOF
+    // would hash those 10 bytes and publish a short, corrupt output.
+    const { run } = core({
+      chunks: [bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), bytes(11, 12)],
+      signalRetryableAfterChunks: 1,
+    });
+    const outcome = await run();
+    expect(outcome.kind).not.toBe("VERIFIED");
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+  });
+
+  it("does NOT convert an ordinary iterator exception to RETRYABLE — that stays a propagated throw", async () => {
+    // The recognition is narrow and nominal: only the application-owned signal
+    // becomes a retry. An unrelated error from the same iteration path keeps its
+    // existing meaning and propagates, so the runner still records
+    // TRANSFER_SOURCE_FAILED for a genuine adapter defect.
+    const { source, sink, run } = core({
+      chunks: [bytes(1), bytes(2)],
+      throwAfterChunks: 1,
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as Error).message).toContain("iterator exploded");
+    // Same non-mutation as every other failure: staging discarded, source closed.
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(source.lastStream.closeCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("does not report a provider failure for a mid-stream interruption", async () => {
+    // The interruption is an operational retry, indistinguishable in the outcome
+    // from any other transient condition — no FAILED arm is ever produced.
+    const { run } = core({ chunks: [bytes(1), bytes(2)], signalRetryableAfterChunks: 1 });
+    const outcome = await run();
+    expect(isWellFormedTransferOutcome(outcome)).toBe(true);
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
   });
 });
 

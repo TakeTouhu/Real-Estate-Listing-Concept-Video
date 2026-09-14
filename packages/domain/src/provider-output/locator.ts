@@ -30,6 +30,23 @@
 /** What a redacted locator renders as, everywhere it might be rendered. */
 export const REDACTED_LOCATOR = "[redacted provider output locator]";
 
+/**
+ * A module-private bridge to the raw location, installed from inside the class
+ * body and reachable only through {@link withTransientProviderOutputLocatorForByteSource}.
+ *
+ * This is the single, deliberately awkward door to the credential. It is not an
+ * accessor on the instance and not a public method on the class — nothing that
+ * ordinary application code holding a locator could reach — so the raw string
+ * still has no way out through spread, serialization, logging or a getter. The
+ * closure is assigned in a `static {}` block, which runs inside the class scope
+ * and is therefore the one place `#raw` is legible to a helper; the exported
+ * capability below calls it and hands the raw value only to the callback that
+ * performs the network open, for the duration of that call.
+ */
+let readTransientLocatorRawForByteSource:
+  | ((locator: TransientProviderOutputLocator) => string)
+  | null = null;
+
 export class TransientProviderOutputLocator {
   /**
    * The nominal identity, following the `ReconciliationPolicy` idiom.
@@ -44,15 +61,26 @@ export class TransientProviderOutputLocator {
   /**
    * The provider's transient location.
    *
-   * Written once and never read by anything that could reveal it. The only
-   * reader in this module is {@link equals}, which compares two locators
-   * without disclosing either.
+   * Written once and read in exactly two guarded places, both inside this
+   * module: {@link equals}, which compares two locators without disclosing
+   * either, and the `static {}` bridge below, which hands the raw value to a
+   * byte-source adapter only through the narrow, subpath-gated capability
+   * {@link withTransientProviderOutputLocatorForByteSource}. There is no third
+   * reader, no accessor and no public method that returns it.
    */
   readonly #raw: string;
 
   private constructor(raw: string) {
     this.#validated = true;
     this.#raw = raw;
+  }
+
+  static {
+    // Install the module-private bridge. Runs inside the class body, which is
+    // the only scope where `#raw` is legible to a helper. This is not a method
+    // on the instance or a public static — ordinary code cannot reach it.
+    readTransientLocatorRawForByteSource = (locator: TransientProviderOutputLocator): string =>
+      locator.#raw;
   }
 
   /**
@@ -111,3 +139,49 @@ export class TransientProviderOutputLocator {
 export type TransientProviderOutputLocatorResult =
   | { readonly ok: true; readonly value: TransientProviderOutputLocator }
   | { readonly ok: false; readonly reason: "NOT_A_STRING" | "BLANK" };
+
+/**
+ * Run one byte-source operation with a locator's raw provider location in scope,
+ * and return **nothing** through this capability.
+ *
+ * The security model is precise, and stated as exactly what the implementation
+ * enforces — no more:
+ *
+ * - **`#raw` blocks ordinary structural access.** A `#` private field is invisible
+ *   to spread, `JSON.stringify`, `Object.keys` and enumeration, and the class has
+ *   no getter, `toString`, `toJSON` or inspect path that returns it. Ordinary code
+ *   holding a locator cannot read the value.
+ * - **This subpath is a deliberate friend capability.** It is exported only from
+ *   `@app/domain/provider-output-byte-source-access`, never the `@app/domain`
+ *   root, and a static access-guard test authorizes exactly one production
+ *   importer: the fal byte-source adapter.
+ * - **The return channel is closed.** The `use` callback returns `Promise<void>`
+ *   and this function returns `Promise<void>`, so the raw string cannot be handed
+ *   back out through the capability's own result — it is not a general-purpose
+ *   unwrap function. A caller wanting to *use* the location does so inside the
+ *   callback; a caller wanting to *extract* it gets a compile error (there is a
+ *   `@ts-expect-error` regression proving `async raw => raw` is rejected).
+ *
+ * What this capability does **not** claim: that a trusted callback keeps the raw
+ * string confined to its lexical lifetime. It cannot. Once the adapter is handed
+ * the string it is ordinary code that could write it into outer mutable state,
+ * and JavaScript cannot prevent that. The guarantee is that the *authorized
+ * adapter is the only production code that ever receives the string at all*, and
+ * that the capability itself is not a channel for pulling it out — not that the
+ * language enforces information-flow isolation after intentional disclosure.
+ *
+ * The callback receives the exact string the locator was constructed from,
+ * unmodified — no normalization, no re-encoding — so a signature-sensitive URL
+ * reaches the request the way the provider issued it.
+ */
+export function withTransientProviderOutputLocatorForByteSource(
+  locator: TransientProviderOutputLocator,
+  use: (rawLocation: string) => Promise<void>,
+): Promise<void> {
+  if (readTransientLocatorRawForByteSource === null) {
+    // Unreachable: the static block installs the bridge when the class is
+    // evaluated, which any reference to the class has already triggered.
+    throw new Error("Transient locator byte-source bridge is not installed");
+  }
+  return use(readTransientLocatorRawForByteSource(locator));
+}

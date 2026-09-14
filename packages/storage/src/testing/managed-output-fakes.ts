@@ -1,10 +1,11 @@
-import type {
-  ManagedGenerationOutputKey,
-  ManagedOutputVerificationReceipt,
-  ProviderOutputByteSource,
-  ProviderOutputByteSourceOpenResult,
-  ProviderOutputByteStream,
-  TransientProviderOutputLocator,
+import {
+  ProviderOutputByteStreamRetryableFailure,
+  type ManagedGenerationOutputKey,
+  type ManagedOutputVerificationReceipt,
+  type ProviderOutputByteSource,
+  type ProviderOutputByteSourceOpenResult,
+  type ProviderOutputByteStream,
+  type TransientProviderOutputLocator,
 } from "@app/domain";
 import type {
   ManagedOutputStagingCommitOutcome,
@@ -79,6 +80,13 @@ export interface FakeByteSourceScript {
   readonly openOverride?: () => unknown;
   /** Throw from the iterator after this many chunks have been emitted. */
   readonly throwAfterChunks?: number;
+  /**
+   * Throw the application-owned {@link ProviderOutputByteStreamRetryableFailure}
+   * signal from the iterator after this many chunks have been emitted, modelling
+   * a source stream interrupted mid-transfer (a fal `read()` that rejected after
+   * a good HTTP status). `0` throws before the first chunk.
+   */
+  readonly signalRetryableAfterChunks?: number;
   /** Emit this value (not bytes) as the chunk at this index. For defect tests. */
   readonly malformedChunkAt?: { readonly index: number; readonly value: unknown };
   /** Awaited before each chunk is emitted. For barriers. */
@@ -128,6 +136,14 @@ export class FakeProviderOutputByteSource implements ProviderOutputByteSource {
         for (const chunk of script.chunks) {
           if (script.throwAfterChunks !== undefined && index >= script.throwAfterChunks) {
             throw new Error("fake source: iterator exploded mid-stream");
+          }
+          if (
+            script.signalRetryableAfterChunks !== undefined &&
+            index >= script.signalRetryableAfterChunks
+          ) {
+            // Models the fal adapter converting a mid-stream read rejection into
+            // the one application-owned retry signal, thrown from iteration.
+            throw new ProviderOutputByteStreamRetryableFailure();
           }
           if (script.beforeChunk !== undefined) await script.beforeChunk(index);
           record.emitted += 1;

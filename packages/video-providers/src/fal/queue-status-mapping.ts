@@ -2,6 +2,7 @@ import type { SubmissionDiagnosticCode } from "@app/domain";
 import { MINIMAX_H3_MAX_MODEL_ID } from "../catalog";
 import { deepFreeze } from "../deep-freeze";
 import { FAL_QUEUE_BASE_URL } from "./h3-max-mapping";
+import { isAuthorizedFalOutputUrl } from "./output-url-policy";
 
 /**
  * Everything the fal queue status adapter has to decide *before* it is allowed
@@ -214,6 +215,16 @@ export function parseFalQueueStatus(payload: unknown): FalQueueStatusFact | null
  * Total, and never throws: this runs after provider success is already known,
  * where a `TypeError` would turn a recorded success into a thrown status-source
  * failure.
+ *
+ * **Fail-closed to the fal output URL authority.** A `video.url` that is not an
+ * authorized signed `fal.media` artifact URL — wrong scheme, a look-alike host,
+ * userinfo, a port, a fragment, a non-`/files/` path — is refused here and
+ * returns `null`. That is the first of the two independent checks this phase
+ * requires: the mapping refuses a hostile location before it can ever become a
+ * locator, and provider execution success is still recorded separately, so the
+ * poll observation is `SUCCEEDED` with `outputLocator: null`, never a failure.
+ * The candidate URL is never logged or returned in any diagnostic; only the
+ * boolean verdict is consulted.
  */
 export function parseFalH3MaxOutputUrl(payload: unknown): string | null {
   if (!isPlainRecord(payload)) return null;
@@ -221,6 +232,7 @@ export function parseFalH3MaxOutputUrl(payload: unknown): string | null {
   if (!isPlainRecord(video)) return null;
   const url = video.url;
   if (typeof url !== "string" || url.trim().length === 0) return null;
+  if (!isAuthorizedFalOutputUrl(url)) return null;
   return url;
 }
 

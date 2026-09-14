@@ -1041,6 +1041,33 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-2** — see GitHub for its lifecycle. One bundled
+  provider-output acquisition boundary: the first *concrete* production
+  `ProviderOutputByteSource` (`FalProviderOutputByteSource`), which would GET an
+  already-issued signed fal media URL and stream the bytes through a narrow,
+  injectable fetch seam — GET only, no `Authorization` or `FAL_KEY`, manual
+  re-validated redirects, no buffering, an idempotent close, and
+  `RETRYABLE_FAILURE` for every acquisition failure. Alongside it: a fal output
+  URL authority fail-closed to signed `https://fal.media` `/files/` URLs (applied
+  in the result mapping and again before every request); a single, subpath-gated
+  locator read-back capability (`withTransientProviderOutputLocatorForByteSource`,
+  never on the `@app/domain` root, imported in production only by the authorized
+  adapter); and the closure of the deferred Phase 3B-1 malformed-OPEN cleanup
+  TOCTOU by a single open-result inspection authority that reads each raw
+  top-level property once and carries a captured cleanup capability. The whole
+  pipeline stays dormant: a concrete fal byte source now exists, but nothing in
+  production constructs it, no durable staging sink exists, and no composition
+  can execute the transfer path. No `FAL_KEY`, no real fal request in tests, no
+  migration and no schema change. A follow-up correction (Correction 2) adds one
+  application-owned control signal, `ProviderOutputByteStreamRetryableFailure`,
+  so an output body that fails *after* a good HTTP status — a mid-stream `read()`
+  rejection — is a retryable acquisition failure (attempt stays
+  `OUTPUT_INGESTING`) rather than a `TRANSFER_SOURCE_FAILED` provider failure, and
+  the partial staged bytes are discarded rather than published as a truncated
+  output; recognition is nominal and narrow, and the caught network rejection is
+  discarded unread at the fal boundary. Detail in
+  `docs/phase-4c3b2h3b2-completion.md` and ADR-0042 (Decision 5). Mutation ledger:
+  40 run, 40 killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-1** — see GitHub for its lifecycle. Adds the first
   *concrete* implementation of Phase 2H-2's `ManagedOutputTransferPort`: a
   streaming core in `@app/storage` that pulls provider bytes through an injected

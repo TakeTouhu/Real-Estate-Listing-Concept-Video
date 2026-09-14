@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { AppError } from "@app/shared";
 import {
-  isWellFormedByteStream,
-  parseProviderOutputByteSourceOpenResult,
+  inspectProviderOutputByteSourceOpenResult,
+  ProviderOutputByteStreamRetryableFailure,
   safePositiveByteCount,
   sha256Digest,
   type CapturedProviderOutputByteStream,
+  type CapturedProviderOutputCleanup,
   type ManagedGenerationOutputKey,
   type ManagedOutputTransferInput,
   type ManagedOutputTransferOutcome,
@@ -123,6 +124,7 @@ async function abortQuietly(session: ManagedOutputStagingSession): Promise<void>
  * check the declared size          over the limit → RETRYABLE_FAILURE, no staging
  * begin an isolated staging write
  * for each chunk, one at a time    count → limit check → hash → write (backpressure)
+ * source stream interrupted        abort → RETRYABLE_FAILURE (partial bytes discarded)
  * zero bytes                       abort → RETRYABLE_FAILURE
  * commit with the computed receipt
  *   PUBLISHED                      VERIFIED with the computed receipt
@@ -146,11 +148,16 @@ async function abortQuietly(session: ManagedOutputStagingSession): Promise<void>
  * destination is someone else's and stays that way.
  *
  * **A transfer failure is never a provider failure.** Every expected condition
- * here — source unavailable, too large, empty, sink busy — returns
- * `RETRYABLE_FAILURE`, and Phase 2H-2 leaves the attempt `OUTPUT_INGESTING`. The
- * render is still there; the key is deterministic; a later run picks it up.
- * Only an adapter-contract defect throws, and the runner records that as
- * `TRANSFER_SOURCE_FAILED` with the same non-mutation.
+ * here — source unavailable, too large, empty, sink busy, and a source stream
+ * interrupted after a good open — returns `RETRYABLE_FAILURE`, and Phase 2H-2
+ * leaves the attempt `OUTPUT_INGESTING`. The render is still there; the key is
+ * deterministic; a later run picks it up. A good HTTP status is not the end of
+ * acquisition: an output body can fail mid-stream, and the adapter reports that
+ * with {@link ProviderOutputByteStreamRetryableFailure}, which this core
+ * recognizes on the iteration path and converts to `RETRYABLE_FAILURE` after
+ * discarding the partial staged bytes. Only an adapter-contract defect — or any
+ * unexpected throw that is *not* that signal — propagates, and the runner
+ * records that as `TRANSFER_SOURCE_FAILED` with the same non-mutation.
  */
 export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort {
   private readonly maxBytes: number;
@@ -180,40 +187,34 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
     // never read, logged or persisted by this class.
     const opened: unknown = await this.source.open(input.source);
 
-    // Read once, under a guard, into a materialized result. On the success path
-    // the captured stream is what the transfer uses from here on: its `body`,
-    // `declaredSizeBytes` and `close` were read exactly once at parse time, so
-    // no getter on the raw handle is ever consulted a second time during use —
-    // the time-of-check/time-of-use gap the predicate alone could not close.
-    const parsed = parseProviderOutputByteSourceOpenResult(opened);
-    if (parsed === null) {
-      // Three questions, answered separately, because the first revision fused
-      // two of them and leaked a resource doing so.
-      //
-      //   1. Is this OPEN-shaped, carrying an object-valued `stream`?
-      //   2. Does that candidate have a callable `close`?
-      //   3. Is the candidate itself a well-formed stream?
-      //
-      // Cleanup eligibility is (1) and (2) alone. It must *not* depend on (3):
-      // a perfectly valid stream inside a wrapper that carries an extra key
-      // still owns a response body or a socket, and the wrapper being the
-      // defective part does not make the stream any less worth releasing.
-      // (3) decides only which defect is raised — the wrapper's, or the
-      // stream's.
-      const candidate = openStreamCandidate(opened);
-      if (candidate === null) {
-        throw new ManagedOutputTransferDefect("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    // Inspect the raw open result exactly once, into a materialized inspection.
+    // From here the core acts only on that inspection and never returns to the
+    // raw `opened` object: `kind` and `stream` were each read once inside the
+    // inspection, so a stateful top-level getter cannot pass inspection and then
+    // throw or change on a second read (the deferred Phase 3B-1 defect). On the
+    // success path the captured stream's `body`, `declaredSizeBytes` and `close`
+    // were likewise each read once, so no getter is consulted twice during use.
+    const inspection = inspectProviderOutputByteSourceOpenResult(opened);
+    if (inspection.kind === "MALFORMED") {
+      // The malformed arm carries a cleanup capability captured during the same
+      // inspection whenever the OPEN wrapper held a closable stream — a valid
+      // stream inside a bad wrapper, or a malformed-but-closable stream both own
+      // a live response body or socket, and the wrapper being defective does not
+      // make the handle less worth releasing. Closing uses that captured
+      // capability, never a re-read of `opened`. A throwing `close` getter
+      // yielded no capability and is simply not called; its error never escaped.
+      if (inspection.cleanup !== null) {
+        await closeCleanupQuietly(inspection.cleanup);
       }
-      await closeCandidateQuietly(candidate);
       throw new ManagedOutputTransferDefect(
-        isWellFormedByteStream(candidate)
+        inspection.reason === "OPEN_RESULT_MALFORMED"
           ? "BYTE_SOURCE_OPEN_RESULT_MALFORMED"
           : "BYTE_SOURCE_STREAM_MALFORMED",
       );
     }
-    if (parsed.kind === "RETRYABLE_FAILURE") return RETRYABLE;
+    if (inspection.result.kind === "RETRYABLE_FAILURE") return RETRYABLE;
 
-    const stream = parsed.stream;
+    const stream = inspection.result.stream;
     try {
       return await this.consume(stream, input.destinationKey);
     } finally {
@@ -250,9 +251,22 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
       pumped = await this.pump(stream.body, session);
     } catch (error) {
       // Source iteration threw, a chunk was not bytes, or the sink refused a
-      // write. Staging state exists and is discarded; the error itself is the
-      // answer and is neither inspected nor replaced.
+      // write. Staging state exists and is discarded first, on every path.
       await abortQuietly(session);
+      // The one recognized case: the source stream was interrupted mid-transfer
+      // — a `read()` that rejected after a good HTTP status, the bytes only
+      // partly delivered. The fal adapter converts that to this application-owned
+      // signal and nothing else, so recognition is nominal and narrow: this is an
+      // acquisition failure, not a defect, and it is retryable. The staged
+      // partial bytes were just aborted and are never committed, hashed into a
+      // receipt, or published as a short output; the signal itself carries no
+      // provider or network detail to inspect, and is *not* rethrown. Every other
+      // error — a malformed chunk, a sink write refusal, an adapter-contract
+      // defect, any unexpected throw without this brand — keeps its existing
+      // meaning and propagates unread.
+      if (ProviderOutputByteStreamRetryableFailure.is(error)) {
+        return RETRYABLE;
+      }
       throw error;
     }
 
@@ -351,40 +365,18 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
 }
 
 /**
- * If a malformed open result is at least `{ kind: "OPEN", stream: <object> }`,
- * return that stream object so its resource can be released; else `null`.
+ * Best-effort release of a cleanup capability captured during inspection.
  *
- * Returns the candidate whether or not it is a well-formed stream. Validity
- * decides which defect is raised, never whether cleanup is attempted. The
- * reads are inside a guard because the value is whatever an adapter handed
- * back, and a throwing `stream` getter is a defect, not an answer.
+ * The capability was obtained from the single guarded inspection of the open
+ * result — `close` was located there, once, and bound to its original receiver
+ * — so this neither re-reads the raw handle nor looks up `close` a second time.
+ * Its failure is swallowed: the fixed defect that follows is the answer, and a
+ * cleanup error must not replace it, appear in its message or `cause`, or reach
+ * a log, a result, an event or a row.
  */
-function openStreamCandidate(value: unknown): object | null {
+async function closeCleanupQuietly(cleanup: CapturedProviderOutputCleanup): Promise<void> {
   try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-    const record = value as { kind?: unknown; stream?: unknown };
-    if (record.kind !== "OPEN") return null;
-    const stream = record.stream;
-    return typeof stream === "object" && stream !== null ? stream : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Best-effort `close()` on a stream candidate, if it has one.
- *
- * *Obtaining* `close` is inside the guard, not just invoking it. A candidate
- * with a throwing `close` getter is exactly the kind of hostile object this
- * path exists for, and the getter's error must not replace the fixed defect
- * that is about to be raised — nor appear in its message, its `cause`, a log,
- * a result, an event or a row.
- */
-async function closeCandidateQuietly(candidate: object): Promise<void> {
-  try {
-    const close = (candidate as { close?: unknown }).close;
-    if (typeof close !== "function") return;
-    await (close as () => unknown).call(candidate);
+    await cleanup.close();
   } catch {
     // Cleanup only. The defect that follows is the answer.
   }

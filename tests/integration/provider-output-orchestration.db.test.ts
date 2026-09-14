@@ -28,6 +28,13 @@ import {
   createProviderPollingContextReader,
   createSubmissionOutcomeRepository,
 } from "@app/database";
+import { StreamingManagedOutputTransfer } from "@app/storage";
+import { FakeManagedOutputStagingSink } from "@app/storage/testing";
+import {
+  FalProviderOutputByteSource,
+  type FalOutputFetch,
+  type FalOutputResponseBody,
+} from "@app/video-providers";
 import {
   ASSET_A,
   ctx,
@@ -684,6 +691,77 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       expect(row.submissionCertainty).toBe("ACCEPTED");
       expect(row.outputSha256).toBeNull();
       expect((await reservationOf(job.id)).state).toBe("RESERVED");
+    });
+
+    it("leaves the attempt ingesting when the real fal source is interrupted mid-stream", async () => {
+      // The whole real stack, against live PostgreSQL: the runner drives the real
+      // StreamingManagedOutputTransfer, wired to the real FalProviderOutputByteSource
+      // over a fetch seam that opens with a good 200, delivers one chunk, then
+      // rejects the next read — a body that fails after acquisition began. The fal
+      // adapter converts that to the application-owned retry signal, the core
+      // reports RETRYABLE_FAILURE, and the attempt must stay ingesting with
+      // nothing published and the reservation untouched.
+      const { attemptId, job } = await seedSucceeded("falinterrupt");
+      const FAL_URL = "https://fal.media/files/panda/out.mp4?X-Fal-Signature=SECRETSIGNATURE";
+      const falLocator = (): TransientProviderOutputLocator => {
+        const built = TransientProviderOutputLocator.fromUnknown(FAL_URL);
+        if (!built.ok) throw new Error("fixture fal locator");
+        return built.value;
+      };
+
+      let requests = 0;
+      let cancels = 0;
+      const interruptingFetch: FalOutputFetch = async ({ url }) => {
+        void url;
+        requests += 1;
+        let position = 0;
+        const body: FalOutputResponseBody = {
+          async read(): Promise<Uint8Array | null> {
+            if (position >= 1) throw new Error(`fake CDN reset for ${FAL_URL}`);
+            position += 1;
+            return new Uint8Array([1, 2, 3]);
+          },
+          async cancel(): Promise<void> {
+            cancels += 1;
+          },
+        };
+        return { status: 200, location: null, contentLength: null, body };
+      };
+
+      const sink = new FakeManagedOutputStagingSink();
+      const realTransfer = new StreamingManagedOutputTransfer(
+        { maxBytes: 1_048_576 },
+        { source: new FalProviderOutputByteSource({ fetch: interruptingFetch }), staging: sink },
+      );
+
+      const result = await runner({
+        source: fakeSource(async () => ({ kind: "SUCCEEDED", outputLocator: falLocator() })),
+        transfer: realTransfer,
+      }).runProviderOutputAttemptOnce({ ...BASE, attemptId });
+
+      // An interrupted acquisition is a retry, never a provider failure.
+      expect(result).toEqual({ kind: "TRANSFER_RETRYABLE_FAILURE" });
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(row.outputSha256).toBeNull();
+      expect((await reservationOf(job.id)).state).toBe("RESERVED");
+
+      // The partial bytes went nowhere: nothing canonical, nothing committed.
+      expect(sink.canonical.size).toBe(0);
+      expect(sink.lastSession.commitCalls).toBe(0);
+      expect(sink.lastSession.abortCalls).toBe(1);
+      // One HTTP request, no auto-retry; the body cancelled once.
+      expect(requests).toBe(1);
+      expect(cancels).toBe(1);
+
+      // None of the signed URL, signature, or network text reached persistence.
+      const persisted =
+        JSON.stringify(result) +
+        JSON.stringify(row) +
+        JSON.stringify(await eventsFor(attemptId));
+      for (const fragment of ["SECRETSIGNATURE", "fal.media", "CDN reset"]) {
+        expect(persisted).not.toContain(fragment);
+      }
     });
 
     it.each([

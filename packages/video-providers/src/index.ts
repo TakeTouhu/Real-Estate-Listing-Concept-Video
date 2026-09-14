@@ -76,3 +76,28 @@ export {
   OPEN_VIDEO_REQUEST_FIELDS,
   createOpenVideoCapabilityProvider,
 } from "./wavespeed/capability";
+
+/** The fal output-download URL authority, fail-closed to signed `fal.media`. */
+export { isAuthorizedFalOutputUrl } from "./fal/output-url-policy";
+
+/**
+ * The dormant fal / H3 Max **streaming output byte source** — the first
+ * concrete production `ProviderOutputByteSource`.
+ *
+ * It really would GET an already-issued fal output URL and stream the bytes,
+ * but nothing in production constructs it, no composition joins it to the
+ * transfer core and a durable sink, and no `FAL_KEY` or scheduler exists to
+ * drive it. Exported for tests and review only.
+ */
+export {
+  FalProviderOutputByteSource,
+  createDefaultFalOutputFetch,
+  parseFalOutputContentLength,
+} from "./fal/provider-output-byte-source";
+export type {
+  FalOutputFetch,
+  FalOutputFetchRequest,
+  FalOutputFetchResponse,
+  FalOutputResponseBody,
+  FalProviderOutputByteSourceDeps,
+} from "./fal/provider-output-byte-source";

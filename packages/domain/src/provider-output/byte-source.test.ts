@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  inspectProviderOutputByteSourceOpenResult,
+  inspectProviderOutputByteStream,
   isWellFormedByteSourceOpenResult,
   isWellFormedByteStream,
   OPEN_BYTE_SOURCE_KEYS,
@@ -331,5 +333,132 @@ describe("parseProviderOutputByteSourceOpenResult materializes the open result",
     expect(
       parseProviderOutputByteSourceOpenResult({ kind: "OPEN", stream: stream({ body: "x" }) }),
     ).toBeNull();
+  });
+});
+
+describe("inspectProviderOutputByteStream captures cleanup even for a malformed stream", () => {
+  it("captures a callable close on a stream with an invalid body, for best-effort cleanup", async () => {
+    let closes = 0;
+    const inspection = inspectProviderOutputByteStream({
+      body: "not-bytes",
+      declaredSizeBytes: null,
+      close: async () => void (closes += 1),
+    });
+    expect(inspection.kind).toBe("MALFORMED");
+    if (inspection.kind !== "MALFORMED") throw new Error("expected MALFORMED");
+    expect(inspection.cleanup).not.toBeNull();
+    await inspection.cleanup!.close();
+    expect(closes).toBe(1);
+  });
+
+  it("reads close exactly once: the cleanup capability reuses the captured function", async () => {
+    let closeGetterReads = 0;
+    let closeInvocations = 0;
+    const inspection = inspectProviderOutputByteStream({
+      body: "not-bytes",
+      declaredSizeBytes: null,
+      get close(): () => Promise<void> {
+        closeGetterReads += 1;
+        return async () => void (closeInvocations += 1);
+      },
+    });
+    if (inspection.kind !== "MALFORMED" || inspection.cleanup === null) {
+      throw new Error("expected MALFORMED with cleanup");
+    }
+    expect(closeGetterReads).toBe(1);
+    await inspection.cleanup.close();
+    expect(closeInvocations).toBe(1);
+    expect(closeGetterReads).toBe(1);
+  });
+
+  it("yields no cleanup when close is a throwing getter, without letting it escape", () => {
+    let result: unknown;
+    expect(() => {
+      result = inspectProviderOutputByteStream({
+        body: "not-bytes",
+        declaredSizeBytes: null,
+        get close(): never {
+          throw new Error("SECRET");
+        },
+      });
+    }).not.toThrow();
+    expect(result).toEqual({ kind: "MALFORMED", cleanup: null });
+  });
+
+  it("invokes the captured close against its original receiver for a prototype method", async () => {
+    let sawTag: unknown;
+    class Handle {
+      readonly body = "not-bytes";
+      readonly declaredSizeBytes = null;
+      readonly tag = "self";
+      async close(): Promise<void> {
+        sawTag = (this as Handle).tag;
+      }
+    }
+    const inspection = inspectProviderOutputByteStream(new Handle());
+    if (inspection.kind !== "MALFORMED" || inspection.cleanup === null) {
+      throw new Error("expected MALFORMED with cleanup");
+    }
+    await inspection.cleanup.close();
+    expect(sawTag).toBe("self");
+  });
+});
+
+describe("inspectProviderOutputByteSourceOpenResult classifies and captures in one pass", () => {
+  it("returns VALID for a well-formed OPEN and RETRYABLE_FAILURE", () => {
+    expect(inspectProviderOutputByteSourceOpenResult({ kind: "OPEN", stream: stream() })).toMatchObject({
+      kind: "VALID",
+      result: { kind: "OPEN" },
+    });
+    expect(inspectProviderOutputByteSourceOpenResult({ kind: "RETRYABLE_FAILURE" })).toEqual({
+      kind: "VALID",
+      result: { kind: "RETRYABLE_FAILURE" },
+    });
+  });
+
+  it("names OPEN_RESULT_MALFORMED with cleanup for a valid stream in a bad wrapper", async () => {
+    let closes = 0;
+    const inspection = inspectProviderOutputByteSourceOpenResult({
+      kind: "OPEN",
+      stream: { body: someBytes(), declaredSizeBytes: null, close: async () => void (closes += 1) },
+      status: 200,
+    });
+    expect(inspection).toMatchObject({ kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED" });
+    if (inspection.kind !== "MALFORMED" || inspection.cleanup === null) {
+      throw new Error("expected cleanup");
+    }
+    await inspection.cleanup.close();
+    expect(closes).toBe(1);
+  });
+
+  it("names STREAM_MALFORMED with cleanup for a malformed-but-closable stream", () => {
+    const inspection = inspectProviderOutputByteSourceOpenResult({
+      kind: "OPEN",
+      stream: { body: "x", declaredSizeBytes: null, close: async () => undefined },
+    });
+    expect(inspection).toMatchObject({ kind: "MALFORMED", reason: "STREAM_MALFORMED" });
+    expect(inspection.kind === "MALFORMED" && inspection.cleanup).not.toBeNull();
+  });
+
+  it("names OPEN_RESULT_MALFORMED with no cleanup when there is no stream object", () => {
+    for (const value of [{ kind: "OPEN" }, { kind: "OPEN", stream: null }, { kind: "OPEN", stream: 5 }]) {
+      expect(inspectProviderOutputByteSourceOpenResult(value)).toEqual({
+        kind: "MALFORMED",
+        reason: "OPEN_RESULT_MALFORMED",
+        cleanup: null,
+      });
+    }
+  });
+
+  it("reads the top-level stream exactly once", () => {
+    let streamReads = 0;
+    inspectProviderOutputByteSourceOpenResult({
+      kind: "OPEN",
+      get stream(): unknown {
+        streamReads += 1;
+        return { body: "x", declaredSizeBytes: null, close: async () => undefined };
+      },
+    });
+    expect(streamReads).toBe(1);
   });
 });
