@@ -141,31 +141,43 @@ export type TransientProviderOutputLocatorResult =
   | { readonly ok: false; readonly reason: "NOT_A_STRING" | "BLANK" };
 
 /**
- * Use a locator's raw provider location for the length of one byte-source open,
- * and nowhere else.
+ * Run one byte-source operation with a locator's raw provider location in scope,
+ * and return **nothing** through this capability.
  *
- * This is the single controlled read-back of the credential the locator holds,
- * and it is shaped to be usable only the way a byte-source adapter needs it:
- * the raw string is passed *into* a callback and is never returned, so it exists
- * only inside the `use` function that performs the network request and is gone
- * when that call settles. There is deliberately no accessor that would let the
- * value escape into an ordinary variable — a signed URL is bearer authorization,
- * and the moment it can be assigned it can be spread, logged or serialized.
+ * The security model is precise, and stated as exactly what the implementation
+ * enforces — no more:
  *
- * **Not exported from the `@app/domain` root.** It is reachable only through the
- * dedicated `@app/domain/provider-output-byte-source-access` subpath, and a
- * static access-guard test proves that in production only the authorized fal
- * byte-source adapter imports that subpath. This is not a general-purpose secret
- * unwrapper; it is the byte source's one door, and it is kept narrow on purpose.
+ * - **`#raw` blocks ordinary structural access.** A `#` private field is invisible
+ *   to spread, `JSON.stringify`, `Object.keys` and enumeration, and the class has
+ *   no getter, `toString`, `toJSON` or inspect path that returns it. Ordinary code
+ *   holding a locator cannot read the value.
+ * - **This subpath is a deliberate friend capability.** It is exported only from
+ *   `@app/domain/provider-output-byte-source-access`, never the `@app/domain`
+ *   root, and a static access-guard test authorizes exactly one production
+ *   importer: the fal byte-source adapter.
+ * - **The return channel is closed.** The `use` callback returns `Promise<void>`
+ *   and this function returns `Promise<void>`, so the raw string cannot be handed
+ *   back out through the capability's own result — it is not a general-purpose
+ *   unwrap function. A caller wanting to *use* the location does so inside the
+ *   callback; a caller wanting to *extract* it gets a compile error (there is a
+ *   `@ts-expect-error` regression proving `async raw => raw` is rejected).
  *
- * The `use` callback receives the exact string the locator was constructed from,
+ * What this capability does **not** claim: that a trusted callback keeps the raw
+ * string confined to its lexical lifetime. It cannot. Once the adapter is handed
+ * the string it is ordinary code that could write it into outer mutable state,
+ * and JavaScript cannot prevent that. The guarantee is that the *authorized
+ * adapter is the only production code that ever receives the string at all*, and
+ * that the capability itself is not a channel for pulling it out — not that the
+ * language enforces information-flow isolation after intentional disclosure.
+ *
+ * The callback receives the exact string the locator was constructed from,
  * unmodified — no normalization, no re-encoding — so a signature-sensitive URL
  * reaches the request the way the provider issued it.
  */
-export function withTransientProviderOutputLocatorForByteSource<T>(
+export function withTransientProviderOutputLocatorForByteSource(
   locator: TransientProviderOutputLocator,
-  use: (rawLocation: string) => Promise<T>,
-): Promise<T> {
+  use: (rawLocation: string) => Promise<void>,
+): Promise<void> {
   if (readTransientLocatorRawForByteSource === null) {
     // Unreachable: the static block installs the bridge when the class is
     // evaluated, which any reference to the class has already triggered.

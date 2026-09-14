@@ -26,28 +26,43 @@ function locator(raw = RAW): TransientProviderOutputLocator {
 }
 
 describe("the byte-source access capability", () => {
-  it("hands the exact raw location to the callback, unmodified", async () => {
-    let seen: string | null = null;
-    const result = await withTransientProviderOutputLocatorForByteSource(locator(), async (raw) => {
-      seen = raw;
-      return raw.length;
+  it("invokes the callback with the exact raw location, unmodified", async () => {
+    // What is enforceable and true: the authorized adapter receives the exact
+    // string the locator was built from, so a signed URL keeps its signature.
+    // This test deliberately makes no claim that the string cannot escape the
+    // callback — a trusted callback is ordinary code, and JavaScript cannot
+    // confine a value it has intentionally been handed.
+    let observed: string | null = null;
+    await withTransientProviderOutputLocatorForByteSource(locator(), async (raw) => {
+      observed = raw;
     });
-    // The raw string reaches the callback exactly as constructed — no
-    // normalization, no re-encoding — so a signed URL keeps its signature.
-    expect(seen).toBe(RAW);
-    expect(result).toBe(RAW.length);
+    expect(observed).toBe(RAW);
   });
 
-  it("returns only what the callback returns, never the raw location itself", async () => {
+  it("returns void: the capability is not itself a raw-return channel", async () => {
+    // The enforceable guarantee: the capability's own result cannot carry the
+    // raw string out. It returns `Promise<void>`, so awaiting it yields nothing.
     const returned = await withTransientProviderOutputLocatorForByteSource(
       locator(),
-      async () => "opaque-result",
+      async () => undefined,
     );
-    expect(returned).toBe("opaque-result");
-    // The capability's own signature offers no way to get the raw string out:
-    // it returns the callback's result type, and the callback is the only place
-    // the raw value is in scope.
-    expect(JSON.stringify(returned)).not.toContain("SECRETSIGNATURE");
+    expect(returned).toBeUndefined();
+  });
+
+  it("rejects a direct-extraction callback at compile time", () => {
+    // The regression that fails if the arbitrary-result channel is restored:
+    // a callback that returns the raw string is a type error against the
+    // `Promise<void>` contract. If the capability were changed back to a generic
+    // `<T>` result channel, this `@ts-expect-error` would become unused and the
+    // typecheck would fail.
+    const attempt = (): Promise<void> =>
+      withTransientProviderOutputLocatorForByteSource(
+        locator(),
+        // @ts-expect-error the callback must return Promise<void>; the raw string cannot be returned out.
+        async (raw) => raw,
+      );
+    // Not invoked — this test's assertion is the compile-time check above.
+    expect(typeof attempt).toBe("function");
   });
 
   it("propagates a callback rejection without exposing the raw value", async () => {

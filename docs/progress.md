@@ -1059,7 +1059,7 @@ and ADR-0020.
   production constructs it, no durable staging sink exists, and no composition
   can execute the transfer path. No `FAL_KEY`, no real fal request in tests, no
   migration and no schema change. Detail in `docs/phase-4c3b2h3b2-completion.md`
-  and ADR-0042. Mutation ledger: 37 run, 37 killed, 0 survivors.
+  and ADR-0042. Mutation ledger: 38 run, 38 killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-1** — see GitHub for its lifecycle. Adds the first
   *concrete* implementation of Phase 2H-2's `ManagedOutputTransferPort`: a
   streaming core in `@app/storage` that pulls provider bytes through an injected

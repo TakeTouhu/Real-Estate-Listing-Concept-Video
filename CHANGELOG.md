@@ -25,11 +25,16 @@ provider-output acquisition boundary; no migration and no schema change.
   `parseFalH3MaxOutputUrl` (unauthorized → `SUCCEEDED` + `outputLocator: null`)
   and again before every byte-source request.
 - **`withTransientProviderOutputLocatorForByteSource`** — the one controlled
-  read-back of a locator's raw value, handing it to a callback and never
-  returning it. Exported only from `@app/domain/provider-output-byte-source-access`,
+  read-back of a locator's raw value. It takes `use: (rawLocation) => Promise<void>`
+  and returns `Promise<void>`, so it is not a general-purpose unwrap function —
+  the raw string cannot be returned back out through the capability (a
+  compile-time `@ts-expect-error` regression proves `async raw => raw` is
+  rejected). Exported only from `@app/domain/provider-output-byte-source-access`,
   never the domain root; a static access-guard test proves only the authorized
   fal adapter imports it in production. The locator instance stays redacted under
-  `toString`, `toJSON`, inspect, `JSON.stringify` and spread.
+  `toString`, `toJSON`, inspect, `JSON.stringify` and spread. The documented
+  model is stated as exactly what is enforced: `#raw` and the subpath gate access,
+  but the language cannot confine the string once the trusted adapter holds it.
 - **A single open-result inspection authority** in the domain byte-source
   contract (`inspectProviderOutputByteSourceOpenResult`,
   `inspectProviderOutputByteStream`) plus a `CapturedProviderOutputCleanup`
@@ -49,8 +54,9 @@ provider-output acquisition boundary; no migration and no schema change.
 
 ### Mutation ledger
 
-37 mutations, 37 killed, 0 survivors (M21/M22/M23/M31 re-aimed to the new
-inspection authority; M32–M36 added for this phase).
+38 mutations, 38 killed, 0 survivors (M21/M22/M23/M31 re-aimed to the new
+inspection authority; M32–M37 added for this phase, M37 by the locator-access
+correction).
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-1: Dormant streaming managed-output transfer core
 

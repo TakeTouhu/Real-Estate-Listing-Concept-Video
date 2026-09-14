@@ -203,13 +203,19 @@ export class FalProviderOutputByteSource implements ProviderOutputByteSource {
    * can carry the URL, a host or an address) is never read.
    */
   async open(source: TransientProviderOutputLocator): Promise<ProviderOutputByteSourceOpenResult> {
+    // The access capability returns nothing, so the open result is carried out
+    // through a local rather than the capability's own return channel. The raw
+    // location stays inside the callback; what leaves is the open result, which
+    // holds the response stream and never the URL.
+    let result: ProviderOutputByteSourceOpenResult = RETRYABLE_FAILURE;
     try {
-      return await withTransientProviderOutputLocatorForByteSource(source, (rawLocation) =>
-        this.#fetchOutput(rawLocation),
-      );
+      await withTransientProviderOutputLocatorForByteSource(source, async (rawLocation) => {
+        result = await this.#fetchOutput(rawLocation);
+      });
     } catch {
       return RETRYABLE_FAILURE;
     }
+    return result;
   }
 
   async #fetchOutput(rawLocation: string): Promise<ProviderOutputByteSourceOpenResult> {

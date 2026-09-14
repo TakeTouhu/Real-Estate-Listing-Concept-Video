@@ -112,6 +112,24 @@ describe("a successful 200 opens a streaming body", () => {
     expect(h.requests).toEqual([START]);
   });
 
+  it("returns an open result carrying no raw URL or signature", async () => {
+    const h = harness([{ status: 200, contentLength: "1", chunks: [bytes(1)] }]);
+    const open = await source(h).open(locator());
+    expect(open.kind).toBe("OPEN");
+    // The raw signed URL stays inside the access callback; the open result holds
+    // the response stream, never the location.
+    const serialized = JSON.stringify(open);
+    expect(serialized).not.toContain("SECRETSIGNATURE");
+    expect(serialized).not.toContain("fal.media");
+    expect(serialized).not.toContain("X-Fal-Signature");
+    if (open.kind === "OPEN") {
+      const streamRecord = open.stream as unknown as Record<string, unknown>;
+      for (const key of Object.keys(streamRecord)) {
+        expect(String(streamRecord[key])).not.toContain("SECRETSIGNATURE");
+      }
+    }
+  });
+
   it("streams the exact bytes and exposes a valid Content-Length as the declaration", async () => {
     const h = harness([{ status: 200, contentLength: "5", chunks: [bytes(1, 2), bytes(3, 4, 5)] }]);
     const open = await source(h).open(locator());

@@ -14,10 +14,17 @@ One bundled provider-output acquisition boundary, in four parts:
    authority, `inspectProviderOutputByteSourceOpenResult`, that reads each raw
    top-level property once and carries a captured cleanup capability on the
    malformed arm. The core never returns to the raw `opened` value.
-2. **A narrow locator-read capability.** `withTransientProviderOutputLocatorForByteSource`
-   hands the raw location to a callback and never returns it, exported only from
+2. **A narrow locator-read capability with a closed return channel.**
+   `withTransientProviderOutputLocatorForByteSource(locator, use)` takes
+   `use: (rawLocation: string) => Promise<void>` and itself returns
+   `Promise<void>`, so it is not a general-purpose unwrap function — the raw
+   string cannot be returned back out through the capability, proved by a
+   compile-time `@ts-expect-error` regression. Exported only from
    `@app/domain/provider-output-byte-source-access` and, in production, imported
-   only by the authorized fal adapter.
+   only by the authorized fal adapter. The security model is stated honestly:
+   `#raw` blocks structural access and the subpath gates the friend capability,
+   but the language cannot confine the string once the trusted adapter has been
+   handed it.
 3. **A fal output URL authority**, fail-closed to signed `https://fal.media`
    artifact URLs, applied both in the fal result mapping and again immediately
    before every request.
@@ -107,12 +114,14 @@ chunk has been pulled.
 
 ## Mutation ledger
 
-**37 mutations, 37 killed, no survivors.** The Phase 3B-1 ledger (thirty-one)
+**38 mutations, 38 killed, no survivors.** The Phase 3B-1 ledger (thirty-one)
 carries forward, with M21, M22, M23 and M31 re-aimed to the new single
-inspection authority; five are added for this phase.
+inspection authority; six are added for this phase (M32–M37, with M37 added by
+the locator-access correction).
 
 | # | Defect | Killed by |
 | --- | --- | --- |
+| **M37** | The locator-access capability restores a generic arbitrary-return channel | the compile-time direct-extraction regression (`@ts-expect-error` on `async raw => raw` becomes unused → domain typecheck fails) |
 | **M32** | The malformed-OPEN cleanup re-reads raw `opened.stream` after inspection | the stateful top-level stream/kind getter core tests |
 | **M33** | Redirect targets are dialed without validating them against the fal output policy | the non-fal-host, loopback and scheme-downgrade redirect tests |
 | **M34** | The raw locator read-back is re-exported from the `@app/domain` root | the access-guard test asserting the root exposes no reader |

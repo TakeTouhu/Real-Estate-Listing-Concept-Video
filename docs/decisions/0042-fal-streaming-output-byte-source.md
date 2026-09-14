@@ -47,20 +47,37 @@ Revision 2's semantics are unchanged: a valid stream in a bad wrapper is closed
 once then `BYTE_SOURCE_OPEN_RESULT_MALFORMED`; a malformed-but-closable stream is
 closed once then `BYTE_SOURCE_STREAM_MALFORMED`. `openStreamCandidate` is gone.
 
-## Decision 2 — Locator read-back is a single subpath-gated capability
+## Decision 2 — Locator read-back is a single subpath-gated capability with a closed return channel
 
-The locator still has no accessor, no getter, no `toString` that reveals it. The
-one controlled read is `withTransientProviderOutputLocatorForByteSource(locator,
-use)`: it hands the raw string *into* a callback and never returns it, so the
-value exists only for the length of one network open. The capability is
-installed from a `static {}` block inside the class — the one scope where `#raw`
-is legible to a helper — and is exported **only** from a dedicated subpath,
-`@app/domain/provider-output-byte-source-access`, never from the `@app/domain`
-root. A static access-guard test proves that in production exactly one file
-imports that subpath: the authorized fal byte-source adapter. This is not a
-general secret-unwrapper; it is the byte source's one door, kept deliberately
-narrow, because a signed URL that can be assigned to a variable can be spread,
-logged or serialized.
+The security model is stated as exactly what the implementation enforces, no
+stronger:
+
+- **`#raw` prevents ordinary structural and read access.** A `#` private field is
+  invisible to spread, `JSON.stringify`, `Object.keys` and enumeration, and the
+  class has no getter, `toString`, `toJSON` or inspect path that returns it.
+- **The dedicated subpath is a deliberate friend capability.**
+  `withTransientProviderOutputLocatorForByteSource` is installed from a `static {}`
+  block inside the class — the one scope where `#raw` is legible to a helper — and
+  exported **only** from `@app/domain/provider-output-byte-source-access`, never
+  the `@app/domain` root.
+- **Repository static guards authorize exactly one production importer** of that
+  subpath: the fal byte-source adapter.
+- **The callback return channel is closed.** The capability takes
+  `use: (rawLocation: string) => Promise<void>` and itself returns
+  `Promise<void>`, so it cannot hand the raw string back out through its own
+  result — it is not a general-purpose unwrap function. A `@ts-expect-error`
+  regression proves a direct-extraction callback (`async raw => raw`) is a type
+  error; a mutation that restores a generic `<T>` result channel is killed by
+  that failing typecheck.
+
+What this design does **not** claim, and an earlier draft wrongly did: that a
+trusted callback keeps the raw string confined to its lexical lifetime. It
+cannot. The authorized adapter is ordinary code, and once it has intentionally
+been handed the string, JavaScript cannot prevent it writing the value into
+outer mutable state. The enforceable guarantee is narrower and honest — the
+authorized adapter is the only production code that ever receives the string at
+all, and the capability itself is not a channel for pulling it out — not that
+the language provides runtime information-flow isolation after disclosure.
 
 ## Decision 3 — fal output routing is fail-closed to signed `fal.media`
 
