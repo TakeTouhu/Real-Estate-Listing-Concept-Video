@@ -196,6 +196,16 @@ the second revision let an adapter-controlled exception escape the predicate —
 after the `commit` guard had already passed, so the staging abort was skipped
 as well — and replace the fixed defect with the adapter's own text.
 
+The same discipline reaches one boundary further down. An `EXISTING` receipt
+travels to Phase 2H-1 as `unknown`, so Phase 2H-1's own receipt authority must
+be total and materializing too — it now is (ADR-0038, amendment of
+2026-09-14). A sink receipt whose `sha256` or `sizeBytes` getter throws is the
+closed `RECEIPT_MALFORMED` there and `TRANSFER_OUTCOME_MALFORMED` from the
+orchestration, with the attempt left ingesting and nothing of the getter in any
+result, row or event. The third revision had closed this class at the commit
+boundary and left it open at the receipt boundary; there is no second receipt
+validator in the core or the runner, because the fix belongs to the authority.
+
 ### 10. The locator is passed through, still unread
 
 The core hands the opaque locator to the source and does not look at it. There

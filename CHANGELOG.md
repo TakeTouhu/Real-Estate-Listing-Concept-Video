@@ -63,6 +63,13 @@ implementation outside deterministic fakes under `@app/storage/testing`.
   throwing `kind` or `receipt` getter is malformed → abort →
   `STAGING_COMMIT_RESULT_MALFORMED` with fixed text and no `cause`, and the raw
   value is never read a second time.
+- **Nor can a sink's `EXISTING` receipt surprise Phase 2H-1.** The receipt
+  authority is now total and materializing (`parseVerificationReceipt`): own
+  keys, `sha256` and `sizeBytes` are read once each under one guard into a fresh
+  plain object, and the finalize decision never re-reads the raw receipt. A
+  throwing or stateful getter is the closed `RECEIPT_MALFORMED` →
+  `TRANSFER_OUTCOME_MALFORMED` with the attempt left ingesting (ADR-0038
+  amendment).
 
 ### Changed
 

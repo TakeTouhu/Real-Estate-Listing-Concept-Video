@@ -880,7 +880,7 @@ describe("adapter-contract defects throw a fixed application-owned error", () =>
     expect(sink.canonical.size).toBe(0);
   });
 
-  it("for a commit result whose kind getter answers once and then throws: still the fixed defect, never a raw throw from the dispatch", async () => {
+  it("for a commit result whose kind getter answers once and then throws: VERIFIED on the single guarded read, and the second-read trap is never sprung", async () => {
     // Passes a naive predicate, then explodes on the second read a naive
     // dispatch would perform. The core reads exactly once, under the guard.
     let reads = 0;

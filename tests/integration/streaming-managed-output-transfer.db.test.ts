@@ -475,6 +475,73 @@ describe.skipIf(!HAS_DB)("the streaming transfer core through the Phase 2H-2 run
     });
   });
 
+  describe("a hostile EXISTING receipt from the sink", () => {
+    const SECRET = "GETTER-SECRET s3://bucket/key?sig=SECRETSIGNATURE";
+
+    it.each([
+      ["sha256", () => ({ get sha256(): never { throw new Error(SECRET); }, sizeBytes: 123 })],
+      ["sizeBytes", () => ({ sha256: "a".repeat(64), get sizeBytes(): never { throw new Error(SECRET); } })],
+    ])("whose %s getter throws → TRANSFER_OUTCOME_MALFORMED, OUTPUT_INGESTING + ACCEPTED, nothing written, nothing escapes", async (label, hostile) => {
+      const seeded = await seedIngesting(`hostile${label}`);
+      const before = await lifecycleSnapshot(seeded);
+      const version = (await attemptRow(seeded.attemptId)).stateVersion;
+      // The sink reports EXISTING and hands back a receipt it controls. The
+      // core carries it as unknown; Phase 2H-1 is the only authority on it.
+      const { runner, sink } = streamingRunner({
+        script: { chunks: [utf8("x")] },
+        sinkOptions: { commit: () => ({ kind: "EXISTING", receipt: hostile() }) },
+      });
+
+      const result = await runner.runProviderOutputAttemptOnce({ ...BASE, attemptId: seeded.attemptId });
+      expect(result.kind).toBe("TRANSFER_OUTCOME_MALFORMED");
+      expect(JSON.stringify(result)).not.toContain("GETTER-SECRET");
+
+      const row = await attemptRow(seeded.attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(row.submissionCertainty).toBe("ACCEPTED");
+      expect(row.stateVersion).toBe(version);
+      expect(row.outputSha256).toBeNull();
+      expect(row.outputVerifiedAt).toBeNull();
+      expect(sink.canonical.size).toBe(0);
+      const types = await eventTypes(seeded.attemptId);
+      expect(types).not.toContain(OUTPUT_VERIFIED_EVENT_TYPE);
+      expect(types).not.toContain(PROVIDER_COMPLETION_FAILED_EVENT_TYPE);
+      expect(await lifecycleSnapshot(seeded)).toBe(before);
+      const persisted =
+        serialize(row) +
+        serialize(await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", seeded.attemptId));
+      for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://"]) {
+        expect(persisted).not.toContain(fragment);
+      }
+    });
+
+    it("whose sha256 getter answers once and then throws → OUTPUT_VERIFIED from the single read, never a second", async () => {
+      const seeded = await seedIngesting("stateful");
+      let reads = 0;
+      const stateful = {
+        get sha256(): string {
+          reads += 1;
+          if (reads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+          return "d".repeat(64);
+        },
+        sizeBytes: 2_048,
+      };
+      const { runner } = streamingRunner({
+        script: { chunks: [utf8("x")] },
+        sinkOptions: { commit: () => ({ kind: "EXISTING", receipt: stateful }) },
+      });
+
+      const result = await runner.runProviderOutputAttemptOnce({ ...BASE, attemptId: seeded.attemptId });
+      expect(result.kind).toBe("OUTPUT_VERIFIED");
+      // One read, end to end: core → runner → service → decision → parser.
+      expect(reads).toBe(1);
+      const row = await attemptRow(seeded.attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_VERIFIED");
+      expect(row.outputSha256).toBe("d".repeat(64));
+      expect(Number(row.outputSizeBytes)).toBe(2_048);
+    });
+  });
+
   describe("crash recovery after canonical publish", () => {
     it("finalizes a resumed attempt against the object a prior run published", async () => {
       const seeded = await seedIngesting("crash");

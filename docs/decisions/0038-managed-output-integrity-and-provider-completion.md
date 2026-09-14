@@ -9,6 +9,19 @@
   references are internal), ADR-0024 (the row is the queue), and the Phase
   4C-3B-2F-1 lock order this phase joins unchanged
 
+> **Amendment, 2026-09-14 (Phase 4C-3B-2H-3B-1).** The receipt boundary this
+> ADR establishes is now **total and materializing**. `isWellFormedVerificationReceipt`
+> delegates to `parseVerificationReceipt(value): ManagedOutputVerificationReceipt | null`,
+> which enumerates own keys and reads `sha256` and `sizeBytes` exactly once each,
+> inside one guard, and returns a fresh plain object — or `null` for anything
+> that throws or fails validation. `decideFinalizeOutputVerification` decides
+> from that materialized copy and never consults the raw receipt again. The
+> reason is the `EXISTING` arm ADR-0041 introduced: a storage sink's receipt
+> travels here as `unknown`, so this is where a hostile object arrives, and a
+> throwing or stateful getter must become the closed `RECEIPT_MALFORMED` result
+> rather than an adapter-controlled exception escaping a pure decision under
+> the completion lock. Nothing about what a valid receipt *is* changed.
+
 ## Context
 
 By the end of Phase 4C-3B-2G-2 an attempt could be `PROCESSING + ACCEPTED`: a

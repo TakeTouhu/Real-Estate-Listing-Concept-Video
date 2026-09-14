@@ -146,12 +146,42 @@ export const VERIFICATION_RECEIPT_KEYS: readonly string[] = ["sha256", "sizeByte
 export function isWellFormedVerificationReceipt(
   value: unknown,
 ): value is ManagedOutputVerificationReceipt {
-  if (!isPlainRecord(value)) return false;
-  return (
-    hasExactlyOwnKeys(value, VERIFICATION_RECEIPT_KEYS) &&
-    isSha256Digest(value.sha256) &&
-    isSafePositiveByteCount(value.sizeBytes)
-  );
+  return parseVerificationReceipt(value) !== null;
+}
+
+/**
+ * Read a receipt once, under a guard, into a fresh plain object — or `null`.
+ *
+ * This is the single authority on receipt validity, and it is total. The
+ * value arriving here is whatever a storage adapter handed back — a sink's
+ * `EXISTING` receipt travels through the transfer core and the orchestrator as
+ * `unknown` precisely so that this boundary, and only this boundary, decides.
+ * That makes it the place a hostile object arrives: reading `sha256` or
+ * `sizeBytes` may invoke a getter, and enumerating own keys may hit a proxy
+ * trap. A getter that throws is not a digest; it is a value outside the
+ * contract, and the answer is `null` — never the adapter's own exception
+ * escaping from a predicate into a place where it would replace the closed
+ * `RECEIPT_MALFORMED` result, or surface from the orchestration as a raw throw.
+ *
+ * Materialized rather than merely validated, for the second half of the same
+ * problem: a predicate that says `true` leaves the decision logic to read the
+ * properties *again*, and a getter that answered once and throws — or answers
+ * differently — the second time would pass validation and then explode, or
+ * write a value nobody validated. Each property is read here exactly once,
+ * inside the guard, and what the caller gets is a plain object with exactly two
+ * own data properties. The raw input is never consulted again.
+ */
+export function parseVerificationReceipt(value: unknown): ManagedOutputVerificationReceipt | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    if (!hasExactlyOwnKeys(value, VERIFICATION_RECEIPT_KEYS)) return null;
+    const sha256: unknown = value.sha256;
+    const sizeBytes: unknown = value.sizeBytes;
+    if (!isSha256Digest(sha256) || !isSafePositiveByteCount(sizeBytes)) return null;
+    return { sha256, sizeBytes };
+  } catch {
+    return null;
+  }
 }
 
 /**
