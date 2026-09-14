@@ -697,6 +697,72 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
       expect((await attemptRow(attemptId)).outputSha256).toBeNull();
     });
 
+    it.each([
+      ["a throwing sha256 getter", () => ({ get sha256(): never { throw new Error("GETTER-SECRET"); }, sizeBytes: 123 })],
+      ["a throwing sizeBytes getter", () => ({ sha256: "a".repeat(64), get sizeBytes(): never { throw new Error("GETTER-SECRET"); } })],
+      [
+        "a revoked Proxy",
+        // Throws from the runtime's `IsArray` before any property is read —
+        // ahead of the parser's own guard. The shared record check absorbs it.
+        () => {
+          const { proxy, revoke } = Proxy.revocable({}, {});
+          revoke();
+          return proxy;
+        },
+      ],
+    ])("answers RECEIPT_MALFORMED for %s, with zero mutation and no raw throw", async (label, hostile) => {
+      const { attemptId } = await seedAcceptedProcessingAttempt(`verhost${label.length}`);
+      const svc = completion();
+      await svc.recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+      await svc.beginOutputIngestion({ ...BASE, attemptId });
+      const before = await attemptRow(attemptId);
+
+      // The hostile object reaches the decision under the completion lock. It
+      // must come back as the closed arm — a raw throw would escape through the
+      // transaction and the orchestration alike.
+      const result = await svc.finalizeOutputVerification({
+        ...BASE,
+        attemptId,
+        receipt: hostile() as unknown as ManagedOutputVerificationReceipt,
+      });
+      expect(result).toEqual({ kind: "RECEIPT_MALFORMED" });
+      expect(JSON.stringify(result)).not.toContain("GETTER-SECRET");
+
+      const after = await attemptRow(attemptId);
+      expect(after.orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.outputSha256).toBeNull();
+      expect(after.outputSizeBytes).toBeNull();
+      expect(after.outputVerifiedAt).toBeNull();
+    });
+
+    it("finalizes from the materialized receipt when a getter answers once and then throws", async () => {
+      const { attemptId } = await seedAcceptedProcessingAttempt("verstateful");
+      const svc = completion();
+      await svc.recordProviderCompletion({ ...BASE, attemptId, observation: SUCCEEDED });
+      await svc.beginOutputIngestion({ ...BASE, attemptId });
+
+      let shaReads = 0;
+      const stateful = {
+        get sha256(): string {
+          shaReads += 1;
+          if (shaReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+          return "c".repeat(64);
+        },
+        sizeBytes: 4_194_304,
+      };
+      const result = await svc.finalizeOutputVerification({
+        ...BASE,
+        attemptId,
+        receipt: stateful as unknown as ManagedOutputVerificationReceipt,
+      });
+      expect(result.kind).toBe("APPLIED");
+      expect(shaReads).toBe(1);
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_VERIFIED");
+      expect(row.outputSha256).toBe("c".repeat(64));
+    });
+
     it("refuses a malformed receipt with zero mutation", async () => {
       const { attemptId } = await seedAcceptedProcessingAttempt("vermal");
       const svc = completion();

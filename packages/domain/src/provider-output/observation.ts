@@ -83,32 +83,69 @@ export const FAILED_POLL_KEYS: readonly string[] = ["kind", "retryable", "diagno
  *
  * Exact own keys throughout, for the reason Phase 2H-1 settled: a value carrying
  * `providerOutputUrl` next to a valid discriminant is not this contract, it is a
- * provider payload with a discriminant in it. Never throws.
+ * provider payload with a discriminant in it. Never throws — implemented on
+ * {@link parseProviderPollObservation}, which is total.
  */
 export function isWellFormedPollObservation(value: unknown): value is ProviderPollObservation {
-  if (!isPlainRecord(value)) return false;
+  return parseProviderPollObservation(value) !== null;
+}
 
-  switch (value.kind) {
-    case "IN_PROGRESS":
-      return hasExactlyOwnKeys(value, IN_PROGRESS_POLL_KEYS);
-    case "SUCCEEDED":
-      return (
-        hasExactlyOwnKeys(value, SUCCEEDED_POLL_KEYS) &&
-        (value.outputLocator === null ||
-          TransientProviderOutputLocator.isLocator(value.outputLocator))
-      );
-    case "FAILED":
-      // `typeof === "boolean"`, not truthiness: `"false"` is truthy, and this
-      // flag decides whether the customer's request may be attempted again.
-      return (
-        hasExactlyOwnKeys(value, FAILED_POLL_KEYS) &&
-        isBoolean(value.retryable) &&
-        isDiagnosticCodeOrNull(value.diagnosticCode)
-      );
-    default:
-      // An unrecognised discriminant is refused, never swept into FAILED.
-      // Treating "I do not recognise this" as "the provider failed" would move a
-      // paid, accepted attempt to a terminal state on a value nobody defined.
-      return false;
+/**
+ * Read a poll observation once, under a guard, into a fresh plain object — or
+ * `null`.
+ *
+ * The value is whatever a status-source adapter returned after its own
+ * `await`, and surviving an `await` proves only that `.then` was harmless. A
+ * `kind` getter that throws, an `ownKeys` trap that throws, or a getter that
+ * answers validly during validation and differently on a second read are all
+ * values an adapter can hand back — and the orchestrator dispatches on this
+ * observation several times, so a second read is exactly where a stateful
+ * getter would strike. Every read of the raw value happens here, once —
+ * `kind`, the own keys, `outputLocator`, `retryable`, `diagnosticCode` —
+ * inside one guard, and the caller gets a plain object whose data properties
+ * are the values that were validated. A throw anywhere is `null`: the adapter's
+ * exception is not an observation, and it must not escape as a raw error where
+ * the closed `STATUS_OBSERVATION_MALFORMED` belongs. Nor may it be *read* as
+ * anything else: a malformed observation is never `FAILED`, because that would
+ * manufacture a provider failure — and a terminal state on a paid attempt —
+ * out of a value nobody defined.
+ *
+ * The locator reference is preserved as constructed. It is not rebuilt,
+ * stringified or inspected; the only thing proved about it is that this
+ * process built it.
+ */
+export function parseProviderPollObservation(value: unknown): ProviderPollObservation | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    const kind: unknown = value.kind;
+    switch (kind) {
+      case "IN_PROGRESS":
+        return hasExactlyOwnKeys(value, IN_PROGRESS_POLL_KEYS) ? { kind: "IN_PROGRESS" } : null;
+      case "SUCCEEDED": {
+        if (!hasExactlyOwnKeys(value, SUCCEEDED_POLL_KEYS)) return null;
+        const outputLocator: unknown = value.outputLocator;
+        if (outputLocator !== null && !TransientProviderOutputLocator.isLocator(outputLocator)) {
+          return null;
+        }
+        return { kind: "SUCCEEDED", outputLocator };
+      }
+      case "FAILED": {
+        if (!hasExactlyOwnKeys(value, FAILED_POLL_KEYS)) return null;
+        // `typeof === "boolean"`, not truthiness: `"false"` is truthy, and this
+        // flag decides whether the customer's request may be attempted again.
+        const retryable: unknown = value.retryable;
+        const diagnosticCode: unknown = value.diagnosticCode;
+        if (!isBoolean(retryable) || !isDiagnosticCodeOrNull(diagnosticCode)) return null;
+        return { kind: "FAILED", retryable, diagnosticCode };
+      }
+      default:
+        // An unrecognised discriminant is refused, never swept into FAILED.
+        // Treating "I do not recognise this" as "the provider failed" would
+        // move a paid, accepted attempt to a terminal state on a value nobody
+        // defined.
+        return null;
+    }
+  } catch {
+    return null;
   }
 }

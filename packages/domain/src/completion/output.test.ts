@@ -6,6 +6,7 @@ import {
   isSha256Digest,
   isWellFormedVerificationReceipt,
   managedGenerationOutputKey,
+  parseVerificationReceipt,
   safePositiveByteCount,
   sha256Digest,
 } from "./output";
@@ -174,6 +175,111 @@ describe("the verification receipt", () => {
     ]) {
       expect(`${forbidden}: ${body.includes(forbidden)}`).toBe(`${forbidden}: false`);
     }
+  });
+});
+
+describe("the receipt authority is total", () => {
+  const SECRET = "GETTER-SECRET s3://bucket/key?sig=SECRETSIGNATURE";
+
+  it.each([
+    ["a throwing sha256 getter", { get sha256(): never { throw new Error(SECRET); }, sizeBytes: 123 }],
+    ["a throwing sizeBytes getter", { sha256: VALID, get sizeBytes(): never { throw new Error(SECRET); } }],
+  ])("answers false, rather than throwing, for %s", (_label, hostile) => {
+    // A predicate is total. The value is whatever a storage adapter returned,
+    // and a getter that throws is a value outside the contract — not a reason
+    // for the adapter's exception to replace the closed malformed result.
+    expect(() => isWellFormedVerificationReceipt(hostile)).not.toThrow();
+    expect(isWellFormedVerificationReceipt(hostile)).toBe(false);
+    expect(() => parseVerificationReceipt(hostile)).not.toThrow();
+    expect(parseVerificationReceipt(hostile)).toBeNull();
+  });
+
+  it("answers false when own-key enumeration itself throws", () => {
+    const trapped = new Proxy(
+      { sha256: VALID, sizeBytes: 1 },
+      {
+        ownKeys() {
+          throw new Error(SECRET);
+        },
+      },
+    );
+    expect(() => isWellFormedVerificationReceipt(trapped)).not.toThrow();
+    expect(isWellFormedVerificationReceipt(trapped)).toBe(false);
+  });
+
+  it("answers false, rather than throwing, for a revoked Proxy", () => {
+    // Hostile before any property is read: `typeof` still says "object", and
+    // the very next question — is it an array? — throws from the runtime,
+    // ahead of the parser's own guard. The shared record check absorbs it.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => parseVerificationReceipt(proxy)).not.toThrow();
+    expect(parseVerificationReceipt(proxy)).toBeNull();
+    expect(() => isWellFormedVerificationReceipt(proxy)).not.toThrow();
+    expect(isWellFormedVerificationReceipt(proxy)).toBe(false);
+  });
+});
+
+describe("the receipt is materialized once", () => {
+  it("returns a fresh plain object with exactly sha256 and sizeBytes", () => {
+    const raw = { sha256: VALID, sizeBytes: 4_194_304 };
+    const parsed = parseVerificationReceipt(raw);
+    expect(parsed).toEqual({ sha256: VALID, sizeBytes: 4_194_304 });
+    expect(parsed).not.toBe(raw);
+    expect(Object.getOwnPropertyNames(parsed)).toEqual(["sha256", "sizeBytes"]);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+  });
+
+  it("reads each property exactly once, so a getter that answers once and then throws is never re-read", () => {
+    let shaReads = 0;
+    let sizeReads = 0;
+    const stateful = {
+      get sha256(): string {
+        shaReads += 1;
+        if (shaReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+        return VALID;
+      },
+      get sizeBytes(): number {
+        sizeReads += 1;
+        if (sizeReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+        return 7;
+      },
+    };
+    const parsed = parseVerificationReceipt(stateful);
+    expect(parsed).toEqual({ sha256: VALID, sizeBytes: 7 });
+    expect(shaReads).toBe(1);
+    expect(sizeReads).toBe(1);
+    // The materialized copy carries plain data properties; reading them again
+    // touches the hostile getters zero more times.
+    expect(parsed?.sha256).toBe(VALID);
+    expect(parsed?.sizeBytes).toBe(7);
+    expect(shaReads).toBe(1);
+    expect(sizeReads).toBe(1);
+  });
+
+  it("does not let a getter that changes its answer smuggle a second value past validation", () => {
+    let reads = 0;
+    const shifting = {
+      get sha256(): string {
+        reads += 1;
+        return reads === 1 ? VALID : "b".repeat(64);
+      },
+      sizeBytes: 1,
+    };
+    // Whatever was validated is what is returned; the second answer never
+    // exists as far as any caller can tell.
+    expect(parseVerificationReceipt(shifting)?.sha256).toBe(VALID);
+    expect(reads).toBe(1);
+  });
+
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a bad digest", { sha256: "nope", sizeBytes: 1 }],
+    ["a zero size", { sha256: VALID, sizeBytes: 0 }],
+    ["an extra key", { sha256: VALID, sizeBytes: 1, url: "s3://x" }],
+  ])("returns null for %s", (_label, value) => {
+    expect(parseVerificationReceipt(value)).toBeNull();
   });
 });
 

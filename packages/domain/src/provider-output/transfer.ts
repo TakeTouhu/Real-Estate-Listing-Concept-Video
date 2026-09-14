@@ -1,3 +1,4 @@
+import type { ManagedGenerationOutputKey } from "../completion/output";
 import { hasExactlyOwnKeys, isPlainRecord } from "../submission/untrusted";
 import type { TransientProviderOutputLocator } from "./locator";
 
@@ -5,21 +6,17 @@ import type { TransientProviderOutputLocator } from "./locator";
  * Copying a provider's output into managed storage, as a contract rather than an
  * implementation.
  *
- * **There is no concrete implementation in this phase.** No HTTP client, no S3,
- * R2 or GCS client, no credentials. What exists is the shape a future adapter
- * must satisfy — and defining it first is deliberate: the shape is the
- * constraint on its implementations, not the other way round.
- */
-
-/**
- * Where the copy is going. Always derived, never chosen.
+ * The domain still owns no implementation — no HTTP client, no S3, R2 or GCS
+ * client, no credentials. A concrete streaming core now exists in
+ * `@app/storage` (Phase 2H-3B-1) and satisfies this shape; the shape remains
+ * the constraint on it, not the other way round.
  *
- * A plain string alias rather than a new opaque type: the value is produced by
- * Phase 2H-1's `managedGenerationOutputKey` and the orchestrator has no other
- * source for one. Naming it here is documentation of that provenance, not a
- * second validation boundary — a second one could drift from the first.
+ * The destination type is imported from the completion module rather than
+ * aliased here. While no writer existed a plain `string` alias documented
+ * provenance well enough; a real writer needs the type to *enforce* it, and one
+ * branded definition next to its only constructor is the way to have that
+ * without a second validation boundary that could drift from the first.
  */
-export type ManagedGenerationOutputKey = string;
 
 export interface ManagedOutputTransferInput {
   /** Opaque, non-readable. The adapter that can dereference it does not exist. */
@@ -79,20 +76,56 @@ export const RETRYABLE_FAILURE_TRANSFER_KEYS: readonly string[] = ["kind"];
  * tolerated. A storage adapter's error text is external data, and the moment a
  * field exists to carry it, something will log it, and a signed URL will be in
  * that log.
+ *
+ * Implemented on {@link parseManagedOutputTransferOutcome}, so the predicate
+ * and the parser cannot disagree about what a well-formed outcome is.
  */
 export function isWellFormedTransferOutcome(
   value: unknown,
 ): value is ManagedOutputTransferOutcome {
-  if (!isPlainRecord(value)) return false;
+  return parseManagedOutputTransferOutcome(value) !== null;
+}
 
-  switch (value.kind) {
-    case "VERIFIED":
-      // `receipt` must be *present*, and may be anything: absence is a defect in
-      // the adapter, while contents are Phase 2H-1's question.
-      return hasExactlyOwnKeys(value, VERIFIED_TRANSFER_KEYS);
-    case "RETRYABLE_FAILURE":
-      return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_TRANSFER_KEYS);
-    default:
-      return false;
+/**
+ * Read a transfer outcome once, under a guard, into a fresh plain object — or
+ * `null`.
+ *
+ * The value is whatever the transfer port returned after its own `await`, and
+ * a value that survives an `await` can still be hostile: a live Proxy whose
+ * `.then` is harmless but whose `kind` getter or `ownKeys` trap throws, or a
+ * getter that answers validly during validation and differently afterwards.
+ * Every read of the raw value happens here — `kind` once, own keys once,
+ * `receipt` once for `VERIFIED` — inside one guard, and what the caller gets
+ * is a plain object with own data properties that cannot surprise it. A throw
+ * anywhere is `null`: it is the adapter's exception, and it must not escape the
+ * orchestration as a raw error where the closed `TRANSFER_OUTCOME_MALFORMED`
+ * result belongs. The thrown value is not inspected, kept or reported.
+ *
+ * The `receipt` reference itself is carried through untouched. Its contents
+ * are Phase 2H-1's question, and that authority reads it once, under its own
+ * guard.
+ */
+export function parseManagedOutputTransferOutcome(
+  value: unknown,
+): ManagedOutputTransferOutcome | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    const kind: unknown = value.kind;
+    switch (kind) {
+      case "VERIFIED":
+        // `receipt` must be *present*, and may be anything: absence is a defect
+        // in the adapter, while contents are Phase 2H-1's question.
+        return hasExactlyOwnKeys(value, VERIFIED_TRANSFER_KEYS)
+          ? { kind: "VERIFIED", receipt: value.receipt }
+          : null;
+      case "RETRYABLE_FAILURE":
+        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_TRANSFER_KEYS)
+          ? { kind: "RETRYABLE_FAILURE" }
+          : null;
+      default:
+        return null;
+    }
+  } catch {
+    return null;
   }
 }

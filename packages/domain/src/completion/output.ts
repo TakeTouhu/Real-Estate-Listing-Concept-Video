@@ -23,6 +23,29 @@ import { hasExactlyOwnKeys, isPlainRecord } from "../submission/untrusted";
 
 declare const sha256DigestBrand: unique symbol;
 declare const byteCountBrand: unique symbol;
+declare const managedGenerationOutputKeyBrand: unique symbol;
+
+/**
+ * Where an attempt's managed output lives, as a value that proves where it came
+ * from.
+ *
+ * Branded, and the brand is the whole point. While no concrete writer existed
+ * a plain `string` alias was enough: the orchestrator had exactly one source
+ * for a destination and nothing consumed it. A streaming transfer core changes
+ * that — it is a real writer whose normal typed boundary must not accept an
+ * arbitrary string, because an arbitrary string is a provider file name, a
+ * caller-chosen path, or another tenant's key, and the type is the cheapest
+ * place to make that impossible.
+ *
+ * Only {@link managedGenerationOutputKey} produces one. The value is still a
+ * string at runtime and remains assignable wherever an ordinary storage key
+ * string is required — the database column, an object-store call — so nothing
+ * downstream changes. What changes is the other direction: a string cannot
+ * become a transfer destination without an explicit, greppable unsafe cast.
+ */
+export type ManagedGenerationOutputKey = string & {
+  readonly [managedGenerationOutputKeyBrand]: "ManagedGenerationOutputKey";
+};
 
 /**
  * A SHA-256 digest of a managed output, in the repository's canonical form.
@@ -123,12 +146,42 @@ export const VERIFICATION_RECEIPT_KEYS: readonly string[] = ["sha256", "sizeByte
 export function isWellFormedVerificationReceipt(
   value: unknown,
 ): value is ManagedOutputVerificationReceipt {
-  if (!isPlainRecord(value)) return false;
-  return (
-    hasExactlyOwnKeys(value, VERIFICATION_RECEIPT_KEYS) &&
-    isSha256Digest(value.sha256) &&
-    isSafePositiveByteCount(value.sizeBytes)
-  );
+  return parseVerificationReceipt(value) !== null;
+}
+
+/**
+ * Read a receipt once, under a guard, into a fresh plain object — or `null`.
+ *
+ * This is the single authority on receipt validity, and it is total. The
+ * value arriving here is whatever a storage adapter handed back — a sink's
+ * `EXISTING` receipt travels through the transfer core and the orchestrator as
+ * `unknown` precisely so that this boundary, and only this boundary, decides.
+ * That makes it the place a hostile object arrives: reading `sha256` or
+ * `sizeBytes` may invoke a getter, and enumerating own keys may hit a proxy
+ * trap. A getter that throws is not a digest; it is a value outside the
+ * contract, and the answer is `null` — never the adapter's own exception
+ * escaping from a predicate into a place where it would replace the closed
+ * `RECEIPT_MALFORMED` result, or surface from the orchestration as a raw throw.
+ *
+ * Materialized rather than merely validated, for the second half of the same
+ * problem: a predicate that says `true` leaves the decision logic to read the
+ * properties *again*, and a getter that answered once and throws — or answers
+ * differently — the second time would pass validation and then explode, or
+ * write a value nobody validated. Each property is read here exactly once,
+ * inside the guard, and what the caller gets is a plain object with exactly two
+ * own data properties. The raw input is never consulted again.
+ */
+export function parseVerificationReceipt(value: unknown): ManagedOutputVerificationReceipt | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    if (!hasExactlyOwnKeys(value, VERIFICATION_RECEIPT_KEYS)) return null;
+    const sha256: unknown = value.sha256;
+    const sizeBytes: unknown = value.sizeBytes;
+    if (!isSha256Digest(sha256) || !isSafePositiveByteCount(sizeBytes)) return null;
+    return { sha256, sizeBytes };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -162,7 +215,7 @@ export function isWellFormedVerificationReceipt(
 export function managedGenerationOutputKey(input: {
   readonly organizationId: string;
   readonly attemptId: string;
-}): string {
+}): ManagedGenerationOutputKey {
   if (input.organizationId.trim().length === 0 || input.attemptId.trim().length === 0) {
     // Blank identifiers would collapse two different attempts onto one key, and
     // a key with an empty segment is a different object than it looks like.
@@ -171,5 +224,9 @@ export function managedGenerationOutputKey(input: {
       "Managed output key requires a non-blank organization and attempt id",
     );
   }
-  return ["org", input.organizationId, "generations", input.attemptId, "output"].join("/");
+  // The one place a string becomes a key. The cast is the brand's constructor,
+  // and it lives here so that the identifiers above are the only way in.
+  return ["org", input.organizationId, "generations", input.attemptId, "output"].join(
+    "/",
+  ) as ManagedGenerationOutputKey;
 }

@@ -518,6 +518,80 @@ describe("finalizing a managed output", () => {
   });
 });
 
+describe("finalization reads the receipt once, under a guard", () => {
+  const ingesting = processing({ orchestrationState: "OUTPUT_INGESTING" });
+
+  it.each([
+    ["a throwing sha256 getter", { get sha256(): never { throw new Error("GETTER-SECRET"); }, sizeBytes: SIZE_A }],
+    ["a throwing sizeBytes getter", { sha256: SHA_A, get sizeBytes(): never { throw new Error("GETTER-SECRET"); } }],
+    [
+      "a revoked Proxy",
+      (() => {
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        revoke();
+        return proxy;
+      })(),
+    ],
+  ])("refuses %s as MALFORMED_RECEIPT without throwing", (_label, hostile) => {
+    // The decision is pure and is called under Phase 2H-1's lock. A raw throw
+    // here would escape the service and the orchestration; the closed arm is
+    // the only acceptable answer.
+    expect(() =>
+      finalize(ingesting, hostile as unknown as ManagedOutputVerificationReceipt),
+    ).not.toThrow();
+    expect(finalize(ingesting, hostile as unknown as ManagedOutputVerificationReceipt)).toEqual({
+      kind: "MALFORMED_RECEIPT",
+    });
+  });
+
+  it("decides from the materialized receipt: a getter that answers once and then throws is read exactly once", () => {
+    let shaReads = 0;
+    let sizeReads = 0;
+    const stateful = {
+      get sha256(): string {
+        shaReads += 1;
+        if (shaReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+        return SHA_A;
+      },
+      get sizeBytes(): number {
+        sizeReads += 1;
+        if (sizeReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+        return SIZE_A;
+      },
+    };
+    const decision = finalize(ingesting, stateful as unknown as ManagedOutputVerificationReceipt);
+    // A naive implementation validates (read 1) then builds the write from the
+    // raw receipt (read 2) — and the second read throws out of a pure function.
+    expect(decision).toEqual({
+      kind: "APPLY",
+      write: {
+        orchestrationState: "OUTPUT_VERIFIED",
+        outputStorageKey: KEY,
+        outputSha256: SHA_A,
+        outputSizeBytes: SIZE_A,
+        outputVerifiedAt: VERIFIED_AT,
+      },
+    });
+    expect(shaReads).toBe(1);
+    expect(sizeReads).toBe(1);
+  });
+
+  it("writes the value that was validated, not whatever a shifting getter says later", () => {
+    let reads = 0;
+    const shifting = {
+      get sha256(): string {
+        reads += 1;
+        return reads === 1 ? SHA_A : "b".repeat(64);
+      },
+      sizeBytes: SIZE_A,
+    };
+    const decision = finalize(ingesting, shifting as unknown as ManagedOutputVerificationReceipt);
+    if (decision.kind !== "APPLY") throw new Error("expected APPLY");
+    expect(decision.write.outputSha256).toBe(SHA_A);
+    expect(reads).toBe(1);
+  });
+});
+
 describe("finalization replay and conflict", () => {
   it("replays the exact same receipt", () => {
     expect(finalize(verified())).toEqual({ kind: "REPLAY" });

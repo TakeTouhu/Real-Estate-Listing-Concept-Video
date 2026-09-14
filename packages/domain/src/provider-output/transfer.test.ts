@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isWellFormedTransferOutcome } from "./transfer";
+import { isWellFormedTransferOutcome, parseManagedOutputTransferOutcome } from "./transfer";
 
 /**
  * What a transfer port may conclude.
@@ -101,6 +101,96 @@ describe("no arm may carry storage or provider text", () => {
     const smuggled: Record<string, unknown> = { kind: "RETRYABLE_FAILURE" };
     Object.defineProperty(smuggled, "signedUrl", { value: "https://x", enumerable: false });
     expect(isWellFormedTransferOutcome(smuggled)).toBe(false);
+  });
+});
+
+describe("the transfer outcome is read once, under a guard, into a fresh object", () => {
+  it("materializes VERIFIED as a fresh two-key object carrying the receipt reference", () => {
+    const receipt = { sha256: "a".repeat(64), sizeBytes: 1 };
+    const input = { kind: "VERIFIED" as const, receipt };
+    const parsed = parseManagedOutputTransferOutcome(input);
+    expect(parsed).toEqual({ kind: "VERIFIED", receipt });
+    expect(parsed).not.toBe(input);
+    // The receipt itself is carried through by reference, untouched: its
+    // contents are Phase 2H-1's question.
+    expect((parsed as { receipt: unknown }).receipt).toBe(receipt);
+    expect(Object.getOwnPropertyNames(parsed)).toEqual(["kind", "receipt"]);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+  });
+
+  it("materializes RETRYABLE_FAILURE as a fresh one-key object", () => {
+    const input = { kind: "RETRYABLE_FAILURE" as const };
+    const parsed = parseManagedOutputTransferOutcome(input);
+    expect(parsed).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(parsed).not.toBe(input);
+    expect(Object.getOwnPropertyNames(parsed)).toEqual(["kind"]);
+  });
+
+  it.each([
+    ["a throwing kind getter", { get kind(): never { throw new Error("SECRET"); }, receipt: {} }],
+    [
+      "a throwing receipt getter on VERIFIED",
+      { kind: "VERIFIED", get receipt(): never { throw new Error("SECRET"); } },
+    ],
+  ])("returns null, rather than throwing, for %s", (_label, hostile) => {
+    expect(() => parseManagedOutputTransferOutcome(hostile)).not.toThrow();
+    expect(parseManagedOutputTransferOutcome(hostile)).toBeNull();
+    expect(() => isWellFormedTransferOutcome(hostile)).not.toThrow();
+    expect(isWellFormedTransferOutcome(hostile)).toBe(false);
+  });
+
+  it("returns null when own-key enumeration itself throws", () => {
+    const trapped = new Proxy(
+      { kind: "VERIFIED", receipt: {} },
+      {
+        ownKeys() {
+          throw new Error("SECRET");
+        },
+      },
+    );
+    expect(() => parseManagedOutputTransferOutcome(trapped)).not.toThrow();
+    expect(parseManagedOutputTransferOutcome(trapped)).toBeNull();
+  });
+
+  it("reads kind exactly once, so a getter that answers once and then throws cannot pass and later explode", () => {
+    let reads = 0;
+    const stateful = {
+      get kind(): string {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return "VERIFIED";
+      },
+      receipt: { sha256: "b".repeat(64), sizeBytes: 2 },
+    };
+    const parsed = parseManagedOutputTransferOutcome(stateful);
+    expect(parsed).toEqual({ kind: "VERIFIED", receipt: stateful.receipt });
+    expect(reads).toBe(1);
+  });
+
+  it("reads the receipt exactly once and holds that value", () => {
+    let reads = 0;
+    const receipt = { sha256: "c".repeat(64), sizeBytes: 3 };
+    const stateful = {
+      kind: "VERIFIED",
+      get receipt(): unknown {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return receipt;
+      },
+    };
+    const parsed = parseManagedOutputTransferOutcome(stateful);
+    expect((parsed as { receipt: unknown }).receipt).toBe(receipt);
+    expect(reads).toBe(1);
+    // Re-reading the materialized copy never re-invokes the getter.
+    void (parsed as { receipt: unknown }).receipt;
+    expect(reads).toBe(1);
+  });
+
+  it("returns null, rather than throwing, for a revoked Proxy", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => parseManagedOutputTransferOutcome(proxy)).not.toThrow();
+    expect(parseManagedOutputTransferOutcome(proxy)).toBeNull();
   });
 });
 

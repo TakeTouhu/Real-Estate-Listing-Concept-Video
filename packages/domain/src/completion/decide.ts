@@ -5,8 +5,8 @@ import {
   type ProviderCompletionObservation,
 } from "./observation";
 import {
-  isWellFormedVerificationReceipt,
   managedGenerationOutputKey,
+  parseVerificationReceipt,
   type ManagedOutputVerificationReceipt,
   type SafePositiveByteCount,
   type Sha256Digest,
@@ -310,9 +310,15 @@ export function decideFinalizeOutputVerification(input: {
   readonly receipt: ManagedOutputVerificationReceipt;
   readonly now: EpochMillis;
 }): FinalizeOutputDecision {
-  const { facts, organizationId, receipt, now } = input;
+  const { facts, organizationId, now } = input;
 
-  if (!isWellFormedVerificationReceipt(receipt)) {
+  // Read once, under a guard, into a plain object. `input.receipt` is whatever
+  // a storage adapter returned and is not consulted again after this line: a
+  // getter that throws, or answers once and then changes, is `null` here and
+  // a closed MALFORMED_RECEIPT below — never a raw exception out of a pure
+  // decision, and never a second read that writes a value nobody validated.
+  const receipt = parseVerificationReceipt(input.receipt);
+  if (receipt === null) {
     return { kind: "MALFORMED_RECEIPT" };
   }
 

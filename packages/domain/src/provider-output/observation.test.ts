@@ -6,6 +6,7 @@ import {
 import { TransientProviderOutputLocator } from "./locator";
 import {
   isWellFormedPollObservation,
+  parseProviderPollObservation,
   type ProviderPollObservation,
 } from "./observation";
 
@@ -204,6 +205,111 @@ describe("the arms are closed against provider payloads", () => {
     const inherited = Object.create({ kind: "IN_PROGRESS" }) as Record<string, unknown>;
     expect(inherited.kind).toBe("IN_PROGRESS");
     expect(isWellFormedPollObservation(inherited)).toBe(false);
+  });
+});
+
+describe("the observation is read once, under a guard, into a fresh object", () => {
+  it("materializes each arm as a fresh plain object with exactly its own keys", () => {
+    const inProgress = parseProviderPollObservation({ kind: "IN_PROGRESS" });
+    expect(inProgress).toEqual({ kind: "IN_PROGRESS" });
+    expect(Object.getOwnPropertyNames(inProgress)).toEqual(["kind"]);
+
+    const loc = locator();
+    const succeeded = parseProviderPollObservation({ kind: "SUCCEEDED", outputLocator: loc });
+    expect(Object.getOwnPropertyNames(succeeded)).toEqual(["kind", "outputLocator"]);
+    // The locator is carried through by reference — never rebuilt or inspected.
+    expect((succeeded as { outputLocator: unknown }).outputLocator).toBe(loc);
+
+    const failed = parseProviderPollObservation({
+      kind: "FAILED",
+      retryable: true,
+      diagnosticCode: null,
+    });
+    expect(failed).toEqual({ kind: "FAILED", retryable: true, diagnosticCode: null });
+    expect(Object.getOwnPropertyNames(failed)).toEqual(["kind", "retryable", "diagnosticCode"]);
+  });
+
+  it("returns a value that does not alias the input", () => {
+    const input = { kind: "IN_PROGRESS" as const };
+    expect(parseProviderPollObservation(input)).not.toBe(input);
+  });
+
+  it.each([
+    ["a throwing kind getter", { get kind(): never { throw new Error("SECRET"); } }],
+    [
+      "a throwing outputLocator getter on SUCCEEDED",
+      { kind: "SUCCEEDED", get outputLocator(): never { throw new Error("SECRET"); } },
+    ],
+    [
+      "a throwing retryable getter on FAILED",
+      { kind: "FAILED", get retryable(): never { throw new Error("SECRET"); }, diagnosticCode: null },
+    ],
+  ])("returns null, rather than throwing, for %s", (_label, hostile) => {
+    expect(() => parseProviderPollObservation(hostile)).not.toThrow();
+    expect(parseProviderPollObservation(hostile)).toBeNull();
+    expect(() => isWellFormedPollObservation(hostile)).not.toThrow();
+    expect(isWellFormedPollObservation(hostile)).toBe(false);
+  });
+
+  it("returns null when own-key enumeration itself throws", () => {
+    const trapped = new Proxy(
+      { kind: "IN_PROGRESS" },
+      {
+        ownKeys() {
+          throw new Error("SECRET");
+        },
+      },
+    );
+    expect(() => parseProviderPollObservation(trapped)).not.toThrow();
+    expect(parseProviderPollObservation(trapped)).toBeNull();
+  });
+
+  it("reads the SUCCEEDED locator exactly once and holds that reference", () => {
+    let reads = 0;
+    const loc = locator();
+    const stateful = {
+      kind: "SUCCEEDED",
+      get outputLocator(): unknown {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return loc;
+      },
+    };
+    const parsed = parseProviderPollObservation(stateful);
+    expect((parsed as { outputLocator: unknown }).outputLocator).toBe(loc);
+    expect(reads).toBe(1);
+  });
+
+  it("reads the FAILED fields exactly once each", () => {
+    let retryableReads = 0;
+    let codeReads = 0;
+    const stateful = {
+      kind: "FAILED",
+      get retryable(): boolean {
+        retryableReads += 1;
+        if (retryableReads > 1) throw new Error("SECOND-READ");
+        return true;
+      },
+      get diagnosticCode(): null {
+        codeReads += 1;
+        if (codeReads > 1) throw new Error("SECOND-READ");
+        return null;
+      },
+    };
+    expect(parseProviderPollObservation(stateful)).toEqual({
+      kind: "FAILED",
+      retryable: true,
+      diagnosticCode: null,
+    });
+    expect(retryableReads).toBe(1);
+    expect(codeReads).toBe(1);
+  });
+
+  it("returns null, rather than throwing, for a revoked Proxy", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => parseProviderPollObservation(proxy)).not.toThrow();
+    expect(parseProviderPollObservation(proxy)).toBeNull();
   });
 });
 
