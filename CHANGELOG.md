@@ -70,6 +70,15 @@ implementation outside deterministic fakes under `@app/storage/testing`.
   throwing or stateful getter is the closed `RECEIPT_MALFORMED` →
   `TRANSFER_OUTCOME_MALFORMED` with the attempt left ingesting (ADR-0038
   amendment).
+- **The shared record check is total.** `isPlainRecord` — the first question
+  every boundary parser asks, ahead of its own guard — answers `Array.isArray`
+  under a guard, so a revoked `Proxy` (which `typeof` still calls an object and
+  `IsArray` throws on) is `false` rather than a `TypeError` escaping every
+  parser and predicate built on it. Fixed once in the helper; no per-parser
+  catch. A revoked Proxy cannot cross an `await`, so it reaches the pipeline
+  only as a property of an adapter's answer — as the `stream` it is the
+  existing `BYTE_SOURCE_STREAM_MALFORMED`; as the `EXISTING` receipt it is
+  `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt left ingesting.
 
 ### Changed
 

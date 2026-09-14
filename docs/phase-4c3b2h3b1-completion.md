@@ -68,6 +68,7 @@ close the source                 always, exactly once
 | **Cleanup on a malformed open** | An OPEN-shaped malformed result with an object `stream` is closed once, best effort, **whether or not the stream is valid** — the wrapper being defective does not make a valid handle less worth releasing. The defect raised follows the stream's validity: valid stream → the wrapper's defect; malformed stream → the stream's. Obtaining `close` is inside the guard, so a throwing getter cannot replace the fixed defect (Revision 2) |
 | **The sink's answer cannot surprise the core** | The commit result is read once, under a guard, into a fresh plain object; a throwing `kind` or `receipt` getter is `null` → abort → `STAGING_COMMIT_RESULT_MALFORMED` with fixed text and no `cause`; a getter that answers once then throws is never read twice (Revision 3) |
 | **The sink's receipt cannot surprise Phase 2H-1 either** | `parseVerificationReceipt` reads own keys, `sha256` and `sizeBytes` once each inside one guard and returns a fresh plain object; the decision uses that copy and never re-reads the raw receipt. A throwing or stateful getter is the closed `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt still ingesting, nothing written, nothing escapes (Revision 4) |
+| **Totality starts at the shared record check** | Every boundary parser asks `isPlainRecord` before opening its own guard, and its `Array.isArray` throws on a revoked `Proxy`. The helper is now total — the one throwing question is answered under a guard, once, for every boundary. A revoked Proxy cannot cross an `await` (promise resolution reads `.then` and throws inside the adapter's own promise), so it reaches this pipeline only as a *property* of an answer: as the `stream` it is `BYTE_SOURCE_STREAM_MALFORMED`; as the `EXISTING` receipt it is `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt left ingesting, nothing of the runtime's text anywhere (Revision 5) |
 | **Failures never blame the provider** | Every expected condition returns `RETRYABLE_FAILURE`; every adapter defect throws fixed text; Phase 2H-2 leaves the attempt `OUTPUT_INGESTING` in both cases |
 | **Locator unread** | Passed to the source by reference; no accessor exists, none was added, and the core does not look |
 
@@ -98,22 +99,23 @@ validation is a delivery-readiness prerequisite for a later phase.
 | --- | --- |
 | `pnpm typecheck` | Pass — all 10 projects, including the `@ts-expect-error` brand proofs |
 | `pnpm lint` | Pass — 0 problems |
-| `pnpm test` | **3720 passed**, 113 files (was 3478 / 108) |
-| `pnpm test:db` (live PostgreSQL) | **751 passed**, 23 files (was 728 / 22) |
+| `pnpm test` | **3750 passed**, 114 files (was 3478 / 108) |
+| `pnpm test:db` (live PostgreSQL) | **753 passed**, 23 files (was 728 / 22) |
 | `pnpm build` | Pass |
 | Prisma drift | `No difference detected` |
 | 2F-1 / 2G-1 / 2G-2 / 2H-1 / 2H-2 / 2H-3A regressions | Pass, unchanged |
 
-242 unit tests and 23 database tests added. No pre-existing test weakened or
+272 unit tests and 25 database tests added. No pre-existing test weakened or
 removed; one Revision 3 test was renamed in Revision 4 so its title states the
-behaviour it actually proves (`VERIFIED` on a single guarded read).
+behaviour it actually proves (`VERIFIED` on a single guarded read). Revision 5
+adds the shared helper's own suite (`submission/untrusted.test.ts`).
 
 ## Mutation ledger
 
-**28 mutations, 28 killed, no survivors.** Nineteen are the required list;
+**29 mutations, 29 killed, no survivors.** Nineteen are the required list;
 three (M01a, M20, M21) are additional; two (M22, M23) were added with the
 Revision 2 correction; two (M24, M25) with Revision 3; two (M26, M27) with
-Revision 4.
+Revision 4; one (M28) with Revision 5.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -130,7 +132,7 @@ Revision 4.
 | M10 | Staging is not aborted after oversize or empty | 4 |
 | M11 | Staging is not aborted after a write or iteration failure | 11 |
 | M12 | The reference sink overwrites the canonical object (last-writer-wins) | 6 — targets the fake's first-publish semantics, proving a real sink that overwrote would be caught |
-| M13 | `EXISTING` reports the proposed receipt instead of the canonical one | 9 |
+| M13 | `EXISTING` reports the proposed receipt instead of the canonical one | 11 |
 | M14 | Commit is issued after the first chunk, before all bytes are written | 22 |
 | M15 | A `RETRYABLE_FAILURE` commit is reported as `VERIFIED` | 4 |
 | M16 | A malformed commit result is accepted | 15 |
@@ -145,6 +147,7 @@ Revision 4.
 | **M25** | **The core dispatches on the raw sink value instead of the materialized outcome** | 1 — exactly the answers-once-then-throws test written for it |
 | **M26** | **Receipt property access happens outside the parser's guard** | 8 — the four throwing-getter unit tests (receipt authority and decision) and the four live-PostgreSQL hostile-receipt tests (2H-1 completion and 2H-2 runner) |
 | **M27** | **The finalize decision re-reads the raw receipt after validation** | 4 — exactly the stateful-getter tests: two unit (decision and authority), two live-PostgreSQL (2H-1 completion and 2H-2 runner) |
+| **M28** | **`isPlainRecord` evaluates `Array.isArray` unguarded** (a revoked Proxy escapes every boundary) | 10 — eight unit (the helper itself, the receipt authority, the decision, both staging entry points, both byte-source predicates, the core's revoked stream) and two live-PostgreSQL (2H-1 completion and the 2H-2 runner, each with a revoked-Proxy `EXISTING` receipt) |
 
 Counts are failures in **this phase's suites only**. M17 and M18 are killed by a
 single static assertion each — that is the honest mechanism for a property the

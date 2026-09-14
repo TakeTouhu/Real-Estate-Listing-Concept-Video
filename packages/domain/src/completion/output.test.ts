@@ -206,6 +206,18 @@ describe("the receipt authority is total", () => {
     expect(() => isWellFormedVerificationReceipt(trapped)).not.toThrow();
     expect(isWellFormedVerificationReceipt(trapped)).toBe(false);
   });
+
+  it("answers false, rather than throwing, for a revoked Proxy", () => {
+    // Hostile before any property is read: `typeof` still says "object", and
+    // the very next question — is it an array? — throws from the runtime,
+    // ahead of the parser's own guard. The shared record check absorbs it.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => parseVerificationReceipt(proxy)).not.toThrow();
+    expect(parseVerificationReceipt(proxy)).toBeNull();
+    expect(() => isWellFormedVerificationReceipt(proxy)).not.toThrow();
+    expect(isWellFormedVerificationReceipt(proxy)).toBe(false);
+  });
 });
 
 describe("the receipt is materialized once", () => {

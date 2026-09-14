@@ -26,9 +26,26 @@ import { isSubmissionDiagnosticCode } from "./diagnostic-code";
  *
  * Arrays are excluded on purpose: `[]` is an object, indexes into cleanly, and
  * would otherwise reach the discriminant check as a value with no `kind`.
+ *
+ * Total, because this is the first question every boundary validator asks of
+ * a value it did not build, and it is asked *before* the validator's own guard
+ * opens. `typeof` and the `null` comparison cannot throw, but `Array.isArray`
+ * can: a revoked `Proxy` still answers `"object"` to `typeof` and then throws a
+ * `TypeError` from the `IsArray` operation. Left unguarded, that exception would
+ * escape from every parser and predicate built on this helper — ahead of the
+ * `try` each of them wraps around its property reads — and replace the closed
+ * malformed result with a raw runtime error. So the one question that can throw
+ * is answered under a guard here, once, and a value that cannot even be asked
+ * whether it is an array is not a record. The thrown value is not inspected,
+ * kept or reported: nothing about it is the answer.
  */
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    return !Array.isArray(value);
+  } catch {
+    return false;
+  }
 }
 
 /**

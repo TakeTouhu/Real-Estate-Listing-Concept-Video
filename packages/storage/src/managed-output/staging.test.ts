@@ -76,9 +76,26 @@ describe("isWellFormedStagingCommitOutcome", () => {
     expect(() => isWellFormedStagingCommitOutcome(hostile)).not.toThrow();
     expect(isWellFormedStagingCommitOutcome(hostile)).toBe(false);
   });
+
+  it("answers false, rather than throwing, for a revoked Proxy", () => {
+    // Hostile before `kind` is ever read: the shared record check's
+    // `Array.isArray` is the first thing that can throw, and it sits ahead of
+    // this parser's guard. Totality has to start there.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => isWellFormedStagingCommitOutcome(proxy)).not.toThrow();
+    expect(isWellFormedStagingCommitOutcome(proxy)).toBe(false);
+  });
 });
 
 describe("parseStagingCommitOutcome", () => {
+  it("returns null, rather than throwing, for a revoked Proxy", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => parseStagingCommitOutcome(proxy)).not.toThrow();
+    expect(parseStagingCommitOutcome(proxy)).toBeNull();
+  });
+
   it("materializes each arm as a fresh plain object with exactly its own keys", () => {
     const published = parseStagingCommitOutcome({ kind: "PUBLISHED" });
     const existing = parseStagingCommitOutcome({ kind: "EXISTING", receipt: RECEIPT });

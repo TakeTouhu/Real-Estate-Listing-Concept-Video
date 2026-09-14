@@ -939,6 +939,78 @@ describe("adapter-contract defects throw a fixed application-owned error", () =>
     }
     expect((error as Error).cause).toBeUndefined();
   });
+
+  // A revoked Proxy is hostile *before* any property is read: `typeof` still
+  // answers "object", and the first real question — is it an array? — throws a
+  // TypeError from the runtime itself, ahead of every parser's guard. The
+  // shared record check is where that is absorbed. Where such a value can
+  // actually arrive in this core is narrower than "anywhere an adapter answers":
+  // a revoked Proxy cannot cross an `await`, because promise resolution reads
+  // `.then` on it and that read throws inside the adapter's own promise. So it
+  // never reaches the core as a whole open result or a whole commit result; it
+  // reaches the core as a *property* of one — the `stream`, or the `EXISTING`
+  // receipt — and those are the arrival points proved here.
+  function revokedProxy(): object {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    return proxy;
+  }
+
+  it("for an OPEN result whose stream is a revoked Proxy: the stream's fixed defect, cleanup attempted quietly, nothing of the runtime escapes", async () => {
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({ kind: "OPEN", stream: revokedProxy() }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    const text = `${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`;
+    for (const fragment of ["revoked", "Proxy", "proxy", "IsArray", "TypeError"]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect((error as Error).cause).toBeUndefined();
+    expect(sink.sessions).toHaveLength(0);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for an EXISTING commit result whose receipt is a revoked Proxy: carried onward untouched, for Phase 2H-1 to refuse", async () => {
+    // The core never reads the receipt's contents, so it never trips the
+    // Proxy; the value travels to the only authority on it, whose shared
+    // record check answers false without throwing.
+    const proxy = revokedProxy();
+    const { sink, run } = core(
+      { chunks: [bytes(1)] },
+      { commit: () => ({ kind: "EXISTING", receipt: proxy }) },
+    );
+    const outcome = await run();
+    expect(outcome.kind).toBe("VERIFIED");
+    expect((outcome as { receipt: unknown }).receipt).toBe(proxy);
+    expect(sink.lastSession.abortCalls).toBe(0);
+  });
+
+  it.each([
+    ["open", { openOverride: () => revokedProxy() }, {}],
+    ["commit", {}, { commit: () => revokedProxy() }],
+  ] as const)(
+    "a revoked Proxy returned whole from %s never reaches the core: the adapter's own promise rejects, and that is handled as the adapter's throw",
+    async (_label, script, sinkOptions) => {
+      // Not a defect of this core and not classified by it: resolving the
+      // adapter's promise reads `.then` on the value, which throws inside the
+      // adapter. The core sees exactly what it sees for any adapter throw and
+      // does what it always does — abort staging if begun, close the source if
+      // opened, propagate. Pinned so the arrival-point analysis above stays
+      // honest if the runtime's promise semantics ever changed.
+      const { source, sink, run } = core({ chunks: [bytes(1)], ...script }, sinkOptions);
+      const error = await rejection(run());
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error).not.toBeInstanceOf(ManagedOutputTransferDefect);
+      expect(sink.canonical.size).toBe(0);
+      if (sink.sessions.length > 0) {
+        expect(sink.lastSession.abortCalls).toBe(1);
+        expect(source.lastStream.closeCalls).toBe(1);
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

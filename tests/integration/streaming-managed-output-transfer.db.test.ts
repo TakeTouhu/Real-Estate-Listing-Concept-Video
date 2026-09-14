@@ -479,9 +479,22 @@ describe.skipIf(!HAS_DB)("the streaming transfer core through the Phase 2H-2 run
     const SECRET = "GETTER-SECRET s3://bucket/key?sig=SECRETSIGNATURE";
 
     it.each([
-      ["sha256", () => ({ get sha256(): never { throw new Error(SECRET); }, sizeBytes: 123 })],
-      ["sizeBytes", () => ({ sha256: "a".repeat(64), get sizeBytes(): never { throw new Error(SECRET); } })],
-    ])("whose %s getter throws → TRANSFER_OUTCOME_MALFORMED, OUTPUT_INGESTING + ACCEPTED, nothing written, nothing escapes", async (label, hostile) => {
+      ["sha256 getter throws", "sha256", () => ({ get sha256(): never { throw new Error(SECRET); }, sizeBytes: 123 })],
+      ["sizeBytes getter throws", "sizeBytes", () => ({ sha256: "a".repeat(64), get sizeBytes(): never { throw new Error(SECRET); } })],
+      [
+        "receipt is a revoked Proxy",
+        "rp",
+        // Hostile before any property is read: `typeof` says object and the
+        // shared record check's `Array.isArray` throws. A receipt is a
+        // *property* of the commit result, so — unlike a whole result — it
+        // crosses the adapter's `await` intact and arrives at Phase 2H-1.
+        () => {
+          const { proxy, revoke } = Proxy.revocable({}, {});
+          revoke();
+          return proxy;
+        },
+      ],
+    ])("whose %s → TRANSFER_OUTCOME_MALFORMED, OUTPUT_INGESTING + ACCEPTED, nothing written, nothing escapes", async (_title, label, hostile) => {
       const seeded = await seedIngesting(`hostile${label}`);
       const before = await lifecycleSnapshot(seeded);
       const version = (await attemptRow(seeded.attemptId)).stateVersion;
@@ -510,7 +523,7 @@ describe.skipIf(!HAS_DB)("the streaming transfer core through the Phase 2H-2 run
       const persisted =
         serialize(row) +
         serialize(await repositories(prisma).events.listForAggregate(ORG_A, "ATTEMPT", seeded.attemptId));
-      for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://"]) {
+      for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://", "revoked", "IsArray"]) {
         expect(persisted).not.toContain(fragment);
       }
     });

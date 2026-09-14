@@ -109,6 +109,16 @@ describe("isWellFormedByteStream", () => {
     expect(() => isWellFormedByteStream(value)).not.toThrow();
     expect(isWellFormedByteStream(value)).toBe(false);
   });
+
+  it("answers false, rather than throwing, for a revoked Proxy", () => {
+    // Hostile before `body` is read: `typeof` still answers "object", and the
+    // shared record check's `Array.isArray` throws from the runtime ahead of
+    // this predicate's guard. It is caught there, once, for every boundary.
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => isWellFormedByteStream(proxy)).not.toThrow();
+    expect(isWellFormedByteStream(proxy)).toBe(false);
+  });
 });
 
 describe("isWellFormedByteSourceOpenResult", () => {
@@ -172,5 +182,20 @@ describe("isWellFormedByteSourceOpenResult", () => {
     };
     expect(() => isWellFormedByteSourceOpenResult({ kind: "OPEN", stream: hostile })).not.toThrow();
     expect(isWellFormedByteSourceOpenResult({ kind: "OPEN", stream: hostile })).toBe(false);
+  });
+
+  it("answers false, rather than throwing, for a revoked Proxy as the result", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => isWellFormedByteSourceOpenResult(proxy)).not.toThrow();
+    expect(isWellFormedByteSourceOpenResult(proxy)).toBe(false);
+  });
+
+  it("answers false, rather than throwing, for a revoked Proxy as the stream", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const wrapper = { kind: "OPEN", stream: proxy };
+    expect(() => isWellFormedByteSourceOpenResult(wrapper)).not.toThrow();
+    expect(isWellFormedByteSourceOpenResult(wrapper)).toBe(false);
   });
 });

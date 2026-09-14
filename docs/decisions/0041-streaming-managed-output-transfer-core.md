@@ -206,6 +206,32 @@ result, row or event. The third revision had closed this class at the commit
 boundary and left it open at the receipt boundary; there is no second receipt
 validator in the core or the runner, because the fix belongs to the authority.
 
+Totality has to begin one step earlier than any of those guards. Every parser
+and predicate above asks the shared `isPlainRecord` first, *before* opening its
+own `try`, and that helper's `Array.isArray` is a question the runtime itself
+can refuse to answer: a revoked `Proxy` still says `"object"` to `typeof` and
+then throws a `TypeError` from `IsArray`. The fourth revision left that path
+unguarded, so a revoked Proxy escaped every boundary ahead of the guard each
+one had just been given. The fix is in the helper, once — `isPlainRecord` is
+total, and a value that cannot be asked whether it is an array is not a record
+— rather than a revoked-Proxy catch copied into each parser.
+
+Where such a value can arrive in this pipeline is narrower than "anywhere an
+adapter answers", and the tests say so rather than pretending otherwise. A
+revoked Proxy cannot cross an `await`: promise resolution reads `.then` on the
+value, and that read throws *inside the adapter's own promise*, so a whole open
+result or a whole commit result that is a revoked Proxy never reaches the core
+as a value — it reaches the core as the adapter's throw, which is handled as
+every adapter throw is (abort staging if begun, close the source if opened,
+propagate; `TRANSFER_SOURCE_FAILED` from the orchestration). What does cross
+an `await` intact is a revoked Proxy held as a *property* of an answer: the
+`stream` inside an `OPEN` result, or the receipt inside `EXISTING`. Those are
+the reachable arrival points, and at each the result is the existing closed
+outcome with nothing of the runtime's text in it: `BYTE_SOURCE_STREAM_MALFORMED`
+from the core (its candidate cleanup was already guarded), and
+`RECEIPT_MALFORMED` from Phase 2H-1 → `TRANSFER_OUTCOME_MALFORMED` from the
+orchestration, attempt left ingesting.
+
 ### 10. The locator is passed through, still unread
 
 The core hands the opaque locator to the source and does not look at it. There

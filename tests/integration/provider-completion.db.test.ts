@@ -700,6 +700,16 @@ describe.skipIf(!HAS_DB)("provider completion and managed output verification", 
     it.each([
       ["a throwing sha256 getter", () => ({ get sha256(): never { throw new Error("GETTER-SECRET"); }, sizeBytes: 123 })],
       ["a throwing sizeBytes getter", () => ({ sha256: "a".repeat(64), get sizeBytes(): never { throw new Error("GETTER-SECRET"); } })],
+      [
+        "a revoked Proxy",
+        // Throws from the runtime's `IsArray` before any property is read —
+        // ahead of the parser's own guard. The shared record check absorbs it.
+        () => {
+          const { proxy, revoke } = Proxy.revocable({}, {});
+          revoke();
+          return proxy;
+        },
+      ],
     ])("answers RECEIPT_MALFORMED for %s, with zero mutation and no raw throw", async (label, hostile) => {
       const { attemptId } = await seedAcceptedProcessingAttempt(`verhost${label.length}`);
       const svc = completion();

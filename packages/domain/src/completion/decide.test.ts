@@ -524,6 +524,14 @@ describe("finalization reads the receipt once, under a guard", () => {
   it.each([
     ["a throwing sha256 getter", { get sha256(): never { throw new Error("GETTER-SECRET"); }, sizeBytes: SIZE_A }],
     ["a throwing sizeBytes getter", { sha256: SHA_A, get sizeBytes(): never { throw new Error("GETTER-SECRET"); } }],
+    [
+      "a revoked Proxy",
+      (() => {
+        const { proxy, revoke } = Proxy.revocable({}, {});
+        revoke();
+        return proxy;
+      })(),
+    ],
   ])("refuses %s as MALFORMED_RECEIPT without throwing", (_label, hostile) => {
     // The decision is pure and is called under Phase 2H-1's lock. A raw throw
     // here would escape the service and the orchestration; the closed arm is
