@@ -97,16 +97,26 @@ export const RETRYABLE_FAILURE_BYTE_SOURCE_KEYS: readonly string[] = ["kind"];
  */
 export function isWellFormedByteStream(value: unknown): value is ProviderOutputByteStream {
   if (!isPlainRecord(value)) return false;
-  const body: unknown = value.body;
-  if (typeof body !== "object" || body === null) return false;
-  if (typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== "function") {
+  // Total over hostile objects. Reading `body`, `declaredSizeBytes` or `close`
+  // may invoke a getter, and a getter that throws is not "a callable close" —
+  // it is a handle outside the contract, and the answer is `false`, never the
+  // getter's own error escaping from a predicate.
+  try {
+    const body: unknown = value.body;
+    if (typeof body !== "object" || body === null) return false;
+    if (
+      typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== "function"
+    ) {
+      return false;
+    }
+    const declared: unknown = value.declaredSizeBytes;
+    if (declared !== null && !(Number.isSafeInteger(declared) && (declared as number) > 0)) {
+      return false;
+    }
+    return typeof value.close === "function";
+  } catch {
     return false;
   }
-  const declared: unknown = value.declaredSizeBytes;
-  if (declared !== null && !(Number.isSafeInteger(declared) && (declared as number) > 0)) {
-    return false;
-  }
-  return typeof value.close === "function";
 }
 
 /**
@@ -121,12 +131,21 @@ export function isWellFormedByteSourceOpenResult(
   value: unknown,
 ): value is ProviderOutputByteSourceOpenResult {
   if (!isPlainRecord(value)) return false;
-  switch (value.kind) {
-    case "OPEN":
-      return hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS) && isWellFormedByteStream(value.stream);
-    case "RETRYABLE_FAILURE":
-      return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS);
-    default:
-      return false;
+  // Total, like the stream predicate: reading `kind` or `stream` may invoke a
+  // getter on a hostile object, and a getter that throws makes the value
+  // malformed rather than making this predicate throw.
+  try {
+    switch (value.kind) {
+      case "OPEN":
+        return (
+          hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS) && isWellFormedByteStream(value.stream)
+        );
+      case "RETRYABLE_FAILURE":
+        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS);
+      default:
+        return false;
+    }
+  } catch {
+    return false;
   }
 }

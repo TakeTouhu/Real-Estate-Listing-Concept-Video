@@ -52,6 +52,12 @@ implementation outside deterministic fakes under `@app/storage/testing`.
   every row and every event.
 - **A malformed adapter answer carries nothing into the error.** Defects throw
   fixed text with a closed code, no `cause`, no value.
+- **A malformed open result still releases its stream.** An OPEN-shaped result
+  carrying an object `stream` is closed once, best effort, before the defect is
+  raised — whether or not the stream is valid. The first revision released only
+  malformed streams, leaking the valid ones, which are exactly the handles that
+  hold a real response body. Obtaining `close` is inside the guard, so a throwing
+  getter cannot replace the fixed defect.
 
 ### Changed
 

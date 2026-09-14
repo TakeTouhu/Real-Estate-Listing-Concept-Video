@@ -692,6 +692,108 @@ describe("adapter-contract defects throw a fixed application-owned error", () =>
     expect(sink.sessions).toHaveLength(0);
   });
 
+  it.each([
+    ["status", { status: 200 }],
+    ["url", { url: "https://fal.media/files/x?sig=SECRETSIGNATURE" }],
+    ["headers", { headers: { "content-length": "3" } }],
+  ])(
+    "for a valid stream inside an OPEN wrapper carrying %s: closes the stream once, then raises the wrapper's defect",
+    async (_label, extra) => {
+      // The wrapper is the defective part — the stream is fully valid. That
+      // makes it *more* important to release, not less: a valid handle is
+      // exactly the one holding a real response body or socket.
+      let closes = 0;
+      const { sink, run } = core({
+        chunks: [],
+        openOverride: () => ({
+          kind: "OPEN",
+          stream: {
+            body: (async function* () {
+              yield bytes(1);
+            })(),
+            declaredSizeBytes: null,
+            close: async () => void (closes += 1),
+          },
+          ...extra,
+        }),
+      });
+      const error = await rejection(run());
+      expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+      expect((error as ManagedOutputTransferDefect).code).toBe(
+        "BYTE_SOURCE_OPEN_RESULT_MALFORMED",
+      );
+      expect(closes).toBe(1);
+      expect(sink.sessions).toHaveLength(0);
+      expect(sink.canonical.size).toBe(0);
+    },
+  );
+
+  it("for a stream whose close getter throws: the fixed defect stands and the getter's text never escapes", async () => {
+    // A hostile handle. Obtaining `close` throws before it could ever be
+    // invoked. The validator answers false rather than propagating, cleanup
+    // swallows the getter, and the defect that follows is the only thing a
+    // caller can observe.
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: {
+          body: (async function* () {})(),
+          declaredSizeBytes: null,
+          get close(): never {
+            throw new Error("GETTER-SECRET s3://bucket/key?sig=SECRETSIGNATURE");
+          },
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    const text = `${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`;
+    for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://"]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect((error as Error).cause).toBeUndefined();
+    expect(sink.sessions).toHaveLength(0);
+  });
+
+  it("for a stream whose close getter throws inside an OPEN wrapper with an extra key: still the stream's defect, still nothing escapes", async () => {
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: {
+          body: (async function* () {})(),
+          declaredSizeBytes: null,
+          get close(): never {
+            throw new Error("GETTER-SECRET");
+          },
+        },
+        status: 200,
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect((error as Error).message).not.toContain("GETTER-SECRET");
+    expect(sink.sessions).toHaveLength(0);
+  });
+
+  it("for an OPEN wrapper whose stream getter throws: the wrapper's defect, no cleanup attempted", async () => {
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        get stream(): never {
+          throw new Error("STREAM-GETTER-SECRET");
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    expect((error as Error).message).not.toContain("STREAM-GETTER-SECRET");
+    expect(sink.sessions).toHaveLength(0);
+  });
+
   it("for an open stream with no close, without attempting one", async () => {
     const { run } = core({
       chunks: [],

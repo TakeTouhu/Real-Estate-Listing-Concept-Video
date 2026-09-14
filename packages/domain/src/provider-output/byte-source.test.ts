@@ -85,6 +85,30 @@ describe("isWellFormedByteStream", () => {
       expect(isWellFormedByteStream(value)).toBe(false);
     },
   );
+
+  it.each([
+    ["a throwing close getter", { get close(): never { throw new Error("GETTER-SECRET"); } }],
+    ["a throwing body getter", { get body(): never { throw new Error("GETTER-SECRET"); } }],
+    ["a throwing declaredSizeBytes getter", { get declaredSizeBytes(): never { throw new Error("x"); } }],
+  ])("answers false, rather than throwing, for a handle with %s", (_label, hostile) => {
+    // A predicate is total. A getter that throws is not "a callable close" —
+    // it is a handle outside the contract — and the caller's fixed defect must
+    // be what escapes, never the getter's own error.
+    const value = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(value, {
+      body: { value: someBytes(), enumerable: true, configurable: true },
+      declaredSizeBytes: { value: null, enumerable: true, configurable: true },
+      close: { value: async () => undefined, enumerable: true, configurable: true },
+      ...Object.fromEntries(
+        Object.getOwnPropertyNames(hostile).map((k) => [
+          k,
+          Object.getOwnPropertyDescriptor(hostile, k)!,
+        ]),
+      ),
+    });
+    expect(() => isWellFormedByteStream(value)).not.toThrow();
+    expect(isWellFormedByteStream(value)).toBe(false);
+  });
 });
 
 describe("isWellFormedByteSourceOpenResult", () => {
@@ -121,4 +145,32 @@ describe("isWellFormedByteSourceOpenResult", () => {
       expect(isWellFormedByteSourceOpenResult(value)).toBe(false);
     },
   );
+
+  it.each([
+    ["a throwing stream getter", "stream"],
+    ["a throwing kind getter", "kind"],
+  ])("answers false, rather than throwing, for a wrapper with %s", (_label, hostileKey) => {
+    const value: Record<string, unknown> = { kind: "OPEN", stream: stream() };
+    Object.defineProperty(value, hostileKey, {
+      get(): never {
+        throw new Error("GETTER-SECRET");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    expect(() => isWellFormedByteSourceOpenResult(value)).not.toThrow();
+    expect(isWellFormedByteSourceOpenResult(value)).toBe(false);
+  });
+
+  it("refuses a wrapper whose stream close getter throws, without throwing itself", () => {
+    const hostile = {
+      body: someBytes(),
+      declaredSizeBytes: null,
+      get close(): never {
+        throw new Error("GETTER-SECRET");
+      },
+    };
+    expect(() => isWellFormedByteSourceOpenResult({ kind: "OPEN", stream: hostile })).not.toThrow();
+    expect(isWellFormedByteSourceOpenResult({ kind: "OPEN", stream: hostile })).toBe(false);
+  });
 });

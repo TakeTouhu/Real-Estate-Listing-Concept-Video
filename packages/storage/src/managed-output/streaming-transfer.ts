@@ -181,16 +181,29 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
     const opened: unknown = await this.source.open(input.source);
 
     if (!isWellFormedByteSourceOpenResult(opened)) {
-      // Distinguish "not an open result at all" from "an open result whose
-      // stream is malformed", because the second may still hold a resource
-      // worth releasing. A callable `close` on an otherwise-broken handle is
-      // called once, best effort, before the defect is raised.
-      const maybeStream = extractStreamCandidate(opened);
-      if (maybeStream !== null) {
-        await closeCandidateQuietly(maybeStream);
-        throw new ManagedOutputTransferDefect("BYTE_SOURCE_STREAM_MALFORMED");
+      // Three questions, answered separately, because the first revision fused
+      // two of them and leaked a resource doing so.
+      //
+      //   1. Is this OPEN-shaped, carrying an object-valued `stream`?
+      //   2. Does that candidate have a callable `close`?
+      //   3. Is the candidate itself a well-formed stream?
+      //
+      // Cleanup eligibility is (1) and (2) alone. It must *not* depend on (3):
+      // a perfectly valid stream inside a wrapper that carries an extra key
+      // still owns a response body or a socket, and the wrapper being the
+      // defective part does not make the stream any less worth releasing.
+      // (3) decides only which defect is raised — the wrapper's, or the
+      // stream's.
+      const candidate = openStreamCandidate(opened);
+      if (candidate === null) {
+        throw new ManagedOutputTransferDefect("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
       }
-      throw new ManagedOutputTransferDefect("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+      await closeCandidateQuietly(candidate);
+      throw new ManagedOutputTransferDefect(
+        isWellFormedByteStream(candidate)
+          ? "BYTE_SOURCE_OPEN_RESULT_MALFORMED"
+          : "BYTE_SOURCE_STREAM_MALFORMED",
+      );
     }
     if (opened.kind === "RETRYABLE_FAILURE") return RETRYABLE;
 
@@ -327,24 +340,41 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
 }
 
 /**
- * If a malformed open result at least looks like `{ kind: "OPEN", stream }`,
- * return the stream candidate so its resource can be released; else `null`.
+ * If a malformed open result is at least `{ kind: "OPEN", stream: <object> }`,
+ * return that stream object so its resource can be released; else `null`.
+ *
+ * Returns the candidate whether or not it is a well-formed stream. Validity
+ * decides which defect is raised, never whether cleanup is attempted. The
+ * reads are inside a guard because the value is whatever an adapter handed
+ * back, and a throwing `stream` getter is a defect, not an answer.
  */
-function extractStreamCandidate(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const record = value as { kind?: unknown; stream?: unknown };
-  if (record.kind !== "OPEN") return null;
-  if (typeof record.stream !== "object" || record.stream === null) return null;
-  return isWellFormedByteStream(record.stream) ? null : record.stream;
+function openStreamCandidate(value: unknown): object | null {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const record = value as { kind?: unknown; stream?: unknown };
+    if (record.kind !== "OPEN") return null;
+    const stream = record.stream;
+    return typeof stream === "object" && stream !== null ? stream : null;
+  } catch {
+    return null;
+  }
 }
 
-/** Best-effort `close()` on a handle that failed validation, if it has one. */
-async function closeCandidateQuietly(candidate: unknown): Promise<void> {
-  const close = (candidate as { close?: unknown }).close;
-  if (typeof close !== "function") return;
+/**
+ * Best-effort `close()` on a stream candidate, if it has one.
+ *
+ * *Obtaining* `close` is inside the guard, not just invoking it. A candidate
+ * with a throwing `close` getter is exactly the kind of hostile object this
+ * path exists for, and the getter's error must not replace the fixed defect
+ * that is about to be raised — nor appear in its message, its `cause`, a log,
+ * a result, an event or a row.
+ */
+async function closeCandidateQuietly(candidate: object): Promise<void> {
   try {
-    await (close as () => Promise<void>).call(candidate);
+    const close = (candidate as { close?: unknown }).close;
+    if (typeof close !== "function") return;
+    await (close as () => unknown).call(candidate);
   } catch {
-    // Cleanup only.
+    // Cleanup only. The defect that follows is the answer.
   }
 }

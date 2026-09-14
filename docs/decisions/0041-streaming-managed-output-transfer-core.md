@@ -157,6 +157,22 @@ either is swallowed without being read, and never replaces the transfer's
 primary result. A future HTTP source will use `close` to release its response
 body; a future store will use `abort` to delete its temporary object.
 
+The rule extends to a source that answered *outside* its contract, and the
+first revision of this phase got that half wrong. If a malformed open result is
+at least `{ kind: "OPEN", stream: <object> }`, the stream candidate is closed
+once, best effort, before the defect is raised — **whether or not the stream
+itself is well formed.** The original selection released a candidate only when
+the stream was malformed, which is backwards: a valid stream inside a wrapper
+carrying an extra key is exactly the handle most likely to be holding a real
+response body. Which defect is raised is a separate question, decided by the
+stream's own validity: a valid stream in a bad wrapper is
+`BYTE_SOURCE_OPEN_RESULT_MALFORMED`; a malformed stream is
+`BYTE_SOURCE_STREAM_MALFORMED`; a non-OPEN result gets no cleanup at all. And
+*obtaining* `close` is inside the best-effort guard, not just invoking it: a
+hostile handle with a throwing `close` getter must not replace the fixed defect
+with its own error, and the domain predicate that inspects a stream is total
+for the same reason.
+
 ### 9. Expected failures return; defects throw; nothing is a provider failure
 
 Source unavailable, declared or actual oversize, empty body, sink busy — each
