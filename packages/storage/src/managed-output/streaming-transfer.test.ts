@@ -1132,6 +1132,164 @@ describe("a stateful stream is captured once, so no getter is re-read during use
   });
 });
 
+describe("the malformed-OPEN cleanup path re-reads no raw top-level property", () => {
+  // The deferred Phase 3B-1 defect: on the malformed path the core re-read the
+  // raw `opened.kind` / `opened.stream`, so a stateful top-level getter could
+  // answer once during inspection and then throw or change, losing the cleanup
+  // candidate. The single inspection reads each top-level property once and the
+  // core acts only on the inspection — never the raw value — so the trap is
+  // never sprung and the originally observed stream is still closed.
+  const SECRET = "GETTER-SECRET s3://bucket?sig=SECRETSIGNATURE";
+
+  function malformedButClosable(onClose: () => void): Record<string, unknown> {
+    // A stream that is plainly invalid (a string body) but owns a live resource
+    // through a perfectly callable close.
+    return {
+      body: "not-bytes",
+      declaredSizeBytes: null,
+      close: async () => void onClose(),
+    };
+  }
+
+  function assertNoSecret(error: unknown): void {
+    const text = `${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`;
+    for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://", "second"]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect((error as Error).cause).toBeUndefined();
+  }
+
+  it("for a stateful top-level stream getter: reads it once, closes the observed stream once, raises the stream defect", async () => {
+    let streamReads = 0;
+    let closes = 0;
+    const stream = malformedButClosable(() => {
+      closes += 1;
+    });
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        get stream(): Record<string, unknown> {
+          streamReads += 1;
+          if (streamReads > 1) throw new Error(`${SECRET} second`);
+          return stream;
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(streamReads).toBe(1);
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.sessions).toHaveLength(0);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a stateful top-level kind getter: reads it once, closes the observed stream once, raises the fixed defect", async () => {
+    let kindReads = 0;
+    let closes = 0;
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        get kind(): string {
+          kindReads += 1;
+          if (kindReads > 1) throw new Error(`${SECRET} second`);
+          return "OPEN";
+        },
+        stream: malformedButClosable(() => {
+          closes += 1;
+        }),
+      }),
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(kindReads).toBe(1);
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.sessions).toHaveLength(0);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a throwing ownKeys trap over a valid stream: closes the stream once, raises the wrapper defect", async () => {
+    let closes = 0;
+    const validStream = {
+      body: (async function* () {
+        yield bytes(1);
+      })(),
+      declaredSizeBytes: null,
+      close: async () => void (closes += 1),
+    };
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () =>
+        new Proxy(
+          { kind: "OPEN", stream: validStream },
+          {
+            ownKeys(): never {
+              throw new Error(SECRET);
+            },
+          },
+        ),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    expect(closes).toBe(1);
+    assertNoSecret(error);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it.each([
+    ["a string body", { body: "x", declaredSizeBytes: null }],
+    ["a bad declared size", { body: (async function* () {})(), declaredSizeBytes: -1 }],
+    [
+      "a throwing async-iterator getter",
+      {
+        body: {
+          get [Symbol.asyncIterator](): never {
+            throw new Error("SECRET-ITERATOR");
+          },
+        },
+        declaredSizeBytes: null,
+      },
+    ],
+  ])("closes a malformed-but-closable stream (%s) exactly once, then STREAM_MALFORMED", async (_label, shape) => {
+    let closes = 0;
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: { ...shape, close: async () => void (closes += 1) },
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    expect(closes).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a stream whose close getter throws: no cleanup is attempted and nothing escapes", async () => {
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: {
+          body: "x",
+          declaredSizeBytes: null,
+          get close(): never {
+            throw new Error(SECRET);
+          },
+        },
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_STREAM_MALFORMED");
+    assertNoSecret(error);
+    expect(sink.canonical.size).toBe(0);
+  });
+});
+
 describe("expected operational failures are retryable, never thrown", () => {
   it("returns RETRYABLE_FAILURE when open reports it, touching nothing", async () => {
     const { sink, run } = core({ chunks: [bytes(1)], open: "RETRYABLE" });

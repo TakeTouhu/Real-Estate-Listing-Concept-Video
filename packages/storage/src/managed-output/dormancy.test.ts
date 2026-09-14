@@ -6,12 +6,15 @@ import { describe, expect, it } from "vitest";
  * The claims that are only worth anything if nobody can quietly undo them.
  *
  * The streaming core is concrete: it really hashes, stages and publishes. What
- * keeps it dormant is not that it cannot act but that nothing gives it the two
- * things it needs to act on — a real provider byte source and a real durable
- * staging sink — and that nothing in production constructs it. Each of those is
- * asserted below rather than described, alongside the dependency direction that
- * keeps the domain free of storage and the core free of providers, and a
- * source-level guard against the one shortcut that would defeat streaming.
+ * keeps it dormant, as of Phase 4C-3B-2H-3B-2, is narrower than before: a
+ * concrete fal `ProviderOutputByteSource` now exists, so the claim is no longer
+ * "no concrete byte source exists" but "no durable managed-output staging sink
+ * exists, nothing in production constructs the fal byte source or the transfer
+ * core, and no production composition can execute the transfer path." Each of
+ * those is asserted below rather than described, alongside the dependency
+ * direction that keeps the domain free of storage and the core free of
+ * providers, and a source-level guard against the one shortcut that would
+ * defeat streaming.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -204,13 +207,33 @@ describe("no production composition", () => {
     }
   });
 
-  it("has no production byte source or staging sink", () => {
-    // The two contracts the core needs, implemented nowhere but the fakes.
+  it("has exactly one production byte source — the dormant fal adapter — and no staging sink", () => {
+    // The dormancy truth changed in Phase 4C-3B-2H-3B-2: a concrete fal
+    // `ProviderOutputByteSource` now exists. Exactly one production file may
+    // implement that port, and it is the authorized fal adapter; a durable
+    // `ManagedOutputStagingSink` still exists nowhere but the test fake.
+    const AUTHORIZED_BYTE_SOURCE = "packages/video-providers/src/fal/provider-output-byte-source.ts";
+    const byteSourceImplementers: string[] = [];
     for (const { name, text } of productionSources()) {
+      if (text.includes("implements ProviderOutputByteSource")) byteSourceImplementers.push(name);
       if (name.endsWith("managed-output/staging.ts")) continue;
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
-      for (const banned of ["implements ManagedOutputStagingSink", "implements ProviderOutputByteSource"]) {
+      expect(`${name}: implements ManagedOutputStagingSink: ${text.includes("implements ManagedOutputStagingSink")}`).toBe(
+        `${name}: implements ManagedOutputStagingSink: false`,
+      );
+    }
+    expect(byteSourceImplementers).toEqual([AUTHORIZED_BYTE_SOURCE]);
+  });
+
+  it("constructs the fal byte source nowhere in production", () => {
+    // Concrete but unconstructed: the adapter exists, and no production code
+    // builds one. A future wiring PR that does gets the review it needs.
+    const AUTHORIZED_BYTE_SOURCE = "packages/video-providers/src/fal/provider-output-byte-source.ts";
+    for (const { name, text } of productionSources()) {
+      if (name.endsWith(AUTHORIZED_BYTE_SOURCE)) continue;
+      if (name.endsWith("packages/video-providers/src/index.ts")) continue;
+      for (const banned of ["new FalProviderOutputByteSource", "FalProviderOutputByteSource("]) {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

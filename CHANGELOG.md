@@ -3,6 +3,55 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-2: Dormant fal streaming output byte source
+
+Detail in `docs/phase-4c3b2h3b2-completion.md` and ADR-0042. One bundled
+provider-output acquisition boundary; no migration and no schema change.
+
+### Added
+
+- **`FalProviderOutputByteSource`** (`@app/video-providers`) — the first
+  concrete production `ProviderOutputByteSource`. It would GET an already-issued
+  signed fal media URL and stream the bytes through a narrow, injectable fetch
+  seam: GET only, no `Authorization`, no `FAL_KEY`, no cookies; manual redirects
+  re-validated against the fal output policy, at most three; a body pulled one
+  chunk at a time and never buffered; an idempotent `close()` that cancels the
+  response. Every failure — non-200, network rejection, missing/over-budget
+  redirect, null body — is `RETRYABLE_FAILURE`, never a provider failure. It
+  remains **dormant**: nothing in production constructs it.
+- **`isAuthorizedFalOutputUrl`** — the fal output URL authority, fail-closed to
+  signed `https://fal.media` (and `*.fal.media`) `/files/` URLs, refusing
+  look-alike hosts, userinfo, ports, fragments and scheme downgrades. Applied in
+  `parseFalH3MaxOutputUrl` (unauthorized → `SUCCEEDED` + `outputLocator: null`)
+  and again before every byte-source request.
+- **`withTransientProviderOutputLocatorForByteSource`** — the one controlled
+  read-back of a locator's raw value, handing it to a callback and never
+  returning it. Exported only from `@app/domain/provider-output-byte-source-access`,
+  never the domain root; a static access-guard test proves only the authorized
+  fal adapter imports it in production. The locator instance stays redacted under
+  `toString`, `toJSON`, inspect, `JSON.stringify` and spread.
+- **A single open-result inspection authority** in the domain byte-source
+  contract (`inspectProviderOutputByteSourceOpenResult`,
+  `inspectProviderOutputByteStream`) plus a `CapturedProviderOutputCleanup`
+  capability, closing the deferred Phase 3B-1 malformed-OPEN TOCTOU: the raw
+  `opened.kind` / `opened.stream` are each read once and the storage core never
+  re-reads the raw value; `openStreamCandidate` is removed.
+
+### Changed
+
+- The streaming transfer core acts on the materialized open-result inspection
+  and its captured cleanup capability rather than re-reading the raw open result
+  on the malformed path. Fixed defect codes and Revision 2 cleanup semantics are
+  unchanged.
+- The dormancy static suite now asserts the new truth: exactly one production
+  `ProviderOutputByteSource` (the fal adapter), constructed nowhere, no durable
+  staging sink, no production composition.
+
+### Mutation ledger
+
+37 mutations, 37 killed, 0 survivors (M21/M22/M23/M31 re-aimed to the new
+inspection authority; M32–M36 added for this phase).
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-1: Dormant streaming managed-output transfer core
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2h3b1-completion.md` and

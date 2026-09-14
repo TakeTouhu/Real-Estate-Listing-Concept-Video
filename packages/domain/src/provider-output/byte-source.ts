@@ -108,7 +108,7 @@ export function isWellFormedByteStream(value: unknown): value is ProviderOutputB
  * `declaredSizeBytes` and `close` are getters on an object an adapter built,
  * and reading one twice can invoke a getter twice — a second read that throws,
  * or answers differently, after validation already passed. Here every one of
- * those was read exactly once, at parse time, and this object holds the
+ * those was read exactly once, at inspection time, and this object holds the
  * captured values. Nothing on it re-touches the raw handle.
  */
 export interface CapturedProviderOutputByteStream {
@@ -116,6 +116,35 @@ export interface CapturedProviderOutputByteStream {
   readonly declaredSizeBytes: number | null;
   close(): Promise<void>;
 }
+
+/**
+ * A best-effort release capability captured from a stream handle during
+ * inspection, carried alongside a *malformed* result so the resource the
+ * handle held can still be closed exactly once.
+ *
+ * It exists because the malformed path is where the resource-leak class lives:
+ * a handle can be malformed — a bad body, a bad declared size, a wrapper with an
+ * extra key — while still owning a live response body or socket through a
+ * perfectly callable `close`. The cleanup capability is obtained from the *same*
+ * single inspection that decided the handle was malformed, so the consumer never
+ * re-reads the raw handle to find something to close. A `close` that could not
+ * be safely obtained — absent, non-callable, or a throwing getter — yields no
+ * capability at all rather than a second lookup.
+ */
+export interface CapturedProviderOutputCleanup {
+  close(): Promise<void>;
+}
+
+/**
+ * What inspecting a byte stream handle concluded, in one guarded pass.
+ *
+ * `VALID` carries the captured stream; `MALFORMED` carries a cleanup capability
+ * when one was safely obtainable and `null` when it was not. Either way, every
+ * raw getter was consulted at most once.
+ */
+export type ProviderOutputByteStreamInspection =
+  | { readonly kind: "VALID"; readonly stream: CapturedProviderOutputByteStream }
+  | { readonly kind: "MALFORMED"; readonly cleanup: CapturedProviderOutputCleanup | null };
 
 /**
  * The materialized counterpart of {@link ProviderOutputByteSourceOpenResult}:
@@ -126,113 +155,227 @@ export type ParsedProviderOutputByteSourceOpenResult =
   | { readonly kind: "RETRYABLE_FAILURE" };
 
 /**
- * Read a byte stream handle once, under a guard, into a captured value — or
- * `null`.
+ * What inspecting an open result concluded, in one guarded pass over the raw
+ * value.
  *
- * The predicate half is the same three facts as before: an asynchronously
- * iterable body, a `null` or positive-safe-integer declared size, a callable
- * `close`. The materialization is the new part, and it closes a
- * time-of-check/time-of-use gap the streaming core had even after the predicate
- * was made total against *immediate* getter failures. A predicate that returned
- * `true` left the core to fetch `stream.declaredSizeBytes`, `stream.body` and
- * `stream.close` from the raw handle during use, so a getter that answered
- * validly once and then threw, or changed, would pass validation and strike
- * later.
+ * This is the single authority the streaming core acts on. `VALID` carries the
+ * materialized result; `MALFORMED` names which fixed defect the core must raise
+ * and carries a cleanup capability when the OPEN wrapper held a closable stream.
+ * The core never returns to the raw `opened` object after this — every
+ * top-level read (`kind`, `stream`) and every stream read happened here, once.
+ */
+export type ProviderOutputByteSourceOpenInspection =
+  | { readonly kind: "VALID"; readonly result: ParsedProviderOutputByteSourceOpenResult }
+  | {
+      readonly kind: "MALFORMED";
+      readonly reason: "OPEN_RESULT_MALFORMED" | "STREAM_MALFORMED";
+      readonly cleanup: CapturedProviderOutputCleanup | null;
+    };
+
+/**
+ * Inspect a byte stream handle in one guarded pass: capture its release
+ * capability first, then validate its shape, reading each raw getter at most
+ * once.
  *
- * Each field is read exactly once here. The **async-iterator capability** is
- * captured too: `body[Symbol.asyncIterator]` is looked up now, and the returned
- * `body` re-exposes it as an ordinary method that invokes the captured factory
- * against the original body object — so a `for await` never re-reads a hostile
- * `[Symbol.asyncIterator]` getter. `close` is captured as a function and invoked
- * against its original receiver, so a method living on a class prototype still
- * sees the right `this`. Class instances remain supported: exact own keys are
- * *not* required of the handle, only of the wrapper around it.
+ * `close` is captured **before** anything else is validated, and on its own,
+ * because a handle can be malformed in every other respect while still owning a
+ * live resource through a callable `close`. Capturing it first means a later
+ * validation failure — a bad body, a bad declared size, a throwing
+ * `[Symbol.asyncIterator]` — does not lose the ability to release. A `close`
+ * that is absent, non-callable, or a throwing getter yields no capability, and
+ * the getter's throw never escapes.
  *
- * No bytes are buffered. The captured body is a thin re-exposure of the source's
- * own pull-based iterator; backpressure and streaming are unchanged.
+ * The **async-iterator capability** is captured too: `body[Symbol.asyncIterator]`
+ * is looked up once, and a valid stream's `body` re-exposes it as an ordinary
+ * method bound to the original body object, so a `for await` never re-reads a
+ * hostile getter. Each of `body`, `declaredSizeBytes` and `close` is read once.
+ * Class instances remain supported: exact own keys are not required of the
+ * handle. No bytes are buffered; the captured body is a thin re-exposure of the
+ * source's own pull-based iterator, so backpressure and streaming are unchanged.
+ */
+export function inspectProviderOutputByteStream(
+  value: unknown,
+): ProviderOutputByteStreamInspection {
+  if (!isPlainRecord(value)) return { kind: "MALFORMED", cleanup: null };
+
+  // Capture the release capability first, guarded and alone. Obtaining `close`
+  // may invoke a getter; a getter that throws is not a usable capability, and
+  // its error must not escape — the answer is simply "no cleanup".
+  let cleanup: CapturedProviderOutputCleanup | null = null;
+  try {
+    const close: unknown = value.close;
+    if (typeof close === "function") {
+      const closeFn = close as () => unknown;
+      cleanup = { close: (): Promise<void> => Promise.resolve(closeFn.call(value)).then(() => undefined) };
+    }
+  } catch {
+    cleanup = null;
+  }
+
+  try {
+    const body: unknown = value.body;
+    if (typeof body !== "object" || body === null) return { kind: "MALFORMED", cleanup };
+    const iteratorFactory: unknown = (body as { [Symbol.asyncIterator]?: unknown })[
+      Symbol.asyncIterator
+    ];
+    if (typeof iteratorFactory !== "function") return { kind: "MALFORMED", cleanup };
+    const declared: unknown = value.declaredSizeBytes;
+    if (declared !== null && !(Number.isSafeInteger(declared) && (declared as number) > 0)) {
+      return { kind: "MALFORMED", cleanup };
+    }
+    // A stream with no usable `close` is malformed by contract — but it is also
+    // exactly the case where there is nothing to release, so cleanup stays null.
+    if (cleanup === null) return { kind: "MALFORMED", cleanup: null };
+
+    const sourceBody = body;
+    const factory = iteratorFactory as () => AsyncIterator<Uint8Array>;
+    const capturedClose = cleanup.close;
+    return {
+      kind: "VALID",
+      stream: {
+        body: {
+          [Symbol.asyncIterator]: (): AsyncIterator<Uint8Array> => factory.call(sourceBody),
+        },
+        declaredSizeBytes: declared as number | null,
+        close: capturedClose,
+      },
+    };
+  } catch {
+    return { kind: "MALFORMED", cleanup };
+  }
+}
+
+/**
+ * Inspect an open result in one guarded pass: the single authority the storage
+ * core acts on, so it never returns to the raw value.
+ *
+ * `kind` is read once and, for `OPEN`, `stream` is read once — into locals that
+ * everything below uses. The stream is inspected once (which captures its
+ * cleanup capability), and only then are the wrapper's exact own keys checked,
+ * so a wrapper that is malformed by an extra key still yields the stream's
+ * cleanup capability. Which fixed defect a malformed open result names follows
+ * the stream's validity, exactly as Revision 2 settled: a valid stream inside a
+ * bad wrapper is `OPEN_RESULT_MALFORMED`; a malformed stream is
+ * `STREAM_MALFORMED`. A throwing `kind` or `stream` getter, or an `ownKeys`
+ * trap, is malformed rather than an escaping exception.
+ */
+export function inspectProviderOutputByteSourceOpenResult(
+  value: unknown,
+): ProviderOutputByteSourceOpenInspection {
+  if (!isPlainRecord(value)) {
+    return { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: null };
+  }
+
+  let discriminant: unknown;
+  try {
+    discriminant = value.kind;
+  } catch {
+    return { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: null };
+  }
+
+  if (discriminant === "RETRYABLE_FAILURE") {
+    let keysOk = false;
+    try {
+      keysOk = hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS);
+    } catch {
+      keysOk = false;
+    }
+    return keysOk
+      ? { kind: "VALID", result: { kind: "RETRYABLE_FAILURE" } }
+      : { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: null };
+  }
+
+  if (discriminant !== "OPEN") {
+    return { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: null };
+  }
+
+  // OPEN: read `stream` exactly once. A throwing `stream` getter is malformed
+  // with no candidate to clean up — there is no stream object to close.
+  let streamRaw: unknown;
+  try {
+    streamRaw = value.stream;
+  } catch {
+    return { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: null };
+  }
+
+  const streamInspection = inspectProviderOutputByteStream(streamRaw);
+
+  let keysOk = false;
+  try {
+    keysOk = hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS);
+  } catch {
+    keysOk = false;
+  }
+
+  if (streamInspection.kind === "VALID" && keysOk) {
+    return { kind: "VALID", result: { kind: "OPEN", stream: streamInspection.stream } };
+  }
+
+  // The defect follows the stream's validity, and the cleanup capability is the
+  // one the single stream inspection already captured — never a re-read.
+  //
+  //  - a valid stream inside a bad wrapper is the wrapper's defect,
+  //    `OPEN_RESULT_MALFORMED`, and its `close` is the cleanup capability;
+  //  - a stream that is an object but malformed is `STREAM_MALFORMED`, carrying
+  //    whatever cleanup the stream inspection could capture;
+  //  - a stream that is missing, `null` or not an object is not a malformed
+  //    stream at all — there is no stream to close — it is a malformed OPEN
+  //    wrapper, with no cleanup.
+  if (streamInspection.kind === "VALID") {
+    return {
+      kind: "MALFORMED",
+      reason: "OPEN_RESULT_MALFORMED",
+      cleanup: { close: streamInspection.stream.close },
+    };
+  }
+  // "Is there a stream object to be malformed?" is a bare `typeof`/`null` check,
+  // never `isPlainRecord`: a revoked `Proxy` is an object that owns a resource
+  // and is a malformed *stream*, even though asking whether it is an array
+  // throws. `streamRaw` is the already-read value, so this reads no getter.
+  if (typeof streamRaw === "object" && streamRaw !== null) {
+    return { kind: "MALFORMED", reason: "STREAM_MALFORMED", cleanup: streamInspection.cleanup };
+  }
+  return { kind: "MALFORMED", reason: "OPEN_RESULT_MALFORMED", cleanup: streamInspection.cleanup };
+}
+
+/**
+ * Read a byte stream handle once into a captured value — or `null`.
+ *
+ * A compatibility surface over {@link inspectProviderOutputByteStream}: it
+ * returns the valid arm's captured stream and drops the cleanup capability that
+ * the malformed arm carries. Callers that must release a malformed handle use
+ * the inspection directly.
  */
 export function parseProviderOutputByteStream(
   value: unknown,
 ): CapturedProviderOutputByteStream | null {
-  if (!isPlainRecord(value)) return null;
-  try {
-    const body: unknown = value.body;
-    if (typeof body !== "object" || body === null) return null;
-    const iteratorFactory: unknown = (body as { [Symbol.asyncIterator]?: unknown })[
-      Symbol.asyncIterator
-    ];
-    if (typeof iteratorFactory !== "function") return null;
-    const declared: unknown = value.declaredSizeBytes;
-    if (declared !== null && !(Number.isSafeInteger(declared) && (declared as number) > 0)) {
-      return null;
-    }
-    const close: unknown = value.close;
-    if (typeof close !== "function") return null;
-
-    const sourceBody = body;
-    const factory = iteratorFactory as () => AsyncIterator<Uint8Array>;
-    const closeFn = close as () => Promise<void>;
-    return {
-      // A fresh iterable that re-exposes the captured factory, bound to the
-      // original body. `for await` reads *this* object's `[Symbol.asyncIterator]`
-      // — a plain method — never the raw handle's getter a second time.
-      body: {
-        [Symbol.asyncIterator]: (): AsyncIterator<Uint8Array> => factory.call(sourceBody),
-      },
-      declaredSizeBytes: declared as number | null,
-      // Invoked against the original stream object, so an inherited `close`
-      // keeps the receiver it expects.
-      close: (): Promise<void> => closeFn.call(value) as Promise<void>,
-    };
-  } catch {
-    return null;
-  }
+  const inspection = inspectProviderOutputByteStream(value);
+  return inspection.kind === "VALID" ? inspection.stream : null;
 }
 
 /**
  * Whether a value is a usable open result.
  *
- * Implemented on {@link parseProviderOutputByteSourceOpenResult}, so the
- * predicate and the parser cannot disagree.
+ * Implemented on {@link inspectProviderOutputByteSourceOpenResult}, so the
+ * predicate, the parser and the inspection cannot disagree.
  */
 export function isWellFormedByteSourceOpenResult(
   value: unknown,
 ): value is ProviderOutputByteSourceOpenResult {
-  return parseProviderOutputByteSourceOpenResult(value) !== null;
+  return inspectProviderOutputByteSourceOpenResult(value).kind === "VALID";
 }
 
 /**
- * Read an open result once, under a guard, into a materialized value — or
- * `null`.
+ * Read an open result once into a materialized value — or `null`.
  *
- * Exact own keys on the result itself, for the reason every 2H contract
- * settled: `{ kind: "OPEN", stream, url }` is not an open result, it is a
- * provider payload with a discriminant in it. `kind` is read once and `stream`
- * is read once; the stream is captured by {@link parseProviderOutputByteStream},
- * which has its own, looser rule and does the single-read capture. The `OPEN`
- * arm therefore carries a stream the consumer can use without ever returning to
- * the raw handle.
+ * A compatibility surface over {@link inspectProviderOutputByteSourceOpenResult}
+ * that returns the valid arm and drops the malformed arm's reason and cleanup.
+ * The storage core uses the inspection directly so it can both classify the
+ * defect and release a captured resource without re-reading the raw value.
  */
 export function parseProviderOutputByteSourceOpenResult(
   value: unknown,
 ): ParsedProviderOutputByteSourceOpenResult | null {
-  if (!isPlainRecord(value)) return null;
-  try {
-    const kind: unknown = value.kind;
-    switch (kind) {
-      case "OPEN": {
-        if (!hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS)) return null;
-        const stream = parseProviderOutputByteStream(value.stream);
-        return stream === null ? null : { kind: "OPEN", stream };
-      }
-      case "RETRYABLE_FAILURE":
-        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS)
-          ? { kind: "RETRYABLE_FAILURE" }
-          : null;
-      default:
-        return null;
-    }
-  } catch {
-    return null;
-  }
+  const inspection = inspectProviderOutputByteSourceOpenResult(value);
+  return inspection.kind === "VALID" ? inspection.result : null;
 }

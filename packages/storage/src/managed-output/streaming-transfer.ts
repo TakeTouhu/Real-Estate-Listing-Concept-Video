@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { AppError } from "@app/shared";
 import {
-  isWellFormedByteStream,
-  parseProviderOutputByteSourceOpenResult,
+  inspectProviderOutputByteSourceOpenResult,
   safePositiveByteCount,
   sha256Digest,
   type CapturedProviderOutputByteStream,
+  type CapturedProviderOutputCleanup,
   type ManagedGenerationOutputKey,
   type ManagedOutputTransferInput,
   type ManagedOutputTransferOutcome,
@@ -180,40 +180,34 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
     // never read, logged or persisted by this class.
     const opened: unknown = await this.source.open(input.source);
 
-    // Read once, under a guard, into a materialized result. On the success path
-    // the captured stream is what the transfer uses from here on: its `body`,
-    // `declaredSizeBytes` and `close` were read exactly once at parse time, so
-    // no getter on the raw handle is ever consulted a second time during use —
-    // the time-of-check/time-of-use gap the predicate alone could not close.
-    const parsed = parseProviderOutputByteSourceOpenResult(opened);
-    if (parsed === null) {
-      // Three questions, answered separately, because the first revision fused
-      // two of them and leaked a resource doing so.
-      //
-      //   1. Is this OPEN-shaped, carrying an object-valued `stream`?
-      //   2. Does that candidate have a callable `close`?
-      //   3. Is the candidate itself a well-formed stream?
-      //
-      // Cleanup eligibility is (1) and (2) alone. It must *not* depend on (3):
-      // a perfectly valid stream inside a wrapper that carries an extra key
-      // still owns a response body or a socket, and the wrapper being the
-      // defective part does not make the stream any less worth releasing.
-      // (3) decides only which defect is raised — the wrapper's, or the
-      // stream's.
-      const candidate = openStreamCandidate(opened);
-      if (candidate === null) {
-        throw new ManagedOutputTransferDefect("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    // Inspect the raw open result exactly once, into a materialized inspection.
+    // From here the core acts only on that inspection and never returns to the
+    // raw `opened` object: `kind` and `stream` were each read once inside the
+    // inspection, so a stateful top-level getter cannot pass inspection and then
+    // throw or change on a second read (the deferred Phase 3B-1 defect). On the
+    // success path the captured stream's `body`, `declaredSizeBytes` and `close`
+    // were likewise each read once, so no getter is consulted twice during use.
+    const inspection = inspectProviderOutputByteSourceOpenResult(opened);
+    if (inspection.kind === "MALFORMED") {
+      // The malformed arm carries a cleanup capability captured during the same
+      // inspection whenever the OPEN wrapper held a closable stream — a valid
+      // stream inside a bad wrapper, or a malformed-but-closable stream both own
+      // a live response body or socket, and the wrapper being defective does not
+      // make the handle less worth releasing. Closing uses that captured
+      // capability, never a re-read of `opened`. A throwing `close` getter
+      // yielded no capability and is simply not called; its error never escaped.
+      if (inspection.cleanup !== null) {
+        await closeCleanupQuietly(inspection.cleanup);
       }
-      await closeCandidateQuietly(candidate);
       throw new ManagedOutputTransferDefect(
-        isWellFormedByteStream(candidate)
+        inspection.reason === "OPEN_RESULT_MALFORMED"
           ? "BYTE_SOURCE_OPEN_RESULT_MALFORMED"
           : "BYTE_SOURCE_STREAM_MALFORMED",
       );
     }
-    if (parsed.kind === "RETRYABLE_FAILURE") return RETRYABLE;
+    if (inspection.result.kind === "RETRYABLE_FAILURE") return RETRYABLE;
 
-    const stream = parsed.stream;
+    const stream = inspection.result.stream;
     try {
       return await this.consume(stream, input.destinationKey);
     } finally {
@@ -351,40 +345,18 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
 }
 
 /**
- * If a malformed open result is at least `{ kind: "OPEN", stream: <object> }`,
- * return that stream object so its resource can be released; else `null`.
+ * Best-effort release of a cleanup capability captured during inspection.
  *
- * Returns the candidate whether or not it is a well-formed stream. Validity
- * decides which defect is raised, never whether cleanup is attempted. The
- * reads are inside a guard because the value is whatever an adapter handed
- * back, and a throwing `stream` getter is a defect, not an answer.
+ * The capability was obtained from the single guarded inspection of the open
+ * result — `close` was located there, once, and bound to its original receiver
+ * — so this neither re-reads the raw handle nor looks up `close` a second time.
+ * Its failure is swallowed: the fixed defect that follows is the answer, and a
+ * cleanup error must not replace it, appear in its message or `cause`, or reach
+ * a log, a result, an event or a row.
  */
-function openStreamCandidate(value: unknown): object | null {
+async function closeCleanupQuietly(cleanup: CapturedProviderOutputCleanup): Promise<void> {
   try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-    const record = value as { kind?: unknown; stream?: unknown };
-    if (record.kind !== "OPEN") return null;
-    const stream = record.stream;
-    return typeof stream === "object" && stream !== null ? stream : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Best-effort `close()` on a stream candidate, if it has one.
- *
- * *Obtaining* `close` is inside the guard, not just invoking it. A candidate
- * with a throwing `close` getter is exactly the kind of hostile object this
- * path exists for, and the getter's error must not replace the fixed defect
- * that is about to be raised — nor appear in its message, its `cause`, a log,
- * a result, an event or a row.
- */
-async function closeCandidateQuietly(candidate: object): Promise<void> {
-  try {
-    const close = (candidate as { close?: unknown }).close;
-    if (typeof close !== "function") return;
-    await (close as () => unknown).call(candidate);
+    await cleanup.close();
   } catch {
     // Cleanup only. The defect that follows is the answer.
   }
