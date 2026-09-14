@@ -1058,8 +1058,16 @@ and ADR-0020.
   pipeline stays dormant: a concrete fal byte source now exists, but nothing in
   production constructs it, no durable staging sink exists, and no composition
   can execute the transfer path. No `FAL_KEY`, no real fal request in tests, no
-  migration and no schema change. Detail in `docs/phase-4c3b2h3b2-completion.md`
-  and ADR-0042. Mutation ledger: 38 run, 38 killed, 0 survivors.
+  migration and no schema change. A follow-up correction (Correction 2) adds one
+  application-owned control signal, `ProviderOutputByteStreamRetryableFailure`,
+  so an output body that fails *after* a good HTTP status — a mid-stream `read()`
+  rejection — is a retryable acquisition failure (attempt stays
+  `OUTPUT_INGESTING`) rather than a `TRANSFER_SOURCE_FAILED` provider failure, and
+  the partial staged bytes are discarded rather than published as a truncated
+  output; recognition is nominal and narrow, and the caught network rejection is
+  discarded unread at the fal boundary. Detail in
+  `docs/phase-4c3b2h3b2-completion.md` and ADR-0042 (Decision 5). Mutation ledger:
+  40 run, 40 killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-1** — see GitHub for its lifecycle. Adds the first
   *concrete* implementation of Phase 2H-2's `ManagedOutputTransferPort`: a
   streaming core in `@app/storage` that pulls provider bytes through an injected

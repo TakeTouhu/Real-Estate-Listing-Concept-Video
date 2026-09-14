@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { AppError } from "@app/shared";
 import {
   inspectProviderOutputByteSourceOpenResult,
+  ProviderOutputByteStreamRetryableFailure,
   safePositiveByteCount,
   sha256Digest,
   type CapturedProviderOutputByteStream,
@@ -123,6 +124,7 @@ async function abortQuietly(session: ManagedOutputStagingSession): Promise<void>
  * check the declared size          over the limit → RETRYABLE_FAILURE, no staging
  * begin an isolated staging write
  * for each chunk, one at a time    count → limit check → hash → write (backpressure)
+ * source stream interrupted        abort → RETRYABLE_FAILURE (partial bytes discarded)
  * zero bytes                       abort → RETRYABLE_FAILURE
  * commit with the computed receipt
  *   PUBLISHED                      VERIFIED with the computed receipt
@@ -146,11 +148,16 @@ async function abortQuietly(session: ManagedOutputStagingSession): Promise<void>
  * destination is someone else's and stays that way.
  *
  * **A transfer failure is never a provider failure.** Every expected condition
- * here — source unavailable, too large, empty, sink busy — returns
- * `RETRYABLE_FAILURE`, and Phase 2H-2 leaves the attempt `OUTPUT_INGESTING`. The
- * render is still there; the key is deterministic; a later run picks it up.
- * Only an adapter-contract defect throws, and the runner records that as
- * `TRANSFER_SOURCE_FAILED` with the same non-mutation.
+ * here — source unavailable, too large, empty, sink busy, and a source stream
+ * interrupted after a good open — returns `RETRYABLE_FAILURE`, and Phase 2H-2
+ * leaves the attempt `OUTPUT_INGESTING`. The render is still there; the key is
+ * deterministic; a later run picks it up. A good HTTP status is not the end of
+ * acquisition: an output body can fail mid-stream, and the adapter reports that
+ * with {@link ProviderOutputByteStreamRetryableFailure}, which this core
+ * recognizes on the iteration path and converts to `RETRYABLE_FAILURE` after
+ * discarding the partial staged bytes. Only an adapter-contract defect — or any
+ * unexpected throw that is *not* that signal — propagates, and the runner
+ * records that as `TRANSFER_SOURCE_FAILED` with the same non-mutation.
  */
 export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort {
   private readonly maxBytes: number;
@@ -244,9 +251,22 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
       pumped = await this.pump(stream.body, session);
     } catch (error) {
       // Source iteration threw, a chunk was not bytes, or the sink refused a
-      // write. Staging state exists and is discarded; the error itself is the
-      // answer and is neither inspected nor replaced.
+      // write. Staging state exists and is discarded first, on every path.
       await abortQuietly(session);
+      // The one recognized case: the source stream was interrupted mid-transfer
+      // — a `read()` that rejected after a good HTTP status, the bytes only
+      // partly delivered. The fal adapter converts that to this application-owned
+      // signal and nothing else, so recognition is nominal and narrow: this is an
+      // acquisition failure, not a defect, and it is retryable. The staged
+      // partial bytes were just aborted and are never committed, hashed into a
+      // receipt, or published as a short output; the signal itself carries no
+      // provider or network detail to inspect, and is *not* rethrown. Every other
+      // error — a malformed chunk, a sink write refusal, an adapter-contract
+      // defect, any unexpected throw without this brand — keeps its existing
+      // meaning and propagates unread.
+      if (ProviderOutputByteStreamRetryableFailure.is(error)) {
+        return RETRYABLE;
+      }
       throw error;
     }
 

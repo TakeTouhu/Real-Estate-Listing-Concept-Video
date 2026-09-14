@@ -42,6 +42,14 @@ provider-output acquisition boundary; no migration and no schema change.
   `opened.kind` / `opened.stream` are each read once and the storage core never
   re-reads the raw value; `openStreamCandidate` is removed.
 
+- **`ProviderOutputByteStreamRetryableFailure`** (`@app/domain`, Correction 2) —
+  one application-owned, secret-free control signal for a provider-output body
+  that fails *after* a good HTTP status (a mid-stream `read()` rejection). The
+  fal adapter converts such a rejection to this signal — discarding the caught
+  value unread — and the streaming transfer core recognizes it nominally, aborts
+  staging, and returns `RETRYABLE_FAILURE` instead of rethrowing. A partial read
+  is never mistaken for clean EOF, and its bytes are never hashed or published.
+
 ### Changed
 
 - The streaming transfer core acts on the materialized open-result inspection
@@ -51,11 +59,19 @@ provider-output acquisition boundary; no migration and no schema change.
 - The dormancy static suite now asserts the new truth: exactly one production
   `ProviderOutputByteSource` (the fal adapter), constructed nowhere, no durable
   staging sink, no production composition.
+- **(Correction 2)** A mid-stream interruption of an already-open output body is
+  now a retryable acquisition failure rather than a `TRANSFER_SOURCE_FAILED`
+  provider failure: the fal adapter's iterator catches a `read()` rejection and
+  throws the retry signal; the core discards the partial staged bytes and reports
+  `RETRYABLE_FAILURE`; the Phase 2H-2 runner (unchanged) leaves the attempt
+  `OUTPUT_INGESTING`. Recognition is narrow — a malformed chunk, a sink defect, or
+  any unbranded throw still propagates as before.
 
 ### Mutation ledger
 
-38 mutations, 38 killed, 0 survivors (M21/M22/M23/M31 re-aimed to the new
-inspection authority; M32–M37 added for this phase, M37 by the locator-access
+40 mutations, 40 killed, 0 survivors (M21/M22/M23/M31 re-aimed to the inspection
+authority; M32–M37 added when the byte source landed; M11/M35 re-aimed onto the
+code Correction 2 reshaped; M38/M39 added for the mid-stream retryability
 correction).
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-1: Dormant streaming managed-output transfer core

@@ -1343,6 +1343,90 @@ describe("expected operational failures are retryable, never thrown", () => {
 
 // ---------------------------------------------------------------------------
 
+describe("a source stream interrupted mid-transfer is retryable, never a truncated output", () => {
+  it("yields one chunk, then the retry signal → exactly RETRYABLE_FAILURE, nothing published", async () => {
+    // The stream opens cleanly and delivers a chunk; the second pull throws the
+    // application-owned signal, as the fal adapter does when a body read rejects
+    // after a good HTTP status. This is an acquisition failure, not a defect.
+    const { source, sink, run } = core({
+      chunks: [bytes(1, 2, 3), bytes(4, 5, 6)],
+      signalRetryableAfterChunks: 1,
+    });
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    // The signal is not rethrown: the outcome is the transient arm, nothing more.
+    expect(Object.getOwnPropertyNames(outcome)).toEqual(["kind"]);
+
+    // The partial bytes that were staged before the interruption are discarded:
+    // nothing is committed, nothing becomes canonical, no receipt is produced.
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+    // Exactly one chunk was written before the interruption — and it went nowhere.
+    expect(sink.lastSession.writes).toBe(1);
+
+    // The source is still released exactly once, on this path as on every other.
+    expect(source.lastStream.closeCalls).toBe(1);
+  });
+
+  it("treats the signal on the very first pull as RETRYABLE_FAILURE, with nothing staged", async () => {
+    const { source, sink, run } = core({
+      chunks: [bytes(1, 2, 3)],
+      signalRetryableAfterChunks: 0,
+    });
+    expect(await run()).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(sink.lastSession.writes).toBe(0);
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+    expect(source.lastStream.closeCalls).toBe(1);
+  });
+
+  it("never hashes the partial bytes into a receipt or reports VERIFIED", async () => {
+    // A larger partial to make truncation unmistakable: 10 real bytes staged,
+    // then the interruption. A core that mistook the interruption for clean EOF
+    // would hash those 10 bytes and publish a short, corrupt output.
+    const { run } = core({
+      chunks: [bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), bytes(11, 12)],
+      signalRetryableAfterChunks: 1,
+    });
+    const outcome = await run();
+    expect(outcome.kind).not.toBe("VERIFIED");
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+  });
+
+  it("does NOT convert an ordinary iterator exception to RETRYABLE — that stays a propagated throw", async () => {
+    // The recognition is narrow and nominal: only the application-owned signal
+    // becomes a retry. An unrelated error from the same iteration path keeps its
+    // existing meaning and propagates, so the runner still records
+    // TRANSFER_SOURCE_FAILED for a genuine adapter defect.
+    const { source, sink, run } = core({
+      chunks: [bytes(1), bytes(2)],
+      throwAfterChunks: 1,
+    });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as Error).message).toContain("iterator exploded");
+    // Same non-mutation as every other failure: staging discarded, source closed.
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(source.lastStream.closeCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("does not report a provider failure for a mid-stream interruption", async () => {
+    // The interruption is an operational retry, indistinguishable in the outcome
+    // from any other transient condition — no FAILED arm is ever produced.
+    const { run } = core({ chunks: [bytes(1), bytes(2)], signalRetryableAfterChunks: 1 });
+    const outcome = await run();
+    expect(isWellFormedTransferOutcome(outcome)).toBe(true);
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe("locator secrecy", () => {
   it("hands the very same locator object to the source, unread", async () => {
     const loc = locator();

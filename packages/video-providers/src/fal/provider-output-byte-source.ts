@@ -1,4 +1,5 @@
 import {
+  ProviderOutputByteStreamRetryableFailure,
   type ProviderOutputByteSource,
   type ProviderOutputByteSourceOpenResult,
   type ProviderOutputByteStream,
@@ -48,11 +49,20 @@ import { isAuthorizedFalOutputUrl } from "./output-url-policy";
  *
  * ## Every failure here is `RETRYABLE_FAILURE`
  *
- * A non-200 final response, a network rejection, a body that cannot be read —
+ * A non-200 final response, a network rejection, a body that cannot be opened —
  * each returns `{ kind: "RETRYABLE_FAILURE" }`. This source has no evidence that
  * a fetch failure is permanent, and provider execution success is a separate,
  * already-recorded fact. No URL, query string or network error text ever
  * appears in the returned value.
+ *
+ * A good HTTP status is not the end of acquisition. The body can fail *after*
+ * the open succeeds — a `read()` that rejects mid-stream with the download only
+ * partly delivered. That is the same transient acquisition failure discovered
+ * later, so the iterator converts it to a single application-owned signal,
+ * {@link ProviderOutputByteStreamRetryableFailure}, constructed from nothing;
+ * the caught rejection is discarded unread at this boundary. The transfer core
+ * recognizes that signal, discards the partial staged bytes, and reports
+ * `RETRYABLE_FAILURE` — a partial read never becomes a clean, short output.
  */
 
 /** At most three redirects, so at most four requests for one open. */
@@ -168,13 +178,30 @@ function buildFalOutputStream(
   async function* iterate(): AsyncGenerator<Uint8Array, void, undefined> {
     try {
       for (;;) {
-        const chunk = await body.read();
+        // A good HTTP status did not promise the whole body. `read()` can reject
+        // after the stream has already begun — a CDN drop, a socket reset, the
+        // download only partly delivered. That is a transient acquisition
+        // failure, not clean end of stream and not a defect: convert it to the
+        // one application-owned retry signal, constructed from nothing. The
+        // caught rejection can carry the signed URL, a host or an address, so it
+        // is discarded here unread — never inspected, logged, attached as a
+        // cause, stringified, or serialized into the signal. A `null` remains
+        // real EOF; a non-`Uint8Array` chunk is passed through unchanged and the
+        // transfer core's malformed-chunk authority rejects it — a partial read
+        // is never allowed to masquerade as clean completion.
+        let chunk: Uint8Array | null;
+        try {
+          chunk = await body.read();
+        } catch {
+          throw new ProviderOutputByteStreamRetryableFailure();
+        }
         if (chunk === null) return;
         yield chunk;
       }
     } finally {
-      // Early close (the consumer stopped iterating) or exhaustion both release
-      // the underlying response exactly once through the idempotent close.
+      // Early close (the consumer stopped iterating), exhaustion, or a mid-stream
+      // read interruption all release the underlying response exactly once
+      // through the idempotent close.
       await close();
     }
   }

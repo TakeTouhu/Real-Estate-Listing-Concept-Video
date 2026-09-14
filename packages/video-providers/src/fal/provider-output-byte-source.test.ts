@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ProviderOutputByteStreamRetryableFailure,
   TransientProviderOutputLocator,
   type ProviderOutputByteSourceOpenResult,
 } from "@app/domain";
@@ -38,6 +39,14 @@ interface Scripted {
   readonly contentLength?: string | null;
   /** Body chunks; omit for no body (null). */
   readonly chunks?: readonly Uint8Array[];
+  /**
+   * When set, `read()` rejects with this value *after* the scripted `chunks`
+   * have all been delivered, instead of returning clean-EOF `null`. This models
+   * an output body that fails mid-stream after a good HTTP status — a CDN drop, a
+   * socket reset — with the download only partly delivered. An empty `chunks`
+   * with this set makes the *first* read reject.
+   */
+  readonly rejectRead?: unknown;
 }
 
 interface Harness {
@@ -70,10 +79,18 @@ function harness(script: readonly (Scripted | "throw")[]): Harness {
         : {
             async read(): Promise<Uint8Array | null> {
               reads[idx] = (reads[idx] ?? 0) + 1;
-              if (cancelled || position >= step.chunks!.length) return null;
-              const chunk = step.chunks![position];
-              position += 1;
-              return chunk ?? null;
+              if (cancelled) return null;
+              if (position < step.chunks!.length) {
+                const chunk = step.chunks![position];
+                position += 1;
+                return chunk ?? null;
+              }
+              // All scripted chunks delivered. A scripted mid-stream failure
+              // rejects here instead of the clean-EOF `null`.
+              if ("rejectRead" in step && step.rejectRead !== undefined) {
+                throw step.rejectRead;
+              }
+              return null;
             },
             async cancel(): Promise<void> {
               cancelled = true;
@@ -160,6 +177,90 @@ describe("a successful 200 opens a streaming body", () => {
     // Idempotent: a second close does not cancel again.
     await open.stream.close();
     expect(h.cancels[0]).toBe(1);
+  });
+});
+
+/**
+ * Iterate a stream expecting it to throw, and return the thrown value. Every
+ * chunk yielded before the throw is pulled and discarded, exactly as the
+ * transfer core would; the returned value is whatever escaped iteration.
+ */
+async function iterateExpectingThrow(open: ProviderOutputByteSourceOpenResult): Promise<unknown> {
+  if (open.kind !== "OPEN") throw new Error(`expected OPEN, got ${open.kind}`);
+  try {
+    for await (const _chunk of open.stream.body) {
+      // Pull each chunk to advance the body toward the scripted failure.
+      void _chunk;
+    }
+  } catch (thrown) {
+    return thrown;
+  }
+  throw new Error("expected the stream to throw a mid-stream failure");
+}
+
+describe("an output body that fails mid-stream is a retryable acquisition failure", () => {
+  it("converts a read rejection after one good chunk to the retry signal, not a raw throw", async () => {
+    // read#1 → a real chunk; read#2 → rejects with a value carrying the secret.
+    const h = harness([
+      { status: 200, chunks: [bytes(1, 2, 3)], rejectRead: new Error(`socket reset reading ${START}`) },
+    ]);
+    const open = await source(h).open(locator());
+    const thrown = await iterateExpectingThrow(open);
+
+    // Exactly the one application-owned signal escaped — never the raw rejection.
+    expect(thrown).toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    expect(ProviderOutputByteStreamRetryableFailure.is(thrown)).toBe(true);
+    expect(thrown).not.toBeInstanceOf(Error);
+
+    // The raw rejection carried the signed URL; none of it is on the signal.
+    expect(String(thrown)).not.toContain("SECRETSIGNATURE");
+    expect(String(thrown)).not.toContain("fal.media");
+    expect(JSON.stringify(thrown) ?? "").not.toContain("SECRETSIGNATURE");
+    for (const key of Reflect.ownKeys(thrown as object)) {
+      expect(String(key)).not.toContain("SECRETSIGNATURE");
+    }
+
+    // read#1 delivered the chunk, read#2 rejected: exactly two reads.
+    expect(h.reads[0]).toBe(2);
+    // No auto-retry: the adapter issued no second HTTP request.
+    expect(h.requests).toEqual([START]);
+    // The response was cancelled exactly once, through the idempotent close.
+    expect(h.cancels[0]).toBe(1);
+  });
+
+  it("converts a rejection on the very first read to the retry signal", async () => {
+    // No chunk is ever delivered: the first read rejects.
+    const h = harness([
+      { status: 200, chunks: [], rejectRead: new Error(`immediate reset for ${START}`) },
+    ]);
+    const open = await source(h).open(locator());
+    const thrown = await iterateExpectingThrow(open);
+
+    expect(thrown).toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    expect(String(thrown)).not.toContain("SECRETSIGNATURE");
+    // A single read was attempted and it rejected; no HTTP retry.
+    expect(h.reads[0]).toBe(1);
+    expect(h.requests).toEqual([START]);
+    expect(h.cancels[0]).toBe(1);
+  });
+
+  it("does not treat a clean null EOF as a failure", async () => {
+    // The same body without `rejectRead` ends cleanly and yields its bytes.
+    const h = harness([{ status: 200, chunks: [bytes(1, 2, 3)] }]);
+    const open = await source(h).open(locator());
+    expect(await drain(open)).toEqual([bytes(1, 2, 3)]);
+  });
+
+  it("converts a non-Error rejection value the same way, still discarding it unread", async () => {
+    // The rejection need not be an Error; whatever it is, it is discarded and the
+    // fixed signal is what escapes.
+    const h = harness([
+      { status: 200, chunks: [bytes(9)], rejectRead: { url: START, note: "SECRETSIGNATURE" } },
+    ]);
+    const open = await source(h).open(locator());
+    const thrown = await iterateExpectingThrow(open);
+    expect(thrown).toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    expect(JSON.stringify(thrown) ?? "").not.toContain("SECRETSIGNATURE");
   });
 });
 

@@ -79,6 +79,44 @@ export const OPEN_BYTE_SOURCE_KEYS: readonly string[] = ["kind", "stream"];
 export const RETRYABLE_FAILURE_BYTE_SOURCE_KEYS: readonly string[] = ["kind"];
 
 /**
+ * The one control signal for a mid-stream provider-output acquisition failure.
+ *
+ * HTTP 200 is not the end of acquisition. A byte source can open successfully —
+ * the status is good, the first chunks arrive — and then the body fails: a CDN
+ * drops the connection, a socket resets, `read()` rejects with the download only
+ * partly delivered. That is not a defect in the adapter and not clean end of
+ * stream; it is the same transient acquisition failure that `open` reports with
+ * `RETRYABLE_FAILURE`, discovered later. It must be retryable, and the partial
+ * bytes must be thrown away rather than hashed and published as a short output.
+ *
+ * This type is how the fal byte-source adapter tells the streaming transfer core
+ * "the source stream was interrupted, retry the acquisition" without handing it
+ * anything a log could leak. It is application-owned and it is deliberately
+ * empty: it carries **no** provider or network error object, no `cause`, no raw
+ * URL, no query signature, no host or IP, no runtime exception text, no
+ * provider-controlled message, and no serialization of the original rejection.
+ * The adapter constructs it from nothing — the caught rejection is discarded
+ * unread at the adapter boundary — and the core recognizes it nominally by its
+ * private brand, never by shape.
+ *
+ * It is **not** a general error transport. It means exactly "expected retryable
+ * source-stream interruption" and nothing else: a malformed chunk, a sink
+ * defect, an adapter contract violation, or any unexpected error is a different
+ * class the core must keep treating as a defect, not convert to a retry.
+ */
+export class ProviderOutputByteStreamRetryableFailure {
+  readonly #marker: true;
+
+  constructor() {
+    this.#marker = true;
+  }
+
+  static is(value: unknown): value is ProviderOutputByteStreamRetryableFailure {
+    return typeof value === "object" && value !== null && #marker in value;
+  }
+}
+
+/**
  * Whether a value is a usable byte stream handle.
  *
  * Three facts are proved: the body can be iterated asynchronously, the declared

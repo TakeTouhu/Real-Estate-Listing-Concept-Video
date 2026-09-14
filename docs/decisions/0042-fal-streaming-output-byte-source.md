@@ -126,6 +126,50 @@ redirect — it surfaces one as a non-final response mapped to
 `RETRYABLE_FAILURE`. The redirect routing is exercised through an injected seam
 that exposes the real status and `Location`.
 
+## Decision 5 — A good HTTP status is not the end of acquisition: a mid-stream interruption is retryable, never a truncated output
+
+The open path already maps a failed *open* to `RETRYABLE_FAILURE`. But a byte
+source can open cleanly — a 200, the first chunks flowing — and then have its
+body fail: a CDN drops the connection, a socket resets, `read()` rejects with the
+download only partly delivered. Left unhandled, that rejection propagates out of
+the stream iterator, the transfer core rethrows it, and the Phase 2H-2 runner
+records `TRANSFER_SOURCE_FAILED` — treating a transient acquisition failure as an
+adapter defect. Worse, if such a read were ever mistaken for clean end-of-stream,
+the partial bytes already staged would be hashed and published as a short, corrupt
+output. Both are wrong: an interrupted download is the same transient condition
+`open` reports, discovered later, and it must be retryable and must discard the
+partial bytes.
+
+The contract gains exactly one application-owned control signal,
+`ProviderOutputByteStreamRetryableFailure`, living in the provider-output
+byte-source domain module where both the fal adapter and the streaming transfer
+core can reference the same type. It is nominal (a private `#marker` brand,
+recognized by a static `is()` guard) and deliberately empty: it carries **no**
+provider or network error object, no `cause`, no raw URL, no query signature, no
+host or IP, no runtime exception text, no provider-controlled message, and no
+serialization of the original rejection. It is not a general error transport — it
+means exactly "expected retryable source-stream interruption" and nothing else.
+
+- **The fal adapter** wraps `body.read()` in a `try/catch`. A rejection throws
+  `new ProviderOutputByteStreamRetryableFailure()`; the caught value is discarded
+  unread at that boundary — never inspected, logged, attached as a cause,
+  stringified, or serialized into the signal. A `null` is still real end of
+  stream, and a non-`Uint8Array` chunk is still passed through for the core's
+  malformed-chunk authority to reject — a partial read is never allowed to
+  masquerade as clean completion. The idempotent close still releases the
+  response exactly once on this path as on every other.
+- **The transfer core** recognizes the signal nominally on the iteration-failure
+  path: it aborts the staging session (discarding every partial byte), then
+  returns `{ kind: "RETRYABLE_FAILURE" }` — it does **not** rethrow the signal and
+  does **not** hash, commit, publish, or produce a receipt for the partial bytes.
+  Recognition is narrow: every other error — a malformed chunk, a sink write
+  refusal, an adapter-contract defect, any unexpected throw without the brand —
+  keeps its existing meaning and propagates unread.
+- **The runner** needs no change: it already maps a transfer `RETRYABLE_FAILURE`
+  to `TRANSFER_RETRYABLE_FAILURE`, leaving the attempt `OUTPUT_INGESTING` with no
+  provider-failure transition, no reservation or quota change, and no
+  finalization. A later run resumes against the same deterministic key.
+
 ## Why this phase remains dormant
 
 The dormancy claim narrows in exactly one respect: a concrete fal
@@ -150,3 +194,9 @@ these rather than describing them.
   without re-validation, attaches a credential to the GET, buffers the body, or
   exposes locator read-back from the domain root is caught by a focused test or
   the access guard, and gets the review it needs.
+- A mid-stream interruption of an already-open body is now a retryable
+  acquisition failure rather than a provider failure or a truncated publish. A
+  future change that rethrows the raw network error across the fal boundary, or
+  that lets the transfer core rethrow the retry signal instead of returning
+  `RETRYABLE_FAILURE`, is caught by the fal-adapter, transfer-core, dormant
+  data-plane, and live-PostgreSQL runner regressions (mutations M38 and M39).
