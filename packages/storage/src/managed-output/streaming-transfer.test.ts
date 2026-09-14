@@ -1015,6 +1015,123 @@ describe("adapter-contract defects throw a fixed application-owned error", () =>
 
 // ---------------------------------------------------------------------------
 
+describe("a stateful stream is captured once, so no getter is re-read during use", () => {
+  // Each handle answers validly on the read the parser performs, and throws on
+  // any second read. With the single-read capture the transfer succeeds; a core
+  // that re-fetched the field from the raw handle would spring the trap.
+  function openWith(stream: Record<string, unknown>): () => unknown {
+    return () => ({ kind: "OPEN", stream });
+  }
+
+  function oneChunkBody(): AsyncGenerator<Uint8Array> {
+    return (async function* () {
+      yield bytes(1, 2, 3);
+    })();
+  }
+
+  it("does not re-read declaredSizeBytes", async () => {
+    let reads = 0;
+    const { run } = core({
+      chunks: [],
+      openOverride: openWith({
+        body: oneChunkBody(),
+        get declaredSizeBytes(): number | null {
+          reads += 1;
+          if (reads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+          return null;
+        },
+        close: async () => undefined,
+      }),
+    });
+    expect((await run()).kind).toBe("VERIFIED");
+    expect(reads).toBe(1);
+  });
+
+  it("does not re-read the body", async () => {
+    let reads = 0;
+    const { run } = core({
+      chunks: [],
+      openOverride: openWith({
+        get body(): AsyncGenerator<Uint8Array> {
+          reads += 1;
+          if (reads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+          return oneChunkBody();
+        },
+        declaredSizeBytes: null,
+        close: async () => undefined,
+      }),
+    });
+    expect((await run()).kind).toBe("VERIFIED");
+    expect(reads).toBe(1);
+  });
+
+  it("does not re-read the close getter, and still closes exactly once", async () => {
+    let getterReads = 0;
+    let invocations = 0;
+    const { run } = core({
+      chunks: [],
+      openOverride: openWith({
+        body: oneChunkBody(),
+        declaredSizeBytes: null,
+        get close(): () => Promise<void> {
+          getterReads += 1;
+          if (getterReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+          return async () => void (invocations += 1);
+        },
+      }),
+    });
+    expect((await run()).kind).toBe("VERIFIED");
+    expect(getterReads).toBe(1);
+    expect(invocations).toBe(1);
+  });
+
+  it("does not look up the body's async-iterator capability twice", async () => {
+    let asyncIteratorReads = 0;
+    const hostileBody = {
+      get [Symbol.asyncIterator](): () => AsyncIterator<Uint8Array> {
+        asyncIteratorReads += 1;
+        if (asyncIteratorReads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+        return async function* (): AsyncGenerator<Uint8Array> {
+          yield bytes(4, 5);
+        };
+      },
+    };
+    const { run } = core({
+      chunks: [],
+      openOverride: openWith({
+        body: hostileBody,
+        declaredSizeBytes: null,
+        close: async () => undefined,
+      }),
+    });
+    expect((await run()).kind).toBe("VERIFIED");
+    expect(asyncIteratorReads).toBe(1);
+  });
+
+  it("still classifies a malformed OPEN wrapper and closes the valid stream inside it", async () => {
+    // The Revision 2 cleanup path is unchanged by the capture: an OPEN wrapper
+    // carrying an extra key is malformed, and its valid stream is still closed
+    // once before the wrapper's defect is raised.
+    let closes = 0;
+    const { sink, run } = core({
+      chunks: [],
+      openOverride: () => ({
+        kind: "OPEN",
+        stream: {
+          body: oneChunkBody(),
+          declaredSizeBytes: null,
+          close: async () => void (closes += 1),
+        },
+        status: 200,
+      }),
+    });
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("BYTE_SOURCE_OPEN_RESULT_MALFORMED");
+    expect(closes).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+});
+
 describe("expected operational failures are retryable, never thrown", () => {
   it("returns RETRYABLE_FAILURE when open reports it, touching nothing", async () => {
     const { sink, run } = core({ chunks: [bytes(1)], open: "RETRYABLE" });

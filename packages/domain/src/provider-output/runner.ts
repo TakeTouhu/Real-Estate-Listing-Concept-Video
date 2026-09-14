@@ -5,7 +5,7 @@ import {
 import { validateReconciliationMaintenanceLimit } from "../reconciliation/limits";
 import { isNonBlankString } from "../submission/untrusted";
 import { TransientProviderOutputLocator } from "./locator";
-import { isWellFormedPollObservation, type ProviderPollObservation } from "./observation";
+import { parseProviderPollObservation, type ProviderPollObservation } from "./observation";
 import type { CompletionCandidate } from "../completion/index";
 import type {
   ContextInvalidReason,
@@ -18,7 +18,7 @@ import type {
   RunProviderOutputAttemptInput,
   RunProviderOutputBatchInput,
 } from "./ports";
-import { isWellFormedTransferOutcome } from "./transfer";
+import { parseManagedOutputTransferOutcome } from "./transfer";
 
 /**
  * One bounded pass over one accepted attempt: ask what the provider did, write
@@ -131,10 +131,16 @@ export function createProviderOutputRunner(deps: ProviderOutputDeps) {
       // request body, an authorization header, or all three.
       return { ok: false, result: { kind: "STATUS_SOURCE_FAILED" } };
     }
-    if (!isWellFormedPollObservation(raw)) {
+    // Read once, under a guard, into a fresh plain object. The runner dispatches
+    // on this observation several times below; using the raw source value would
+    // re-read `kind`, `outputLocator` and the failure fields each time, so a
+    // hostile or stateful getter could pass here and then throw or change during
+    // a later dispatch. The materialized copy cannot.
+    const observation = parseProviderPollObservation(raw);
+    if (observation === null) {
       return { ok: false, result: { kind: "STATUS_OBSERVATION_MALFORMED" } };
     }
-    return { ok: true, observation: raw };
+    return { ok: true, observation };
   }
 
   /**
@@ -167,13 +173,18 @@ export function createProviderOutputRunner(deps: ProviderOutputDeps) {
     } catch {
       return { kind: "TRANSFER_SOURCE_FAILED" };
     }
-    if (!isWellFormedTransferOutcome(raw)) {
+    // Read once, under a guard, into a fresh plain object. The raw value is
+    // never consulted again below — a port result whose `kind` getter throws,
+    // or answers once and then throws, is `null` here rather than a raw
+    // adapter-controlled exception escaping the runner.
+    const outcome = parseManagedOutputTransferOutcome(raw);
+    if (outcome === null) {
       // The attempt stays `OUTPUT_INGESTING`. It genuinely is ingesting — that
       // transition was applied and committed before this call — and rolling it
       // back because a port misbehaved would discard a true fact.
       return { kind: "TRANSFER_OUTCOME_MALFORMED" };
     }
-    if (raw.kind === "RETRYABLE_FAILURE") {
+    if (outcome.kind === "RETRYABLE_FAILURE") {
       return { kind: "TRANSFER_RETRYABLE_FAILURE" };
     }
 
@@ -185,8 +196,9 @@ export function createProviderOutputRunner(deps: ProviderOutputDeps) {
       attemptId: input.attemptId,
       // Cast, not validated: the receipt is `unknown` by contract and Phase
       // 2H-1's boundary proves it. Checking it here would be the second
-      // validator this design exists to avoid.
-      receipt: raw.receipt as ManagedOutputVerificationReceipt,
+      // validator this design exists to avoid. It is the reference the parser
+      // carried through untouched, not a re-read of the raw value.
+      receipt: outcome.receipt as ManagedOutputVerificationReceipt,
       context: input.context,
     });
 

@@ -96,56 +96,143 @@ export const RETRYABLE_FAILURE_BYTE_SOURCE_KEYS: readonly string[] = ["kind"];
  * untrusted data actually arrives.
  */
 export function isWellFormedByteStream(value: unknown): value is ProviderOutputByteStream {
-  if (!isPlainRecord(value)) return false;
-  // Total over hostile objects. Reading `body`, `declaredSizeBytes` or `close`
-  // may invoke a getter, and a getter that throws is not "a callable close" —
-  // it is a handle outside the contract, and the answer is `false`, never the
-  // getter's own error escaping from a predicate.
+  return parseProviderOutputByteStream(value) !== null;
+}
+
+/**
+ * A byte stream whose every field has already been read and captured.
+ *
+ * Structurally a {@link ProviderOutputByteStream}, and deliberately so: it is
+ * assignable wherever the raw contract is expected, and the consumer cannot
+ * tell it apart. What differs is provenance. A raw stream's `body`,
+ * `declaredSizeBytes` and `close` are getters on an object an adapter built,
+ * and reading one twice can invoke a getter twice — a second read that throws,
+ * or answers differently, after validation already passed. Here every one of
+ * those was read exactly once, at parse time, and this object holds the
+ * captured values. Nothing on it re-touches the raw handle.
+ */
+export interface CapturedProviderOutputByteStream {
+  readonly body: AsyncIterable<Uint8Array>;
+  readonly declaredSizeBytes: number | null;
+  close(): Promise<void>;
+}
+
+/**
+ * The materialized counterpart of {@link ProviderOutputByteSourceOpenResult}:
+ * an `OPEN` carrying a captured stream, or the transient arm.
+ */
+export type ParsedProviderOutputByteSourceOpenResult =
+  | { readonly kind: "OPEN"; readonly stream: CapturedProviderOutputByteStream }
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
+/**
+ * Read a byte stream handle once, under a guard, into a captured value — or
+ * `null`.
+ *
+ * The predicate half is the same three facts as before: an asynchronously
+ * iterable body, a `null` or positive-safe-integer declared size, a callable
+ * `close`. The materialization is the new part, and it closes a
+ * time-of-check/time-of-use gap the streaming core had even after the predicate
+ * was made total against *immediate* getter failures. A predicate that returned
+ * `true` left the core to fetch `stream.declaredSizeBytes`, `stream.body` and
+ * `stream.close` from the raw handle during use, so a getter that answered
+ * validly once and then threw, or changed, would pass validation and strike
+ * later.
+ *
+ * Each field is read exactly once here. The **async-iterator capability** is
+ * captured too: `body[Symbol.asyncIterator]` is looked up now, and the returned
+ * `body` re-exposes it as an ordinary method that invokes the captured factory
+ * against the original body object — so a `for await` never re-reads a hostile
+ * `[Symbol.asyncIterator]` getter. `close` is captured as a function and invoked
+ * against its original receiver, so a method living on a class prototype still
+ * sees the right `this`. Class instances remain supported: exact own keys are
+ * *not* required of the handle, only of the wrapper around it.
+ *
+ * No bytes are buffered. The captured body is a thin re-exposure of the source's
+ * own pull-based iterator; backpressure and streaming are unchanged.
+ */
+export function parseProviderOutputByteStream(
+  value: unknown,
+): CapturedProviderOutputByteStream | null {
+  if (!isPlainRecord(value)) return null;
   try {
     const body: unknown = value.body;
-    if (typeof body !== "object" || body === null) return false;
-    if (
-      typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] !== "function"
-    ) {
-      return false;
-    }
+    if (typeof body !== "object" || body === null) return null;
+    const iteratorFactory: unknown = (body as { [Symbol.asyncIterator]?: unknown })[
+      Symbol.asyncIterator
+    ];
+    if (typeof iteratorFactory !== "function") return null;
     const declared: unknown = value.declaredSizeBytes;
     if (declared !== null && !(Number.isSafeInteger(declared) && (declared as number) > 0)) {
-      return false;
+      return null;
     }
-    return typeof value.close === "function";
+    const close: unknown = value.close;
+    if (typeof close !== "function") return null;
+
+    const sourceBody = body;
+    const factory = iteratorFactory as () => AsyncIterator<Uint8Array>;
+    const closeFn = close as () => Promise<void>;
+    return {
+      // A fresh iterable that re-exposes the captured factory, bound to the
+      // original body. `for await` reads *this* object's `[Symbol.asyncIterator]`
+      // — a plain method — never the raw handle's getter a second time.
+      body: {
+        [Symbol.asyncIterator]: (): AsyncIterator<Uint8Array> => factory.call(sourceBody),
+      },
+      declaredSizeBytes: declared as number | null,
+      // Invoked against the original stream object, so an inherited `close`
+      // keeps the receiver it expects.
+      close: (): Promise<void> => closeFn.call(value) as Promise<void>,
+    };
   } catch {
-    return false;
+    return null;
   }
 }
 
 /**
  * Whether a value is a usable open result.
  *
- * Exact own keys on the result itself, for the reason every 2H contract settled:
- * `{ kind: "OPEN", stream, url }` is not an open result, it is a provider payload
- * with a discriminant in it. The stream inside is checked by
- * {@link isWellFormedByteStream}, which has its own, looser rule.
+ * Implemented on {@link parseProviderOutputByteSourceOpenResult}, so the
+ * predicate and the parser cannot disagree.
  */
 export function isWellFormedByteSourceOpenResult(
   value: unknown,
 ): value is ProviderOutputByteSourceOpenResult {
-  if (!isPlainRecord(value)) return false;
-  // Total, like the stream predicate: reading `kind` or `stream` may invoke a
-  // getter on a hostile object, and a getter that throws makes the value
-  // malformed rather than making this predicate throw.
+  return parseProviderOutputByteSourceOpenResult(value) !== null;
+}
+
+/**
+ * Read an open result once, under a guard, into a materialized value — or
+ * `null`.
+ *
+ * Exact own keys on the result itself, for the reason every 2H contract
+ * settled: `{ kind: "OPEN", stream, url }` is not an open result, it is a
+ * provider payload with a discriminant in it. `kind` is read once and `stream`
+ * is read once; the stream is captured by {@link parseProviderOutputByteStream},
+ * which has its own, looser rule and does the single-read capture. The `OPEN`
+ * arm therefore carries a stream the consumer can use without ever returning to
+ * the raw handle.
+ */
+export function parseProviderOutputByteSourceOpenResult(
+  value: unknown,
+): ParsedProviderOutputByteSourceOpenResult | null {
+  if (!isPlainRecord(value)) return null;
   try {
-    switch (value.kind) {
-      case "OPEN":
-        return (
-          hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS) && isWellFormedByteStream(value.stream)
-        );
+    const kind: unknown = value.kind;
+    switch (kind) {
+      case "OPEN": {
+        if (!hasExactlyOwnKeys(value, OPEN_BYTE_SOURCE_KEYS)) return null;
+        const stream = parseProviderOutputByteStream(value.stream);
+        return stream === null ? null : { kind: "OPEN", stream };
+      }
       case "RETRYABLE_FAILURE":
-        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS);
+        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_BYTE_SOURCE_KEYS)
+          ? { kind: "RETRYABLE_FAILURE" }
+          : null;
       default:
-        return false;
+        return null;
     }
   } catch {
-    return false;
+    return null;
   }
 }

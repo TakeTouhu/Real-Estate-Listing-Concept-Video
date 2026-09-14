@@ -79,6 +79,23 @@ implementation outside deterministic fakes under `@app/storage/testing`.
   only as a property of an adapter's answer — as the `stream` it is the
   existing `BYTE_SOURCE_STREAM_MALFORMED`; as the `EXISTING` receipt it is
   `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt left ingesting.
+- **Three more `unknown` boundaries are materialized, not just validated.** The
+  transfer outcome (`parseManagedOutputTransferOutcome`), the poll observation
+  (`parseProviderPollObservation`) and the byte-source open result / stream
+  (`parseProviderOutputByteSourceOpenResult`, `parseProviderOutputByteStream`)
+  each read every field once, under one guard, into a fresh captured value that
+  the consumer uses instead of re-reading the raw adapter object. This closes a
+  validate-then-reread gap: a live Proxy whose `.then` is harmless but whose
+  `kind` getter or `ownKeys` trap throws is now the closed
+  `TRANSFER_OUTCOME_MALFORMED` / `STATUS_OBSERVATION_MALFORMED`, and a getter
+  that answers once then throws or changes can no longer pass validation and
+  strike during use. The captured stream re-exposes the body's async-iterator
+  capability once and invokes `close` against its original receiver; no bytes
+  are buffered, backpressure and class-instance support are unchanged, and the
+  Revision 2 malformed-OPEN cleanup is intact. The predicates
+  (`isWellFormedTransferOutcome`, `isWellFormedPollObservation`,
+  `isWellFormedByteStream`, `isWellFormedByteSourceOpenResult`) now delegate to
+  the parsers.
 
 ### Changed
 

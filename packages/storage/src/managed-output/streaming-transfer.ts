@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
 import { AppError } from "@app/shared";
 import {
-  isWellFormedByteSourceOpenResult,
   isWellFormedByteStream,
+  parseProviderOutputByteSourceOpenResult,
   safePositiveByteCount,
   sha256Digest,
+  type CapturedProviderOutputByteStream,
   type ManagedGenerationOutputKey,
   type ManagedOutputTransferInput,
   type ManagedOutputTransferOutcome,
   type ManagedOutputTransferPort,
   type ManagedOutputVerificationReceipt,
   type ProviderOutputByteSource,
-  type ProviderOutputByteStream,
 } from "@app/domain";
 import { ManagedOutputTransferDefect } from "./defect";
 import {
@@ -79,7 +79,7 @@ const RETRYABLE: ManagedOutputTransferOutcome = { kind: "RETRYABLE_FAILURE" };
  * must not replace the transfer's real answer, and there is no value in scope
  * to log, attach or widen a diagnostic with.
  */
-async function closeQuietly(stream: ProviderOutputByteStream): Promise<void> {
+async function closeQuietly(stream: CapturedProviderOutputByteStream): Promise<void> {
   try {
     await stream.close();
   } catch {
@@ -180,7 +180,13 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
     // never read, logged or persisted by this class.
     const opened: unknown = await this.source.open(input.source);
 
-    if (!isWellFormedByteSourceOpenResult(opened)) {
+    // Read once, under a guard, into a materialized result. On the success path
+    // the captured stream is what the transfer uses from here on: its `body`,
+    // `declaredSizeBytes` and `close` were read exactly once at parse time, so
+    // no getter on the raw handle is ever consulted a second time during use —
+    // the time-of-check/time-of-use gap the predicate alone could not close.
+    const parsed = parseProviderOutputByteSourceOpenResult(opened);
+    if (parsed === null) {
       // Three questions, answered separately, because the first revision fused
       // two of them and leaked a resource doing so.
       //
@@ -205,9 +211,9 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
           : "BYTE_SOURCE_STREAM_MALFORMED",
       );
     }
-    if (opened.kind === "RETRYABLE_FAILURE") return RETRYABLE;
+    if (parsed.kind === "RETRYABLE_FAILURE") return RETRYABLE;
 
-    const stream = opened.stream;
+    const stream = parsed.stream;
     try {
       return await this.consume(stream, input.destinationKey);
     } finally {
@@ -225,7 +231,7 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
    * visibly inside that guarantee.
    */
   private async consume(
-    stream: ProviderOutputByteStream,
+    stream: CapturedProviderOutputByteStream,
     destinationKey: ManagedGenerationOutputKey,
   ): Promise<ManagedOutputTransferOutcome> {
     // Preflight only. A declared size over the limit is refused before any

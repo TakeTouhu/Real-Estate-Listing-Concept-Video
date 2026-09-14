@@ -3,8 +3,16 @@ import {
   isWellFormedByteSourceOpenResult,
   isWellFormedByteStream,
   OPEN_BYTE_SOURCE_KEYS,
+  parseProviderOutputByteSourceOpenResult,
+  parseProviderOutputByteStream,
   RETRYABLE_FAILURE_BYTE_SOURCE_KEYS,
 } from "./byte-source";
+
+async function drain(body: AsyncIterable<Uint8Array>): Promise<Uint8Array[]> {
+  const out: Uint8Array[] = [];
+  for await (const chunk of body) out.push(chunk);
+  return out;
+}
 
 /**
  * The byte-source contract, checked against values nobody promised anything
@@ -197,5 +205,131 @@ describe("isWellFormedByteSourceOpenResult", () => {
     const wrapper = { kind: "OPEN", stream: proxy };
     expect(() => isWellFormedByteSourceOpenResult(wrapper)).not.toThrow();
     expect(isWellFormedByteSourceOpenResult(wrapper)).toBe(false);
+  });
+});
+
+describe("parseProviderOutputByteStream captures each field exactly once", () => {
+  it("reads body, declaredSizeBytes and close once each and never again", async () => {
+    let bodyReads = 0;
+    let declaredReads = 0;
+    let closeReads = 0;
+    let closeInvocations = 0;
+    const source = someBytes();
+    const handle = {
+      get body(): AsyncIterable<Uint8Array> {
+        bodyReads += 1;
+        return source;
+      },
+      get declaredSizeBytes(): number | null {
+        declaredReads += 1;
+        return 3;
+      },
+      get close(): () => Promise<void> {
+        closeReads += 1;
+        return async () => void (closeInvocations += 1);
+      },
+    };
+    const captured = parseProviderOutputByteStream(handle);
+    if (captured === null) throw new Error("expected a captured stream");
+    expect(bodyReads).toBe(1);
+    expect(declaredReads).toBe(1);
+    expect(closeReads).toBe(1);
+    expect(captured.declaredSizeBytes).toBe(3);
+
+    // Using the captured stream re-touches none of the raw getters.
+    expect(await drain(captured.body)).toEqual([new Uint8Array([1, 2, 3])]);
+    await captured.close();
+    await captured.close();
+    expect(closeInvocations).toBe(2);
+    expect(bodyReads).toBe(1);
+    expect(declaredReads).toBe(1);
+    expect(closeReads).toBe(1);
+  });
+
+  it("looks up the body's async-iterator capability once, not on each iteration", async () => {
+    let asyncIteratorReads = 0;
+    const hostileBody = {
+      get [Symbol.asyncIterator](): () => AsyncIterator<Uint8Array> {
+        asyncIteratorReads += 1;
+        return async function* (): AsyncGenerator<Uint8Array> {
+          yield new Uint8Array([7]);
+        };
+      },
+    };
+    const captured = parseProviderOutputByteStream({
+      body: hostileBody,
+      declaredSizeBytes: null,
+      close: async () => undefined,
+    });
+    if (captured === null) throw new Error("expected a captured stream");
+    expect(asyncIteratorReads).toBe(1);
+    expect(await drain(captured.body)).toEqual([new Uint8Array([7])]);
+    // Iterating the captured body did not return to the hostile getter.
+    expect(asyncIteratorReads).toBe(1);
+  });
+
+  it("invokes a prototype close against its original receiver", async () => {
+    let sawReceiver: unknown;
+    class Handle {
+      readonly body = someBytes();
+      readonly declaredSizeBytes = null;
+      readonly tag = "self";
+      async close(): Promise<void> {
+        sawReceiver = (this as Handle).tag;
+      }
+    }
+    const instance = new Handle();
+    const captured = parseProviderOutputByteStream(instance);
+    if (captured === null) throw new Error("expected a captured stream");
+    await captured.close();
+    expect(sawReceiver).toBe("self");
+  });
+
+  it("refuses hostile and malformed handles as null", () => {
+    expect(parseProviderOutputByteStream({ body: "x", declaredSizeBytes: null, close() {} })).toBeNull();
+    expect(
+      parseProviderOutputByteStream({
+        get body(): never {
+          throw new Error("SECRET");
+        },
+      }),
+    ).toBeNull();
+    expect(parseProviderOutputByteStream(null)).toBeNull();
+  });
+});
+
+describe("parseProviderOutputByteSourceOpenResult materializes the open result", () => {
+  it("captures the stream of an OPEN result and reads kind and stream once", () => {
+    let kindReads = 0;
+    let streamReads = 0;
+    const wrapper = {
+      get kind(): string {
+        kindReads += 1;
+        return "OPEN";
+      },
+      get stream(): Record<string, unknown> {
+        streamReads += 1;
+        return { body: someBytes(), declaredSizeBytes: null, close: async () => undefined };
+      },
+    };
+    const parsed = parseProviderOutputByteSourceOpenResult(wrapper);
+    expect(parsed?.kind).toBe("OPEN");
+    expect(kindReads).toBe(1);
+    expect(streamReads).toBe(1);
+  });
+
+  it("materializes RETRYABLE_FAILURE as a fresh one-key object", () => {
+    const parsed = parseProviderOutputByteSourceOpenResult({ kind: "RETRYABLE_FAILURE" });
+    expect(parsed).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(Object.getOwnPropertyNames(parsed)).toEqual(["kind"]);
+  });
+
+  it("refuses a wrapper with an extra key, and a wrapper whose stream is malformed", () => {
+    expect(
+      parseProviderOutputByteSourceOpenResult({ kind: "OPEN", stream: stream(), status: 200 }),
+    ).toBeNull();
+    expect(
+      parseProviderOutputByteSourceOpenResult({ kind: "OPEN", stream: stream({ body: "x" }) }),
+    ).toBeNull();
   });
 });

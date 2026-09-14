@@ -232,6 +232,45 @@ from the core (its candidate cleanup was already guarded), and
 `RECEIPT_MALFORMED` from Phase 2H-1 → `TRANSFER_OUTCOME_MALFORMED` from the
 orchestration, attempt left ingesting.
 
+The same *validate-then-reuse* gap that made the staging commit outcome and the
+receipt boundaries into materializing parsers existed at three more `unknown`
+boundaries, and the sixth revision closes them the same way rather than with
+scattered `try/catch`. Each returns `unknown` by contract, each was checked by a
+predicate, and each was then **re-read** by its consumer *outside* the `await`
+that produced it — so a live Proxy whose `.then` is harmless (it crosses the
+await) but whose `kind` getter or `ownKeys` trap throws would escape as a raw
+adapter error, and a getter that answered validly during validation and
+differently on a second read would pass the predicate and then act on a value
+nobody validated:
+
+- **The transfer outcome.** `parseManagedOutputTransferOutcome` reads `kind`
+  once, the own keys once, and the `VERIFIED` receipt once, into a fresh object;
+  the runner acts on that copy and never re-reads the raw port result. The
+  receipt reference is carried through untouched — its contents remain Phase
+  2H-1's question.
+- **The poll observation.** `parseProviderPollObservation` reads `kind`, the own
+  keys, `outputLocator`, `retryable` and `diagnosticCode` once each, into a
+  fresh object; the orchestrator dispatches on that copy several times without
+  returning to the raw source value. The already-constructed
+  `TransientProviderOutputLocator` is preserved by reference — never rebuilt,
+  stringified or inspected — and a malformed observation is `null`, never read
+  as `FAILED`, because that would manufacture a paid attempt's terminal state
+  from a value nobody defined.
+- **The byte-source open result and stream.** The predicates were total against
+  *immediate* getter failures but stayed predicates, so the core re-fetched
+  `stream.declaredSizeBytes`, `stream.body` and `stream.close` from the raw
+  handle during use. `parseProviderOutputByteStream` now reads each once and
+  returns a captured stream: `body`'s async-iterator capability is looked up
+  once and re-exposed as a plain method bound to the original body, so a
+  `for await` never re-reads a hostile `[Symbol.asyncIterator]`; `close` is
+  captured as a function and invoked against its original receiver, so an
+  inherited method still sees the right `this`. No bytes are buffered and
+  backpressure is unchanged. Class instances remain supported: exact own keys
+  are required of the wrapper, never of the handle. The Revision 2 malformed-OPEN
+  cleanup is untouched — an OPEN-shaped wrapper carrying a closable stream
+  candidate is still best-effort closed before the fixed defect, and cleanup
+  failure never replaces it.
+
 ### 10. The locator is passed through, still unread
 
 The core hands the opaque locator to the source and does not look at it. There

@@ -69,6 +69,9 @@ close the source                 always, exactly once
 | **The sink's answer cannot surprise the core** | The commit result is read once, under a guard, into a fresh plain object; a throwing `kind` or `receipt` getter is `null` → abort → `STAGING_COMMIT_RESULT_MALFORMED` with fixed text and no `cause`; a getter that answers once then throws is never read twice (Revision 3) |
 | **The sink's receipt cannot surprise Phase 2H-1 either** | `parseVerificationReceipt` reads own keys, `sha256` and `sizeBytes` once each inside one guard and returns a fresh plain object; the decision uses that copy and never re-reads the raw receipt. A throwing or stateful getter is the closed `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt still ingesting, nothing written, nothing escapes (Revision 4) |
 | **Totality starts at the shared record check** | Every boundary parser asks `isPlainRecord` before opening its own guard, and its `Array.isArray` throws on a revoked `Proxy`. The helper is now total — the one throwing question is answered under a guard, once, for every boundary. A revoked Proxy cannot cross an `await` (promise resolution reads `.then` and throws inside the adapter's own promise), so it reaches this pipeline only as a *property* of an answer: as the `stream` it is `BYTE_SOURCE_STREAM_MALFORMED`; as the `EXISTING` receipt it is `RECEIPT_MALFORMED` → `TRANSFER_OUTCOME_MALFORMED`, attempt left ingesting, nothing of the runtime's text anywhere (Revision 5) |
+| **The transfer outcome cannot surprise the runner** | `parseManagedOutputTransferOutcome` reads `kind`, the own keys and the `VERIFIED` receipt once each into a fresh object; the runner acts on that copy and never re-reads the raw port result. A throwing `kind`/`ownKeys` or a stateful getter is the closed `TRANSFER_OUTCOME_MALFORMED`, attempt still ingesting, no finalization; the receipt reference travels to Phase 2H-1 untouched (Revision 6) |
+| **The poll observation cannot surprise the orchestrator** | `parseProviderPollObservation` reads `kind`, the own keys, `outputLocator`, `retryable` and `diagnosticCode` once each into a fresh object; the orchestrator dispatches on that copy several times without returning to the raw source. A hostile or stateful getter is `STATUS_OBSERVATION_MALFORMED` with no write — never read as `FAILED` — and the opaque locator is preserved by reference, never rebuilt or inspected (Revision 6) |
+| **The byte-source stream cannot surprise the core after validation** | `parseProviderOutputByteStream` reads `body`, `declaredSizeBytes` and `close` once each and returns a captured stream: the async-iterator capability is looked up once and re-exposed as a plain method, and `close` is invoked against its original receiver. The core uses the capture, so no getter on the raw handle is read twice; a stateful getter that answers once then throws never strikes. No bytes buffered, backpressure unchanged, class instances still supported, the Revision 2 malformed-OPEN cleanup intact (Revision 6) |
 | **Failures never blame the provider** | Every expected condition returns `RETRYABLE_FAILURE`; every adapter defect throws fixed text; Phase 2H-2 leaves the attempt `OUTPUT_INGESTING` in both cases |
 | **Locator unread** | Passed to the source by reference; no accessor exists, none was added, and the core does not look |
 
@@ -99,23 +102,25 @@ validation is a delivery-readiness prerequisite for a later phase.
 | --- | --- |
 | `pnpm typecheck` | Pass — all 10 projects, including the `@ts-expect-error` brand proofs |
 | `pnpm lint` | Pass — 0 problems |
-| `pnpm test` | **3750 passed**, 114 files (was 3478 / 108) |
-| `pnpm test:db` (live PostgreSQL) | **753 passed**, 23 files (was 728 / 22) |
+| `pnpm test` | **3787 passed**, 114 files (was 3478 / 108) |
+| `pnpm test:db` (live PostgreSQL) | **755 passed**, 23 files (was 728 / 22) |
 | `pnpm build` | Pass |
 | Prisma drift | `No difference detected` |
 | 2F-1 / 2G-1 / 2G-2 / 2H-1 / 2H-2 / 2H-3A regressions | Pass, unchanged |
 
-272 unit tests and 25 database tests added. No pre-existing test weakened or
+309 unit tests and 27 database tests added. No pre-existing test weakened or
 removed; one Revision 3 test was renamed in Revision 4 so its title states the
 behaviour it actually proves (`VERIFIED` on a single guarded read). Revision 5
-adds the shared helper's own suite (`submission/untrusted.test.ts`).
+adds the shared helper's own suite (`submission/untrusted.test.ts`); Revision 6
+adds materialization suites for the transfer outcome, the poll observation and
+the captured byte stream.
 
 ## Mutation ledger
 
-**29 mutations, 29 killed, no survivors.** Nineteen are the required list;
+**32 mutations, 32 killed, no survivors.** Nineteen are the required list;
 three (M01a, M20, M21) are additional; two (M22, M23) were added with the
 Revision 2 correction; two (M24, M25) with Revision 3; two (M26, M27) with
-Revision 4; one (M28) with Revision 5.
+Revision 4; one (M28) with Revision 5; three (M29, M30, M31) with Revision 6.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -140,7 +145,7 @@ Revision 4; one (M28) with Revision 5.
 | M18 | The full output is accumulated in memory alongside streaming | 1 — the static `Buffer.concat` guard; behaviourally invisible, which is why the guard exists |
 | M19 | A session advisory lock is left held across the transfer | 11 — every live-PostgreSQL test that reaches a write blocks and times out |
 | M20 | A non-bytes chunk is hashed and written rather than refused | 6 |
-| M21 | The open result is trusted without validation | 11 |
+| M21 | The open result is trusted without validating its exact keys | 7 — re-aimed in Revision 6 to the new open-result parser, where the exact-key check now lives |
 | **M22** | **A valid stream inside a malformed OPEN wrapper is not closed** (the rejected head's selection) | 3 — exactly the three focused wrapper tests; fails against `229d484…`, passes after |
 | **M23** | **The `close` lookup happens outside the best-effort cleanup guard** | 2 — the two throwing-`close`-getter tests |
 | **M24** | **The commit-outcome parser reads `kind` outside its guard** | 3 — the throwing-`kind`-getter core test and the two predicate tests |
@@ -148,6 +153,9 @@ Revision 4; one (M28) with Revision 5.
 | **M26** | **Receipt property access happens outside the parser's guard** | 8 — the four throwing-getter unit tests (receipt authority and decision) and the four live-PostgreSQL hostile-receipt tests (2H-1 completion and 2H-2 runner) |
 | **M27** | **The finalize decision re-reads the raw receipt after validation** | 4 — exactly the stateful-getter tests: two unit (decision and authority), two live-PostgreSQL (2H-1 completion and 2H-2 runner) |
 | **M28** | **`isPlainRecord` evaluates `Array.isArray` unguarded** (a revoked Proxy escapes every boundary) | 10 — eight unit (the helper itself, the receipt authority, the decision, both staging entry points, both byte-source predicates, the core's revoked stream) and two live-PostgreSQL (2H-1 completion and the 2H-2 runner, each with a revoked-Proxy `EXISTING` receipt) |
+| **M29** | **The runner re-reads the raw transfer outcome after validation** | 2 — the stateful-`kind` and stateful-`receipt` runner tests, each of which throws on the second read the mutation reintroduces |
+| **M30** | **The runner dispatches on the raw poll source value instead of the materialized observation** | 2 — the stateful SUCCEEDED-locator and stateful FAILED-fields runner tests |
+| **M31** | **The byte-stream parser returns the raw handle uncaptured, so the core re-reads its getters** | 6 — the four stateful stream-getter core tests (declared size, body, close, async-iterator) and the two parser single-read unit tests |
 
 Counts are failures in **this phase's suites only**. M17 and M18 are killed by a
 single static assertion each — that is the honest mechanism for a property the

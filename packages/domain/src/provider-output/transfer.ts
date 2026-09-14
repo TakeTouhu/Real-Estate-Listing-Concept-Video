@@ -76,20 +76,56 @@ export const RETRYABLE_FAILURE_TRANSFER_KEYS: readonly string[] = ["kind"];
  * tolerated. A storage adapter's error text is external data, and the moment a
  * field exists to carry it, something will log it, and a signed URL will be in
  * that log.
+ *
+ * Implemented on {@link parseManagedOutputTransferOutcome}, so the predicate
+ * and the parser cannot disagree about what a well-formed outcome is.
  */
 export function isWellFormedTransferOutcome(
   value: unknown,
 ): value is ManagedOutputTransferOutcome {
-  if (!isPlainRecord(value)) return false;
+  return parseManagedOutputTransferOutcome(value) !== null;
+}
 
-  switch (value.kind) {
-    case "VERIFIED":
-      // `receipt` must be *present*, and may be anything: absence is a defect in
-      // the adapter, while contents are Phase 2H-1's question.
-      return hasExactlyOwnKeys(value, VERIFIED_TRANSFER_KEYS);
-    case "RETRYABLE_FAILURE":
-      return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_TRANSFER_KEYS);
-    default:
-      return false;
+/**
+ * Read a transfer outcome once, under a guard, into a fresh plain object — or
+ * `null`.
+ *
+ * The value is whatever the transfer port returned after its own `await`, and
+ * a value that survives an `await` can still be hostile: a live Proxy whose
+ * `.then` is harmless but whose `kind` getter or `ownKeys` trap throws, or a
+ * getter that answers validly during validation and differently afterwards.
+ * Every read of the raw value happens here — `kind` once, own keys once,
+ * `receipt` once for `VERIFIED` — inside one guard, and what the caller gets
+ * is a plain object with own data properties that cannot surprise it. A throw
+ * anywhere is `null`: it is the adapter's exception, and it must not escape the
+ * orchestration as a raw error where the closed `TRANSFER_OUTCOME_MALFORMED`
+ * result belongs. The thrown value is not inspected, kept or reported.
+ *
+ * The `receipt` reference itself is carried through untouched. Its contents
+ * are Phase 2H-1's question, and that authority reads it once, under its own
+ * guard.
+ */
+export function parseManagedOutputTransferOutcome(
+  value: unknown,
+): ManagedOutputTransferOutcome | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    const kind: unknown = value.kind;
+    switch (kind) {
+      case "VERIFIED":
+        // `receipt` must be *present*, and may be anything: absence is a defect
+        // in the adapter, while contents are Phase 2H-1's question.
+        return hasExactlyOwnKeys(value, VERIFIED_TRANSFER_KEYS)
+          ? { kind: "VERIFIED", receipt: value.receipt }
+          : null;
+      case "RETRYABLE_FAILURE":
+        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_TRANSFER_KEYS)
+          ? { kind: "RETRYABLE_FAILURE" }
+          : null;
+      default:
+        return null;
+    }
+  } catch {
+    return null;
   }
 }

@@ -508,6 +508,34 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       ).toHaveLength(0);
     });
 
+    it("closes a hostile poll observation without a raw throw and without any write", async () => {
+      // The status source returns a value that survives the await but throws
+      // when its `kind` is read. It becomes STATUS_OBSERVATION_MALFORMED, and
+      // nothing about the provider is recorded on the strength of it.
+      const { attemptId, job } = await seedAcceptedProcessingAttempt("hostilepoll");
+      const before = await attemptRow(attemptId);
+      const hostile = new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === "kind") throw new Error("GETTER-SECRET SECRETSIGNATURE");
+            return undefined;
+          },
+        },
+      );
+      const result = await runner({
+        source: fakeSource(async () => hostile),
+        transfer: fakeTransfer(VERIFIED_A),
+      }).runProviderOutputAttemptOnce({ ...BASE, attemptId });
+
+      expect(result).toEqual({ kind: "STATUS_OBSERVATION_MALFORMED" });
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("PROCESSING");
+      expect(row.stateVersion).toBe(before.stateVersion);
+      expect((await reservationOf(job.id)).state).toBe("RESERVED");
+      expect(JSON.stringify(result)).not.toContain("GETTER-SECRET");
+    });
+
     it("keeps the certainty ACCEPTED on a provider execution failure", async () => {
       const { attemptId, job } = await seedAcceptedProcessingAttempt("fail");
       const result = await runner({
@@ -690,6 +718,42 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       }).runProviderOutputAttemptOnce({ ...BASE, attemptId });
       expect(second).toEqual({ kind: "OUTPUT_VERIFIED" });
       expect((await attemptRow(attemptId)).outputSha256).toBe(SHA_A);
+    });
+
+    it("closes a hostile transfer outcome without a raw throw and without finalizing", async () => {
+      // The port returns a value that survives the await but throws when its
+      // `kind` is read. The materializing parser turns it into the closed
+      // result; the attempt stays ingesting and nothing of the getter persists.
+      // Seed it already ingesting so the resume path transfers directly, with
+      // no begin transition to bump the version between the snapshot and the run.
+      const { attemptId } = await seedSucceeded("hostiletransfer", true);
+      const before = await attemptRow(attemptId);
+      const hostile = new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === "kind") throw new Error("GETTER-SECRET SECRETSIGNATURE");
+            return undefined;
+          },
+        },
+      );
+      const result = await runner({
+        source: fakeSource(SUCCEEDED_WITH),
+        transfer: fakeTransfer(async () => hostile),
+      }).runProviderOutputAttemptOnce({ ...BASE, attemptId });
+
+      expect(result).toEqual({ kind: "TRANSFER_OUTCOME_MALFORMED" });
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(row.outputSha256).toBeNull();
+      expect(row.stateVersion).toBe(before.stateVersion);
+      const persisted =
+        JSON.stringify(result) +
+        JSON.stringify(row) +
+        JSON.stringify(await eventsFor(attemptId));
+      for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE"]) {
+        expect(persisted).not.toContain(fragment);
+      }
     });
   });
 

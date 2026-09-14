@@ -1,4 +1,4 @@
-import { isSubmissionDiagnosticCode } from "./diagnostic-code";
+import { isSubmissionDiagnosticCode, type SubmissionDiagnosticCode } from "./diagnostic-code";
 
 /**
  * Predicates for values that arrive from outside the type system.
@@ -98,6 +98,6 @@ export function isBoolean(value: unknown): value is boolean {
  * and is still not one, and `undefined` is not `null` — a field the sender
  * simply omitted has not been stated to be absent.
  */
-export function isDiagnosticCodeOrNull(value: unknown): boolean {
+export function isDiagnosticCodeOrNull(value: unknown): value is SubmissionDiagnosticCode | null {
   return value === null || isSubmissionDiagnosticCode(value);
 }

@@ -512,6 +512,165 @@ describe("a transfer that fails is not a provider failure", () => {
   });
 });
 
+describe("a hostile transfer outcome is closed, never let through raw", () => {
+  it("answers TRANSFER_OUTCOME_MALFORMED for a live Proxy whose kind getter throws, and never finalizes", async () => {
+    // Crosses the await (its `.then` is undefined) and then throws only when the
+    // runner reads `kind`. The materializing parser turns that into the closed
+    // result; without it, the runner's own read would escape as a raw error.
+    const hostile = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === "kind") throw new Error("GETTER-SECRET s3://bucket?sig=SIG");
+          return undefined;
+        },
+      },
+    );
+    const h = harness({
+      poll: async () => ({ kind: "SUCCEEDED", outputLocator: locator() }),
+      transferResult: async () => hostile,
+    });
+    const result = await run(h);
+    expect(result).toEqual({ kind: "TRANSFER_OUTCOME_MALFORMED" });
+    expect(JSON.stringify(result)).not.toContain("GETTER-SECRET");
+    expect(h.completionCalls.some((c) => c.op === "finalize")).toBe(false);
+  });
+
+  it("answers TRANSFER_OUTCOME_MALFORMED for a live Proxy whose ownKeys trap throws", async () => {
+    const hostile = new Proxy(
+      { kind: "VERIFIED", receipt: {} },
+      {
+        ownKeys() {
+          throw new Error("GETTER-SECRET");
+        },
+      },
+    );
+    const h = harness({
+      poll: async () => ({ kind: "SUCCEEDED", outputLocator: locator() }),
+      transferResult: async () => hostile,
+    });
+    expect(await run(h)).toEqual({ kind: "TRANSFER_OUTCOME_MALFORMED" });
+    expect(h.completionCalls.some((c) => c.op === "finalize")).toBe(false);
+  });
+
+  it("reads the outcome kind exactly once: a VERIFIED getter that then throws still verifies", async () => {
+    let reads = 0;
+    const receipt = { sha256: "d".repeat(64), sizeBytes: 2048 };
+    const stateful = {
+      get kind(): string {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return "VERIFIED";
+      },
+      receipt,
+    };
+    const h = harness({
+      poll: async () => ({ kind: "SUCCEEDED", outputLocator: locator() }),
+      transferResult: async () => stateful,
+    });
+    expect(await run(h)).toEqual({ kind: "OUTPUT_VERIFIED" });
+    expect(reads).toBe(1);
+  });
+
+  it("reads the receipt exactly once and hands that reference to Phase 2H-1", async () => {
+    let reads = 0;
+    const receipt = { sha256: "e".repeat(64), sizeBytes: 4096 };
+    const stateful = {
+      kind: "VERIFIED",
+      get receipt(): unknown {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return receipt;
+      },
+    };
+    const h = harness({
+      poll: async () => ({ kind: "SUCCEEDED", outputLocator: locator() }),
+      transferResult: async () => stateful,
+    });
+    await run(h);
+    expect(reads).toBe(1);
+    const finalize = h.completionCalls.find((c) => c.op === "finalize");
+    expect(finalize?.input.receipt).toBe(receipt);
+  });
+});
+
+describe("a hostile poll observation is closed, never dispatched on raw", () => {
+  it("answers STATUS_OBSERVATION_MALFORMED for a live Proxy whose kind getter throws, and writes nothing", async () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === "kind") throw new Error("GETTER-SECRET https://p.example?sig=SIG");
+          return undefined;
+        },
+      },
+    );
+    const h = harness({ poll: async () => hostile });
+    const result = await run(h);
+    expect(result).toEqual({ kind: "STATUS_OBSERVATION_MALFORMED" });
+    expect(JSON.stringify(result)).not.toContain("GETTER-SECRET");
+    expect(h.completionCalls).toHaveLength(0);
+  });
+
+  it("answers STATUS_OBSERVATION_MALFORMED for a live Proxy whose ownKeys trap throws", async () => {
+    const hostile = new Proxy(
+      { kind: "IN_PROGRESS" },
+      {
+        ownKeys() {
+          throw new Error("GETTER-SECRET");
+        },
+      },
+    );
+    const h = harness({ poll: async () => hostile });
+    expect(await run(h)).toEqual({ kind: "STATUS_OBSERVATION_MALFORMED" });
+    expect(h.completionCalls).toHaveLength(0);
+  });
+
+  it("reads a SUCCEEDED locator exactly once and transfers with that reference", async () => {
+    let reads = 0;
+    const produced = locator();
+    const stateful = {
+      kind: "SUCCEEDED",
+      get outputLocator(): unknown {
+        reads += 1;
+        if (reads > 1) throw new Error("SECOND-READ");
+        return produced;
+      },
+    };
+    const h = harness({ poll: async () => stateful });
+    expect(await run(h)).toEqual({ kind: "OUTPUT_VERIFIED" });
+    expect(reads).toBe(1);
+    expect(h.transferredWith[0]?.source.equals(produced)).toBe(true);
+  });
+
+  it("reads FAILED fields from the materialized copy, never a second raw read", async () => {
+    let retryableReads = 0;
+    let codeReads = 0;
+    const stateful = {
+      kind: "FAILED",
+      get retryable(): boolean {
+        retryableReads += 1;
+        if (retryableReads > 1) throw new Error("SECOND-READ");
+        return true;
+      },
+      get diagnosticCode(): null {
+        codeReads += 1;
+        if (codeReads > 1) throw new Error("SECOND-READ");
+        return null;
+      },
+    };
+    const h = harness({ poll: async () => stateful });
+    expect(await run(h)).toEqual({ kind: "PROVIDER_COMPLETION_APPLIED" });
+    expect(retryableReads).toBe(1);
+    expect(codeReads).toBe(1);
+    expect(h.completionCalls[0]?.input.observation).toEqual({
+      kind: "FAILED",
+      retryable: true,
+      diagnosticCode: null,
+    });
+  });
+});
+
 describe("finalization is Phase 2H-1's, unchanged", () => {
   it("passes the receipt through exactly as received", async () => {
     const receipt = { sha256: "b".repeat(64), sizeBytes: 2048 };
