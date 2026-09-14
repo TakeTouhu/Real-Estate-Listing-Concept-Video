@@ -5,6 +5,7 @@ export {
   PUBLISHED_COMMIT_KEYS,
   RETRYABLE_FAILURE_COMMIT_KEYS,
   isWellFormedStagingCommitOutcome,
+  parseStagingCommitOutcome,
 } from "./staging";
 export type {
   ManagedOutputStagingCommitOutcome,

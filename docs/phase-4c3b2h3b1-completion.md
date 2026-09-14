@@ -66,6 +66,7 @@ close the source                 always, exactly once
 | **Receipt recovery** | `EXISTING` carries the canonical object's receipt, and the core reports *that* — not the receipt for the bytes it just abandoned |
 | **Cleanup exactly once** | `close()` once on every path out of a successful open; `abort()` on every failure after `begin`, never after a success; both best effort, neither ever the answer |
 | **Cleanup on a malformed open** | An OPEN-shaped malformed result with an object `stream` is closed once, best effort, **whether or not the stream is valid** — the wrapper being defective does not make a valid handle less worth releasing. The defect raised follows the stream's validity: valid stream → the wrapper's defect; malformed stream → the stream's. Obtaining `close` is inside the guard, so a throwing getter cannot replace the fixed defect (Revision 2) |
+| **The sink's answer cannot surprise the core** | The commit result is read once, under a guard, into a fresh plain object; a throwing `kind` or `receipt` getter is `null` → abort → `STAGING_COMMIT_RESULT_MALFORMED` with fixed text and no `cause`; a getter that answers once then throws is never read twice (Revision 3) |
 | **Failures never blame the provider** | Every expected condition returns `RETRYABLE_FAILURE`; every adapter defect throws fixed text; Phase 2H-2 leaves the attempt `OUTPUT_INGESTING` in both cases |
 | **Locator unread** | Passed to the source by reference; no accessor exists, none was added, and the core does not look |
 
@@ -96,20 +97,20 @@ validation is a delivery-readiness prerequisite for a later phase.
 | --- | --- |
 | `pnpm typecheck` | Pass — all 10 projects, including the `@ts-expect-error` brand proofs |
 | `pnpm lint` | Pass — 0 problems |
-| `pnpm test` | **3691 passed**, 113 files (was 3478 / 108) |
+| `pnpm test` | **3705 passed**, 113 files (was 3478 / 108) |
 | `pnpm test:db` (live PostgreSQL) | **745 passed**, 23 files (was 728 / 22) |
 | `pnpm build` | Pass |
 | Prisma drift | `No difference detected` |
 | 2F-1 / 2G-1 / 2G-2 / 2H-1 / 2H-2 / 2H-3A regressions | Pass, unchanged |
 
-213 unit tests and 17 database tests added. No pre-existing
+227 unit tests and 17 database tests added. No pre-existing
 test modified, weakened or removed.
 
 ## Mutation ledger
 
-**24 mutations, 24 killed, no survivors.** Nineteen are the required list;
+**26 mutations, 26 killed, no survivors.** Nineteen are the required list;
 three (M01a, M20, M21) are additional; two (M22, M23) were added with the
-Revision 2 correction.
+Revision 2 correction; two (M24, M25) with Revision 3.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -122,21 +123,23 @@ Revision 2 correction.
 | M06 | The first chunk is omitted from SHA-256 | 13 |
 | M07 | The hash is finalized after the first chunk | 6 |
 | M08 | The source is drained eagerly before any write | 12 — the backpressure test and the source-level guard both |
-| M09 | The source is never closed | 34 |
+| M09 | The source is never closed | 35 |
 | M10 | Staging is not aborted after oversize or empty | 4 |
 | M11 | Staging is not aborted after a write or iteration failure | 11 |
 | M12 | The reference sink overwrites the canonical object (last-writer-wins) | 6 — targets the fake's first-publish semantics, proving a real sink that overwrote would be caught |
 | M13 | `EXISTING` reports the proposed receipt instead of the canonical one | 6 |
 | M14 | Commit is issued after the first chunk, before all bytes are written | 22 |
 | M15 | A `RETRYABLE_FAILURE` commit is reported as `VERIFIED` | 4 |
-| M16 | A malformed commit result is accepted | 12 |
+| M16 | A malformed commit result is accepted | 15 |
 | M17 | `LocalObjectStorage` is pulled into the transfer core | 1 — the static guard |
 | M18 | The full output is accumulated in memory alongside streaming | 1 — the static `Buffer.concat` guard; behaviourally invisible, which is why the guard exists |
-| M19 | A session advisory lock is left held across the transfer | 10 — every live-PostgreSQL test that reaches a write blocks and times out |
+| M19 | A session advisory lock is left held across the transfer | 11 — every live-PostgreSQL test that reaches a write blocks and times out |
 | M20 | A non-bytes chunk is hashed and written rather than refused | 6 |
 | M21 | The open result is trusted without validation | 11 |
 | **M22** | **A valid stream inside a malformed OPEN wrapper is not closed** (the rejected head's selection) | 3 — exactly the three focused wrapper tests; fails against `229d484…`, passes after |
 | **M23** | **The `close` lookup happens outside the best-effort cleanup guard** | 2 — the two throwing-`close`-getter tests |
+| **M24** | **The commit-outcome parser reads `kind` outside its guard** | 3 — the throwing-`kind`-getter core test and the two predicate tests |
+| **M25** | **The core dispatches on the raw sink value instead of the materialized outcome** | 1 — exactly the answers-once-then-throws test written for it |
 
 Counts are failures in **this phase's suites only**. M17 and M18 are killed by a
 single static assertion each — that is the honest mechanism for a property the

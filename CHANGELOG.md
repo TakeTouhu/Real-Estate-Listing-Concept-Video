@@ -58,6 +58,11 @@ implementation outside deterministic fakes under `@app/storage/testing`.
   malformed streams, leaking the valid ones, which are exactly the handles that
   hold a real response body. Obtaining `close` is inside the guard, so a throwing
   getter cannot replace the fixed defect.
+- **A malformed staging commit result cannot surprise the core either.** The
+  sink's answer is read once, under a guard, into a fresh plain object; a
+  throwing `kind` or `receipt` getter is malformed → abort →
+  `STAGING_COMMIT_RESULT_MALFORMED` with fixed text and no `cause`, and the raw
+  value is never read a second time.
 
 ### Changed
 

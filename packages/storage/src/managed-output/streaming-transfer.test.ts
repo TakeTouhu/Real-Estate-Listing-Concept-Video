@@ -851,6 +851,82 @@ describe("adapter-contract defects throw a fixed application-owned error", () =>
     expect(source.lastStream.closeCalls).toBe(1);
   });
 
+  it("for a commit result whose kind getter throws: the fixed defect stands, nothing of the getter escapes, staging is aborted, nothing is published", async () => {
+    const { source, sink, run } = core(
+      { chunks: [bytes(1, 2, 3)] },
+      {
+        commit: () => ({
+          get kind(): never {
+            throw new Error("GETTER-SECRET s3://bucket/key?sig=SECRETSIGNATURE");
+          },
+        }),
+      },
+    );
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as ManagedOutputTransferDefect).code).toBe("STAGING_COMMIT_RESULT_MALFORMED");
+    expect((error as Error).message).toBe(
+      "The managed output staging sink returned something other than a commit outcome",
+    );
+    const text = `${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`;
+    for (const fragment of ["GETTER-SECRET", "SECRETSIGNATURE", "s3://", "bucket"]) {
+      expect(text).not.toContain(fragment);
+    }
+    expect((error as Error).cause).toBeUndefined();
+    // The malformed answer is treated as no answer: the session is discarded,
+    // the source released, and nothing has been made canonical.
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(source.lastStream.closeCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("for a commit result whose kind getter answers once and then throws: still the fixed defect, never a raw throw from the dispatch", async () => {
+    // Passes a naive predicate, then explodes on the second read a naive
+    // dispatch would perform. The core reads exactly once, under the guard.
+    let reads = 0;
+    const { sink, run } = core(
+      { chunks: [bytes(1)] },
+      {
+        commit: () => ({
+          get kind(): string {
+            reads += 1;
+            if (reads > 1) throw new Error("GETTER-SECRET-SECOND-READ");
+            return "PUBLISHED";
+          },
+        }),
+      },
+    );
+    // A `kind` that reads as PUBLISHED once and is otherwise well-formed is a
+    // valid outcome on its single guarded read — and the core never reads it
+    // again, so the second-read trap is never sprung.
+    const outcome = await run();
+    expect(outcome.kind).toBe("VERIFIED");
+    expect(reads).toBe(1);
+    expect(sink.lastSession.abortCalls).toBe(0);
+  });
+
+  it("for an EXISTING commit result whose receipt getter throws: the fixed defect, nothing escapes", async () => {
+    const { sink, run } = core(
+      { chunks: [bytes(1)] },
+      {
+        commit: () => ({
+          kind: "EXISTING",
+          get receipt(): never {
+            throw new Error("GETTER-SECRET");
+          },
+        }),
+      },
+    );
+    const error = await rejection(run());
+    expect((error as ManagedOutputTransferDefect).code).toBe("STAGING_COMMIT_RESULT_MALFORMED");
+    expect(`${(error as Error).message} ${String(error)} ${JSON.stringify(error)}`).not.toContain(
+      "GETTER-SECRET",
+    );
+    expect((error as Error).cause).toBeUndefined();
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
   it("puts none of the malformed value into the thrown error", async () => {
     const { run } = core(
       { chunks: [bytes(1)] },

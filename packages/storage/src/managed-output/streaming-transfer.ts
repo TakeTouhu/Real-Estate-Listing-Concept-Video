@@ -15,7 +15,7 @@ import {
 } from "@app/domain";
 import { ManagedOutputTransferDefect } from "./defect";
 import {
-  isWellFormedStagingCommitOutcome,
+  parseStagingCommitOutcome,
   type ManagedOutputStagingSession,
   type ManagedOutputStagingSink,
 } from "./staging";
@@ -265,7 +265,12 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
       throw error;
     }
 
-    if (!isWellFormedStagingCommitOutcome(committed)) {
+    // Read once, under a guard, into a plain object. The raw value is never
+    // consulted again after this line — a sink result whose `kind` getter
+    // throws, or answers once and then throws, is `null` here rather than an
+    // adapter-controlled exception surfacing anywhere below.
+    const outcome = parseStagingCommitOutcome(committed);
+    if (outcome === null) {
       // The sink answered outside its contract. Nothing more may be published
       // or finalized on the strength of a value nobody defined; the staging
       // state is discarded and the defect is raised without the value in it.
@@ -273,7 +278,7 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
       throw new ManagedOutputTransferDefect("STAGING_COMMIT_RESULT_MALFORMED");
     }
 
-    switch (committed.kind) {
+    switch (outcome.kind) {
       case "PUBLISHED":
         // The staged bytes are canonical. The sink owns whatever cleanup its
         // temporary state needs; abort is not called on a success.
@@ -283,7 +288,7 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
         // and the database must be finalized against that — so its receipt is
         // reported, not the one computed for the bytes just abandoned. It
         // travels as `unknown`; Phase 2H-1 decides whether it is real.
-        return { kind: "VERIFIED", receipt: committed.receipt };
+        return { kind: "VERIFIED", receipt: outcome.receipt };
       case "RETRYABLE_FAILURE":
         await abortQuietly(session);
         return RETRYABLE;

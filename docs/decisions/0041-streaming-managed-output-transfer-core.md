@@ -184,6 +184,18 @@ same non-mutation. The defect carries no value, no `cause`, no message from the
 adapter: a malformed commit result may be a raw storage response with a signed
 URL in it.
 
+That boundary holds against a hostile *object*, not only a hostile *shape*.
+The sink's commit result is read exactly once, under a guard, into a fresh
+plain object — `parseStagingCommitOutcome` — and the raw value is never
+consulted again. A `kind` getter that throws is `null` there, and the core
+raises `STAGING_COMMIT_RESULT_MALFORMED` after aborting staging; a getter that
+answers once and throws on a second read never gets a second read, because the
+dispatch runs on the materialized copy. The predicate
+`isWellFormedStagingCommitOutcome` is total for the same reason. Without this,
+the second revision let an adapter-controlled exception escape the predicate —
+after the `commit` guard had already passed, so the staging abort was skipped
+as well — and replace the fixed defect with the adapter's own text.
+
 ### 10. The locator is passed through, still unread
 
 The core hands the opaque locator to the source and does not look at it. There

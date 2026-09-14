@@ -114,16 +114,51 @@ export const RETRYABLE_FAILURE_COMMIT_KEYS: readonly string[] = ["kind"];
 export function isWellFormedStagingCommitOutcome(
   value: unknown,
 ): value is ManagedOutputStagingCommitOutcome {
-  if (!isPlainRecord(value)) return false;
-  switch (value.kind) {
-    case "PUBLISHED":
-      return hasExactlyOwnKeys(value, PUBLISHED_COMMIT_KEYS);
-    case "EXISTING":
-      // `receipt` must be *present*; its contents are Phase 2H-1's question.
-      return hasExactlyOwnKeys(value, EXISTING_COMMIT_KEYS);
-    case "RETRYABLE_FAILURE":
-      return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_COMMIT_KEYS);
-    default:
-      return false;
+  return parseStagingCommitOutcome(value) !== null;
+}
+
+/**
+ * Read a commit result once, under a guard, into a fresh plain object — or
+ * `null`.
+ *
+ * Total over hostile objects, which is the whole reason this exists alongside
+ * the predicate. The value is whatever a sink adapter returned, and reading
+ * `kind` or `receipt` may invoke a getter. A getter that throws is not a commit
+ * outcome — it is a value outside the contract, and the answer is `null`, never
+ * the getter's own error escaping into a place where it would replace the fixed
+ * defect the core is about to raise.
+ *
+ * Materialized rather than merely validated, for the second half of the same
+ * problem: a predicate that returns `true` leaves the caller to read the
+ * properties *again*, and a getter that answered once and throws the second
+ * time would pass validation and then explode in the dispatch. Every read
+ * happens here, exactly once, inside the guard, and what the caller gets is a
+ * plain object with own data properties that cannot surprise it. The
+ * `receipt` reference itself is carried through untouched — its contents are
+ * Phase 2H-1's question, and it travels there exactly as received.
+ */
+export function parseStagingCommitOutcome(
+  value: unknown,
+): ManagedOutputStagingCommitOutcome | null {
+  if (!isPlainRecord(value)) return null;
+  try {
+    const kind: unknown = value.kind;
+    switch (kind) {
+      case "PUBLISHED":
+        return hasExactlyOwnKeys(value, PUBLISHED_COMMIT_KEYS) ? { kind: "PUBLISHED" } : null;
+      case "EXISTING":
+        // `receipt` must be *present*; its contents are Phase 2H-1's question.
+        return hasExactlyOwnKeys(value, EXISTING_COMMIT_KEYS)
+          ? { kind: "EXISTING", receipt: value.receipt }
+          : null;
+      case "RETRYABLE_FAILURE":
+        return hasExactlyOwnKeys(value, RETRYABLE_FAILURE_COMMIT_KEYS)
+          ? { kind: "RETRYABLE_FAILURE" }
+          : null;
+      default:
+        return null;
+    }
+  } catch {
+    return null;
   }
 }

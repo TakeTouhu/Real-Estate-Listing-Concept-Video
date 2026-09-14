@@ -3,6 +3,7 @@ import { safePositiveByteCount, sha256Digest } from "@app/domain";
 import {
   EXISTING_COMMIT_KEYS,
   isWellFormedStagingCommitOutcome,
+  parseStagingCommitOutcome,
   PUBLISHED_COMMIT_KEYS,
   RETRYABLE_FAILURE_COMMIT_KEYS,
 } from "./staging";
@@ -60,5 +61,73 @@ describe("isWellFormedStagingCommitOutcome", () => {
     const value = { kind: "PUBLISHED" };
     Object.defineProperty(value, "url", { value: "s3://x", enumerable: false });
     expect(isWellFormedStagingCommitOutcome(value)).toBe(false);
+  });
+
+  it.each([
+    ["a throwing kind getter", { get kind(): never { throw new Error("GETTER-SECRET"); } }],
+    [
+      "a throwing receipt getter on EXISTING",
+      { kind: "EXISTING", get receipt(): never { throw new Error("GETTER-SECRET"); } },
+    ],
+  ])("answers false, rather than throwing, for %s", (_label, hostile) => {
+    // A predicate is total. A getter that throws is a value outside the
+    // contract, and the caller's fixed defect must be what escapes — never the
+    // getter's own error.
+    expect(() => isWellFormedStagingCommitOutcome(hostile)).not.toThrow();
+    expect(isWellFormedStagingCommitOutcome(hostile)).toBe(false);
+  });
+});
+
+describe("parseStagingCommitOutcome", () => {
+  it("materializes each arm as a fresh plain object with exactly its own keys", () => {
+    const published = parseStagingCommitOutcome({ kind: "PUBLISHED" });
+    const existing = parseStagingCommitOutcome({ kind: "EXISTING", receipt: RECEIPT });
+    const retry = parseStagingCommitOutcome({ kind: "RETRYABLE_FAILURE" });
+    expect(published).toEqual({ kind: "PUBLISHED" });
+    expect(existing).toEqual({ kind: "EXISTING", receipt: RECEIPT });
+    expect(retry).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(Object.getOwnPropertyNames(published)).toEqual(["kind"]);
+    expect(Object.getOwnPropertyNames(existing)).toEqual(["kind", "receipt"]);
+  });
+
+  it("carries the EXISTING receipt reference through untouched", () => {
+    const receipt = { anything: "at all" };
+    const parsed = parseStagingCommitOutcome({ kind: "EXISTING", receipt });
+    expect(parsed?.kind).toBe("EXISTING");
+    expect((parsed as { receipt: unknown }).receipt).toBe(receipt);
+  });
+
+  it("returns a value that does not alias the input", () => {
+    const input = { kind: "PUBLISHED" };
+    expect(parseStagingCommitOutcome(input)).not.toBe(input);
+  });
+
+  it("reads kind exactly once, so a getter that answers once and then throws cannot pass and later explode", () => {
+    let reads = 0;
+    const stateful = {
+      get kind(): string {
+        reads += 1;
+        if (reads > 1) throw new Error("GETTER-SECRET-ON-SECOND-READ");
+        return "PUBLISHED";
+      },
+    };
+    const parsed = parseStagingCommitOutcome(stateful);
+    expect(parsed).toEqual({ kind: "PUBLISHED" });
+    expect(reads).toBe(1);
+    // The materialized object's own `kind` is a plain data property; reading
+    // it again touches the hostile getter zero more times.
+    expect(parsed?.kind).toBe("PUBLISHED");
+    expect(reads).toBe(1);
+  });
+
+  it.each([
+    ["a throwing kind getter", { get kind(): never { throw new Error("x"); } }],
+    ["a throwing receipt getter", { kind: "EXISTING", get receipt(): never { throw new Error("x"); } }],
+    ["null", null],
+    ["an unknown kind", { kind: "OK" }],
+    ["PUBLISHED with an extra key", { kind: "PUBLISHED", url: "s3://x" }],
+  ])("returns null for %s", (_label, value) => {
+    expect(() => parseStagingCommitOutcome(value)).not.toThrow();
+    expect(parseStagingCommitOutcome(value)).toBeNull();
   });
 });
