@@ -23,6 +23,29 @@ import { hasExactlyOwnKeys, isPlainRecord } from "../submission/untrusted";
 
 declare const sha256DigestBrand: unique symbol;
 declare const byteCountBrand: unique symbol;
+declare const managedGenerationOutputKeyBrand: unique symbol;
+
+/**
+ * Where an attempt's managed output lives, as a value that proves where it came
+ * from.
+ *
+ * Branded, and the brand is the whole point. While no concrete writer existed
+ * a plain `string` alias was enough: the orchestrator had exactly one source
+ * for a destination and nothing consumed it. A streaming transfer core changes
+ * that — it is a real writer whose normal typed boundary must not accept an
+ * arbitrary string, because an arbitrary string is a provider file name, a
+ * caller-chosen path, or another tenant's key, and the type is the cheapest
+ * place to make that impossible.
+ *
+ * Only {@link managedGenerationOutputKey} produces one. The value is still a
+ * string at runtime and remains assignable wherever an ordinary storage key
+ * string is required — the database column, an object-store call — so nothing
+ * downstream changes. What changes is the other direction: a string cannot
+ * become a transfer destination without an explicit, greppable unsafe cast.
+ */
+export type ManagedGenerationOutputKey = string & {
+  readonly [managedGenerationOutputKeyBrand]: "ManagedGenerationOutputKey";
+};
 
 /**
  * A SHA-256 digest of a managed output, in the repository's canonical form.
@@ -162,7 +185,7 @@ export function isWellFormedVerificationReceipt(
 export function managedGenerationOutputKey(input: {
   readonly organizationId: string;
   readonly attemptId: string;
-}): string {
+}): ManagedGenerationOutputKey {
   if (input.organizationId.trim().length === 0 || input.attemptId.trim().length === 0) {
     // Blank identifiers would collapse two different attempts onto one key, and
     // a key with an empty segment is a different object than it looks like.
@@ -171,5 +194,9 @@ export function managedGenerationOutputKey(input: {
       "Managed output key requires a non-blank organization and attempt id",
     );
   }
-  return ["org", input.organizationId, "generations", input.attemptId, "output"].join("/");
+  // The one place a string becomes a key. The cast is the brand's constructor,
+  // and it lives here so that the identifiers above are the only way in.
+  return ["org", input.organizationId, "generations", input.attemptId, "output"].join(
+    "/",
+  ) as ManagedGenerationOutputKey;
 }

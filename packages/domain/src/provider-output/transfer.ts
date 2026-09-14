@@ -1,3 +1,4 @@
+import type { ManagedGenerationOutputKey } from "../completion/output";
 import { hasExactlyOwnKeys, isPlainRecord } from "../submission/untrusted";
 import type { TransientProviderOutputLocator } from "./locator";
 
@@ -5,21 +6,17 @@ import type { TransientProviderOutputLocator } from "./locator";
  * Copying a provider's output into managed storage, as a contract rather than an
  * implementation.
  *
- * **There is no concrete implementation in this phase.** No HTTP client, no S3,
- * R2 or GCS client, no credentials. What exists is the shape a future adapter
- * must satisfy — and defining it first is deliberate: the shape is the
- * constraint on its implementations, not the other way round.
- */
-
-/**
- * Where the copy is going. Always derived, never chosen.
+ * The domain still owns no implementation — no HTTP client, no S3, R2 or GCS
+ * client, no credentials. A concrete streaming core now exists in
+ * `@app/storage` (Phase 2H-3B-1) and satisfies this shape; the shape remains
+ * the constraint on it, not the other way round.
  *
- * A plain string alias rather than a new opaque type: the value is produced by
- * Phase 2H-1's `managedGenerationOutputKey` and the orchestrator has no other
- * source for one. Naming it here is documentation of that provenance, not a
- * second validation boundary — a second one could drift from the first.
+ * The destination type is imported from the completion module rather than
+ * aliased here. While no writer existed a plain `string` alias documented
+ * provenance well enough; a real writer needs the type to *enforce* it, and one
+ * branded definition next to its only constructor is the way to have that
+ * without a second validation boundary that could drift from the first.
  */
-export type ManagedGenerationOutputKey = string;
 
 export interface ManagedOutputTransferInput {
   /** Opaque, non-readable. The adapter that can dereference it does not exist. */

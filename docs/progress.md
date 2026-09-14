@@ -1041,6 +1041,48 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-1** — see GitHub for its lifecycle. Adds the first
+  *concrete* implementation of Phase 2H-2's `ManagedOutputTransferPort`: a
+  streaming core in `@app/storage` that pulls provider bytes through an injected
+  `ProviderOutputByteSource`, bounds them at a 512 MiB ceiling, hashes them
+  incrementally, writes them to an isolated `ManagedOutputStagingSink` session,
+  and publishes first-wins. Detail in `docs/phase-4c3b2h3b1-completion.md` and
+  ADR-0041.
+
+  The dormancy claim is stated precisely, as 2H-3A's was: the core is concrete,
+  and it has no production byte source, no production staging sink, no
+  production composition and no credential. The static suite asserts each of
+  those rather than describing them, and the only implementations of either
+  contract are the deterministic fakes under `@app/storage/testing`.
+
+  Neither existing piece was reused. The provider `HttpClient` reads a response
+  into a string, which is right for a status poll and wrong for a video, and it
+  is left string-bodied; `LocalObjectStorage` takes a whole `Uint8Array` into
+  process memory and is left serving photos. Control plane and data plane get
+  separate narrow contracts.
+
+  The actual bytes decide everything: a declared size may refuse a transfer
+  before staging begins, but it never counts, never hashes and never lets an
+  over-limit stream through. Zero bytes never become a canonical object. The
+  SHA-256 is built per chunk and finalized once; there is no chunk array, no
+  concatenation and no read-ahead, and the backpressure proof holds the sink at
+  its first write and shows exactly one chunk pulled. The canonical key is
+  untouched until commit says `PUBLISHED`, and once an object exists there no
+  later session replaces it — a second download may differ, and those bytes must
+  not overwrite an object a prior runner may already have verified. `EXISTING`
+  carries the canonical object's receipt because that is what makes crash
+  recovery work: a runner that publishes and dies before the database learns of
+  it is completed by the next runner against what is actually at the key, never
+  against the bytes it just abandoned. No transfer lease was added; it would be
+  a durable lock whose holder can die, and a migration. `close()` is called
+  exactly once on every path out of a successful open, `abort()` on every
+  failure after `begin` and never after a success, and neither can ever replace
+  the transfer's answer. Expected conditions return `RETRYABLE_FAILURE`; adapter
+  defects throw fixed text; Phase 2H-2 leaves the attempt `OUTPUT_INGESTING` in
+  both cases and never records a provider failure. `ManagedGenerationOutputKey`
+  is now branded, produced only by the application helper, and refused as a
+  transfer destination without an explicit cast. Media format remains
+  unverified and the key extensionless; no migration and no schema change.
 - **Phase 4C proper** — 4C-1b onward remains unstarted: the system-scoped
   execution repository, execution input assembly, submission, polling, and the
   worker runtime, fake provider first. Its prerequisites are recorded in

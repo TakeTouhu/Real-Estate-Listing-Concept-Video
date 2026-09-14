@@ -3,6 +3,68 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-1: Dormant streaming managed-output transfer core
+
+See GitHub for lifecycle; detail in `docs/phase-4c3b2h3b1-completion.md` and
+ADR-0041. Adds the first **concrete** implementation of Phase 2H-2's
+`ManagedOutputTransferPort` — a streaming core in `@app/storage` that pulls
+provider bytes, bounds them, hashes them, stages them and publishes them
+first-wins — **without a real byte source and without a real object store.**
+No migration and no schema change.
+
+The core is concrete and dormant in the precise sense the static suite asserts:
+nothing in production constructs it, and the two contracts it consumes have no
+implementation outside deterministic fakes under `@app/storage/testing`.
+
+### Added
+
+- **`ManagedGenerationOutputKey` is now branded.** Produced only by
+  `managedGenerationOutputKey`; consumed by the transfer input and the staging
+  sink. Still an ordinary string wherever a string is required, so the column and
+  any object-store call are unchanged — but a string cannot become a transfer
+  destination without an explicit cast. Shape unchanged, extensionless.
+- **`ProviderOutputByteSource`** (domain): `open(locator)` → `OPEN { stream }` |
+  `RETRYABLE_FAILURE`, where the stream is a pull-based `AsyncIterable<Uint8Array>`
+  with a declared size that is never trusted and a `close()` that is called
+  exactly once.
+- **`ManagedOutputStagingSink` / `ManagedOutputStagingSession`** (storage):
+  `begin` → isolated session; `write`; `commit` → `PUBLISHED` | `EXISTING { receipt }`
+  | `RETRYABLE_FAILURE`; `abort`. Exact-own-key validation on the commit outcome.
+- **`StreamingManagedOutputTransfer`**: the core. 512 MiB hard ceiling
+  (`MAX_MANAGED_PROVIDER_OUTPUT_BYTES`), configured limit refused rather than
+  clamped, actual bytes authoritative over the declared size, incremental SHA-256,
+  zero bytes refused, backpressure through `for await` + awaited `write`,
+  first-publish-wins with receipt recovery on `EXISTING`.
+- **Deterministic fakes** for both contracts, with barriers, under
+  `@app/storage/testing` — not exported from the package root.
+- **A live-PostgreSQL suite** running the real core through the real Phase 2H-2
+  runner and Phase 2H-1 persistence: the full `PROCESSING → OUTPUT_VERIFIED`
+  path, every expected and thrown failure leaving the attempt
+  `OUTPUT_INGESTING + ACCEPTED`, crash recovery after publish, two concurrent
+  ingesting runners, no lock held while bytes move, tenant isolation.
+
+### Security
+
+- **The canonical key is never chosen by the source, the sink or the caller.**
+  Derived by the application, branded at the type level, asserted at the sink.
+- **The locator is still unread.** Passed by reference to the source; no accessor
+  exists and none was added; absent from every outcome, every staging call,
+  every row and every event.
+- **A malformed adapter answer carries nothing into the error.** Defects throw
+  fixed text with a closed code, no `cause`, no value.
+
+### Changed
+
+- Nothing about `LocalObjectStorage` or the provider `HttpClient`. Both are
+  asserted unchanged in shape: the client still reads a string body; the store
+  still takes a whole `Uint8Array`.
+
+### Not done
+
+No concrete fal byte source; no durable staging sink; no media-format
+validation; no production composition; no credential wiring; no Scene delivery
+or Job readiness; no pricing or resolution change; no paid activation.
+
 ## [Unreleased] — Phase 4C-3B-2H-3A: Dormant fal Queue completion status adapter
 
 See GitHub for lifecycle; detail in `docs/phase-4c3b2h3a-completion.md` and
