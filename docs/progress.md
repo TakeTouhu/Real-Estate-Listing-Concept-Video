@@ -1041,6 +1041,28 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-3** — see GitHub for its lifecycle. The first *concrete*
+  durable `ManagedOutputStagingSink` (`S3ManagedOutputStagingSink`), completing
+  the real provider-output data plane. It stages generated output as an S3
+  multipart upload against the canonical key and publishes only through a
+  conditional `CompleteMultipartUpload` with `If-None-Match: "*"` — the atomic
+  first-publish-wins authority (`412` → stream-verify the existing winner and
+  return `EXISTING`; `409` → `RETRYABLE_FAILURE`). Every non-final part carries
+  its own SHA-256, the ETag is never treated as an application hash, existing
+  winners are verified by streaming the actual bytes back, part uploads are
+  bounded and sequential (no whole-object buffering), and the 512 MiB ceiling is
+  reused. A new application-owned signal, `ManagedOutputStagingRetryableFailure`,
+  makes an interrupted `write()` part upload retryable (attempt stays
+  `OUTPUT_INGESTING`) rather than a provider failure. The AWS SDK
+  (`@aws-sdk/client-s3`) is added to `@app/storage`, used only by a dormant client
+  adapter; the sink depends on a narrow injected seam and every test drives a fake
+  client. The Node/Undici manual-redirect documentation note from 3B-2 is
+  corrected. The whole pipeline stays dormant: every real piece exists — fal byte
+  source, transfer core, S3 sink — but no production code constructs or joins
+  them, there is no `S3Client`, no bucket credential, no `FAL_KEY`, no real fal or
+  AWS request, and no migration or schema change. Detail in
+  `docs/phase-4c3b2h3b3-completion.md` and ADR-0043. Mutation ledger: 48 run, 48
+  killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-2** — see GitHub for its lifecycle. One bundled
   provider-output acquisition boundary: the first *concrete* production
   `ProviderOutputByteSource` (`FalProviderOutputByteSource`), which would GET an

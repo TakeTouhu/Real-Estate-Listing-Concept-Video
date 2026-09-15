@@ -401,3 +401,21 @@ describe("the adapter never materializes the body or carries a credential", () =
     expect(src.includes('method: "GET"')).toBe(true);
   });
 });
+
+describe("the manual-redirect note is accurate about Node's runtime, not browser-only", () => {
+  // The raw source, comments included: this is a claim about the documentation.
+  const raw = readFileSync(join(__dirname, "provider-output-byte-source.ts"), "utf8");
+
+  it("states that the adapter owns redirect policy and does not rely on the transport", () => {
+    // The corrected wording names Undici (Node's global fetch) exposing the real
+    // redirect, and pins the guarantee to the adapter, not the transport.
+    expect(raw).toContain("Undici");
+    expect(raw).toContain("adapter, not automatic following, is");
+  });
+
+  it("no longer claims a manual redirect *necessarily* yields an opaque status-0 response", () => {
+    // The old, browser-oriented absolute claim must not return.
+    expect(raw).not.toContain("yields an opaque-redirect\n * response whose status is `0` and whose headers are not readable");
+    expect(raw).not.toContain("this\n * default cannot itself follow a redirect");
+  });
+});

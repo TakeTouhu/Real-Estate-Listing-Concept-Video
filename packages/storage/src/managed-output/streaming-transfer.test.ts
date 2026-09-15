@@ -1427,6 +1427,55 @@ describe("a source stream interrupted mid-transfer is retryable, never a truncat
 
 // ---------------------------------------------------------------------------
 
+describe("a storage write interrupted mid-transfer is retryable, never a provider failure", () => {
+  it("recognizes the staging retry signal from write() and returns RETRYABLE_FAILURE", async () => {
+    // The durable sink converts an interrupted part upload into the
+    // application-owned staging signal. The core recognizes it on the iteration
+    // path — where the write is awaited — aborts staging, and returns the
+    // transient arm; nothing is committed or published.
+    const { source, sink, run } = core({ chunks: [bytes(1, 2, 3), bytes(4, 5, 6)] }, { writeSignalsRetryableAt: 0 });
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(Object.getOwnPropertyNames(outcome)).toEqual(["kind"]);
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+    expect(source.lastStream.closeCalls).toBe(1);
+  });
+
+  it("recognizes the staging signal after at least one accepted write", async () => {
+    const { sink, run } = core({ chunks: [bytes(1), bytes(2), bytes(3)] }, { writeSignalsRetryableAt: 1 });
+    expect(await run()).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(sink.lastSession.commitCalls).toBe(0);
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("does NOT convert an ordinary unbranded sink write error to RETRYABLE — that still propagates", async () => {
+    // Recognition is narrow and nominal: only the branded staging signal becomes
+    // a retry. A plain write error keeps its meaning and propagates, so the
+    // runner still records TRANSFER_SOURCE_FAILED for a genuine sink defect.
+    const { source, sink, run } = core({ chunks: [bytes(1)] }, { writeThrowsAt: 0 });
+    const error = await rejection(run());
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ManagedOutputTransferDefect);
+    expect((error as Error).message).toContain("write exploded");
+    expect(sink.lastSession.abortCalls).toBe(1);
+    expect(source.lastStream.closeCalls).toBe(1);
+    expect(sink.canonical.size).toBe(0);
+  });
+
+  it("satisfies the Phase 2H-2 outcome contract for a storage interruption", async () => {
+    const { run } = core({ chunks: [bytes(1), bytes(2)] }, { writeSignalsRetryableAt: 1 });
+    const outcome = await run();
+    expect(isWellFormedTransferOutcome(outcome)).toBe(true);
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe("locator secrecy", () => {
   it("hands the very same locator object to the source, unread", async () => {
     const loc = locator();

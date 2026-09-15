@@ -119,12 +119,15 @@ already-recorded fact. `Content-Length` is read only as a preflight hint and is
 bytes that actually arrive remains authoritative.
 
 The default fetch seam, backed by the runtime `fetch`, exists for a future
-wiring to inject but is never constructed in production here. Note that WHATWG
-`fetch` with `redirect: "manual"` yields an opaque-redirect response whose status
-is `0` and whose headers are unreadable, so the default cannot itself follow a
-redirect — it surfaces one as a non-final response mapped to
-`RETRYABLE_FAILURE`. The redirect routing is exercised through an injected seam
-that exposes the real status and `Location`.
+wiring to inject but is never constructed in production here. It asks for
+`redirect: "manual"` so that the *adapter* owns redirect policy and
+re-validation, never the transport. How a runtime surfaces a manual-redirect
+response is a runtime detail this code does not depend on — Node's global fetch
+(Undici) exposes the real redirect status and `Location`, while a browser fetch
+returns an opaque `status: 0` response — and either way production must never
+rely on the transport following a redirect on its own. The redirect routing is
+exercised through an injected seam that exposes the real status and `Location`,
+and that seam is the test authority.
 
 ## Decision 5 — A good HTTP status is not the end of acquisition: a mid-stream interruption is retryable, never a truncated output
 

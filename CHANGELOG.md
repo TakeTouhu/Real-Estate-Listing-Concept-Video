@@ -3,6 +3,70 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-3: Dormant durable S3 managed-output sink
+
+Detail in `docs/phase-4c3b2h3b3-completion.md` and ADR-0043. The first concrete
+durable `ManagedOutputStagingSink`; no migration and no schema change. Still
+dormant: nothing in production constructs it or an `S3Client`.
+
+### Added
+
+- **`S3ManagedOutputStagingSink`** (`@app/storage`) — the first concrete durable
+  managed-output sink. It stages generated output as an S3 multipart upload
+  against the canonical key and publishes **only** through a conditional
+  `CompleteMultipartUpload` with `If-None-Match: *`, which is the atomic
+  first-publish-wins authority: a completion against an occupied key returns
+  `412`, and the losing session best-effort aborts, streams the canonical winner
+  back, hashes it incrementally, and returns `EXISTING` with the winner's receipt;
+  a `409` returns `RETRYABLE_FAILURE`. Every non-final part carries its own
+  SHA-256; the ETag is never treated as an application hash. Part uploads are
+  sequential and bounded — the whole output is never buffered — and the 512 MiB
+  ceiling (`MAX_MANAGED_PROVIDER_OUTPUT_BYTES`) is reused and enforced on
+  read-back. `abort` is idempotent and a no-op after publish. It remains
+  **dormant**: nothing in production constructs it, no `S3Client` is built, and
+  no bucket credential exists.
+- **`ManagedOutputStagingRetryableFailure`** (`@app/storage`) — one
+  application-owned, secret-free signal for an interrupted `write()` part upload
+  (analogous to the provider stream's retry signal). The sink converts an
+  `UploadPart`/`CreateMultipartUpload` rejection to it, discarding the SDK value
+  unread; the transfer core recognizes it narrowly, aborts staging, and returns
+  `RETRYABLE_FAILURE`, leaving the attempt `OUTPUT_INGESTING`.
+- **A narrow `S3MultipartClient` seam** and the dormant `createS3MultipartClient`
+  adapter (`s3-client-adapter.ts`) that maps a real `S3Client` onto it — the one
+  place `@aws-sdk/client-s3` is used, constructed nowhere in production. A
+  deterministic `FakeS3MultipartClient` drives every test with no network.
+- **`@aws-sdk/client-s3`** added to `@app/storage` (no AWS credential, no
+  `S3_BUCKET`, no environment-schema change).
+
+### Changed
+
+- The streaming transfer core now recognizes the storage staging retry signal on
+  its iteration path alongside the provider stream signal, returning
+  `RETRYABLE_FAILURE` and discarding the partial staged bytes.
+- The S3 sink's `write` bounds its own multipart assembly by the configured part
+  size independent of source chunk size: an arbitrary incoming chunk is
+  partitioned on the part boundary — full `partSizeBytes` regions upload directly
+  from bounded `subarray` views (no copy) and only a sub-part remainder is
+  retained — so one large chunk never becomes one oversized copied part. The
+  enforceable claim is *sink-owned assembly ≤ partSizeBytes, the supplied chunk
+  stays caller-owned*.
+- **(Doc)** The Node/Undici manual-redirect note in the fal byte source and
+  ADR-0042 is corrected: the adapter owns redirect policy and re-validation, and
+  production never relies on the transport following a redirect on its own — the
+  browser-oriented "opaque `status: 0`" claim is no longer stated as universal.
+- The dormancy static suite now asserts the new truth: exactly one production byte
+  source (fal) and one durable staging sink (S3), both unconstructed, with the AWS
+  SDK confined to the dormant client adapter.
+
+### Mutation ledger
+
+49 mutations, 49 killed, 0 survivors (M40–M48: dropped `If-None-Match`,
+loser-receipt-on-412, Content-Length trust, omitted per-part SHA-256, raw
+UploadPart rejection, core rethrow of the staging signal, whole-object read-back
+buffering, the reintroduced manual-redirect doc claim, and — from the
+bounded-assembly correction — one large chunk uploaded as a single oversized part
+instead of split on the part boundary).
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-2: Dormant fal streaming output byte source
 
 Detail in `docs/phase-4c3b2h3b2-completion.md` and ADR-0042. One bundled
