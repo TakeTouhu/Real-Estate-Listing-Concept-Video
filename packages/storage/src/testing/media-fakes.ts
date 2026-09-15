@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import type {
   ProcessRunInput,
   ProcessRunOutcome,
   ProcessRunner,
 } from "../managed-output/ffprobe";
+import type {
+  ManagedOutputTempFile,
+  ManagedOutputTempFileFactory,
+  ManagedOutputTempFileWriteResult,
+} from "../managed-output/media-validation";
 
 /**
  * Deterministic stand-ins for the media-validation boundary: a subprocess runner
@@ -155,4 +160,110 @@ export function ffprobeDocument(options: FfprobeDocumentOptions = {}): Record<st
 /** A successful run returning the given document as stdout JSON. */
 export function exitedWith(document: unknown): ProcessRunOutcome {
   return { kind: "EXITED", exitCode: 0, stdout: JSON.stringify(document) };
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * A temporary-file writer that wraps a **real** owner-only file while making
+ * the failure modes of local materialization reachable: short writes, a writer
+ * that reports impossible progress, an open that fails, and a close that fails.
+ *
+ * Wrapping a real file is the point. The fake process runner reads whatever is
+ * actually on disk, so a test can prove what the inspector would have seen
+ * rather than what the validator believed it wrote.
+ */
+export interface FakeTempFileOptions {
+  /** Reject `openExclusive0600` (models a local open failure after the GET). */
+  readonly openFails?: boolean;
+  /**
+   * Cap successive delegated writes at these lengths, in order; once exhausted,
+   * each remaining write takes everything it is offered. `[2, 3]` writes the
+   * first two bytes, then three, then the rest — a real short-write sequence.
+   */
+  readonly writeCaps?: readonly number[];
+  /**
+   * Make the Nth (1-based) write report `bytesWritten` while delegating
+   * nothing, so the file falls behind what the report claims.
+   */
+  readonly reportWithoutWriting?: { readonly call: number; readonly bytesWritten: number };
+  /** Fail `close()` — after the real descriptor has been released. */
+  readonly closeFails?: boolean;
+}
+
+/** What one delegated write did, for assertions. */
+export interface FakeTempFileWrite {
+  readonly offset: number;
+  readonly length: number;
+  /** What the seam reported to the validator. */
+  readonly bytesWritten: number;
+  /** What actually reached the file. */
+  readonly delegated: number;
+}
+
+class FakeTempFile implements ManagedOutputTempFile {
+  readonly #handle: Awaited<ReturnType<typeof open>>;
+  readonly #options: FakeTempFileOptions;
+  readonly #owner: FakeManagedOutputTempFiles;
+  #writeCount = 0;
+
+  constructor(
+    handle: Awaited<ReturnType<typeof open>>,
+    options: FakeTempFileOptions,
+    owner: FakeManagedOutputTempFiles,
+  ) {
+    this.#handle = handle;
+    this.#options = options;
+    this.#owner = owner;
+  }
+
+  async write(
+    data: Uint8Array,
+    offset: number,
+    length: number,
+  ): Promise<ManagedOutputTempFileWriteResult> {
+    this.#writeCount += 1;
+
+    const forced = this.#options.reportWithoutWriting;
+    if (forced !== undefined && forced.call === this.#writeCount) {
+      this.#owner.writes.push({ offset, length, bytesWritten: forced.bytesWritten, delegated: 0 });
+      return { bytesWritten: forced.bytesWritten };
+    }
+
+    const cap = this.#options.writeCaps?.[this.#writeCount - 1];
+    const take = cap === undefined ? length : Math.min(cap, length);
+    const { bytesWritten } = await this.#handle.write(data, offset, take, null);
+    this.#owner.writes.push({ offset, length, bytesWritten, delegated: take });
+    return { bytesWritten };
+  }
+
+  async close(): Promise<void> {
+    this.#owner.closeCalls += 1;
+    // Release the real descriptor either way: a simulated failure must not leak
+    // an OS handle into the rest of the suite.
+    await this.#handle.close();
+    if (this.#options.closeFails === true) {
+      throw new Error("fake temp file: close refused (simulated flush failure)");
+    }
+  }
+}
+
+/** Opens {@link FakeTempFile} instances and records everything they were asked. */
+export class FakeManagedOutputTempFiles implements ManagedOutputTempFileFactory {
+  readonly openedPaths: string[] = [];
+  readonly writes: FakeTempFileWrite[] = [];
+  closeCalls = 0;
+  readonly #options: FakeTempFileOptions;
+
+  constructor(options: FakeTempFileOptions = {}) {
+    this.#options = options;
+  }
+
+  async openExclusive0600(path: string): Promise<ManagedOutputTempFile> {
+    this.openedPaths.push(path);
+    if (this.#options.openFails === true) {
+      throw new Error("fake temp file: EACCES opening /nonexistent-secret-path/input");
+    }
+    return new FakeTempFile(await open(path, "wx", 0o600), this.#options, this);
+  }
 }

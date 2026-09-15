@@ -1055,7 +1055,13 @@ and ADR-0020.
   preflight ceiling only, the 512 MiB ceiling is reused, and the object is never
   buffered whole. The temporary directory is random and application-owned, the
   file is always `input` with mode `0600`, and it is removed with its directory on
-  every exit path. `FfprobeMediaProbe` invokes `ffprobe` through `execFile` with
+  every exit path. Every canonical chunk must be *completely* materialized
+  locally, and the file must close successfully, before the inspector may look at
+  it: short writes are honoured in a loop and count only once fully landed,
+  impossible write progress ends the copy as `RETRYABLE_FAILURE` instead of
+  spinning, a failing close is retryable rather than `INVALID_MEDIA`, and a body
+  already acquired from `GetObject` is cancelled exactly once if the local open
+  fails. `FfprobeMediaProbe` invokes `ffprobe` through `execFile` with
   `shell: false` and a fixed argument vector whose only variable element is that
   path, under a validated timeout and stdout cap, discarding stderr; a non-zero
   exit is `PROBE_REJECTED`, a timeout is retryable, and an unlaunchable binary is

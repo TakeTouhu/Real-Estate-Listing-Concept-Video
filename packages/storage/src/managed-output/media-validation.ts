@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, open, rm } from "node:fs/promises";
+import { mkdtemp, open, rm, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AppError } from "@app/shared";
@@ -40,6 +40,28 @@ import {
  * incremental — the object is never held in memory, never concatenated, never
  * turned into one array — and the hash and byte count are computed on the way
  * past, so materialization and verification are one pass.
+ *
+ * ## The materialization invariant
+ *
+ * The canonical object is not merely *hashed while being copied*. Every
+ * canonical chunk must be **completely materialized locally**, and the local
+ * file must **close successfully**, before the inspector may look at it:
+ *
+ * ```text
+ * bytes admitted to the probe
+ *   === bytes materialized to the temporary file
+ *   === bytes hashed and counted from the canonical object
+ * ```
+ *
+ * A write may be short — `write()` consuming part of a buffer is a request to
+ * continue, not an error — so each chunk is written in a loop until every byte
+ * of it has landed, and only then does it advance the authoritative hash and
+ * byte count. A chunk that cannot be fully written, a writer that reports no
+ * progress, and a close that fails all end the same way: `RETRYABLE_FAILURE`,
+ * with the partial file discarded and the inspector never invoked. Without
+ * that ordering the hash would describe bytes the inspector never saw, and a
+ * truncated local copy could be reported as invalid media — a storage problem
+ * dressed up as a verdict about the customer's video.
  *
  * ## What the inspector is told
  *
@@ -83,6 +105,69 @@ export type ManagedOutputMediaProbeOutcome =
 export interface ManagedOutputMediaProbe {
   probe(localPath: string): Promise<ManagedOutputMediaProbeOutcome>;
 }
+
+/** What one local write reported. Deliberately the only thing the seam returns. */
+export interface ManagedOutputTempFileWriteResult {
+  readonly bytesWritten: number;
+}
+
+/**
+ * The open temporary file media validation materializes into.
+ *
+ * Narrow on purpose: this is **not** a filesystem abstraction and nothing else
+ * in the repository may use it. It exposes exactly the two operations whose
+ * failure modes change the validator's answer — a possibly-short `write` and a
+ * `close` that can fail — so those paths can be exercised without a real
+ * failing disk.
+ */
+export interface ManagedOutputTempFile {
+  /**
+   * Write `length` bytes of `data` starting at `data[offset]`, appending at the
+   * current file position. May write fewer bytes than asked; the caller loops.
+   */
+  write(
+    data: Uint8Array,
+    offset: number,
+    length: number,
+  ): Promise<ManagedOutputTempFileWriteResult>;
+  close(): Promise<void>;
+}
+
+/** Opens the one temporary file media validation materializes into. */
+export interface ManagedOutputTempFileFactory {
+  /** Exclusive create (`wx`), owner-only mode. Rejects if the path exists. */
+  openExclusive0600(path: string): Promise<ManagedOutputTempFile>;
+}
+
+/** The production temporary file: a plain `FileHandle`, nothing added. */
+class NodeManagedOutputTempFile implements ManagedOutputTempFile {
+  readonly #handle: FileHandle;
+
+  constructor(handle: FileHandle) {
+    this.#handle = handle;
+  }
+
+  async write(
+    data: Uint8Array,
+    offset: number,
+    length: number,
+  ): Promise<ManagedOutputTempFileWriteResult> {
+    // `position: null` appends at the handle's current offset.
+    const { bytesWritten } = await this.#handle.write(data, offset, length, null);
+    return { bytesWritten };
+  }
+
+  async close(): Promise<void> {
+    await this.#handle.close();
+  }
+}
+
+/** The production factory. Tests substitute a writer with controllable seams. */
+export const nodeManagedOutputTempFileFactory: ManagedOutputTempFileFactory = {
+  async openExclusive0600(path: string): Promise<ManagedOutputTempFile> {
+    return new NodeManagedOutputTempFile(await open(path, "wx", 0o600));
+  },
+};
 
 export type ManagedOutputMediaValidationDefectCode =
   | "EXPECTED_RECEIPT_MALFORMED"
@@ -129,6 +214,12 @@ export interface S3ManagedOutputMediaValidatorConfig {
 export interface S3ManagedOutputMediaValidatorDeps {
   readonly reader: S3ManagedObjectReader;
   readonly probe: ManagedOutputMediaProbe;
+  /**
+   * The local materialization seam; defaults to a real owner-only temporary
+   * file. Substituted only so short writes, zero-progress writes and close
+   * failures can be exercised deterministically.
+   */
+  readonly tempFiles?: ManagedOutputTempFileFactory;
 }
 
 /** The fixed local filename — never derived from a key, tenant or provider. */
@@ -154,12 +245,44 @@ type Materialized =
   | { readonly kind: "OK"; readonly sha256: string; readonly sizeBytes: number }
   | { readonly kind: "RETRYABLE" };
 
+/**
+ * Write every byte of `chunk`, in order, honouring short writes.
+ *
+ * `true` means the exact bytes of this chunk are now in the file — no byte
+ * skipped, none written twice — so the caller may finally count and hash them.
+ * `false` means the local copy is incomplete or the writer reported progress
+ * that cannot be true, and nothing derived from the file may be trusted.
+ *
+ * The progress guard is what keeps this loop bounded: a writer that reports
+ * zero, negative, fractional or impossible progress ends the copy instead of
+ * being asked again forever. Its report is read exactly once.
+ */
+async function writeAll(file: ManagedOutputTempFile, chunk: Uint8Array): Promise<boolean> {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const remaining = chunk.byteLength - offset;
+    const result = await file.write(chunk, offset, remaining);
+    const written = result.bytesWritten;
+    if (
+      typeof written !== "number" ||
+      !Number.isSafeInteger(written) ||
+      written <= 0 ||
+      written > remaining
+    ) {
+      return false;
+    }
+    offset += written;
+  }
+  return true;
+}
+
 export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidationPort {
   readonly #bucket: string;
   readonly #maxBytes: number;
   readonly #expectedBucketOwner: string | undefined;
   readonly #reader: S3ManagedObjectReader;
   readonly #probe: ManagedOutputMediaProbe;
+  readonly #tempFiles: ManagedOutputTempFileFactory;
 
   constructor(
     config: S3ManagedOutputMediaValidatorConfig,
@@ -175,6 +298,7 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
     this.#expectedBucketOwner = config.expectedBucketOwner;
     this.#reader = deps.reader;
     this.#probe = deps.probe;
+    this.#tempFiles = deps.tempFiles ?? nodeManagedOutputTempFileFactory;
   }
 
   async validate(
@@ -227,9 +351,9 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
   }
 
   /**
-   * Stream the canonical object to the local path, hashing and counting on the
-   * way past. Never buffers the object: one chunk is held at a time, written
-   * before the next is pulled.
+   * Stream the canonical object to the local path, hashing and counting bytes
+   * only once they are actually on disk. Never buffers the object: one chunk is
+   * held at a time, written completely before the next is pulled.
    */
   async #materialize(
     destinationKey: ManagedGenerationOutputKey,
@@ -257,15 +381,19 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
 
     // Exclusive create, owner-only mode: the file cannot pre-exist and is not
     // readable by other users on platforms that honour the mode.
-    let handle: Awaited<ReturnType<typeof open>>;
+    let file: ManagedOutputTempFile;
     try {
-      handle = await open(localPath, "wx", 0o600);
+      file = await this.#tempFiles.openExclusive0600(localPath);
     } catch {
+      // The body was already acquired, so it owns a connection nothing else
+      // will close. Release it exactly once before giving up.
+      await cancelQuietly(body);
       return { kind: "RETRYABLE" };
     }
 
     const hash = createHash("sha256");
     let total = 0;
+    let streamed = false;
     try {
       for (;;) {
         const chunk = await body.read();
@@ -274,26 +402,49 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
           await cancelQuietly(body);
           return { kind: "RETRYABLE" };
         }
-        total += chunk.byteLength;
-        if (total > this.#maxBytes) {
+        const next = total + chunk.byteLength;
+        if (next > this.#maxBytes) {
           // An over-limit object never reaches the inspector.
           await cancelQuietly(body);
           return { kind: "RETRYABLE" };
         }
+        // The chunk counts for nothing until all of it is on disk: a short or
+        // stalled write leaves a truncated file, and a truncated file must
+        // never be described by a hash of the bytes it does not contain.
+        if (!(await writeAll(file, chunk))) {
+          await cancelQuietly(body);
+          return { kind: "RETRYABLE" };
+        }
         hash.update(chunk);
-        await handle.write(chunk);
+        total = next;
       }
+      streamed = true;
     } catch {
       // A mid-stream read rejection or a local write failure: both are transient
       // materialization problems, and neither is evidence about the media.
       await cancelQuietly(body);
       return { kind: "RETRYABLE" };
     } finally {
-      try {
-        await handle.close();
-      } catch {
-        // Best effort.
+      // Only the abandoned paths close here, best effort — the success path
+      // needs a close whose failure is *not* swallowed, and does it below.
+      if (!streamed) {
+        try {
+          await file.close();
+        } catch {
+          // Best effort.
+        }
       }
+    }
+
+    // Writing every byte is not the same as having every byte. Buffered data
+    // still owed to the file is flushed by `close()`, so a close that fails
+    // means the local copy may be short of what the hash already counted, and
+    // the inspector must not see it.
+    try {
+      await file.close();
+    } catch {
+      await cancelQuietly(body);
+      return { kind: "RETRYABLE" };
     }
 
     await cancelQuietly(body);

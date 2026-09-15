@@ -15,7 +15,12 @@ import {
   FakeS3MultipartClient,
   type FakeS3ReadBackOptions,
 } from "../testing/s3-fakes";
-import { exitedWith, FakeProcessRunner, ffprobeDocument } from "../testing/media-fakes";
+import {
+  exitedWith,
+  FakeManagedOutputTempFiles,
+  FakeProcessRunner,
+  ffprobeDocument,
+} from "../testing/media-fakes";
 import { FfprobeMediaProbe } from "./ffprobe";
 import {
   MEDIA_VALIDATION_TEMP_FILENAME,
@@ -23,7 +28,9 @@ import {
   S3ManagedOutputMediaValidator,
   type ManagedOutputMediaProbe,
   type ManagedOutputMediaProbeOutcome,
+  type S3ManagedObjectReader,
 } from "./media-validation";
+import type { S3GetObjectInput, S3GetObjectResult } from "./s3-staging-sink";
 import { MAX_MANAGED_PROVIDER_OUTPUT_BYTES } from "./streaming-transfer";
 
 /**
@@ -63,6 +70,8 @@ function harness(
     readonly runner?: FakeProcessRunner;
     readonly probe?: ManagedOutputMediaProbe;
     readonly maxBytes?: number;
+    readonly tempFiles?: FakeManagedOutputTempFiles;
+    readonly reader?: S3ManagedObjectReader;
   } = {},
 ): Harness {
   const world = createFakeS3World();
@@ -72,7 +81,7 @@ function harness(
   const probe = options.probe ?? new FfprobeMediaProbe({}, { runner });
   const validator = new S3ManagedOutputMediaValidator(
     { bucket: BUCKET, maxBytes: options.maxBytes },
-    { reader: client, probe },
+    { reader: options.reader ?? client, probe, tempFiles: options.tempFiles },
   );
   return { client, runner, validator };
 }
@@ -366,6 +375,221 @@ describe("the materialized temporary file", () => {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A probe that would happily return facts, and counts how often it was asked.
+ * Every failure case below must leave the count at zero: if the validator ever
+ * inspected an incomplete local file, the outcome would come back VALID instead
+ * of RETRYABLE_FAILURE, and the count would say who did it.
+ */
+function countingProbe(): { readonly probe: ManagedOutputMediaProbe; calls: () => number } {
+  let calls = 0;
+  return {
+    probe: {
+      async probe(): Promise<ManagedOutputMediaProbeOutcome> {
+        calls += 1;
+        return {
+          kind: "FACTS",
+          facts: {
+            container: "ISO_BMFF",
+            durationMs: 1000,
+            videoWidth: 640,
+            videoHeight: 480,
+            videoStreamCount: 1,
+            audioStreamCount: 0,
+          },
+        };
+      },
+    },
+    calls: () => calls,
+  };
+}
+
+/** Wraps a reader so body `read` and `cancel` calls can be counted. */
+class RecordingReader implements S3ManagedObjectReader {
+  readCalls = 0;
+  cancelCalls = 0;
+  readonly #inner: S3ManagedObjectReader;
+
+  constructor(inner: S3ManagedObjectReader) {
+    this.#inner = inner;
+  }
+
+  async getObject(input: S3GetObjectInput): Promise<S3GetObjectResult> {
+    const result = await this.#inner.getObject(input);
+    const body = result.body;
+    if (body === null) return result;
+    return {
+      contentLength: result.contentLength,
+      body: {
+        read: async (): Promise<Uint8Array | null> => {
+          this.readCalls += 1;
+          return body.read();
+        },
+        cancel: async (): Promise<void> => {
+          this.cancelCalls += 1;
+          return body.cancel();
+        },
+      },
+    };
+  }
+}
+
+describe("local materialization is complete before anything is inspected", () => {
+  it("writes a canonical chunk across as many writes as the file accepts", async () => {
+    // One S3 chunk of 12 bytes, a writer that takes 2, then 3, then the rest.
+    // A short write is a request to continue, not a failure.
+    const data = new Uint8Array(12).map((_v, i) => (i * 29) & 0xff);
+    const tempFiles = new FakeManagedOutputTempFiles({ writeCaps: [2, 3] });
+    const h = harness(data, { readBack: { chunkSize: 64 }, tempFiles });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(data),
+    });
+
+    expect(outcome).toMatchObject({ kind: "VALID" });
+
+    // The writer was asked repeatedly until the chunk was exhausted.
+    expect(tempFiles.writes.map((w) => w.delegated)).toEqual([2, 3, 7]);
+    // In exact source order, contiguous: no byte written twice, none skipped.
+    expect(tempFiles.writes.map((w) => w.offset)).toEqual([0, 2, 5]);
+    expect(tempFiles.writes.map((w) => w.length)).toEqual([12, 10, 7]);
+    expect(tempFiles.writes.reduce((sum, w) => sum + w.bytesWritten, 0)).toBe(data.byteLength);
+
+    // The invariant: canonical bytes === materialized bytes === probed bytes.
+    expect(h.runner.runs).toHaveLength(1);
+    expect(h.runner.lastRun.seenFileBytes).toBe(data.byteLength);
+    expect(h.runner.lastRun.seenFileSha256).toBe(sha256Of(data));
+  });
+
+  it("keeps canonical, materialized and probed bytes identical across many short writes", async () => {
+    // Many S3 chunks, every one of them written in fragments.
+    const data = new Uint8Array(257).map((_v, i) => (i * 37 + 11) & 0xff);
+    const tempFiles = new FakeManagedOutputTempFiles({
+      writeCaps: Array.from({ length: 40 }, (_v, i) => (i % 3) + 1),
+    });
+    const h = harness(data, { readBack: { chunkSize: 9 }, tempFiles });
+
+    expect(
+      await h.validator.validate({ destinationKey: KEY, expectedReceipt: receiptFor(data) }),
+    ).toMatchObject({ kind: "VALID" });
+
+    const materialized = tempFiles.writes.reduce((sum, w) => sum + w.delegated, 0);
+    expect(tempFiles.writes.length).toBeGreaterThan(Math.ceil(data.byteLength / 9));
+    expect(materialized).toBe(data.byteLength);
+    // Read from S3 === written to disk === hashed === handed to the inspector.
+    expect(h.runner.lastRun.seenFileBytes).toBe(data.byteLength);
+    expect(h.runner.lastRun.seenFileSha256).toBe(sha256Of(data));
+    expect(h.runner.lastRun.seenFileBytes).toBe(receiptFor(data).sizeBytes);
+  });
+
+  it.each([
+    ["no progress at all", 0],
+    ["negative progress", -1],
+    ["fractional progress", 1.5],
+    ["more progress than there were bytes", 99],
+  ])("stops instead of spinning when a write reports %s", async (_label, bytesWritten) => {
+    const data = new Uint8Array(12).fill(5);
+    const tempFiles = new FakeManagedOutputTempFiles({
+      reportWithoutWriting: { call: 1, bytesWritten },
+    });
+    const counting = countingProbe();
+    const h = harness(data, {
+      readBack: { chunkSize: 64 },
+      tempFiles,
+      probe: counting.probe,
+    });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(data),
+    });
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    // Bounded: the writer was asked once and not again.
+    expect(tempFiles.writes).toHaveLength(1);
+    // The incomplete file was never inspected, and nothing was declared valid.
+    expect(counting.calls()).toBe(0);
+    // Cleanup still happened, and no local error text escaped.
+    const path = tempFiles.openedPaths[0] ?? "";
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(dirname(path))).toBe(false);
+    expect(JSON.stringify(outcome)).not.toContain("fake temp file");
+  });
+
+  it("discards a partially materialized file rather than probing it", async () => {
+    // Two chunks land, the third write stalls: the file on disk is short of the
+    // canonical object, so no receipt comparison may reach VALID.
+    const data = new Uint8Array(30).map((_v, i) => i & 0xff);
+    const tempFiles = new FakeManagedOutputTempFiles({
+      reportWithoutWriting: { call: 3, bytesWritten: 0 },
+    });
+    const counting = countingProbe();
+    const h = harness(data, { readBack: { chunkSize: 10 }, tempFiles, probe: counting.probe });
+
+    expect(
+      await h.validator.validate({ destinationKey: KEY, expectedReceipt: receiptFor(data) }),
+    ).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(tempFiles.writes).toHaveLength(3);
+    expect(counting.calls()).toBe(0);
+    expect(existsSync(tempFiles.openedPaths[0] ?? "")).toBe(false);
+  });
+
+  it("treats a failing close as a materialization failure, never a media verdict", async () => {
+    // Every byte was written, but the flush that close performs did not land:
+    // what is on disk may be shorter than what the hash counted.
+    const data = bytes(1, 2, 3, 4, 5, 6);
+    const tempFiles = new FakeManagedOutputTempFiles({ closeFails: true });
+    const counting = countingProbe();
+    const h = harness(data, { tempFiles, probe: counting.probe });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(data),
+    });
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(counting.calls()).toBe(0);
+    expect(tempFiles.closeCalls).toBe(1);
+    // Cleanup still ran, and the filesystem error text stayed inside.
+    const path = tempFiles.openedPaths[0] ?? "";
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(dirname(path))).toBe(false);
+    expect(JSON.stringify(outcome)).not.toContain("close refused");
+    expect(JSON.stringify(outcome)).not.toContain("fake temp file");
+  });
+
+  it("releases an acquired canonical body exactly once when the local open fails", async () => {
+    // Distinct from a temp-directory failure: the GET already succeeded, so a
+    // connection is open that nothing else will close.
+    const data = bytes(7, 7, 7, 7);
+    const world = createFakeS3World();
+    world.canonical.set(KEY, data);
+    const reader = new RecordingReader(new FakeS3MultipartClient({ world }));
+    const tempFiles = new FakeManagedOutputTempFiles({ openFails: true });
+    const counting = countingProbe();
+    const h = harness(data, { reader, tempFiles, probe: counting.probe });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(data),
+    });
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(reader.cancelCalls).toBe(1);
+    expect(reader.readCalls).toBe(0);
+    expect(counting.calls()).toBe(0);
+    // The directory the validator created was still removed.
+    const path = tempFiles.openedPaths[0] ?? "";
+    expect(path).not.toBe("");
+    expect(existsSync(dirname(path))).toBe(false);
+    expect(JSON.stringify(outcome)).not.toContain("EACCES");
+    expect(JSON.stringify(outcome)).not.toContain("nonexistent-secret-path");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe("the validator never buffers the whole object", () => {
   const src = readFileSync(join(__dirname, "media-validation.ts"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -389,6 +613,16 @@ describe("the validator never buffers the whole object", () => {
   it("hashes and writes incrementally, one chunk at a time", () => {
     expect(src.includes('createHash("sha256")')).toBe(true);
     expect(src.includes("hash.update(chunk)")).toBe(true);
-    expect(src.includes("handle.write(chunk)")).toBe(true);
+    expect(src.includes("await writeAll(file, chunk)")).toBe(true);
+  });
+
+  it("counts and hashes a chunk only after it is completely written", () => {
+    // Ordering is the invariant, not merely the presence of both calls: the
+    // authoritative hash must never describe bytes the file does not hold.
+    const wrote = src.indexOf("await writeAll(file, chunk)");
+    const hashed = src.indexOf("hash.update(chunk)");
+    expect(wrote).toBeGreaterThan(-1);
+    expect(hashed).toBeGreaterThan(wrote);
+    expect(src.indexOf("total = next")).toBeGreaterThan(wrote);
   });
 });

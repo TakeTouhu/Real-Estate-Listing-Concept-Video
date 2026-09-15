@@ -73,6 +73,54 @@ so materialization and verification are a single pass bounded by
 `MAX_MANAGED_PROVIDER_OUTPUT_BYTES` (reused, never duplicated). An over-limit
 object never reaches the inspector.
 
+### The materialization invariant
+
+The canonical object is not merely *hashed while being copied*. Every canonical
+chunk must be **completely materialized locally**, and the local file must
+**close successfully**, before the inspector may look at it:
+
+```text
+bytes admitted to the probe
+  === bytes materialized to the temporary file
+  === bytes hashed and counted from the canonical object
+```
+
+Three consequences, each enforced in code and covered by a focused regression:
+
+- **Short writes are normal, not failures.** A `write()` may consume only part
+  of a buffer; that is a request to continue. Each chunk is written in a loop
+  until every one of its bytes has landed, and only *then* does it advance the
+  authoritative hash and byte count. The next chunk is pulled from S3 only after
+  the current one is fully written, so backpressure is unchanged and no bytes
+  are hashed twice on a partial write.
+- **A writer that reports impossible progress ends the copy.** Zero, negative,
+  fractional, or more-than-remaining progress cannot be honoured and must not be
+  retried forever: the loop stops and the outcome is `RETRYABLE_FAILURE`, with
+  the partial file discarded and the inspector never invoked.
+- **Success requires a successful close.** Writing every byte is not the same as
+  having every byte: data still owed to the file is flushed by `close()`. A
+  close that fails on the success path therefore yields `RETRYABLE_FAILURE` and
+  no probe. A flush failure is a storage problem and must never be reported as
+  `INVALID_MEDIA` — a verdict about the customer's video.
+
+Without this ordering the hash would describe bytes the inspector never saw, and
+a truncated local copy could be reported as invalid media. Cleanup on the
+abandoned paths (including a best-effort close) is unchanged.
+
+The failure modes above are reachable in tests through a narrow
+`ManagedOutputTempFileFactory` seam, private to the managed-output adapter,
+whose production implementation is a plain `open(path, "wx", 0o600)` handle. It
+is deliberately **not** a filesystem abstraction: it exposes only the open,
+possibly-short `write` and fallible `close` whose behaviour changes the answer.
+
+### Acquired-body release
+
+The canonical body is obtained from `GetObject` *before* the local file is
+opened, so it owns a connection nothing else will close. If the local open
+fails, the body is cancelled exactly once and the outcome is
+`RETRYABLE_FAILURE`; the body is never read and the inspector never runs. The
+local error itself does not escape.
+
 ### Secure temporary file rules
 
 - an application-created directory with a random, application-owned name;

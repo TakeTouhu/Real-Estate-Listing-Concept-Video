@@ -65,6 +65,27 @@ codec prose.
 | Removed on every exit path | VALID, INVALID_MEDIA, INTEGRITY_MISMATCH, RETRYABLE_FAILURE, and an unexpected inspector defect — file **and** directory |
 | Cleanup never replaces the result | Swallowed in `finally`; proven by a probe that deletes the directory itself |
 
+### The materialization invariant
+
+The canonical object is not merely *hashed while being copied*: every canonical
+chunk must be completely materialized locally, and the local file must close
+successfully, before the probe may inspect it.
+
+```text
+bytes admitted to the probe
+  === bytes materialized to the temporary file
+  === bytes hashed and counted from the canonical object
+```
+
+| Rule | How it is held |
+| --- | --- |
+| Short writes are honoured | Each chunk is written in a loop until every byte lands; the hash and byte count advance **only after** the chunk is fully on disk; the next S3 chunk is pulled only after that. Proven by a writer that takes a 12-byte chunk as 2 + 3 + 7 bytes and still produces the exact canonical file for the probe |
+| Impossible progress ends the copy | Zero, negative, fractional or more-than-remaining `bytesWritten` → `RETRYABLE_FAILURE`, bounded (the writer is asked once, never again); partial file discarded; probe invocation count **0** |
+| Success requires a successful close | A failing `close()` on the success path → `RETRYABLE_FAILURE` with no probe; a flush failure is never `INVALID_MEDIA`. Abandoned paths still close best effort |
+| Acquired body released on open failure | If `GetObject` succeeded and the local open fails, the body is cancelled **exactly once**, never read, and the probe never runs |
+| No raw local error escapes | Open, write and close failures carry no `cause` and no OS message into any outcome |
+| Test seam is narrow | `ManagedOutputTempFileFactory` is private to the managed-output adapter — open, a possibly-short `write`, a fallible `close`. Production default is a plain `FileHandle`; it is **not** a filesystem abstraction |
+
 ## The inspector subprocess
 
 | Rule | How it is held |
@@ -127,8 +148,9 @@ no change to `OUTPUT_VERIFIED`.**
 
 ## Mutation ledger
 
-**59 mutations, 59 killed, no survivors.** M01–M48 carry forward unchanged;
-M49–M58 added:
+**63 mutations, 63 killed, no survivors.** M01–M48 carry forward unchanged;
+M49–M58 added by this phase, and M59–M62 by the local-materialization
+integrity correction:
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -142,6 +164,10 @@ M49–M58 added:
 | **M56** | Inspector launched through a shell | static process-invocation tests |
 | **M57** | Raw inspector output leaks from the malformed-output defect | leakage tests |
 | **M58** | Temporary materialization not fully cleaned up | lifecycle tests |
+| **M59** | One `write()` assumed to consume the whole chunk (`bytesWritten` ignored) | partial-write regression |
+| **M60** | Zero/impossible write progress treated as success and skipped past | zero-progress regressions |
+| **M61** | Failing success-path `close()` swallowed, probe runs anyway | close-failure regression |
+| **M62** | Acquired canonical body abandoned uncancelled when the local open fails | open-failure-after-GET regression |
 
 ## Not done, on purpose
 

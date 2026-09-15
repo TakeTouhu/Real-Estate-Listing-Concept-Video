@@ -37,6 +37,17 @@ change, and **no change to the meaning of `OUTPUT_VERIFIED`**.
   file is always named `input` (no org, attempt, key or provider data in any path
   component), created exclusively with mode `0600`, and removed with its
   directory on every exit path.
+
+  The canonical object is not merely *hashed while being copied*: every chunk
+  must be **completely materialized locally**, and the file must **close
+  successfully**, before the inspector may look at it — so the bytes admitted to
+  the probe, the bytes on disk, and the bytes hashed and counted are provably the
+  same. Short writes are honoured in a loop and count only once fully landed;
+  zero, negative, fractional or more-than-remaining write progress ends the copy
+  as `RETRYABLE_FAILURE` rather than spinning; a failing `close()` is
+  `RETRYABLE_FAILURE` with no probe, never `INVALID_MEDIA`; and a canonical body
+  already acquired from `GetObject` is cancelled exactly once if the local open
+  fails. No OS-level error text escapes any of these paths.
 - **`FfprobeMediaProbe`** (`@app/storage`) — a concrete dormant inspector behind
   an injected process seam. `execFile` with `shell: false` and a fixed argument
   vector; the only variable argument is the application-created path. Validated
