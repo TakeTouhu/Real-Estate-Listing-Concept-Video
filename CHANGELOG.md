@@ -48,6 +48,27 @@ change, and **no change to the meaning of `OUTPUT_VERIFIED`**.
   `RETRYABLE_FAILURE` with no probe, never `INVALID_MEDIA`; and a canonical body
   already acquired from `GetObject` is cancelled exactly once if the local open
   fails. No OS-level error text escapes any of these paths.
+
+  A **usable** video stream means `codec_type === "video"` *without*
+  `disposition.attached_pic`: ffprobe reports embedded cover art as a video
+  stream with plausible dimensions, so an audio-only M4A or podcast with album
+  art would otherwise be certified as a property walkthrough. Artwork never
+  counts toward `videoStreamCount`, never becomes primary, and never supplies the
+  duration fallback; a real video that also carries artwork stays valid.
+
+  A clean end-of-stream at **zero bytes**, after a successful open and close, is
+  now `INTEGRITY_MISMATCH` rather than `RETRYABLE_FAILURE`: a well-formed receipt
+  always carries a positive size, so this is a successful determination that the
+  canonical object is not what was published, not a failure to read it.
+  Acquisition failures remain retryable.
+
+  Host and process failures are no longer fabricated into a child exit status.
+  `error.code` is overloaded — a number is a real exit status, a string is a
+  system error — so only a genuine numeric status becomes `EXITED`. `EMFILE`,
+  `ENOMEM`, other system codes, a signal we did not send, and unreadable error
+  properties become a new `TRANSIENT_FAILURE` outcome mapped to
+  `RETRYABLE_FAILURE`: the binary may be perfectly valid and the video perfectly
+  fine, so neither `PROBE_REJECTED` nor `PROBE_PROGRAM_UNAVAILABLE` is honest.
 - **`FfprobeMediaProbe`** (`@app/storage`) — a concrete dormant inspector behind
   an injected process seam. `execFile` with `shell: false` and a fixed argument
   vector; the only variable argument is the application-created path. Validated

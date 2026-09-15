@@ -220,14 +220,6 @@ describe("storage and materialization failures are retryable, never media verdic
     expect(JSON.stringify(outcome)).not.toContain("GetFailed");
   });
 
-  it("returns RETRYABLE_FAILURE for a zero-byte canonical object", async () => {
-    const h = harness(new Uint8Array(0));
-    expect(
-      await h.validator.validate({ destinationKey: KEY, expectedReceipt: receiptFor(bytes(1)) }),
-    ).toEqual({ kind: "RETRYABLE_FAILURE" });
-    expect(h.runner.runs).toHaveLength(0);
-  });
-
   it("returns RETRYABLE_FAILURE when the actual object exceeds the ceiling, never probing it", async () => {
     const data = new Uint8Array(200).fill(3);
     const h = harness(data, { maxBytes: 64, readBack: { contentLengthOverride: null, chunkSize: 16 } });
@@ -433,6 +425,93 @@ class RecordingReader implements S3ManagedObjectReader {
     };
   }
 }
+
+describe("an observed zero-byte canonical object is a mismatch, not a retry", () => {
+  /**
+   * The distinction this suite exists to hold: "we could not determine the
+   * bytes" is retryable, "we determined the bytes and they are wrong" is not.
+   * A clean EOF at zero bytes is the second kind of answer.
+   */
+  it("returns INTEGRITY_MISMATCH when the canonical object is cleanly empty", async () => {
+    const tempFiles = new FakeManagedOutputTempFiles();
+    const counting = countingProbe();
+    const h = harness(new Uint8Array(0), { tempFiles, probe: counting.probe });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(bytes(1, 2, 3)),
+    });
+
+    expect(outcome).toEqual({ kind: "INTEGRITY_MISMATCH" });
+    // Not a retry: a worker must not spin against a replacement that can never
+    // match a positive receipt.
+    expect(outcome).not.toEqual({ kind: "RETRYABLE_FAILURE" });
+    // The local file was opened and closed successfully; the read simply ended.
+    expect(tempFiles.openedPaths).toHaveLength(1);
+    expect(tempFiles.writes).toHaveLength(0);
+    expect(tempFiles.closeCalls).toBe(1);
+    // The inspector never saw an empty file.
+    expect(counting.calls()).toBe(0);
+    // Everything materialized was still removed.
+    const path = tempFiles.openedPaths[0] ?? "";
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(dirname(path))).toBe(false);
+  });
+
+  it("releases the canonical body exactly once on the zero-byte path", async () => {
+    const world = createFakeS3World();
+    world.canonical.set(KEY, new Uint8Array(0));
+    const reader = new RecordingReader(new FakeS3MultipartClient({ world }));
+    const counting = countingProbe();
+    const h = harness(new Uint8Array(0), { reader, probe: counting.probe });
+
+    expect(
+      await h.validator.validate({ destinationKey: KEY, expectedReceipt: receiptFor(bytes(1)) }),
+    ).toEqual({ kind: "INTEGRITY_MISMATCH" });
+    // One read returning EOF, then exactly one release.
+    expect(reader.readCalls).toBe(1);
+    expect(reader.cancelCalls).toBe(1);
+    expect(counting.calls()).toBe(0);
+  });
+
+  it.each([
+    ["the GET rejects", { getRejects: true }],
+    ["the body is absent", { noBody: true }],
+    ["the read is interrupted mid-stream", { rejectReadAfter: 1, chunkSize: 2 }],
+  ])("still returns RETRYABLE_FAILURE when %s — acquisition failed", async (_l, readBack) => {
+    // The contrast case: no bytes were successfully determined at all, so the
+    // answer is "try again", not "the object is wrong".
+    const data = bytes(1, 2, 3, 4, 5, 6);
+    const counting = countingProbe();
+    const h = harness(data, { readBack, probe: counting.probe });
+
+    const outcome = await h.validator.validate({
+      destinationKey: KEY,
+      expectedReceipt: receiptFor(data),
+    });
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(outcome).not.toEqual({ kind: "INTEGRITY_MISMATCH" });
+    expect(counting.calls()).toBe(0);
+  });
+
+  it("does not let a zero-byte read satisfy a receipt by accident", async () => {
+    // Even the empty digest paired with a positive size must fail: the size
+    // comparison alone is decisive, and no zero-byte receipt type exists.
+    const emptySha = sha256Of(new Uint8Array(0));
+    const h = harness(new Uint8Array(0));
+    const wrong: ManagedOutputVerificationReceipt = {
+      sha256: sha256Digest(emptySha),
+      sizeBytes: safePositiveByteCount(1),
+    };
+    expect(await h.validator.validate({ destinationKey: KEY, expectedReceipt: wrong })).toEqual({
+      kind: "INTEGRITY_MISMATCH",
+    });
+    expect(h.runner.runs).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 
 describe("local materialization is complete before anything is inspected", () => {
   it("writes a canonical chunk across as many writes as the file accepts", async () => {

@@ -1061,11 +1061,21 @@ and ADR-0020.
   impossible write progress ends the copy as `RETRYABLE_FAILURE` instead of
   spinning, a failing close is retryable rather than `INVALID_MEDIA`, and a body
   already acquired from `GetObject` is cancelled exactly once if the local open
-  fails. `FfprobeMediaProbe` invokes `ffprobe` through `execFile` with
+  fails. A clean end-of-stream at zero bytes is `INTEGRITY_MISMATCH`, not a
+  retry: a well-formed receipt carries a positive size, so this is a successful
+  determination that the object is not what was published. A "video stream" means
+  a *usable* one — `codec_type === "video"` without `disposition.attached_pic` —
+  so an audio-only file with embedded cover art is `VIDEO_STREAM_MISSING` rather
+  than valid, while a real video that also carries artwork stays valid.
+  `FfprobeMediaProbe` invokes `ffprobe` through `execFile` with
   `shell: false` and a fixed argument vector whose only variable element is that
-  path, under a validated timeout and stdout cap, discarding stderr; a non-zero
-  exit is `PROBE_REJECTED`, a timeout is retryable, and an unlaunchable binary is
-  a configuration defect rather than a claim the video is broken. Audio is
+  path, under a validated timeout and stdout cap, discarding stderr; a *real
+  numeric* non-zero exit is `PROBE_REJECTED`, a timeout is retryable, and an
+  unlaunchable binary is a configuration defect rather than a claim the video is
+  broken. No exit status is fabricated: `EMFILE`, `ENOMEM`, other system codes,
+  an unsent signal and unreadable error properties become a `TRANSIENT_FAILURE`
+  the probe maps to retryable, because the host being briefly unable to run the
+  inspector says nothing about either the binary or the video. Audio is
   optional, no codec is required, and the recorded dimensions are deliberately not
   compared against `targetOutputResolution`. **`OUTPUT_VERIFIED` is unchanged** —
   it still means byte-level integrity only — and no durable state, media column,

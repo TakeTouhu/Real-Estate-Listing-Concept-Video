@@ -57,14 +57,25 @@ export interface ProcessRunInput {
 /**
  * What running the inspector concluded, before any interpretation.
  *
- * `LAUNCH_FAILED` is deliberately distinct from a non-zero exit: one means the
- * binary is missing or unusable, the other means it ran and refused the file.
+ * Four distinct things can go wrong, and collapsing any two of them would put a
+ * false statement in front of a customer:
+ *
+ * - `EXITED` — the program ran and returned a real exit status. Only here can a
+ *   non-zero code be read as evidence about the *file*.
+ * - `LAUNCH_FAILED` — the binary is missing or unusable: a *deployment* defect.
+ * - `OUTPUT_TOO_LARGE` — it overran the configured stdout ceiling.
+ * - `TIMED_OUT` — it exceeded the configured timeout.
+ * - `TRANSIENT_FAILURE` — the *host* could not run it this time: `EMFILE`,
+ *   `ENOMEM`, an abnormal signal, any other non-numeric system failure. The
+ *   binary may be perfectly fine and the file may be perfectly valid, so this is
+ *   neither `LAUNCH_FAILED` nor evidence of invalid media — it is retryable.
  */
 export type ProcessRunOutcome =
   | { readonly kind: "EXITED"; readonly exitCode: number; readonly stdout: string }
   | { readonly kind: "TIMED_OUT" }
   | { readonly kind: "OUTPUT_TOO_LARGE" }
-  | { readonly kind: "LAUNCH_FAILED" };
+  | { readonly kind: "LAUNCH_FAILED" }
+  | { readonly kind: "TRANSIENT_FAILURE" };
 
 export interface ProcessRunner {
   run(input: ProcessRunInput): Promise<ProcessRunOutcome>;
@@ -171,6 +182,40 @@ function positiveSafeInteger(value: unknown): number | null {
 }
 
 /**
+ * Whether a stream is an embedded attached picture (cover art), not video.
+ *
+ * ffprobe reports cover art inside an MP4-family container as a stream whose
+ * `codec_type` is `"video"` with `disposition.attached_pic` set — a single
+ * still image, typically with perfectly plausible width and height. An
+ * audio-only podcast or M4A with album art therefore *looks* like it has a
+ * video stream, which is exactly the confusion this rules out. The numeric
+ * string form is accepted alongside the number because the value is JSON from
+ * an external tool; excluding artwork more eagerly can never reject a real
+ * video stream.
+ */
+function isAttachedPicture(stream: Record<string, unknown>): boolean {
+  if (!isRecord(stream.disposition)) return false;
+  const attached: unknown = stream.disposition.attached_pic;
+  return attached === 1 || attached === "1";
+}
+
+/**
+ * Whether a stream is a *usable* video stream: real moving pictures.
+ *
+ * "Video stream" throughout this policy means this, not merely
+ * `codec_type === "video"`. Attached artwork is not the customer's video, so it
+ * never counts toward `videoStreamCount`, never becomes the primary video
+ * stream, and never supplies the duration fallback. A file that carries artwork
+ * *in addition to* a real video stream stays valid — the artwork is skipped,
+ * not held against it.
+ */
+export function isUsableVideoStream(stream: unknown): boolean {
+  if (!isRecord(stream)) return false;
+  if (stream.codec_type !== "video") return false;
+  return !isAttachedPicture(stream);
+}
+
+/**
  * Whether the reported `format_name` names an MP4-family container.
  *
  * ffprobe reports a comma-separated candidate list; any ISO-BMFF member is
@@ -209,9 +254,11 @@ export function interpretFfprobeDocument(
     ? rawStreams.filter(isRecord)
     : [];
 
-  // Primary video stream determinism: the first stream ffprobe lists whose
-  // codec_type is "video", regardless of how many other streams are present.
-  const videoStreams = streams.filter((s) => s.codec_type === "video");
+  // Primary video stream determinism: the first *usable* video stream ffprobe
+  // lists — attached artwork is skipped, so an audio-only file with cover art
+  // has no video stream at all, and a real video that also carries artwork
+  // still selects the real one regardless of listing order.
+  const videoStreams = streams.filter(isUsableVideoStream);
   const audioStreams = streams.filter((s) => s.codec_type === "audio");
   const primaryVideo = videoStreams[0];
   if (primaryVideo === undefined) {
@@ -284,6 +331,10 @@ export class FfprobeMediaProbe implements ManagedOutputMediaProbe {
       case "TIMED_OUT":
         // Neither a statement about the file nor about the deployment.
         return { kind: "RETRYABLE" };
+      case "TRANSIENT_FAILURE":
+        // The host could not run the inspector this time. The binary may be
+        // fine and the video may be fine; nothing here justifies either verdict.
+        return { kind: "RETRYABLE" };
       case "LAUNCH_FAILED":
         // The binary is missing or unusable: a deployment defect, never a claim
         // that the customer's video is invalid.
@@ -317,6 +368,67 @@ export class FfprobeMediaProbe implements ManagedOutputMediaProbe {
 }
 
 /**
+ * Classify a failed `execFile` callback into the closed process outcome.
+ *
+ * Exported so the classification can be proven exhaustively against synthetic
+ * error objects — no subprocess, no `ffprobe` binary, no host conditions to
+ * reproduce. It is the whole of the runner's judgement; the runner itself only
+ * launches and forwards.
+ *
+ * ## An exit status is never fabricated
+ *
+ * `error.code` is overloaded: a *number* is the child's real exit status, while
+ * a *string* is a Node/libuv system error that means the child never got that
+ * far. Defaulting the string case to exit 1 — as this once did — invents a
+ * child exit status the operating system never produced, and a fabricated
+ * non-zero exit reads downstream as `PROBE_REJECTED`: "this customer's video is
+ * structurally unreadable". `EMFILE` and `ENOMEM` say nothing whatsoever about
+ * the video, so only a genuine numeric status may become `EXITED`; everything
+ * unrecognized is a transient host failure.
+ *
+ * Every property is read once inside one guard: a hostile or unusual error
+ * object must not escape, and none of its text is ever surfaced.
+ */
+export function classifyProcessError(error: unknown, stdout: unknown): ProcessRunOutcome {
+  let code: unknown;
+  let killed: unknown;
+  let signal: unknown;
+  try {
+    code = (error as { code?: unknown }).code;
+    killed = (error as { killed?: unknown }).killed;
+    signal = (error as { signal?: unknown }).signal;
+  } catch {
+    // A throwing getter tells us nothing. Claiming the binary is unavailable
+    // would be a guess about the deployment; retry instead.
+    return { kind: "TRANSIENT_FAILURE" };
+  }
+
+  // The binary is missing or not executable: a deployment defect.
+  if (code === "ENOENT" || code === "EACCES") return { kind: "LAUNCH_FAILED" };
+  if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { kind: "OUTPUT_TOO_LARGE" };
+  // Our own configured timeout killed it.
+  if (killed === true) return { kind: "TIMED_OUT" };
+  // Terminated by a signal we did not send — OOM killer, operator, crash. The
+  // signal name itself never crosses this boundary.
+  if (typeof signal === "string" && signal.length > 0) return { kind: "TRANSIENT_FAILURE" };
+  // A real numeric exit status, and only that, is evidence about the file.
+  if (typeof code === "number" && Number.isSafeInteger(code)) {
+    return { kind: "EXITED", exitCode: code, stdout: safeStdout(stdout) };
+  }
+  // EMFILE, ENOMEM, any other system code, or nothing recognizable at all.
+  return { kind: "TRANSIENT_FAILURE" };
+}
+
+/** Coerce inspector stdout to a string without letting a hostile value throw. */
+function safeStdout(stdout: unknown): string {
+  try {
+    return typeof stdout === "string" ? stdout : String(stdout);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * The default process runner, backed by `execFile` with `shell: false`.
  *
  * Provided so a future wiring has a real implementation to inject; constructed
@@ -339,40 +451,11 @@ export function createDefaultProcessRunner(): ProcessRunner {
             windowsHide: true,
           },
           (error, stdout) => {
-            if (error === null) {
-              resolve({ kind: "EXITED", exitCode: 0, stdout: String(stdout) });
-              return;
-            }
-            // Every property read below is guarded: a hostile or unusual error
-            // object must not escape, and none of its text is ever surfaced.
-            let code: unknown;
-            let killed: unknown;
-            let exitCode: unknown;
-            try {
-              code = (error as { code?: unknown }).code;
-              killed = (error as { killed?: unknown }).killed;
-              exitCode = (error as { code?: unknown }).code;
-            } catch {
-              resolve({ kind: "LAUNCH_FAILED" });
-              return;
-            }
-            if (code === "ENOENT" || code === "EACCES") {
-              resolve({ kind: "LAUNCH_FAILED" });
-              return;
-            }
-            if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-              resolve({ kind: "OUTPUT_TOO_LARGE" });
-              return;
-            }
-            if (killed === true) {
-              resolve({ kind: "TIMED_OUT" });
-              return;
-            }
-            resolve({
-              kind: "EXITED",
-              exitCode: typeof exitCode === "number" ? exitCode : 1,
-              stdout: String(stdout),
-            });
+            resolve(
+              error === null
+                ? { kind: "EXITED", exitCode: 0, stdout: safeStdout(stdout) }
+                : classifyProcessError(error, stdout),
+            );
           },
         );
       });

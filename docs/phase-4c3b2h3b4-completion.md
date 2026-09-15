@@ -50,6 +50,7 @@ codec prose.
 | Rule | How it is held |
 | --- | --- |
 | Integrity before inspection | The object is streamed, hashed and counted; only a matching SHA-256 **and** byte count admits the probe. Mismatch → `INTEGRITY_MISMATCH`, probe never called |
+| Observed emptiness is a mismatch | A clean EOF at zero bytes, after a successful open and close, is a successful determination that the object is empty. A well-formed receipt always carries a positive size, so the ordinary comparison rejects it as `INTEGRITY_MISMATCH` — not `RETRYABLE_FAILURE`, which would retry forever against a replacement that can never match. No zero-byte receipt type is invented. Acquisition failures (rejected GET, absent body, interrupted read, failed write, failed close) stay retryable |
 | Actual bytes are authoritative | `Content-Length` is a preflight ceiling only; a misleading smaller or larger value does not change the verdict; ETag and metadata are never consulted |
 | Ceiling reused | `MAX_MANAGED_PROVIDER_OUTPUT_BYTES`; an over-limit object never reaches the inspector |
 | No whole-object buffering | Streamed chunk-by-chunk to a file; static test bans `transformToByteArray` / `.arrayBuffer` / `Buffer.concat` / `readFile` / chunk arrays |
@@ -94,15 +95,25 @@ bytes admitted to the probe
 | Fixed argument vector | `-v error -of json -show_format -show_streams <app-created-path>`; the path is the only variable argument |
 | Nothing tenant-shaped on the command line | Asserted: no bucket, key, `s3://`, `org/`, `generations/`, fal host, signature or `.mp4` |
 | Bounded | Validated timeout (default 15s, ceiling 120s) and stdout cap (default 1 MiB, ceiling 8 MiB); stderr discarded |
-| Availability ≠ invalidity | non-zero exit → `PROBE_REJECTED`; timeout → `RETRYABLE_FAILURE`; unlaunchable → fixed configuration defect |
-| No raw output escapes | Malformed JSON and oversized output become fixed defects carrying none of the text |
+| Availability ≠ invalidity | real numeric non-zero exit → `PROBE_REJECTED`; timeout → `RETRYABLE_FAILURE`; `ENOENT`/`EACCES` → fixed configuration defect; host failure → `RETRYABLE_FAILURE` |
+| No exit status is fabricated | `error.code` is overloaded — a number is a real child exit status, a string is a system error. Only a genuine numeric status becomes `EXITED`. `EMFILE`, `ENOMEM`, other system codes, a signal we did not send, and unreadable error properties all become `TRANSIENT_FAILURE` → `RETRYABLE`, never `PROBE_REJECTED` and never `PROBE_PROGRAM_UNAVAILABLE` |
+| No raw output escapes | Malformed JSON and oversized output become fixed defects carrying none of the text; no signal name, system code or error message crosses the boundary |
+| Classification is provable without a binary | `classifyProcessError` is a pure function driven by synthetic error objects — no subprocess, no `ffprobe`, no host condition to reproduce |
 
 ## Media policy
 
 - MP4-family container required, read from the reported format list — **never** a
   filename or extension (the canonical key is extensionless).
-- At least one video stream; the first listed video stream is primary,
-  deterministically, however many other streams exist.
+- At least one **usable** video stream. `codec_type === "video"` is necessary but
+  not sufficient: ffprobe reports embedded cover art as a video stream carrying
+  `disposition.attached_pic`, usually with perfectly plausible dimensions.
+  Embedded artwork is not customer video, so an audio-only M4A or podcast with
+  album art and a positive container duration is `VIDEO_STREAM_MISSING`, not
+  `VALID`. Attached pictures never count toward `videoStreamCount`, never become
+  primary, and never supply the duration fallback; a real video that also carries
+  artwork stays valid.
+- The first listed **usable** video stream is primary, deterministically, however
+  many other streams exist and in whatever order they are listed.
 - Positive safe-integer width and height (numeric strings accepted, as ffprobe
   emits them).
 - Positive finite duration → positive safe-integer milliseconds; container
@@ -148,9 +159,9 @@ no change to `OUTPUT_VERIFIED`.**
 
 ## Mutation ledger
 
-**63 mutations, 63 killed, no survivors.** M01–M48 carry forward unchanged;
-M49–M58 added by this phase, and M59–M62 by the local-materialization
-integrity correction:
+**66 mutations, 66 killed, no survivors.** M01–M48 carry forward unchanged;
+M49–M58 added by this phase, M59–M62 by the local-materialization integrity
+correction, and M63–M65 by the media-verdict correctness correction:
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -168,6 +179,9 @@ integrity correction:
 | **M60** | Zero/impossible write progress treated as success and skipped past | zero-progress regressions |
 | **M61** | Failing success-path `close()` swallowed, probe runs anyway | close-failure regression |
 | **M62** | Acquired canonical body abandoned uncancelled when the local open fails | open-failure-after-GET regression |
+| **M63** | Embedded cover art counted as a usable video stream | attached-artwork regressions |
+| **M64** | Cleanly observed zero-byte canonical object reported as retryable | zero-byte integrity regressions |
+| **M65** | Non-numeric system/process failure fabricated into child exit 1 | process-classification regressions |
 
 ## Not done, on purpose
 

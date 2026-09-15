@@ -51,6 +51,27 @@ The **actual streamed bytes are authoritative**. `Content-Length` is a preflight
 ceiling only, an ETag is never an application hash, and custom S3 metadata is
 never trusted — exactly as in ADR-0043.
 
+### A cleanly observed empty object is a mismatch, not a retry
+
+If the canonical read succeeds, the local file opens and closes successfully, and
+the stream ends cleanly at **zero bytes**, that is not a failure to determine the
+bytes — it is a successful determination that the object is empty. A well-formed
+expected receipt always carries a positive size, so the ordinary receipt
+comparison rejects it as `INTEGRITY_MISMATCH`, and the inspector never runs. No
+zero-byte receipt type is invented for this; the positive-size comparison is
+sufficient on its own.
+
+Calling that retryable would conflate two different answers:
+
+```text
+"could not determine the bytes"                    → RETRYABLE_FAILURE
+"determined the bytes, and they are not ours"      → INTEGRITY_MISMATCH
+```
+
+and would leave a worker retrying forever against a replacement object that can
+never match. Acquisition failures stay retryable exactly as before: a rejected
+GET, an absent body, an interrupted read, a failed local write, a failed close.
+
 ## Decision 3 — Why S3 metadata, `Content-Type` and file extensions are insufficient
 
 The canonical key is extensionless by design (Phase 2H-1), so there is no suffix
@@ -158,15 +179,35 @@ captured into anything that could be surfaced.
 
 ### Availability is not invalidity
 
-Three different things are deliberately not conflated:
+Four different things are deliberately not conflated:
 
 ```text
 runs and exits non-zero  → INVALID_MEDIA / PROBE_REJECTED   (about the file)
 times out                → RETRYABLE_FAILURE                 (about neither)
 cannot be launched       → fixed configuration defect        (about the deployment)
+host cannot run it now   → RETRYABLE_FAILURE                 (about the machine)
 ```
 
 A missing or unusable binary must never be reported as a customer's broken video.
+
+### An exit status is never fabricated
+
+`error.code` from `execFile` is overloaded: a **number** is the child's real exit
+status, a **string** is a Node/libuv system error meaning the child never got
+that far. Defaulting the string case to exit `1` invents a status the operating
+system never produced — and a fabricated non-zero exit reads downstream as
+`PROBE_REJECTED`, telling a customer their video is structurally unreadable
+because the *host* momentarily ran out of file descriptors.
+
+So only a genuine numeric status becomes `EXITED`. `EMFILE`, `ENOMEM`, any other
+system code, an abnormal signal we did not send, and an error object whose
+properties cannot even be read all become `TRANSIENT_FAILURE`, which the probe
+maps to `RETRYABLE`. These are explicitly **not** `LAUNCH_FAILED`: the binary may
+be perfectly valid and the host simply unable to execute it this moment, so the
+answer is "try again", not "fix the deployment". Every property is read once
+inside a guard, and no signal name, system code or error text crosses the
+boundary. The classification is a pure function, so it is proven against
+synthetic error objects with no subprocess and no `ffprobe` binary.
 Every property read from a caught process error is guarded, and no external
 message is ever propagated.
 
@@ -181,12 +222,24 @@ filename, temp path, bucket, key, AWS metadata, command string or process output
 Policy notes:
 
 - **Container** comes from the reported format list, never a filename.
-- **Primary video** is the first stream ffprobe lists whose `codec_type` is
-  `video`, deterministically, however many other streams exist.
+- **"Video stream" means a *usable* video stream.** `codec_type === "video"` is
+  necessary but not sufficient: ffprobe reports embedded cover art as a video
+  stream carrying `disposition.attached_pic`, typically with perfectly plausible
+  width and height. Embedded artwork is not the customer's video. An audio-only
+  M4A or podcast with album art and a positive container duration must therefore
+  be `VIDEO_STREAM_MISSING`, not `VALID` — otherwise the pipeline would certify a
+  still image with a soundtrack as a property walkthrough. Attached pictures
+  never count toward `videoStreamCount`, never become the primary video stream,
+  and never supply the duration fallback. A real video that *also* carries
+  artwork stays valid: the artwork is skipped, not held against it.
+- **Primary video** is the first *usable* video stream ffprobe lists,
+  deterministically, however many other streams exist and in whatever order.
 - **Duration** prefers the container's own duration; a primary-video-stream
   duration is an accepted, documented fallback, because a valid MP4 can carry
   duration on the track when the format entry is absent. Zero, negative, NaN,
-  Infinity, malformed and absent durations are all invalid.
+  Infinity, malformed and absent durations are all invalid. Because the fallback
+  reads the *primary usable* stream, an attached picture's duration can never
+  stand in for a real one.
 - **Audio is optional.** `audioStreamCount` may be `0`; a generated walkthrough
   with no audio track is valid media, and requiring audio would encode a product
   rule this phase has no authority to make.

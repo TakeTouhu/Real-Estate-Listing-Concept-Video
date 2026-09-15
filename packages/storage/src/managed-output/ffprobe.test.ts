@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import { ISO_BMFF_CONTAINER } from "@app/domain";
 import {
+  attachedPictureStream,
   audioStream,
   exitedWith,
   FakeProcessRunner,
@@ -18,9 +19,11 @@ import {
   FfprobeMediaProbe,
   MAX_PROBE_STDOUT_BYTES,
   MAX_PROBE_TIMEOUT_MS,
+  classifyProcessError,
   ffprobeArgsFor,
   interpretFfprobeDocument,
   isIsoBmffFormatName,
+  isUsableVideoStream,
   validateProbeMaxStdoutBytes,
   validateProbeTimeoutMs,
 } from "./ffprobe";
@@ -318,6 +321,252 @@ describe("stream and duration policy", () => {
       });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+
+describe("embedded artwork is not the customer's video", () => {
+  it("recognizes a usable video stream and rejects attached artwork", () => {
+    expect(isUsableVideoStream(videoStream(1920, 1080))).toBe(true);
+    expect(isUsableVideoStream(attachedPictureStream())).toBe(false);
+    // The numeric-string form external JSON may carry is excluded too.
+    expect(
+      isUsableVideoStream({ codec_type: "video", width: 8, height: 8, disposition: { attached_pic: "1" } }),
+    ).toBe(false);
+    // A disposition that merely exists, or says 0, does not exclude anything.
+    expect(
+      isUsableVideoStream({ codec_type: "video", width: 8, height: 8, disposition: { attached_pic: 0 } }),
+    ).toBe(true);
+    expect(isUsableVideoStream(audioStream())).toBe(false);
+    expect(isUsableVideoStream(null)).toBe(false);
+  });
+
+  it("refuses an audio-only file whose only 'video' stream is cover art", () => {
+    // An M4A podcast with album art: positive artwork dimensions and a positive
+    // container duration must not add up to a valid video.
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({ streams: [audioStream(), attachedPictureStream(1400, 1400)] }),
+    );
+    expect(result).toEqual({ kind: "INVALID", reason: "VIDEO_STREAM_MISSING" });
+  });
+
+  it("refuses a file carrying several attached pictures and no real video", () => {
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        streams: [
+          attachedPictureStream(1400, 1400),
+          audioStream(),
+          attachedPictureStream(600, 600),
+          attachedPictureStream(3000, 3000),
+        ],
+      }),
+    );
+    expect(result).toEqual({ kind: "INVALID", reason: "VIDEO_STREAM_MISSING" });
+  });
+
+  it("selects the real video stream even when artwork is listed first", () => {
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        streams: [audioStream(), attachedPictureStream(1400, 1400), videoStream(1920, 1080)],
+      }),
+    );
+    expect(result).toEqual({
+      kind: "FACTS",
+      facts: {
+        container: ISO_BMFF_CONTAINER,
+        durationMs: 8500,
+        // The real video's dimensions, not the artwork's.
+        videoWidth: 1920,
+        videoHeight: 1080,
+        videoStreamCount: 1,
+        audioStreamCount: 1,
+      },
+    });
+  });
+
+  it("counts only usable video streams, never artwork", () => {
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        streams: [
+          videoStream(1920, 1080),
+          attachedPictureStream(),
+          videoStream(640, 360),
+          attachedPictureStream(),
+          audioStream(),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "FACTS",
+      facts: { videoStreamCount: 2, audioStreamCount: 1, videoWidth: 1920, videoHeight: 1080 },
+    });
+  });
+
+  it("never takes the duration fallback from an attached picture", () => {
+    // No container duration at all. The artwork carries a plausible one; the
+    // real video does not. Falling back to the artwork would invent a duration.
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        formatDuration: null,
+        streams: [
+          attachedPictureStream(1400, 1400, { duration: "12.000000" }),
+          videoStream(1920, 1080),
+        ],
+      }),
+    );
+    expect(result).toEqual({ kind: "INVALID", reason: "DURATION_INVALID" });
+  });
+
+  it("still takes the documented fallback from the real video stream", () => {
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        formatDuration: null,
+        streams: [
+          attachedPictureStream(1400, 1400, { duration: "99.000000" }),
+          videoStream(1920, 1080, { duration: "4.250000" }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "FACTS", facts: { durationMs: 4250 } });
+  });
+
+  it("judges dimensions on the real video, not on artwork that happens to be valid", () => {
+    const result = interpretFfprobeDocument(
+      ffprobeDocument({
+        streams: [attachedPictureStream(1400, 1400), videoStream(0, undefined)],
+      }),
+    );
+    expect(result).toEqual({ kind: "INVALID", reason: "VIDEO_DIMENSIONS_INVALID" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The narrowest deterministic seam for the runner's judgement: the pure
+ * classification of one `execFile` callback error. No subprocess, no binary, no
+ * host condition to reproduce.
+ */
+describe("host and process failures are never fabricated into an exit status", () => {
+  function err(props: Record<string, unknown>): unknown {
+    return Object.assign(new Error("boom SECRET-DETAIL /tmp/SECRET/input"), props);
+  }
+
+  it("keeps a real numeric exit status as EXITED", () => {
+    expect(classifyProcessError(err({ code: 1 }), "partial")).toEqual({
+      kind: "EXITED",
+      exitCode: 1,
+      stdout: "partial",
+    });
+    expect(classifyProcessError(err({ code: 69 }), "")).toMatchObject({
+      kind: "EXITED",
+      exitCode: 69,
+    });
+  });
+
+  it.each([
+    ["ENOENT", "LAUNCH_FAILED"],
+    ["EACCES", "LAUNCH_FAILED"],
+    ["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "OUTPUT_TOO_LARGE"],
+    ["EMFILE", "TRANSIENT_FAILURE"],
+    ["ENOMEM", "TRANSIENT_FAILURE"],
+    ["EAGAIN", "TRANSIENT_FAILURE"],
+    ["ESOMETHINGUNKNOWN", "TRANSIENT_FAILURE"],
+  ])("classifies system code %s as %s", (code, expected) => {
+    expect(classifyProcessError(err({ code }), "")).toMatchObject({ kind: expected });
+  });
+
+  it("keeps our own configured timeout as TIMED_OUT", () => {
+    // Node marks a timeout kill with killed: true and a signal.
+    expect(classifyProcessError(err({ killed: true, signal: "SIGTERM" }), "")).toEqual({
+      kind: "TIMED_OUT",
+    });
+  });
+
+  it("classifies a signal we did not send as a transient host failure", () => {
+    // The OOM killer, an operator, or a crash — not a verdict about the video.
+    expect(classifyProcessError(err({ killed: false, signal: "SIGKILL" }), "")).toEqual({
+      kind: "TRANSIENT_FAILURE",
+    });
+    expect(classifyProcessError(err({ signal: "SIGSEGV" }), "")).toEqual({
+      kind: "TRANSIENT_FAILURE",
+    });
+  });
+
+  it("does not invent exit 1 for an unrecognizable failure", () => {
+    for (const shape of [{}, { code: undefined }, { code: null }, { code: 1.5 }, { code: "1" }]) {
+      expect(classifyProcessError(err(shape), "")).toEqual({ kind: "TRANSIENT_FAILURE" });
+    }
+  });
+
+  it("survives hostile error properties without leaking them", () => {
+    const hostile = new Error("outer SECRET-DETAIL");
+    Object.defineProperty(hostile, "code", {
+      get() {
+        throw new Error("getter SECRET-DETAIL s3://bucket/key");
+      },
+    });
+    const outcome = classifyProcessError(hostile, "");
+    expect(outcome).toEqual({ kind: "TRANSIENT_FAILURE" });
+    expect(JSON.stringify(outcome)).not.toContain("SECRET-DETAIL");
+    expect(JSON.stringify(outcome)).not.toContain("s3://");
+  });
+
+  it("carries none of the error's own text into any outcome", () => {
+    for (const shape of [{ code: 1 }, { code: "ENOENT" }, { code: "EMFILE" }, { signal: "SIGKILL" }]) {
+      const text = JSON.stringify(classifyProcessError(err(shape), ""));
+      expect(text).not.toContain("SECRET-DETAIL");
+      expect(text).not.toContain("/tmp/SECRET");
+      expect(text).not.toContain("boom");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the probe maps every process outcome to the closed model", () => {
+  it.each([
+    ["a numeric non-zero exit", { code: 1 }, { kind: "INVALID", reason: "PROBE_REJECTED" }],
+    ["EMFILE", { code: "EMFILE" }, { kind: "RETRYABLE" }],
+    ["ENOMEM", { code: "ENOMEM" }, { kind: "RETRYABLE" }],
+    ["an unexpected signal", { killed: false, signal: "SIGKILL" }, { kind: "RETRYABLE" }],
+    ["an unknown non-numeric code", { code: "EWHATEVER" }, { kind: "RETRYABLE" }],
+    ["our configured timeout", { killed: true, signal: "SIGTERM" }, { kind: "RETRYABLE" }],
+  ])("maps %s through classification to the right verdict", async (_label, shape, expected) => {
+    const outcome = classifyProcessError(
+      Object.assign(new Error("boom SECRET-DETAIL"), shape),
+      "",
+    );
+    const runner = new FakeProcessRunner({ outcome });
+    const result = await probe(runner).probe(PATH);
+    expect(result).toEqual(expected);
+    expect(JSON.stringify(result)).not.toContain("SECRET-DETAIL");
+  });
+
+  it.each([
+    ["ENOENT", { code: "ENOENT" }],
+    ["EACCES", { code: "EACCES" }],
+  ])("keeps %s a fixed configuration defect, never invalid media", async (_label, shape) => {
+    const outcome = classifyProcessError(Object.assign(new Error("boom"), shape), "");
+    expect(outcome).toEqual({ kind: "LAUNCH_FAILED" });
+    const error = await rejection(probe(new FakeProcessRunner({ outcome })).probe(PATH));
+    expect((error as ManagedOutputMediaValidationDefect).code).toBe("PROBE_PROGRAM_UNAVAILABLE");
+  });
+
+  it("keeps the max-buffer error its own fixed defect", async () => {
+    const outcome = classifyProcessError(
+      Object.assign(new Error("boom"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
+      "",
+    );
+    expect(outcome).toEqual({ kind: "OUTPUT_TOO_LARGE" });
+    const error = await rejection(probe(new FakeProcessRunner({ outcome })).probe(PATH));
+    expect((error as ManagedOutputMediaValidationDefect).code).toBe("PROBE_OUTPUT_TOO_LARGE");
+  });
+
+  it("maps a transient host failure to RETRYABLE, never to a defect or a verdict", async () => {
+    const runner = new FakeProcessRunner({ outcome: { kind: "TRANSIENT_FAILURE" } });
+    expect(await probe(runner).probe(PATH)).toEqual({ kind: "RETRYABLE" });
+  });
 });
 
 // ---------------------------------------------------------------------------

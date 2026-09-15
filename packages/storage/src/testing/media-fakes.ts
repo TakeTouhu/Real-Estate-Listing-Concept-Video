@@ -140,6 +140,27 @@ export function audioStream(extra: Record<string, unknown> = {}): Record<string,
 }
 
 /**
+ * Embedded cover art as ffprobe reports it: `codec_type: "video"` with
+ * `disposition.attached_pic`, and perfectly plausible dimensions. This is what
+ * an audio-only M4A or podcast with album art looks like, and it must never be
+ * mistaken for the customer's video.
+ */
+export function attachedPictureStream(
+  width: unknown = 1400,
+  height: unknown = 1400,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...videoStream(width, height, extra),
+    disposition: { attached_pic: 1, ...(isRecord(extra.disposition) ? extra.disposition : {}) },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * Build an ffprobe-shaped document. Defaults describe a valid MP4-family file
  * with a single 1920×1080 video stream and no audio.
  */

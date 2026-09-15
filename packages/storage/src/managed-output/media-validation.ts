@@ -448,10 +448,15 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
     }
 
     await cancelQuietly(body);
-    // A zero-byte canonical object cannot match any positive receipt and is
-    // certainly not media.
-    if (total === 0) return { kind: "RETRYABLE" };
 
+    // A clean end-of-stream at zero bytes is *not* a failure to determine the
+    // bytes — it is a successful determination that the canonical object is
+    // empty. A well-formed expected receipt always carries a positive size, so
+    // that comparison is what rejects it, as INTEGRITY_MISMATCH: the object at
+    // the canonical key is not what was published. Reporting it as retryable
+    // would have a worker retry forever against a replacement that will never
+    // match, and would confuse "could not read the bytes" with "read the bytes,
+    // and they are wrong". No zero-byte receipt type is invented for this.
     return { kind: "OK", sha256: hash.digest("hex"), sizeBytes: total };
   }
 }
