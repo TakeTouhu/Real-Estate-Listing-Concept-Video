@@ -250,6 +250,43 @@ describe("no production composition", () => {
     }
   });
 
+  it("constructs the media validator and its ffprobe inspector nowhere in production", () => {
+    // Phase 2H-3B-4 adds two more concrete pieces — a managed-output media
+    // validator and an `ffprobe`-backed inspector. Both exist; neither is built,
+    // and no production code launches a subprocess to inspect managed output.
+    const VALIDATOR = "packages/storage/src/managed-output/media-validation.ts";
+    const PROBE = "packages/storage/src/managed-output/ffprobe.ts";
+    for (const { name, text } of productionSources()) {
+      if (name.endsWith("managed-output/index.ts")) continue;
+      if (name.endsWith("packages/storage/src/index.ts")) continue;
+      if (!name.endsWith(VALIDATOR)) {
+        for (const banned of ["new S3ManagedOutputMediaValidator", "S3ManagedOutputMediaValidator("]) {
+          expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+        }
+      }
+      if (!name.endsWith(PROBE)) {
+        for (const banned of ["new FfprobeMediaProbe", "FfprobeMediaProbe(", "createDefaultProcessRunner("]) {
+          expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+        }
+        // Only the dormant inspector may reference a child process at all.
+        for (const banned of ["node:child_process", "execFile", "spawn(", "ffprobe"]) {
+          expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+        }
+      }
+    }
+  });
+
+  it("never invokes the media inspector through a shell", () => {
+    // The one process invocation in the repository is `execFile` with the shell
+    // disabled and a fixed argument vector. No command string is ever built.
+    const probe = code(readFileSync(join(CORE_DIR, "ffprobe.ts"), "utf8"));
+    for (const banned of ["shell: true", "execSync", "spawnSync", "/bin/sh", "exec("]) {
+      expect(`${banned}: ${probe.includes(banned)}`).toBe(`${banned}: false`);
+    }
+    expect(probe.includes("shell: false")).toBe(true);
+    expect(probe.includes("execFile(")).toBe(true);
+  });
+
   it("constructs the fal byte source nowhere in production", () => {
     // Concrete but unconstructed: the adapter exists, and no production code
     // builds one. A future wiring PR that does gets the review it needs.
