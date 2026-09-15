@@ -9,5 +9,6 @@ export {
 export * from "./observation";
 export * from "./transfer";
 export * from "./byte-source";
+export * from "./media-validation";
 export * from "./ports";
 export * from "./runner";

@@ -1041,6 +1041,49 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-4** — see GitHub for its lifecycle. Adds a dormant,
+  provider-neutral managed-output **media/container validation** capability that
+  nothing calls. A domain port takes only a destination key and the receipt the
+  transfer computed and returns `unknown`, read back through a total,
+  materializing parser; the closed outcome model is `VALID` (normalized facts
+  only), `INVALID_MEDIA` (container unsupported, video stream missing, invalid
+  dimensions, invalid duration, probe rejected), `INTEGRITY_MISMATCH` and
+  `RETRYABLE_FAILURE`. `S3ManagedOutputMediaValidator` streams the canonical
+  object to a private temporary file while hashing and counting incrementally and
+  admits the inspector only when both the SHA-256 and the byte count match the
+  expected receipt — mismatching bytes are never probed; `Content-Length` is a
+  preflight ceiling only, the 512 MiB ceiling is reused, and the object is never
+  buffered whole. The temporary directory is random and application-owned, the
+  file is always `input` with mode `0600`, and it is removed with its directory on
+  every exit path. Every canonical chunk must be *completely* materialized
+  locally, and the file must close successfully, before the inspector may look at
+  it: short writes are honoured in a loop and count only once fully landed,
+  impossible write progress ends the copy as `RETRYABLE_FAILURE` instead of
+  spinning, a failing close is retryable rather than `INVALID_MEDIA`, and a body
+  already acquired from `GetObject` is cancelled exactly once if the local open
+  fails. A clean end-of-stream at zero bytes is `INTEGRITY_MISMATCH`, not a
+  retry: a well-formed receipt carries a positive size, so this is a successful
+  determination that the object is not what was published. A "video stream" means
+  a *usable* one — `codec_type === "video"` without `disposition.attached_pic` —
+  so an audio-only file with embedded cover art is `VIDEO_STREAM_MISSING` rather
+  than valid, while a real video that also carries artwork stays valid.
+  `FfprobeMediaProbe` invokes `ffprobe` through `execFile` with
+  `shell: false` and a fixed argument vector whose only variable element is that
+  path, under a validated timeout and stdout cap, discarding stderr; a *real
+  numeric* non-zero exit is `PROBE_REJECTED`, a timeout is retryable, and an
+  unlaunchable binary is a configuration defect rather than a claim the video is
+  broken. No exit status is fabricated: `EMFILE`, `ENOMEM`, other system codes,
+  an unsent signal and unreadable error properties become a `TRANSIENT_FAILURE`
+  the probe maps to retryable, because the host being briefly unable to run the
+  inspector says nothing about either the binary or the video. Audio is
+  optional, no codec is required, and the recorded dimensions are deliberately not
+  compared against `targetOutputResolution`. **`OUTPUT_VERIFIED` is unchanged** —
+  it still means byte-level integrity only — and no durable state, media column,
+  migration or runner integration is added; container inspection is explicitly not
+  a full-frame decode guarantee. Still dormant: nothing in production constructs
+  the validator or the inspector, no production subprocess exists, and CI needs no
+  ffmpeg binary. Detail in `docs/phase-4c3b2h3b4-completion.md` and ADR-0044.
+  Mutation ledger: 59 run, 59 killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-3** — see GitHub for its lifecycle. The first *concrete*
   durable `ManagedOutputStagingSink` (`S3ManagedOutputStagingSink`), completing
   the real provider-output data plane. It stages generated output as an S3

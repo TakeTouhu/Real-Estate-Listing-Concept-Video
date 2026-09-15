@@ -3,6 +3,102 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-4: Dormant managed-output media validation
+
+Detail in `docs/phase-4c3b2h3b4-completion.md` and ADR-0044. A provider-neutral
+media-validation capability that **nothing calls**; no migration, no schema
+change, and **no change to the meaning of `OUTPUT_VERIFIED`**.
+
+### Added
+
+- **`ManagedOutputMediaValidationPort`** (`@app/domain`) — asks whether the bytes
+  already published at a canonical key are *media*, a question deliberately
+  separate from whether they are the *right bytes*. It takes only a destination
+  key and the receipt the transfer computed; no provider URL, prediction id or
+  bucket crosses the boundary. Returns `unknown`, with a total, materializing
+  parser as the single authority: every property read once, under a guard, into a
+  fresh plain object, so hostile or stateful adapter values cannot surprise the
+  caller.
+- **A closed outcome model** — `VALID` (normalized facts only),
+  `INVALID_MEDIA` (`CONTAINER_UNSUPPORTED`, `VIDEO_STREAM_MISSING`,
+  `VIDEO_DIMENSIONS_INVALID`, `DURATION_INVALID`, `PROBE_REJECTED`),
+  `INTEGRITY_MISMATCH`, `RETRYABLE_FAILURE`. `VALID` carries exactly container
+  family, `durationMs`, video width/height and normalized video/audio stream
+  counts — no raw ffprobe JSON, filename, temp path, bucket, key, AWS metadata,
+  command string or process output. Audio is optional; no codec restriction; the
+  dimensions are facts, never compared against `targetOutputResolution`.
+- **`S3ManagedOutputMediaValidator`** (`@app/storage`) — streams the canonical
+  object to a private temporary file while hashing and counting incrementally,
+  and admits the inspector **only** when both the SHA-256 and the byte count
+  match the expected receipt; otherwise `INTEGRITY_MISMATCH`, with the inspector
+  never invoked. `Content-Length` is a preflight ceiling only, the
+  `MAX_MANAGED_PROVIDER_OUTPUT_BYTES` ceiling is reused, and the object is never
+  buffered whole. The temporary directory is random and application-owned, the
+  file is always named `input` (no org, attempt, key or provider data in any path
+  component), created exclusively with mode `0600`, and removed with its
+  directory on every exit path.
+
+  The canonical object is not merely *hashed while being copied*: every chunk
+  must be **completely materialized locally**, and the file must **close
+  successfully**, before the inspector may look at it — so the bytes admitted to
+  the probe, the bytes on disk, and the bytes hashed and counted are provably the
+  same. Short writes are honoured in a loop and count only once fully landed;
+  zero, negative, fractional or more-than-remaining write progress ends the copy
+  as `RETRYABLE_FAILURE` rather than spinning; a failing `close()` is
+  `RETRYABLE_FAILURE` with no probe, never `INVALID_MEDIA`; and a canonical body
+  already acquired from `GetObject` is cancelled exactly once if the local open
+  fails. No OS-level error text escapes any of these paths.
+
+  A **usable** video stream means `codec_type === "video"` *without*
+  `disposition.attached_pic`: ffprobe reports embedded cover art as a video
+  stream with plausible dimensions, so an audio-only M4A or podcast with album
+  art would otherwise be certified as a property walkthrough. Artwork never
+  counts toward `videoStreamCount`, never becomes primary, and never supplies the
+  duration fallback; a real video that also carries artwork stays valid.
+
+  A clean end-of-stream at **zero bytes**, after a successful open and close, is
+  now `INTEGRITY_MISMATCH` rather than `RETRYABLE_FAILURE`: a well-formed receipt
+  always carries a positive size, so this is a successful determination that the
+  canonical object is not what was published, not a failure to read it.
+  Acquisition failures remain retryable.
+
+  Host and process failures are no longer fabricated into a child exit status.
+  `error.code` is overloaded — a number is a real exit status, a string is a
+  system error — so only a genuine numeric status becomes `EXITED`. `EMFILE`,
+  `ENOMEM`, other system codes, a signal we did not send, and unreadable error
+  properties become a new `TRANSIENT_FAILURE` outcome mapped to
+  `RETRYABLE_FAILURE`: the binary may be perfectly valid and the video perfectly
+  fine, so neither `PROBE_REJECTED` nor `PROBE_PROGRAM_UNAVAILABLE` is honest.
+- **`FfprobeMediaProbe`** (`@app/storage`) — a concrete dormant inspector behind
+  an injected process seam. `execFile` with `shell: false` and a fixed argument
+  vector; the only variable argument is the application-created path. Validated
+  timeout (default 15s) and stdout cap (default 1 MiB); stderr discarded. A
+  non-zero exit is `PROBE_REJECTED`, a timeout is retryable, and an unlaunchable
+  binary is a fixed configuration defect — never a claim the video is broken.
+  Raw output never escapes: malformed JSON and oversized output become fixed
+  defects carrying none of the text.
+
+### Changed
+
+- The dormancy static suite asserts the new truth: the media validator and its
+  inspector exist but are constructed nowhere, and only the dormant inspector may
+  reference a child process at all.
+
+### Unchanged, deliberately
+
+- `OUTPUT_VERIFIED` still means "canonical managed bytes were copied and
+  byte-level integrity was verified" — not "playable video validated". No new
+  durable state, no media fact columns, no runner integration. Container
+  inspection is **not** a full-frame decode guarantee.
+
+### Mutation ledger
+
+59 mutations, 59 killed, 0 survivors (M49–M58 added: skipped receipt
+re-verification, Content-Length trust, whole-object buffering, missing video
+stream accepted, invalid duration accepted, unsupported container accepted,
+storage-derived temp filename, shell execution, leaked inspector output, and
+incomplete temporary cleanup).
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-3: Dormant durable S3 managed-output sink
 
 Detail in `docs/phase-4c3b2h3b3-completion.md` and ADR-0043. The first concrete
