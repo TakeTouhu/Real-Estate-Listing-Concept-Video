@@ -16,6 +16,7 @@ import {
 } from "@app/domain";
 import { ManagedOutputTransferDefect } from "./defect";
 import {
+  ManagedOutputStagingRetryableFailure,
   parseStagingCommitOutcome,
   type ManagedOutputStagingSession,
   type ManagedOutputStagingSink,
@@ -253,18 +254,26 @@ export class StreamingManagedOutputTransfer implements ManagedOutputTransferPort
       // Source iteration threw, a chunk was not bytes, or the sink refused a
       // write. Staging state exists and is discarded first, on every path.
       await abortQuietly(session);
-      // The one recognized case: the source stream was interrupted mid-transfer
-      // — a `read()` that rejected after a good HTTP status, the bytes only
-      // partly delivered. The fal adapter converts that to this application-owned
-      // signal and nothing else, so recognition is nominal and narrow: this is an
-      // acquisition failure, not a defect, and it is retryable. The staged
-      // partial bytes were just aborted and are never committed, hashed into a
-      // receipt, or published as a short output; the signal itself carries no
-      // provider or network detail to inspect, and is *not* rethrown. Every other
-      // error — a malformed chunk, a sink write refusal, an adapter-contract
-      // defect, any unexpected throw without this brand — keeps its existing
-      // meaning and propagates unread.
-      if (ProviderOutputByteStreamRetryableFailure.is(error)) {
+      // Two recognized cases, both nominal and both narrow, both meaning "not
+      // now, retry the acquisition" rather than "the code is broken":
+      //
+      //  - the *source* stream was interrupted mid-transfer — a `read()` that
+      //    rejected after a good HTTP status, the bytes only partly delivered;
+      //    the fal adapter converts that to `ProviderOutputByteStreamRetryableFailure`;
+      //  - the *sink* write was interrupted mid-transfer — a dropped or throttled
+      //    part upload; the durable sink converts that to
+      //    `ManagedOutputStagingRetryableFailure`.
+      //
+      // Either way the staged partial bytes were just aborted and are never
+      // committed, hashed into a receipt, or published as a short output; the
+      // signal itself carries no provider, network or storage detail to inspect,
+      // and is *not* rethrown. Every other error — a malformed chunk, an
+      // adapter-contract defect, any unexpected throw without one of these brands
+      // — keeps its existing meaning and propagates unread.
+      if (
+        ProviderOutputByteStreamRetryableFailure.is(error) ||
+        ManagedOutputStagingRetryableFailure.is(error)
+      ) {
         return RETRYABLE;
       }
       throw error;

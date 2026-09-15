@@ -297,12 +297,16 @@ export class FalProviderOutputByteSource implements ProviderOutputByteSource {
  * `redirect: "manual"` and no credentials, and streams the body through a
  * reader — it never calls `.text()`, `.json()` or `.arrayBuffer()`.
  *
- * Note: WHATWG `fetch` with `redirect: "manual"` yields an opaque-redirect
- * response whose status is `0` and whose headers are not readable, so this
- * default cannot itself follow a redirect — it surfaces one as a non-final,
- * non-200 response, which the source maps to `RETRYABLE_FAILURE`. The redirect
- * routing above is exercised through an injected seam that exposes the real
- * status and `Location`.
+ * Note on redirects: this default explicitly asks for `redirect: "manual"` so
+ * that the *adapter* owns redirect policy and re-validation, never the transport.
+ * How a given runtime surfaces a manual-redirect response is a runtime detail and
+ * not something this code depends on — Node's global fetch (Undici) exposes the
+ * real redirect status and `Location`, while a browser fetch returns an opaque
+ * `status: 0` response, and either way the adapter, not automatic following, is
+ * the authority. Production behavior must never rely on the transport following a
+ * redirect on its own; the redirect routing above re-validates every `Location`
+ * against the fal output policy before dialing it. The injected seam is the test
+ * authority for that routing, exposing the status and `Location` deterministically.
  */
 export function createDefaultFalOutputFetch(): FalOutputFetch {
   return async ({ url }): Promise<FalOutputFetchResponse> => {

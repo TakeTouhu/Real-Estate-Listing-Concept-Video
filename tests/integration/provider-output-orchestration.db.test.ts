@@ -28,8 +28,12 @@ import {
   createProviderPollingContextReader,
   createSubmissionOutcomeRepository,
 } from "@app/database";
-import { StreamingManagedOutputTransfer } from "@app/storage";
-import { FakeManagedOutputStagingSink } from "@app/storage/testing";
+import { S3ManagedOutputStagingSink, StreamingManagedOutputTransfer } from "@app/storage";
+import {
+  FakeManagedOutputStagingSink,
+  FakeS3MultipartClient,
+  fakeS3Error,
+} from "@app/storage/testing";
 import {
   FalProviderOutputByteSource,
   type FalOutputFetch,
@@ -760,6 +764,73 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
         JSON.stringify(row) +
         JSON.stringify(await eventsFor(attemptId));
       for (const fragment of ["SECRETSIGNATURE", "fal.media", "CDN reset"]) {
+        expect(persisted).not.toContain(fragment);
+      }
+    });
+
+    it("leaves the attempt ingesting when the real S3 sink's part upload is interrupted", async () => {
+      // The whole real stack, against live PostgreSQL: the runner drives the real
+      // StreamingManagedOutputTransfer wired to the real fal source AND the real
+      // S3ManagedOutputStagingSink over a fake S3 client whose UploadPart rejects
+      // mid-transfer. The sink converts that to the application-owned staging
+      // retry signal, the core returns RETRYABLE_FAILURE, and the attempt must
+      // stay ingesting with nothing published, the reservation untouched, and no
+      // storage secret persisted.
+      const { attemptId, job } = await seedSucceeded("s3interrupt");
+      const FAL_URL = "https://fal.media/files/panda/out.mp4?X-Fal-Signature=SECRETSIGNATURE";
+      const falLocator = (): TransientProviderOutputLocator => {
+        const built = TransientProviderOutputLocator.fromUnknown(FAL_URL);
+        if (!built.ok) throw new Error("fixture fal locator");
+        return built.value;
+      };
+      const PART = 5 * 1024 * 1024;
+      // Two ~3 MiB chunks => one full 5 MiB+ part flushed during write(), which
+      // is where the interruption lands.
+      const streamingFetch: FalOutputFetch = async ({ url }) => {
+        void url;
+        const chunks = [new Uint8Array(3 * 1024 * 1024).fill(1), new Uint8Array(3 * 1024 * 1024).fill(2)];
+        let position = 0;
+        const body: FalOutputResponseBody = {
+          async read(): Promise<Uint8Array | null> {
+            if (position >= chunks.length) return null;
+            const chunk = chunks[position];
+            position += 1;
+            return chunk ?? null;
+          },
+          async cancel(): Promise<void> {},
+        };
+        return { status: 200, location: null, contentLength: null, body };
+      };
+
+      const client = new FakeS3MultipartClient({
+        failUploadPartOnCall: 1,
+        failUploadPartWith: fakeS3Error(503, "SlowDown", "s3://secret-bucket/leak?sig=SECRETSIGNATURE"),
+      });
+      const realTransfer = new StreamingManagedOutputTransfer(
+        { maxBytes: 536_870_912 },
+        {
+          source: new FalProviderOutputByteSource({ fetch: streamingFetch }),
+          staging: new S3ManagedOutputStagingSink({ bucket: "managed-output-itest", partSizeBytes: PART }, { client }),
+        },
+      );
+
+      const result = await runner({
+        source: fakeSource(async () => ({ kind: "SUCCEEDED", outputLocator: falLocator() })),
+        transfer: realTransfer,
+      }).runProviderOutputAttemptOnce({ ...BASE, attemptId });
+
+      expect(result).toEqual({ kind: "TRANSFER_RETRYABLE_FAILURE" });
+      const row = await attemptRow(attemptId);
+      expect(row.orchestrationState).toBe("OUTPUT_INGESTING");
+      expect(row.outputSha256).toBeNull();
+      expect((await reservationOf(job.id)).state).toBe("RESERVED");
+      // Nothing published, and no storage completion attempted.
+      expect(client.world.canonical.size).toBe(0);
+      expect(client.completeCalls).toHaveLength(0);
+
+      const persisted =
+        JSON.stringify(result) + JSON.stringify(row) + JSON.stringify(await eventsFor(attemptId));
+      for (const fragment of ["SECRETSIGNATURE", "s3://", "secret-bucket", "SlowDown", "fal.media"]) {
         expect(persisted).not.toContain(fragment);
       }
     });

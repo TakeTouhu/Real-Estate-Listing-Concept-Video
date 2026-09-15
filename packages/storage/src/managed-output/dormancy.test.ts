@@ -6,15 +6,16 @@ import { describe, expect, it } from "vitest";
  * The claims that are only worth anything if nobody can quietly undo them.
  *
  * The streaming core is concrete: it really hashes, stages and publishes. What
- * keeps it dormant, as of Phase 4C-3B-2H-3B-2, is narrower than before: a
- * concrete fal `ProviderOutputByteSource` now exists, so the claim is no longer
- * "no concrete byte source exists" but "no durable managed-output staging sink
- * exists, nothing in production constructs the fal byte source or the transfer
- * core, and no production composition can execute the transfer path." Each of
- * those is asserted below rather than described, alongside the dependency
- * direction that keeps the domain free of storage and the core free of
- * providers, and a source-level guard against the one shortcut that would
- * defeat streaming.
+ * keeps it dormant, as of Phase 4C-3B-2H-3B-3, is narrower still: the *complete*
+ * real data-plane pieces now exist — a concrete fal `ProviderOutputByteSource`,
+ * the transfer core, and a concrete durable `S3ManagedOutputStagingSink`. The
+ * claim is therefore no longer "no durable sink exists" but "every piece exists
+ * yet no production code joins or executes them." So the assertions below prove:
+ * nothing in production constructs the fal byte source, the transfer core, the S3
+ * sink or an `S3Client`; there is exactly one production implementer of each
+ * port; no storage credential is in the environment schema; the runner has no
+ * production caller; and the dependency direction and streaming shortcuts are
+ * unchanged. The AWS SDK is used only by the dormant client adapter.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -207,23 +208,46 @@ describe("no production composition", () => {
     }
   });
 
-  it("has exactly one production byte source — the dormant fal adapter — and no staging sink", () => {
-    // The dormancy truth changed in Phase 4C-3B-2H-3B-2: a concrete fal
-    // `ProviderOutputByteSource` now exists. Exactly one production file may
-    // implement that port, and it is the authorized fal adapter; a durable
-    // `ManagedOutputStagingSink` still exists nowhere but the test fake.
+  it("has exactly one production byte source (fal) and exactly one durable staging sink (S3)", () => {
+    // The dormancy truth changed in Phase 4C-3B-2H-3B-3: a concrete durable
+    // `ManagedOutputStagingSink` now exists too. Exactly one production file may
+    // implement each port — the authorized fal adapter for the byte source and
+    // the S3 sink for the staging sink — and nothing else, so a second concrete
+    // implementation of either gets the review it needs.
     const AUTHORIZED_BYTE_SOURCE = "packages/video-providers/src/fal/provider-output-byte-source.ts";
+    const AUTHORIZED_SINK = "packages/storage/src/managed-output/s3-staging-sink.ts";
     const byteSourceImplementers: string[] = [];
+    const sinkImplementers: string[] = [];
     for (const { name, text } of productionSources()) {
       if (text.includes("implements ProviderOutputByteSource")) byteSourceImplementers.push(name);
-      if (name.endsWith("managed-output/staging.ts")) continue;
-      if (name.endsWith("managed-output/index.ts")) continue;
-      if (name.endsWith("packages/storage/src/index.ts")) continue;
-      expect(`${name}: implements ManagedOutputStagingSink: ${text.includes("implements ManagedOutputStagingSink")}`).toBe(
-        `${name}: implements ManagedOutputStagingSink: false`,
-      );
+      if (text.includes("implements ManagedOutputStagingSink")) sinkImplementers.push(name);
     }
     expect(byteSourceImplementers).toEqual([AUTHORIZED_BYTE_SOURCE]);
+    expect(sinkImplementers).toEqual([AUTHORIZED_SINK]);
+  });
+
+  it("constructs the S3 sink and an S3Client nowhere in production", () => {
+    // The sink is concrete but unconstructed, and no production code builds a
+    // real `S3Client` or maps one onto the sink's seam. A future wiring PR that
+    // does gets the review it needs.
+    const AUTHORIZED_SINK = "packages/storage/src/managed-output/s3-staging-sink.ts";
+    const CLIENT_ADAPTER = "packages/storage/src/managed-output/s3-client-adapter.ts";
+    for (const { name, text } of productionSources()) {
+      if (name.endsWith("managed-output/index.ts")) continue;
+      if (name.endsWith("packages/storage/src/index.ts")) continue;
+      if (!name.endsWith(AUTHORIZED_SINK)) {
+        for (const banned of ["new S3ManagedOutputStagingSink", "S3ManagedOutputStagingSink("]) {
+          expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+        }
+      }
+      for (const banned of ["new S3Client", "new S3Client("]) {
+        expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+      }
+      // Only the dormant client adapter may reference the AWS SDK at all.
+      if (!name.endsWith(CLIENT_ADAPTER)) {
+        expect(`${name}: @aws-sdk: ${text.includes("@aws-sdk")}`).toBe(`${name}: @aws-sdk: false`);
+      }
+    }
   });
 
   it("constructs the fal byte source nowhere in production", () => {

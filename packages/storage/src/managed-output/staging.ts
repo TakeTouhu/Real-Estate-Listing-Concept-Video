@@ -71,6 +71,43 @@ export interface ManagedOutputStagingSession {
 }
 
 /**
+ * The one control signal for a transient storage-write interruption.
+ *
+ * `write` returns `Promise<void>`, so a durable sink whose part upload is dropped
+ * mid-transfer — a socket reset, a throttled service response, a 5xx — has no arm
+ * in that signature to say "not now, retry the acquisition". Left as a raw throw
+ * it would reach the transfer core and be recorded as `TRANSFER_SOURCE_FAILED`,
+ * treating an ordinary storage hiccup as an adapter defect. This is the
+ * storage-side counterpart of the provider stream's retry signal: the durable
+ * sink converts an expected upload/service rejection into this one
+ * application-owned signal, and the transfer core recognizes it and returns
+ * `RETRYABLE_FAILURE`.
+ *
+ * It is nominal (a private `#marker` brand, recognized by a static `is()` guard)
+ * and deliberately empty. It carries **no** raw SDK exception, no `cause`, no
+ * bucket, no object key, no AWS request ID, no endpoint, no credential, no
+ * provider URL, and no external error message. The sink constructs it from
+ * nothing — the caught rejection is discarded unread at the sink boundary — and
+ * the core recognizes it by brand, never by shape.
+ *
+ * It is **not** a general error transport. It means exactly "expected retryable
+ * storage-write interruption" and nothing else: an unbranded programming error, a
+ * malformed value, or any unexpected throw is a different class the core keeps
+ * treating as a defect, not a retry.
+ */
+export class ManagedOutputStagingRetryableFailure {
+  readonly #marker: true;
+
+  constructor() {
+    this.#marker = true;
+  }
+
+  static is(value: unknown): value is ManagedOutputStagingRetryableFailure {
+    return typeof value === "object" && value !== null && #marker in value;
+  }
+}
+
+/**
  * What a commit can conclude, and deliberately nothing else.
  *
  * ```text

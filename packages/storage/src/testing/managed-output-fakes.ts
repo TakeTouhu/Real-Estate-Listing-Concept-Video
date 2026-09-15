@@ -7,10 +7,11 @@ import {
   type ProviderOutputByteStream,
   type TransientProviderOutputLocator,
 } from "@app/domain";
-import type {
-  ManagedOutputStagingCommitOutcome,
-  ManagedOutputStagingSession,
-  ManagedOutputStagingSink,
+import {
+  ManagedOutputStagingRetryableFailure,
+  type ManagedOutputStagingCommitOutcome,
+  type ManagedOutputStagingSession,
+  type ManagedOutputStagingSink,
 } from "../managed-output/staging";
 
 /**
@@ -187,6 +188,12 @@ export interface FakeCanonicalObject {
 export interface FakeStagingSinkOptions {
   /** Throw from `write` on this zero-based write index. */
   readonly writeThrowsAt?: number;
+  /**
+   * Throw the application-owned {@link ManagedOutputStagingRetryableFailure}
+   * signal from `write` on this zero-based write index, modelling a durable sink
+   * whose part upload was interrupted mid-transfer.
+   */
+  readonly writeSignalsRetryableAt?: number;
   /** Awaited before each write, with the zero-based index. For barriers. */
   readonly beforeWrite?: (session: FakeStagingSession, index: number) => Promise<void>;
   /** Awaited before commit decides anything. For ordering two sessions. */
@@ -241,6 +248,9 @@ export class FakeStagingSession implements ManagedOutputStagingSession {
   async write(chunk: Uint8Array): Promise<void> {
     const index = this.writes;
     if (this.#options.beforeWrite !== undefined) await this.#options.beforeWrite(this, index);
+    if (this.#options.writeSignalsRetryableAt === index) {
+      throw new ManagedOutputStagingRetryableFailure();
+    }
     if (this.#options.writeThrowsAt === index) throw new Error("fake sink: write exploded");
     this.staged.push(Uint8Array.from(chunk));
     this.writes += 1;
