@@ -43,6 +43,13 @@ dormant: nothing in production constructs it or an `S3Client`.
 - The streaming transfer core now recognizes the storage staging retry signal on
   its iteration path alongside the provider stream signal, returning
   `RETRYABLE_FAILURE` and discarding the partial staged bytes.
+- The S3 sink's `write` bounds its own multipart assembly by the configured part
+  size independent of source chunk size: an arbitrary incoming chunk is
+  partitioned on the part boundary — full `partSizeBytes` regions upload directly
+  from bounded `subarray` views (no copy) and only a sub-part remainder is
+  retained — so one large chunk never becomes one oversized copied part. The
+  enforceable claim is *sink-owned assembly ≤ partSizeBytes, the supplied chunk
+  stays caller-owned*.
 - **(Doc)** The Node/Undici manual-redirect note in the fal byte source and
   ADR-0042 is corrected: the adapter owns redirect policy and re-validation, and
   production never relies on the transport following a redirect on its own — the
@@ -53,10 +60,12 @@ dormant: nothing in production constructs it or an `S3Client`.
 
 ### Mutation ledger
 
-48 mutations, 48 killed, 0 survivors (M40–M47 added: dropped `If-None-Match`,
+49 mutations, 49 killed, 0 survivors (M40–M48: dropped `If-None-Match`,
 loser-receipt-on-412, Content-Length trust, omitted per-part SHA-256, raw
 UploadPart rejection, core rethrow of the staging signal, whole-object read-back
-buffering, and the reintroduced manual-redirect doc claim).
+buffering, the reintroduced manual-redirect doc claim, and — from the
+bounded-assembly correction — one large chunk uploaded as a single oversized part
+instead of split on the part boundary).
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-2: Dormant fal streaming output byte source
 

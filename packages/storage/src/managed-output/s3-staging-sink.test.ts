@@ -48,6 +48,42 @@ function filled(size: number, value: number): Uint8Array {
   return new Uint8Array(size).fill(value);
 }
 
+/**
+ * A deterministic buffer whose every byte depends on its absolute position, so
+ * any reorder, skipped, or duplicated byte changes both the exact bytes and the
+ * SHA-256. `seed` distinguishes two independently generated buffers.
+ */
+function patterned(size: number, seed = 0): Uint8Array {
+  const out = new Uint8Array(size);
+  for (let i = 0; i < size; i += 1) out[i] = (i + seed * 97) & 0xff;
+  return out;
+}
+
+function concat(...parts: readonly Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const p of parts) total += p.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.byteLength;
+  }
+  return out;
+}
+
+/**
+ * Assert two byte arrays are identical by length and SHA-256 — orders of
+ * magnitude faster than `toEqual` on multi-MiB typed arrays, and just as strict:
+ * a matching length and digest means the exact same ordered bytes.
+ */
+function expectSameBytes(actual: Uint8Array | undefined, expected: Uint8Array): void {
+  expect(actual).toBeDefined();
+  expect(actual!.byteLength).toBe(expected.byteLength);
+  expect(createHash("sha256").update(actual!).digest("hex")).toBe(
+    createHash("sha256").update(expected).digest("hex"),
+  );
+}
+
 function digestHex(...chunks: readonly Uint8Array[]): string {
   const hash = createHash("sha256");
   for (const c of chunks) hash.update(c);
@@ -217,6 +253,106 @@ describe("multipart correctness", () => {
     await stage(client, chunks, { partSizeBytes: PART });
     expect(client.uploadedParts).toHaveLength(2);
     expect(client.completeCalls[0]!.parts.map((p) => p.partNumber)).toEqual([1, 2]);
+  });
+});
+
+describe("the sink bounds its own multipart assembly by the part size, independent of source chunk size", () => {
+  const PART = S3_MIN_PART_SIZE_BYTES; // 5 MiB
+
+  it("splits ONE incoming chunk larger than two parts into exact part-sized parts plus a small remainder", async () => {
+    // 2 * partSize + 37 arriving in a single write() must become part-sized
+    // parts, not one oversized copied part.
+    const remainder = 37;
+    const big = patterned(2 * PART + remainder, 1);
+    const client = new FakeS3MultipartClient();
+    const session = await sink(client, { partSizeBytes: PART }).begin({ destinationKey: KEY });
+
+    await session.write(big);
+    // Before commit: exactly two full part-sized parts were uploaded, and only
+    // the sub-part remainder is retained (bounded pending assembly).
+    expect(client.uploadedParts.map((p) => p.bytes.byteLength)).toEqual([PART, PART]);
+
+    const outcome = await session.commit({ receipt: receiptFor(big) });
+    expect(outcome).toEqual({ kind: "PUBLISHED" });
+
+    // Final uploaded part sizes are exactly [partSize, partSize, 37]; no
+    // non-final part exceeds the part size just because the source chunk was big.
+    expect(client.uploadedParts.map((p) => p.bytes.byteLength)).toEqual([PART, PART, remainder]);
+    expect(client.uploadedParts.map((p) => p.partNumber)).toEqual([1, 2, 3]);
+    for (const p of client.uploadedParts) expect(p.bytes.byteLength).toBeGreaterThan(0);
+    // Exact byte order and exact canonical bytes — the fake assembles the parts
+    // in completion order, so this catches any reorder, skip, or duplicate.
+    expectSameBytes(client.world.canonical.get(KEY), big);
+    // Correct per-part SHA-256 for every part.
+    for (const p of client.uploadedParts) {
+      expect(p.checksumSha256Base64).toBe(createHash("sha256").update(p.bytes).digest("base64"));
+    }
+    // Conditional completion is unchanged.
+    expect(client.completeCalls[0]!.ifNoneMatch).toBe("*");
+  });
+
+  it("partitions correctly across a partial-part boundary, preserving exact byte order", async () => {
+    // A partial part exists (partSize - 3), then a large chunk arrives.
+    const first = patterned(PART - 3, 1);
+    const second = patterned(2 * PART + 10, 2);
+    const client = new FakeS3MultipartClient();
+    const session = await sink(client, { partSizeBytes: PART }).begin({ destinationKey: KEY });
+
+    await session.write(first);
+    // partSize - 3 < partSize: no full part yet.
+    expect(client.uploadedParts).toHaveLength(0);
+
+    await session.write(second);
+    // The combined stream yields three full parts; 7 bytes remain.
+    expect(client.uploadedParts.map((p) => p.bytes.byteLength)).toEqual([PART, PART, PART]);
+
+    const outcome = await session.commit({ receipt: receiptFor(first, second) });
+    expect(outcome).toEqual({ kind: "PUBLISHED" });
+    expect(client.uploadedParts.map((p) => p.bytes.byteLength)).toEqual([PART, PART, PART, 7]);
+    expect(client.uploadedParts.map((p) => p.partNumber)).toEqual([1, 2, 3, 4]);
+
+    // Exact byte order across the boundary — catches off-by-one, skipped, and
+    // duplicated bytes.
+    expectSameBytes(client.world.canonical.get(KEY), concat(first, second));
+    for (const p of client.uploadedParts) {
+      expect(p.checksumSha256Base64).toBe(createHash("sha256").update(p.bytes).digest("base64"));
+    }
+  });
+
+  it("surfaces the retry signal when the second part of one large chunk fails, uploading no later slice", async () => {
+    // One write carrying three full parts; the second UploadPart rejects.
+    const big = patterned(3 * PART, 5);
+    const client = new FakeS3MultipartClient({
+      failUploadPartOnCall: 2,
+      failUploadPartWith: fakeS3Error(503, "SlowDown", "s3://secret-bucket/leak?sig=SECRET"),
+    });
+    const session = await sink(client, { partSizeBytes: PART }).begin({ destinationKey: KEY });
+
+    let thrown: unknown;
+    try {
+      await session.write(big);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ManagedOutputStagingRetryableFailure);
+    // First part uploaded, second failed, third slice never attempted.
+    expect(client.uploadedParts.map((p) => p.partNumber)).toEqual([1]);
+    // No raw SDK text escapes on the signal.
+    expect(String(thrown)).not.toContain("secret");
+    expect(JSON.stringify(thrown) ?? "").not.toContain("secret");
+    // Nothing published, no completion.
+    expect(client.completeCalls).toHaveLength(0);
+    expect(client.world.canonical.size).toBe(0);
+  });
+
+  it("keeps a small output a single final part (no premature part upload)", async () => {
+    // A sub-part single chunk: nothing uploads until commit.
+    const client = new FakeS3MultipartClient();
+    const session = await sink(client, { partSizeBytes: PART }).begin({ destinationKey: KEY });
+    await session.write(patterned(1234, 3));
+    expect(client.uploadedParts).toHaveLength(0);
+    expect(await session.commit({ receipt: receiptFor(patterned(1234, 3)) })).toEqual({ kind: "PUBLISHED" });
+    expect(client.uploadedParts.map((p) => p.bytes.byteLength)).toEqual([1234]);
   });
 });
 

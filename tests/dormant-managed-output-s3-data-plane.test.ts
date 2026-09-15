@@ -64,12 +64,19 @@ function streamingFetch(chunks: readonly Uint8Array[]): { fetch: FalOutputFetch;
   return { fetch, reads: () => readCount };
 }
 
-function pipeline(fetch: FalOutputFetch, client: FakeS3MultipartClient): StreamingManagedOutputTransfer {
+function pipeline(
+  fetch: FalOutputFetch,
+  client: FakeS3MultipartClient,
+  options: { readonly maxBytes?: number; readonly partSizeBytes?: number } = {},
+): StreamingManagedOutputTransfer {
   return new StreamingManagedOutputTransfer(
-    { maxBytes: 1_048_576 },
+    { maxBytes: options.maxBytes ?? 1_048_576 },
     {
       source: new FalProviderOutputByteSource({ fetch }),
-      staging: new S3ManagedOutputStagingSink({ bucket: BUCKET }, { client }),
+      staging: new S3ManagedOutputStagingSink(
+        { bucket: BUCKET, partSizeBytes: options.partSizeBytes },
+        { client },
+      ),
     },
   );
 }
@@ -180,6 +187,31 @@ describe("the fal source, the transfer core and the S3 sink publish end to end",
     expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
     expect(client.world.canonical.size).toBe(0);
     expect(client.completeCalls).toHaveLength(0);
+    expect(JSON.stringify(outcome)).not.toContain("SECRETSIGNATURE");
+  });
+
+  it("aborts once and returns RETRYABLE_FAILURE when the second part of one large streamed chunk fails", async () => {
+    // One large streamed body carrying three full parts; the second UploadPart
+    // rejects. The whole stack must abort the multipart upload exactly once,
+    // publish nothing, and report a retry — no later slice uploaded, no leak.
+    const PART = 5 * 1024 * 1024;
+    const big = new Uint8Array(3 * PART).fill(9);
+    const client = new FakeS3MultipartClient({
+      failUploadPartOnCall: 2,
+      failUploadPartWith: { name: "SlowDown", $metadata: { httpStatusCode: 503 }, message: "SECRETSIGNATURE" },
+    });
+    const outcome = await pipeline(streamingFetch([big]).fetch, client, {
+      maxBytes: 536_870_912,
+      partSizeBytes: PART,
+    }).transferAndVerify({ source: locator(), destinationKey: KEY });
+
+    expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+    // Only the first part was uploaded; the third was never attempted.
+    expect(client.uploadedParts.map((p) => p.partNumber)).toEqual([1]);
+    // The core aborted the multipart upload exactly once.
+    expect(client.abortCalls).toHaveLength(1);
+    expect(client.completeCalls).toHaveLength(0);
+    expect(client.world.canonical.size).toBe(0);
     expect(JSON.stringify(outcome)).not.toContain("SECRETSIGNATURE");
   });
 });

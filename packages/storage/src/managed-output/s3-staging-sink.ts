@@ -254,17 +254,6 @@ function httpStatusOf(error: unknown): number | null {
   }
 }
 
-/** Concatenate a bounded run of slices into one part buffer. */
-function concatParts(slices: readonly Uint8Array[], totalBytes: number): Uint8Array {
-  const out = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const slice of slices) {
-    out.set(slice, offset);
-    offset += slice.byteLength;
-  }
-  return out;
-}
-
 /** Base64 SHA-256 of one part's bytes — the checksum S3 validates. */
 function partChecksumBase64(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("base64");
@@ -339,8 +328,17 @@ export class S3ManagedOutputStagingSession implements ManagedOutputStagingSessio
   readonly #client: S3MultipartClient;
 
   #uploadId: string | null = null;
-  #pending: Uint8Array[] = [];
-  #pendingBytes = 0;
+  /**
+   * The one sink-owned assembly buffer, allocated lazily to exactly
+   * `partSizeBytes`. It holds only a *partial* part being assembled across chunk
+   * boundaries; full aligned regions of an incoming chunk are uploaded directly
+   * from bounded `subarray` views without ever entering it. So the sink's pending
+   * assembly state is bounded by `partSizeBytes`, independent of how large a
+   * single incoming chunk is.
+   */
+  #partBuffer: Uint8Array | null = null;
+  /** Bytes currently assembled in `#partBuffer` — always `< partSizeBytes`. */
+  #partFill = 0;
   #stagedBytes = 0;
   #nextPartNumber = 1;
   readonly #parts: S3CompletedPartRef[] = [];
@@ -352,24 +350,53 @@ export class S3ManagedOutputStagingSession implements ManagedOutputStagingSessio
     this.#client = client;
   }
 
+  /**
+   * Partition an arbitrary incoming chunk into `partSizeBytes` parts, uploading
+   * each full part sequentially and retaining only a sub-part remainder.
+   *
+   * S3 part boundaries are the sink's, not the source's: a single incoming chunk
+   * may be smaller than a part, span several parts, or straddle a boundary, and
+   * none of that changes the parts produced. The whole chunk is counted, then
+   * consumed from an offset — first topping up any partial part in the bounded
+   * buffer, then uploading each full `partSizeBytes` region directly as a view
+   * (no copy), then copying only the final sub-part remainder into the buffer.
+   * Every full-part upload is awaited before `write` proceeds, so backpressure
+   * holds and no unbounded concurrent uploads exist. The caller-owned chunk is
+   * not retained after `write` returns — only the bounded remainder is copied.
+   */
   async write(chunk: Uint8Array): Promise<void> {
     this.#stagedBytes += chunk.byteLength;
-    this.#pending.push(chunk);
-    this.#pendingBytes += chunk.byteLength;
-
-    // Only a *full* part is flushed here; the remainder waits, so at most one
-    // part's worth of bytes (plus one chunk) is ever held. The final, possibly
-    // short, part is flushed at commit. This is the backpressure point: the
-    // upload is awaited before `write` resolves, so the source is not asked for
-    // the next chunk until this part is on its way.
-    if (this.#pendingBytes < this.#config.partSizeBytes) return;
-
-    const part = concatParts(this.#pending, this.#pendingBytes);
-    this.#pending = [];
-    this.#pendingBytes = 0;
+    const partSize = this.#config.partSizeBytes;
+    let offset = 0;
 
     try {
-      await this.#uploadPart(part);
+      // 1. Top up a partial pending part from the front of this chunk.
+      if (this.#partFill > 0) {
+        const buffer = this.#ensurePartBuffer();
+        const take = Math.min(partSize - this.#partFill, chunk.byteLength - offset);
+        buffer.set(chunk.subarray(offset, offset + take), this.#partFill);
+        this.#partFill += take;
+        offset += take;
+        if (this.#partFill === partSize) {
+          await this.#uploadPart(buffer.subarray(0, partSize));
+          this.#partFill = 0;
+        }
+      }
+
+      // 2. Upload each full aligned part straight from the chunk as a bounded
+      //    view — no copy, no sink allocation for the source's bytes.
+      while (this.#partFill === 0 && chunk.byteLength - offset >= partSize) {
+        await this.#uploadPart(chunk.subarray(offset, offset + partSize));
+        offset += partSize;
+      }
+
+      // 3. Retain only the sub-part remainder in the bounded buffer.
+      if (offset < chunk.byteLength) {
+        const buffer = this.#ensurePartBuffer();
+        buffer.set(chunk.subarray(offset, chunk.byteLength), this.#partFill);
+        this.#partFill += chunk.byteLength - offset;
+      }
+      return;
     } catch (error) {
       if (S3StorageInterruption.is(error)) {
         // Discard the caught SDK value entirely; it never reaches the signal.
@@ -392,11 +419,11 @@ export class S3ManagedOutputStagingSession implements ManagedOutputStagingSessio
       throw new S3ManagedOutputStagingDefect("STAGED_BYTES_RECEIPT_MISMATCH");
     }
 
-    // Flush the final, possibly short, part — but never an empty one.
-    if (this.#pendingBytes > 0) {
-      const finalPart = concatParts(this.#pending, this.#pendingBytes);
-      this.#pending = [];
-      this.#pendingBytes = 0;
+    // Flush the final, possibly short, part — but never an empty one. The
+    // remainder lives in the bounded buffer; a sub-part view of it is the last
+    // part.
+    if (this.#partFill > 0) {
+      const finalPart = this.#ensurePartBuffer().subarray(0, this.#partFill);
       try {
         await this.#uploadPart(finalPart);
       } catch (error) {
@@ -406,6 +433,7 @@ export class S3ManagedOutputStagingSession implements ManagedOutputStagingSessio
         }
         throw error;
       }
+      this.#partFill = 0;
     }
 
     // Publish only through the conditional completion. `If-None-Match: *` is the
@@ -488,6 +516,14 @@ export class S3ManagedOutputStagingSession implements ManagedOutputStagingSessio
       checksumSha256Base64: checksum,
     });
     this.#nextPartNumber += 1;
+  }
+
+  /** Allocate the bounded assembly buffer on first need, at exactly the part size. */
+  #ensurePartBuffer(): Uint8Array {
+    if (this.#partBuffer === null) {
+      this.#partBuffer = new Uint8Array(this.#config.partSizeBytes);
+    }
+    return this.#partBuffer;
   }
 
   async #ensureUploadId(): Promise<string> {

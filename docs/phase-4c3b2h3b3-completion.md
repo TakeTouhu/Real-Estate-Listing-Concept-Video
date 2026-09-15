@@ -49,8 +49,10 @@ provider-output data plane — while keeping every piece dormant.
 
 | Rule | How it is held |
 | --- | --- |
+| Sink-owned assembly bounded by the part size, independent of source chunk size | `write` partitions each arbitrary incoming chunk on the part boundary — topping up one bounded buffer, uploading each full `partSizeBytes` region directly from a `subarray` view of the caller's chunk (no copy), retaining only a sub-part remainder; the enforceable claim is *sink-owned assembly ≤ partSizeBytes, the supplied chunk stays caller-owned* |
 | No whole-object buffering | Only one bounded part buffer is held; the whole output is never concatenated or arrayed; a static test bans `Buffer.concat` / `transformToByteArray` / `.arrayBuffer` in the sink |
-| Non-final parts ≥ the minimum, a smaller final part, consecutive numbers | Parts flush at the part-size threshold; the final short part flushes at commit; numbers start at 1 and never skip; no empty final part |
+| One large chunk never becomes one oversized part | A single `write` of `2·partSize + 37` uploads `[partSize, partSize]` and retains 37; across a partial boundary, `partSize−3` then `2·partSize+10` yields `[partSize, partSize, partSize]` and 7; byte order exact (regression M48) |
+| Non-final parts exactly the part size, a smaller final part, consecutive numbers | Full parts are exactly `partSizeBytes`; the final short part flushes at commit; numbers start at 1 and never skip; no empty final part |
 | Sequential uploads preserve backpressure | Each part upload is awaited before `write` resolves; no unbounded concurrent part uploads |
 | `write()` interruption is retryable | An `UploadPart`/`CreateMultipartUpload` rejection on the write path becomes `ManagedOutputStagingRetryableFailure`; the core aborts staging and returns `RETRYABLE_FAILURE` |
 | Recognition is narrow | Only the branded signal converts; an unbranded write error still propagates as a defect |
@@ -89,7 +91,7 @@ the winner's streamed receipt; and an interrupted part upload becomes
 | --- | --- |
 | `pnpm typecheck` | Pass — all projects |
 | `pnpm lint` | Pass — 0 problems |
-| `pnpm test` | **3940 passed**, 120 files (was 3887 at the 3B-2 merge) |
+| `pnpm test` | **3945 passed**, 120 files (was 3887 at the 3B-2 merge) |
 | `pnpm test:db` (live PostgreSQL) | **757 passed**, 23 files (adds the S3 interruption runner regression) |
 | `pnpm build` | Pass |
 | Prisma drift | `No difference detected` |
@@ -100,8 +102,8 @@ untouched.**
 
 ## Mutation ledger
 
-**48 mutations, 48 killed, no survivors.** M01–M39 carry forward; M40–M47 added
-for this phase:
+**49 mutations, 49 killed, no survivors.** M01–M39 carry forward; M40–M48 added
+for this phase (M48 for the bounded-assembly correction):
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -113,6 +115,7 @@ for this phase:
 | **M45** | The transfer core rethrows the staging signal instead of returning `RETRYABLE_FAILURE` | the core staging-interruption tests |
 | **M46** | The existing winner is buffered whole (`Buffer.concat`) before hashing | the sink's no-whole-buffer static test |
 | **M47** | The browser-only Node manual-redirect claim is reintroduced | the fal-source documentation static test |
+| **M48** | One large incoming chunk is uploaded as a single oversized part instead of split on the part boundary | the bounded-assembly partition tests (huge chunk / cross-boundary) |
 
 ## Not done, on purpose
 

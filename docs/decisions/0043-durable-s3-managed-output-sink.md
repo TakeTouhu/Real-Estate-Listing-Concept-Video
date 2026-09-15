@@ -99,19 +99,34 @@ through the commit outcome's own `RETRYABLE_FAILURE` arm.
 
 ## Decision 5 — Bounded memory and idempotent abort
 
-`write` fills one bounded part buffer and flushes it only when it reaches the
-configured part size (default 8 MiB, floor 5 MiB, validated as a safe integer no
-greater than the managed-output ceiling); the final, possibly short, part is
-flushed at commit, and never an empty one. Parts upload sequentially — the upload
-is awaited before `write` resolves, which is the backpressure point — so at most
-one part's worth of bytes is ever held. The whole output is never buffered,
-concatenated, or turned into one array, and the existing-winner read-back is
-likewise incremental. `abort` is idempotent, issues at most one
-`AbortMultipartUpload`, is a no-op after a successful publish, and swallows its own
-failure so it can never replace the primary outcome. Production S3 infrastructure
-should carry an incomplete-multipart lifecycle rule as defense-in-depth cleanup
-for aborted or abandoned uploads; **no infrastructure (Terraform/CDK) is added in
-this phase.**
+S3 part boundaries are the sink's, not the source's. `write(chunk)` accepts an
+arbitrary `Uint8Array` — the provider/fetch stream, not the sink, chooses how many
+bytes each chunk carries, and one chunk may be far larger than a part. So the sink
+partitions each incoming chunk on the configured part boundary regardless of its
+size: it counts the whole chunk, then consumes it from an offset — first topping
+up any partial part held in one bounded buffer, then uploading each full
+`partSizeBytes` region **directly from a bounded `subarray` view of the caller's
+chunk** (no copy), and finally copying only the sub-part remainder into the
+buffer. The precise, enforceable claim is therefore:
+
+> The sink-owned multipart assembly state is bounded by the configured part size,
+> while the currently supplied source chunk remains caller-owned.
+
+The sink does **not** claim to control the allocation size the provider stream
+chose for the chunk it was handed, and it never adds a second whole-chunk-sized
+copy of a large input. The one sink-owned buffer is allocated once at exactly the
+part size (default 8 MiB, floor 5 MiB, validated as a safe integer no greater than
+the managed-output ceiling); the final, possibly short, part is flushed at commit,
+and never an empty one. Every full-part upload — whether a view of a large chunk
+or the filled buffer — is awaited before `write` resolves, which is the
+backpressure point, and parts upload sequentially with no unbounded concurrency,
+so a non-final part is always exactly the part size and never larger merely because
+a source chunk was. The existing-winner read-back is likewise incremental. `abort`
+is idempotent, issues at most one `AbortMultipartUpload`, is a no-op after a
+successful publish, and swallows its own failure so it can never replace the
+primary outcome. Production S3 infrastructure should carry an incomplete-multipart
+lifecycle rule as defense-in-depth cleanup for aborted or abandoned uploads;
+**no infrastructure (Terraform/CDK) is added in this phase.**
 
 ## Decision 6 — The SDK is a dependency; the sink depends on a narrow seam
 
