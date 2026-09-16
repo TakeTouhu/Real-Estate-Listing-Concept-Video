@@ -171,7 +171,7 @@ module, so reaching them would require a visible, reviewable change.
 | `pnpm typecheck` | Pass — all projects |
 | `pnpm lint` | Pass — 0 problems |
 | `pnpm test` | **4209 passed**, 126 files |
-| `pnpm test:db` (live PostgreSQL) | **796 passed**, 24 files |
+| `pnpm test:db` (live PostgreSQL) | **805 passed**, 24 files |
 | `pnpm build` | Pass |
 | `prisma validate` / `format` | Pass |
 | Migrations against an empty database | Pass — applied cleanly to a fresh database |
