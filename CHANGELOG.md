@@ -93,11 +93,20 @@ change, and **no change to the meaning of `OUTPUT_VERIFIED`**.
 
 ### Mutation ledger
 
-59 mutations, 59 killed, 0 survivors (M49–M58 added: skipped receipt
-re-verification, Content-Length trust, whole-object buffering, missing video
-stream accepted, invalid duration accepted, unsupported container accepted,
-storage-derived temp filename, shell execution, leaked inspector output, and
-incomplete temporary cleanup).
+66 mutations, 66 killed, 0 survivors. Seventeen were added across this phase:
+
+- **M49–M58** — media validation: skipped receipt re-verification,
+  `Content-Length` trust, whole-object buffering, missing video stream accepted,
+  invalid duration accepted, unsupported container accepted, storage-derived
+  temp filename, shell execution, leaked inspector output, incomplete temporary
+  cleanup.
+- **M59–M62** — local-materialization integrity: single-call write ignoring
+  `bytesWritten`, zero or impossible write progress treated as success,
+  swallowed success-path close failure, uncancelled canonical body on a local
+  open failure.
+- **M63–M65** — media-verdict correctness: cover art counted as a usable video
+  stream, a cleanly observed zero-byte object reported as retryable, and a
+  non-numeric system failure fabricated into child exit 1.
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-3: Dormant durable S3 managed-output sink
 

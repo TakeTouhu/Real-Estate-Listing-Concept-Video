@@ -149,7 +149,7 @@ none of them.
 | --- | --- |
 | `pnpm typecheck` | Pass — all projects |
 | `pnpm lint` | Pass — 0 problems |
-| `pnpm test` | **4096 passed**, 124 files |
+| `pnpm test` | **4142 passed**, 124 files |
 | `pnpm test:db` (live PostgreSQL) | **757 passed**, 23 files (unchanged — this phase adds no DB behavior) |
 | `pnpm build` | Pass |
 | Prisma drift | `No difference detected` |

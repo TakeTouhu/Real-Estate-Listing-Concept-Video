@@ -1083,7 +1083,7 @@ and ADR-0020.
   a full-frame decode guarantee. Still dormant: nothing in production constructs
   the validator or the inspector, no production subprocess exists, and CI needs no
   ffmpeg binary. Detail in `docs/phase-4c3b2h3b4-completion.md` and ADR-0044.
-  Mutation ledger: 59 run, 59 killed, 0 survivors.
+  Mutation ledger: 66 run, 66 killed, 0 survivors.
 - **Phase 4C-3B-2H-3B-3** — see GitHub for its lifecycle. The first *concrete*
   durable `ManagedOutputStagingSink` (`S3ManagedOutputStagingSink`), completing
   the real provider-output data plane. It stages generated output as an S3
