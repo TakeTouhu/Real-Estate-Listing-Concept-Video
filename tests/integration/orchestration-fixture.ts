@@ -143,6 +143,9 @@ export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   await prisma.generationScene.updateMany({ data: { currentDeliveredRequestId: null } });
   await prisma.generationTransitionEvent.deleteMany({});
   await prisma.generationPricingSnapshot.deleteMany({});
+  // Before the attempts they belong to: the FK is RESTRICT on purpose, so
+  // durable validation history cannot be erased through a cascade.
+  await prisma.managedOutputMediaValidation.deleteMany({});
   await prisma.sceneGeneration.deleteMany({
     where: { videoProjectId: { in: [PROJECT_A, PROJECT_B] } },
   });

@@ -383,7 +383,13 @@ describe("nothing about the existing adapters changed shape", () => {
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
-    expect(dirs.at(-1)).toBe("00000000000011_phase4c3b2h1_managed_output_integrity");
+    // Pinned to the newest migration, so an unreviewed one still trips this.
+    // Phase 4C-3B-2H-3B-5 added migration 12 under its own authorization for
+    // the durable media-validation lifecycle; the claim here is unchanged —
+    // *this* phase's streaming core added none, and no migration named for it
+    // exists.
+    expect(dirs.at(-1)).toBe("00000000000012_phase4c3b2h3b5_media_validation_lifecycle");
+    expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(
       join(REPO_ROOT, "packages", "database", "prisma", "schema.prisma"),

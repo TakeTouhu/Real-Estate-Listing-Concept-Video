@@ -1041,6 +1041,35 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-5** — see GitHub for its lifecycle. Makes the result of
+  2H-3B-4's validator **durable and safely retryable**, and deliberately nothing
+  more. `ManagedOutputMediaValidation` is a one-to-one durable record per attempt
+  with a closed status vocabulary (`PENDING`, `RUNNING`, `VALID`,
+  `INVALID_MEDIA`, `INTEGRITY_MISMATCH`) — *not* another attempt state, because
+  appending one after `OUTPUT_VERIFIED` would retroactively redefine what every
+  existing row claimed; `OUTPUT_VERIFIED` keeps its exact meaning and no existing
+  vocabulary changed. Each record permanently binds the SHA-256 and byte count it
+  was created against and is never repaired to match newer bytes. Records are
+  discovered, never backfilled: the completion transaction is unchanged and the
+  absence of a row is itself eligible, so historical `OUTPUT_VERIFIED` attempts
+  are validated lazily for the first time. A claim writes an opaque random lease
+  token and increments a version; every post-claim write carries version, token
+  and receipt in its `WHERE` clause, so a stale worker's late finalize matches
+  zero rows and terminal rows are never reopened. Lease expiry is crash recovery
+  rather than a deadline (five minutes by default, injected and validated,
+  because the validator may stream a large object before inspecting it).
+  `RETRYABLE_FAILURE` is never durable — it returns the row to `PENDING` with a
+  future attempt time — and a thrown or malformed validator result releases the
+  lease and raises a fixed defect carrying no external text. No repository method
+  takes a callback, so no transaction can span an S3 read, a temp-file write or
+  `ffprobe`. Per-status `CHECK` constraints enforce the row shape in the
+  database, and the receipt and all five `BIGINT` media facts are bounded at
+  `Number.MAX_SAFE_INTEGER`. Migration
+  `00000000000012_phase4c3b2h3b5_media_validation_lifecycle`; no backfill. Still
+  dormant: nothing constructs, schedules or invokes the runner, no credential is
+  wired, and no Scene, Job, reservation, quota or `SYSTEM_RECOVERY` decision is
+  made — where a verdict enters the product lifecycle is the next reviewed
+  package. Detail in `docs/phase-4c3b2h3b5-completion.md` and ADR-0045.
 - **Phase 4C-3B-2H-3B-4** — see GitHub for its lifecycle. Adds a dormant,
   provider-neutral managed-output **media/container validation** capability that
   nothing calls. A domain port takes only a destination key and the receipt the

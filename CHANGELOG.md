@@ -3,6 +3,57 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-5: Durable media-validation lifecycle
+
+Detail in `docs/phase-4c3b2h3b5-completion.md` and ADR-0045. Makes the result of
+Phase 2H-3B-4's validator **durable and safely retryable**, and deliberately
+nothing more: no Scene becomes ready, no recovery attempt is created, no quota
+moves, and **no production scheduler exists**.
+
+### Added
+
+- **`ManagedOutputMediaValidation`** — a one-to-one durable record per attempt,
+  with a closed status vocabulary (`PENDING`, `RUNNING`, `VALID`,
+  `INVALID_MEDIA`, `INTEGRITY_MISMATCH`). Media validity is orthogonal to
+  provider execution, so it is *not* another attempt state: appending one after
+  `OUTPUT_VERIFIED` would retroactively redefine what every existing row
+  claimed. `OUTPUT_VERIFIED` keeps its exact meaning and no existing state
+  vocabulary changed.
+- **An immutable receipt binding.** Every record permanently carries the
+  SHA-256 and byte count it was created against, equal to the attempt's verified
+  receipt, and every post-claim write asserts it. A record is never "repaired"
+  to match newer bytes — that would silently answer a different question from
+  the one the record claims to answer.
+- **Lazy discovery of historical attempts.** The completion transaction is
+  unchanged and nothing is backfilled; the absence of a record is itself an
+  eligible state, so attempts that reached `OUTPUT_VERIFIED` before this phase
+  are validated for the first time.
+- **A lease/version claim → finalize lifecycle.** Three guards — version, lease
+  token and receipt — are in the `WHERE` clause of every post-claim write, so a
+  stale worker's late finalize matches zero rows and cannot overwrite the worker
+  that reclaimed its row. Terminal rows are never reopened. Lease expiry is
+  crash recovery, not a deadline: five minutes by default, injected and
+  validated, because the validator may stream a large object before inspecting
+  it.
+- **`MediaValidationLifecycleRunner`** (`@app/domain`) — a dormant runner over
+  ports. `RETRYABLE_FAILURE` is never a durable verdict: it returns the row to
+  `PENDING` with a future attempt time, because a storage hiccup must not become
+  a permanent record that a customer's output is unusable. A thrown or malformed
+  validator result releases the lease and raises a fixed application-owned
+  defect, carrying no external text and no `cause`.
+- **A structural guarantee that no transaction spans external I/O.** No
+  repository method accepts a callback, so a transaction cannot wrap an S3 GET,
+  a temp-file write or `ffprobe` — proven by a live-database test that reads the
+  committed `RUNNING` row from inside the validator.
+
+### Changed
+
+- **Migration `00000000000012_phase4c3b2h3b5_media_validation_lifecycle`** — new
+  enums, the validation table with a `RESTRICT` foreign key, per-status `CHECK`
+  constraints, receipt and media-fact range bounds, two worker indexes, and one
+  supporting `scene_generations(orchestrationState, outputVerifiedAt)` index.
+  No backfill; no existing vocabulary altered.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-4: Dormant managed-output media validation
 
 Detail in `docs/phase-4c3b2h3b4-completion.md` and ADR-0044. A provider-neutral

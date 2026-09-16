@@ -256,8 +256,13 @@ describe("no persistence, pricing or resolution surface changed", () => {
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
-    // Phase 2H-1's is still the newest. This phase persists nothing new.
-    expect(dirs.at(-1)).toBe("00000000000011_phase4c3b2h1_managed_output_integrity");
+    // Pinned to the newest migration, so an unreviewed one still trips this.
+    // Phase 4C-3B-2H-3B-5 added migration 12 for the durable media-validation
+    // lifecycle under its own authorization; the claim here is unchanged — this
+    // queue-status adapter persists nothing new, and no migration is named for
+    // it.
+    expect(dirs.at(-1)).toBe("00000000000012_phase4c3b2h3b5_media_validation_lifecycle");
+    expect(dirs.filter((d) => d.toLowerCase().includes("queue"))).toEqual([]);
   });
 
   it("touches no pricing or resolution mapping", () => {
