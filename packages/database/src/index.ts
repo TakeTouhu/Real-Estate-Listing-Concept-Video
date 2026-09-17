@@ -13,3 +13,4 @@ export { createReconciliationRepository } from "./reconciliation-repository";
 export { createCompletionRepository } from "./completion-repository";
 export { createProviderPollingContextReader } from "./provider-output-repository";
 export { createMediaValidationLifecycleRepository } from "./media-validation-lifecycle-repository";
+export { createValidatedSceneDeliveryRepository } from "./validated-scene-delivery-repository";

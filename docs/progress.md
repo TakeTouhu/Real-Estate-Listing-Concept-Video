@@ -1041,6 +1041,44 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-6A** — see GitHub for its lifecycle. Gives a durable
+  `VALID` media verdict its one consequence — the customer-visible delivery of a
+  Scene — as a single atomic business fact, and only that consequence.
+  Transaction F is **one** repository operation that, in one short database
+  transaction, moves the request `GENERATING -> DELIVERED` recording
+  `deliveredAt`, the Scene `GENERATING`/`REVISING -> READY`, the Scene's
+  delivered pointer to that request, and — only when every Scene of the Job is
+  `READY` — the Job `GENERATING -> SCENES_READY`. The boundary deliberately
+  offers no `markRequestDelivered`, `markSceneReady` or `maybeMarkJobReady`:
+  three calls are three crash boundaries, and a delivered request whose Scene
+  never became ready, or a ready Scene pointing at a request the ledger says
+  never delivered, are not repairable afterwards because nothing records which
+  half was intended. The candidate sweep returns identifiers only and is a hint,
+  never permission; every condition is re-read and re-checked under the
+  transaction's own locks. The lock order is fixed — Job, Scene, request,
+  attempt, validation — and taking the Job first is what makes readiness
+  correct: two Scenes of one Job finishing at the same instant serialize on the
+  Job row, so exactly one transaction observes itself as the last. A
+  deterministic live-PostgreSQL regression holds both workers blocked on that row
+  before releasing them, and waits for the holder to own it before either worker
+  starts; the synchronisation is the lock, not a sleep. No S3 read and no
+  `ffprobe` happens here — the durable verdict is the media authority, the gate
+  is a positive test for `VALID` rather than a denylist, and the verdict's frozen
+  receipt must equal the attempt's verified digest and size before anything
+  moves. Latest-attempt authority is `MAX("attemptOrdinal")`, never `createdAt`:
+  two attempts admitted in the same millisecond have no order under a timestamp.
+  A replay is `ALREADY_APPLIED` and writes nothing again; any half-applied shape
+  raises and is never repaired, and because returning inside an interactive
+  transaction is committing, the guards that run after the first write raise
+  rather than return. `READY -> REVISING` is not this transaction's edge, and the
+  regeneration right stays derived from `DELIVERED` `USER_REGENERATION` requests
+  with no counter added. No schema change and no migration: `deliveredAt`,
+  `currentDeliveredRequestId`, its composite foreign key and `stateVersion`
+  already existed, and migration 12 stays newest. Still dormant: nothing
+  constructs, schedules or invokes the runner, no credential is wired,
+  `INVALID_MEDIA` and `INTEGRITY_MISMATCH` still do nothing, and no recovery,
+  provider call, composition, deliverable, quota, reservation or payment
+  decision is made. Detail in `docs/phase-4c3b2h3b6a-completion.md` and ADR-0046.
 - **Phase 4C-3B-2H-3B-5** — see GitHub for its lifecycle. Makes the result of
   2H-3B-4's validator **durable and safely retryable**, and deliberately nothing
   more. `ManagedOutputMediaValidation` is a one-to-one durable record per attempt
