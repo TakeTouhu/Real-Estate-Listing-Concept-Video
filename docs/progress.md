@@ -1048,7 +1048,18 @@ and ADR-0020.
   transaction, moves the request `GENERATING -> DELIVERED` recording
   `deliveredAt`, the Scene `GENERATING`/`REVISING -> READY`, the Scene's
   delivered pointer to that request, and — only when every Scene of the Job is
-  `READY` — the Job `GENERATING -> SCENES_READY`. The boundary deliberately
+  `READY` — the Job `GENERATING -> SCENES_READY`. A new delivery additionally
+  requires the Job itself to still be `GENERATING`, checked after replay
+  classification and before any write, because otherwise the last Scene of a
+  `REVISING` or `CANCELLED` Job becomes `READY` with its request `DELIVERED`
+  while the Job stays put, and the now-delivered request stops being a candidate
+  so nothing is left to advance it. A `USER_REGENERATION` must replace a
+  `DELIVERED` predecessor on its own Scene; with nothing to regenerate it fails
+  closed rather than inventing the Scene's first delivery under the wrong kind.
+  Candidate discovery mirrors every condition that can never become true again —
+  superseded attempts by `attemptOrdinal` and non-`GENERATING` Jobs — because a
+  permanently ineligible row in an `ORDER BY validatedAt ASC LIMIT n` sweep
+  occupies the bound forever and starves deliverable work behind it. The boundary deliberately
   offers no `markRequestDelivered`, `markSceneReady` or `maybeMarkJobReady`:
   three calls are three crash boundaries, and a delivered request whose Scene
   never became ready, or a ready Scene pointing at a request the ledger says

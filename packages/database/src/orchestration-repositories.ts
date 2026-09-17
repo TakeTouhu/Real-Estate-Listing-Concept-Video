@@ -98,9 +98,13 @@ const REQUEST_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // Attempt admission owns this: the request generates *because* an attempt
   // exists, and the two must become true together.
   "PENDING->GENERATING",
-  // Transaction F owns this, and Transaction F is deferred. Delivery consumes
-  // a customer regeneration right; the half that makes it safe — output
-  // verification — does not exist yet.
+  // Transaction F owns this. It now exists — see
+  // `validated-scene-delivery-repository.ts` — and that is precisely why the
+  // edge stays reserved here: delivery consumes a customer's regeneration
+  // right, and it is only safe alongside the durable media verdict, the
+  // byte-identity recheck, the Scene transition and the delivered pointer that
+  // Transaction F applies in the same commit. Reaching `DELIVERED` through the
+  // generic API would write one of those facts without the others.
   "GENERATING->DELIVERED",
 ];
 
@@ -1139,8 +1143,9 @@ export function createSceneGenerationRequestRepository(
             // is reserved for Transaction F, so this method cannot reach
             // `DELIVERED` and a `deliveredAt` branch here would be unreachable.
             // `deliveredAt` is the instant a customer's regeneration right was
-            // spent; it belongs to the commit that spends it, alongside the
-            // output verification that justifies delivery.
+            // spent; it belongs to the commit that spends it, which is
+            // Transaction F, alongside the media verdict and the Scene
+            // transition that justify delivery.
             ...(input.nextState === "FAILED_TERMINAL" ? { failedAt: new Date() } : {}),
           },
         });

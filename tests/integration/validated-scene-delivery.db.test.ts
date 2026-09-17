@@ -256,6 +256,17 @@ async function seedValidation(
   });
 }
 
+/** Everything a fail-closed proof must show unchanged, beyond the chain itself. */
+async function worldSnapshot() {
+  const [attempts, validations, reservations, events] = await Promise.all([
+    prisma.sceneGeneration.findMany({ orderBy: { id: "asc" } }),
+    prisma.managedOutputMediaValidation.findMany({ orderBy: { id: "asc" } }),
+    prisma.generationReservation.findMany({ orderBy: { id: "asc" } }),
+    prisma.generationTransitionEvent.count(),
+  ]);
+  return { attempts, validations, reservations, events };
+}
+
 async function deliver(attemptId: string, organizationId = ORG_A) {
   return repository.deliverValidatedScene({
     organizationId,
@@ -435,30 +446,38 @@ RUN("Transaction F — atomic validated scene delivery", () => {
       expect(other.stateVersion).toBe(0);
     });
 
-    it("leaves a Job that is not GENERATING exactly where it is", async () => {
-      // A Job in REVISING has a regeneration in flight; a Scene becoming ready
-      // does not mean the whole Job is.
-      const jobId = await seedJob({ state: "REVISING" });
-      const chain = await seedScene(jobId, 0);
+    // A new delivery requires a Job that is still generating. The earlier
+    // version of this suite asserted the opposite — that a `REVISING` Job could
+    // still take a delivery, leaving the Job behind. That strands the Job: once
+    // the request is DELIVERED it stops being a candidate, so no later
+    // Transaction F call exists to perform `GENERATING -> SCENES_READY`. The
+    // Job state machine agrees: `REVISING -> GENERATING` is the edge, so a
+    // regeneration that is actually generating has a `GENERATING` Job.
+    for (const state of ["REVISING", "SCENES_READY", "FAILED_TERMINAL", "CANCELLED"] as const) {
+      it(`refuses a new delivery while the Job is ${state}`, async () => {
+        const jobId = await seedJob({ state });
+        const chain = await seedScene(jobId, 0);
+        const before = await snapshot(chain);
 
-      const outcome = await deliver(chain.attemptId);
-      expect(outcome).toEqual({ kind: "DELIVERED", jobAdvanced: false });
+        expect(await deliver(chain.attemptId)).toEqual({ kind: "NOT_ELIGIBLE" });
 
-      const after = await snapshot(chain);
-      expect(after.sceneState).toBe("READY");
-      expect(after.jobState).toBe("REVISING");
-      expect(after.jobVersion).toBe(0);
-      expect(
-        await prisma.generationTransitionEvent.count({ where: { aggregateType: "JOB" } }),
-      ).toBe(0);
-    });
+        // Zero mutation, zero event.
+        expect(await snapshot(chain)).toEqual(before);
+        expect(await prisma.generationTransitionEvent.count()).toBe(0);
+        // And it is not offered by the sweep either.
+        expect(await repository.findValidatedDeliveryCandidates({ limit: 100 })).toEqual([]);
+      });
+    }
   });
 
   // -------------------------------------------------------------------------
 
   describe("regeneration delivery", () => {
     it("moves REVISING -> READY and switches the pointer without rewriting history", async () => {
-      const jobId = await seedJob({ state: "REVISING" });
+      // The Job stays GENERATING: `REVISING -> GENERATING` is the Job edge, so
+      // by the time a regeneration's attempt has output to deliver, the Job is
+      // generating again.
+      const jobId = await seedJob();
       // The original delivery, already applied.
       const original = await seedScene(jobId, 0);
       await deliver(original.attemptId);
@@ -466,12 +485,28 @@ RUN("Transaction F — atomic validated scene delivery", () => {
         where: { id: original.requestId },
       });
 
-      // The scene is regenerating: READY -> REVISING is someone else's edge, so
-      // the state is set here directly.
+      // The first delivery advanced the single-Scene Job to SCENES_READY. The
+      // regeneration path then runs it back through `REVISING -> GENERATING`
+      // (Job) and `READY -> REVISING` (Scene). Both edges belong to other
+      // transactions, so the states are set here directly — Transaction F is
+      // entered with exactly the shape it will see in production:
+      //
+      //   Job GENERATING · Scene REVISING · pointer = prior DELIVERED request
+      //   USER_REGENERATION request GENERATING · latest attempt OUTPUT_VERIFIED
+      //   validation VALID
       await prisma.generationScene.update({
         where: { id: original.sceneId },
         data: { state: "REVISING", stateVersion: { increment: 1 } },
       });
+      await prisma.generationJob.update({
+        where: { id: jobId },
+        data: { state: "GENERATING", stateVersion: { increment: 1 } },
+      });
+      // The predecessor the regeneration replaces is in place and DELIVERED.
+      expect(
+        (await prisma.generationScene.findUniqueOrThrow({ where: { id: original.sceneId } }))
+          .currentDeliveredRequestId,
+      ).toBe(original.requestId);
       seq += 1;
       const regenId = `genreq_regen_${seq}`;
       const regenAttempt = `sgen_regen_${seq}`;
@@ -499,7 +534,11 @@ RUN("Transaction F — atomic validated scene delivery", () => {
       });
 
       const outcome = await deliver(regenAttempt);
-      expect(outcome).toEqual({ kind: "DELIVERED", jobAdvanced: false });
+      // Every Scene of the Job is READY again, so the Job advances again.
+      expect(outcome).toEqual({ kind: "DELIVERED", jobAdvanced: true });
+      expect(
+        (await prisma.generationJob.findUniqueOrThrow({ where: { id: jobId } })).state,
+      ).toBe("SCENES_READY");
 
       const scene = await prisma.generationScene.findUniqueOrThrow({
         where: { id: original.sceneId },
@@ -531,6 +570,37 @@ RUN("Transaction F — atomic validated scene delivery", () => {
         "GENERATING->READY",
         "REVISING->READY",
       ]);
+    });
+
+    it("refuses a USER_REGENERATION that has no delivered predecessor", async () => {
+      // A regeneration *replaces* something. With no delivered request on the
+      // Scene there is nothing to regenerate: the customer spent an entitlement
+      // against a predecessor that does not exist, and delivering would invent
+      // the Scene's first delivery under the wrong request kind. Previously the
+      // predecessor check ran only when the pointer was non-null, so this shape
+      // walked straight through.
+      const jobId = await seedJob();
+      const chain = await seedScene(jobId, 0, {
+        requestKind: "USER_REGENERATION",
+        sceneState: "REVISING",
+      });
+      expect((await snapshot(chain)).pointer).toBeNull();
+      const before = await snapshot(chain);
+      const worldBefore = await worldSnapshot();
+
+      await expect(deliver(chain.attemptId)).rejects.toMatchObject({
+        code: "REGENERATION_PREDECESSOR_MISSING",
+      });
+
+      // Nothing repaired, nothing invented, nothing consumed.
+      expect(await snapshot(chain)).toEqual(before);
+      expect(await worldSnapshot()).toEqual(worldBefore);
+      // No entitlement was spent: the derivation still sees zero.
+      expect(
+        await prisma.sceneGenerationRequest.count({
+          where: { generationSceneId: chain.sceneId, kind: "USER_REGENERATION", state: "DELIVERED" },
+        }),
+      ).toBe(0);
     });
 
     it("refuses a USER_REGENERATION whose Scene never entered REVISING", async () => {
@@ -920,6 +990,69 @@ RUN("Transaction F — atomic validated scene delivery", () => {
         first.attemptId,
         second.attemptId,
       ]);
+    });
+
+    it("does not let a superseded attempt occupy the bound", async () => {
+      // The starvation shape. Request A's ordinal-1 attempt is VALID,
+      // OUTPUT_VERIFIED and has the *oldest* verdict, so `ORDER BY validatedAt
+      // ASC LIMIT n` puts it first — but a newer sibling exists, so every
+      // delivery call for it returns NOT_ELIGIBLE forever. Listing it anyway
+      // means enough such rows permanently occupy the batch and genuinely
+      // deliverable work behind them is never reached.
+      const jobA = await seedJob();
+      const stale = await seedScene(jobA, 0, {
+        validatedAt: new Date("2026-07-01T00:00:00.000Z"),
+      });
+      await seedAttempt(`${stale.attemptId}_next`, stale.requestId, ORG_A, {
+        ordinal: 2,
+        attemptKind: "SYSTEM_RECOVERY",
+        orchestrationState: "PROCESSING",
+        sha256: OTHER_DIGEST,
+        sizeBytes: SIZE,
+      });
+
+      const jobB = await seedJob();
+      const deliverable = await seedScene(jobB, 0, {
+        validatedAt: new Date("2026-07-02T00:00:00.000Z"),
+      });
+
+      // With a bound of one, the single slot goes to the row that can actually
+      // be delivered, not to the older permanently-ineligible one.
+      const bounded = await repository.findValidatedDeliveryCandidates({ limit: 1 });
+      expect(bounded.map((one) => one.sceneGenerationId)).toEqual([deliverable.attemptId]);
+
+      // And the stale row is absent from an unbounded sweep too, so it is
+      // filtered rather than merely out-ranked.
+      const all = await repository.findValidatedDeliveryCandidates({ limit: 100 });
+      expect(all.map((one) => one.sceneGenerationId)).toEqual([deliverable.attemptId]);
+
+      // The runner therefore makes progress on B in a single pass of size one.
+      const runner = new ValidatedSceneDeliveryRunner({
+        repository,
+        context: () => ctx({ correlationId: "corr_starve" }),
+      });
+      expect(await runner.runOnce(1)).toMatchObject({ delivered: 1 });
+      expect((await snapshot(deliverable)).requestState).toBe("DELIVERED");
+      // A's stale attempt was never touched.
+      expect((await snapshot(stale)).requestState).toBe("GENERATING");
+    });
+
+    it("still refuses the superseded attempt when it is named directly", async () => {
+      // Candidate discovery is a hint, so filtering it out of the listing does
+      // not retire the transactional check.
+      const jobId = await seedJob();
+      const chain = await seedScene(jobId, 0);
+      await seedAttempt(`${chain.attemptId}_next`, chain.requestId, ORG_A, {
+        ordinal: 2,
+        attemptKind: "SYSTEM_RECOVERY",
+        orchestrationState: "PROCESSING",
+        sha256: OTHER_DIGEST,
+        sizeBytes: SIZE,
+      });
+      const before = await snapshot(chain);
+
+      expect(await deliver(chain.attemptId)).toEqual({ kind: "NOT_ELIGIBLE" });
+      expect(await snapshot(chain)).toEqual(before);
     });
 
     it("refuses an unusable bound rather than clamping it", async () => {

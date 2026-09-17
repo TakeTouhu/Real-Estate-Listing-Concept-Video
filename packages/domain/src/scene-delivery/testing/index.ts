@@ -171,6 +171,15 @@ export class FakeValidatedSceneDeliveryRepository implements ValidatedSceneDeliv
     });
   }
 
+  /** The greatest attempt ordinal on a request — the same durable fact the SQL uses. */
+  #highestOrdinal(requestId: string): number {
+    return Math.max(
+      ...[...this.attempts.values()]
+        .filter((row) => row.requestId === requestId)
+        .map((row) => row.ordinal),
+    );
+  }
+
   async findValidatedDeliveryCandidates(
     query: ValidatedSceneDeliveryQuery,
   ): Promise<readonly ValidatedSceneDeliveryCandidate[]> {
@@ -183,10 +192,14 @@ export class FakeValidatedSceneDeliveryRepository implements ValidatedSceneDeliv
       if (attempt === undefined || attempt.orchestrationState !== "OUTPUT_VERIFIED") continue;
       const request = this.requests.get(attempt.requestId);
       if (request === undefined || request.state !== "GENERATING") continue;
+      // Superseded attempts are filtered out of the listing, not merely refused
+      // by the transaction: a permanently-ineligible row that stays listable
+      // occupies the bound and starves deliverable work.
+      if (attempt.ordinal !== this.#highestOrdinal(request.id)) continue;
       const scene = this.scenes.get(request.sceneId);
       if (scene === undefined) continue;
       const job = this.jobs.get(scene.jobId);
-      if (job === undefined) continue;
+      if (job === undefined || job.state !== "GENERATING") continue;
       found.push({
         at: validation.validatedAt.getTime(),
         candidate: {
@@ -229,6 +242,10 @@ export class FakeValidatedSceneDeliveryRepository implements ValidatedSceneDeliv
     if (delivered && pointsHere && scene.state === "READY") return { kind: "ALREADY_APPLIED" };
     if (delivered || pointsHere) throw new ValidatedSceneDeliveryDefect("PARTIAL_DELIVERY_STATE");
 
+    // After replay classification, before anything is judged ineligible on
+    // media grounds and before any write.
+    if (job.state !== "GENERATING") return { kind: "NOT_ELIGIBLE" };
+
     const validation = [...this.validations.values()].find(
       (row) => row.attemptId === attempt.id,
     );
@@ -248,15 +265,16 @@ export class FakeValidatedSceneDeliveryRepository implements ValidatedSceneDeliv
       throw new ValidatedSceneDeliveryDefect("RECEIPT_BINDING_CONFLICT");
     }
 
-    const highest = Math.max(
-      ...[...this.attempts.values()]
-        .filter((row) => row.requestId === request.id)
-        .map((row) => row.ordinal),
-    );
-    if (attempt.ordinal !== highest) return { kind: "NOT_ELIGIBLE" };
+    if (attempt.ordinal !== this.#highestOrdinal(request.id)) {
+      return { kind: "NOT_ELIGIBLE" };
+    }
 
     const expected = request.kind === "USER_REGENERATION" ? "REVISING" : "GENERATING";
     if (scene.state !== expected) throw new ValidatedSceneDeliveryDefect("SCENE_STATE_CONFLICT");
+
+    if (request.kind === "USER_REGENERATION" && scene.deliveredRequestId === null) {
+      throw new ValidatedSceneDeliveryDefect("REGENERATION_PREDECESSOR_MISSING");
+    }
 
     if (scene.deliveredRequestId !== null) {
       const previous = this.requests.get(scene.deliveredRequestId);
@@ -279,7 +297,7 @@ export class FakeValidatedSceneDeliveryRepository implements ValidatedSceneDeliv
       (row) => row.jobId === job.id && row.state !== "READY",
     ).length;
     let jobAdvanced = false;
-    if (remaining === 0 && job.state === "GENERATING") {
+    if (remaining === 0) {
       job.state = "SCENES_READY";
       job.version += 1;
       jobAdvanced = true;

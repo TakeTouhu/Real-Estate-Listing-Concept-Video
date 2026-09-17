@@ -80,6 +80,8 @@ export type ValidatedSceneDeliveryDefectCode =
   | "SCENE_STATE_CONFLICT"
   /** The Scene's delivered pointer names a request from another Scene or chain. */
   | "DELIVERY_POINTER_CONFLICT"
+  /** A `USER_REGENERATION` reached delivery with nothing on its Scene to replace. */
+  | "REGENERATION_PREDECESSOR_MISSING"
   /** Request, Scene and pointer disagree about whether delivery happened. */
   | "PARTIAL_DELIVERY_STATE";
 
@@ -89,6 +91,8 @@ const DEFECT_MESSAGES: Record<ValidatedSceneDeliveryDefectCode, string> = {
   SCENE_STATE_CONFLICT: "The scene is not in the state its request kind requires for delivery",
   DELIVERY_POINTER_CONFLICT:
     "The scene's delivered-request pointer does not belong to this scene",
+  REGENERATION_PREDECESSOR_MISSING:
+    "A regeneration reached delivery with no delivered predecessor on its scene",
   PARTIAL_DELIVERY_STATE: "Request, scene and delivered pointer disagree about delivery",
 };
 

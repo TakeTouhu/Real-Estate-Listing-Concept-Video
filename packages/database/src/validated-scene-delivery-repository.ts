@@ -98,6 +98,15 @@ export function createValidatedSceneDeliveryRepository(
       // No lock, no transaction, identifiers only. `deliverValidatedScene`
       // re-checks every condition under its own locks, so this cannot be
       // mistaken for authority. Deterministic order: oldest verdict first.
+      //
+      // Every condition the transaction refuses on is mirrored here, and that
+      // is not redundancy — it is what keeps the bound useful. A row the
+      // transaction will always refuse is still listable forever, so with
+      // `ORDER BY validatedAt ASC LIMIT n` enough permanently-ineligible rows
+      // sit at the head of the queue and starve work that could actually be
+      // delivered. Superseded attempts and non-`GENERATING` Jobs are therefore
+      // filtered out here as well, by the same durable facts the transaction
+      // uses: `attemptOrdinal`, never `createdAt`.
       const rows = await prisma.$queryRaw<CandidateRow[]>`
         SELECT v."id"                       AS "validationId",
                a."id"                       AS "sceneGenerationId",
@@ -114,6 +123,12 @@ export function createValidatedSceneDeliveryRepository(
            AND a."orchestrationState" = 'OUTPUT_VERIFIED'::"GenerationAttemptState"
            AND a."generationSceneRequestId" IS NOT NULL
            AND r."state" = 'GENERATING'::"SceneGenerationRequestState"
+           AND j."state" = 'GENERATING'::"GenerationJobState"
+           AND a."attemptOrdinal" = (
+                 SELECT MAX(sib."attemptOrdinal")
+                   FROM "scene_generations" sib
+                  WHERE sib."generationSceneRequestId" = a."generationSceneRequestId"
+               )
          ORDER BY v."validatedAt" ASC, v."id" ASC
          LIMIT ${limit}
       `;
@@ -147,6 +162,19 @@ export function createValidatedSceneDeliveryRepository(
           // half of it.
           throw new ValidatedSceneDeliveryDefect("PARTIAL_DELIVERY_STATE");
         }
+
+        // ---- 3b. A new delivery needs a Job that is still generating. ---
+        // Deliberately *after* replay classification, so a genuine replay still
+        // answers ALREADY_APPLIED once the Job has legitimately moved past
+        // SCENES_READY.
+        //
+        // Without this, the last Scene of a `REVISING`, `CANCELLED` or
+        // already-`SCENES_READY` Job could become READY and its request
+        // DELIVERED while the Job stayed put. The delivered request then stops
+        // being a candidate, so no later Transaction F call exists to perform
+        // `GENERATING -> SCENES_READY`, and the Job is stranded with no way
+        // back.
+        if (row.jobState !== "GENERATING") return { kind: "NOT_ELIGIBLE" };
 
         // ---- 4. Media authority: the durable VALID verdict only. --------
         if (row.validationStatus !== "VALID" || row.validationValidatedAt === null) {
@@ -189,10 +217,21 @@ export function createValidatedSceneDeliveryRepository(
           throw new ValidatedSceneDeliveryDefect("SCENE_STATE_CONFLICT");
         }
 
-        // A regeneration replaces a pointer that must already name a delivered
-        // request *of this Scene*. The composite foreign key makes a pointer to
-        // another Scene's request impossible at the database level; this checks
-        // the remaining case, a pointer to a request that never delivered.
+        // A regeneration *replaces* something. A `USER_REGENERATION` whose
+        // Scene has no delivered request at all is not a regeneration: there is
+        // nothing to regenerate, the customer spent an entitlement against a
+        // predecessor that does not exist, and delivering would invent the
+        // first delivery of the Scene under the wrong request kind. Fail closed
+        // — the pointer is not created, the predecessor is not invented, and no
+        // entitlement is consumed.
+        if (row.requestKind === "USER_REGENERATION" && row.sceneDeliveredRequestId === null) {
+          throw new ValidatedSceneDeliveryDefect("REGENERATION_PREDECESSOR_MISSING");
+        }
+
+        // A pointer that does exist must already name a delivered request *of
+        // this Scene*. The composite foreign key makes a pointer to another
+        // Scene's request impossible at the database level; this checks the
+        // remaining case, a pointer to a request that never delivered.
         if (row.sceneDeliveredRequestId !== null) {
           const previous = await tx.sceneGenerationRequest.findFirst({
             where: { id: row.sceneDeliveredRequestId, generationSceneId: row.sceneId },
@@ -273,8 +312,12 @@ export function createValidatedSceneDeliveryRepository(
           where: { generationJobId: row.jobId, state: { not: "READY" } },
         });
 
+        // The Job-state authority is the guard above; reaching here means the
+        // Job was `GENERATING` when this transaction read it under its lock.
+        // The compare-and-set still names the state, so the write itself can
+        // never land on a Job that is not generating.
         let jobAdvanced = false;
-        if (notReady === 0 && row.jobState === "GENERATING") {
+        if (notReady === 0) {
           const jobMoved = await tx.generationJob.updateMany({
             where: { id: row.jobId, state: "GENERATING", stateVersion: row.jobVersion },
             data: { state: "SCENES_READY", stateVersion: row.jobVersion + 1 },

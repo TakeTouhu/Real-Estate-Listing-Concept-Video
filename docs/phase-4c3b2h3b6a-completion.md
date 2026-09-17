@@ -19,7 +19,7 @@ it, or calls it.
 - **`ValidatedSceneDeliveryRunner`** (`@app/domain`) — a dormant runner over
   ports, with no scheduler.
 - **A closed outcome vocabulary** — `DELIVERED`, `ALREADY_APPLIED`,
-  `NOT_ELIGIBLE`, `NOT_FOUND` — and four fixed defect codes.
+  `NOT_ELIGIBLE`, `NOT_FOUND` — and five fixed defect codes.
 
 ## The business fact
 
@@ -44,7 +44,7 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     R->>Repo: findValidatedDeliveryCandidates({ limit })
-    Repo->>PG: SELECT ids WHERE verdict VALID, attempt OUTPUT_VERIFIED, request GENERATING
+    Repo->>PG: SELECT ids WHERE verdict VALID, attempt OUTPUT_VERIFIED + latest ordinal,<br/>request GENERATING, Job GENERATING
     PG-->>Repo: identifiers only (a hint, not authority)
     Repo-->>R: candidates
 
@@ -54,12 +54,14 @@ sequenceDiagram
         Repo->>PG: lock Job → Scene → Request → attempt (FOR UPDATE), scoped by organization
         Repo->>PG: one authoritative read (states, versions, receipt, max ordinal)
         Note over Repo: replay? → ALREADY_APPLIED · half-applied? → defect
+        Note over Repo: new delivery needs Job GENERATING, else NOT_ELIGIBLE
         Note over Repo: VALID only · receipt == attempt digest+size · ordinal == max
         Note over Repo: INITIAL expects GENERATING · USER_REGENERATION expects REVISING
+        Note over Repo: USER_REGENERATION needs a DELIVERED predecessor on this Scene
         Repo->>PG: CAS request → DELIVERED (+ deliveredAt) + event
         Repo->>PG: CAS scene → READY + pointer + event
         Repo->>PG: count scenes of this Job not READY
-        opt zero remaining and Job GENERATING
+        opt zero remaining
             Repo->>PG: CAS job → SCENES_READY + event
         end
         Repo->>PG: COMMIT
@@ -92,15 +94,30 @@ The candidate sweep is a hint. It returns identifiers and nothing else, so it
 cannot be mistaken for permission, and every condition is re-read and re-checked
 inside the transaction under its own locks.
 
-| Condition | Effect |
-| --- | --- |
-| Verdict is `VALID` with a verdict instant | required; anything else is `NOT_ELIGIBLE` |
-| Attempt is `OUTPUT_VERIFIED` | required |
-| Request is `GENERATING` | required, and in the compare-and-set `WHERE` |
-| Verdict receipt == attempt digest and size | required; a mismatch is `RECEIPT_BINDING_CONFLICT` |
-| Attempt ordinal == max ordinal on the request | required; otherwise `NOT_ELIGIBLE` |
-| Scene state matches the request kind | `INITIAL` → `GENERATING`, `USER_REGENERATION` → `REVISING`; otherwise `SCENE_STATE_CONFLICT` |
-| Existing pointer names a `DELIVERED` request of this Scene | otherwise `PARTIAL_DELIVERY_STATE` |
+| Condition | Effect | Also filtered in the sweep |
+| --- | --- | --- |
+| Verdict is `VALID` with a verdict instant | required; anything else is `NOT_ELIGIBLE` | yes |
+| Attempt is `OUTPUT_VERIFIED` | required | yes |
+| Request is `GENERATING` | required, and in the compare-and-set `WHERE` | yes |
+| **Job is `GENERATING`** | required for a *new* delivery; otherwise `NOT_ELIGIBLE` | yes |
+| **Attempt ordinal == max ordinal on the request** | required; otherwise `NOT_ELIGIBLE` | yes |
+| Verdict receipt == attempt digest and size | required; a mismatch is `RECEIPT_BINDING_CONFLICT` | no — cannot change after the fact, but a mismatch is a defect rather than a skip |
+| Scene state matches the request kind | `INITIAL` → `GENERATING`, `USER_REGENERATION` → `REVISING`; otherwise `SCENE_STATE_CONFLICT` | no |
+| **A `USER_REGENERATION` has a delivered predecessor** | pointer non-null, same Scene, `DELIVERED`; otherwise `REGENERATION_PREDECESSOR_MISSING` | no |
+| Existing pointer names a `DELIVERED` request of this Scene | otherwise `PARTIAL_DELIVERY_STATE` | no |
+
+### Discovery filters what can never become eligible again
+
+A hint that is never filtered becomes a queue that starves. The sweep is
+`ORDER BY validatedAt ASC LIMIT n`, so a row the transaction will *always*
+refuse sits at the head of the queue forever and consumes a slot on every pass;
+enough of them and deliverable work is never reached. Superseded attempts and
+non-`GENERATING` Jobs are therefore filtered out of discovery as well, using the
+same durable facts the transaction uses — `attemptOrdinal`, never `createdAt`.
+
+Conditions that *can* change between listing and delivery are deliberately not
+mirrored, and the transactional checks all remain: a live-PostgreSQL regression
+proves a superseded attempt is still refused when it is named directly.
 
 The `VALID` gate is a positive test, not a list of statuses to exclude: a
 denylist silently admits whatever status is added next.
@@ -143,6 +160,16 @@ no second source of truth exists.
 never entered `REVISING` is a `SCENE_STATE_CONFLICT`, not something to move into
 place.
 
+A regeneration **replaces** something, so the predecessor is required rather
+than merely validated when present. A `USER_REGENERATION` must find
+`currentDeliveredRequestId` non-null, naming a request of this same Scene whose
+state is `DELIVERED`; otherwise it raises `REGENERATION_PREDECESSOR_MISSING`.
+There is nothing to regenerate, the customer spent an entitlement against a
+predecessor that does not exist, and delivering would invent the Scene's first
+delivery under the wrong request kind. The pointer is not created, the
+predecessor is not invented, no entitlement is consumed and no recovery attempt
+is made.
+
 A pointer to another Scene's request is unstorable — the composite foreign key
 `(currentDeliveredRequestId, id) -> (id, generationSceneId)` rejects it, and a
 regression proves the database does the rejecting.
@@ -154,6 +181,18 @@ Scene became ready, under the Job lock. A `PENDING`, `REVISING`, failed or
 cancelled Scene is not a ready Scene, and a regression covers that. Readiness is
 scoped to the delivered Scene's Job; a second regression proves another Job is
 never advanced.
+
+A **new** delivery additionally requires the Job to be `GENERATING`, checked
+after replay classification and before any write. Otherwise the last Scene of a
+`REVISING`, `CANCELLED` or already-`SCENES_READY` Job would become `READY` and
+its request `DELIVERED` while the Job stayed put — and because a delivered
+request stops being a candidate, no later Transaction F call would exist to
+perform `GENERATING -> SCENES_READY`, stranding the Job permanently. Four
+regressions cover `REVISING`, `SCENES_READY`, `FAILED_TERMINAL` and `CANCELLED`,
+each asserting `NOT_ELIGIBLE` with zero mutation and zero event.
+
+Placing the check after replay classification is deliberate: a genuine replay
+still answers `ALREADY_APPLIED` once the Job has legitimately moved on.
 
 The Job moves `GENERATING -> SCENES_READY` and never beyond.
 `COMPOSITION_PENDING`, composition, the deliverable and quota `CONSUME` all
@@ -212,8 +251,8 @@ schema. Static tests assert each of those.
 | --- | --- |
 | `pnpm typecheck` | pass |
 | `pnpm lint` | pass |
-| `pnpm test` | **4236 passed**, 128 files (4209/126 before this phase, plus 27 in 2 new files) |
-| `pnpm test:db` (live PostgreSQL) | **846 passed**, 25 files (806/24 before this phase, plus 40 in 1 new file) |
+| `pnpm test` | **4239 passed**, 128 files (4209/126 before this phase, plus 30 in 2 new files) |
+| `pnpm test:db` (live PostgreSQL) | **852 passed**, 25 files (806/24 before this phase, plus 46 in 1 new file) |
 | `pnpm build` | pass |
 | `prisma validate` / `prisma format` | pass, no diff |
 | Migrations on an empty database | pass |
@@ -221,12 +260,13 @@ schema. Static tests assert each of those.
 
 ## Mutation ledger
 
-M01–M79 carry forward. M80–M127 were added for this phase. The **complete**
-ledger was run against the final tree — not a composite of one pass plus a
-spot check — and reported **128 run, 128 killed, 0 survivors, 0
-anchor-missing**. No mutation was re-aimed. Restoration was then proved by
-SHA-256: every file in the change set matched its pre-ledger hash, and no
-other tracked file was left modified.
+M01–M79 carry forward. M80–M127 were added for this phase and M128–M131 by the
+correction below. The **complete** ledger was run against the final tree — not a
+composite of one pass plus a spot check — and reported **132 run, 132 killed, 0
+survivors, 0 anchor-missing**. One mutation, M114, was re-aimed; the reason is
+stated under the table. Restoration was then proved by SHA-256: every file in
+the change set matched its pre-ledger hash, no other tracked file was left
+modified, and `git diff --check` was clean.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -278,6 +318,20 @@ other tracked file was left modified.
 | **M125** | The batch bound is clamped instead of refused | bound-validation tests |
 | **M126** | A defect message carries an identifier | defect-message test |
 | **M127** | The runner is wired into a production composition root | dormancy tests |
+| **M128** | Discovery stops enforcing latest attempt, so superseded rows occupy the bound | bounded-starvation regression |
+| **M129** | A `USER_REGENERATION` with no delivered predecessor is delivered | missing-predecessor regression |
+| **M130** | The transactional Job `GENERATING` authority is removed | the four non-`GENERATING` Job regressions |
+| **M131** | Discovery stops filtering non-`GENERATING` Jobs | the four non-`GENERATING` Job regressions |
+
+**M114 re-aim, stated explicitly.** Its defect is unchanged — "a Job that is not
+`GENERATING` is advanced to `SCENES_READY`" — but this correction moved where
+the Job-state authority lives. It used to be a redundant clause inside the
+readiness condition plus the compare-and-set guard; it is now an explicit guard
+taken after replay classification and before any write, plus the same
+compare-and-set guard. The mutation still removes both Job-state authorities, so
+it targets the identical defect at its new location. Leaving it aimed at the old
+text would have reported `ANCHOR-MISSING`; re-pointing it at anything weaker
+would have reported a false kill.
 
 ### Clauses deliberately absent from the ledger
 

@@ -155,21 +155,66 @@ describe("what a pass does not do", () => {
     ]);
   });
 
-  it("reports an ineligible candidate rather than retrying it", async () => {
+  it("is never offered a superseded attempt, so it cannot be starved by one", async () => {
+    const repository = new FakeValidatedSceneDeliveryRepository();
+    const stale = repository.seed({ suffix: "stale", validatedAt: new Date(1) });
+    repository.seedNewerAttempt(stale, 2);
+    const fresh = repository.seed({ suffix: "fresh", validatedAt: new Date(2) });
+
+    const { runner: subject } = runner(repository);
+    // A bound of one: the slot must go to work that can actually be delivered,
+    // not to the older permanently-ineligible row.
+    const report = await subject.runOnce(1);
+
+    expect(report.delivered).toBe(1);
+    expect(repository.calls).toEqual(["find", `deliver:${fresh}`]);
+  });
+
+  it("still refuses a candidate that was superseded after it was listed", async () => {
     const repository = new FakeValidatedSceneDeliveryRepository();
     const attempt = repository.seed({ suffix: "stale" });
-    // The listing saw it; by delivery time a newer attempt exists.
+
+    // The listing is a hint, and this is the window it cannot close: the row
+    // was eligible when listed and is superseded by the time it is delivered.
+    const listed = await repository.findValidatedDeliveryCandidates({ limit: 10 });
+    expect(listed.map((one) => one.sceneGenerationId)).toEqual([attempt]);
     repository.seedNewerAttempt(attempt, 2);
+
+    // Addressed directly, exactly as a runner holding a stale listing would.
+    const outcome = await repository.deliverValidatedScene({
+      organizationId: "org_a",
+      sceneGenerationId: attempt,
+      context: fakeDeliveryContext("corr-superseded"),
+    });
+
+    expect(outcome).toEqual({ kind: "NOT_ELIGIBLE" });
+    expect(repository.requests.get("req_stale")?.state).toBe("GENERATING");
+    expect(repository.scenes.get("scene_stale")?.state).toBe("GENERATING");
+  });
+
+  it("is never offered a candidate whose Job is not generating", async () => {
+    const repository = new FakeValidatedSceneDeliveryRepository();
+    repository.seed({ suffix: "revising", jobState: "REVISING" });
 
     const { runner: subject } = runner(repository);
     const report = await subject.runOnce(10);
 
     expect(report.delivered).toBe(0);
-    expect(report.outcomes).toEqual([
-      { sceneGenerationId: attempt, outcome: { kind: "NOT_ELIGIBLE" } },
-    ]);
-    // One attempt, not a retry loop.
-    expect(repository.calls).toEqual(["find", `deliver:${attempt}`]);
+    expect(repository.calls).toEqual(["find"]);
+  });
+
+  it("lets a missing regeneration predecessor out as a defect", async () => {
+    const repository = new FakeValidatedSceneDeliveryRepository();
+    repository.seed({
+      suffix: "orphan",
+      requestKind: "USER_REGENERATION",
+      sceneState: "REVISING",
+    });
+
+    const { runner: subject } = runner(repository);
+    await expect(subject.runOnce(10)).rejects.toMatchObject({
+      code: "REGENERATION_PREDECESSOR_MISSING",
+    });
   });
 
   it("reports a replay as ALREADY_APPLIED and writes nothing again", async () => {
@@ -237,6 +282,7 @@ describe("the event vocabulary is fixed and application-owned", () => {
       "SCENE_STATE_CONFLICT",
       "DELIVERY_POINTER_CONFLICT",
       "PARTIAL_DELIVERY_STATE",
+      "REGENERATION_PREDECESSOR_MISSING",
     ] as const) {
       const defect = new ValidatedSceneDeliveryDefect(code);
       expect(defect.code).toBe(code);

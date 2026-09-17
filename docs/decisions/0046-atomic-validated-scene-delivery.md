@@ -68,6 +68,21 @@ verdict can be superseded, the Scene can move, or another worker can deliver, so
 locks. The candidate type carries identifiers and nothing else, so a caller
 cannot mistake it for authority.
 
+### A hint that is not filtered becomes a queue that starves
+
+Being "only a hint" does not excuse listing rows the transaction will always
+refuse. The sweep is `ORDER BY validatedAt ASC LIMIT n`, so a permanently
+ineligible row sits at the head of the queue forever and consumes a slot on
+every pass. Enough of them and genuinely deliverable work is never reached — a
+liveness failure that no amount of transactional correctness repairs.
+
+So every condition that can *never* become true again is mirrored in discovery,
+by the same durable facts the transaction uses: the attempt must be the latest
+for its request by `attemptOrdinal`, and the Job must still be `GENERATING`.
+Conditions that can change between listing and delivery are deliberately not
+treated as authority — they are re-checked inside the transaction, and the
+window they leave open is the whole reason the transactional checks stay.
+
 ## Decision 3 — The verdict must be about the bytes being delivered
 
 Before anything moves, the validation's frozen receipt is compared to the
@@ -117,6 +132,24 @@ Symmetrically, Transaction F does **not** own `READY -> REVISING`. A
 delivery expects `GENERATING`; anything else is a `SCENE_STATE_CONFLICT` defect
 rather than something to move into place.
 
+## Decision 6b — A new delivery requires a `GENERATING` Job
+
+Checked inside the transaction, after replay classification and before any
+write. A non-`GENERATING` Job yields `NOT_ELIGIBLE` with zero mutation and zero
+event.
+
+The ordering matters in both directions. It is *after* replay classification so
+that a genuine replay still answers `ALREADY_APPLIED` once the Job has
+legitimately moved past `SCENES_READY`. It is *before* any write because the
+alternative strands the Job permanently: the last Scene of a `REVISING`,
+`CANCELLED` or already-`SCENES_READY` Job would become `READY` and its request
+`DELIVERED`, the delivered request would stop being a candidate, and no later
+Transaction F call would exist to perform `GENERATING -> SCENES_READY`.
+
+This is consistent with the Job state machine rather than a new rule: the
+regeneration path is `DELIVERABLE_READY -> REVISING -> GENERATING`, so a
+regeneration whose attempt has output to deliver has a `GENERATING` Job.
+
 ## Decision 7 — The regeneration right is consumed by `deliveredAt`, not a counter
 
 Entitlement stays derived: the number of used regenerations is the number of
@@ -124,6 +157,16 @@ Entitlement stays derived: the number of used regenerations is the number of
 no counter and no second source of truth. The pointer switches to the new
 request and the superseded request row is left exactly as it is — `DELIVERED`,
 with its own delivery instant — because it is history, not garbage.
+
+A regeneration *replaces* something, so the predecessor is required, not merely
+validated when present. Before any write, a `USER_REGENERATION` must find
+`currentDeliveredRequestId` non-null, naming a request of this same Scene whose
+state is `DELIVERED`. A regeneration with no delivered predecessor is not a
+regeneration: there is nothing to regenerate, the customer spent an entitlement
+against something that does not exist, and delivering would invent the Scene's
+first delivery under the wrong request kind. It raises
+`REGENERATION_PREDECESSOR_MISSING` — the pointer is not created, the predecessor
+is not invented, no entitlement is consumed and no recovery attempt is made.
 
 A pointer to another Scene's request is unstorable: the composite foreign key
 `(currentDeliveredRequestId, id) -> (id, generationSceneId)` rejects it at the

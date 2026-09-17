@@ -59,6 +59,29 @@ constructs the runner, schedules it, or calls it.
   `USER_REGENERATION` requests. No counter was added, and the superseded
   request row is left untouched as history.
 
+### Liveness and regeneration guarantees
+
+- **Discovery filters what can never become eligible again.** A candidate the
+  transaction will always refuse still occupies a slot in an
+  `ORDER BY validatedAt ASC LIMIT n` sweep, forever, starving deliverable work
+  behind it. Superseded attempts (by `attemptOrdinal`, never `createdAt`) and
+  non-`GENERATING` Jobs are therefore filtered out of the listing as well as
+  refused by the transaction. The transactional checks all remain, because
+  discovery is still only a hint.
+- **A new delivery requires a `GENERATING` Job**, checked after replay
+  classification and before any write. Otherwise the last Scene of a `REVISING`,
+  `CANCELLED` or already-`SCENES_READY` Job could become `READY` with its
+  request `DELIVERED` while the Job stayed put — and since a delivered request
+  stops being a candidate, no later Transaction F call would exist to perform
+  `GENERATING -> SCENES_READY`, stranding the Job. Placing the check after
+  replay classification keeps a genuine replay answering `ALREADY_APPLIED`.
+- **A regeneration must replace a delivered predecessor.** A
+  `USER_REGENERATION` requires `currentDeliveredRequestId` to be non-null and to
+  name a `DELIVERED` request of the same Scene; otherwise it raises
+  `REGENERATION_PREDECESSOR_MISSING`. With nothing to regenerate, delivering
+  would invent the Scene's first delivery under the wrong request kind. No
+  pointer is created, no predecessor invented, no entitlement consumed.
+
 ### Unchanged, on purpose
 
 - **No schema change and no migration.** `deliveredAt`,
