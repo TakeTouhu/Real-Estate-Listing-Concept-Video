@@ -12,3 +12,4 @@ export { createSubmissionOutcomeRepository } from "./submission-outcome-reposito
 export { createReconciliationRepository } from "./reconciliation-repository";
 export { createCompletionRepository } from "./completion-repository";
 export { createProviderPollingContextReader } from "./provider-output-repository";
+export { createMediaValidationLifecycleRepository } from "./media-validation-lifecycle-repository";

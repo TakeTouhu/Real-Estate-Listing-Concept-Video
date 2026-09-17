@@ -389,7 +389,7 @@ enum SceneGenerationState {
 /// Tenant scope is inherited through VideoProject, never denormalized — the
 /// same model storyboard_scenes uses.
 model SceneGeneration {
-  id                                String                     @id
+  id                                String                        @id
   videoProjectId                    String
   /// Provenance only — no FK. Recomposition replaces storyboard scenes.
   sourceStoryboardSceneId           String
@@ -443,7 +443,7 @@ model SceneGeneration {
   /// Frozen so a renderer change cannot alter an already-admitted attempt.
   /// Customer-authored text. Never logged, audited, or put on a queue payload.
   requestRenderedPrompt             String?
-  state                             SceneGenerationState       @default(QUEUED)
+  state                             SceneGenerationState          @default(QUEUED)
   /// --- Phase 4C-3B-2E orchestration linkage --------------------------------
   /// Every column below is NULLABLE, and that is a migration decision rather
   /// than a modelling one. Rows admitted before this phase have no logical
@@ -474,7 +474,7 @@ model SceneGeneration {
   /// than a rewrite of it: legacy rows keep the legacy vocabulary, because
   /// relabelling a historical state is a claim nobody can verify now.
   orchestrationState                GenerationAttemptState?
-  stateVersion                      Int                        @default(0)
+  stateVersion                      Int                           @default(0)
   /// When this attempt crossed into SUBMITTING. Set exactly once. A row with
   /// this set has been at the provider boundary and must never return to QUEUED.
   submissionBoundaryEnteredAt       DateTime?
@@ -520,23 +520,31 @@ model SceneGeneration {
   outputSizeBytes                   BigInt?
   /// One post-lock service clock instant. Never provider- or caller-supplied.
   outputVerifiedAt                  DateTime?
-  createdAt                         DateTime                   @default(now())
-  updatedAt                         DateTime                   @updatedAt
+  createdAt                         DateTime                      @default(now())
+  updatedAt                         DateTime                      @updatedAt
   /// RESTRICT, not Cascade. A generation may record a paid provider attempt, so
   /// a future physical project deletion must resolve retention policy
   /// deliberately rather than silently erasing history through a cascade that
   /// happened to be in the schema. No physical deletion path exists today, so
   /// this changes no current behaviour (docs/decisions/TODO.md).
-  videoProject                      VideoProject               @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  videoProject                      VideoProject                  @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
   /// RESTRICT again: the logical request must not be deletable while a provider
   /// attempt against it exists.
-  generationSceneRequest            SceneGenerationRequest?    @relation(fields: [generationSceneRequestId], references: [id], onDelete: Restrict)
+  generationSceneRequest            SceneGenerationRequest?       @relation(fields: [generationSceneRequestId], references: [id], onDelete: Restrict)
   pricingSnapshot                   GenerationPricingSnapshot?
+  /// Optional, and absent is a meaningful state: an attempt that reached
+  /// OUTPUT_VERIFIED before Phase 4C-3B-2H-3B-5 has no record, and the
+  /// lifecycle runner discovers it rather than a backfill inventing one.
+  mediaValidation                   ManagedOutputMediaValidation?
 
   @@unique([generationSceneRequestId, attemptOrdinal])
   @@index([videoProjectId])
   @@index([state])
   @@index([generationSceneRequestId])
+  /// Supports the media-validation candidate sweep, which orders by
+  /// `outputVerifiedAt` within `orchestrationState = OUTPUT_VERIFIED`. No such
+  /// index existed; the three above are on other columns entirely.
+  @@index([orchestrationState, outputVerifiedAt])
   // At most one ACTIVE attempt per (videoProjectId, requestHash) is enforced by
   // a partial unique index added by raw SQL in the migration: Prisma cannot
   // express `WHERE` on an index. See docs/migration-notes.md.
@@ -892,4 +900,98 @@ model GenerationTransitionEvent {
   @@index([aggregateId])
   @@index([correlationId])
   @@map("generation_transition_events")
+}
+
+// ===========================================================================
+// Phase 4C-3B-2H-3B-5 — durable managed-output media-validation lifecycle
+//
+// One orthogonal durable fact, deliberately not another orchestration state.
+//
+// `OUTPUT_VERIFIED` remains terminal for the provider-attempt byte-integrity
+// lifecycle and keeps its exact meaning: canonical managed bytes were copied
+// and byte-level integrity was verified. Appending a media state after it would
+// retroactively redefine what every already-`OUTPUT_VERIFIED` row claimed, and
+// would bind a question about container structure to a state machine about
+// provider execution. So media validity lives in its own one-to-one record with
+// its own closed vocabulary, and nothing in this phase makes a Scene ready or
+// creates a recovery attempt from it.
+//
+// Rows are NOT created by the completion transaction. An attempt that reached
+// `OUTPUT_VERIFIED` before this phase has no validation record, and backfilling
+// one would be inventing a verdict; the runner discovers absent records
+// instead, which leaves completion untouched and makes history discoverable.
+// ===========================================================================
+
+enum ManagedOutputMediaValidationStatus {
+  PENDING
+  RUNNING
+  VALID
+  INVALID_MEDIA
+  INTEGRITY_MISMATCH
+}
+
+enum ManagedOutputMediaInvalidReason {
+  CONTAINER_UNSUPPORTED
+  VIDEO_STREAM_MISSING
+  VIDEO_DIMENSIONS_INVALID
+  DURATION_INVALID
+  PROBE_REJECTED
+}
+
+enum ManagedOutputContainerFamily {
+  ISO_BMFF
+}
+
+model ManagedOutputMediaValidation {
+  id                String                             @id
+  /// One validation per attempt. The uniqueness is what makes two workers
+  /// racing to create the first record resolvable: exactly one insert wins.
+  sceneGenerationId String                             @unique
+  status            ManagedOutputMediaValidationStatus @default(PENDING)
+  /// --- Immutable byte binding -----------------------------------------------
+  /// Which bytes this verdict is about, frozen at creation. A validation answers
+  /// a question about *specific* bytes; without naming them permanently, a
+  /// record created against one object could later be read as a verdict about a
+  /// different object at the same key — exactly what INTEGRITY_MISMATCH exists
+  /// to detect. Never "repaired" to match a newer receipt.
+  receiptSha256     String
+  /// BIGINT for the same reason as `scene_generations.outputSizeBytes`: the
+  /// domain admits any positive safe integer and int4 overflows at 2 GiB.
+  receiptSizeBytes  BigInt
+  /// --- Lease / retry --------------------------------------------------------
+  /// Opaque and random. Carries no organization, scene, attempt, key or
+  /// provider identity, so it discloses nothing if it is ever logged.
+  leaseToken        String?
+  /// Crash recovery, not a deadline: it says how long the system waits before
+  /// assuming the owner died, not that the work must finish by then.
+  leaseExpiresAt    DateTime?
+  nextAttemptAt     DateTime?
+  attemptCount      Int                                @default(0)
+  /// Incremented on every transition. With `leaseToken` this is what makes a
+  /// stale worker's late finalize match zero rows.
+  version           Int                                @default(0)
+  /// --- Terminal verdict -----------------------------------------------------
+  invalidReason     ManagedOutputMediaInvalidReason?
+  container         ManagedOutputContainerFamily?
+  /// The five normalized media facts. BIGINT so a safe JS integer round-trips
+  /// exactly; a CHECK bounds each at Number.MAX_SAFE_INTEGER so the column's
+  /// range and the domain's range are the same range.
+  durationMs        BigInt?
+  videoWidth        BigInt?
+  videoHeight       BigInt?
+  videoStreamCount  BigInt?
+  /// Zero is legal: a walkthrough with no audio track is valid media.
+  audioStreamCount  BigInt?
+  validatedAt       DateTime?
+  createdAt         DateTime                           @default(now())
+  updatedAt         DateTime                           @updatedAt
+  /// RESTRICT, never Cascade. A validation record describes a possibly-paid
+  /// attempt's output; a future physical deletion must resolve retention policy
+  /// deliberately rather than erasing durable validation history through a
+  /// cascade that happened to be in the schema.
+  sceneGeneration   SceneGeneration                    @relation(fields: [sceneGenerationId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
+  @@map("managed_output_media_validations")
 }
