@@ -51,7 +51,7 @@ transient outcome — the absence of a verdict — and returns the row to `PENDI
 | Choice | Why |
 | --- | --- |
 | Separate table, one-to-one on `sceneGenerationId` | Media validity is orthogonal to provider execution; appending a state would retroactively redefine existing rows |
-| `sceneGenerationId` UNIQUE | Also the race resolver: exactly one concurrent insert wins |
+| `sceneGenerationId` UNIQUE | Also the race resolver: exactly one concurrent insert wins, and the loser's insert is conflict-free so its transaction survives |
 | `onDelete: Restrict` | Durable validation history of a possibly-paid attempt is not erasable through a cascade |
 | Enums for status, invalid reason, container | No raw ffprobe name, codec, stderr, JSON, command, signal, AWS error or temp path can ever be persisted |
 | `BIGINT` for receipt size and all five media facts | The domain admits any positive safe integer; `int4` overflows at 2 GiB |
@@ -93,7 +93,7 @@ the attempt's state between listing and claim.
 | Rule | How it is held |
 | --- | --- |
 | Three guards on every post-claim write | `version`, `leaseToken` and the receipt are all in the `WHERE` clause; a zero-row write reports `LOST`, which is a correct outcome |
-| Concurrent creation | The unique index picks the winner; the loser re-reads once, bounded, and no Prisma exception escapes |
+| Concurrent creation | `INSERT … ON CONFLICT ("sceneGenerationId") DO NOTHING RETURNING` — the loser gets zero rows rather than a duplicate-key error, so its transaction is never aborted and it re-reads the winner's row once, bounded. A unique-constraint violation would abort the PostgreSQL transaction and make any in-transaction "recovery" read fail with `25P02`; no `P2002` and no aborted-transaction error escapes |
 | Crash recovery | An expired lease is reclaimed with a fresh token, and `attemptCount` and `version` both advance |
 | Stale finalize | A worker whose lease expired and whose row was reclaimed matches zero rows and cannot overwrite the winner |
 | Terminal rows | Never reopened — the claim refuses them, whatever they say |
@@ -171,7 +171,7 @@ module, so reaching them would require a visible, reviewable change.
 | `pnpm typecheck` | Pass — all projects |
 | `pnpm lint` | Pass — 0 problems |
 | `pnpm test` | **4209 passed**, 126 files |
-| `pnpm test:db` (live PostgreSQL) | **805 passed**, 24 files |
+| `pnpm test:db` (live PostgreSQL) | **806 passed**, 24 files |
 | `pnpm build` | Pass |
 | `prisma validate` / `format` | Pass |
 | Migrations against an empty database | Pass — applied cleanly to a fresh database |
@@ -179,8 +179,8 @@ module, so reaching them would require a visible, reviewable change.
 
 ## Mutation ledger
 
-M01–M65 carry forward. M66–M78 added for the new durable failure domain; M71 was
-re-aimed once during development, documented below.
+M01–M65 carry forward. M66–M79 added for the new durable failure domain. Two
+mutations were re-aimed, both documented below.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -197,6 +197,7 @@ re-aimed once during development, documented below.
 | **M76** | A malformed validator result is persisted as a verdict | malformed-result tests |
 | **M77** | A thrown validator escapes raw | defect-leakage tests |
 | **M78** | The batch limit is no longer bounded before SQL | limit-validation tests |
+| **M79** | The first-record insert throws on conflict and "recovery" reuses the aborted transaction | deterministic live-Postgres race regression |
 
 **M71 re-aim, stated explicitly.** It first targeted the `status: "RUNNING"`
 clause in the finalize `WHERE`. That mutation is *unobservable*: every transition
@@ -206,6 +207,17 @@ holding a lease at all. The clause is deliberately kept as redundant defence, bu
 it cannot be killed by any test, so M71 was re-aimed at the claim-level terminal
 branch — the guard that actually protects a settled verdict from being reopened.
 The mutation's stated intent is unchanged.
+
+**M67 re-aim, stated explicitly.** Its anchor was the receipt fields of the
+Prisma `create` that the first-record claim used. The claim-race correction
+replaced that `create` with a parameterized `ON CONFLICT DO NOTHING` statement,
+so the anchor text no longer exists and the first full ledger run after the
+correction reported `ANCHOR-MISSING`. M67 was re-aimed at the same two values in
+their new position — the bound `${eligible.receipt.sha256}` and
+`${BigInt(eligible.receipt.sizeBytes)}` parameters — which is the identical
+defect: the record bound to something other than the attempt's own receipt. It
+is killed by 15 tests. The ledger was then re-run complete rather than reported
+as a composite of one run plus a spot check.
 
 ## Not done, on purpose
 

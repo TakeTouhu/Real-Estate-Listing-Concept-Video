@@ -217,24 +217,47 @@ export function createMediaValidationLifecycleRepository(
         if (eligible === null) return { kind: "NOT_ELIGIBLE" };
 
         // ---- No record yet: the historical-attempt path. -------------------
+        //
+        // Two workers can both read this row as absent and then both try to
+        // create it. The loser must survive that, and *how* it loses matters:
+        // a unique-constraint violation aborts the PostgreSQL transaction, so
+        // catching the driver's error in JavaScript and continuing to query the
+        // same `tx` is not recovery — every following statement fails with
+        // `25P02 current transaction is aborted`. The only safe shape is an
+        // insert that never raises on conflict, so the transaction stays
+        // healthy and the loser can simply read what the winner wrote.
+        //
+        // `ON CONFLICT DO NOTHING` inserts at most one row and returns zero
+        // rows when another worker already holds the key. The values are bound
+        // as parameters by Prisma's tagged template; nothing is interpolated.
         if (row.validationId === null) {
           const id = `momv_${randomUUID()}`;
-          try {
-            const created = await tx.managedOutputMediaValidation.create({
-              data: {
-                id,
-                sceneGenerationId,
-                status: "RUNNING",
-                receiptSha256: eligible.receipt.sha256,
-                receiptSizeBytes: BigInt(eligible.receipt.sizeBytes),
-                leaseToken,
-                leaseExpiresAt: expires,
-                nextAttemptAt: null,
-                attemptCount: 1,
-                version: 1,
-              },
-              select: { id: true, version: true },
-            });
+          const inserted = await tx.$queryRaw<{ id: string; version: number }[]>`
+            INSERT INTO "managed_output_media_validations" (
+              "id", "sceneGenerationId", "status",
+              "receiptSha256", "receiptSizeBytes",
+              "leaseToken", "leaseExpiresAt", "nextAttemptAt",
+              "attemptCount", "version", "createdAt", "updatedAt"
+            ) VALUES (
+              ${id},
+              ${sceneGenerationId},
+              'RUNNING'::"ManagedOutputMediaValidationStatus",
+              ${eligible.receipt.sha256},
+              ${BigInt(eligible.receipt.sizeBytes)},
+              ${leaseToken},
+              ${expires},
+              NULL,
+              1,
+              1,
+              CURRENT_TIMESTAMP,
+              CURRENT_TIMESTAMP
+            )
+            ON CONFLICT ("sceneGenerationId") DO NOTHING
+            RETURNING "id", "version"
+          `;
+
+          const created = inserted[0];
+          if (created !== undefined) {
             return {
               kind: "CLAIMED",
               claim: {
@@ -246,19 +269,20 @@ export function createMediaValidationLifecycleRepository(
                 expectedReceipt: eligible.receipt,
               },
             };
-          } catch (error) {
-            // Two workers discovered the same missing row. The unique index let
-            // exactly one insert win; the loser re-reads and reports what it
-            // found. Bounded — one re-read, no retry loop — and safe, because
-            // no provider or storage action has happened yet. The Prisma
-            // exception itself never leaves this method.
-            if (!isUniqueViolation(error)) throw error;
-            const again = await readContext(tx, sceneGenerationId);
-            if (again === null || again.status === null) return { kind: "NOT_CLAIMED" };
-            return again.status === "PENDING" || again.status === "RUNNING"
-              ? { kind: "NOT_CLAIMED" }
-              : { kind: "ALREADY_TERMINAL" };
           }
+
+          // Another worker won the first-record race. The transaction was never
+          // poisoned, so this read succeeds; it reports what the winner wrote
+          // and never reclaims or overwrites it. One read, no loop.
+          const again = await readContext(tx, sceneGenerationId);
+          if (again === null || again.status === null) {
+            // The key existed a moment ago and is now unreadable. Nothing here
+            // can establish ownership, so fail closed rather than guess.
+            return { kind: "NOT_CLAIMED" };
+          }
+          return again.status === "PENDING" || again.status === "RUNNING"
+            ? { kind: "NOT_CLAIMED" }
+            : { kind: "ALREADY_TERMINAL" };
         }
 
         // ---- A record exists. -----------------------------------------------
@@ -459,16 +483,6 @@ async function write(
     data: { ...data, version: claim.version + 1 },
   });
   return count === 1 ? { kind: "WRITTEN" } : { kind: "LOST" };
-}
-
-/** Whether a thrown value is a Prisma unique-constraint violation. */
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  try {
-    return (error as { code?: unknown }).code === "P2002";
-  } catch {
-    return false;
-  }
 }
 
 /** Row shape the read model is built from. */

@@ -42,6 +42,34 @@ One attempt's output is one object, so one verdict. The uniqueness on
 `sceneGenerationId` is not merely tidiness: it is the mechanism that resolves
 the concurrent-creation race, because exactly one insert can win.
 
+### Losing that race must not poison the transaction
+
+Two workers can both read the row as absent and both try to create it. *How*
+the loser loses decides whether the claim transaction survives.
+
+A unique-constraint violation **aborts the PostgreSQL transaction**. Catching the
+driver's error in JavaScript does not restore it: every subsequent statement on
+that connection fails with `25P02 current transaction is aborted, commands
+ignored until end of transaction block`. So "insert, catch the duplicate-key
+error, then re-read inside the same transaction" is not bounded recovery — it is
+a second, worse failure, and the re-read never runs.
+
+The first-record insert is therefore conflict-free:
+
+```sql
+INSERT INTO "managed_output_media_validations" (…)
+VALUES (…)
+ON CONFLICT ("sceneGenerationId") DO NOTHING
+RETURNING "id", "version"
+```
+
+It inserts at most one row and returns zero rows when another worker already
+holds the key — no error is raised, so the transaction stays healthy and the
+loser simply reads what the winner wrote. One read, no loop, and the winner is
+never reclaimed or overwritten during the first-record race. Every value is
+bound as a parameter by Prisma's tagged template; nothing is interpolated into
+SQL.
+
 ## Decision 3 — The receipt binding is immutable
 
 Every record permanently carries the `receiptSha256` and `receiptSizeBytes` it

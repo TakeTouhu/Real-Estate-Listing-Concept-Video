@@ -409,6 +409,175 @@ RUN("durable media-validation lifecycle (live database)", () => {
       expect(await prisma.managedOutputMediaValidation.count()).toBe(1);
     });
 
+    it("resolves a forced first-record race where both workers observed the row absent", async () => {
+      // `Promise.all` alone does not prove the race: the first claim usually
+      // commits before the second one even reads, so the second takes the
+      // ordinary "a record exists" path and the first-record insert never
+      // competes. This forces the interleaving the production code must
+      // survive.
+      //
+      // The synchronisation is a PostgreSQL lock, not a timer. A third session
+      // inserts the key and *holds the transaction open*: at READ COMMITTED both
+      // workers' `SELECT` sees the row as absent, and both then block on the
+      // uncommitted unique key when they try to insert. Only once both are
+      // provably blocked is the holder rolled back, releasing them to race for
+      // real with PostgreSQL serialising the two inserts.
+      //
+      // Against the pre-correction head this test fails: the loser's insert
+      // raised a duplicate-key error, which aborts the PostgreSQL transaction,
+      // so the in-transaction "recovery" read failed with `25P02` and the
+      // rejection escaped `claim()`.
+      await seedVerifiedAttempt("sgen_mvl_forced");
+
+      // Generous transaction bounds: two workers deliberately sit blocked on a
+      // lock, which the 5s default would kill before the race could happen.
+      const options = { transactionOptions: { timeout: 25_000, maxWait: 25_000 } };
+      const holder = new PrismaClient(options);
+      const workerA = new PrismaClient(options);
+      const workerB = new PrismaClient(options);
+
+      let releaseHolder!: () => void;
+      const holderMayRollBack = new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+
+      /** How many backends are currently waiting on a lock in this database. */
+      async function blockedBackends(): Promise<number> {
+        const rows = await prisma.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
+          `SELECT wait_event_type FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+        );
+        return rows.filter((r) => r.wait_event_type === "Lock").length;
+      }
+
+      // The holder takes the key and keeps its transaction open. Throwing at
+      // the end rolls it back, so this row never survives and neither worker
+      // inherits it.
+      const holderDone = holder
+        .$transaction(async (tx) => {
+          await tx.$executeRaw`
+            INSERT INTO "managed_output_media_validations" (
+              "id", "sceneGenerationId", "status",
+              "receiptSha256", "receiptSizeBytes",
+              "leaseToken", "leaseExpiresAt", "nextAttemptAt",
+              "attemptCount", "version", "createdAt", "updatedAt"
+            ) VALUES (
+              ${"momv_holder"}, ${"sgen_mvl_forced"},
+              'RUNNING'::"ManagedOutputMediaValidationStatus",
+              ${DIGEST}, ${BigInt(SIZE)}, ${"holder"}, ${new Date(Date.now() + 60_000)},
+              NULL, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+          `;
+          await holderMayRollBack;
+          throw new Error("rollback-holder");
+        })
+        .catch(() => undefined);
+
+      // Each worker's claim is captured as a settled result rather than left to
+      // reject in flight, so a thrown `P2002` or `25P02` surfaces as a readable
+      // assertion instead of an unhandled rejection.
+      type Settled =
+        | { readonly ok: true; readonly value: Awaited<ReturnType<ReturnType<typeof repo>["claim"]>> }
+        | { readonly ok: false; readonly error: unknown };
+
+      const now = Date.now();
+      const settled = [false, false];
+      const run = (client: PrismaClient, token: string, index: number): Promise<Settled> =>
+        createMediaValidationLifecycleRepository(client)
+          .claim({
+            sceneGenerationId: "sgen_mvl_forced",
+            now,
+            leaseToken: token,
+            leaseExpiresAt: now + 60_000,
+          })
+          .then(
+            (value): Settled => {
+              settled[index] = true;
+              return { ok: true, value };
+            },
+            (error: unknown): Settled => {
+              settled[index] = true;
+              return { ok: false, error };
+            },
+          );
+
+      const claimA = run(workerA, "worker-A", 0);
+      const claimB = run(workerB, "worker-B", 1);
+
+      // Wait until both workers are past their SELECT and blocked on the
+      // holder's key. Polling only *observes* the lock; the lock is what orders
+      // the race.
+      let blockedSeen = false;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        if ((await blockedBackends()) >= 2) {
+          blockedSeen = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      // Both workers reached the insert with the row still absent to them, and
+      // neither has finished: they are blocked, not done.
+      expect(blockedSeen).toBe(true);
+      expect(settled).toEqual([false, false]);
+      // Nothing is committed yet: the holder still owns the key.
+      expect(await prisma.managedOutputMediaValidation.count()).toBe(0);
+
+      releaseHolder();
+      await holderDone;
+
+      const results = await Promise.all([claimA, claimB]);
+
+      // No duplicate-key error and no aborted-transaction error escaped.
+      for (const result of results) {
+        if (!result.ok) {
+          throw new Error(
+            `claim rejected instead of resolving: ${String(
+              (result.error as { code?: unknown; message?: unknown }).code ??
+                (result.error as { message?: unknown }).message ??
+                result.error,
+            )}`,
+          );
+        }
+      }
+      const outcomes = results.map((r) => (r.ok ? r.value : null)).filter((v) => v !== null);
+      const kinds = outcomes.map((o) => o.kind).sort();
+
+      expect(kinds).toEqual(["CLAIMED", "NOT_CLAIMED"]);
+      expect(kinds.filter((k) => k === "CLAIMED")).toHaveLength(1);
+      expect(kinds.filter((k) => k === "NOT_CLAIMED")).toHaveLength(1);
+      // Exactly one durable row, and it is a worker's — not the holder's.
+      expect(await prisma.managedOutputMediaValidation.count()).toBe(1);
+
+      const winner = outcomes.find((o) => o.kind === "CLAIMED");
+      if (winner === undefined || winner.kind !== "CLAIMED") throw new Error("no winner");
+      const row = await prisma.managedOutputMediaValidation.findUniqueOrThrow({
+        where: { sceneGenerationId: "sgen_mvl_forced" },
+      });
+      expect(row.id).not.toBe("momv_holder");
+      expect(row.id).toBe(winner.claim.validationId);
+      expect(row.leaseToken).toBe(winner.claim.leaseToken);
+      expect(["worker-A", "worker-B"]).toContain(row.leaseToken);
+      expect(row.version).toBe(1);
+      expect(winner.claim.version).toBe(1);
+      expect(row.status).toBe("RUNNING");
+      expect(row.attemptCount).toBe(1);
+      expect(row.nextAttemptAt).toBeNull();
+      // The receipt binding is the attempt's, intact through the race.
+      expect(row.receiptSha256).toBe(DIGEST);
+      expect(row.receiptSizeBytes).toBe(BigInt(SIZE));
+      expect(winner.claim.expectedReceipt).toEqual({
+        sha256: sha256Digest(DIGEST),
+        sizeBytes: safePositiveByteCount(SIZE),
+      });
+      expect(winner.claim.destinationKey).toBe(
+        managedGenerationOutputKey({ organizationId: ORG_A, attemptId: "sgen_mvl_forced" }),
+      );
+
+      await Promise.all([holder.$disconnect(), workerA.$disconnect(), workerB.$disconnect()]);
+    });
+
     it("reclaims an expired lease with a new token and bumped counters", async () => {
       await seedVerifiedAttempt("sgen_mvl_reclaim");
       const now = Date.now();
