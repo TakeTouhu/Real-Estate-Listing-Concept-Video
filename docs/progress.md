@@ -1041,6 +1041,54 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
+  Phase 6B left. First, a planning refusal was an answer: the runner reported
+  `NO_PLAN` and moved on, nothing durable recorded that the candidate had been
+  looked at, and a prefix of unplannable candidates could occupy every bounded
+  oldest-first sweep forever while newer actionable failures sat behind them.
+  `NO_PLAN` is also almost never a verdict about the customer — an FX source can
+  be unreachable, a rate card can be mid-replacement, a model can be withdrawn
+  for an afternoon — so terminalizing a job for one would charge the platform's
+  own outage to the customer, irreversibly. A refusal now **defers**: a durable
+  work row returns to `PENDING` with a future `nextAttemptAt`, disappears from
+  discovery until then, and the sweep moves on to work it can actually do. That
+  single predicate is the whole fairness mechanism; no unbounded scan and no
+  priority queue. Second, an exhausted recovery settled nothing: when the one
+  automatic retry also came back as unusable media the customer's request stayed
+  `GENERATING` forever with a reservation still held. Transaction H now owns
+  every customer consequence in one commit, and which shape it takes follows
+  from what the customer already has. An `INITIAL` failure delivered nothing, so
+  the request, scene and job all fail and the hold is `RELEASED` — a provider or
+  system failure never consumes the customer's Unit. A `USER_REGENERATION`
+  failure leaves a delivered video in place, so only the new request fails, the
+  scene returns to `READY` with its delivered pointer untouched, the job returns
+  to `DELIVERABLE_READY` with its deliverable pointer untouched, and the
+  `CONSUMED` reservation is not released, because releasing it would refund a
+  Unit that already produced something the customer can watch. A failed
+  regeneration therefore spends no entitlement and the same ordinal returns.
+  Settlement releases a reservation, which is exactly the mutation the paid
+  submission gate protects itself against, so the two-key advisory-lock formula
+  that made them serialize — previously copied into four repositories — became
+  one module private to `@app/database`, and settlement takes it first and the
+  reservation second like every other cost path; a live regression forces both
+  onto that lock and proves no queued attempt is armed after the hold behind it
+  was released. Revision start also became atomic: `admitUserRegeneration`
+  created a request and left the job and scene to an actor nobody had written,
+  which is the concern Phases 6A and 6B both carried forward. It now requires a
+  job that actually delivered something and moves the scene `READY -> REVISING`
+  and the job `DELIVERABLE_READY -> REVISING -> GENERATING` in the same commit,
+  recording both job moves rather than inventing a direct edge. The job row is
+  also the MVP's one-active-regeneration mutex, and that constraint is a schema
+  limitation stated honestly: with two revisions in flight and one failing,
+  nothing durable records which scene versions the current deliverable was
+  composed from, so nothing can prove whether rolling back would discard the
+  other scene's valid replacement. Migration 13 adds the work table, three enums
+  and shape constraints that keep an impossible row impossible in the database
+  rather than only in TypeScript; there is no backfill, and historical failures
+  are discovered lazily. Phase 6B's own runner was deleted rather than left
+  beside the coordinator, so one orchestration authority remains and it is the
+  one with the deferral. Still dormant: nothing constructs, schedules or invokes
+  it, no FX integration is wired, no provider is called and no quota moves.
 - **Phase 4C-3B-2H-3B-6B** — see GitHub for its lifecycle. Gives a durable
   terminal media failure — `INVALID_MEDIA` or `INTEGRITY_MISMATCH` — its one
   bounded consequence: the platform may admit **one** automatic
