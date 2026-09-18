@@ -525,6 +525,35 @@ RUN("bounded automatic media-failure SYSTEM_RECOVERY admission", () => {
       expect(listed).toEqual([]);
     });
 
+    it("recognizes a superseded source rather than treating it as eligible", async () => {
+      // Structural note worth stating: in this module "the source is superseded"
+      // and "the cap is spent" are the same condition. Every newer attempt on a
+      // request is necessarily a SYSTEM_RECOVERY, because one PRIMARY per
+      // request is a unique index — so a source that is no longer latest always
+      // has a recovery sibling, and the answer is idempotent recognition rather
+      // than an eligibility failure.
+      const chain = await seedFailedAttempt();
+      const first = await recover(chain);
+      if (first.kind !== "ADMITTED") throw new Error("expected admission");
+
+      const source = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: chain.sourceAttemptId },
+      });
+      const recovery = await prisma.sceneGeneration.findUniqueOrThrow({
+        where: { id: first.attemptId },
+      });
+      // The source really is no longer the latest attempt.
+      expect(recovery.attemptOrdinal).toBeGreaterThan(source.attemptOrdinal ?? 0);
+      expect(recovery.attemptKind).toBe("SYSTEM_RECOVERY");
+
+      const before = await frozen(chain);
+      expect(await recoverRaw(chain)).toEqual({ kind: "ALREADY_RECOVERED" });
+      expect(await attemptsOf(chain.requestId)).toHaveLength(2);
+      expect(await frozen(chain)).toEqual(before);
+      // And it is gone from the sweep, so it cannot occupy the bound.
+      expect(await repository.findAutomaticMediaRecoveryCandidates({ limit: 100 })).toEqual([]);
+    });
+
     it("reports a replay against the original source as already recovered", async () => {
       const chain = await seedFailedAttempt();
       const first = await recover(chain);

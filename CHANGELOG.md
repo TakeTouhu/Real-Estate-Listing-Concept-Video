@@ -3,6 +3,77 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-6B: Bounded automatic media-failure recovery
+
+Detail in `docs/phase-4c3b2h3b6b-completion.md` and ADR-0047. Gives a durable
+terminal media failure its one bounded consequence, and **only** that: the
+platform may admit one automatic `SYSTEM_RECOVERY` provider attempt under the
+same `SceneGenerationRequest`. **No production scheduler exists**: nothing
+constructs the runner, schedules it, or calls it, and no provider is called.
+
+### Added
+
+- **A bounded automatic recovery policy.**
+  `MAX_AUTOMATIC_MEDIA_RECOVERY_ATTEMPTS_PER_REQUEST = 1`, counting every
+  existing `SYSTEM_RECOVERY` attempt under the request conservatively. Without a
+  cap the shape is output → invalid → recovery → invalid → recovery, which is an
+  automatic spending loop the moment paid execution is enabled.
+- **A same-route pricing planner** (`AutomaticMediaRecoveryPricingPlanner`) that
+  parses the persisted pricing identity, revalidates the route against today's
+  model catalog, resolves exactly one currently eligible contract for the same
+  five commercial dimensions, requires a valid fresh FX rate, and computes a
+  completely new `PricingSnapshot` at the planning instant.
+- **`admitAutomaticMediaRecovery`** — one short transaction that locks
+  Job → Scene → request → source attempt → validation, re-checks every
+  authority, and delegates to the shared admission helper.
+- **`AutomaticMediaFailureRecoveryRunner`** — a dormant runner that plans
+  outside the transaction and admits inside it.
+- **`parseProviderPricingIdentity`** — the canonical reader for the
+  `identityJson` column, iterating the now-exported `IDENTITY_DIMENSION_NAMES`.
+
+### Guarantees
+
+- **Platform failure, not customer regeneration.** The same request is reused; no
+  new `SceneGenerationRequest`, no `userRegenerationOrdinal` change, and the
+  derived regeneration entitlement is identical before and after.
+- **The cap is not a global `SYSTEM_RECOVERY` cap.** Generic Transaction C still
+  admits later recoveries sequentially; a named regression drives ordinals 1, 2
+  and 3 through the generic API and fails if the cap is ever moved into it.
+- **Same route, exactly** — provider, provider model id, model key, the
+  customer's exact rendered prompt, native resolution, normalization and
+  `nativeMeetsTarget`. No fallback provider, no ranking, no re-render.
+- **Historical identity, current money.** Old cost figures are never copied; the
+  paid gate re-derives them from the contract, so a copied row would fail
+  verification later.
+- **Planning is outside the transaction**, and no boundary method accepts a
+  callback, so no future external I/O can be smuggled inside one.
+- **The source verdict must describe the source attempt's bytes**, else
+  `SOURCE_RECEIPT_BINDING_CONFLICT` — never repaired, never re-validated.
+- **Raw planning failures never escape.** A throw or a malformed return
+  normalizes to one fixed `INTERNAL_ERROR` with no cause, no details and no
+  original message.
+
+### Changed
+
+- `packages/database/src/index.ts` lists its orchestration exports explicitly
+  instead of re-exporting the module, so the new within-transaction helper
+  `admitAttemptWithin` is not reachable from `@app/database`. Every previously
+  public export is preserved, including `armProviderBoundaryWithin`.
+- Generic attempt admission is refactored to expose that helper. Its public
+  behaviour is unchanged and its existing tests pass untouched.
+
+### Unchanged, on purpose
+
+- **No schema change and no migration.** The existence of the newer
+  `SYSTEM_RECOVERY` attempt is the durable idempotency marker; migration 12
+  remains newest.
+- Request, Scene, delivered pointer, Job and reservation are all frozen by a
+  successful admission. `RECOVERY_LIMIT_REACHED` terminalizes nothing —
+  customer-visible failure semantics belong to Phase 6C, which is mandatory
+  before production activation.
+- The paid provider boundary stays closed: `QUEUED`/`PRE_SUBMISSION` only, no
+  provider call, no paid authorization, no quota movement, no credential wiring.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-6A: Atomic validated Scene delivery
 
 Detail in `docs/phase-4c3b2h3b6a-completion.md` and ADR-0046. Gives a durable
