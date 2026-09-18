@@ -167,8 +167,8 @@ provider call, no credential.
 | --- | --- |
 | `pnpm typecheck` | pass, 0 errors |
 | `pnpm lint` | pass, 0 problems |
-| `pnpm test` | **4328 passed**, 133 files |
-| `pnpm test:db` (live PostgreSQL) | **955 passed**, 31 files |
+| `pnpm test` | **4332 passed**, 133 files |
+| `pnpm test:db` (live PostgreSQL) | **961 passed**, 31 files |
 | `pnpm build` | pass |
 | `prisma validate` / `format` | pass, no schema diff |
 | Migrations 1–13 on a fresh empty database | pass |
@@ -176,7 +176,107 @@ provider call, no credential.
 
 ## Mutation ledger
 
-*(filled in after the complete run; see the final report.)*
+This section states what was actually run. It is deliberately not rounded up to
+a clean "213 / 213", because no single complete run produced that.
+
+### First complete run — ten survivors
+
+The first complete ledger against the corrected production tree reported **213
+run, 203 killed, 10 survivors, 0 anchor-missing**. Every one of the ten was a
+real gap, and they fell into four groups:
+
+- **Three duplicated or unreachable guards** — a finding about the code, not the
+  tests. The `PRIMARY with an existing recovery` branch in `classify` was proved
+  *unreachable*: a recovery always carries a higher ordinal than the PRIMARY it
+  retries, so "a recovery exists" and "this PRIMARY is superseded" are the same
+  condition and the superseded branch answers first. It was deleted. The
+  `attemptKind` check in the settlement authority is redundant with the recovery
+  count beside it, and the receipt-binding gate exists twice — once at claim
+  classification, once inside the settlement check — so removing either site
+  alone was invisible. Those two mutations now remove both sites.
+- **One test reading prose.** The dormancy suite asserted the settlement lock
+  clause with `toContain` against the raw file, and the doc comment above
+  `lockSettlementChain` quotes that exact clause, so deleting the real SQL left
+  the assertion passing on a comment. It now strips comments first.
+- **One mis-classified kill mode.** The transition tables are plain arrays, so
+  deleting an entry is well-typed; the mutation was re-aimed from `typecheck` to
+  `tests`.
+- **Five missing tests**, since written.
+
+### Second complete run — one survivor
+
+After those corrections the complete ledger was run again against the final
+production tree: **213 run, 212 killed, 1 survivor, 0 anchor-missing**.
+
+The survivor was **M210** — "revision start no longer locks the job, losing the
+one-at-a-time mutex", which deletes `FOR UPDATE OF j, s` from
+`lockJobAndSceneForTenant`.
+
+**M210 was timing-dependent, not un-killable.** The same mutation was *killed* in
+the first complete run and *survived* in the second, with nothing about it or
+its anchor changed in between. The concurrency regression raced two revisions on
+the *same* scene and accepted whatever order the connection pool produced: when
+the two serialized, the second simply read the first's committed `PENDING`
+regeneration and returned `REGENERATION_ALREADY_ACTIVE`, so the test passed
+without either caller reaching the Job authority together.
+
+### The M210 correction — test-only
+
+**Production locking behaviour was not changed.** The fault was in the
+regression, so the regression was rewritten:
+
+- two **different** `READY` scenes in one `DELIVERABLE_READY` job, each with its
+  own `DELIVERED` predecessor and a `CONSUMED` reservation;
+- three independent Prisma clients — holder, worker A, worker B;
+- the holder takes `SELECT "id" FROM "generation_jobs" WHERE "id" = $1 FOR UPDATE`
+  **before** either worker starts, and is released in a `finally` path so a
+  failing assertion cannot strand the row;
+- `pg_stat_activity` is polled purely as an *observation* that at least two
+  backends are waiting on a PostgreSQL lock — the row lock is the ordering
+  authority, never the polling interval;
+- both calls must **fulfil**, resolving to exactly one `ADMITTED` and one
+  `JOB_NOT_REVISABLE`. A rejected promise, a uniqueness error or an
+  `INTERNAL_ERROR` is a failure.
+
+**Measured determinism:**
+
+| Proof | Result |
+| --- | --- |
+| Corrected regression, unmutated implementation | **10 consecutive passes** |
+| M210 targeted mutation, independent runs | **5 consecutive kills**, 0 survivors, 0 anchor-missing |
+
+**Exact kill reason**, captured by instrumenting one mutated run: with M210 the
+contention is real — `bothBlocked` observes two blocked backends — and the
+failing assertion is `expect(a.ok && b.ok).toBe(true)`, because one worker's
+promise **rejects**:
+
+```text
+REJECTED: AppError: A locked orchestration transition matched no row
+                    while holding that row's lock
+ADMITTED
+```
+
+That is precisely the designed mechanism: without the Job lock both workers pass
+the `DELIVERABLE_READY` precondition on a plain read, both create their request
+on their own scene, and both reach the Job `UPDATE`; one wins and the other
+matches zero rows and throws instead of returning the application-owned outcome.
+
+### No third complete ledger
+
+By explicit CTO authorization, a third 213-mutation run was **not** performed.
+The production tree, the mutation definitions and the other 212 kill proofs are
+all unchanged by a test-only correction, and strengthening one regression cannot
+invalidate a kill proof for a different mutation.
+
+**Honest summary:** the complete corrected-production ledger result is
+**213 run, 212 killed, 1 survivor, 0 anchor-missing**. All 213 mutation
+definitions now have a kill proof on the final production implementation, with
+M210 closed by the deterministic test-only correction above.
+
+Restoration for the targeted M210 runs was proved against a **fresh** SHA-256
+snapshot taken after the test correction was in place and before the mutation
+was injected: **zero mismatches** across 482 files, with `git status --short`
+showing only the corrected test and `git diff --check` clean.
 
 ## Not done, on purpose
 

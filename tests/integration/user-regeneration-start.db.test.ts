@@ -238,24 +238,246 @@ RUN("starting a user regeneration", () => {
       );
     });
 
-    it("lets exactly one of two concurrent revision starts succeed", async () => {
+    /**
+     * Two revisions on **different** scenes of one job, forced into the critical
+     * interleaving by a third session holding the Job row.
+     *
+     * ## Why the previous version of this test was not enough
+     *
+     * It raced two revisions on the *same* scene and accepted whatever order the
+     * connection pool happened to produce. When the two serialized — which they
+     * usually did — the second simply read the first's committed `PENDING`
+     * regeneration and returned `REGENERATION_ALREADY_ACTIVE`, so the test passed
+     * without either caller ever reaching the Job authority together. Mutation
+     * M210, which deletes `FOR UPDATE OF j, s`, therefore survived roughly half
+     * the time: a timing-dependent kill is not a regression.
+     *
+     * ## What this proves instead
+     *
+     * The invariant is not "eventually one transaction commits". It is that one
+     * active `USER_REGENERATION` per Job is serialized **at the Job authority**,
+     * and that the loser learns so through the application-owned outcome rather
+     * than through a raw database error.
+     *
+     * With the Job lock in place:
+     *
+     * ```text
+     * holder owns the Job row
+     *   -> A and B both block at lockJobAndSceneForTenant, before reading anything
+     *   -> holder releases
+     *   -> one acquires the lock, reads DELIVERABLE_READY, completes revision start
+     *   -> the other then acquires it, re-reads GENERATING, returns JOB_NOT_REVISABLE
+     * ```
+     *
+     * Without it (M210), the initial SELECT no longer locks, so a plain read is
+     * not blocked by the holder at all:
+     *
+     * ```text
+     * A and B both read DELIVERABLE_READY and both pass the preconditions
+     *   -> different scenes, so neither blocks on the other's scene row or index
+     *   -> both create their request and both reach the Job UPDATE
+     *   -> holder releases; one UPDATE wins
+     *   -> the other matches zero rows and throws, instead of returning an outcome
+     * ```
+     *
+     * So the assertion that *both* calls fulfil is what kills M210, and it kills
+     * it for a reason the product cares about rather than by luck.
+     */
+    it("serializes two revisions on different scenes at the job authority", async () => {
       const chain = await revisableChain();
-      const results = await Promise.allSettled([
-        startRevision(chain.scene.id, `genreq_r1_${chain.tag}`),
-        startRevision(chain.scene.id, `genreq_r2_${chain.tag}`),
-      ]);
-      expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
-      const kinds = results.map((r) => (r.status === "fulfilled" ? r.value.kind : "REJECTED"));
-      expect(kinds.filter((k) => k === "ADMITTED")).toHaveLength(1);
 
-      const stored = await prisma.sceneGenerationRequest.findMany({
-        where: { generationSceneId: chain.scene.id, kind: "USER_REGENERATION" },
+      // A second delivered scene in the same job. On its own it is exactly as
+      // revisable as the first.
+      const sceneB = await prisma.generationScene.create({
+        data: {
+          id: `genscene_b_${chain.tag}`,
+          generationJobId: chain.job.id,
+          position: 1,
+          sourceStoryboardSceneId: "sbs_itest_orch_gone",
+          sourceAssetId: "ast_itest_orch_a",
+          sourceAnalysisRevision: 1,
+          snapshotDurationSeconds: 5,
+          state: "READY",
+        },
       });
-      expect(stored).toHaveLength(1);
-      // The job moved exactly once, not twice.
+      const predecessorB = await prisma.sceneGenerationRequest.create({
+        data: {
+          id: `genreq_bpred_${chain.tag}`,
+          generationSceneId: sceneB.id,
+          kind: "INITIAL",
+          state: "DELIVERED",
+          deliveredAt: new Date("2026-08-01T00:00:00.000Z"),
+          requestedByUserId: "usr_itest",
+        },
+      });
+      await prisma.generationScene.update({
+        where: { id: sceneB.id },
+        data: { currentDeliveredRequestId: predecessorB.id },
+      });
+
+      const holder = new PrismaClient();
+      const workerA = new PrismaClient();
+      const workerB = new PrismaClient();
+
+      let releaseHolder: () => void = () => undefined;
+      const holderMayFinish = new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+      let holderHasLock: () => void = () => undefined;
+      const holderReady = new Promise<void>((resolve) => {
+        holderHasLock = resolve;
+      });
+
+      /** Resolves when `promise` settles; never rejects. Used to prove blocking. */
+      function settled<T>(promise: Promise<T>): {
+        done: () => boolean;
+        value: Promise<{ ok: true; value: T } | { ok: false; error: unknown }>;
+      } {
+        let finished = false;
+        const value = promise.then(
+          (v) => {
+            finished = true;
+            return { ok: true as const, value: v };
+          },
+          (error: unknown) => {
+            finished = true;
+            return { ok: false as const, error };
+          },
+        );
+        return { done: () => finished, value };
+      }
+
+      /** Backends waiting on a PostgreSQL lock. Observation only, never ordering. */
+      async function blockedBackends(): Promise<number> {
+        const rows = await prisma.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
+          `SELECT wait_event_type FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+        );
+        return rows.filter((r) => r.wait_event_type === "Lock").length;
+      }
+
+      let runA!: ReturnType<typeof settled<Awaited<ReturnType<typeof startRevision>>>>;
+      let runB!: ReturnType<typeof settled<Awaited<ReturnType<typeof startRevision>>>>;
+      let bothBlocked = false;
+
+      const holderDone = holder
+        .$transaction(
+          async (tx) => {
+            await tx.$queryRawUnsafe(
+              `SELECT "id" FROM "generation_jobs" WHERE "id" = $1 FOR UPDATE`,
+              chain.job.id,
+            );
+            holderHasLock();
+            await holderMayFinish;
+          },
+          { timeout: 30_000, maxWait: 30_000 },
+        )
+        .catch(() => undefined);
+
+      try {
+        // The holder owns the Job row before either worker starts. The row lock
+        // is the ordering authority; the polling below only observes it.
+        await holderReady;
+
+        runA = settled(
+          repositories(workerA).requests.admitUserRegeneration(
+            ORG_A,
+            {
+              id: `genreq_ra_${chain.tag}`,
+              generationSceneId: chain.scene.id,
+              requestedByUserId: "usr_itest",
+            },
+            ctx({ actorType: "USER", actorUserId: "usr_itest", correlationId: "corr_ra" }),
+          ),
+        );
+        runB = settled(
+          repositories(workerB).requests.admitUserRegeneration(
+            ORG_A,
+            {
+              id: `genreq_rb_${chain.tag}`,
+              generationSceneId: sceneB.id,
+              requestedByUserId: "usr_itest",
+            },
+            ctx({ actorType: "USER", actorUserId: "usr_itest", correlationId: "corr_rb" }),
+          ),
+        );
+
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          if ((await blockedBackends()) >= 2) {
+            bothBlocked = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      } finally {
+        // Released on every path, so a failing assertion above cannot strand the
+        // Job row locked for the rest of the suite.
+        releaseHolder();
+      }
+      await holderDone;
+
+      // Both really contended, and neither had finished while the holder owned
+      // the row. Without this the rest of the test could pass on two sequential
+      // calls that never met.
+      expect(bothBlocked).toBe(true);
+
+      const [a, b] = await Promise.all([runA.value, runB.value]);
+
+      // Neither call may reject. A uniqueness violation, an INTERNAL_ERROR or any
+      // raw database error here is the failure M210 produces.
+      expect(a.ok && b.ok).toBe(true);
+      if (!a.ok || !b.ok) {
+        throw new Error(
+          `a revision start rejected instead of returning an outcome: ${String(
+            (a.ok ? b : a).ok ? "" : ((a.ok ? b : a) as { error: unknown }).error,
+          )}`,
+        );
+      }
+
+      const kinds = [a.value.kind, b.value.kind].sort();
+      expect(kinds).toEqual(["ADMITTED", "JOB_NOT_REVISABLE"]);
+
+      // Exactly one regeneration exists across the whole job.
+      const regenerations = await prisma.sceneGenerationRequest.findMany({
+        where: {
+          kind: "USER_REGENERATION",
+          generationScene: { generationJobId: chain.job.id },
+        },
+      });
+      expect(regenerations).toHaveLength(1);
+
+      // Exactly one scene is revising; the loser's scene is untouched.
+      const scenes = await prisma.generationScene.findMany({
+        where: { generationJobId: chain.job.id },
+        orderBy: { position: "asc" },
+      });
+      expect(scenes.filter((s) => s.state === "REVISING")).toHaveLength(1);
+      expect(scenes.filter((s) => s.state === "READY")).toHaveLength(1);
+
       const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } });
       expect(job.state).toBe("GENERATING");
-    });
+
+      // The job's revision-start pair happened exactly once, not twice.
+      const jobEvents = await prisma.generationTransitionEvent.findMany({
+        where: { aggregateId: chain.job.id, aggregateType: "JOB" },
+        orderBy: { createdAt: "asc" },
+      });
+      const moves = jobEvents.map((e) => `${String(e.fromState)}->${String(e.toState)}`);
+      expect(moves.filter((m) => m === "DELIVERABLE_READY->REVISING")).toHaveLength(1);
+      expect(moves.filter((m) => m === "REVISING->GENERATING")).toHaveLength(1);
+
+      // Nothing of the losing transaction survived — not the request it would
+      // have created, not an event for it.
+      const loserId =
+        a.value.kind === "ADMITTED" ? `genreq_rb_${chain.tag}` : `genreq_ra_${chain.tag}`;
+      expect(await prisma.sceneGenerationRequest.count({ where: { id: loserId } })).toBe(0);
+      expect(
+        await prisma.generationTransitionEvent.count({ where: { aggregateId: loserId } }),
+      ).toBe(0);
+
+      await Promise.all([holder.$disconnect(), workerA.$disconnect(), workerB.$disconnect()]);
+    }, 60_000);
 
     it("allows another revision once the job is revisable again", async () => {
       const chain = await revisableChain();
