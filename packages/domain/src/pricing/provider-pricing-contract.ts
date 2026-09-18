@@ -34,8 +34,14 @@ export interface ProviderPricingIdentity {
   readonly pricingVersion: string;
 }
 
-/** The dimensions that make two pricing contracts different, in a fixed order. */
-const IDENTITY_DIMENSIONS = [
+/**
+ * The dimensions that make two pricing contracts different, in a fixed order.
+ *
+ * Exported as the single list every reader of an identity iterates, so a new
+ * dimension cannot be added to the type and silently skipped by a parser that
+ * happened to enumerate the old six.
+ */
+export const IDENTITY_DIMENSION_NAMES = [
   "provider",
   "pricingModelKey",
   "generationMode",
@@ -44,6 +50,8 @@ const IDENTITY_DIMENSIONS = [
   "durationBillingRuleId",
   "pricingVersion",
 ] as const satisfies readonly (keyof ProviderPricingIdentity)[];
+
+const IDENTITY_DIMENSIONS = IDENTITY_DIMENSION_NAMES;
 
 /**
  * One opaque key that maps 1:1 to the complete identity.

@@ -1333,6 +1333,218 @@ export async function armProviderBoundaryWithin(
   }
   return { kind: "ARMED", attempt: toAttempt(row) };}
 
+/**
+ * Attempt admission, as a function over an open transaction whose caller has
+ * already locked the parent request.
+ *
+ * Extracted from the repository method rather than duplicated, exactly as
+ * `armProviderBoundaryWithin` was, so automatic media-failure recovery can hold
+ * one transaction across its own recovery-authority locks and this admission.
+ * Two transactions would reopen the window the request lock exists to close:
+ * recovery would release its serialization point before the attempt existed,
+ * and a second worker could admit a second paid attempt for the same failure.
+ *
+ * The public `admit` is unchanged in behaviour — it opens a transaction, takes
+ * the request lock and calls this. Every derivation stays here: the attempt
+ * kind and ordinal come from the siblings, the request hash from the scene's
+ * own facts, and the `PENDING -> GENERATING` start happens only for a `PRIMARY`.
+ *
+ * **Not a public escape hatch.** It is deliberately absent from the package's
+ * own public surface documentation, it assumes a lock it does not take, and a
+ * static test bounds the set of production callers.
+ */
+export async function admitAttemptWithin(
+  tx: Tx,
+  organizationId: string,
+  input: AdmitGenerationAttemptInput,
+  context: TransitionContext,
+): Promise<AdmitGenerationAttemptOutcome> {
+  // The authoritative read, *after* the lock: the parent request and
+  // through it every fact this attempt must not be told. A caller-supplied
+  // copy of any of these could disagree with the scene it claims to
+  // render.
+  const request = await tx.sceneGenerationRequest.findFirst({
+    where: { id: input.generationSceneRequestId, ...requestScope(organizationId) },
+    select: {
+      id: true,
+      state: true,
+      stateVersion: true,
+      generationScene: {
+        select: {
+          sourceStoryboardSceneId: true,
+          sourceAssetId: true,
+          sourceAnalysisRevision: true,
+          snapshotDurationSeconds: true,
+          snapshotCameraMotion: true,
+          snapshotCompiledPrompt: true,
+          generationJob: {
+            select: {
+              videoProjectId: true,
+              qualityTier: true,
+              targetOutputResolution: true,
+              targetAspectRatio: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (request === null) return { kind: "REQUEST_NOT_FOUND" };
+
+  // A finished request admits nothing. Admitting an attempt onto a
+  // DELIVERED request would spend money on work the customer already has.
+  if (request.state !== "PENDING" && request.state !== "GENERATING") {
+    return { kind: "REQUEST_NOT_ADMITTING" };
+  }
+
+  const scene = request.generationScene;
+  const job = scene.generationJob;
+
+  // A V2 executable request needs a compiled prompt. A scene without one
+  // cannot produce a hash, so nothing is created rather than a row that
+  // can never be executed or re-derived.
+  if (scene.snapshotCompiledPrompt === null) {
+    return { kind: "SCENE_FACTS_INCOMPLETE" };
+  }
+  if (!isTargetOutputResolution(job.targetOutputResolution)) {
+    return { kind: "SCENE_FACTS_INCOMPLETE" };
+  }
+
+  const snapshot = input.pricingSnapshot;
+  const mismatch = checkPricingBinding({
+    snapshot,
+    attemptProvider: input.providerName,
+    attemptModelKey: input.requestModelKey,
+    attemptNativeTier: input.requestNativeGenerationResolution,
+    sceneDurationSeconds: scene.snapshotDurationSeconds,
+    jobQualityTier: job.qualityTier,
+  });
+  if (mismatch !== null) {
+    return { kind: "PRICING_BINDING_INVALID", reason: mismatch };
+  }
+
+  const fxFailure = await bindFxSnapshot(tx, snapshot, input.fxSnapshot);
+  if (fxFailure !== null) return { kind: "FX_BINDING_INVALID", reason: fxFailure };
+
+  // Attempt kind and ordinal are derived from what already exists. A
+  // caller could otherwise make the first attempt a SYSTEM_RECOVERY, or
+  // file a second PRIMARY — and after the fact the ordinal alone cannot
+  // say which of two "first" attempts was really first.
+  //
+  // Read under the parent lock taken at the top, so "what already exists"
+  // is settled rather than sampled. A competing admission has either
+  // committed its attempt and is visible here, or has not yet acquired
+  // the lock and will read this one.
+  const siblings = await tx.sceneGeneration.findMany({
+    where: { generationSceneRequestId: request.id },
+    select: { attemptOrdinal: true, orchestrationState: true },
+  });
+  const active = siblings.some(
+    (a) =>
+      a.orchestrationState !== null &&
+      (ACTIVE_ORCHESTRATION_STATES as readonly string[]).includes(a.orchestrationState),
+  );
+  // System recovery is sequential recovery from a *finished* attempt, not
+  // permission to run two paid attempts at once.
+  if (active) return { kind: "ATTEMPT_ALREADY_ACTIVE" };
+
+  const attemptOrdinal = siblings.reduce(
+    (highest, a) => Math.max(highest, a.attemptOrdinal ?? 0),
+    0,
+  ) + 1;
+  const attemptKind = siblings.length === 0 ? "PRIMARY" : "SYSTEM_RECOVERY";
+
+  // The request identity, derived from the exact facts about to be
+  // persisted — never accepted from a caller. A caller offering its own
+  // V2-prefixed digest for identical facts walks straight past the
+  // active-request protection that stops the platform paying twice.
+  const facts: GenerationRequestFacts = {
+    assetId: scene.sourceAssetId,
+    compiledPrompt: scene.snapshotCompiledPrompt,
+    durationSeconds: scene.snapshotDurationSeconds,
+    cameraMotion: scene.snapshotCameraMotion,
+    aspectRatio: job.targetAspectRatio,
+    targetOutputResolution: job.targetOutputResolution,
+    nativeGenerationResolution: input.requestNativeGenerationResolution,
+    resolutionNormalization: input.requestResolutionNormalization,
+    nativeMeetsTarget: input.requestNativeMeetsTarget,
+    modelKey: input.requestModelKey,
+    providerName: input.providerName,
+    providerModelId: input.providerModelId,
+  };
+  const requestHash = computeGenerationRequestHash(facts);
+
+  const attempt = await tx.sceneGeneration.create({
+    data: {
+      id: input.id,
+      videoProjectId: job.videoProjectId,
+      // Every fact below comes from the scene or the job, never the caller.
+      sourceStoryboardSceneId: scene.sourceStoryboardSceneId,
+      assetId: scene.sourceAssetId,
+      sourceAnalysisRevision: scene.sourceAnalysisRevision,
+      requestHash,
+      providerName: input.providerName,
+      providerModelId: input.providerModelId,
+      requestCompiledPrompt: scene.snapshotCompiledPrompt,
+      requestRenderedPrompt: input.requestRenderedPrompt,
+      requestDurationSeconds: scene.snapshotDurationSeconds,
+      requestCameraMotion: scene.snapshotCameraMotion,
+      requestAspectRatio: job.targetAspectRatio,
+      requestModelKey: input.requestModelKey,
+      requestTargetOutputResolution: job.targetOutputResolution,
+      requestNativeGenerationResolution: input.requestNativeGenerationResolution,
+      requestResolutionNormalization: input.requestResolutionNormalization,
+      requestNativeMeetsTarget: input.requestNativeMeetsTarget,
+      generationSceneRequestId: request.id,
+      attemptOrdinal,
+      attemptKind,
+      submissionCertainty: "PRE_SUBMISSION",
+      orchestrationState: "QUEUED",
+      // Copied from the snapshot, never from the caller.
+      pricingContractKey: snapshot.contractKey,
+    },
+    select: ATTEMPT_SELECT,
+  });
+
+  await tx.generationPricingSnapshot.create({
+    data: pricingSnapshotData(input.pricingSnapshotId, attempt.id, snapshot),
+  });
+
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "ATTEMPT",
+    aggregateId: attempt.id,
+    fromState: null,
+    toState: "QUEUED",
+    context,
+  });
+
+  // The first attempt starts the customer's request, in this same commit.
+  // Split apart, the database would claim the request had not begun while
+  // a provider attempt for it already existed.
+  if (attemptKind === "PRIMARY") {
+    const started = await tx.sceneGenerationRequest.updateMany({
+      where: { id: request.id, state: "PENDING", stateVersion: request.stateVersion },
+      data: { state: "GENERATING", stateVersion: { increment: 1 } },
+    });
+    if (started.count === 0) {
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "Scene request moved during its own first attempt admission",
+      );
+    }
+    await appendGenerationEvent(tx, {
+      organizationId,
+      aggregateType: "SCENE_REQUEST",
+      aggregateId: request.id,
+      fromState: "PENDING",
+      toState: "GENERATING",
+      context,
+    });
+  }
+  return { kind: "ADMITTED", attempt: toAttempt(attempt) };
+}
+
 export function createSceneGenerationAttemptRepository(
   prisma: PrismaClient,
 ): SceneGenerationAttemptRepository {
@@ -1360,206 +1572,22 @@ export function createSceneGenerationAttemptRepository(
       return prisma.$transaction(async (tx): Promise<AdmitGenerationAttemptOutcome> => {
         // Serialize on the parent request *before* reading anything about it.
         //
-        // Everything below — the request's state, its siblings, the attempt
-        // kind and ordinal derived from them — is a decision about what already
-        // exists, and two callers reading the same pre-insert state both
-        // conclude they may file the first attempt. The unique indexes let only
-        // one through, but the loser surfaced a raw uniqueness error instead of
-        // `ATTEMPT_ALREADY_ACTIVE`, which is the outcome its caller is written
-        // against. With the lock the second caller waits, then re-reads and
-        // sees the attempt the first one committed.
+        // Everything `admitAttemptWithin` decides — the request's state, its
+        // siblings, the attempt kind and ordinal derived from them — is a
+        // decision about what already exists, and two callers reading the same
+        // pre-insert state both conclude they may file the first attempt. The
+        // unique indexes let only one through, but the loser surfaced a raw
+        // uniqueness error instead of `ATTEMPT_ALREADY_ACTIVE`, which is the
+        // outcome its caller is written against. With the lock the second
+        // caller waits, then re-reads and sees the attempt the first one
+        // committed.
         //
         // Tenancy is proved in the same statement, so a cross-tenant id locks
         // nothing and is indistinguishable from a missing one.
         if (!(await lockSceneRequestForTenant(tx, organizationId, input.generationSceneRequestId))) {
           return { kind: "REQUEST_NOT_FOUND" };
         }
-
-        // The authoritative read, *after* the lock: the parent request and
-        // through it every fact this attempt must not be told. A caller-supplied
-        // copy of any of these could disagree with the scene it claims to
-        // render.
-        const request = await tx.sceneGenerationRequest.findFirst({
-          where: { id: input.generationSceneRequestId, ...requestScope(organizationId) },
-          select: {
-            id: true,
-            state: true,
-            stateVersion: true,
-            generationScene: {
-              select: {
-                sourceStoryboardSceneId: true,
-                sourceAssetId: true,
-                sourceAnalysisRevision: true,
-                snapshotDurationSeconds: true,
-                snapshotCameraMotion: true,
-                snapshotCompiledPrompt: true,
-                generationJob: {
-                  select: {
-                    videoProjectId: true,
-                    qualityTier: true,
-                    targetOutputResolution: true,
-                    targetAspectRatio: true,
-                  },
-                },
-              },
-            },
-          },
-        });
-        if (request === null) return { kind: "REQUEST_NOT_FOUND" };
-
-        // A finished request admits nothing. Admitting an attempt onto a
-        // DELIVERED request would spend money on work the customer already has.
-        if (request.state !== "PENDING" && request.state !== "GENERATING") {
-          return { kind: "REQUEST_NOT_ADMITTING" };
-        }
-
-        const scene = request.generationScene;
-        const job = scene.generationJob;
-
-        // A V2 executable request needs a compiled prompt. A scene without one
-        // cannot produce a hash, so nothing is created rather than a row that
-        // can never be executed or re-derived.
-        if (scene.snapshotCompiledPrompt === null) {
-          return { kind: "SCENE_FACTS_INCOMPLETE" };
-        }
-        if (!isTargetOutputResolution(job.targetOutputResolution)) {
-          return { kind: "SCENE_FACTS_INCOMPLETE" };
-        }
-
-        const snapshot = input.pricingSnapshot;
-        const mismatch = checkPricingBinding({
-          snapshot,
-          attemptProvider: input.providerName,
-          attemptModelKey: input.requestModelKey,
-          attemptNativeTier: input.requestNativeGenerationResolution,
-          sceneDurationSeconds: scene.snapshotDurationSeconds,
-          jobQualityTier: job.qualityTier,
-        });
-        if (mismatch !== null) {
-          return { kind: "PRICING_BINDING_INVALID", reason: mismatch };
-        }
-
-        const fxFailure = await bindFxSnapshot(tx, snapshot, input.fxSnapshot);
-        if (fxFailure !== null) return { kind: "FX_BINDING_INVALID", reason: fxFailure };
-
-        // Attempt kind and ordinal are derived from what already exists. A
-        // caller could otherwise make the first attempt a SYSTEM_RECOVERY, or
-        // file a second PRIMARY — and after the fact the ordinal alone cannot
-        // say which of two "first" attempts was really first.
-        //
-        // Read under the parent lock taken at the top, so "what already exists"
-        // is settled rather than sampled. A competing admission has either
-        // committed its attempt and is visible here, or has not yet acquired
-        // the lock and will read this one.
-        const siblings = await tx.sceneGeneration.findMany({
-          where: { generationSceneRequestId: request.id },
-          select: { attemptOrdinal: true, orchestrationState: true },
-        });
-        const active = siblings.some(
-          (a) =>
-            a.orchestrationState !== null &&
-            (ACTIVE_ORCHESTRATION_STATES as readonly string[]).includes(a.orchestrationState),
-        );
-        // System recovery is sequential recovery from a *finished* attempt, not
-        // permission to run two paid attempts at once.
-        if (active) return { kind: "ATTEMPT_ALREADY_ACTIVE" };
-
-        const attemptOrdinal = siblings.reduce(
-          (highest, a) => Math.max(highest, a.attemptOrdinal ?? 0),
-          0,
-        ) + 1;
-        const attemptKind = siblings.length === 0 ? "PRIMARY" : "SYSTEM_RECOVERY";
-
-        // The request identity, derived from the exact facts about to be
-        // persisted — never accepted from a caller. A caller offering its own
-        // V2-prefixed digest for identical facts walks straight past the
-        // active-request protection that stops the platform paying twice.
-        const facts: GenerationRequestFacts = {
-          assetId: scene.sourceAssetId,
-          compiledPrompt: scene.snapshotCompiledPrompt,
-          durationSeconds: scene.snapshotDurationSeconds,
-          cameraMotion: scene.snapshotCameraMotion,
-          aspectRatio: job.targetAspectRatio,
-          targetOutputResolution: job.targetOutputResolution,
-          nativeGenerationResolution: input.requestNativeGenerationResolution,
-          resolutionNormalization: input.requestResolutionNormalization,
-          nativeMeetsTarget: input.requestNativeMeetsTarget,
-          modelKey: input.requestModelKey,
-          providerName: input.providerName,
-          providerModelId: input.providerModelId,
-        };
-        const requestHash = computeGenerationRequestHash(facts);
-
-        const attempt = await tx.sceneGeneration.create({
-          data: {
-            id: input.id,
-            videoProjectId: job.videoProjectId,
-            // Every fact below comes from the scene or the job, never the caller.
-            sourceStoryboardSceneId: scene.sourceStoryboardSceneId,
-            assetId: scene.sourceAssetId,
-            sourceAnalysisRevision: scene.sourceAnalysisRevision,
-            requestHash,
-            providerName: input.providerName,
-            providerModelId: input.providerModelId,
-            requestCompiledPrompt: scene.snapshotCompiledPrompt,
-            requestRenderedPrompt: input.requestRenderedPrompt,
-            requestDurationSeconds: scene.snapshotDurationSeconds,
-            requestCameraMotion: scene.snapshotCameraMotion,
-            requestAspectRatio: job.targetAspectRatio,
-            requestModelKey: input.requestModelKey,
-            requestTargetOutputResolution: job.targetOutputResolution,
-            requestNativeGenerationResolution: input.requestNativeGenerationResolution,
-            requestResolutionNormalization: input.requestResolutionNormalization,
-            requestNativeMeetsTarget: input.requestNativeMeetsTarget,
-            generationSceneRequestId: request.id,
-            attemptOrdinal,
-            attemptKind,
-            submissionCertainty: "PRE_SUBMISSION",
-            orchestrationState: "QUEUED",
-            // Copied from the snapshot, never from the caller.
-            pricingContractKey: snapshot.contractKey,
-          },
-          select: ATTEMPT_SELECT,
-        });
-
-        await tx.generationPricingSnapshot.create({
-          data: pricingSnapshotData(input.pricingSnapshotId, attempt.id, snapshot),
-        });
-
-        await appendGenerationEvent(tx, {
-          organizationId,
-          aggregateType: "ATTEMPT",
-          aggregateId: attempt.id,
-          fromState: null,
-          toState: "QUEUED",
-          context,
-        });
-
-        // The first attempt starts the customer's request, in this same commit.
-        // Split apart, the database would claim the request had not begun while
-        // a provider attempt for it already existed.
-        if (attemptKind === "PRIMARY") {
-          const started = await tx.sceneGenerationRequest.updateMany({
-            where: { id: request.id, state: "PENDING", stateVersion: request.stateVersion },
-            data: { state: "GENERATING", stateVersion: { increment: 1 } },
-          });
-          if (started.count === 0) {
-            throw new AppError(
-              "INTERNAL_ERROR",
-              "Scene request moved during its own first attempt admission",
-            );
-          }
-          await appendGenerationEvent(tx, {
-            organizationId,
-            aggregateType: "SCENE_REQUEST",
-            aggregateId: request.id,
-            fromState: "PENDING",
-            toState: "GENERATING",
-            context,
-          });
-        }
-
-        return { kind: "ADMITTED", attempt: toAttempt(attempt) };
+        return admitAttemptWithin(tx, organizationId, input, context);
       });
     },
 

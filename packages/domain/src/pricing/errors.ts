@@ -29,6 +29,8 @@ export type PricingErrorReason =
   | "PRICING_CONTRACT_EXPIRED"
   | "PRICING_CONTRACT_NOT_YET_EFFECTIVE"
   | "PRICING_CONTRACT_PROMOTIONAL_ONLY"
+  // Persisted pricing identity, read back from an untrusted JSON column
+  | "PRICING_IDENTITY_MALFORMED"
   // FX
   | "FX_SNAPSHOT_CURRENCY_MISMATCH"
   | "FX_SNAPSHOT_RATE_INVALID";

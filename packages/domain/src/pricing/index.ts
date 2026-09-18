@@ -15,6 +15,7 @@ export * from "./customer-plan-catalog";
 export * from "./customer-pricing";
 export * from "./provider-pricing-contract";
 export * from "./provider-pricing-catalog";
+export * from "./provider-pricing-identity-parse";
 export * from "./provider-cost-calculator";
 export * from "./pricing-eligibility";
 export * from "./pricing-snapshot";
