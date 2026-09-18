@@ -24,3 +24,4 @@ export * from "./completion/index";
 export * from "./provider-output/index";
 export * from "./media-validation-lifecycle/index";
 export * from "./scene-delivery/index";
+export * from "./media-recovery/index";

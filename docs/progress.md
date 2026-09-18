@@ -1041,6 +1041,50 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 4C-3B-2H-3B-6B** — see GitHub for its lifecycle. Gives a durable
+  terminal media failure — `INVALID_MEDIA` or `INTEGRITY_MISMATCH` — its one
+  bounded consequence: the platform may admit **one** automatic
+  `SYSTEM_RECOVERY` provider attempt under the *same* `SceneGenerationRequest`.
+  This is platform failure, not customer regeneration, so no new request is
+  created, `userRegenerationOrdinal` never moves and the derived entitlement is
+  identical before and after. One is the cap, because without it the shape is
+  output → invalid → recovery → invalid → recovery, which becomes an automatic
+  spending loop the moment paid execution is enabled; the count is deliberately
+  conservative over every existing `SYSTEM_RECOVERY` attempt, since nothing
+  durably records which actor admitted one. It is emphatically not a global
+  `SYSTEM_RECOVERY` cap — generic Transaction C may still admit later recoveries
+  sequentially, and a named regression drives ordinals 1, 2 and 3 through the
+  generic API to fail if anyone ever moves this cap into it. Recovery retries
+  the *same* route: provider, provider model id, model key, the customer's exact
+  rendered prompt and the whole native-resolution decision are copied from the
+  source attempt, because "retry the same work once" is safe to do without
+  asking anyone and "silently choose a different product" is not. A historically
+  valid route is not automatically safe, so today's model catalog must still
+  deliver that exact route or the candidate is refused. Historical identity,
+  current money: the persisted pricing identity is parsed through one canonical
+  parser rather than cast, the old cost figures are never copied — the paid gate
+  re-derives them, so a copied row would fail verification during an incident —
+  and a completely fresh `PricingSnapshot` is computed at the planning instant
+  against exactly one currently eligible contract for the same five commercial
+  dimensions, with a valid fresh FX rate because the authorization path refuses a
+  snapshot without one. Planning runs to completion outside any transaction and
+  hands the repository finished data; no boundary method accepts a callback.
+  Admission locks Job → Scene → request → source attempt → validation, re-checks
+  receipt binding, latest-attempt authority, request/Job/Scene state, the
+  regeneration predecessor and the cap, then delegates to `admitAttemptWithin` —
+  extracted from the generic `admit()` exactly as `armProviderBoundaryWithin`
+  was — so attempt kind, ordinal, the canonical request hash, pricing and FX
+  binding and the first event stay derived in one place. That helper is absent
+  from `@app/database`'s public surface, asserted statically. No schema change
+  and no migration: the existence of the newer `SYSTEM_RECOVERY` attempt is the
+  durable idempotency marker, and migration 12 stays newest. Successful
+  admission changes nothing customer-facing — request, Scene, delivered pointer,
+  Job and reservation are all frozen — and `RECOVERY_LIMIT_REACHED` is an
+  operational outcome that terminalizes nothing. Still dormant: nothing
+  constructs, schedules or invokes the runner, no FX network integration exists,
+  no provider is called and no paid authorization is invoked. Phase 6C is
+  mandatory before production activation. Detail in
+  `docs/phase-4c3b2h3b6b-completion.md` and ADR-0047.
 - **Phase 4C-3B-2H-3B-6A** — see GitHub for its lifecycle. Gives a durable
   `VALID` media verdict its one consequence — the customer-visible delivery of a
   Scene — as a single atomic business fact, and only that consequence.
