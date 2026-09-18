@@ -207,6 +207,44 @@ RUN("durable media-failure resolution work", () => {
       expect((await workRow(prisma, chain.validationId))?.status).toBe("RUNNING");
     });
 
+    it("refuses a write whose lease token is wrong even when its version matches", async () => {
+      // The version guard and the token guard are not the same guard. A worker
+      // holding a claim with the right version but somebody else's token must
+      // still lose — otherwise ownership is only as good as an integer that two
+      // workers can legitimately agree on.
+      const chain = await seedFailure(prisma, { attemptKind: "PRIMARY" });
+      const claimed = await claimOne(chain);
+      if (claimed.kind !== "CLAIMED") throw new Error("expected CLAIMED");
+
+      const impostor = { ...claimed.claim, leaseToken: "lease_not_mine" };
+      const lost = await work.resolveObsolete({ claim: impostor, resolvedAt: NOW });
+      expect(lost.kind).toBe("LOST");
+      expect((await workRow(prisma, chain.validationId))?.status).toBe("RUNNING");
+
+      // The real owner still succeeds.
+      const applied = await work.resolveObsolete({ claim: claimed.claim, resolvedAt: NOW });
+      expect(applied.kind).toBe("APPLIED");
+    });
+
+    it("lets exactly one of two concurrent reclaims of one expired lease win", async () => {
+      const chain = await seedFailure(prisma, { attemptKind: "PRIMARY" });
+      const first = await claimOne(chain, NOW, "lease_a");
+      if (first.kind !== "CLAIMED") throw new Error("expected CLAIMED");
+
+      const at = NOW + LEASE_MS + 1;
+      const [b, c] = await Promise.all([
+        claimOne(chain, at, "lease_b"),
+        claimOne(chain, at, "lease_c"),
+      ]);
+
+      // Both read the same expired row and both try to take it. Only the
+      // version-pinned CAS can settle that.
+      expect([b.kind, c.kind].sort()).toEqual(["CLAIMED", "NOT_CLAIMED"]);
+      const row = await workRow(prisma, chain.validationId);
+      expect(row?.attemptCount).toBe(2);
+      expect(row?.version).toBe(2);
+    });
+
     it("never reopens resolved work", async () => {
       const chain = await seedFailure(prisma, { attemptKind: "PRIMARY" });
       const claimed = await claimOne(chain);

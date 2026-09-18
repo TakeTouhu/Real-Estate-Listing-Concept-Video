@@ -339,7 +339,11 @@ describe("durable shape and the cost lock", () => {
   });
 
   it("takes the cost lock before the reservation in settlement", () => {
-    const repo = readFileSync(RESOLUTION_REPOSITORY, "utf8");
+    // Comments stripped first. An earlier version of this assertion read the raw
+    // file, and the doc comment above `lockSettlementChain` quotes the very
+    // `FOR UPDATE OF` clause being asserted — so deleting the real SQL left the
+    // test passing on prose. Mutation M198 is what found it.
+    const repo = code(readFileSync(RESOLUTION_REPOSITORY, "utf8"));
     const lock = repo.indexOf("acquireCostAdmissionLock(tx");
     const chain = repo.indexOf("lockSettlementChain(tx");
     expect(lock).toBeGreaterThan(-1);
@@ -348,5 +352,33 @@ describe("durable shape and the cost lock", () => {
     // serialize instead of racing over one entitlement.
     expect(lock).toBeLessThan(chain);
     expect(repo).toContain("FOR UPDATE OF res, j, s, r, a, v, w");
+  });
+
+  it("pins the reclaim CAS to the version and status it read", () => {
+    // Structural rather than behavioural, and deliberately so.
+    //
+    // The predicate defends against two workers whose SELECTs both land before
+    // either UPDATE: the second's write then blocks on the row lock, re-evaluates
+    // its WHERE against the winner's committed row, and matches nothing. A test
+    // cannot force that interleaving — Prisma serializes the two transactions on
+    // the connection pool, so the second reads a row the first has already
+    // reclaimed and is refused a step earlier, by the `claimable` check.
+    //
+    // Mutation M175 is what established that. Rather than leave the guard
+    // unprotected because the harness cannot reach it, the requirement is stated
+    // here: the CAS pins both columns it read.
+    const repo = code(readFileSync(RESOLUTION_REPOSITORY, "utf8"));
+    const cas = repo.slice(repo.indexOf("managedOutputMediaFailureResolution.updateMany"));
+    expect(cas).toContain("version: row.workVersion");
+    expect(cas).toContain('status: row.workStatus === "PENDING" ? "PENDING" : "RUNNING"');
+  });
+
+  it("states the lease and version guard in SQL rather than in prose", () => {
+    // Same class of mistake as the clause above, pinned separately: every write
+    // after a claim carries all three predicates.
+    const repo = code(readFileSync(RESOLUTION_REPOSITORY, "utf8"));
+    expect(repo).toContain(`AND "version" = `);
+    expect(repo).toContain(`AND "status" = 'RUNNING'::"MediaFailureResolutionStatus"`);
+    expect(repo).toContain(`AND "leaseToken" = `);
   });
 });

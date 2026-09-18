@@ -225,6 +225,51 @@ RUN("exhausted media failure settlement", () => {
       ).rejects.toMatchObject({ code: "SOURCE_RECEIPT_BINDING_CONFLICT" });
     });
 
+    it("refuses a superseded recovery, even though it is a recovery", async () => {
+      // Being the automatic recovery is not enough: it must also still be the
+      // request's latest attempt. A newer attempt means something else is in
+      // flight, and terminalizing from an older failure would fail a customer
+      // whose work is still running.
+      const chain = await seedFailure(prisma);
+      const claim = await claimFor(chain);
+
+      // Make the failed recovery no longer the request's latest attempt, by
+      // moving its already-terminal PRIMARY sibling past it. Simpler than
+      // inserting a whole new attempt row, and it produces the exact condition
+      // under test: a SYSTEM_RECOVERY failure that something newer has overtaken.
+      await prisma.sceneGeneration.update({
+        where: { id: `sgen_${chain.tag}_p` },
+        data: { attemptOrdinal: 3 },
+      });
+
+      const outcome = await work.settleExhaustedMediaFailure({
+        claim,
+        settledAt: NOW,
+        context: ctx(),
+      });
+      expect(outcome.kind).toBe("NOT_EXHAUSTED");
+      const request = await prisma.sceneGenerationRequest.findUnique({
+        where: { id: chain.requestId },
+      });
+      expect(request?.state).toBe("GENERATING");
+    });
+
+    it("refuses a claim whose lease token is wrong even when its version matches", async () => {
+      const chain = await seedFailure(prisma);
+      const claim = await claimFor(chain);
+
+      const outcome = await work.settleExhaustedMediaFailure({
+        claim: { ...claim, leaseToken: "lease_not_mine" },
+        settledAt: NOW,
+        context: ctx(),
+      });
+      expect(outcome.kind).toBe("NOT_EXHAUSTED");
+      const request = await prisma.sceneGenerationRequest.findUnique({
+        where: { id: chain.requestId },
+      });
+      expect(request?.state).toBe("GENERATING");
+    });
+
     it("refuses a stale claim whose lease was reclaimed", async () => {
       const chain = await seedFailure(prisma);
       const stale = await claimFor(chain, "lease_a", NOW);
@@ -267,6 +312,49 @@ RUN("exhausted media failure settlement", () => {
 
       expect(await snapshot(chain)).toEqual(after);
       expect(await workRow(prisma, chain.validationId)).toEqual(row);
+    });
+
+    it("raises rather than reporting a partial settlement as already settled", async () => {
+      // The settlement path's own view of an already-settled shape. Every row
+      // must match; a half-applied one is a defect and is never completed
+      // quietly, because finishing it would destroy the evidence of how it
+      // happened.
+      const chain = await seedFailure(prisma);
+      const claim = await claimFor(chain);
+      const first = await work.settleExhaustedMediaFailure({
+        claim,
+        settledAt: NOW,
+        context: ctx(),
+      });
+      expect(first.kind).toBe("SETTLED");
+
+      // Something outside this system undoes one row of it.
+      await prisma.generationJob.update({
+        where: { id: chain.jobId },
+        data: { state: "GENERATING" },
+      });
+
+      await expect(
+        work.settleExhaustedMediaFailure({ claim, settledAt: NOW + 1, context: ctx() }),
+      ).rejects.toMatchObject({ code: "PARTIAL_SETTLEMENT" });
+    });
+
+    it("raises on a partially undone regeneration rollback too", async () => {
+      const chain = await seedFailure(prisma, { requestKind: "USER_REGENERATION" });
+      const claim = await claimFor(chain);
+      expect(
+        (await work.settleExhaustedMediaFailure({ claim, settledAt: NOW, context: ctx() })).kind,
+      ).toBe("SETTLED");
+
+      // The scene's delivered pointer is cleared by something else.
+      await prisma.generationScene.update({
+        where: { id: chain.sceneId },
+        data: { currentDeliveredRequestId: null },
+      });
+
+      await expect(
+        work.settleExhaustedMediaFailure({ claim, settledAt: NOW + 1, context: ctx() }),
+      ).rejects.toMatchObject({ code: "PARTIAL_SETTLEMENT" });
     });
 
     it("refuses to repair a partial settlement", async () => {

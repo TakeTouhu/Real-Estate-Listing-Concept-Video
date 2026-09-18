@@ -227,6 +227,20 @@ export function createMediaFailureResolutionRepository(
     if (row.requestState !== "GENERATING") return { kind: "OBSOLETE" };
 
     // A superseded attempt's failure is history: a newer attempt is the live one.
+    //
+    // This branch is also the crash-recovery path, and that is not a
+    // coincidence. A recovery always carries a higher ordinal than the PRIMARY
+    // it retries, so "a recovery exists for this request" and "this PRIMARY is
+    // superseded" are the *same* condition — there is no reachable state where a
+    // PRIMARY is still the latest attempt and a `SYSTEM_RECOVERY` exists beside
+    // it. A worker that admitted the recovery and died before resolving its work
+    // row therefore arrives here on the next claim, finds the attempt it created,
+    // and binds to it rather than creating a second one.
+    //
+    // An earlier draft carried a separate "PRIMARY with an existing recovery"
+    // branch below this one. Mutation testing proved it unreachable: removing it
+    // changed no behaviour, because this branch answers first in every case it
+    // was written for.
     if (row.attemptOrdinal !== row.maxAttemptOrdinal) {
       return row.existingRecoveryAttemptId === null
         ? { kind: "OBSOLETE" }
@@ -236,14 +250,6 @@ export function createMediaFailureResolutionRepository(
     // The failed attempt *is* the automatic recovery. The customer is owed an
     // answer, and Transaction H is the only thing that may give it.
     if (row.attemptKind === "SYSTEM_RECOVERY") return { kind: "SETTLE_EXHAUSTED" };
-
-    // A PRIMARY failure with a recovery already in existence: either another
-    // worker admitted it, or a previous claim of this very work did and died
-    // before resolving the row. Indistinguishable, and identical in effect.
-    if (row.existingRecoveryAttemptId !== null) {
-      return { kind: "RECONCILE_RECOVERY", recoveryAttemptId: row.existingRecoveryAttemptId };
-    }
-    if (row.systemRecoveryCount > 0) return null;
 
     const candidate = toRecoveryCandidate(row);
     return candidate === null ? null : { kind: "ADMIT_RECOVERY", candidate };
