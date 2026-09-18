@@ -77,9 +77,28 @@ describe("the database package's public surface", () => {
       "createValidatedSceneDeliveryRepository",
       "createAutomaticMediaRecoveryRepository",
       "getPrismaClient",
+      // Added by Phase 4C-3B-2H-3B-6C.
+      "createMediaFailureResolutionRepository",
     ]) {
       expect(`${name}: ${name in database}`).toBe(`${name}: true`);
     }
+  });
+
+  it("does not export the cost-admission lock", () => {
+    // Holding it outside the package means holding it without the transaction
+    // that gives it meaning, and one key formula is worth nothing if it can be
+    // taken from somewhere this package cannot see.
+    expect(Object.keys(database)).not.toContain("acquireCostAdmissionLock");
+    expect("acquireCostAdmissionLock" in database).toBe(false);
+    expect("costAdmissionLockKeys" in database).toBe(false);
+  });
+
+  it("keeps the cost-admission lock key formula in exactly one module", () => {
+    const holders = productionSources()
+      .filter(({ text }) => text.includes("pg_advisory_xact_lock"))
+      .map(({ name }) => name)
+      .sort();
+    expect(holders).toEqual(["packages/database/src/cost-admission-lock.ts"]);
   });
 
   it("lists its orchestration exports explicitly rather than re-exporting the module", () => {

@@ -14,6 +14,22 @@ import {
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { appendGenerationEvent } from "./orchestration-repositories";
+/**
+ * The cost-admission lock, taken first and for the same reason Phase
+ * 4C-3B-2F-1 takes it.
+ *
+ * Recording uncertainty changes an organization's cycle exposure — an attempt
+ * entering `RECONCILIATION_PENDING` starts counting against the Safety Guard —
+ * so an authorization reading exposure while an outcome lands would decide on a
+ * total that is mid-flight. Taking the same advisory lock makes the two
+ * operations serialize on the cycle they share.
+ *
+ * It is also what keeps the two free of deadlock. Phase 2F-1 takes
+ * `advisory → reservation → attempt CAS`; this takes the same three in the same
+ * order, differing only in acquiring the reservation `FOR UPDATE` because it may
+ * modify it. Same order, stronger mode, no cycle.
+ */
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
 
 /**
  * Persistence for submission outcomes.
@@ -59,34 +75,6 @@ const attemptScope = (organizationId: string) => ({
 const reservationScope = (organizationId: string) => ({
   generationJob: { videoProject: { organizationId } },
 });
-
-/**
- * The cost-admission lock, taken first and for the same reason Phase
- * 4C-3B-2F-1 takes it.
- *
- * Recording uncertainty changes an organization's cycle exposure — an attempt
- * entering `RECONCILIATION_PENDING` starts counting against the Safety Guard —
- * so an authorization reading exposure while an outcome lands would decide on a
- * total that is mid-flight. Taking the same advisory lock makes the two
- * operations serialize on the cycle they share.
- *
- * It is also what keeps the two free of deadlock. Phase 2F-1 takes
- * `advisory → reservation → attempt CAS`; this takes the same three in the same
- * order, differing only in acquiring the reservation `FOR UPDATE` because it may
- * modify it. Same order, stronger mode, no cycle.
- */
-async function acquireCostAdmissionLock(
-  tx: Tx,
-  organizationId: string,
-  billingCycleKey: string,
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT pg_advisory_xact_lock(
-      hashtext(${`paid-submission:${organizationId}`}),
-      hashtext(${`cycle:${billingCycleKey}`})
-    )::text AS locked
-  `;
-}
 
 /** The cycle this attempt's cost is attributed to, from its own reservation. */
 async function billingCycleKeyForAttempt(
