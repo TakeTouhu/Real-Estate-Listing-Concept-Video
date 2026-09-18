@@ -19,6 +19,19 @@ import {
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { appendGenerationEvent } from "./orchestration-repositories";
+/**
+ * The cost-admission lock, with the key Phase 4C-3B-2F-1 chose.
+ *
+ * Taken even though no entitlement moves here, because provider completion does
+ * move an organization's cycle exposure: `PROCESSING` and `PROVIDER_SUCCEEDED`
+ * are in-flight, `FAILED_* + ACCEPTED` is settled estimate. An authorization
+ * reading exposure while a completion lands would decide on a total that is
+ * mid-flight.
+ *
+ * Same key and same acquisition point as the three phases before it, so the four
+ * share one lock order and cannot deadlock against each other.
+ */
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
 
 /**
  * Persistence for provider completion and managed output verification.
@@ -110,31 +123,6 @@ const attemptScope = (organizationId: string) => ({
     generationScene: { generationJob: { videoProject: { organizationId } } },
   },
 });
-
-/**
- * The cost-admission lock, with the key Phase 4C-3B-2F-1 chose.
- *
- * Taken even though no entitlement moves here, because provider completion does
- * move an organization's cycle exposure: `PROCESSING` and `PROVIDER_SUCCEEDED`
- * are in-flight, `FAILED_* + ACCEPTED` is settled estimate. An authorization
- * reading exposure while a completion lands would decide on a total that is
- * mid-flight.
- *
- * Same key and same acquisition point as the three phases before it, so the four
- * share one lock order and cannot deadlock against each other.
- */
-async function acquireCostAdmissionLock(
-  tx: Tx,
-  organizationId: string,
-  billingCycleKey: string,
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT pg_advisory_xact_lock(
-      hashtext(${`paid-submission:${organizationId}`}),
-      hashtext(${`cycle:${billingCycleKey}`})
-    )::text AS locked
-  `;
-}
 
 /** The cycle this attempt's cost is attributed to, from its own reservation. */
 async function billingCycleKeyForAttempt(

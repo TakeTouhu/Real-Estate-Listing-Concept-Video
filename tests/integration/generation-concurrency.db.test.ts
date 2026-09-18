@@ -177,7 +177,10 @@ describe.skipIf(!HAS_DB)("concurrent callers are serialized on the row they deci
 
   describe("user regeneration serializes on the parent scene", () => {
     it("returns REGENERATION_ALREADY_ACTIVE to the loser instead of a database error", async () => {
-      const { scene } = await seedChain(prisma, "regserial");
+      const chain = await seedChain(prisma, "regserial", ORG_A, PROJECT_A, {
+        revisable: true,
+      });
+      const { scene } = chain;
 
       let release!: () => void;
       const held = new Promise<void>((resolve) => {

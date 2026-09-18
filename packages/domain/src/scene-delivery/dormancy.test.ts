@@ -279,7 +279,10 @@ describe("no new durable shape", () => {
     // Migration 12 belongs to Phase 4C-3B-2H-3B-5; this phase needed no schema
     // change, because `deliveredAt`, `currentDeliveredRequestId` and
     // `stateVersion` already existed.
-    expect(dirs.at(-1)).toBe("00000000000012_phase4c3b2h3b5_media_validation_lifecycle");
+    // Updated by Phase 4C-3B-2H-3B-6C, which is authorized to add migration 13
+    // for the durable media-failure resolution work table. The pin moving is the
+    // tripwire working: an unreviewed migration still trips every one of these.
+    expect(dirs.at(-1)).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
     expect(dirs.filter((dir) => dir.includes("6a") || dir.includes("delivery"))).toEqual([]);
   });
 

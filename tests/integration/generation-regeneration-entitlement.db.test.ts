@@ -10,6 +10,7 @@ import {
   seedChain,
   seedTenants,
   wipeOrchestration,
+  makeJobRevisable,
 } from "./orchestration-fixture";
 
 /**
@@ -92,18 +93,31 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     if (done.kind !== "APPLIED") throw new Error("expected APPLIED");
   }
 
-  async function admitRegen(sceneId: string, id: string) {
+  /**
+   * Admit a regeneration against a job that is in a revisable state.
+   *
+   * Phase 4C-3B-2H-3B-6C made revision start atomic, so it now requires a job
+   * that has delivered something. Re-arming before each call models what
+   * Transaction H does after a failed revision — these tests fail a request
+   * directly rather than settling it, so nothing else here restores the job.
+   * The entitlement rules under test are unchanged.
+   */
+  async function admitRegen(chain: Chain, id: string) {
+    await makeJobRevisable(prisma, chain, id);
     return repos.requests.admitUserRegeneration(
       ORG_A,
-      { id, generationSceneId: sceneId, requestedByUserId: "usr_itest" },
+      { id, generationSceneId: chain.scene.id, requestedByUserId: "usr_itest" },
       ctx({ actorType: "USER", actorUserId: "usr_itest" }),
     );
   }
 
-  it("gives back the ordinal when a regeneration fails", async () => {
-    const { scene } = await seedChain(prisma, "regenfail");
+  type Chain = Awaited<ReturnType<typeof seedChain>>;
 
-    const first = await admitRegen(scene.id, "genreq_regen_a");
+  it("gives back the ordinal when a regeneration fails", async () => {
+    const chain = await seedChain(prisma, "regenfail");
+    const scene = chain.scene;
+
+    const first = await admitRegen(chain, "genreq_regen_a");
     if (first.kind !== "ADMITTED") throw new Error(`expected ADMITTED, got ${first.kind}`);
     expect(first.request.userRegenerationOrdinal).toBe(1);
 
@@ -116,7 +130,7 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     // And the replacement can actually be stored, carrying ordinal 1 again.
     // Under the old unconditional index this insert failed, so the customer
     // could never ask a second time.
-    const replacement = await admitRegen(scene.id, "genreq_regen_b");
+    const replacement = await admitRegen(chain, "genreq_regen_b");
     if (replacement.kind !== "ADMITTED") {
       throw new Error(`expected ADMITTED, got ${replacement.kind}`);
     }
@@ -125,29 +139,32 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     // The failed request stays in history rather than being cleaned away.
     const all = await repos.requests.listBySceneId(ORG_A, scene.id);
     expect(all.map((r) => [r.id, r.state])).toEqual([
-      ["genreq_regenfail", "PENDING"],
+      // DELIVERED rather than PENDING: a revision can only start from a scene
+      // that already delivered something, which is what the fixture now models.
+      ["genreq_regenfail", "DELIVERED"],
       ["genreq_regen_a", "FAILED_TERMINAL"],
       ["genreq_regen_b", "PENDING"],
     ]);
   });
 
   it("walks the full entitlement and then refuses a third", async () => {
-    const { scene } = await seedChain(prisma, "regenwalk");
+    const chain = await seedChain(prisma, "regenwalk");
+    const scene = chain.scene;
 
-    const first = await admitRegen(scene.id, "genreq_w1");
+    const first = await admitRegen(chain, "genreq_w1");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     expect(first.request.userRegenerationOrdinal).toBe(1);
     await finish(first.request.id, first.request.stateVersion, "DELIVERED");
     expect(usedUserRegenerationCount(await repos.requests.listBySceneId(ORG_A, scene.id))).toBe(1);
 
-    const second = await admitRegen(scene.id, "genreq_w2");
+    const second = await admitRegen(chain, "genreq_w2");
     if (second.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     // Derived from delivered requests, not from a caller-supplied number.
     expect(second.request.userRegenerationOrdinal).toBe(2);
     await finish(second.request.id, second.request.stateVersion, "DELIVERED");
     expect(usedUserRegenerationCount(await repos.requests.listBySceneId(ORG_A, scene.id))).toBe(2);
 
-    const third = await admitRegen(scene.id, "genreq_w3");
+    const third = await admitRegen(chain, "genreq_w3");
     expect(third.kind).toBe("ENTITLEMENT_EXHAUSTED");
     expect(await prisma.sceneGenerationRequest.findUnique({ where: { id: "genreq_w3" } }))
       .toBeNull();
@@ -156,10 +173,10 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   it("refuses a second regeneration while one is still in flight", async () => {
     // Not an entitlement rule but a coherence one: two concurrent renditions of
     // the same scene would both claim to be the customer's current answer.
-    const { scene } = await seedChain(prisma, "regenactive");
-    const first = await admitRegen(scene.id, "genreq_act1");
+    const chain = await seedChain(prisma, "regenactive");
+    const first = await admitRegen(chain, "genreq_act1");
     expect(first.kind).toBe("ADMITTED");
-    const second = await admitRegen(scene.id, "genreq_act2");
+    const second = await admitRegen(chain, "genreq_act2");
     expect(second.kind).toBe("REGENERATION_ALREADY_ACTIVE");
   });
 
@@ -172,10 +189,11 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
    * share an entitlement slot.
    */
   it("lets only one of two concurrent admissions succeed", async () => {
-    const { scene } = await seedChain(prisma, "regenrace");
+    const chain = await seedChain(prisma, "regenrace");
+    const scene = chain.scene;
     const results = await Promise.allSettled([
-      admitRegen(scene.id, "genreq_race_a"),
-      admitRegen(scene.id, "genreq_race_b"),
+      admitRegen(chain, "genreq_race_a"),
+      admitRegen(chain, "genreq_race_b"),
     ]);
 
     // Both calls *return*. The loser's unique violation is an expected business
@@ -204,14 +222,14 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     // this is what that has to mean in practice: an unrelated collision reaches
     // the caller as the error it is, rather than as a cheerful "someone else is
     // already doing this" that would hide a real defect for months.
-    const { scene } = await seedChain(prisma, "regendup");
-    const first = await admitRegen(scene.id, "genreq_dup");
+    const chain = await seedChain(prisma, "regendup");
+    const first = await admitRegen(chain, "genreq_dup");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     await finish(first.request.id, first.request.stateVersion, "DELIVERED");
 
     // Nothing is in flight, so the entitlement check passes and the id itself
     // is what collides.
-    const outcome = await admitRegen(scene.id, "genreq_dup").then(
+    const outcome = await admitRegen(chain, "genreq_dup").then(
       (value) => value.kind,
       (error: unknown) => (error as { code?: string }).code,
     );
@@ -239,8 +257,9 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
    * `generation-concurrency.db.test.ts`.
    */
   it("records that the active and INITIAL indexes are indistinguishable in Prisma's error", async () => {
-    const { scene } = await seedChain(prisma, "shape");
-    const admitted = await admitRegen(scene.id, "genreq_shape_a");
+    const chain = await seedChain(prisma, "shape");
+    const scene = chain.scene;
+    const admitted = await admitRegen(chain, "genreq_shape_a");
     if (admitted.kind !== "ADMITTED") throw new Error("expected ADMITTED");
 
     // A distinct id and a distinct ordinal, so only the *active* index can
@@ -310,8 +329,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     // entitlement derives from `state`, so nothing observable broke while the
     // column recording *when* a right was spent silently stayed empty. That is
     // the fact a billing dispute is settled with.
-    const { scene } = await seedChain(prisma, "stamps");
-    const first = await admitRegen(scene.id, "genreq_stamp_ok");
+    const chain = await seedChain(prisma, "stamps");
+    const first = await admitRegen(chain, "genreq_stamp_ok");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     expect(first.request.deliveredAt).toBeNull();
 
@@ -334,7 +353,7 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     expect(delivered?.deliveredAt).not.toBeNull();
     expect(delivered?.failedAt).toBeNull();
 
-    const second = await admitRegen(scene.id, "genreq_stamp_fail");
+    const second = await admitRegen(chain, "genreq_stamp_fail");
     if (second.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     await finish(second.request.id, second.request.stateVersion, "FAILED_TERMINAL");
     const failed = await repos.requests.findById(ORG_A, second.request.id);
@@ -348,7 +367,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     // what a sequential caller hits — so a mutation removing the index survived
     // until this test bypassed the repository entirely. Under a genuine
     // concurrent interleave the index is the only thing left.
-    const { scene } = await seedChain(prisma, "activeidx");
+    const chain = await seedChain(prisma, "activeidx");
+    const scene = chain.scene;
     await prisma.sceneGenerationRequest.create({
       data: {
         id: "genreq_active_1",
@@ -374,7 +394,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   it("permits at most one initial request per scene", async () => {
     // NULL ordinals are distinct to PostgreSQL, so the old unconditional index
     // allowed any number of these.
-    const { scene } = await seedChain(prisma, "initdup");
+    const chain = await seedChain(prisma, "initdup");
+    const scene = chain.scene;
     await expect(
       prisma.sceneGenerationRequest.create({
         data: {
@@ -388,8 +409,9 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   });
 
   it("permits only one delivered request per entitlement ordinal", async () => {
-    const { scene } = await seedChain(prisma, "delivdup");
-    const first = await admitRegen(scene.id, "genreq_d1");
+    const chain = await seedChain(prisma, "delivdup");
+    const scene = chain.scene;
+    const first = await admitRegen(chain, "genreq_d1");
     if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
     await finish(first.request.id, first.request.stateVersion, "DELIVERED");
 
@@ -409,7 +431,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   });
 
   it("still refuses an out-of-range ordinal at the database", async () => {
-    const { scene } = await seedChain(prisma, "ordrange");
+    const chain = await seedChain(prisma, "ordrange");
+    const scene = chain.scene;
     for (const ordinal of [0, 3, 99]) {
       await expect(
         prisma.sceneGenerationRequest.create({
@@ -436,7 +459,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
 
   describe("a scene's delivered pointer must name one of its own requests", () => {
     it("rejects a request id that does not exist", async () => {
-      const { scene } = await seedChain(prisma, "ptrmissing");
+      const chain = await seedChain(prisma, "ptrmissing");
+    const scene = chain.scene;
       await expect(
         prisma.generationScene.update({
           where: { id: scene.id },
@@ -459,7 +483,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     });
 
     it("accepts a request belonging to the same scene", async () => {
-      const { scene, request } = await seedChain(prisma, "ptrok");
+      const chain = await seedChain(prisma, "ptrok");
+      const { scene, request } = chain;
       const updated = await prisma.generationScene.update({
         where: { id: scene.id },
         data: { currentDeliveredRequestId: request.id },
@@ -468,7 +493,8 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
     });
 
     it("keeps the named request undeletable while it is selected", async () => {
-      const { scene, request } = await seedChain(prisma, "ptrdel");
+      const chain = await seedChain(prisma, "ptrdel");
+      const { scene, request } = chain;
       await prisma.generationScene.update({
         where: { id: scene.id },
         data: { currentDeliveredRequestId: request.id },

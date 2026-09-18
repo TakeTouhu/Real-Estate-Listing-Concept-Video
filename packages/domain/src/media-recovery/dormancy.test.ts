@@ -120,7 +120,13 @@ describe("the capability exists but nothing runs it", () => {
 
   it("invokes no recovery entry point anywhere in production", () => {
     for (const { name, text } of productionSources()) {
-      if (name.endsWith("media-recovery/runner.ts")) continue;
+      // Phase 4C-3B-2H-3B-6C removed this phase's own runner: the durable
+      // resolution coordinator is now the single authority that may invoke
+      // recovery admission, and it is itself proved dormant by
+      // `media-failure-resolution/dormancy.test.ts`. Skipping it here is the
+      // same exemption the other runners already carry — what this test bans is
+      // a production *caller* of a runner, not a runner's own internals.
+      if (name.endsWith("media-failure-resolution/runner.ts")) continue;
       for (const banned of [
         ".runOnce(",
         ".admitAutomaticMediaRecovery(",
@@ -359,7 +365,10 @@ describe("no new durable shape", () => {
     // Migration 12 belongs to Phase 4C-3B-2H-3B-5. This phase needed no schema
     // change: the existence of the newer SYSTEM_RECOVERY attempt is itself the
     // durable idempotency marker.
-    expect(dirs.at(-1)).toBe("00000000000012_phase4c3b2h3b5_media_validation_lifecycle");
+    // Updated by Phase 4C-3B-2H-3B-6C, which is authorized to add migration 13
+    // for the durable media-failure resolution work table. The pin moving is the
+    // tripwire working: an unreviewed migration still trips every one of these.
+    expect(dirs.at(-1)).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
     expect(dirs.filter((dir) => dir.includes("6b") || dir.includes("recovery"))).toEqual([]);
   });
 

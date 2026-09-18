@@ -21,6 +21,7 @@ import {
   seedTenants,
   STORYBOARD_SCENE,
   wipeOrchestration,
+  makeJobRevisable,
 } from "./orchestration-fixture";
 
 /**
@@ -921,6 +922,21 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
      * terminal the identity is released.
      */
     async function regenerationRequestOn(sceneId: string, suffix: string) {
+      // Revision start is atomic since Phase 4C-3B-2H-3B-6C and needs a job that
+      // delivered something; the hash rules under test are unchanged.
+      const scene = await prisma.generationScene.findUniqueOrThrow({
+        where: { id: sceneId },
+        select: { id: true, generationJobId: true },
+      });
+      const initial = await prisma.sceneGenerationRequest.findFirstOrThrow({
+        where: { generationSceneId: sceneId, kind: "INITIAL" },
+        select: { id: true },
+      });
+      await makeJobRevisable(
+        prisma,
+        { job: { id: scene.generationJobId }, scene, request: initial },
+        suffix,
+      );
       const admitted = await repos.requests.admitUserRegeneration(
         ORG_A,
         { id: `genreq_regen_${suffix}`, generationSceneId: sceneId, requestedByUserId: "usr" },
