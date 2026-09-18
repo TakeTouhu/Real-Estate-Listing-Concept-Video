@@ -133,6 +133,49 @@ export class AutomaticMediaRecoveryDefect extends Error {
   }
 }
 
+/**
+ * Why a candidate could not be planned. Closed, application-owned, no external
+ * text.
+ *
+ * The runtime list lives beside the type because the runner *parses* a planner
+ * result rather than trusting it: a structural type is a promise about a
+ * compiled call site, not about what a value actually is at runtime.
+ */
+export type RecoveryPlanRefusalCode =
+  /** The persisted pricing identity is not a complete, well-formed identity. */
+  | "PERSISTED_PRICING_IDENTITY_MALFORMED"
+  /** Today's model catalog no longer delivers this exact route. */
+  | "NO_SAFE_CURRENT_ROUTE"
+  /** No currently eligible contract, or no usable FX rate, for this route. */
+  | "NO_SAFE_CURRENT_PRICING"
+  /** More than one current contract matches this route; choosing one would be a guess. */
+  | "AMBIGUOUS_CURRENT_PRICING";
+
+export const RECOVERY_PLAN_REFUSAL_CODES: readonly RecoveryPlanRefusalCode[] = [
+  "PERSISTED_PRICING_IDENTITY_MALFORMED",
+  "NO_SAFE_CURRENT_ROUTE",
+  "NO_SAFE_CURRENT_PRICING",
+  "AMBIGUOUS_CURRENT_PRICING",
+];
+
+export function isRecoveryPlanRefusalCode(value: unknown): value is RecoveryPlanRefusalCode {
+  return (
+    typeof value === "string" &&
+    (RECOVERY_PLAN_REFUSAL_CODES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The one message a planning failure ever produces.
+ *
+ * Fixed text, no cause, no details. A planner reaches a pricing catalog, a
+ * model catalog and an FX source — every one of which is a place a credential,
+ * a vendor URL or a raw response body can appear in an exception. Attaching the
+ * original as `cause` puts all of that one `JSON.stringify` away from a log.
+ */
+export const MEDIA_RECOVERY_PLANNING_FAILED_MESSAGE =
+  "Automatic media recovery planning failed";
+
 /** The largest recovery batch one pass may claim. Frozen, matching the other sweeps. */
 export const MAX_MEDIA_RECOVERY_BATCH_SIZE = 100;
 

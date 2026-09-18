@@ -288,16 +288,101 @@ describe("one pass, bounded and deterministic", () => {
     }
   });
 
-  it("converts a thrown planner into a fixed internal error with no external text", async () => {
+});
+
+describe("a planner failure never carries external text", () => {
+  /** Anything a real planner could be holding when it goes wrong. */
+  const SENTINEL = "RAW_PROVIDER_OR_FX_SECRET_TEXT";
+
+  /** Every place an error could smuggle text out, including the whole object. */
+  function leakSurfaces(error: unknown): string {
+    const app = error as {
+      message?: unknown;
+      cause?: unknown;
+      details?: unknown;
+      stack?: unknown;
+    };
+    const own: Record<string, unknown> = {};
+    for (const key of Object.getOwnPropertyNames(error as object)) {
+      own[key] = (error as Record<string, unknown>)[key];
+    }
+    return [
+      String(app.message ?? ""),
+      JSON.stringify(app.cause ?? null),
+      JSON.stringify(app.details ?? null),
+      JSON.stringify(own, (_k, v: unknown) => (v instanceof Error ? String(v.stack) : v)),
+      String(error),
+    ].join("|");
+  }
+
+  async function failureFrom(
+    plan: () => Promise<AutomaticMediaRecoveryPlan>,
+  ): Promise<{ error: unknown; repository: FakeRepository }> {
     const repository = new FakeRepository([candidate("one")]);
-    const subject = runner(repository, async () => {
-      throw new Error("provider said: sk-live-secret at https://vendor.example/x");
+    try {
+      await runner(repository, plan).runOnce(10);
+    } catch (error) {
+      return { error, repository };
+    }
+    throw new Error("expected the runner to fail");
+  }
+
+  it("normalizes a thrown planner to the fixed error and drops the original", async () => {
+    const { error, repository } = await failureFrom(async () => {
+      throw new Error(`${SENTINEL} at https://vendor.example/x`);
     });
 
-    await expect(subject.runOnce(10)).rejects.toMatchObject({
+    expect(error).toMatchObject({
       code: "INTERNAL_ERROR",
       message: "Automatic media recovery planning failed",
     });
+    expect((error as { cause?: unknown }).cause).toBeUndefined();
+    expect((error as { details?: unknown }).details).toBeUndefined();
+    expect(leakSurfaces(error)).not.toContain(SENTINEL);
+    // Nothing was admitted on the way out.
     expect(repository.calls).toEqual(["find"]);
+  });
+
+  for (const [name, value] of [
+    ["undefined", undefined],
+    ["null", null],
+    ["a string", `${SENTINEL}`],
+    ["an unknown kind", { kind: SENTINEL }],
+    ["NO_PLAN with no code", { kind: "NO_PLAN" }],
+    ["NO_PLAN with a raw code", { kind: "NO_PLAN", code: SENTINEL }],
+    ["PLANNED with no snapshot", { kind: "PLANNED", fxSnapshot: {} }],
+    ["PLANNED with a null snapshot", { kind: "PLANNED", pricingSnapshot: null, fxSnapshot: {} }],
+    ["PLANNED with no rate", { kind: "PLANNED", pricingSnapshot: {} }],
+    ["PLANNED with a raw rate", { kind: "PLANNED", pricingSnapshot: {}, fxSnapshot: SENTINEL }],
+  ] as const) {
+    it(`normalizes a planner returning ${name}`, async () => {
+      const { error, repository } = await failureFrom(
+        async () => value as unknown as AutomaticMediaRecoveryPlan,
+      );
+
+      expect(error).toMatchObject({
+        code: "INTERNAL_ERROR",
+        message: "Automatic media recovery planning failed",
+      });
+      expect((error as { cause?: unknown }).cause).toBeUndefined();
+      expect((error as { details?: unknown }).details).toBeUndefined();
+      expect(leakSurfaces(error)).not.toContain(SENTINEL);
+      // A malformed plan is never admitted, and never becomes a TypeError.
+      expect(repository.calls).toEqual(["find"]);
+    });
+  }
+
+  it("still accepts every well-formed refusal code", async () => {
+    for (const code of [
+      "PERSISTED_PRICING_IDENTITY_MALFORMED",
+      "NO_SAFE_CURRENT_ROUTE",
+      "NO_SAFE_CURRENT_PRICING",
+      "AMBIGUOUS_CURRENT_PRICING",
+    ] as const) {
+      const repository = new FakeRepository([candidate("one")]);
+      const report = await runner(repository, async () => ({ kind: "NO_PLAN", code })).runOnce(10);
+      expect(report.noPlan).toBe(1);
+      expect(report.outcomes[0]?.result).toEqual({ kind: "NO_PLAN", code });
+    }
   });
 });

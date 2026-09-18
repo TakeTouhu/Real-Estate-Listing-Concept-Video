@@ -17,7 +17,11 @@
 
 import type { FxSnapshot, PricingSnapshot } from "../pricing/index";
 import type { TransitionContext } from "../orchestration/ports";
-import type { AutomaticMediaRecoveryOutcome, MediaFailureKind } from "./policy";
+import type {
+  AutomaticMediaRecoveryOutcome,
+  MediaFailureKind,
+  RecoveryPlanRefusalCode,
+} from "./policy";
 
 /**
  * The immutable execution route a recovery must reproduce exactly.
@@ -64,17 +68,6 @@ export interface AutomaticMediaRecoveryCandidate {
 export interface AutomaticMediaRecoveryQuery {
   readonly limit: number;
 }
-
-/** Why a candidate could not be planned. Closed, application-owned, no external text. */
-export type RecoveryPlanRefusalCode =
-  /** The persisted pricing identity is not a complete, well-formed identity. */
-  | "PERSISTED_PRICING_IDENTITY_MALFORMED"
-  /** Today's model catalog no longer delivers this exact route. */
-  | "NO_SAFE_CURRENT_ROUTE"
-  /** No currently eligible contract, or no usable FX rate, for this route. */
-  | "NO_SAFE_CURRENT_PRICING"
-  /** More than one current contract matches this route; choosing one would be a guess. */
-  | "AMBIGUOUS_CURRENT_PRICING";
 
 export type AutomaticMediaRecoveryPlan =
   | {

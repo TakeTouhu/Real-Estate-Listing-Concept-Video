@@ -234,6 +234,19 @@ export function createAutomaticMediaRecoveryRepository(
           input.sourceAttemptId,
         );
         if (!locked) return { kind: "NOT_FOUND" };
+        // The last link in the declared order, taken after the attempt lock and
+        // before any authority is read. Tenancy is already proved: the
+        // validation is reachable only through the attempt the statement above
+        // locked in-tenant.
+        //
+        // A terminal verdict is effectively immutable today, so this is
+        // defence-in-depth rather than a race that exists now — but the
+        // transaction contract names five rows and the implementation must take
+        // all five, or the contract is a comment rather than a guarantee.
+        // Locking nothing is not an outcome: a missing, cross-tenant or
+        // mismatched validation keeps failing closed through the existing
+        // checks below.
+        await lockSourceValidation(tx, input.sourceAttemptId);
 
         // ---- 2. One authoritative read under those locks. ---------------
         const row = await readRecoveryContext(tx, input.organizationId, input.sourceAttemptId);
@@ -437,6 +450,24 @@ async function lockRecoveryChainForTenant(
        FOR UPDATE OF j, s, r, a
   `;
   return rows.length > 0;
+}
+
+/**
+ * Lock the source validation row, completing the declared chain.
+ *
+ * Deliberately returns nothing. Whether a row exists is not this function's
+ * decision — the authoritative read below answers that, and the existing
+ * `NOT_ELIGIBLE` / defect semantics answer what to do about it. Making the lock
+ * an eligibility check would change the outcome vocabulary to accommodate a
+ * lock, which is backwards.
+ */
+async function lockSourceValidation(tx: Tx, sourceAttemptId: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT v."id"
+      FROM "managed_output_media_validations" v
+     WHERE v."sceneGenerationId" = ${sourceAttemptId}
+       FOR UPDATE
+  `;
 }
 
 /** One authoritative read of every row the recovery authority judges. */

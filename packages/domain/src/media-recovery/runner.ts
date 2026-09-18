@@ -16,12 +16,19 @@
  */
 
 import { AppError } from "@app/shared";
+import type { FxSnapshot, PricingSnapshot } from "../pricing/index";
 import type { TransitionContext } from "../orchestration/ports";
-import { validateMediaRecoveryBatchLimit, type AutomaticMediaRecoveryOutcome } from "./policy";
+import {
+  isRecoveryPlanRefusalCode,
+  validateMediaRecoveryBatchLimit,
+  MEDIA_RECOVERY_PLANNING_FAILED_MESSAGE,
+  type AutomaticMediaRecoveryOutcome,
+  type RecoveryPlanRefusalCode,
+} from "./policy";
 import type {
+  AutomaticMediaRecoveryPlan,
   AutomaticMediaRecoveryPlannerPort,
   AutomaticMediaRecoveryRepository,
-  RecoveryPlanRefusalCode,
 } from "./ports";
 
 /** What one candidate did, as a closed union the report can be read from. */
@@ -91,17 +98,21 @@ export class AutomaticMediaFailureRecoveryRunner {
       seen.add(candidate.sourceValidationId);
 
       // Planning finishes completely before admission opens a transaction.
-      // A planner that throws is a defect in this application's own catalogs,
-      // not an expected outcome, so it is converted to a fixed internal error
-      // carrying no external text rather than being reported as "no plan".
-      let plan;
+      //
+      // A planner that throws, or returns something that is not a plan, is a
+      // defect in this application's own catalogs rather than an expected
+      // outcome — and both are normalized to the *same* fixed error carrying no
+      // external text. The original is dropped entirely, not attached as
+      // `cause`: a planner touches a pricing catalog, a model catalog and an FX
+      // source, and an exception from any of them can carry a credential, a
+      // vendor URL or a raw response body.
+      let raw: unknown;
       try {
-        plan = await this.#planner.plan(candidate);
-      } catch (cause) {
-        throw new AppError("INTERNAL_ERROR", "Automatic media recovery planning failed", {
-          cause,
-        });
+        raw = await this.#planner.plan(candidate);
+      } catch {
+        throw planningFailed();
       }
+      const plan = parsePlan(raw);
 
       if (plan.kind === "NO_PLAN") {
         noPlan += 1;
@@ -131,4 +142,46 @@ export class AutomaticMediaFailureRecoveryRunner {
 
     return { admitted, noPlan, outcomes };
   }
+}
+
+/** The one error a planning failure ever produces. No cause, no details. */
+function planningFailed(): AppError {
+  return new AppError("INTERNAL_ERROR", MEDIA_RECOVERY_PLANNING_FAILED_MESSAGE);
+}
+
+/**
+ * Read a planner result as a plan, or refuse.
+ *
+ * A structural type is a promise about a compiled call site, not about the
+ * value that actually arrives. Without this, a planner returning `undefined`,
+ * `{ kind: "PLANNED" }` with no snapshot, or `{ kind: "NO_PLAN", code: <raw
+ * vendor string> }` would surface later as a `TypeError` whose message quotes
+ * whatever the planner was holding — precisely the leak the fixed error exists
+ * to prevent.
+ *
+ * Shape only. Whether the materialized plan actually binds to the attempt is
+ * the repository's question, and it still asks it.
+ */
+function parsePlan(value: unknown): AutomaticMediaRecoveryPlan {
+  if (typeof value !== "object" || value === null) throw planningFailed();
+  const record = value as Record<string, unknown>;
+
+  if (record.kind === "NO_PLAN") {
+    if (!isRecoveryPlanRefusalCode(record.code)) throw planningFailed();
+    return { kind: "NO_PLAN", code: record.code };
+  }
+
+  if (record.kind === "PLANNED") {
+    const pricingSnapshot = record.pricingSnapshot;
+    const fxSnapshot = record.fxSnapshot;
+    if (typeof pricingSnapshot !== "object" || pricingSnapshot === null) throw planningFailed();
+    if (typeof fxSnapshot !== "object" || fxSnapshot === null) throw planningFailed();
+    return {
+      kind: "PLANNED",
+      pricingSnapshot: pricingSnapshot as PricingSnapshot,
+      fxSnapshot: fxSnapshot as FxSnapshot,
+    };
+  }
+
+  throw planningFailed();
 }
