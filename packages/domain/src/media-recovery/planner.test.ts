@@ -84,7 +84,10 @@ function realModels(): VideoModelCatalog {
     tier: "ECONOMY",
     recommended: false,
     availability: { kind: "SELECTABLE" },
-    capability: { maxDurationSeconds: 10 },
+    // The real OpenVideo descriptor's own duration policy, not an invented one:
+    // the planner now asks the catalog whether the historical clip length is
+    // still generatable, so a fixture of the wrong shape would prove nothing.
+    capability: { durationSeconds: { kind: "RANGE", minSeconds: 3, maxSeconds: 20 } },
     nativeGeneration: {
       byTarget: {
         "1080p": {
@@ -228,6 +231,40 @@ describe("today's catalog must still deliver the same route", () => {
     }
   });
 
+  it("refuses a duration the model no longer generates", async () => {
+    // Admitting this would spend the request's one automatic allowance on an
+    // attempt execution preflight is certain to refuse, leaving nothing left to
+    // retry with. The catalog answers before any money is priced.
+    const plan = await plannerWith().plan(candidate({ sceneDurationSeconds: 25 }));
+    expect(plan).toEqual({ kind: "NO_PLAN", code: "NO_SAFE_CURRENT_ROUTE" });
+  });
+
+  it("refuses a duration a narrowed policy no longer covers", async () => {
+    const base = realModels().find("wavespeed-open-video");
+    if (base === undefined) throw new Error("expected the entry");
+    for (const policy of [
+      { kind: "RANGE", minSeconds: 8, maxSeconds: 20 },
+      { kind: "ENUMERATED", seconds: [4, 6, 8] },
+    ]) {
+      const narrowed = mutate(base, {
+        capability: { durationSeconds: policy },
+      });
+      // The Scene asks for 5 seconds, which both narrowed policies exclude.
+      const plan = await plannerWith({ models: models(narrowed) }).plan(candidate());
+      expect(plan).toEqual({ kind: "NO_PLAN", code: "NO_SAFE_CURRENT_ROUTE" });
+    }
+  });
+
+  it("plans a duration an enumerated policy still lists", async () => {
+    const base = realModels().find("wavespeed-open-video");
+    if (base === undefined) throw new Error("expected the entry");
+    const enumerated = mutate(base, {
+      capability: { durationSeconds: { kind: "ENUMERATED", seconds: [5, 10] } },
+    });
+    const plan = await plannerWith({ models: models(enumerated) }).plan(candidate());
+    expect(plan.kind).toBe("PLANNED");
+  });
+
   it("refuses a target the model no longer supports", async () => {
     const plan = await plannerWith().plan(candidate({ targetOutputResolution: "720p" }));
     expect(plan).toEqual({ kind: "NO_PLAN", code: "NO_SAFE_CURRENT_ROUTE" });
@@ -342,8 +379,15 @@ describe("a recovery that could never be armed is never planned", () => {
     }
   });
 
-  it("refuses a duration the provider will not generate", async () => {
-    const plan = await plannerWith().plan(candidate({ sceneDurationSeconds: 9999 }));
+  it("refuses a duration the rate card will not bill", async () => {
+    // Distinct from the catalog's duration gate: the model still generates five
+    // seconds, but this rate card stops billing at four. A recovery nothing can
+    // price is refused here rather than admitted and discovered later.
+    const narrowed: ProviderPricingContract = {
+      ...openVideoContract(),
+      billableDuration: { kind: "CONTINUOUS", minSeconds: 3, maxSeconds: 4 },
+    };
+    const plan = await plannerWith({ pricing: catalogOf([narrowed]) }).plan(candidate());
     expect(plan).toEqual({ kind: "NO_PLAN", code: "NO_SAFE_CURRENT_PRICING" });
   });
 });

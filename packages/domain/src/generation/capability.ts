@@ -182,7 +182,15 @@ function isValidAspectRatioSyntax(value: string): boolean {
   return width! > 0 && height! > 0;
 }
 
-function durationAccepted(seconds: number, policy: DurationPolicy): boolean {
+/**
+ * Whether a duration policy accepts a duration, as one authority.
+ *
+ * Exported because admission is not the only caller: anything that re-asks
+ * "can this model still do this work" — such as replanning a retry against
+ * today's catalog — must ask the *same* question admission asked, or the two
+ * disagree and one of them admits work the other refuses.
+ */
+export function durationPolicyAccepts(seconds: number, policy: DurationPolicy): boolean {
   if (!Number.isInteger(seconds) || seconds <= 0) return false;
   return policy.kind === "RANGE"
     ? seconds >= policy.minSeconds && seconds <= policy.maxSeconds
@@ -214,7 +222,7 @@ export function assertSettingsSupported(
   settings: GenerationRequestSettings,
   capability: VideoModelCapability,
 ): void {
-  if (!durationAccepted(settings.durationSeconds, capability.durationSeconds)) {
+  if (!durationPolicyAccepts(settings.durationSeconds, capability.durationSeconds)) {
     throw new AppError(
       "VALIDATION_FAILED",
       `This model supports ${describeDuration(capability.durationSeconds)}; the scene asks for ${settings.durationSeconds}`,

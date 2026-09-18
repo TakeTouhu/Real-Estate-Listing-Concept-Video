@@ -86,12 +86,29 @@ different video — so it is a separate decision that has not been made.
 
 Before planning, the route is revalidated against **today's** catalogs. The
 model must still exist, still be `SELECTABLE`, still point at the same provider
-and provider model id, still support the Job's target, and
-`planGenerationResolution` must still return the same native resolution,
-normalization and `nativeMeetsTarget`. Any difference is `NO_SAFE_CURRENT_ROUTE`.
+and provider model id, still accept the Scene's duration, still support the
+Job's target, and `planGenerationResolution` must still return the same native
+resolution, normalization and `nativeMeetsTarget`. Any difference is
+`NO_SAFE_CURRENT_ROUTE`.
 
 Re-running under a changed catalog would silently produce *different work* than
 the attempt being retried, under the same request identity.
+
+The duration belongs in this list, and review found it missing. Leaving it to
+execution preflight looked harmless because preflight would refuse the attempt
+anyway — but the admitted `SYSTEM_RECOVERY` row *is* the durable cap marker
+(Decision 13), so an attempt that preflight is certain to refuse would still
+spend the request's one automatic allowance and leave it with nothing to retry
+with. A model that narrows its accepted clip lengths is an ordinary catalog
+change, so this is reachable without any defect elsewhere.
+
+The rule itself is not restated here: `durationPolicyAccepts` is exported from
+`packages/domain/src/generation/capability.ts` and is the same predicate
+`assertSettingsSupported` applies at admission, so planning and preflight cannot
+drift into disagreeing about what the model accepts. The rate card's own
+`billableDuration` remains a separate and later question — a duration the model
+generates but the current contract will not bill is `NO_SAFE_CURRENT_PRICING`,
+not `NO_SAFE_CURRENT_ROUTE`.
 
 ## Decision 5 — Historical identity, current money
 

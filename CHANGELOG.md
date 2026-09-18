@@ -30,6 +30,12 @@ constructs the runner, schedules it, or calls it, and no provider is called.
   outside the transaction and admits inside it.
 - **`parseProviderPricingIdentity`** — the canonical reader for the
   `identityJson` column, iterating the now-exported `IDENTITY_DIMENSION_NAMES`.
+- **`durationPolicyAccepts`** — the duration rule `assertSettingsSupported`
+  already applied, extracted and exported so route revalidation asks the same
+  question admission asks. Added in review: without it, a model that narrowed
+  its accepted clip lengths would let the planner admit a recovery execution
+  preflight is certain to refuse, and that admitted attempt would still spend
+  the request's one automatic allowance.
 
 ### Guarantees
 

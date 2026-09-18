@@ -23,6 +23,16 @@ it, or calls it, and no provider is called.
   `identityJson` column.
 - **`admitAttemptWithin`** — generic attempt admission's within-transaction half,
   extracted rather than duplicated.
+- **`durationPolicyAccepts`** — admission's own duration rule, extracted from
+  `assertSettingsSupported` so route revalidation asks the identical question.
+
+## Corrections made in review
+
+- **Automated review (Codex, P2): the Scene's duration was not revalidated.**
+  `routeIsStillSafe` checked selectability, provider identity and the resolution
+  decision, but not whether today's model still accepts the historical clip
+  length. The finding was correct and is now fixed — see *Same route, exactly*
+  for why it mattered more than defence in depth, plus mutations M165 and M166.
 
 ## The business fact
 
@@ -126,9 +136,21 @@ Copied from the source attempt and never re-derived: `providerName`,
 `requestNativeMeetsTarget`.
 
 Today's model catalog must still deliver that exact route — the entry must
-exist, be `SELECTABLE`, carry the same provider and provider model id, support
-the Job's target, and `planGenerationResolution` must return the same three
-values. Otherwise `NO_SAFE_CURRENT_ROUTE`.
+exist, be `SELECTABLE`, carry the same provider and provider model id, still
+accept the Scene's duration, support the Job's target, and
+`planGenerationResolution` must return the same three values. Otherwise
+`NO_SAFE_CURRENT_ROUTE`.
+
+The duration clause was added in review. It is not merely defence in depth:
+because the admitted `SYSTEM_RECOVERY` row is itself the cap marker, admitting a
+recovery that execution preflight is certain to refuse would spend the request's
+one automatic allowance and leave nothing to retry with. A model narrowing its
+accepted clip lengths is an ordinary catalog change, so this was reachable. The
+predicate is `durationPolicyAccepts`, extracted from
+`packages/domain/src/generation/capability.ts` and now shared with
+`assertSettingsSupported`, so planning and preflight cannot disagree about what
+the model accepts. A duration the model still generates but the current rate
+card will not bill remains a *pricing* refusal (`NO_SAFE_CURRENT_PRICING`).
 
 The request hash is re-derived through `computeGenerationRequestHash` and
 asserted equal to the source's, rather than copied.
@@ -215,7 +237,7 @@ Asserted rather than described:
 | --- | --- |
 | `pnpm typecheck` | pass |
 | `pnpm lint` | pass |
-| `pnpm test` | **4313 passed**, 132 files (4239/128 before this phase, plus 74 in 4 new files) |
+| `pnpm test` | **4316 passed**, 132 files (4239/128 before this phase, plus 74 in 4 new files and 3 added in review) |
 | `pnpm test:db` (live PostgreSQL) | **888 passed**, 27 files (852/25 before this phase, plus 36 in 2 new files) |
 | `pnpm build` | pass |
 | `prisma validate` / `format` | pass, no schema diff |
@@ -224,11 +246,18 @@ Asserted rather than described:
 
 ## Mutation ledger
 
-M01–M131 carry forward. **M132–M164** were added for this phase. The complete
-ledger was run against the final tree and reported **165 run, 165 killed, 0
-survivors, 0 anchor-missing**. Restoration was then proved by SHA-256 against a
-pre-run snapshot, with `git status` showing only the change set and
-`git diff --check` clean.
+M01–M131 carry forward. **M132–M166** were added for this phase. The complete
+ledger of M01–M164 was run against the tree at `0559b21` and reported **165 run,
+165 killed, 0 survivors, 0 anchor-missing**. Restoration was then proved by
+SHA-256 against a pre-run snapshot, with `git status` showing only the change set
+and `git diff --check` clean.
+
+**M165 and M166 were added for the review correction** (the duration clause in
+`routeIsStillSafe`). They were run together with every mutation that touches the
+planner or the shared duration rule — M153–M160, M165, M166 — against the
+corrected tree: **10 run, 10 killed, 0 survivors, 0 anchor-missing**. The
+correction changes no other mutated file: the earlier full-ledger result stands
+for M01–M152 and M161–M164, whose anchors are untouched by this diff.
 
 | # | Defect | Killed by |
 | --- | --- | --- |
@@ -258,6 +287,8 @@ pre-run snapshot, with `git status` showing only the change set and
 | **M162** | A malformed planner result is trusted instead of parsed | malformed-plan sanitization tests |
 | **M163** | The runner acts on a duplicated candidate twice | runner de-duplication test |
 | **M164** | The within-transaction admission helper becomes public again | public-surface regression |
+| **M165** | The historical duration is not revalidated against today's model | narrowed-duration refusal tests |
+| **M166** | The shared duration rule accepts what its policy excludes | capability admission tests and the planner's duration tests together |
 
 ### Three re-aims, stated explicitly
 

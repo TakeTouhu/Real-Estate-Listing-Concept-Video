@@ -35,6 +35,7 @@ import {
   type ProviderPricingContract,
   type ProviderPricingIdentity,
 } from "../pricing/index";
+import { durationPolicyAccepts } from "../generation/capability";
 import {
   isSelectableModel,
   isTargetOutputResolution,
@@ -151,9 +152,17 @@ function identityAgreesWithRoute(
  *
  * A route that was valid once is not automatically safe to re-run: the model
  * may have been withdrawn, un-verified, re-pointed at a different provider id,
- * or may deliver the same product target through a different native resolution
- * or normalization now. Re-running under any of those silently produces
- * *different work* than the attempt being retried.
+ * narrowed the clip lengths it accepts, or may deliver the same product target
+ * through a different native resolution or normalization now. Re-running under
+ * any of those silently produces *different work* than the attempt being
+ * retried — or no work at all.
+ *
+ * The duration check is here rather than left to execution preflight because
+ * admitting a recovery is not free: the admitted `SYSTEM_RECOVERY` attempt is
+ * itself the durable cap marker, so a recovery that preflight will certainly
+ * refuse would still spend the request's one automatic allowance and leave it
+ * with no usable retry. `durationPolicyAccepts` is the same authority admission
+ * uses, so the two cannot drift into disagreeing.
  */
 function routeIsStillSafe(
   models: VideoModelCatalog,
@@ -164,6 +173,9 @@ function routeIsStillSafe(
   if (!isSelectableModel(entry)) return false;
   if (entry.providerName !== candidate.route.providerName) return false;
   if (entry.providerModelId !== candidate.route.providerModelId) return false;
+  if (!durationPolicyAccepts(candidate.sceneDurationSeconds, entry.capability.durationSeconds)) {
+    return false;
+  }
   if (!isTargetOutputResolution(candidate.targetOutputResolution)) return false;
 
   const target = candidate.targetOutputResolution as TargetOutputResolution;
