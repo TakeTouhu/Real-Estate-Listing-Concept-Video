@@ -3,6 +3,104 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-6A: Atomic validated Scene delivery
+
+Detail in `docs/phase-4c3b2h3b6a-completion.md` and ADR-0046. Gives a durable
+`VALID` media verdict its one consequence — the customer-visible delivery of a
+Scene — as a single atomic business fact, and **only** that consequence. No
+recovery attempt is admitted, no provider is called, no quota moves, and nothing
+advances past `SCENES_READY`. **No production scheduler exists**: nothing
+constructs the runner, schedules it, or calls it.
+
+### Added
+
+- **Transaction F** — one repository operation,
+  `createValidatedSceneDeliveryRepository(...).deliverValidatedScene`, that in
+  one short database transaction moves the request `GENERATING -> DELIVERED`
+  (recording `deliveredAt`), the Scene `GENERATING`/`REVISING -> READY`, the
+  Scene's delivered pointer to the delivered request, and — only when every
+  Scene of the Job is `READY` — the Job `GENERATING -> SCENES_READY`. All of it
+  or none of it: the boundary deliberately offers no `markRequestDelivered`,
+  `markSceneReady` or `maybeMarkJobReady`, because three calls are three crash
+  boundaries and the half-applied states they leave behind are not repairable.
+- **A bounded candidate sweep** over durable `VALID` verdicts, returning
+  identifiers only. It is a hint, never permission: every condition is re-read
+  and re-checked inside the transaction under its own locks.
+- **`ValidatedSceneDeliveryRunner`** (`@app/domain`) — a dormant runner over
+  ports that acts on each candidate at most once per pass, with no scheduler,
+  no interval and no production caller.
+- **A closed outcome vocabulary** — `DELIVERED`, `ALREADY_APPLIED`,
+  `NOT_ELIGIBLE`, `NOT_FOUND` — and four fixed defect codes
+  (`RECEIPT_BINDING_CONFLICT`, `SCENE_STATE_CONFLICT`,
+  `DELIVERY_POINTER_CONFLICT`, `PARTIAL_DELIVERY_STATE`) whose messages carry no
+  identifier, key, URL or provider text.
+
+### Guarantees
+
+- **A fixed lock order, Job first.** `Job → Scene → Request → attempt →
+  validation`, taken the same way by every caller. The Job lock is what makes
+  the readiness decision correct: two Scenes of one Job finishing at the same
+  instant serialize on the Job row, so exactly one transaction observes itself
+  as the last. A deterministic live-PostgreSQL regression holds both workers
+  blocked on that row before releasing them; the synchronisation is the lock,
+  not a sleep.
+- **`VALID` only, and re-proved.** No S3 read and no `ffprobe` run here. The
+  gate is a positive test for `VALID`, not a denylist, and the verdict's frozen
+  receipt must equal the attempt's verified digest *and* size before anything
+  moves.
+- **Latest-attempt authority is the durable ordinal**, never `createdAt`. A
+  regression gives the superseded attempt a later creation time, so a timestamp
+  comparison delivers the wrong row.
+- **Idempotent and fail-closed.** A replay is `ALREADY_APPLIED` and writes
+  nothing again; any half-applied shape raises `PARTIAL_DELIVERY_STATE` and is
+  never repaired. Inside an interactive transaction returning is committing, so
+  the guards that run after the first write raise rather than return.
+- **The regeneration right stays derived** from `DELIVERED`
+  `USER_REGENERATION` requests. No counter was added, and the superseded
+  request row is left untouched as history.
+
+### Liveness and regeneration guarantees
+
+- **Discovery filters what can never become eligible again.** A candidate the
+  transaction will always refuse still occupies a slot in an
+  `ORDER BY validatedAt ASC LIMIT n` sweep, forever, starving deliverable work
+  behind it. Superseded attempts (by `attemptOrdinal`, never `createdAt`) and
+  non-`GENERATING` Jobs are therefore filtered out of the listing as well as
+  refused by the transaction. The transactional checks all remain, because
+  discovery is still only a hint.
+- **A new delivery requires a `GENERATING` Job**, checked after replay
+  classification and before any write. Otherwise the last Scene of a `REVISING`,
+  `CANCELLED` or already-`SCENES_READY` Job could become `READY` with its
+  request `DELIVERED` while the Job stayed put — and since a delivered request
+  stops being a candidate, no later Transaction F call would exist to perform
+  `GENERATING -> SCENES_READY`, stranding the Job. Placing the check after
+  replay classification keeps a genuine replay answering `ALREADY_APPLIED`.
+- **A regeneration must replace a delivered predecessor.** A
+  `USER_REGENERATION` requires `currentDeliveredRequestId` to be non-null and to
+  name a `DELIVERED` request of the same Scene; otherwise it raises
+  `REGENERATION_PREDECESSOR_MISSING`. With nothing to regenerate, delivering
+  would invent the Scene's first delivery under the wrong request kind. No
+  pointer is created, no predecessor invented, no entitlement consumed.
+
+### Unchanged, on purpose
+
+- **No schema change and no migration.** `deliveredAt`,
+  `currentDeliveredRequestId`, its composite foreign key and `stateVersion`
+  already existed; migration 12 remains the newest.
+- `OUTPUT_VERIFIED` keeps its exact meaning, and no state vocabulary changed.
+- `INVALID_MEDIA` and `INTEGRITY_MISMATCH` remain durable terminal verdicts with
+  no downstream action. Recovery admission belongs to a later phase.
+- Reservations, quota, settlement, payment, composition, the deliverable and
+  upscale are untouched, and static tests assert the module cannot name them.
+
+### Fixed
+
+- The Phase 2H-3B-5 first-record race regression could fail spuriously in a
+  loaded full-suite run: its lock holder and its two workers started together,
+  so a worker could take the key first and finish immediately, leaving only one
+  backend waiting. Both that test and this phase's new race regression now wait
+  for the holder to own the row before either worker starts.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-5: Durable media-validation lifecycle
 
 Detail in `docs/phase-4c3b2h3b5-completion.md` and ADR-0045. Makes the result of

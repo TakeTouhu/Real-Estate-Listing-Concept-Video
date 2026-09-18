@@ -396,16 +396,20 @@ export interface GenerationTransitionEventRecord {
  * - **`RESERVING -> RESERVED` on a job** belongs to `reserve()`.
  * - **`PENDING -> GENERATING` on a request** belongs to attempt admission: the
  *   request starts generating *because* an attempt exists.
- * - **`GENERATING -> DELIVERED` on a request**, and the pair
- *   `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` with `-> CONSUMED`, belong to
- *   Transactions F and G, which are deferred. Delivery consumes a customer's
- *   regeneration right and `CONSUMED` spends their unit; exposing either alone
- *   would make an incomplete workflow executable, and the missing halves —
- *   output verification and the quota ledger — are what make it safe.
+ * - **`GENERATING -> DELIVERED` on a request** belongs to Transaction F, which
+ *   now exists. It stays reserved here because delivery is only safe as a whole:
+ *   the durable media verdict, the byte-identity recheck, the Scene transition
+ *   and the delivered pointer are applied in the same commit, and a generic
+ *   route to `DELIVERED` would write one of those facts without the others.
+ * - **`DELIVERABLE_VALIDATING -> DELIVERABLE_READY` with `-> CONSUMED`** belong
+ *   to Transaction G, which is still deferred. `CONSUMED` spends a customer's
+ *   unit, and the quota ledger that makes it safe does not exist yet.
  *
- * The pure state machines still describe these edges: they are legal moves with
- * no persistence route yet, which is the honest description of deferred work.
- * Tests needing such rows seed them through raw Prisma.
+ * The pure state machines still describe these edges. For Transaction G they are
+ * legal moves with no persistence route yet, which is the honest description of
+ * deferred work; for Transaction F the route exists but lives behind the one
+ * operation that applies the whole fact. Tests needing such rows seed them
+ * through raw Prisma.
  */
 export type ReservedTransitionOutcome = { readonly kind: "TRANSITION_RESERVED" };
 
@@ -518,7 +522,7 @@ export interface SceneGenerationRequestRepository {
   ): Promise<readonly SceneGenerationRequestRecord[]>;
   /**
    * Refuses `PENDING -> GENERATING` (attempt admission owns it) and
-   * `GENERATING -> DELIVERED` (Transaction F, deferred).
+   * `GENERATING -> DELIVERED` (Transaction F owns it).
    */
   transition(input: {
     readonly organizationId: string;

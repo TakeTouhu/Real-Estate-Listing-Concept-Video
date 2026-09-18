@@ -112,6 +112,7 @@ flowchart TB
 | `@app/video-providers` verified OpenVideo capability descriptor | Implemented (Phase 4B-2a, ADR-0019) |
 | `@app/video-providers` `ProviderSubmissionOutcome` + `VideoGenerationSubmissionProvider` | Implemented (Phase 4C-3B-2C-1, ADR-0035); submission reports certainty as a returned value, not an exception |
 | `@app/video-providers` fal / MiniMax H3 Max submission adapter | Implemented and **dormant** (Phase 4C-3B-2C-2, ADR-0035 §7); `VIDEO_PROVIDER` refuses `fal`, no fal key in the env schema, no factory branch, zero production callers |
+| `@app/domain` scene-delivery + `@app/database` Transaction F — atomic validated Scene delivery (request `DELIVERED`, Scene `READY`, delivered pointer, Job `SCENES_READY`) | Implemented and **dormant** (Phase 4C-3B-2H-3B-6A, ADR-0046); consumes a durable `VALID` media verdict only, nothing constructs or schedules the runner |
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` execution loop, generation orchestration | **Not implemented** (Phase 4) |
 | `@app/queue` | **Placeholder.** No transport exists: the `QUEUED` generation row is the durable queue (ADR-0024) |

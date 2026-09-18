@@ -678,3 +678,34 @@ rather than a second write, and the legacy tenant-facing
 `orchestrationState IS NULL`. No trigger was added: the mutation path was
 closeable in the application, where the rule stays visible to the people who
 maintain it.
+
+## Phase 4C-3B-2H-3B-6A — Atomic validated Scene delivery
+
+**No migration.** This phase adds none, and
+`00000000000012_phase4c3b2h3b5_media_validation_lifecycle` remains the newest
+migration in `packages/database/prisma/migrations`.
+
+Transaction F writes only columns that already existed:
+
+| Column | Added by |
+| --- | --- |
+| `scene_generation_requests.deliveredAt` | migration 10 |
+| `scene_generation_requests.state`, `.stateVersion` | migration 10 |
+| `generation_scenes.currentDeliveredRequestId` | migration 10 |
+| `generation_scenes.state`, `.stateVersion` | migration 10 |
+| `generation_jobs.state`, `.stateVersion` | migration 10 |
+
+Two constraints already in place do real work here and were deliberately not
+duplicated in application code:
+
+- the composite foreign key
+  `generation_scenes(currentDeliveredRequestId, id) -> scene_generation_requests(id, generationSceneId)`,
+  which makes a delivered pointer to *another* Scene's request unstorable; and
+- `scene_generation_requests_delivered_ordinal_key`, which lets a regeneration
+  ordinal be spent only once.
+
+A static test pins migration 12 as the newest and asserts no migration named for
+this phase exists, so an unreviewed migration trips it.
+
+**Backfill:** none. No existing row is read differently than before, and no
+historical row changes meaning.

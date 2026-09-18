@@ -440,6 +440,15 @@ RUN("durable media-validation lifecycle (live database)", () => {
       const holderMayRollBack = new Promise<void>((resolve) => {
         releaseHolder = resolve;
       });
+      // The holder must own the key *before* either worker starts. Starting
+      // them together is a race of its own: if a worker's insert lands first
+      // the holder blocks instead, that worker finishes immediately, and only
+      // one backend is ever waiting — which is what made this test flaky in a
+      // loaded full-suite run.
+      let holderHasKey!: () => void;
+      const holderReady = new Promise<void>((resolve) => {
+        holderHasKey = resolve;
+      });
 
       /** How many backends are currently waiting on a lock in this database. */
       async function blockedBackends(): Promise<number> {
@@ -468,6 +477,7 @@ RUN("durable media-validation lifecycle (live database)", () => {
               NULL, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
           `;
+          holderHasKey();
           await holderMayRollBack;
           throw new Error("rollback-holder");
         })
@@ -501,6 +511,7 @@ RUN("durable media-validation lifecycle (live database)", () => {
             },
           );
 
+      await holderReady;
       const claimA = run(workerA, "worker-A", 0);
       const claimB = run(workerB, "worker-B", 1);
 
