@@ -333,6 +333,131 @@ RUN("durable media-failure resolution work", () => {
      * that can, and the batch limit is three. Without durable deferral the sweep
      * would offer the same three forever and the fourth would never be reached.
      */
+    /**
+     * The slow-scheduler case, which deferral alone does not solve.
+     *
+     * If the scheduler runs less often than the retry delay, every deferred row
+     * is due again by the time the next pass happens. Ordering by `validatedAt`
+     * would then hand the batch straight back to the same old prefix, forever.
+     * What breaks the cycle is that a deferral moves the row's *place in the
+     * queue*: ordering is by when a row became eligible, so a deferred row sorts
+     * behind everything that has been waiting since before its new
+     * `nextAttemptAt`.
+     *
+     * This test deliberately does the opposite of the one below it: the second
+     * pass happens at `retryDelay + epsilon`, when the whole deferred prefix is
+     * eligible again.
+     */
+    /**
+     * A reclaimable row queues by when its lease expired, not by its verdict.
+     *
+     * The `RUNNING` arm of the ordering is otherwise invisible: a row whose owner
+     * died has been *waiting* only since the lease expired, however old the
+     * verdict underneath it is. Ordering it by `validatedAt` would let a
+     * long-abandoned lease jump ahead of work that has genuinely been waiting
+     * longer — the same starvation as the `PENDING` case, through a different
+     * column.
+     */
+    it("orders a reclaimable row by its lease expiry, not by its verdict", async () => {
+      // The oldest verdict in the database, but its lease only just expired.
+      const reclaimable = await seedFailure(prisma, {
+        attemptKind: "PRIMARY",
+        validatedAt: new Date(Date.UTC(2026, 8, 1)),
+      });
+      // A newer verdict that has been waiting, untouched, ever since.
+      const waiting = await seedFailure(prisma, {
+        attemptKind: "PRIMARY",
+        validatedAt: new Date(Date.UTC(2026, 8, 5)),
+      });
+
+      const claimed = await claimOne(reclaimable, NOW, "lease_stale");
+      if (claimed.kind !== "CLAIMED") throw new Error("expected CLAIMED");
+      // Its owner is now presumed dead, as of a moment ago.
+      await prisma.$executeRaw`
+        UPDATE "managed_output_media_failure_resolutions"
+           SET "leaseExpiresAt" = ${new Date(NOW - 1_000)}
+         WHERE "managedOutputMediaValidationId" = ${reclaimable.validationId}
+      `;
+
+      const found = await work.findResolutionCandidates({ now: NOW, limit: 10 });
+      const ids = found.map((c) => c.sourceValidationId);
+      expect(ids).toContain(reclaimable.validationId);
+      expect(ids).toContain(waiting.validationId);
+      // The untouched row has been waiting since 5 September; the reclaimable one
+      // only since a second ago, despite its older verdict.
+      expect(ids.indexOf(waiting.validationId)).toBeLessThan(
+        ids.indexOf(reclaimable.validationId),
+      );
+      expect(ids[0]).toBe(waiting.validationId);
+    });
+
+    it("reaches an actionable candidate even when the next pass is later than the retry", async () => {
+      const RETRY_MS = 5 * 60 * 1000;
+      const LIMIT = 3;
+
+      // The prefix: as old as it gets, and unplannable.
+      const blocked: FailureChain[] = [];
+      for (let i = 0; i < LIMIT; i += 1) {
+        blocked.push(
+          await seedFailure(prisma, {
+            attemptKind: "PRIMARY",
+            validatedAt: new Date(Date.UTC(2026, 8, 1, i)),
+          }),
+        );
+      }
+      // Actionable, and *newer* than the whole prefix — so `validatedAt` ordering
+      // alone would never reach it.
+      const actionable = await seedFailure(prisma, {
+        attemptKind: "PRIMARY",
+        validatedAt: new Date(Date.UTC(2026, 8, 2)),
+      });
+
+      // Pass 1: the prefix fills the batch and defers. The actionable row is not
+      // even offered.
+      const first = await runner({ fx: fakeFx(null), now: () => NOW }).runOnce(LIMIT);
+      expect(first.claimed).toBe(LIMIT);
+      expect(first.deferred).toBe(LIMIT);
+      expect(first.outcomes.map((o) => o.sourceValidationId)).not.toContain(
+        actionable.validationId,
+      );
+
+      // Pass 2 happens *after* the retry is due, so all three deferred rows are
+      // eligible again. Under `validatedAt` ordering they would fill the batch a
+      // second time; under eligibility ordering the actionable row — waiting
+      // since its verdict, which predates their new retry instant — sorts first.
+      const slowPass = NOW + RETRY_MS + 1_000;
+      const due = await work.findResolutionCandidates({ now: slowPass, limit: LIMIT });
+      expect(due.map((c) => c.sourceValidationId)).toContain(actionable.validationId);
+      expect(due[0]?.sourceValidationId).toBe(actionable.validationId);
+
+      // Deliberately one slot. Four rows are eligible and three of them are older
+      // by verdict; the slot still goes to the actionable one, which is the whole
+      // claim. Under `validatedAt` ordering it would go to the prefix.
+      const second = await runner({ now: () => slowPass }).runOnce(1);
+      expect(second.outcomes.map((o) => o.sourceValidationId)).toEqual([
+        actionable.validationId,
+      ]);
+      // It was not merely offered — it was acted on, and its work is done.
+      expect(await workRow(prisma, actionable.validationId)).toMatchObject({
+        status: "RESOLVED",
+        resolutionKind: "RECOVERY_ADMITTED",
+      });
+
+      // And repeated deferral keeps moving eligibility forward rather than
+      // parking a row at one fixed instant. The prefix is still PENDING, so a
+      // third slow pass defers it again — further into the future each time.
+      const beforeAgain = await workRow(prisma, blocked[0]!.validationId);
+      expect(beforeAgain?.status).toBe("PENDING");
+      const thirdPass = slowPass + RETRY_MS + 1_000;
+      await runner({ fx: fakeFx(null), now: () => thirdPass }).runOnce(LIMIT);
+      const afterAgain = await workRow(prisma, blocked[0]!.validationId);
+      expect(afterAgain?.status).toBe("PENDING");
+      expect(afterAgain?.nextAttemptAt?.getTime()).toBeGreaterThan(
+        beforeAgain?.nextAttemptAt?.getTime() ?? 0,
+      );
+      expect(afterAgain?.attemptCount).toBeGreaterThan(beforeAgain?.attemptCount ?? 0);
+    });
+
     it("reaches an actionable candidate behind more refusals than the batch holds", async () => {
       const blocked: FailureChain[] = [];
       for (let i = 0; i < 3; i += 1) {

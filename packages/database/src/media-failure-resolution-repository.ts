@@ -129,7 +129,46 @@ interface ClaimContextRow {
  * past it to work that can actually be done. No unbounded scan, no priority
  * queue, no second index to keep in step.
  */
-const CANDIDATE_SQL_ORDER = 'v."validatedAt" ASC, v."id" ASC';
+/**
+ * Oldest **eligibility instant** first, not oldest verdict first.
+ *
+ * Ordering by `validatedAt` alone looked equivalent and is not, and the
+ * difference only shows up once a scheduler is slower than the retry delay:
+ *
+ * ```text
+ * retry delay 5 min, scheduler every 10 min, batch limit 3
+ *   pass 1  three old NO_PLAN rows fill the batch, all defer
+ *   pass 2  ten minutes later, all three are due again -- and they are still
+ *           the oldest by validatedAt, so they fill the batch again
+ *   ...     the actionable row behind them is never reached
+ * ```
+ *
+ * Deferral alone does not fix that; it only helps when the next pass happens
+ * before the retry comes due. What fixes it is that a deferral *moves the row's
+ * place in the queue*: once ordering is by when a row became eligible rather
+ * than by when its verdict was recorded, a deferred row sorts behind everything
+ * that has been waiting since before its new `nextAttemptAt`.
+ *
+ * The three arms are the three ways a row is eligible, and each uses the column
+ * that made it eligible:
+ *
+ * - no work row yet -> it has been waiting since the verdict was recorded;
+ * - `PENDING`       -> since `nextAttemptAt`, which deferral pushes forward;
+ * - `RUNNING`       -> since `leaseExpiresAt`, when its owner was presumed dead.
+ *
+ * `validatedAt` and `id` remain as tie-breakers so the order is total and
+ * stable, which is what makes a bounded batch reproducible.
+ */
+const CANDIDATE_SQL_ORDER = `
+           CASE
+             WHEN w."id" IS NULL THEN v."validatedAt"
+             WHEN w."status" = 'PENDING'::"MediaFailureResolutionStatus"
+               THEN w."nextAttemptAt"
+             WHEN w."status" = 'RUNNING'::"MediaFailureResolutionStatus"
+               THEN w."leaseExpiresAt"
+           END ASC,
+           v."validatedAt" ASC,
+           v."id" ASC`;
 
 export function createMediaFailureResolutionRepository(
   prisma: PrismaClient,

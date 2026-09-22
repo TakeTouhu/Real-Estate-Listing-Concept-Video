@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { usedUserRegenerationCount } from "@app/domain";
 import {
+  attemptInput,
   ctx,
   dropTenants,
   HAS_DB,
@@ -499,6 +501,360 @@ RUN("starting a user regeneration", () => {
   });
 
   // -------------------------------------------------------------------------
+
+  describe("abandoning a pending revision", () => {
+    /**
+     * The escape this exists to close.
+     *
+     * Revision start commits three aggregates together. Terminalizing the
+     * request on its own would leave the Scene `REVISING` and the Job
+     * `GENERATING` with nothing that will ever advance them — and no repair
+     * authority, because inventing one after the fact means guessing what the
+     * job was supposed to become.
+     */
+    it.each([["CANCELLED"], ["FAILED_TERMINAL"]] as const)(
+      "reserves the generic PENDING -> %s edge for a regeneration",
+      async (nextState) => {
+        const chain = await revisableChain();
+        const started = await startRevision(chain.scene.id, `genreq_esc_${chain.tag}`);
+        if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+
+        const outcome = await repos.requests.transition({
+          organizationId: ORG_A,
+          id: started.request.id,
+          expectedState: "PENDING",
+          expectedVersion: started.request.stateVersion,
+          nextState,
+          context: ctx(),
+        });
+        expect(outcome.kind).toBe("TRANSITION_RESERVED");
+
+        // Nothing moved — not the request, not the aggregates it would strand.
+        const request = await prisma.sceneGenerationRequest.findUniqueOrThrow({
+          where: { id: started.request.id },
+        });
+        expect(request.state).toBe("PENDING");
+        const scene = await prisma.generationScene.findUniqueOrThrow({
+          where: { id: chain.scene.id },
+        });
+        expect(scene.state).toBe("REVISING");
+        const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } });
+        expect(job.state).toBe("GENERATING");
+      },
+    );
+
+    it.each([["CANCELLED"], ["FAILED_TERMINAL"]] as const)(
+      "still allows an INITIAL request to reach %s generically",
+      async (nextState) => {
+        // The reservation is kind-aware, not a blanket ban: an INITIAL request
+        // that never got an attempt strands nothing.
+        const chain = await seedChain(prisma, `init${nextState.slice(0, 4).toLowerCase()}`);
+        const outcome = await repos.requests.transition({
+          organizationId: ORG_A,
+          id: chain.request.id,
+          expectedState: "PENDING",
+          expectedVersion: chain.request.stateVersion,
+          nextState,
+          context: ctx(),
+        });
+        expect(outcome.kind).toBe("APPLIED");
+      },
+    );
+
+    it.each([["CANCELLED"], ["FAILED_TERMINAL"]] as const)(
+      "rolls the whole revision back atomically as %s",
+      async (terminalState) => {
+        const chain = await revisableChain();
+        const started = await startRevision(chain.scene.id, `genreq_rb_${chain.tag}`);
+        if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+
+        const before = {
+          scene: await prisma.generationScene.findUniqueOrThrow({
+            where: { id: chain.scene.id },
+          }),
+          job: await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } }),
+          reservation: await prisma.generationReservation.findUniqueOrThrow({
+            where: { generationJobId: chain.job.id },
+          }),
+        };
+
+        const at = Date.UTC(2026, 8, 25, 9, 0, 0);
+        const outcome = await repos.requests.rollBackPendingUserRegeneration(
+          ORG_A,
+          {
+            generationSceneRequestId: started.request.id,
+            terminalState,
+            rolledBackAt: at,
+          },
+          ctx({ correlationId: "corr_rollback" }),
+        );
+        expect(outcome).toEqual({ kind: "ROLLED_BACK", terminalState, rolledBackAt: at });
+
+        const request = await prisma.sceneGenerationRequest.findUniqueOrThrow({
+          where: { id: started.request.id },
+        });
+        expect(request.state).toBe(terminalState);
+        expect(request.deliveredAt).toBeNull();
+        expect(request.failedAt?.getTime() ?? null).toBe(
+          terminalState === "FAILED_TERMINAL" ? at : null,
+        );
+
+        // The scene is READY again and its delivered pointer never moved: that
+        // pointer is the customer's video.
+        const scene = await prisma.generationScene.findUniqueOrThrow({
+          where: { id: chain.scene.id },
+        });
+        expect(scene.state).toBe("READY");
+        expect(scene.currentDeliveredRequestId).toBe(before.scene.currentDeliveredRequestId);
+        expect(scene.stateVersion).toBe(before.scene.stateVersion + 1);
+
+        const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } });
+        expect(job.state).toBe("DELIVERABLE_READY");
+        expect(job.currentDeliverableVersionId).toBe(before.job.currentDeliverableVersionId);
+        expect(job.stateVersion).toBe(before.job.stateVersion + 1);
+
+        // The consumed hold is untouched, byte for byte — not even a version bump.
+        const reservation = await prisma.generationReservation.findUniqueOrThrow({
+          where: { generationJobId: chain.job.id },
+        });
+        expect(reservation).toEqual(before.reservation);
+
+        // No attempt, no quota event, no deliverable event.
+        expect(
+          await prisma.sceneGeneration.count({
+            where: { generationSceneRequestId: started.request.id },
+          }),
+        ).toBe(0);
+        expect(
+          await prisma.generationTransitionEvent.count({
+            where: { aggregateType: { in: ["RESERVATION", "DELIVERABLE"] } },
+          }),
+        ).toBe(0);
+
+        // Exactly the three transitions, in this commit.
+        const events = await prisma.generationTransitionEvent.findMany({
+          where: {
+            aggregateId: { in: [started.request.id, chain.scene.id, chain.job.id] },
+          },
+          orderBy: { createdAt: "asc" },
+        });
+        const moves = events.map((e) => `${String(e.fromState)}->${String(e.toState)}`);
+        expect(moves).toContain(`PENDING->${terminalState}`);
+        expect(moves.filter((m) => m === "REVISING->READY")).toHaveLength(1);
+        expect(moves.filter((m) => m === "GENERATING->DELIVERABLE_READY")).toHaveLength(1);
+      },
+    );
+
+    it("is idempotent for the exact already-rolled-back shape", async () => {
+      const chain = await revisableChain();
+      const started = await startRevision(chain.scene.id, `genreq_idem_${chain.tag}`);
+      if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+      const at = Date.UTC(2026, 8, 25, 9, 0, 0);
+      const input = {
+        generationSceneRequestId: started.request.id,
+        terminalState: "CANCELLED" as const,
+        rolledBackAt: at,
+      };
+      expect(
+        (await repos.requests.rollBackPendingUserRegeneration(ORG_A, input, ctx())).kind,
+      ).toBe("ROLLED_BACK");
+
+      const after = {
+        request: await prisma.sceneGenerationRequest.findUniqueOrThrow({
+          where: { id: started.request.id },
+        }),
+        scene: await prisma.generationScene.findUniqueOrThrow({ where: { id: chain.scene.id } }),
+        job: await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } }),
+        events: await prisma.generationTransitionEvent.count(),
+      };
+
+      const again = await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        { ...input, rolledBackAt: at + 1000 },
+        ctx(),
+      );
+      expect(again).toEqual({ kind: "ALREADY_ROLLED_BACK", terminalState: "CANCELLED" });
+
+      expect(
+        await prisma.sceneGenerationRequest.findUniqueOrThrow({
+          where: { id: started.request.id },
+        }),
+      ).toEqual(after.request);
+      expect(
+        await prisma.generationScene.findUniqueOrThrow({ where: { id: chain.scene.id } }),
+      ).toEqual(after.scene);
+      expect(
+        await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } }),
+      ).toEqual(after.job);
+      expect(await prisma.generationTransitionEvent.count()).toBe(after.events);
+    });
+
+    it("fails closed on a partially applied rollback", async () => {
+      const chain = await revisableChain();
+      const started = await startRevision(chain.scene.id, `genreq_part_${chain.tag}`);
+      if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+      await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        {
+          generationSceneRequestId: started.request.id,
+          terminalState: "CANCELLED",
+          rolledBackAt: Date.UTC(2026, 8, 25),
+        },
+        ctx(),
+      );
+
+      // Something outside this system undoes one row of it.
+      await prisma.generationJob.update({
+        where: { id: chain.job.id },
+        data: { state: "GENERATING" },
+      });
+
+      await expect(
+        repos.requests.rollBackPendingUserRegeneration(
+          ORG_A,
+          {
+            generationSceneRequestId: started.request.id,
+            terminalState: "CANCELLED",
+            rolledBackAt: Date.UTC(2026, 8, 26),
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow(/partially applied/);
+    });
+
+    it("refuses once an attempt exists, because a provider may hold the work", async () => {
+      const chain = await revisableChain();
+      const started = await startRevision(chain.scene.id, `genreq_att_${chain.tag}`);
+      if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+      const admitted = await repos.attempts.admit(
+        ORG_A,
+        attemptInput({
+          id: `sgen_att_${chain.tag}`,
+          generationSceneRequestId: started.request.id,
+        }),
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`not admitted: ${admitted.kind}`);
+
+      const outcome = await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        {
+          generationSceneRequestId: started.request.id,
+          terminalState: "CANCELLED",
+          rolledBackAt: Date.UTC(2026, 8, 25),
+        },
+        ctx(),
+      );
+      // Admission also moved the request to GENERATING, and either fact alone is
+      // enough to refuse: how a generating request ends is Transaction H's
+      // question, because that path has a media verdict to justify the ending.
+      expect(outcome.kind).toBe("NOT_ROLLBACKABLE");
+      const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } });
+      expect(job.state).toBe("GENERATING");
+    });
+
+    it("refuses a PENDING request that nonetheless already has an attempt", async () => {
+      // A state the system believes it cannot produce: attempt admission moves
+      // the request PENDING -> GENERATING in the same commit that creates the
+      // attempt, so the two facts are never apart. The guard exists for the case
+      // where they somehow are, and this manufactures exactly that — admit
+      // normally, then force the request back to PENDING — because a guard
+      // against an impossible state is untestable any other way.
+      const chain = await revisableChain();
+      const started = await startRevision(chain.scene.id, `genreq_pa_${chain.tag}`);
+      if (started.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+      const admitted = await repos.attempts.admit(
+        ORG_A,
+        attemptInput({
+          id: `sgen_pa_${chain.tag}`,
+          generationSceneRequestId: started.request.id,
+        }),
+        ctx(),
+      );
+      if (admitted.kind !== "ADMITTED") throw new Error(`not admitted: ${admitted.kind}`);
+      await prisma.$executeRaw`
+        UPDATE "scene_generation_requests"
+           SET "state" = 'PENDING'::"SceneGenerationRequestState"
+         WHERE "id" = ${started.request.id}
+      `;
+
+      const outcome = await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        {
+          generationSceneRequestId: started.request.id,
+          terminalState: "CANCELLED",
+          rolledBackAt: Date.UTC(2026, 8, 25),
+        },
+        ctx(),
+      );
+      // The attempt is what decides: a provider may already hold this work, and
+      // how it ends belongs to the path that has a media verdict to justify it.
+      expect(outcome.kind).toBe("NOT_ROLLBACKABLE");
+      const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.job.id } });
+      expect(job.state).toBe("GENERATING");
+      const scene = await prisma.generationScene.findUniqueOrThrow({
+        where: { id: chain.scene.id },
+      });
+      expect(scene.state).toBe("REVISING");
+    });
+
+    it("refuses an INITIAL request and a cross-tenant id without mutating", async () => {
+      const chain = await seedChain(prisma, "rbinitial");
+      expect(
+        (
+          await repos.requests.rollBackPendingUserRegeneration(
+            ORG_A,
+            {
+              generationSceneRequestId: chain.request.id,
+              terminalState: "CANCELLED",
+              rolledBackAt: Date.UTC(2026, 8, 25),
+            },
+            ctx(),
+          )
+        ).kind,
+      ).toBe("NOT_ROLLBACKABLE");
+
+      expect(
+        (
+          await repos.requests.rollBackPendingUserRegeneration(
+            ORG_A,
+            {
+              generationSceneRequestId: "genreq_does_not_exist",
+              terminalState: "CANCELLED",
+              rolledBackAt: Date.UTC(2026, 8, 25),
+            },
+            ctx(),
+          )
+        ).kind,
+      ).toBe("NOT_FOUND");
+    });
+
+    it("spends no entitlement, so the same ordinal is reusable", async () => {
+      const chain = await revisableChain();
+      const first = await startRevision(chain.scene.id, `genreq_ent1_${chain.tag}`);
+      if (first.kind !== "ADMITTED") throw new Error("expected ADMITTED");
+      expect(first.request.userRegenerationOrdinal).toBe(1);
+
+      await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        {
+          generationSceneRequestId: first.request.id,
+          terminalState: "CANCELLED",
+          rolledBackAt: Date.UTC(2026, 8, 25),
+        },
+        ctx(),
+      );
+
+      // The entitlement is derived from delivery, and nothing was delivered.
+      const all = await repos.requests.listBySceneId(ORG_A, chain.scene.id);
+      expect(usedUserRegenerationCount(all)).toBe(0);
+
+      // And the job is revisable again immediately — no extra repair step.
+      const second = await startRevision(chain.scene.id, `genreq_ent2_${chain.tag}`);
+      if (second.kind !== "ADMITTED") throw new Error(`expected ADMITTED, got ${second.kind}`);
+      expect(second.request.userRegenerationOrdinal).toBe(1);
+    });
+  });
 
   describe("the generic APIs cannot assemble this", () => {
     it.each([

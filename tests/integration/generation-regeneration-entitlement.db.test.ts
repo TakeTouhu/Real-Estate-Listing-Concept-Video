@@ -67,8 +67,12 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
    * arrangement §11 prescribes: the entitlement rules under test are about what
    * the *stored* history means, not about how it got there.
    *
-   * `FAILED_TERMINAL` goes through the real transition, because that edge is
-   * not reserved.
+   * `FAILED_TERMINAL` on a pending **regeneration** goes through
+   * `rollBackPendingUserRegeneration`, because the generic edge is reserved:
+   * terminalizing that request alone would strand the Scene `REVISING` and the
+   * Job `GENERATING` with nothing to advance them. The rollback is the authority
+   * that ends it *and* puts those two back, which is also what lets the next
+   * regeneration in this suite start at all.
    */
   async function finish(
     id: string,
@@ -80,6 +84,16 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
         where: { id },
         data: { state: "DELIVERED", stateVersion: version + 2, deliveredAt: new Date() },
       });
+      return;
+    }
+    const row = await prisma.sceneGenerationRequest.findUniqueOrThrow({ where: { id } });
+    if (row.kind === "USER_REGENERATION" && row.state === "PENDING") {
+      const rolled = await repos.requests.rollBackPendingUserRegeneration(
+        ORG_A,
+        { generationSceneRequestId: id, terminalState: "FAILED_TERMINAL", rolledBackAt: Date.now() },
+        ctx(),
+      );
+      if (rolled.kind !== "ROLLED_BACK") throw new Error(`expected ROLLED_BACK, got ${rolled.kind}`);
       return;
     }
     const done = await repos.requests.transition({

@@ -54,17 +54,40 @@ sequenceDiagram
   H-->>R: SETTLED { INITIAL_FAILURE_SETTLED }
 ```
 
-## Fairness: why deferral, not a scan
+## Fairness: deferral, *and* eligibility ordering
 
 A refusal is recorded on the work row with a future `nextAttemptAt`, and
 discovery excludes `PENDING` work that is not yet due. An unplannable candidate
 therefore stops *being* a candidate for a retry delay.
 
-`tests/integration/media-failure-resolution.db.test.ts` proves it end to end:
-three unplannable candidates with a batch limit of three fill the first pass and
-all defer; the actionable candidate behind them — never even offered in pass one
-— is the only thing the second pass sees; and the deferred three return once
-they are due.
+**Deferral alone is not enough, and review found the gap.** It only helps while
+the next scheduler pass happens *before* the retry comes due. With a five-minute
+retry and a ten-minute scheduler, every deferred row is eligible again by the
+next pass — and if candidates are ordered by `validatedAt`, the same old prefix
+is still the oldest and fills the bounded batch again, forever.
+
+So discovery orders by **effective eligibility instant**, not verdict age:
+
+```text
+CASE WHEN no work row  THEN validation.validatedAt
+     WHEN PENDING      THEN work.nextAttemptAt
+     WHEN RUNNING      THEN work.leaseExpiresAt
+END ASC, validation.validatedAt ASC, validation.id ASC
+```
+
+Each arm uses the column that actually made the row eligible. A deferral now
+moves the row's *place in the queue*, so it sorts behind everything that has
+been waiting since before its new retry instant. The `RUNNING` arm matters for
+the same reason: a row whose owner died has been waiting only since the lease
+expired, however old the verdict beneath it is.
+
+`tests/integration/media-failure-resolution.db.test.ts` proves all three
+properties end to end: the immediate-pass case; the **slow-scheduler** case,
+where the second pass happens at `retryDelay + 1s` with the whole prefix
+eligible again and a single batch slot still goes to the actionable candidate;
+and the reclaimable case, where a lease that expired a second ago queues behind
+a newer verdict that has been waiting since September. Repeated deferral is
+shown to keep pushing `nextAttemptAt` forward rather than parking a row.
 
 ## Settlement
 
@@ -131,6 +154,44 @@ from `DELIVERABLE_READY`, so a second revision on any scene finds a Job that is
 no longer revisable. This resolves the carried-forward `REVISING -> GENERATING`
 actor concern from Phases 6A and 6B.
 
+## Abandoning a pending revision
+
+Revision start commits three aggregates together, so anything that ends a
+revision must move the same three together. Review found the escape: the generic
+request transition still allowed a `USER_REGENERATION` in `PENDING` to reach
+`CANCELLED` or `FAILED_TERMINAL` on its own, which strands
+
+```text
+request  CANCELLED / FAILED_TERMINAL   <- nothing left to advance
+Scene    REVISING                      <- no active request
+Job      GENERATING                    <- not deliverable, not failed
+```
+
+with no safe repair authority afterwards.
+
+Both edges are now **kind-aware reserved** — the only kind-aware rule in the
+file, and the kind is read from the stored row rather than taken from the
+caller. An `INITIAL` request still reaches both states generically, because
+abandoning one strands nothing.
+
+`rollBackPendingUserRegeneration` owns them. It locks Job → Scene → Request,
+requires a `PENDING` regeneration with **zero attempts** (once an attempt exists
+a provider may hold the work, and the ending belongs to Transaction H, which has
+a media verdict to justify it), and in one commit:
+
+| Row | Effect |
+| --- | --- |
+| Request | `PENDING -> CANCELLED` or `-> FAILED_TERMINAL`, `failedAt` only for the latter |
+| Scene | `REVISING -> READY`, `currentDeliveredRequestId` **unchanged** |
+| Job | `GENERATING -> DELIVERABLE_READY`, `currentDeliverableVersionId` **unchanged** |
+| Reservation | `CONSUMED`, not written at all — not even a version bump |
+
+No attempt, no quota event, no deliverable event. The entitlement is untouched,
+so the same ordinal is immediately reusable — proved by starting a second
+revision at ordinal 1 straight after a rollback. Exact replay is
+`ALREADY_ROLLED_BACK` with nothing changed; a partial shape raises rather than
+being repaired.
+
 ## Reserved edges
 
 The generic transition APIs now refuse every edge an atomic primitive owns —
@@ -168,7 +229,7 @@ provider call, no credential.
 | `pnpm typecheck` | pass, 0 errors |
 | `pnpm lint` | pass, 0 problems |
 | `pnpm test` | **4332 passed**, 133 files |
-| `pnpm test:db` (live PostgreSQL) | **961 passed**, 31 files |
+| `pnpm test:db` (live PostgreSQL) | **975 passed**, 31 files |
 | `pnpm build` | pass |
 | `prisma validate` / `format` | pass, no schema diff |
 | Migrations 1–13 on a fresh empty database | pass |
@@ -260,6 +321,36 @@ That is precisely the designed mechanism: without the Job lock both workers pass
 the `DELIVERABLE_READY` precondition on a plain read, both create their request
 on their own scene, and both reach the Job `UPDATE`; one wins and the other
 matches zero rows and throws instead of returning the application-owned outcome.
+
+### PR #69 review correction — impacted mutation set
+
+Exact-head review found two further blockers: the pending-regeneration terminal
+escape above, and the slow-scheduler fairness gap. Both were corrected, and the
+**42 existing mutations targeting the two changed production files** were re-run
+together with **14 new ones** (M213–M226) covering both generic escapes, the
+kind check itself, Scene and Job rollback omission, both pointer mutations,
+reservation release, entitlement consumption, the attempt guard, partial-rollback
+repair, and all three ordering regressions. M210 was included once.
+
+The first impacted run reported **56 run, 54 killed, 2 survivors** — two more
+real test gaps, not harness artefacts:
+
+- **M222** — the attempt guard was never decided by a test, because attempt
+  admission also moves the request `PENDING -> GENERATING` and the state check
+  answered first. The guard defends a state the system believes it cannot
+  produce, so the new test manufactures it: admit normally, then force the
+  request back to `PENDING`.
+- **M225** — the `RUNNING` arm of the ordering had no test at all. The new case
+  gives the oldest verdict a lease that expired a second ago and asserts it
+  queues behind a newer verdict that has genuinely been waiting.
+
+After those, the impacted set is **56 run, 56 killed, 0 survivors, 0
+anchor-missing**, with **M210 KILLED**. Restoration was proved against a fresh
+SHA-256 snapshot taken with the corrected tests in place: **zero mismatches**
+across 482 files.
+
+No schema change: migration 13 is untouched and `git diff` over
+`packages/database/prisma/` is empty.
 
 ### No third complete ledger
 

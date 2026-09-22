@@ -258,6 +258,44 @@ export type AdmitUserRegenerationOutcome =
   | { readonly kind: "SCENE_NOT_REVISABLE" };
 
 /**
+ * How a pending revision is abandoned.
+ *
+ * Two endings rather than one, because they mean different things to a customer
+ * and to an operator: `CANCELLED` is "nobody wants this any more", and
+ * `FAILED_TERMINAL` is "the platform could not proceed". Only the second stamps
+ * `failedAt`.
+ */
+export interface RollBackPendingUserRegenerationInput {
+  readonly generationSceneRequestId: string;
+  readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+  /** The one instant every row in the rollback records. */
+  readonly rolledBackAt: number;
+}
+
+export type RollBackPendingUserRegenerationOutcome =
+  | {
+      readonly kind: "ROLLED_BACK";
+      readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+      readonly rolledBackAt: number;
+    }
+  /**
+   * The exact already-rolled-back shape. Every row of it — a partial match is a
+   * defect and raises, because half an applied rollback means an invariant this
+   * application believes it cannot violate was violated.
+   */
+  | {
+      readonly kind: "ALREADY_ROLLED_BACK";
+      readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+    }
+  /**
+   * The durable facts do not authorize a rollback: the request is not a pending
+   * regeneration, it already has an attempt, or the Job, Scene or reservation is
+   * not in the shape revision start leaves behind. Ordinary, not an error.
+   */
+  | { readonly kind: "NOT_ROLLBACKABLE" }
+  | { readonly kind: "NOT_FOUND" };
+
+/**
  * One provider attempt, in the orchestration vocabulary.
  *
  * A projection of the existing `scene_generations` row, not a second table.
@@ -557,14 +595,35 @@ export interface SceneGenerationRequestRepository {
     context: TransitionContext,
   ): Promise<AdmitUserRegenerationOutcome>;
 
+  /**
+   * Abandon a revision that never started generating, and put the job back.
+   *
+   * The counterpart of `admitUserRegeneration`, and it exists for the same
+   * reason that one does: revision start moves three aggregates together, so
+   * unwinding it must move the same three together. Terminalizing the request
+   * alone leaves the Scene `REVISING` and the Job `GENERATING` with nothing that
+   * will ever advance them, and no safe repair authority afterwards.
+   *
+   * Only for a `PENDING` regeneration with **zero attempts**. Once an attempt
+   * exists the request is generating against a provider and its ending belongs
+   * to Transaction H, which has the media verdict to justify it.
+   */
+  rollBackPendingUserRegeneration(
+    organizationId: string,
+    input: RollBackPendingUserRegenerationInput,
+    context: TransitionContext,
+  ): Promise<RollBackPendingUserRegenerationOutcome>;
+
   findById(organizationId: string, id: string): Promise<SceneGenerationRequestRecord | null>;
   listBySceneId(
     organizationId: string,
     generationSceneId: string,
   ): Promise<readonly SceneGenerationRequestRecord[]>;
   /**
-   * Refuses `PENDING -> GENERATING` (attempt admission owns it) and
-   * `GENERATING -> DELIVERED` (Transaction F owns it).
+   * Refuses `PENDING -> GENERATING` (attempt admission owns it),
+   * `GENERATING -> DELIVERED` (Transaction F owns it), and — for a
+   * `USER_REGENERATION` only — `PENDING -> CANCELLED` and
+   * `PENDING -> FAILED_TERMINAL`, which `rollBackPendingUserRegeneration` owns.
    */
   transition(input: {
     readonly organizationId: string;

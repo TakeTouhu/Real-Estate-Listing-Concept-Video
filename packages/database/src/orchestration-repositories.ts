@@ -30,6 +30,8 @@ import type {
   PricingSnapshot,
   ReservedTransitionOutcome,
   ReserveGenerationJobInput,
+  RollBackPendingUserRegenerationInput,
+  RollBackPendingUserRegenerationOutcome,
   ReserveGenerationJobOutcome,
   SceneGenerationAttemptRepository,
   SceneGenerationRequestRecord,
@@ -161,6 +163,17 @@ function isReservedEdge(
 }
 
 /**
+ * The two ways a request can end without ever being delivered.
+ *
+ * Named together because the rule that reserves them for a `USER_REGENERATION`
+ * treats them identically: either one abandons the request, and abandoning a
+ * revision is what strands the Scene and Job that revision start moved.
+ */
+function isTerminalRequestState(state: string): boolean {
+  return state === "CANCELLED" || state === "FAILED_TERMINAL";
+}
+
+/**
  * Serialize the callers competing over one aggregate, before anyone reads it.
  *
  * Read-then-decide-then-insert is not a decision under concurrency: two
@@ -251,6 +264,89 @@ async function lockJobAndSceneForTenant(
        FOR UPDATE OF j, s
   `;
   return rows[0] ?? null;
+}
+
+interface RevisionRollbackChainRow {
+  readonly requestId: string;
+  readonly requestKind: string;
+  readonly requestState: string;
+  readonly requestDeliveredAt: Date | null;
+  readonly attemptCount: number;
+  readonly sceneId: string;
+  readonly sceneState: string;
+  readonly currentDeliveredRequestId: string | null;
+  readonly jobId: string;
+  readonly jobState: string;
+  readonly currentDeliverableVersionId: string | null;
+  readonly reservationState: string | null;
+}
+
+/**
+ * Lock Job, Scene and the request itself, and read all three under those locks.
+ *
+ * `FOR UPDATE OF j, s, r` names the three aliases this transaction writes. The
+ * reservation and project rows are joined as evidence and deliberately not
+ * locked: the rollback proves the reservation is `CONSUMED` and then leaves it
+ * entirely alone, so locking it would serialize unrelated work for nothing.
+ */
+async function lockRevisionRollbackChain(
+  tx: Tx,
+  organizationId: string,
+  generationSceneRequestId: string,
+): Promise<RevisionRollbackChainRow | null> {
+  const rows = await tx.$queryRaw<RevisionRollbackChainRow[]>`
+    SELECT r."id"                          AS "requestId",
+           r."kind"::text                  AS "requestKind",
+           r."state"::text                 AS "requestState",
+           r."deliveredAt"                 AS "requestDeliveredAt",
+           s."id"                          AS "sceneId",
+           s."state"::text                 AS "sceneState",
+           s."currentDeliveredRequestId"   AS "currentDeliveredRequestId",
+           j."id"                          AS "jobId",
+           j."state"::text                 AS "jobState",
+           j."currentDeliverableVersionId" AS "currentDeliverableVersionId",
+           res."state"::text               AS "reservationState",
+           (SELECT COUNT(*)::int
+              FROM "scene_generations" a
+             WHERE a."generationSceneRequestId" = r."id") AS "attemptCount"
+      FROM "scene_generation_requests" r
+      JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+      JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+      LEFT JOIN "generation_reservations" res ON res."generationJobId" = j."id"
+     WHERE r."id" = ${generationSceneRequestId}
+       AND p."organizationId" = ${organizationId}
+       FOR UPDATE OF j, s, r
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * Whether the exact already-rolled-back shape is present.
+ *
+ * Every row of it, or none. A partial match raises rather than being repaired:
+ * finishing a half-applied rollback quietly would destroy the evidence of how it
+ * came to be half-applied.
+ */
+function alreadyRolledBack(
+  row: RevisionRollbackChainRow,
+): "CANCELLED" | "FAILED_TERMINAL" | null {
+  if (row.requestState !== "CANCELLED" && row.requestState !== "FAILED_TERMINAL") return null;
+
+  const complete =
+    row.sceneState === "READY" &&
+    row.currentDeliveredRequestId !== null &&
+    row.currentDeliveredRequestId !== row.requestId &&
+    row.jobState === "DELIVERABLE_READY" &&
+    row.currentDeliverableVersionId !== null &&
+    row.reservationState === "CONSUMED";
+  if (!complete) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "A pending regeneration rollback is partially applied and will not be repaired automatically",
+    );
+  }
+  return row.requestState;
 }
 
 /**
@@ -1312,6 +1408,170 @@ export function createSceneGenerationRequestRepository(
       });
     },
 
+    /**
+     * Unwind a revision that never started generating.
+     *
+     * The exact inverse of `admitUserRegeneration`, and atomic for the same
+     * reason: that transaction moved the request, the Scene and the Job
+     * together, so anything that abandons it must move the same three together
+     * or leave a Job nothing can advance.
+     *
+     * **Zero attempts is a hard requirement.** Once an attempt exists the
+     * request is generating against a provider, and how it ends is Transaction
+     * H's question — that path has a media verdict to justify the ending and a
+     * reservation to reason about. This one has neither, which is exactly why it
+     * is allowed to be this simple.
+     *
+     * The reservation is never touched, not even a version bump. It is
+     * `CONSUMED` by the video the customer still has, and a revision that never
+     * ran cannot have changed that.
+     */
+    async rollBackPendingUserRegeneration(
+      organizationId: string,
+      input: RollBackPendingUserRegenerationInput,
+      context: TransitionContext,
+    ): Promise<RollBackPendingUserRegenerationOutcome> {
+      const at = new Date(input.rolledBackAt);
+      return prisma.$transaction(
+        async (tx): Promise<RollBackPendingUserRegenerationOutcome> => {
+          // Job -> Scene -> Request, the order every multi-aggregate transaction
+          // in this system takes.
+          const chain = await lockRevisionRollbackChain(
+            tx,
+            organizationId,
+            input.generationSceneRequestId,
+          );
+          if (chain === null) return { kind: "NOT_FOUND" };
+          if (chain.requestKind !== "USER_REGENERATION") return { kind: "NOT_ROLLBACKABLE" };
+
+          const settled = alreadyRolledBack(chain);
+          if (settled !== null) return { kind: "ALREADY_ROLLED_BACK", terminalState: settled };
+
+          if (chain.requestState !== "PENDING" || chain.requestDeliveredAt !== null) {
+            return { kind: "NOT_ROLLBACKABLE" };
+          }
+          // An attempt means a provider may already hold this work.
+          if (chain.attemptCount !== 0) return { kind: "NOT_ROLLBACKABLE" };
+
+          if (chain.sceneState !== "REVISING" || chain.currentDeliveredRequestId === null) {
+            return { kind: "NOT_ROLLBACKABLE" };
+          }
+          if (chain.currentDeliveredRequestId === input.generationSceneRequestId) {
+            return { kind: "NOT_ROLLBACKABLE" };
+          }
+          if (
+            chain.jobState !== "GENERATING" ||
+            chain.currentDeliverableVersionId === null ||
+            chain.reservationState !== "CONSUMED"
+          ) {
+            return { kind: "NOT_ROLLBACKABLE" };
+          }
+
+          // The pointer must name a delivered request of this same Scene: that
+          // request is the video the customer keeps.
+          const predecessor = await tx.sceneGenerationRequest.findFirst({
+            where: {
+              id: chain.currentDeliveredRequestId,
+              generationSceneId: chain.sceneId,
+              state: "DELIVERED",
+            },
+            select: { id: true },
+          });
+          if (predecessor === null) return { kind: "NOT_ROLLBACKABLE" };
+
+          // One revision at a time is the MVP constraint, and it is load-bearing
+          // here for the same reason it is in Transaction H: with another Scene
+          // mid-revision, returning the Job to DELIVERABLE_READY could discard
+          // that Scene's work, and nothing durable records what the current
+          // deliverable was composed from.
+          const siblings = await tx.$queryRaw<{ revising: number; active: number }[]>`
+            SELECT
+              (SELECT COUNT(*)::int
+                 FROM "generation_scenes" sib
+                WHERE sib."generationJobId" = ${chain.jobId}
+                  AND sib."id" <> ${chain.sceneId}
+                  AND sib."state" <> 'READY'::"GenerationSceneState") AS "revising",
+              (SELECT COUNT(*)::int
+                 FROM "scene_generation_requests" orr
+                 JOIN "generation_scenes" os ON os."id" = orr."generationSceneId"
+                WHERE os."generationJobId" = ${chain.jobId}
+                  AND orr."id" <> ${input.generationSceneRequestId}
+                  AND orr."kind" = 'USER_REGENERATION'::"SceneGenerationRequestKind"
+                  AND orr."state" IN (
+                        'PENDING'::"SceneGenerationRequestState",
+                        'GENERATING'::"SceneGenerationRequestState"
+                      )) AS "active"
+          `;
+          const counts = siblings[0];
+          if (counts === undefined || counts.revising > 0 || counts.active > 0) {
+            return { kind: "NOT_ROLLBACKABLE" };
+          }
+
+          // ---- Apply, all in this commit. ---------------------------------
+          const moved = await tx.$queryRaw<{ id: string }[]>`
+            UPDATE "scene_generation_requests"
+               SET "state" = ${input.terminalState}::"SceneGenerationRequestState",
+                   "stateVersion" = "stateVersion" + 1,
+                   "failedAt" = ${input.terminalState === "FAILED_TERMINAL" ? at : null}
+             WHERE "id" = ${input.generationSceneRequestId}
+               AND "state" = 'PENDING'::"SceneGenerationRequestState"
+             RETURNING "id"
+          `;
+          if (moved.length !== 1) {
+            throw new AppError(
+              "INTERNAL_ERROR",
+              "A pending regeneration rollback matched no row while holding that row's lock",
+            );
+          }
+          await appendGenerationEvent(tx, {
+            organizationId,
+            aggregateType: "SCENE_REQUEST",
+            aggregateId: input.generationSceneRequestId,
+            fromState: "PENDING",
+            toState: input.terminalState,
+            context,
+          });
+
+          // The Scene returns to READY with its delivered pointer untouched.
+          await applyLockedTransition(tx, {
+            table: "generation_scenes",
+            id: chain.sceneId,
+            from: "REVISING",
+            to: "READY",
+          });
+          await appendGenerationEvent(tx, {
+            organizationId,
+            aggregateType: "SCENE",
+            aggregateId: chain.sceneId,
+            fromState: "REVISING",
+            toState: "READY",
+            context,
+          });
+
+          await applyLockedTransition(tx, {
+            table: "generation_jobs",
+            id: chain.jobId,
+            from: "GENERATING",
+            to: "DELIVERABLE_READY",
+          });
+          await appendGenerationEvent(tx, {
+            organizationId,
+            aggregateType: "JOB",
+            aggregateId: chain.jobId,
+            fromState: "GENERATING",
+            toState: "DELIVERABLE_READY",
+            context,
+          });
+
+          return {
+            kind: "ROLLED_BACK",
+            terminalState: input.terminalState,
+            rolledBackAt: input.rolledBackAt,
+          };
+        },
+      );
+    },
+
     async findById(organizationId, id) {
       const row = await prisma.sceneGenerationRequest.findFirst({
         where: { id, ...requestScope(organizationId) },
@@ -1339,6 +1599,39 @@ export function createSceneGenerationRequestRepository(
         input.nextState,
         "scene generation request",
       );
+
+      // Kind-aware reservation, and the only one in this file.
+      //
+      // A `PENDING` request is normally a harmless thing to abandon: an INITIAL
+      // one that never got an attempt leaves a Scene and Job that never moved on
+      // its account. A `USER_REGENERATION` is not, because revision *start* moved
+      // three aggregates in one commit — Scene `READY -> REVISING`, Job
+      // `DELIVERABLE_READY -> REVISING -> GENERATING` — and the request is the
+      // only thing that will ever move them back.
+      //
+      // Terminalizing it on its own therefore strands the customer's job:
+      //
+      // ```text
+      // request  CANCELLED / FAILED_TERMINAL   <- nothing left to advance
+      // Scene    REVISING                      <- no active request
+      // Job      GENERATING                    <- not deliverable, not failed
+      // ```
+      //
+      // No repair authority exists for that shape, and none is safe to invent
+      // after the fact. So the edge is reserved here and
+      // `rollBackPendingUserRegeneration` owns it, which restores the Scene and
+      // Job in the same commit.
+      //
+      // Checked against the stored row rather than a caller-supplied kind: the
+      // caller does not get to decide which rule applies to it.
+      if (input.expectedState === "PENDING" && isTerminalRequestState(input.nextState)) {
+        const kindRow = await prisma.sceneGenerationRequest.findFirst({
+          where: { id: input.id, ...requestScope(input.organizationId) },
+          select: { kind: true },
+        });
+        if (kindRow?.kind === "USER_REGENERATION") return { kind: "TRANSITION_RESERVED" };
+      }
+
       return prisma.$transaction(async (tx) => {
         const { count } = await tx.sceneGenerationRequest.updateMany({
           where: {
