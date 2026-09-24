@@ -7,7 +7,15 @@ import {
   type FxSnapshot,
 } from "@app/domain";
 import { createVideoModelCatalog } from "@app/video-providers";
-import { attemptInput, ctx, ORG_A, PROJECT_B, repositories, seedChain } from "./orchestration-fixture";
+import {
+  attemptInput,
+  ctx,
+  ORG_A,
+  PROJECT_B,
+  repositories,
+  seedChain,
+  seedPriorDeliverable,
+} from "./orchestration-fixture";
 
 /**
  * A failed provider attempt with a durable terminal media verdict, built through
@@ -126,9 +134,13 @@ export async function seedFailure(
         requestedByUserId: "usr_itest",
       },
     });
+    // A real version row, not a synthetic id: Phase 5A gave the pointer a
+    // composite foreign key, so only a version belonging to this job is
+    // insertable.
+    const priorDeliverableId = await seedPriorDeliverable(prisma, job.id, tag);
     await prisma.generationJob.update({
       where: { id: job.id },
-      data: { currentDeliverableVersionId: `gdv_${tag}` },
+      data: { currentDeliverableVersionId: priorDeliverableId },
     });
   } else {
     await prisma.generationScene.update({

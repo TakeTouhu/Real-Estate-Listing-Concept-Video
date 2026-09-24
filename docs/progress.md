@@ -37,7 +37,7 @@ the authoritative scope definition; this file records what has actually shipped.
 | 2 | Properties and secure media upload | ✅ Merged | #3 | `653372a54d72d8dacc38fb7103ad32f15041cc2f` | `phase-2-complete` | `b13e5490f2014dc43a3815c3570795c955a2089a` |
 | 3 | AI analysis, human review and correction, storyboard | ✅ Merged (24 milestones, #4 … #27) | #27 (final) | `541ada413a6c7b71df5169faca0592626c9be454` | `phase-3-complete` | see the tag table below |
 | 4 | WaveSpeedAI scene generation | 🔄 In progress (4A and 4B-1 closed; 4B-2a merged, 4B-2b in review) | #28 … #34 merged | `be9259681ba3caf179f8ec73aee98943a9672cd8` (latest) | — | — |
-| 5 | Video composition and review | ⏳ Not started | — | — | — | — |
+| 5 | Video composition and review | 🔄 In progress (5A: durable deliverable composition plan, in review) | — | — | — | — |
 | 6 | Billing and commercial controls | ⏳ Not started | — | — | — | — |
 | 7 | SaaS operations and production readiness | ⏳ Not started | — | — | — | — |
 | 8 | Beta and launch | ⏳ Not started | — | — | — | — |
@@ -1041,6 +1041,62 @@ and ADR-0020.
   change. No migration and no schema change: nothing about fal's status, logs,
   metrics, error text or output URL is persisted, and 2H-1's managed-output
   verification remains the only authority for the digest, byte count and key.
+- **Phase 5A** — see GitHub for its lifecycle. Answers, durably, which immutable
+  scene renditions belong to the next customer deliverable. Two tables
+  (migration 14): `GenerationDeliverableVersion`, carrying a job-scoped ordinal
+  derived as `MAX + 1` **inside** the admission transaction and never accepted
+  from a caller, and `GenerationDeliverableInput`, one immutable row per scene
+  naming the scene, its delivered request, that request's latest
+  `OUTPUT_VERIFIED` attempt, the `VALID` media verdict, and the frozen receipt of
+  the bytes selected. Every foreign key `ON DELETE RESTRICT`: this is paid
+  generated history end to end.
+
+  Transaction I admits the version, all its input rows, the `DELIVERABLE` event,
+  `SCENES_READY -> COMPOSITION_PENDING` and the job event in one commit, or none
+  of them. The selection authorities are the ones the rest of the system already
+  established and are used verbatim: the scene's `currentDeliveredRequestId` (not
+  "newest request", not "highest regeneration ordinal" — a rolled-back
+  regeneration is exactly where those guesses go wrong), the latest attempt by
+  `MAX(attemptOrdinal)` (never `createdAt`), a durable `VALID` media verdict, and
+  an exact receipt binding to the attempt's verified bytes. A scene that cannot
+  prove all of it fails the **whole** admission closed — a deliverable missing a
+  scene the customer paid for is worse than no deliverable and would look
+  complete.
+
+  The customer's current deliverable pointer is **not** moved. For an initial
+  composition it stays null; for a recomposition it keeps naming the previous,
+  still-usable video, through `COMPOSITION_PENDING`, `COMPOSING` and
+  `DELIVERABLE_VALIDATING` alike. Publishing belongs to Transaction G, which
+  remains deferred along with unit `CONSUME`. That restraint is proved rather
+  than asserted: the transaction re-reads the pointer after its writes, and a
+  static allowlist permits only the lines of the repository that read the column.
+
+  The pointer also finally has a foreign key. It had none since migration 10, so
+  a job could name a nonexistent version or another job's; a composite key
+  through `UNIQUE(id, generationJobId)` now makes both impossible in PostgreSQL.
+  No backfill was needed and none was performed — no migration, no seed script
+  and no repository path had ever written the column, and the only non-null
+  values in existence were two integration fixtures, now creating real rows.
+
+  A new versioned fingerprint, `sha256:deliverable-input:v1:<hex>`, over the
+  canonical ordered input set plus the job's frozen delivery target. Deliberately
+  a third vocabulary: ADR-0012's storyboard digest asks whether a storyboard is
+  stale, ADR-0034's request hash asks whether two provider requests are the same,
+  and neither is an object content hash. Two admitters serialize on the job row —
+  one version, one job move, and the loser answers `ALREADY_PLANNED` with the
+  *winner's* id rather than a raw uniqueness error. A concurrent revision start
+  cannot commit a stale plan for a stronger reason than the lock: planning needs
+  `SCENES_READY` and revision start needs `DELIVERABLE_READY`, so whichever state
+  the job is in, exactly one proceeds.
+
+  Nothing composes. No `ffmpeg`, no `ffprobe`, no object store, no HTTP, no
+  runner, no scheduler, no candidate-discovery query, and no composition profile:
+  codec, bitrate, frame rate, transitions, audio mix, crop and padding are all
+  unfrozen, because a guess recorded now would store a policy nobody chose.
+  `COMPOSITION_PENDING -> COMPOSING` and `COMPOSING -> DELIVERABLE_VALIDATING`
+  are reserved ahead of their Phase 5B owners so the generic API cannot walk a
+  job to `DELIVERABLE_VALIDATING` with no bytes produced. Detail in
+  `docs/phase-5a-completion.md` and ADR-0049.
 - **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
   Phase 6B left. First, a planning refusal was an answer: the runner reported
   `NO_PLAN` and moved on, nothing durable recorded that the candidate had been

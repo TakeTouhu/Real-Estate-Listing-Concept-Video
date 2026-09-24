@@ -370,8 +370,45 @@ replays or conflicts rather than writing again, and the legacy tenant-facing
   only**: never in a customer-facing DTO, never logged (ADR-0016 §9). This entry
   previously listed them as not stored at all.
 
+## Phase 5A — the deliverable composition plan
+
+```mermaid
+erDiagram
+    GenerationJob ||--o{ GenerationDeliverableVersion : "has versions"
+    GenerationJob |o--o| GenerationDeliverableVersion : "currentDeliverableVersionId (same job, composite FK)"
+    GenerationDeliverableVersion ||--|{ GenerationDeliverableInput : "freezes"
+    GenerationScene ||--o{ GenerationDeliverableInput : "appears once per plan"
+    SceneGenerationRequest ||--o{ GenerationDeliverableInput : "selected rendition"
+    SceneGeneration ||--o{ GenerationDeliverableInput : "source attempt"
+    ManagedOutputMediaValidation ||--o{ GenerationDeliverableInput : "media authority"
+```
+
+Two relationships between `GenerationJob` and `GenerationDeliverableVersion`, and
+they mean different things. The one-to-many is *history*: every version a job has
+ever planned. The optional one-to-one is *publication*: the single version the
+customer currently holds, which composition planning never writes — it moves only
+when a validated deliverable is published, which is Transaction G's fact and is
+deferred.
+
+The publication pointer is a **composite** foreign key,
+`(currentDeliverableVersionId, id) -> (id, generationJobId)`, so a job can only
+ever name a version belonging to itself. The same shape
+`GenerationScene.currentDeliveredRequestId` already uses, and for the same reason:
+a single-column key would let one customer's deliverable name another's.
+
+`GenerationDeliverableInput` is the only place in the schema that duplicates a
+receipt. `sourceSha256` and `sourceSizeBytes` repeat the attempt's verified
+values so a plan is self-describing — which bytes were planned is answerable
+without joining four tables, and a receipt that ever disagreed with the attempt's
+becomes visible rather than assumed away. No other media metadata is copied:
+duration, dimensions and container stay on the validation that measured them.
+
 ## Not implemented yet (later phases)
 
-`VideoOutput` (Phase 5), `CreditLedger` / `Subscription` (Phase 6),
-`ConsentRecord` (Phase 6–7). These appear in `docs/DataModel.md` but have no
-tables yet. The Phase 4 generation attempt is `scene_generations`, above.
+`CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7). These
+appear in `docs/DataModel.md` but have no tables yet. The Phase 4 generation
+attempt is `scene_generations`, above.
+
+`VideoOutput` (Phase 5) has no table either, and Phase 5A deliberately did not
+create one: a *plan* is not an output. The final deliverable object, its receipt
+and its own media validation belong to Phase 5B/5C, once bytes exist to describe.

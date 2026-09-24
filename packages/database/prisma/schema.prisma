@@ -541,6 +541,8 @@ model SceneGeneration {
   /// request receives one automatic recovery — but the relation is a list
   /// because nothing in the schema makes that arithmetic true on its own.
   mediaFailureRecoveryFor           ManagedOutputMediaFailureResolution[] @relation("MediaFailureRecoveryAttempt")
+  /// The deliverable plans that froze this attempt's output as a scene input.
+  deliverableInputs                 GenerationDeliverableInput[]
 
   @@unique([generationSceneRequestId, attemptOrdinal])
   @@index([videoProjectId])
@@ -678,7 +680,7 @@ enum GenerationTransitionActorType {
 /// consumed entitlement and a paid provider history, so a project deletion must
 /// resolve retention deliberately rather than cascading it away.
 model GenerationJob {
-  id                          String                 @id
+  id                          String                         @id
   videoProjectId              String
   requestedByUserId           String
   qualityTier                 GenerationQualityTier
@@ -695,16 +697,26 @@ model GenerationJob {
   /// the total; they are never additional.
   requiredVideoUnits          Int
   requiredHighQualityUnits    Int
-  state                       GenerationJobState     @default(CREATED)
-  stateVersion                Int                    @default(0)
-  /// Set when a deliverable version exists. No FK in this phase: the
-  /// deliverable table is deferred, and a nullable pointer is honest about that.
+  state                       GenerationJobState             @default(CREATED)
+  stateVersion                Int                            @default(0)
+  /// The deliverable version currently published to the customer, or null until
+  /// one has been. Constrained by a composite foreign key to
+  /// `(id, generationJobId)` on the version, so a non-null value can only ever
+  /// name a version belonging to THIS job -- a nonexistent id and another job's
+  /// id are both rejected by PostgreSQL. Exactly the pattern
+  /// `GenerationScene.currentDeliveredRequestId` already uses.
+  ///
+  /// Composition *planning* never writes this. A planned version is discoverable
+  /// by job plus highest ordinal; this pointer moves only when a validated
+  /// deliverable is published, which is Transaction G's fact and is deferred.
   currentDeliverableVersionId String?
-  createdAt                   DateTime               @default(now())
-  updatedAt                   DateTime               @updatedAt
-  videoProject                VideoProject           @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  createdAt                   DateTime                       @default(now())
+  updatedAt                   DateTime                       @updatedAt
+  videoProject                VideoProject                   @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
   reservation                 GenerationReservation?
   scenes                      GenerationScene[]
+  deliverableVersions         GenerationDeliverableVersion[] @relation("JobDeliverableVersions")
+  currentDeliverableVersion   GenerationDeliverableVersion?  @relation("JobCurrentDeliverable", fields: [currentDeliverableVersionId, id], references: [id, generationJobId], onDelete: Restrict)
 
   @@index([videoProjectId])
   @@index([state])
@@ -745,7 +757,7 @@ model GenerationReservation {
 /// cascade from either would erase paid history on an ordinary user action, and
 /// a restrict would block recomposition (ADR-0016).
 model GenerationScene {
-  id                        String                   @id
+  id                        String                       @id
   generationJobId           String
   position                  Int
   /// Provenance only — no FK. Recomposition replaces storyboard scenes.
@@ -758,8 +770,8 @@ model GenerationScene {
   /// Customer-authored text. Never logged, audited, or placed in transition
   /// metadata — the same secrecy rule as SceneGeneration.requestCompiledPrompt.
   snapshotCompiledPrompt    String?
-  state                     GenerationSceneState     @default(PENDING)
-  stateVersion              Int                      @default(0)
+  state                     GenerationSceneState         @default(PENDING)
+  stateVersion              Int                          @default(0)
   /// The delivered request currently selected for this scene. No FK: it points
   /// into a child table, and a circular required reference would make insertion
   /// order load-bearing.
@@ -768,11 +780,12 @@ model GenerationScene {
   /// non-null value can only ever name a request belonging to THIS scene --
   /// a nonexistent id and another scene's id are both rejected by PostgreSQL.
   currentDeliveredRequestId String?
-  createdAt                 DateTime                 @default(now())
-  updatedAt                 DateTime                 @updatedAt
-  generationJob             GenerationJob            @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
-  requests                  SceneGenerationRequest[] @relation("SceneRequests")
-  currentDeliveredRequest   SceneGenerationRequest?  @relation("SceneCurrentDelivered", fields: [currentDeliveredRequestId, id], references: [id, generationSceneId], onDelete: Restrict)
+  createdAt                 DateTime                     @default(now())
+  updatedAt                 DateTime                     @updatedAt
+  generationJob             GenerationJob                @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
+  requests                  SceneGenerationRequest[]     @relation("SceneRequests")
+  currentDeliveredRequest   SceneGenerationRequest?      @relation("SceneCurrentDelivered", fields: [currentDeliveredRequestId, id], references: [id, generationSceneId], onDelete: Restrict)
+  deliverableInputs         GenerationDeliverableInput[]
 
   @@unique([generationJobId, position])
   @@index([generationJobId])
@@ -786,22 +799,23 @@ model GenerationScene {
 /// is what keeps a provider outage from consuming a customer's regeneration
 /// right.
 model SceneGenerationRequest {
-  id                      String                      @id
+  id                      String                       @id
   generationSceneId       String
   kind                    SceneGenerationRequestKind
   /// NULL for INITIAL, 1 or 2 for USER_REGENERATION. Both halves are enforced
   /// by a CHECK constraint, so a third regeneration cannot be inserted even by
   /// a caller that skipped the domain.
   userRegenerationOrdinal Int?
-  state                   SceneGenerationRequestState @default(PENDING)
-  stateVersion            Int                         @default(0)
+  state                   SceneGenerationRequestState  @default(PENDING)
+  stateVersion            Int                          @default(0)
   requestedByUserId       String?
-  createdAt               DateTime                    @default(now())
+  createdAt               DateTime                     @default(now())
   deliveredAt             DateTime?
   failedAt                DateTime?
-  generationScene         GenerationScene             @relation("SceneRequests", fields: [generationSceneId], references: [id], onDelete: Restrict)
-  currentForScenes        GenerationScene[]           @relation("SceneCurrentDelivered")
+  generationScene         GenerationScene              @relation("SceneRequests", fields: [generationSceneId], references: [id], onDelete: Restrict)
+  currentForScenes        GenerationScene[]            @relation("SceneCurrentDelivered")
   attempts                SceneGeneration[]
+  deliverableInputs       GenerationDeliverableInput[]
 
   /// The composite key the scene's `currentDeliveredRequestId` points through,
   /// so a scene can only ever name a request that belongs to it.
@@ -998,6 +1012,8 @@ model ManagedOutputMediaValidation {
   /// Absent until a worker first claims this failure. Absent is the ordinary
   /// state for every VALID verdict and for every failure nobody has swept yet.
   failureResolution ManagedOutputMediaFailureResolution?
+  /// The deliverable plans that cited this verdict as media authority.
+  deliverableInputs GenerationDeliverableInput[]
 
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
@@ -1087,4 +1103,110 @@ model ManagedOutputMediaFailureResolution {
   @@index([status, leaseExpiresAt])
   @@index([recoveryAttemptId])
   @@map("managed_output_media_failure_resolutions")
+}
+
+// ===========================================================================
+// Phase 5A — durable deliverable composition plan
+//
+// One question, made durable: *exactly which immutable scene renditions belong
+// to the next customer deliverable?*
+//
+// Two tables rather than a column on the job. A deliverable is versioned — a
+// successful user regeneration produces a second one — and each version must
+// remember the exact ordered set of validated bytes it was planned from, or a
+// crashed composition would re-derive that set from live rows that have since
+// moved. The job then keeps a *pointer* to the version the customer currently
+// holds, which planning never touches.
+//
+// No backfill. Nothing here reads, updates or rewrites an existing
+// orchestration row: jobs that already delivered under earlier phases carry no
+// deliverable version, and inventing one would be fabricating a plan that never
+// existed.
+// ===========================================================================
+
+/// One planned customer deliverable, frozen.
+///
+/// `ordinal` is scoped to the job and derived as `MAX + 1` inside the admission
+/// transaction, never accepted from a caller: an ordinal chosen outside that
+/// transaction is a claim about rows the caller did not lock. It is deliberately
+/// **not** the scene regeneration ordinal — one regeneration of one scene
+/// produces one new deliverable version covering every scene.
+///
+/// RESTRICT on the job, matching every other row in this chain: a version can
+/// name paid provider history, so a physical deletion must resolve retention
+/// deliberately rather than cascading it away.
+model GenerationDeliverableVersion {
+  id               String                       @id
+  generationJobId  String
+  /// Job-scoped, starting at 1. A gap or a duplicate is a detectable defect.
+  ordinal          Int
+  /// `sha256:deliverable-input:v1:<hex>` over the canonical ordered input set
+  /// plus the job's frozen delivery target. Not an object content hash, not the
+  /// final video's SHA-256, not the storyboard composition fingerprint and not a
+  /// provider request hash -- the prefix exists so a future reader cannot
+  /// compare two of them by accident.
+  inputFingerprint String
+  createdAt        DateTime                     @default(now())
+  generationJob    GenerationJob                @relation("JobDeliverableVersions", fields: [generationJobId], references: [id], onDelete: Restrict)
+  inputs           GenerationDeliverableInput[]
+  /// The jobs whose current deliverable pointer names this version. At most one
+  /// in practice -- the pointer is per job and the composite key confines it to
+  /// this version's own job -- but the relation is a list because nothing in the
+  /// schema makes that arithmetic true on its own.
+  currentForJobs   GenerationJob[]              @relation("JobCurrentDeliverable")
+
+  @@unique([generationJobId, ordinal])
+  /// The composite key `GenerationJob.currentDeliverableVersionId` points
+  /// through, so a job can only ever name a version that belongs to it.
+  @@unique([id, generationJobId])
+  @@index([generationJobId])
+  @@map("generation_deliverable_versions")
+}
+
+/// One scene rendition frozen into one deliverable version.
+///
+/// The four foreign keys are the whole selection, recorded rather than
+/// re-derivable: the scene, the request that was the scene's delivered pointer
+/// at planning time, that request's latest `OUTPUT_VERIFIED` attempt, and the
+/// `VALID` media verdict about that attempt's bytes. All RESTRICT -- this names
+/// paid generated history end to end.
+///
+/// `sourceSha256` and `sourceSizeBytes` duplicate the attempt's verified
+/// receipt on purpose, and it is the only duplication here. They are what make
+/// the plan self-describing: a later reader can tell which bytes were planned
+/// without joining four tables, and a receipt that ever disagreed with the
+/// attempt's is then visible rather than assumed away. No other media metadata
+/// is copied -- duration, dimensions and container stay where they were
+/// measured.
+model GenerationDeliverableInput {
+  id                       String                       @id
+  deliverableVersionId     String
+  /// The `GenerationScene.position` frozen into the plan. Scenes are never
+  /// renumbered by planning.
+  position                 Int
+  generationSceneId        String
+  /// The scene's `currentDeliveredRequestId` at planning time -- the selection
+  /// authority, never "the newest request" or "the highest regeneration
+  /// ordinal".
+  sceneGenerationRequestId String
+  sceneGenerationAttemptId String
+  mediaValidationId        String
+  /// Canonical lowercase 64-character hex, enforced by CHECK.
+  sourceSha256             String
+  /// BIGINT for the same reason as `scene_generations.outputSizeBytes`: the
+  /// domain admits any positive safe integer and int4 overflows at 2 GiB.
+  sourceSizeBytes          BigInt
+  createdAt                DateTime                     @default(now())
+  deliverableVersion       GenerationDeliverableVersion @relation(fields: [deliverableVersionId], references: [id], onDelete: Restrict)
+  generationScene          GenerationScene              @relation(fields: [generationSceneId], references: [id], onDelete: Restrict)
+  sceneGenerationRequest   SceneGenerationRequest       @relation(fields: [sceneGenerationRequestId], references: [id], onDelete: Restrict)
+  sceneGenerationAttempt   SceneGeneration              @relation(fields: [sceneGenerationAttemptId], references: [id], onDelete: Restrict)
+  mediaValidation          ManagedOutputMediaValidation @relation(fields: [mediaValidationId], references: [id], onDelete: Restrict)
+
+  /// A scene appears exactly once, at exactly one position, in one plan.
+  @@unique([deliverableVersionId, position])
+  @@unique([deliverableVersionId, generationSceneId])
+  @@index([generationSceneId])
+  @@index([sceneGenerationAttemptId])
+  @@map("generation_deliverable_inputs")
 }

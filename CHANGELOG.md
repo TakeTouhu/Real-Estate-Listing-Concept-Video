@@ -3,6 +3,56 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 5A: Durable deliverable composition plan
+
+Detail in `docs/phase-5a-completion.md` and ADR-0049. Answers, durably, which
+immutable scene renditions belong to the next customer deliverable. **Nothing is
+composed**: no `ffmpeg`, no `ffprobe`, no object store, no final deliverable
+object, no unit consumed, and no scheduler or runner exists.
+
+### Added
+
+- **`GenerationDeliverableVersion`** (migration 14) — durable deliverable
+  identity per job: a job-scoped `ordinal` derived as `MAX + 1` inside the
+  admission transaction, and an input fingerprint.
+- **`GenerationDeliverableInput`** — one immutable row per scene in a version,
+  naming the scene, its delivered request, that request's latest
+  `OUTPUT_VERIFIED` attempt, the `VALID` media verdict, and the frozen receipt of
+  the bytes selected. Every foreign key `ON DELETE RESTRICT`.
+- **Transaction I** (`admitCompositionPlan`) — the version, every input row, the
+  `DELIVERABLE` event, `GenerationJob SCENES_READY -> COMPOSITION_PENDING` and
+  its event, in one commit. Database-only; no external I/O is reachable from
+  inside it.
+- **`computeDeliverableInputFingerprint`** — a new versioned hash vocabulary,
+  `sha256:deliverable-input:v1:<hex>`, over the canonical ordered input set plus
+  the job's frozen delivery target. Deliberately distinct from ADR-0012's
+  storyboard fingerprint and ADR-0034's request hash, and from any object digest.
+- **The composite foreign key on `GenerationJob.currentDeliverableVersionId`** —
+  `(currentDeliverableVersionId, id) -> (id, generationJobId)`, so a job can only
+  ever name a deliverable version of its own. The column had carried no foreign
+  key since migration 10.
+
+### Changed
+
+- **Three more job edges are reserved from the generic transition API** —
+  `SCENES_READY -> COMPOSITION_PENDING` (Transaction I owns it), plus
+  `COMPOSITION_PENDING -> COMPOSING` and `COMPOSING -> DELIVERABLE_VALIDATING`,
+  reserved ahead of their Phase 5B owners so the generic API cannot assemble the
+  delivery pipeline without its atomic authorities.
+- **Integration fixtures create a real deliverable version** instead of writing a
+  synthetic `gdv_<suffix>` string into the job pointer, which the new foreign key
+  no longer admits.
+
+### Not done, on purpose
+
+- No composition profile: no codec, bitrate, frame rate, transition, audio mix,
+  crop, padding or watermark policy is frozen. Phase 5B owns it.
+- No actor for `COMPOSITION_PENDING -> COMPOSING`, no runner, no scheduler, and
+  no candidate-discovery query.
+- No unit `CONSUME` and no Transaction G. `currentDeliverableVersionId` is never
+  moved by planning: the customer keeps the video they already have until a
+  validated replacement is published.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 
 Detail in `docs/phase-4c3b2h3b6c-completion.md` and ADR-0048. Closes the two

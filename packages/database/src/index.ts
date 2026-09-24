@@ -34,6 +34,7 @@ export { createMediaValidationLifecycleRepository } from "./media-validation-lif
 export { createValidatedSceneDeliveryRepository } from "./validated-scene-delivery-repository";
 export { createAutomaticMediaRecoveryRepository } from "./media-recovery-repository";
 export { createMediaFailureResolutionRepository } from "./media-failure-resolution-repository";
+export { createDeliverableCompositionPlanRepository } from "./deliverable-composition-repository";
 // `cost-admission-lock` is deliberately absent. A caller outside this package
 // holding that lock would hold it without the transaction that makes it mean
 // anything, and one key formula is worth nothing if it can be taken from
