@@ -107,9 +107,28 @@ export function createDeliverableCompositionPlanRepository(
   return {
     async admitCompositionPlan(input: AdmitCompositionPlanInput) {
       return prisma.$transaction(async (tx): Promise<AdmitCompositionPlanOutcome> => {
-        // ---- 1. The Job lock, first and held for the whole transaction. --
-        const job = await lockJobForTenant(tx, input.organizationId, input.generationJobId);
-        if (job === null) return { kind: "NOT_FOUND" };
+        // ---- 1. The entitlement and Job locks, held for the whole transaction.
+        // The reservation's *state* is composition-admission authority, so it
+        // must be locked before it is read and stay locked until this commits.
+        // Reading it unlocked was a time-of-check/time-of-use hole: a concurrent
+        // release or reconciliation hold could move it after the read and before
+        // the plan committed, admitting a deliverable against an entitlement
+        // that no longer authorized one.
+        const locked = await lockJobForComposition(
+          tx,
+          input.organizationId,
+          input.generationJobId,
+        );
+        if (locked === null) return { kind: "NOT_FOUND" };
+        // The hold's state is authority, so the value the decision uses is the
+        // one read *under its own row lock* — never the unlocked one carried by
+        // the job read above.
+        const reservationState = await lockReservationForComposition(
+          tx,
+          input.organizationId,
+          input.generationJobId,
+        );
+        const job: JobContextRow = { ...locked, reservationState };
 
         // ---- 2. Idempotent replay, before anything is judged ineligible. -
         // A Job already `COMPOSITION_PENDING` was planned by someone, and the
@@ -277,6 +296,45 @@ async function existingPlan(
   });
   if (version === null) throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
 
+  // The latest version must be the one planned *for this pending cycle*, not
+  // merely the latest one that exists.
+  //
+  // Without this, a recomposition is misread. Its Job legitimately still points
+  // at the previous, still-usable deliverable while the new plan is non-current,
+  // so a Job stuck in `COMPOSITION_PENDING` with **no** new version at all finds
+  // the customer's *old* version at the top of the ordinal order, proves it
+  // self-consistent — it is, it was planned correctly once — and reports
+  // `ALREADY_PLANNED` for a deliverable that is not the pending cycle's. That is
+  // precisely the partial plan this transaction must fail closed on.
+  if (job.currentDeliverableVersionId === null) {
+    // Initial cycle: nothing has been published, so the pending plan is the
+    // first one.
+    if (version.ordinal !== FIRST_DELIVERABLE_ORDINAL) {
+      throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
+    }
+  } else {
+    // Recomposition: the pending plan must be a *different*, *later* version
+    // than the one the customer currently holds. The composite foreign key
+    // already proves the current pointer names a version of this Job, so it is
+    // resolved from the database rather than trusted from the caller.
+    const current = await tx.generationDeliverableVersion.findFirst({
+      where: { id: job.currentDeliverableVersionId, generationJobId: job.jobId },
+      select: { id: true, ordinal: true },
+    });
+    if (current === null) throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
+    if (version.id === current.id) {
+      throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
+    }
+    // Exactly one ordinal after the current version. Phase 5A has no
+    // failed-composition or retry lifecycle, so a pending cycle produces exactly
+    // one new version and any gap is a plan nobody can account for. A later
+    // phase that introduces retry history must revisit this deliberately rather
+    // than widening it by accident.
+    if (version.ordinal !== current.ordinal + 1) {
+      throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
+    }
+  }
+
   const inputs = await tx.generationDeliverableInput.findMany({
     where: { deliverableVersionId: version.id },
     orderBy: [{ position: "asc" }, { generationSceneId: "asc" }],
@@ -403,17 +461,21 @@ function proveSceneInput(row: SceneInputRow): DeliverableInputFingerprintScene |
 /**
  * Lock the Job and read its frozen delivery target, proving tenancy as it goes.
  *
- * `FOR UPDATE OF j` names the Job alias alone: the project is joined to prove
- * ownership and the reservation to read the cycle, and neither is written here.
- * A cross-tenant or unknown id matches no row, locks nothing, and is reported as
- * not found — the caller's organization id is never trusted on its own.
+ * `FOR UPDATE OF j` names the Job alias alone; the project is joined for
+ * ownership and deliberately not locked.
+ *
+ * The reservation is **not joined here at all**, and its state is not among the
+ * columns returned. That is the point: the only read of `res."state"` in this
+ * file is the one that holds the reservation's row lock, so there is no unlocked
+ * value for a later edit to start trusting by accident. A cross-tenant or
+ * unknown id matches no row, locks nothing, and is reported as not found.
  */
-async function lockJobForTenant(
+async function lockJobForComposition(
   tx: Tx,
   organizationId: string,
   generationJobId: string,
-): Promise<JobContextRow | null> {
-  const rows = await tx.$queryRaw<JobContextRow[]>`
+): Promise<Omit<JobContextRow, "reservationState"> | null> {
+  const rows = await tx.$queryRaw<Omit<JobContextRow, "reservationState">[]>`
     SELECT p."organizationId"              AS "organizationId",
            j."id"                          AS "jobId",
            j."state"::text                 AS "jobState",
@@ -421,11 +483,9 @@ async function lockJobForTenant(
            j."currentDeliverableVersionId" AS "currentDeliverableVersionId",
            j."targetOutputResolution"      AS "targetOutputResolution",
            j."targetAspectRatio"           AS "targetAspectRatio",
-           j."requestedDurationSeconds"    AS "requestedDurationSeconds",
-           res."state"::text               AS "reservationState"
+           j."requestedDurationSeconds"    AS "requestedDurationSeconds"
       FROM "generation_jobs" j
       JOIN "video_projects" p ON p."id" = j."videoProjectId"
-      LEFT JOIN "generation_reservations" res ON res."generationJobId" = j."id"
      WHERE j."id" = ${generationJobId}
        AND p."organizationId" = ${organizationId}
        FOR UPDATE OF j
@@ -434,9 +494,71 @@ async function lockJobForTenant(
 }
 
 /**
- * Take the Scene, request and attempt locks, in the fixed order.
+ * Lock the entitlement hold and read the state this transaction will act on.
  *
- * Two statements rather than one, and not by preference: PostgreSQL refuses
+ * The reservation's state is **composition-admission authority**: it is what
+ * separates an initial composition from a recomposition, and what refuses a
+ * released or reconciling hold. Reading it without the row lock was a
+ * time-of-check/time-of-use hole — a concurrent release or reconciliation hold
+ * could move it after the read and before the plan committed, admitting a
+ * deliverable against an entitlement that no longer authorized one.
+ *
+ * ## Why after the Job, not before it
+ *
+ * The prescribed correction was a staged reservation-then-Job order, on the
+ * premise that settlement already takes reservation before Job. Measured against
+ * live PostgreSQL, it does not. Transaction H locks both in one statement whose
+ * `FROM` clause reaches `generation_jobs` before `generation_reservations`, and
+ * a three-session probe — hold the reservation row, run the settlement-shaped
+ * join, then try the Job row `FOR UPDATE NOWAIT` — reports
+ * `could not obtain lock on row in relation "generation_jobs"`. Settlement
+ * therefore **already holds the Job while it waits for the reservation**, and a
+ * staged reservation-then-Job acquisition here would close a real cycle:
+ *
+ * ```text
+ * Transaction I : holds reservation, waits for Job
+ * Transaction H : holds Job,         waits for reservation
+ * ```
+ *
+ * The same probe with the two tables swapped in the `FROM` clause reports the
+ * Job row as freely acquirable, which is what makes the instrument trustworthy
+ * rather than a coincidence.
+ *
+ * So the order is Job then reservation, matching settlement's measured order.
+ * The three cost workflows — paid-submission authorization, reconciliation and
+ * submission outcome — lock `res` *alone* and never the Job, so none of them can
+ * participate in a cycle in either direction.
+ *
+ * Locking this row is **not** an entitlement mutation. Transaction I authorizes
+ * no paid provider call, moves no exposure, consumes no unit and releases none,
+ * and takes no cost-admission advisory lock. The row is locked only because its
+ * current state authorizes the composition cycle.
+ *
+ * A job with no reservation locks nothing and returns `null`, which the caller
+ * refuses as `NOT_ELIGIBLE` — a composition cycle with no entitlement behind it
+ * is not one of the two legitimate shapes.
+ */
+async function lockReservationForComposition(
+  tx: Tx,
+  organizationId: string,
+  generationJobId: string,
+): Promise<string | null> {
+  const rows = await tx.$queryRaw<{ reservationState: string }[]>`
+    SELECT res."state"::text AS "reservationState"
+      FROM "generation_reservations" res
+      JOIN "generation_jobs" j ON j."id" = res."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+     WHERE res."generationJobId" = ${generationJobId}
+       AND p."organizationId" = ${organizationId}
+       FOR UPDATE OF res
+  `;
+  return rows[0]?.reservationState ?? null;
+}
+
+/**
+ * Take the Scene, request, attempt and media-verdict locks, in the fixed order.
+ *
+ * Three statements rather than one, and not by preference: PostgreSQL refuses
  * `FOR UPDATE` on the nullable side of an outer join, and the authoritative read
  * *must* be an outer join so that a Scene with no delivered pointer still
  * appears and is refused by name rather than silently vanishing from the plan.
@@ -478,6 +600,30 @@ async function lockSceneChain(tx: Tx, generationJobId: string): Promise<void> {
      WHERE s."generationJobId" = ${generationJobId}
      ORDER BY s."position" ASC, s."id" ASC
        FOR UPDATE OF r, a
+  `;
+  // The media verdicts, last and in the same order. They are authority — the
+  // plan freezes a `VALID` status and its receipt — so reading them unlocked
+  // left the same time-of-check/time-of-use gap the reservation had. A scene
+  // with no verdict yields no row to lock and is refused by the authoritative
+  // outer-join read, exactly as before; nothing about the media-validation
+  // lifecycle changes here.
+  await tx.$queryRaw<{ id: string }[]>`
+    SELECT v."id"
+      FROM "generation_scenes" s
+      JOIN "scene_generation_requests" r
+             ON r."id" = s."currentDeliveredRequestId"
+            AND r."generationSceneId" = s."id"
+      JOIN "scene_generations" a
+             ON a."generationSceneRequestId" = r."id"
+            AND a."attemptOrdinal" = (
+                  SELECT MAX(sib."attemptOrdinal")
+                    FROM "scene_generations" sib
+                   WHERE sib."generationSceneRequestId" = r."id"
+                )
+      JOIN "managed_output_media_validations" v ON v."sceneGenerationId" = a."id"
+     WHERE s."generationJobId" = ${generationJobId}
+     ORDER BY s."position" ASC, s."id" ASC
+       FOR UPDATE OF v
   `;
 }
 

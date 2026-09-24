@@ -208,14 +208,17 @@ are exactly what this transaction exists to make impossible.
 
 ```text
 GenerationJob
-  → GenerationScenes (position ASC, id ASC)
-    → selected SceneGenerationRequests
-      → selected latest SceneGenerations
-        → their ManagedOutputMediaValidations
+  → GenerationReservation
+    → GenerationScenes (position ASC, id ASC)
+      → selected SceneGenerationRequests
+        → selected latest SceneGenerations
+          → their ManagedOutputMediaValidations
 ```
 
 The same Job-first order Transaction F, the recovery admission and Transaction H
-take, so none of them can close a deadlock cycle with this one.
+take, so none of them can close a deadlock cycle with this one. Every row in that
+list is locked; see *Why the Job is locked before the hold* below for the
+measurement that fixed the Job/reservation pair's order.
 
 The locks are taken in two statements rather than one, and not by preference:
 PostgreSQL refuses `FOR UPDATE` on the nullable side of an outer join, and the
@@ -224,11 +227,57 @@ pointer still appears and is refused by name rather than silently vanishing from
 the plan. So the locks are taken first by inner join, and the read follows under
 them.
 
-The **reservation is joined as evidence and deliberately not locked**: this
-transaction proves which composition cycle it is in and then leaves the hold
-entirely alone. There is **no cost-admission advisory lock** either — planning
-authorizes no provider call and moves no quota, so serializing it against the
-gate that does would be contention for nothing.
+The **reservation is locked**, and the correction that made it so is worth
+recording plainly: it was originally joined as unlocked evidence, which was a
+time-of-check/time-of-use hole. The hold's state is *authority* here — it is what
+separates an initial composition from a recomposition, and what refuses a
+released or reconciling hold — so a concurrent release could move it after the
+read and before the plan committed, admitting a deliverable against an
+entitlement that no longer authorized one.
+
+Locking it is **not** an entitlement mutation. Transaction I authorizes no paid
+provider call, moves no exposure, consumes no unit and releases none. There is
+**no cost-admission advisory lock**: planning does not cross the paid boundary,
+so serializing it against the gate that does would be contention for nothing.
+
+### Why the Job is locked before the hold
+
+The pair's order was chosen by measurement, not by convention. Transaction H is
+the only other operation that locks both rows, and it does so in one statement
+whose `FROM` clause reaches `generation_jobs` before `generation_reservations`. A
+three-session probe against live PostgreSQL — hold the reservation row, run the
+settlement-shaped join, then attempt the Job row `FOR UPDATE NOWAIT` from a third
+session — reports `could not obtain lock on row in relation "generation_jobs"`.
+Settlement therefore **already holds the Job while it waits for the reservation**.
+
+The same probe with the two tables swapped in the `FROM` clause reports the Job
+row as freely acquirable, which is what makes the instrument trustworthy rather
+than a coincidence.
+
+So a staged reservation-then-Job acquisition here would close a real cycle:
+
+```text
+Transaction I : holds reservation, waits for Job
+Transaction H : holds Job,         waits for reservation
+```
+
+Job-then-reservation matches settlement's measured order and cannot deadlock with
+it. The three cost workflows — paid-submission authorization, reconciliation and
+submission outcome — lock the reservation *alone* and never the Job, so none of
+them can participate in a cycle in either direction.
+
+The reservation's state is read **only** under its own row lock. The Job read
+does not join the reservation at all, so no unlocked value exists for a later
+edit to start trusting by accident.
+
+### The media verdicts are locked too
+
+`ManagedOutputMediaValidation` rows are authority — the plan freezes a `VALID`
+status and its receipt — and were originally read without being locked, the same
+gap in a different place. They are locked last, after the attempts, in the same
+deterministic scene order. A scene with no verdict yields no row to lock and is
+refused by the authoritative outer-join read exactly as before; nothing about the
+media-validation lifecycle itself changes.
 
 ### No external I/O
 
@@ -313,10 +362,39 @@ A replay finds the job already `COMPOSITION_PENDING`. That job was planned by
 someone, and the only honest answers are "here is that plan" or "the plan behind
 this claim is broken". Re-deriving would create a second version for one cycle.
 
-`ALREADY_PLANNED` is returned when three facts hold of the highest-ordinal
-version: it exists, it holds one input per Scene of this job and no others, and
-its recorded fingerprint recomputes from its **own stored rows** under this job's
-frozen target. Anything else raises `PARTIAL_PLAN_STATE`.
+`ALREADY_PLANNED` is returned when four facts hold of the highest-ordinal
+version: it exists, **it is the version planned for this pending cycle**, it
+holds one input per Scene of this job and no others, and its recorded fingerprint
+recomputes from its **own stored rows** under this job's frozen target. Anything
+else raises `PARTIAL_PLAN_STATE`.
+
+The second fact was missing originally, and its absence was a customer-facing
+defect rather than a tidiness one. A recomposition legitimately leaves the job
+pointing at the previous, still-usable deliverable while the new plan is
+non-current — so a job stuck in `COMPOSITION_PENDING` with **no** new version
+found the customer's *old* version at the top of the ordinal order, proved it
+self-consistent (it is: it was planned correctly, once), and reported
+`ALREADY_PLANNED` for a deliverable that is not this cycle's.
+
+So the pending cycle is proved explicitly:
+
+```text
+INITIAL        pointer null      → latest planned version must be ordinal 1
+RECOMPOSITION  pointer non-null  → resolve the current version under THIS job,
+                                   latest.id != current.id,
+                                   latest.ordinal == current.ordinal + 1
+```
+
+The current version is resolved from the database by `(id, generationJobId)`,
+never trusted from the caller — the composite foreign key already guarantees the
+pointer names a version of this job, and this uses that authority rather than
+re-deriving it.
+
+`ordinal + 1` exactly, not merely "greater", and that is a deliberate Phase 5A
+choice: there is no failed-composition or retry lifecycle yet, so a pending cycle
+produces exactly one new version and any gap is a plan nobody can account for. A
+later phase introducing retry history must revisit this rule deliberately rather
+than widening it by accident.
 
 Self-consistency rather than re-derivation from live Scene rows, deliberately. A
 `COMPOSITION_PENDING` job cannot have its Scenes moved — revision start requires

@@ -266,6 +266,9 @@ describe("planning never bills and never publishes", () => {
       "currentDeliverableVersionId: true",
       ".currentDeliverableVersionId ===",
       ".currentDeliverableVersionId !==",
+      // A lookup key, not an assignment: the replay path resolves the current
+      // version through the database rather than trusting the pointer value.
+      "where: { id: job.currentDeliverableVersionId,",
     ];
     for (const line of repo.split("\n")) {
       if (!line.includes("currentDeliverableVersionId")) continue;
@@ -391,17 +394,50 @@ describe("the authorities the transaction must use", () => {
     expect(ports).not.toContain("ordinal");
   });
 
-  it("takes the job lock before the scene chain", () => {
+  it("locks the job, then the entitlement hold, then the scene chain", () => {
     const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
-    const job = repo.indexOf("lockJobForTenant(tx");
+    const job = repo.indexOf("lockJobForComposition(");
+    const hold = repo.indexOf("lockReservationForComposition(");
     const scenes = repo.indexOf("lockSceneChain(tx");
     expect(job).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(-1);
     expect(scenes).toBeGreaterThan(-1);
-    expect(job).toBeLessThan(scenes);
-    // Named aliases, so the project and reservation joined as evidence are not
-    // locked along with the row this transaction actually moves.
+    // Job before reservation, matching settlement's *measured* acquisition
+    // order. Reversing the pair would let Transaction I hold the reservation
+    // while waiting for the job that settlement already holds.
+    expect(job).toBeLessThan(hold);
+    expect(hold).toBeLessThan(scenes);
     expect(repo).toContain("FOR UPDATE OF j");
+    expect(repo).toContain("FOR UPDATE OF res");
     expect(repo).toContain("FOR UPDATE OF r, a");
+    // The media verdicts are authority too, and are locked last.
+    expect(repo).toContain("FOR UPDATE OF v");
+  });
+
+  it("decides on a reservation state that was read under the reservation lock", () => {
+    const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+    // The state used by the cycle decision comes from the locking helper, and
+    // the unlocked value carried by the job read is explicitly overwritten.
+    expect(repo).toContain("const reservationState = await lockReservationForComposition(");
+    expect(repo).toContain("const job: JobContextRow = { ...locked, reservationState };");
+    // And the locking helper is the only place `res."state"` is selected.
+    const selects = repo.split("$queryRaw").filter((s) => s.includes('res."state"'));
+    for (const statement of selects) {
+      expect(`res.state selected without FOR UPDATE OF res: ${statement.includes("FOR UPDATE OF res")}`)
+        .toBe("res.state selected without FOR UPDATE OF res: true");
+    }
+  });
+
+  it("locks every selected media verdict, not just the attempts", () => {
+    const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+    const lockChain = repo.slice(
+      repo.indexOf("async function lockSceneChain"),
+      repo.indexOf("async function readSceneInputs"),
+    );
+    expect(lockChain).toContain('JOIN "managed_output_media_validations" v');
+    expect(lockChain).toContain("FOR UPDATE OF v");
+    // Same deterministic order as the scene and attempt locks above it.
+    expect(lockChain.split("ORDER BY").length - 1).toBe(3);
   });
 
   it("takes no cost-admission advisory lock", () => {

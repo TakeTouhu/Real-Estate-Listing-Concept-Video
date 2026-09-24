@@ -1097,14 +1097,28 @@ and ADR-0020.
   are reserved ahead of their Phase 5B owners so the generic API cannot walk a
   job to `DELIVERABLE_VALIDATING` with no bytes produced.
 
-  Mutation ledger: one **complete** run — 264 run, 264 killed, 0 survivors, 0
-  anchor-missing, with all 227 earlier definitions preserved. Two guards in the
-  per-scene proof are structurally redundant and are reported as such rather than
-  counted as clean kills: the SQL join already restricts the attempt to
-  `MAX(attemptOrdinal)`, and the outer joins make the delivered-pointer null
-  check implied by every guard below it. Both are kept, and the mutations aimed
-  at them remove every site at once. Detail in `docs/phase-5a-completion.md` and
-  ADR-0049.
+  Review found three correctness gaps, all corrected: the reservation's state is
+  composition authority and was read without its row lock; a recomposition replay
+  could report the customer's *current* deliverable as the pending plan, because
+  a recomposition legitimately leaves the job pointing at the previous usable
+  version; and the selected media verdicts were read unlocked despite the
+  documented contract naming them. The Job→Reservation lock order was settled by
+  measuring live PostgreSQL — settlement holds the Job while waiting for the
+  reservation, so the reverse order would have deadlocked against it.
+
+  Mutation ledger: an earlier **complete** run — 264 run, 264 killed, 0 survivors,
+  0 anchor-missing, with all 227 earlier definitions preserved — is **not** final
+  evidence: it ran while `generation-regeneration-entitlement.db.test.ts` had a
+  measured ~50% flake, and the harness treats any suite failure as a kill, so
+  false kills cannot be excluded. A clean complete ledger was re-run on the
+  corrected deterministic tree; its result is recorded in
+  `docs/phase-5a-completion.md`. Three guards are structurally redundant and are
+  reported as such rather than counted as clean kills: the SQL join already
+  restricts the attempt to `MAX(attemptOrdinal)`, the outer joins make the
+  delivered-pointer null check implied by every guard below it, and the replay's
+  identity check is dominated by its succession check. All are kept, and the
+  mutations aimed at them remove every site at once. Detail in
+  `docs/phase-5a-completion.md` and ADR-0049.
 - **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
   Phase 6B left. First, a planning refusal was an answer: the runner reported
   `NO_PLAN` and moved on, nothing durable recorded that the candidate had been

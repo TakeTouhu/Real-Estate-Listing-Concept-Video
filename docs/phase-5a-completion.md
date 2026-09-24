@@ -285,6 +285,93 @@ Not done, on purpose, and each with a reason rather than an omission:
 New tests: 45 unit (`packages/domain/src/deliverable-composition/`), 69 DB
 (51 plan + 18 races/foreign-key/reserved-edge).
 
+## PR #70 review corrections
+
+Three correctness gaps were found in review and corrected. All three were
+*authority read without a lock* or *authority not actually proved*; none changed
+the schema, and migration 14 required no structural change.
+
+### Blocker A — the entitlement hold was read without its row lock
+
+`Reservation.state` decides which composition cycle this is, so it is authority.
+It was joined as unlocked evidence, which is a time-of-check/time-of-use hole: a
+concurrent release or reconciliation hold could move it after the read and before
+the plan committed, admitting a deliverable against an entitlement that no longer
+authorized one.
+
+The hold is now locked, and the state used by the decision is the one read *under
+that lock*. The Job read no longer joins the reservation at all, so no unlocked
+value exists for a later edit to start trusting by accident.
+
+**The prescribed lock order was corrected by measurement.** The review asked for
+a staged reservation-then-Job acquisition, on the premise that settlement already
+takes reservation before Job. It does not. Transaction H locks both in one
+statement whose `FROM` clause reaches `generation_jobs` before
+`generation_reservations`, and a three-session probe — hold the reservation row,
+run the settlement-shaped join, then attempt the Job row `FOR UPDATE NOWAIT` from
+a third session — reports:
+
+```text
+ERROR:  could not obtain lock on row in relation "generation_jobs"
+```
+
+Settlement therefore **already holds the Job while it waits for the
+reservation**. The same probe with the two tables swapped reports the Job row as
+freely acquirable, which is what makes the instrument trustworthy rather than a
+coincidence. A staged reservation-then-Job order here would have closed a real
+cycle:
+
+```text
+Transaction I : holds reservation, waits for Job
+Transaction H : holds Job,         waits for reservation
+```
+
+So the corrected order is **Job → Reservation**, matching settlement's measured
+order. The three cost workflows lock the reservation *alone* and never the Job,
+so none can participate in a cycle either way. No cost-admission advisory lock is
+taken, and no unit is consumed or released.
+
+### Blocker B — a recomposition replay could return the customer's current deliverable
+
+A recomposition legitimately leaves the job pointing at the previous,
+still-usable deliverable while the new plan is non-current. So a job stuck in
+`COMPOSITION_PENDING` with **no** new version found the customer's *old* version
+at the top of the ordinal order, proved it self-consistent — it is — and reported
+`ALREADY_PLANNED` for a deliverable that is not this cycle's.
+
+Replay now proves the pending cycle:
+
+```text
+INITIAL        pointer null      → latest planned version must be ordinal 1
+RECOMPOSITION  pointer non-null  → resolve current under THIS job,
+                                   latest.id != current.id,
+                                   latest.ordinal == current.ordinal + 1
+```
+
+The current version is resolved by `(id, generationJobId)` rather than trusted
+from the caller. `ordinal + 1` exactly is a deliberate Phase 5A choice: with no
+retry lifecycle, a pending cycle produces exactly one new version.
+
+### Blocker C — the selected media verdicts were not locked
+
+The authorized lock contract named the validation rows, and the previous report
+claimed them; `lockSceneChain` locked only scenes, requests and attempts. They
+are now locked last, after the attempts, in the same deterministic scene order.
+The media-validation lifecycle itself is unchanged.
+
+### One mutation re-aim, reported honestly
+
+`M267` (remove the replay identity guard) **survived** its first spot run, and
+the reason was a weakness in my own regression rather than a missing test: the
+identity check is dominated by the succession check — an equal id implies an
+equal ordinal — and the partial-plan fixture's stand-in version carried no input
+rows, so the coverage check refused it before either cycle guard ran.
+
+Both were fixed. The regression now uses a **real ordinal-1 plan produced by
+Transaction I** as the current version, so coverage and fingerprint both pass and
+only the cycle guards can refuse; and `M267` is re-aimed at *both* guards, since
+removing either alone is unobservable. It now kills.
+
 ## A flake this phase introduced, found in final verification
 
 Final verification failed on `pnpm test:db`, and the cause was Phase 5A's own
@@ -333,9 +420,9 @@ then **3/3 consecutive passes** of the entire 33-file DB suite.
 
 ## Mutation ledger
 
-One **complete** run of the whole ledger, not an impacted subset.
+### Historical run — contaminated, kept for the record
 
-> **Caveat, stated plainly.** The ledger ran *before* the flake above was found,
+> **Not final evidence.** This run happened *before* the flake above was found,
 > against the version of `generation-regeneration-entitlement.db.test.ts` that
 > failed roughly half the time. The harness kills a mutation whenever any suite
 > reports a failure, so a mutation that should have survived could have been
@@ -347,10 +434,17 @@ One **complete** run of the whole ledger, not an impacted subset.
 
 | | |
 | --- | --- |
-| Mutations run | **264** |
-| Killed | **264** |
-| Survivors | **0** |
-| Anchor-missing | **0** |
+| Mutations run | 264 |
+| Killed | 264 |
+| Survivors | 0 |
+| Anchor-missing | 0 |
+
+The flake history is deliberately not erased: this run is what a contaminated
+ledger looks like, and the reason a clean one was required.
+
+### Corrected complete run
+
+_(filled in below)_
 
 All 227 pre-existing definitions were preserved unchanged; M227–M263 are this
 phase's 37 additions. Every one of the 37 is killed by the test suites, none by

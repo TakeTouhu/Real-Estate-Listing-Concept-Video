@@ -458,6 +458,118 @@ RUN("deliverable composition plan admission (Transaction I)", () => {
       await expect(admit(chain.jobId)).rejects.toMatchObject({ code: "PARTIAL_PLAN_STATE" });
     });
 
+    it("never reports a fully self-consistent current deliverable as the pending plan", async () => {
+      // The sharpest form of the recomposition partial plan, and the one that
+      // makes the cycle guards load-bearing.
+      //
+      // The current version here is a *real* plan produced by Transaction I: its
+      // fingerprint recomputes from its own rows and it covers every scene of
+      // the job. So the self-consistency and coverage checks both pass, and the
+      // only thing standing between the customer and being told their OLD
+      // deliverable is the pending one is the rule that a recomposition's plan
+      // must be a different, later version.
+      const chain = await seedPlanChain(prisma);
+      const first = await admit(chain.jobId);
+      if (first.kind !== "PLANNED") throw new Error(first.kind);
+      expect(first.ordinal).toBe(1);
+
+      // What publication would leave behind: the plan becomes the customer's
+      // deliverable and the hold is spent. The job is parked back in
+      // COMPOSITION_PENDING with no ordinal 2 — a state no lifecycle produces,
+      // which is exactly why it must be reported rather than answered.
+      await prisma.generationJob.update({
+        where: { id: chain.jobId },
+        data: {
+          currentDeliverableVersionId: first.deliverableVersionId,
+          state: "COMPOSITION_PENDING",
+        },
+      });
+      await prisma.generationReservation.update({
+        where: { id: chain.reservationId },
+        data: { state: "CONSUMED", consumedAt: new Date() },
+      });
+
+      await expect(admit(chain.jobId)).rejects.toMatchObject({ code: "PARTIAL_PLAN_STATE" });
+      // Still exactly one version, and the customer still holds it.
+      expect(await prisma.generationDeliverableVersion.count()).toBe(1);
+      expect((await job(chain.jobId)).currentDeliverableVersionId).toBe(
+        first.deliverableVersionId,
+      );
+    });
+
+    it("never reports the customer's current deliverable as the pending plan", async () => {
+      // The recomposition partial plan, and the reason the replay path cannot
+      // simply trust the highest ordinal. A recomposition legitimately leaves
+      // the job pointing at the previous, still-usable deliverable while the new
+      // plan is non-current — so a job stuck in COMPOSITION_PENDING with *no*
+      // new version finds the customer's OLD version at the top of the ordinal
+      // order and would prove it self-consistent, because it is.
+      const chain = await seedPlanChain(prisma, { reservationState: "CONSUMED" });
+      const previous = await makeCurrentDeliverable(
+        prisma,
+        chain.jobId,
+        "sha256:deliverable-input:v1:prior",
+      );
+      await prisma.generationJob.update({
+        where: { id: chain.jobId },
+        data: { state: "COMPOSITION_PENDING" },
+      });
+
+      await expect(admit(chain.jobId)).rejects.toMatchObject({ code: "PARTIAL_PLAN_STATE" });
+      // Emphatically not ALREADY_PLANNED for ordinal 1.
+      const after = await job(chain.jobId);
+      expect(after.currentDeliverableVersionId).toBe(previous);
+      expect(await prisma.generationDeliverableVersion.count()).toBe(1);
+    });
+
+    it("returns the new version on a recomposition replay, not the current one", async () => {
+      const chain = await seedPlanChain(prisma, { reservationState: "CONSUMED" });
+      const previous = await makeCurrentDeliverable(
+        prisma,
+        chain.jobId,
+        "sha256:deliverable-input:v1:prior",
+      );
+      const first = await admit(chain.jobId);
+      if (first.kind !== "PLANNED") throw new Error(first.kind);
+      expect(first.ordinal).toBe(2);
+      const after = await worldSnapshot(prisma);
+
+      const replay = await admit(chain.jobId);
+      expect(replay.kind).toBe("ALREADY_PLANNED");
+      if (replay.kind !== "ALREADY_PLANNED") return;
+      expect(replay.deliverableVersionId).toBe(first.deliverableVersionId);
+      expect(replay.deliverableVersionId).not.toBe(previous);
+      expect(replay.ordinal).toBe(2);
+      // The customer still holds ordinal 1 throughout.
+      expect((await job(chain.jobId)).currentDeliverableVersionId).toBe(previous);
+      expect(await worldSnapshot(prisma)).toEqual(after);
+    });
+
+    it("fails closed when the pending plan is not the version after the current one", async () => {
+      const chain = await seedPlanChain(prisma, { reservationState: "CONSUMED" });
+      await makeCurrentDeliverable(prisma, chain.jobId, "sha256:deliverable-input:v1:prior");
+      const first = await admit(chain.jobId);
+      if (first.kind !== "PLANNED") throw new Error(first.kind);
+      // A gap no Phase 5A lifecycle can produce: there is no failed-composition
+      // retry history, so a pending cycle produces exactly one new version.
+      await prisma.generationDeliverableVersion.update({
+        where: { id: first.deliverableVersionId },
+        data: { ordinal: 5 },
+      });
+      await expect(admit(chain.jobId)).rejects.toMatchObject({ code: "PARTIAL_PLAN_STATE" });
+    });
+
+    it("fails closed when an initial pending plan is not ordinal one", async () => {
+      const chain = await seedPlanChain(prisma);
+      const first = await admit(chain.jobId);
+      if (first.kind !== "PLANNED") throw new Error(first.kind);
+      await prisma.generationDeliverableVersion.update({
+        where: { id: first.deliverableVersionId },
+        data: { ordinal: 3 },
+      });
+      await expect(admit(chain.jobId)).rejects.toMatchObject({ code: "PARTIAL_PLAN_STATE" });
+    });
+
     it("fails closed when the stored plan covers a scene the job does not have", async () => {
       const chain = await seedPlanChain(prisma);
       const first = await admit(chain.jobId);

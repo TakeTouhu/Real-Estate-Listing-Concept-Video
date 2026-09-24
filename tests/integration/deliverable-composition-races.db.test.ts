@@ -216,6 +216,163 @@ RUN("composition admission under contention", () => {
 
   // -------------------------------------------------------------------------
 
+  describe("against a concurrent entitlement mutation", () => {
+    /**
+     * The time-of-check/time-of-use hole the reservation lock closes.
+     *
+     * Reading `Reservation.state` without locking it meant a concurrent release
+     * or reconciliation hold could move the hold *after* the read and *before*
+     * the plan committed — admitting a deliverable against an entitlement that
+     * no longer authorized one. The proof is not "it did not happen once": the
+     * holder's mutation is deliberately left uncommitted while admission runs,
+     * so a planner that does not take the row lock reads the old MVCC
+     * `RESERVED` value and admits.
+     */
+    it("waits for an in-flight reservation mutation and then refuses the stale state", async () => {
+      const chain = await seedPlanChain(prisma);
+
+      const holder = new PrismaClient();
+      const planner = new PrismaClient();
+      let commitHolder: () => void = () => undefined;
+      const holderMayCommit = new Promise<void>((resolve) => {
+        commitHolder = resolve;
+      });
+      let mutated: () => void = () => undefined;
+      const holderHasMutated = new Promise<void>((resolve) => {
+        mutated = resolve;
+      });
+
+      // Uncommitted: the row is changed and the lock held, but no other
+      // transaction can see the new value yet. That is the whole point.
+      const holderDone = holder
+        .$transaction(
+          async (tx) => {
+            await tx.$executeRaw`
+              UPDATE "generation_reservations"
+                 SET "state" = 'RECONCILIATION_HOLD'::"GenerationReservationState",
+                     "stateVersion" = "stateVersion" + 1
+               WHERE "id" = ${chain.reservationId}
+            `;
+            mutated();
+            await holderMayCommit;
+          },
+          { timeout: 30_000 },
+        )
+        .catch(() => undefined);
+
+      await holderHasMutated;
+
+      let settledEarly = false;
+      const plan = settled(
+        createDeliverableCompositionPlanRepository(planner).admitCompositionPlan({
+          organizationId: ORG_A,
+          generationJobId: chain.jobId,
+          deliverableVersionId: "gdv_res_race",
+          context: ctx({ correlationId: "corr_res_race" }),
+        }),
+      ).then((value) => {
+        settledEarly = true;
+        return value;
+      });
+
+      // It must be genuinely blocked on the reservation row, not merely slow.
+      expect(await waitForBlocked(prisma, 1)).toBe(true);
+      expect(settledEarly).toBe(false);
+
+      commitHolder();
+      await holderDone;
+
+      const result = await plan;
+      await holder.$disconnect();
+      await planner.$disconnect();
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Reads the *committed* ineligible state, not the stale RESERVED one.
+      expect(result.value.kind).toBe("NOT_ELIGIBLE");
+
+      expect(await prisma.generationDeliverableVersion.count()).toBe(0);
+      expect(await prisma.generationDeliverableInput.count()).toBe(0);
+      expect(
+        await prisma.generationTransitionEvent.count({ where: { aggregateType: "DELIVERABLE" } }),
+      ).toBe(0);
+      expect(
+        (await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.jobId } })).state,
+      ).toBe("SCENES_READY");
+    });
+
+    /**
+     * The media verdict is authority too, so it is locked rather than read.
+     *
+     * A lock-contract test, not a verdict-mutation test: the row is held
+     * unchanged and still `VALID`, and admission must wait for it and then
+     * proceed normally.
+     */
+    it("waits for a held media verdict row before planning", async () => {
+      const chain = await seedPlanChain(prisma, { sceneCount: 1 });
+      const validationId = chain.scenes[0]!.validationId;
+
+      const holder = new PrismaClient();
+      const planner = new PrismaClient();
+      let release: () => void = () => undefined;
+      const mayRelease = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let ready: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+
+      const holderDone = holder
+        .$transaction(
+          async (tx) => {
+            await tx.$queryRaw`
+              SELECT "id" FROM "managed_output_media_validations"
+               WHERE "id" = ${validationId} FOR UPDATE
+            `;
+            ready();
+            await mayRelease;
+          },
+          { timeout: 30_000 },
+        )
+        .catch(() => undefined);
+
+      await held;
+
+      let settledEarly = false;
+      const plan = settled(
+        createDeliverableCompositionPlanRepository(planner).admitCompositionPlan({
+          organizationId: ORG_A,
+          generationJobId: chain.jobId,
+          deliverableVersionId: "gdv_val_lock",
+          context: ctx({ correlationId: "corr_val_lock" }),
+        }),
+      ).then((value) => {
+        settledEarly = true;
+        return value;
+      });
+
+      expect(await waitForBlocked(prisma, 1)).toBe(true);
+      expect(settledEarly).toBe(false);
+
+      release();
+      await holderDone;
+
+      const result = await plan;
+      await holder.$disconnect();
+      await planner.$disconnect();
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // The verdict never changed, so once the lock is free the plan is admitted
+      // exactly as it would have been.
+      expect(result.value.kind).toBe("PLANNED");
+      expect(await prisma.generationDeliverableInput.count()).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+
   describe("against a concurrent revision start", () => {
     it("admits the plan and refuses the revision when the job is SCENES_READY", async () => {
       const chain = await seedPlanChain(prisma);
