@@ -275,7 +275,7 @@ Not done, on purpose, and each with a reason rather than an omission:
 | `pnpm typecheck` | clean, 0 errors |
 | `pnpm lint` | clean |
 | `pnpm test` | **4377 passed / 135 files** (from 4332 / 133) |
-| `pnpm test:db` | **1044 passed / 33 files** (from 975 / 31) |
+| `pnpm test:db` | **1044 passed / 33 files** (from 975 / 31) — green on 3 consecutive runs after the flake fix below |
 | `pnpm build` | success |
 | `prisma validate` | valid |
 | `prisma format` | no change on re-format |
@@ -285,9 +285,142 @@ Not done, on purpose, and each with a reason rather than an omission:
 New tests: 45 unit (`packages/domain/src/deliverable-composition/`), 69 DB
 (51 plan + 18 races/foreign-key/reserved-edge).
 
+## A flake this phase introduced, found in final verification
+
+Final verification failed on `pnpm test:db`, and the cause was Phase 5A's own
+fixture change. It is recorded here in full because it also bears on the mutation
+ledger below.
+
+**What broke.** `makeJobRevisable` previously wrote a synthetic string into
+`GenerationJob.currentDeliverableVersionId`, which is idempotent under
+concurrency. With the composite foreign key it must create a real
+`GenerationDeliverableVersion` instead, and `seedPriorDeliverable` did that as
+read-then-create. In `generation-regeneration-entitlement.db.test.ts` the helper
+`admitRegen` re-armed the job *inside* each of two deliberately concurrent calls,
+so both re-arms raced: both observed no version, both inserted ordinal 1, and one
+lost on `(generationJobId, ordinal)`. The unique violation escaped as a rejected
+promise.
+
+**Measured, not assumed.** Six isolated runs of that one test: **three failures**
+— roughly 50%. Two distinct signatures, and both were diagnostic:
+`['fulfilled','rejected']` (the unique violation) and `expected [] to have a
+length of 1` (zero admissions, because the interleaved re-arms left the job
+non-revisable for both callers).
+
+**Two fixes, both test-only. No production behaviour changed.**
+
+1. `seedPriorDeliverable` now inserts with `skipDuplicates` and re-reads the
+   winner's row on a collision. A fixture that explodes under contention makes
+   every concurrency test around it flaky for a reason unrelated to what the test
+   asserts.
+2. The concurrency test re-arms **once, before** the race, and then races only
+   the two `admitUserRegeneration` calls. Re-arming inside them put the *fixture*
+   in the race, which is not the rule under test.
+
+The second fix changed what the loser's outcome may be, and the test now says so
+rather than pinning the scheduler: the loser is refused under the job lock by
+either `JOB_NOT_REVISABLE` (the winner already moved the job) or
+`REGENERATION_ALREADY_ACTIVE` (the winner's request is in flight). Both are
+correct, and the invariant that matters is unchanged and still asserted —
+**exactly one `ADMITTED`, exactly one stored request at ordinal 1, and no
+database error escaping as a business outcome.**
+
+Ordering-dependence in that test pre-dates Phase 5A; the unique-violation failure
+mode does not. This phase made a latent flake frequent, and the fix removes both.
+
+Determinism after the fix: **10/10 consecutive passes** of the isolated suite,
+then **3/3 consecutive passes** of the entire 33-file DB suite.
+
 ## Mutation ledger
 
-_(filled in below)_
+One **complete** run of the whole ledger, not an impacted subset.
+
+> **Caveat, stated plainly.** The ledger ran *before* the flake above was found,
+> against the version of `generation-regeneration-entitlement.db.test.ts` that
+> failed roughly half the time. The harness kills a mutation whenever any suite
+> reports a failure, so a mutation that should have survived could have been
+> recorded as `KILLED` by that flake rather than by the defect it injected. The
+> 264/264 result below is therefore **not fully trustworthy as evidence**, and I
+> am not presenting it as if it were. It is reported as run; re-running it
+> against the now-deterministic suite is the only thing that would restore its
+> value, and that decision is recorded as outstanding.
+
+| | |
+| --- | --- |
+| Mutations run | **264** |
+| Killed | **264** |
+| Survivors | **0** |
+| Anchor-missing | **0** |
+
+All 227 pre-existing definitions were preserved unchanged; M227–M263 are this
+phase's 37 additions. Every one of the 37 is killed by the test suites, none by
+`typecheck` — this phase's defects are behavioural, not shape violations, and a
+mutation that only failed to compile would not have proved a test existed.
+
+Runtime was measured before committing to a complete run rather than assumed: a
+single timed mutation took 67s, projecting ~4.9 hours for 264. That is inside the
+12–14 hour class the work package set as the threshold, so no substitution was
+requested.
+
+### What the 37 cover
+
+| Area | Mutations |
+| --- | --- |
+| Per-scene authorities (scene `READY`, request `DELIVERED`, attempt `OUTPUT_VERIFIED`, `VALID` verdict, receipt binding on both axes) | M227–M231, M234, M235 |
+| Latest-attempt rule (`createdAt` substituted for the ordinal; the restriction removed from both sites) | M232, M233 |
+| Reservation and pointer cycle authority | M236–M238 |
+| The current deliverable pointer published during planning | M239 |
+| Caller-supplied ordinal | M240 |
+| Idempotency and the partial-plan defect | M241–M244 |
+| The job row lock and the tenant predicate | M245, M246 |
+| Deterministic scene order; the empty-job refusal; source-history immutability | M247–M249 |
+| Every fingerprint tuple dimension, the target triple, the versioned prefix, the order and duplicate rules | M250–M260 |
+| The three reserved job edges | M261–M263 |
+
+### Two redundant guards, reported rather than hidden
+
+Two guards in `proveSceneInput` cannot be killed *individually*, and the reason
+is a property of the code rather than a gap in the tests. Both are stated here
+rather than left to look like clean kills.
+
+**The latest-attempt comparison.** The SQL join already restricts the attempt to
+`MAX(attemptOrdinal)`, so `row.attemptOrdinal !== row.maxAttemptOrdinal` can
+never be the sole cause of a refusal. Removing either site alone changes nothing
+observable. **M233 therefore removes both**, and the behaviour it breaks is real:
+with no restriction, a superseded request yields two rows for one scene, the
+duplicate-scene rule fires, and the admission raises
+`PLAN_INPUT_ORDER_INVALID`. The positive direction is pinned separately by a DB
+test in which the newer attempt by ordinal is deliberately the *older* one by
+`createdAt`, so the two authorities disagree and the plan says which was used —
+that test is what kills M232.
+
+**The delivered-pointer null check.** Every join below the Scene is an outer
+join, so a Scene with no `currentDeliveredRequestId` nulls the request, the
+attempt and the verdict together. Any downstream guard catches it, which means
+`row.currentDeliveredRequestId === null` alone is unreachable as a cause. M229
+removes the whole chain down to the verdict, and *that* is killable: the receipt
+comparison then runs against a null digest and raises
+`SOURCE_RECEIPT_BINDING_CONFLICT` where the suite expects `NOT_ELIGIBLE`.
+
+Both guards are kept. They document different facts, they fail closed, and the
+cost of keeping them is one honest note rather than a removed defence.
+
+### Restoration
+
+Verified after the harness exited, not asserted:
+
+```text
+mutation/harness processes         0
+sha256sum -c pre-ledger snapshot   657 files checked, 0 mismatches
+git status --short                 empty
+git diff --check                   empty
+HEAD                               d5edef3 (the Phase 5A commit)
+```
+
+The first process check appeared to report one match; that was this session's own
+shell, whose command line contained the harness name as an argument. A re-check
+naming the full process lines showed no matching process and no `python3` process
+at all.
 
 ## Carried forward
 

@@ -53,6 +53,23 @@ object, no unit consumed, and no scheduler or runner exists.
   moved by planning: the customer keeps the video they already have until a
   validated replacement is published.
 
+### Verified
+
+Complete mutation ledger: **264 run, 264 killed, 0 survivors, 0 anchor-missing**
+— all 227 pre-existing definitions preserved, plus 37 new ones covering the
+per-scene authorities, the latest-attempt rule, the reservation cycle, the
+current-pointer restraint, idempotency, the job lock, every fingerprint
+dimension and the three reserved edges. Two structurally redundant guards are
+documented in `docs/phase-5a-completion.md` rather than reported as clean kills.
+
+That ledger ran before final verification found a flake this phase introduced in
+`generation-regeneration-entitlement.db.test.ts` (~50% failure rate, caused by two
+concurrent fixture re-arms colliding on the new deliverable-version insert). The
+flake is fixed test-only and the suite is now green on three consecutive full
+runs, but because the harness treats any suite failure as a kill, the 264/264
+tally is reported with that caveat rather than as settled evidence. See
+`docs/phase-5a-completion.md`.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 
 Detail in `docs/phase-4c3b2h3b6c-completion.md` and ADR-0048. Closes the two

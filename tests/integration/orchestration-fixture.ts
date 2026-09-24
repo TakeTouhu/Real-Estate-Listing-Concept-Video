@@ -402,13 +402,29 @@ export async function seedPriorDeliverable(
       requestedDurationSeconds: true,
     },
   });
-  await prisma.generationDeliverableVersion.create({
-    data: {
-      id,
-      generationJobId,
-      ordinal: 1,
-      inputFingerprint: computeDeliverableInputFingerprint(job, []),
-    },
+  // Read-then-create is not a decision under concurrency: two callers re-arming
+  // the same job can both observe no version and then collide on
+  // `(generationJobId, ordinal)`. The loser must get the winner's row, not a
+  // unique violation dressed up as a test failure — a fixture that explodes
+  // under contention makes every concurrency test around it flaky for a reason
+  // that has nothing to do with what the test asserts.
+  const created = await prisma.generationDeliverableVersion.createMany({
+    data: [
+      {
+        id,
+        generationJobId,
+        ordinal: 1,
+        inputFingerprint: computeDeliverableInputFingerprint(job, []),
+      },
+    ],
+    skipDuplicates: true,
   });
-  return id;
+  if (created.count === 1) return id;
+
+  const winner = await prisma.generationDeliverableVersion.findFirstOrThrow({
+    where: { generationJobId },
+    orderBy: { ordinal: "desc" },
+    select: { id: true },
+  });
+  return winner.id;
 }

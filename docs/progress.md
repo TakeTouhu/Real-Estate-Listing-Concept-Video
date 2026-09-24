@@ -1095,8 +1095,16 @@ and ADR-0020.
   unfrozen, because a guess recorded now would store a policy nobody chose.
   `COMPOSITION_PENDING -> COMPOSING` and `COMPOSING -> DELIVERABLE_VALIDATING`
   are reserved ahead of their Phase 5B owners so the generic API cannot walk a
-  job to `DELIVERABLE_VALIDATING` with no bytes produced. Detail in
-  `docs/phase-5a-completion.md` and ADR-0049.
+  job to `DELIVERABLE_VALIDATING` with no bytes produced.
+
+  Mutation ledger: one **complete** run — 264 run, 264 killed, 0 survivors, 0
+  anchor-missing, with all 227 earlier definitions preserved. Two guards in the
+  per-scene proof are structurally redundant and are reported as such rather than
+  counted as clean kills: the SQL join already restricts the attempt to
+  `MAX(attemptOrdinal)`, and the outer joins make the delivered-pointer null
+  check implied by every guard below it. Both are kept, and the mutations aimed
+  at them remove every site at once. Detail in `docs/phase-5a-completion.md` and
+  ADR-0049.
 - **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
   Phase 6B left. First, a planning refusal was an answer: the runner reported
   `NO_PLAN` and moved on, nothing durable recorded that the candidate had been
