@@ -16,6 +16,20 @@ import {
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { appendGenerationEvent } from "./orchestration-repositories";
+/**
+ * The cost-admission lock, taken first, with the key Phase 4C-3B-2F-1 chose.
+ *
+ * Reconciliation moves an organization's cycle exposure in both directions — a
+ * resolved acceptance turns uncertain cost into in-flight cost, a definitive
+ * rejection removes it entirely — so an authorization reading exposure while a
+ * conclusion lands would decide on a total that is mid-flight. Sharing the key
+ * makes the two serialize on the cycle they both account for.
+ *
+ * It is also what keeps all three phases free of deadlock. 2F-1 takes
+ * `advisory → reservation → attempt CAS`; 2G-1 takes the same three; this takes
+ * the same three. One order, no cycle.
+ */
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
 
 /**
  * Persistence for ending an attempt's uncertainty.
@@ -62,32 +76,6 @@ const attemptScope = (organizationId: string) => ({
 const reservationScope = (organizationId: string) => ({
   generationJob: { videoProject: { organizationId } },
 });
-
-/**
- * The cost-admission lock, taken first, with the key Phase 4C-3B-2F-1 chose.
- *
- * Reconciliation moves an organization's cycle exposure in both directions — a
- * resolved acceptance turns uncertain cost into in-flight cost, a definitive
- * rejection removes it entirely — so an authorization reading exposure while a
- * conclusion lands would decide on a total that is mid-flight. Sharing the key
- * makes the two serialize on the cycle they both account for.
- *
- * It is also what keeps all three phases free of deadlock. 2F-1 takes
- * `advisory → reservation → attempt CAS`; 2G-1 takes the same three; this takes
- * the same three. One order, no cycle.
- */
-async function acquireCostAdmissionLock(
-  tx: Tx,
-  organizationId: string,
-  billingCycleKey: string,
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT pg_advisory_xact_lock(
-      hashtext(${`paid-submission:${organizationId}`}),
-      hashtext(${`cycle:${billingCycleKey}`})
-    )::text AS locked
-  `;
-}
 
 /** The cycle this attempt's cost is attributed to, from its own reservation. */
 async function billingCycleKeyForAttempt(

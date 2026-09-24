@@ -1,7 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  AutomaticMediaFailureRecoveryRunner,
   AutomaticMediaRecoveryPricingPlanner,
   MAX_AUTOMATIC_MEDIA_RECOVERY_ATTEMPTS_PER_REQUEST,
   MEDIA_INTEGRITY_MISMATCH_SYSTEM_RECOVERY_REASON,
@@ -846,65 +845,6 @@ RUN("bounded automatic media-failure SYSTEM_RECOVERY admission", () => {
       expect(JSON.stringify(candidate)).not.toMatch(/sunlit|cinematic|org\/|https?:/);
     });
   });
-
-  // -------------------------------------------------------------------------
-
-  describe("the dormant runner against a live database", () => {
-    it("plans outside the transaction and admits one recovery per candidate", async () => {
-      const chain = await seedFailedAttempt();
-      let planned = 0;
-      const runner = new AutomaticMediaFailureRecoveryRunner({
-        repository,
-        planner: {
-          async plan(candidate) {
-            planned += 1;
-            // Proof the planner runs with no transaction open: an independent
-            // client can read and write freely while planning is in flight.
-            await prisma.$queryRaw`SELECT 1`;
-            return planner().plan(candidate);
-          },
-        },
-        ids: {
-          nextAttemptId: () => "sgen_runner_recovery",
-          nextPricingSnapshotId: () => "price_runner_recovery",
-        },
-        context: () => ctx({ correlationId: "corr_runner_recovery" }),
-      });
-
-      const report = await runner.runOnce(50);
-      expect(report.admitted).toBe(1);
-      expect(report.noPlan).toBe(0);
-      expect(planned).toBe(1);
-      expect(await attemptsOf(chain.requestId)).toHaveLength(2);
-
-      // A second pass finds nothing: the cap is spent.
-      expect(await runner.runOnce(50)).toMatchObject({ admitted: 0, noPlan: 0 });
-    });
-
-    it("reports a candidate it cannot safely plan instead of admitting it", async () => {
-      const chain = await seedFailedAttempt();
-      const runner = new AutomaticMediaFailureRecoveryRunner({
-        repository,
-        // No usable rate: a recovery that could never be armed is not planned.
-        planner: planner(fakeFx(null)),
-        ids: {
-          nextAttemptId: () => "sgen_never_planned",
-          nextPricingSnapshotId: () => "price_never_planned",
-        },
-        context: () => ctx(),
-      });
-
-      const report = await runner.runOnce(50);
-      expect(report.admitted).toBe(0);
-      expect(report.noPlan).toBe(1);
-      expect(report.outcomes[0]?.result).toEqual({
-        kind: "NO_PLAN",
-        code: "NO_SAFE_CURRENT_PRICING",
-      });
-      expect(await attemptsOf(chain.requestId)).toHaveLength(1);
-    });
-  });
-
   // -------------------------------------------------------------------------
 
   describe("two workers on the same terminal failure", () => {

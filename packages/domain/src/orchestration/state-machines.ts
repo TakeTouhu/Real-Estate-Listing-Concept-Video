@@ -45,7 +45,21 @@ const JOB_TRANSITIONS: Readonly<Record<GenerationJobState, readonly GenerationJo
   CREATED: ["RESERVING", "CANCELLED", "FAILED_TERMINAL"],
   RESERVING: ["RESERVED", "CANCELLED", "FAILED_TERMINAL"],
   RESERVED: ["GENERATING", "CANCELLED", "FAILED_TERMINAL"],
-  GENERATING: ["SCENES_READY", "FAILED_TERMINAL"],
+  // `GENERATING -> DELIVERABLE_READY` is the **revision rollback** edge, and it
+  // is the only way a job that already delivered a video gets that video back
+  // after a regeneration fails. Without it the table forces a choice between two
+  // lies: fail a job whose customer still holds a perfectly good deliverable, or
+  // strand it in GENERATING forever.
+  //
+  // It is not a shortcut past composition. A job reaching DELIVERABLE_READY for
+  // the *first* time still travels SCENES_READY -> ... -> DELIVERABLE_VALIDATING,
+  // and that edge remains reserved for Transaction G. This one is legal only
+  // because the deliverable it returns to already exists and never stopped
+  // existing — `currentDeliverableVersionId` is unchanged across the rollback.
+  //
+  // Legality is not permission: the generic job repository refuses this edge, and
+  // Transaction H is the only thing that may persist it.
+  GENERATING: ["SCENES_READY", "DELIVERABLE_READY", "FAILED_TERMINAL"],
   SCENES_READY: ["COMPOSITION_PENDING", "FAILED_TERMINAL"],
   COMPOSITION_PENDING: ["COMPOSING", "FAILED_TERMINAL"],
   COMPOSING: ["DELIVERABLE_VALIDATING", "FAILED_TERMINAL"],

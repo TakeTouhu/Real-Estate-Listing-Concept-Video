@@ -30,23 +30,6 @@ import {
   type Yen,
 } from "@app/domain";
 import { armProviderBoundaryWithin } from "./orchestration-repositories";
-
-/**
- * Persistence for the paid submission authorization gate.
- *
- * Everything one decision reads, and the serialization point that makes two
- * decisions safe, in one place. There is no provider client here and no HTTP:
- * this module reads rows and runs one compare-and-set.
- *
- * It also performs no pricing arithmetic. Amounts are read, range-checked at the
- * `BIGINT` boundary, and handed to the domain's `verifyPersistedPricingSnapshot`,
- * which re-derives the whole snapshot through the same calculation admission
- * used. A repository that recomputed a cost here would become a second pricing
- * authority, and the two would drift.
- */
-
-type Tx = Prisma.TransactionClient;
-
 /**
  * The organization + billing-cycle cost-admission lock.
  *
@@ -70,18 +53,23 @@ type Tx = Prisma.TransactionClient;
  * which takes no row lock of its own beyond the CAS it performs. There is
  * therefore no cycle: nothing acquires a 2E lock and then waits for this one.
  */
-async function acquireCostAdmissionLock(
-  tx: Tx,
-  organizationId: string,
-  billingCycleKey: string,
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT pg_advisory_xact_lock(
-      hashtext(${`paid-submission:${organizationId}`}),
-      hashtext(${`cycle:${billingCycleKey}`})
-    )::text AS locked
-  `;
-}
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
+
+/**
+ * Persistence for the paid submission authorization gate.
+ *
+ * Everything one decision reads, and the serialization point that makes two
+ * decisions safe, in one place. There is no provider client here and no HTTP:
+ * this module reads rows and runs one compare-and-set.
+ *
+ * It also performs no pricing arithmetic. Amounts are read, range-checked at the
+ * `BIGINT` boundary, and handed to the domain's `verifyPersistedPricingSnapshot`,
+ * which re-derives the whole snapshot through the same calculation admission
+ * used. A repository that recomputed a cost here would become a second pricing
+ * authority, and the two would drift.
+ */
+
+type Tx = Prisma.TransactionClient;
 
 /**
  * The cycle an attempt's cost is attributed to.

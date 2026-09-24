@@ -230,7 +230,70 @@ export type AdmitUserRegenerationOutcome =
   | { readonly kind: "ADMITTED"; readonly request: SceneGenerationRequestRecord }
   | { readonly kind: "SCENE_NOT_FOUND" }
   | { readonly kind: "ENTITLEMENT_EXHAUSTED" }
-  | { readonly kind: "REGENERATION_ALREADY_ACTIVE" };
+  /**
+   * Another regeneration is already in flight **anywhere in this job**, not only
+   * on this scene.
+   *
+   * The MVP serializes revision at the job boundary, and the reason is a gap in
+   * what the schema can currently prove. There is no revision-cycle identity and
+   * no durable mapping from the delivered version to the exact scene request
+   * versions composed into it, so with two revisions in flight and one failing,
+   * nothing can say whether returning the job to its previous deliverable would
+   * discard the other scene's valid replacement. Inventing a revision-cycle
+   * model to answer that is a product decision, not something to guess at inside
+   * a settlement transaction — so the second revision waits instead.
+   */
+  | { readonly kind: "REGENERATION_ALREADY_ACTIVE" }
+  /**
+   * The job is not in a state a revision can start from — it is not
+   * `DELIVERABLE_READY`, holds no deliverable version, or its entitlement is not
+   * `CONSUMED`. A revision replaces a delivered video; without one there is
+   * nothing to revise.
+   */
+  | { readonly kind: "JOB_NOT_REVISABLE" }
+  /**
+   * The scene is not `READY`, or its delivered pointer does not name a
+   * `DELIVERED` request belonging to it.
+   */
+  | { readonly kind: "SCENE_NOT_REVISABLE" };
+
+/**
+ * How a pending revision is abandoned.
+ *
+ * Two endings rather than one, because they mean different things to a customer
+ * and to an operator: `CANCELLED` is "nobody wants this any more", and
+ * `FAILED_TERMINAL` is "the platform could not proceed". Only the second stamps
+ * `failedAt`.
+ */
+export interface RollBackPendingUserRegenerationInput {
+  readonly generationSceneRequestId: string;
+  readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+  /** The one instant every row in the rollback records. */
+  readonly rolledBackAt: number;
+}
+
+export type RollBackPendingUserRegenerationOutcome =
+  | {
+      readonly kind: "ROLLED_BACK";
+      readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+      readonly rolledBackAt: number;
+    }
+  /**
+   * The exact already-rolled-back shape. Every row of it — a partial match is a
+   * defect and raises, because half an applied rollback means an invariant this
+   * application believes it cannot violate was violated.
+   */
+  | {
+      readonly kind: "ALREADY_ROLLED_BACK";
+      readonly terminalState: "CANCELLED" | "FAILED_TERMINAL";
+    }
+  /**
+   * The durable facts do not authorize a rollback: the request is not a pending
+   * regeneration, it already has an attempt, or the Job, Scene or reservation is
+   * not in the shape revision start leaves behind. Ordinary, not an error.
+   */
+  | { readonly kind: "NOT_ROLLBACKABLE" }
+  | { readonly kind: "NOT_FOUND" };
 
 /**
  * One provider attempt, in the orchestration vocabulary.
@@ -391,25 +454,35 @@ export interface GenerationTransitionEventRecord {
  * `RESERVED` job with no reservation, which is exactly the state Transaction B
  * exists to prevent.
  *
- * Three groups, for three reasons:
+ * The groups, and their reasons:
  *
  * - **`RESERVING -> RESERVED` on a job** belongs to `reserve()`.
  * - **`PENDING -> GENERATING` on a request** belongs to attempt admission: the
  *   request starts generating *because* an attempt exists.
- * - **`GENERATING -> DELIVERED` on a request** belongs to Transaction F, which
- *   now exists. It stays reserved here because delivery is only safe as a whole:
- *   the durable media verdict, the byte-identity recheck, the Scene transition
- *   and the delivered pointer are applied in the same commit, and a generic
- *   route to `DELIVERED` would write one of those facts without the others.
+ * - **`GENERATING -> DELIVERED` on a request**, **`GENERATING -> SCENES_READY`
+ *   on a job** and **`GENERATING -> READY` on a scene** belong to Transaction F.
+ *   Delivery is only safe as a whole: the durable media verdict, the
+ *   byte-identity recheck, the Scene transition, the delivered pointer and the
+ *   job's own move happen in one commit, and a generic route to any one of them
+ *   would write that fact without the others.
+ * - **`DELIVERABLE_READY -> REVISING` and `REVISING -> GENERATING` on a job**,
+ *   with **`READY -> REVISING` on a scene**, belong to revision start. A job
+ *   parked in `REVISING` with no request revising it is a state nothing else in
+ *   the system knows how to finish.
+ * - **`GENERATING -> DELIVERABLE_READY` on a job** and **`REVISING -> READY` on
+ *   a scene** belong to Transaction H, the revision rollback. `REVISING -> READY`
+ *   has two owners — Transaction F when the new rendition lands, Transaction H
+ *   when it never will — and both write the scene's delivered pointer, one
+ *   replacing it and one proving it unchanged.
  * - **`DELIVERABLE_VALIDATING -> DELIVERABLE_READY` with `-> CONSUMED`** belong
  *   to Transaction G, which is still deferred. `CONSUMED` spends a customer's
  *   unit, and the quota ledger that makes it safe does not exist yet.
  *
- * The pure state machines still describe these edges. For Transaction G they are
- * legal moves with no persistence route yet, which is the honest description of
- * deferred work; for Transaction F the route exists but lives behind the one
- * operation that applies the whole fact. Tests needing such rows seed them
- * through raw Prisma.
+ * The pure state machines still describe every one of these edges, and that
+ * separation is deliberate: *legal* and *who may persist it* are different
+ * questions, and collapsing them would mean deleting a real edge from the domain
+ * to express an access rule. Tests needing such rows seed them through raw
+ * Prisma.
  */
 export type ReservedTransitionOutcome = { readonly kind: "TRANSITION_RESERVED" };
 
@@ -427,8 +500,11 @@ export interface GenerationJobRepository {
   ): Promise<CreateGenerationJobOutcome>;
   findById(organizationId: string, id: string): Promise<GenerationJob | null>;
   /**
-   * Refuses `RESERVING -> RESERVED` (Transaction B) and
-   * `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` (Transaction G, deferred).
+   * Refuses `RESERVING -> RESERVED` (Transaction B),
+   * `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` (Transaction G, deferred),
+   * `GENERATING -> SCENES_READY` (Transaction F),
+   * `DELIVERABLE_READY -> REVISING` and `REVISING -> GENERATING` (revision
+   * start), and `GENERATING -> DELIVERABLE_READY` (Transaction H).
    */
   transition(input: {
     readonly organizationId: string;
@@ -480,6 +556,10 @@ export interface GenerationSceneRepository {
     organizationId: string,
     generationJobId: string,
   ): Promise<readonly GenerationScene[]>;
+  /**
+   * Refuses `GENERATING -> READY` (Transaction F), `READY -> REVISING`
+   * (revision start) and `REVISING -> READY` (Transaction F or Transaction H).
+   */
   transition(input: {
     readonly organizationId: string;
     readonly id: string;
@@ -487,7 +567,7 @@ export interface GenerationSceneRepository {
     readonly expectedVersion: number;
     readonly nextState: GenerationSceneState;
     readonly context: TransitionContext;
-  }): Promise<TransitionOutcome<GenerationScene>>;
+  }): Promise<TransitionOutcome<GenerationScene> | ReservedTransitionOutcome>;
 }
 
 export interface SceneGenerationRequestRepository {
@@ -515,14 +595,35 @@ export interface SceneGenerationRequestRepository {
     context: TransitionContext,
   ): Promise<AdmitUserRegenerationOutcome>;
 
+  /**
+   * Abandon a revision that never started generating, and put the job back.
+   *
+   * The counterpart of `admitUserRegeneration`, and it exists for the same
+   * reason that one does: revision start moves three aggregates together, so
+   * unwinding it must move the same three together. Terminalizing the request
+   * alone leaves the Scene `REVISING` and the Job `GENERATING` with nothing that
+   * will ever advance them, and no safe repair authority afterwards.
+   *
+   * Only for a `PENDING` regeneration with **zero attempts**. Once an attempt
+   * exists the request is generating against a provider and its ending belongs
+   * to Transaction H, which has the media verdict to justify it.
+   */
+  rollBackPendingUserRegeneration(
+    organizationId: string,
+    input: RollBackPendingUserRegenerationInput,
+    context: TransitionContext,
+  ): Promise<RollBackPendingUserRegenerationOutcome>;
+
   findById(organizationId: string, id: string): Promise<SceneGenerationRequestRecord | null>;
   listBySceneId(
     organizationId: string,
     generationSceneId: string,
   ): Promise<readonly SceneGenerationRequestRecord[]>;
   /**
-   * Refuses `PENDING -> GENERATING` (attempt admission owns it) and
-   * `GENERATING -> DELIVERED` (Transaction F owns it).
+   * Refuses `PENDING -> GENERATING` (attempt admission owns it),
+   * `GENERATING -> DELIVERED` (Transaction F owns it), and — for a
+   * `USER_REGENERATION` only — `PENDING -> CANCELLED` and
+   * `PENDING -> FAILED_TERMINAL`, which `rollBackPendingUserRegeneration` owns.
    */
   transition(input: {
     readonly organizationId: string;

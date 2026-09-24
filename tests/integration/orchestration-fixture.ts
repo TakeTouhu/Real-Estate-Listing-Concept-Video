@@ -143,8 +143,10 @@ export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   await prisma.generationScene.updateMany({ data: { currentDeliveredRequestId: null } });
   await prisma.generationTransitionEvent.deleteMany({});
   await prisma.generationPricingSnapshot.deleteMany({});
-  // Before the attempts they belong to: the FK is RESTRICT on purpose, so
-  // durable validation history cannot be erased through a cascade.
+  // Before the validations they belong to, which come before the attempts: both
+  // foreign keys are RESTRICT on purpose, so durable failure history cannot be
+  // erased through a cascade.
+  await prisma.managedOutputMediaFailureResolution.deleteMany({});
   await prisma.managedOutputMediaValidation.deleteMany({});
   await prisma.sceneGeneration.deleteMany({
     where: { videoProjectId: { in: [PROJECT_A, PROJECT_B] } },
@@ -211,12 +213,19 @@ export async function dropTenants(prisma: PrismaClient): Promise<void> {
   await prisma.property.deleteMany({ where: { id: { in: [PROP_A, PROP_B] } } });
 }
 
-/** A full job → scene → initial request chain in one organization. */
+/**
+ * A full job → scene → initial request chain in one organization.
+ *
+ * `revisable` additionally brings it to the state a revision can start from —
+ * see `makeJobRevisable`. Off by default, because most callers want the plain
+ * pre-delivery chain.
+ */
 export async function seedChain(
   prisma: PrismaClient,
   suffix: string,
   organizationId: string = ORG_A,
   videoProjectId: string = PROJECT_A,
+  options: { readonly revisable?: boolean } = {},
 ) {
   const repos = repositories(prisma);
   const created = await repos.jobs.create(
@@ -260,5 +269,79 @@ export async function seedChain(
   );
   if (request === null) throw new Error("request not created");
 
-  return { job: created.job, scene, request };
+  const chain = { job: created.job, scene, request };
+  if (options.revisable === true) await makeJobRevisable(prisma, chain, suffix);
+  return chain;
+}
+
+/**
+ * Bring a seeded chain to the state a revision can actually start from.
+ *
+ * Phase 4C-3B-2H-3B-6C made `admitUserRegeneration` the whole revision-start
+ * fact, so it now requires what a revision logically requires: a job that has
+ * delivered something (`DELIVERABLE_READY` with a deliverable version), the
+ * consumed hold that paid for it, and a scene whose delivered pointer names a
+ * `DELIVERED` request of its own.
+ *
+ * Before that, a regeneration could be admitted against a job that had never
+ * delivered anything — which is why every pre-6C fixture needs this. Written
+ * with raw statements on purpose: the edges involved are reserved from the
+ * generic repositories precisely so no production caller can assemble this
+ * state, and a test fixture pretending otherwise would be testing a route that
+ * does not exist.
+ */
+export async function makeJobRevisable(
+  prisma: PrismaClient,
+  chain: { job: { id: string }; scene: { id: string }; request: { id: string } },
+  suffix: string,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "scene_generation_requests"
+       SET "state" = 'DELIVERED'::"SceneGenerationRequestState",
+           "deliveredAt" = CURRENT_TIMESTAMP,
+           "stateVersion" = "stateVersion" + 1
+     WHERE "id" = ${chain.request.id}
+  `;
+  await prisma.$executeRaw`
+    UPDATE "generation_scenes"
+       SET "state" = 'READY'::"GenerationSceneState",
+           "currentDeliveredRequestId" = ${chain.request.id},
+           "stateVersion" = "stateVersion" + 1
+     WHERE "id" = ${chain.scene.id}
+  `;
+  await prisma.$executeRaw`
+    UPDATE "generation_jobs"
+       SET "state" = 'DELIVERABLE_READY'::"GenerationJobState",
+           "currentDeliverableVersionId" = ${`gdv_${suffix}`},
+           "stateVersion" = "stateVersion" + 1
+     WHERE "id" = ${chain.job.id}
+  `;
+
+  const existing = await prisma.generationReservation.findUnique({
+    where: { generationJobId: chain.job.id },
+    select: { id: true },
+  });
+  if (existing === null) {
+    await prisma.generationReservation.create({
+      data: {
+        id: `genres_${suffix}`,
+        generationJobId: chain.job.id,
+        billingCycleKey: "2026-09",
+        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
+        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        reservedTotalVideoUnits: 1,
+        reservedHighQualityUnits: 1,
+        state: "CONSUMED",
+        consumedAt: new Date(),
+      },
+    });
+  } else {
+    await prisma.$executeRaw`
+      UPDATE "generation_reservations"
+         SET "state" = 'CONSUMED'::"GenerationReservationState",
+             "consumedAt" = CURRENT_TIMESTAMP,
+             "stateVersion" = "stateVersion" + 1
+       WHERE "id" = ${existing.id}
+    `;
+  }
 }

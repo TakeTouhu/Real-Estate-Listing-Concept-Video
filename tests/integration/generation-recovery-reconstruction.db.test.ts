@@ -20,6 +20,7 @@ import {
   seedTenants,
   STORYBOARD_SCENE,
   wipeOrchestration,
+  makeJobRevisable,
 } from "./orchestration-fixture";
 
 /**
@@ -159,6 +160,12 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
       data: { state: "DELIVERED", stateVersion: 2, deliveredAt: new Date("2026-09-29T12:00:00.000Z") },
     });
 
+    // Revision start now needs the delivered job the fixture is modelling.
+    await makeJobRevisable(
+      writer,
+      { job: { id: JOB }, scene: { id: SCENE }, request: { id: REQUEST_INITIAL } },
+      "rec",
+    );
     const regen = await repos.requests.admitUserRegeneration(
       ORG_A,
       { id: REQUEST_REGEN, generationSceneId: SCENE, requestedByUserId: "usr_customer" },
@@ -266,14 +273,20 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
     // Which customer billing cycle, and how many units are held?
     const reservation = await repos.reservations.findByJobId(ORG_A, JOB);
     expect(reservation?.billingCycleKey).toBe("2026-09");
-    expect(reservation?.state).toBe("RESERVED");
+    // CONSUMED, not RESERVED: this fixture now models a scene being *revised*,
+    // and a revision only exists because a delivered video already spent the
+    // hold. The reconstruction question is unchanged — it is still "what was the
+    // customer's entitlement doing when this attempt ran".
+    expect(reservation?.state).toBe("CONSUMED");
     expect(reservation?.reservedTotalVideoUnits).toBe(2);
     expect(reservation?.reservedHighQualityUnits).toBe(2);
 
     // Which logical scene? Its provenance survives the storyboard scene it
     // names having been deleted by recomposition.
     const scene = await repos.scenes.findById(ORG_A, SCENE);
-    expect(scene?.state).toBe("GENERATING");
+    // REVISING since revision start became atomic: admitting the regeneration
+    // moves the scene in the same commit that creates the request.
+    expect(scene?.state).toBe("REVISING");
     expect(scene?.sourceStoryboardSceneId).toBe(STORYBOARD_SCENE);
     expect(
       await reader.storyboardScene.findUnique({ where: { id: STORYBOARD_SCENE } }),

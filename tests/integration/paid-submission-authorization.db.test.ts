@@ -31,6 +31,7 @@ import {
   seedTenants,
   STORYBOARD_SCENE,
   wipeOrchestration,
+  makeJobRevisable,
 } from "./orchestration-fixture";
 
 /**
@@ -384,6 +385,8 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           outputVerifiedAt: new Date(),
         },
       });
+      // A revision now requires a job that actually delivered something.
+      await makeJobRevisable(prisma, chain, suffix);
       const regen = await repos.requests.admitUserRegeneration(
         ORG_A,
         {
@@ -1290,6 +1293,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           outputVerifiedAt: new Date(),
         },
       });
+      await makeJobRevisable(prisma, chain, "lockregen2");
       const regen = await repositories(prisma).requests.admitUserRegeneration(
         ORG_A,
         {

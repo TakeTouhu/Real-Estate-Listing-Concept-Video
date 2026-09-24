@@ -3,6 +3,66 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
+
+Detail in `docs/phase-4c3b2h3b6c-completion.md` and ADR-0048. Closes the two
+holes Phase 6B left: a planning refusal that was treated as an answer, and an
+exhausted automatic recovery that settled nothing. **No production scheduler
+exists**: nothing constructs the coordinator, schedules it, or calls it.
+
+### Added
+
+- **Durable resolution work** (`ManagedOutputMediaFailureResolution`, migration
+  13) — one row per terminal media verdict, with `PENDING`/`RUNNING`/`RESOLVED`,
+  four resolution kinds, a lease, a retry instant and the closed
+  `MediaRecoveryPlanRefusalCode` vocabulary. Created lazily on first claim; no
+  backfill, and database CHECK constraints keep an impossible row impossible.
+- **`MediaFailureResolutionRunner`** — the single dormant coordinator:
+  claim → classify → maybe plan → admit, settle, defer or resolve.
+- **Transaction H** (`settleExhaustedMediaFailure`) — every customer consequence
+  of an exhausted media failure in one commit, including resolving the work row.
+- **`cost-admission-lock.ts`** — the two-key advisory-lock formula that existed
+  in four repositories, extracted into one module private to `@app/database`.
+- **`GenerationJob GENERATING -> DELIVERABLE_READY`** — the revision rollback
+  edge, legal in the pure state machine and reserved from the generic repository.
+
+### Changed
+
+- **`admitUserRegeneration` is now the whole revision-start fact.** It requires a
+  job that actually delivered something and moves the Scene `READY -> REVISING`
+  and the Job `DELIVERABLE_READY -> REVISING -> GENERATING` in the same commit,
+  recording both job moves. This is the `REVISING -> GENERATING` actor Phases 6A
+  and 6B both carried forward as a blocker.
+- **Phase 6B's recovery runner was deleted**, not wrapped. Two runners would
+  leave two things a composition root could wire, and the one without the
+  durable deferral is the one it would most plausibly wire.
+- **The generic transition APIs close their remaining escape hatches** — the Job,
+  Scene and Request edges that Transaction F, revision start and Transaction H
+  own now return `TRANSITION_RESERVED`. `FAILED_TERMINAL` stays generic.
+
+### Guarantees
+
+- **A provider or system failure never consumes the customer's Unit.** An
+  `INITIAL` exhaustion fails the request, scene and job and RELEASES the hold; a
+  `USER_REGENERATION` exhaustion fails only the new request and leaves the
+  `CONSUMED` reservation untouched, because it belongs to the video the customer
+  still has.
+- **A failed regeneration keeps the delivered video.** The scene's delivered
+  pointer and the job's deliverable pointer are proved unchanged across the
+  rollback, and the same regeneration ordinal becomes available again.
+- **`NO_PLAN` defers rather than terminalizes**, with a future `nextAttemptAt`
+  that removes the row from discovery until it is due. That predicate is the
+  whole fix for Phase 6B's bounded-sweep starvation.
+- **One settlement, exactly once.** An exact replay is `ALREADY_SETTLED` with no
+  version, event or timestamp change; a partial shape raises rather than being
+  repaired.
+
+### Not done, on purpose
+
+Concurrent revision cycles (one active regeneration per job is an MVP
+constraint), quota `CONSUME`, composition, production scheduler/cron/worker, FX
+network integration, provider execution, credential wiring.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-6B: Bounded automatic media-failure recovery
 
 Detail in `docs/phase-4c3b2h3b6b-completion.md` and ADR-0047. Gives a durable

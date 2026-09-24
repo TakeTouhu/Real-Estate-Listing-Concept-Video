@@ -389,7 +389,7 @@ enum SceneGenerationState {
 /// Tenant scope is inherited through VideoProject, never denormalized — the
 /// same model storyboard_scenes uses.
 model SceneGeneration {
-  id                                String                        @id
+  id                                String                                @id
   videoProjectId                    String
   /// Provenance only — no FK. Recomposition replaces storyboard scenes.
   sourceStoryboardSceneId           String
@@ -443,7 +443,7 @@ model SceneGeneration {
   /// Frozen so a renderer change cannot alter an already-admitted attempt.
   /// Customer-authored text. Never logged, audited, or put on a queue payload.
   requestRenderedPrompt             String?
-  state                             SceneGenerationState          @default(QUEUED)
+  state                             SceneGenerationState                  @default(QUEUED)
   /// --- Phase 4C-3B-2E orchestration linkage --------------------------------
   /// Every column below is NULLABLE, and that is a migration decision rather
   /// than a modelling one. Rows admitted before this phase have no logical
@@ -474,7 +474,7 @@ model SceneGeneration {
   /// than a rewrite of it: legacy rows keep the legacy vocabulary, because
   /// relabelling a historical state is a claim nobody can verify now.
   orchestrationState                GenerationAttemptState?
-  stateVersion                      Int                           @default(0)
+  stateVersion                      Int                                   @default(0)
   /// When this attempt crossed into SUBMITTING. Set exactly once. A row with
   /// this set has been at the provider boundary and must never return to QUEUED.
   submissionBoundaryEnteredAt       DateTime?
@@ -520,22 +520,27 @@ model SceneGeneration {
   outputSizeBytes                   BigInt?
   /// One post-lock service clock instant. Never provider- or caller-supplied.
   outputVerifiedAt                  DateTime?
-  createdAt                         DateTime                      @default(now())
-  updatedAt                         DateTime                      @updatedAt
+  createdAt                         DateTime                              @default(now())
+  updatedAt                         DateTime                              @updatedAt
   /// RESTRICT, not Cascade. A generation may record a paid provider attempt, so
   /// a future physical project deletion must resolve retention policy
   /// deliberately rather than silently erasing history through a cascade that
   /// happened to be in the schema. No physical deletion path exists today, so
   /// this changes no current behaviour (docs/decisions/TODO.md).
-  videoProject                      VideoProject                  @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
+  videoProject                      VideoProject                          @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
   /// RESTRICT again: the logical request must not be deletable while a provider
   /// attempt against it exists.
-  generationSceneRequest            SceneGenerationRequest?       @relation(fields: [generationSceneRequestId], references: [id], onDelete: Restrict)
+  generationSceneRequest            SceneGenerationRequest?               @relation(fields: [generationSceneRequestId], references: [id], onDelete: Restrict)
   pricingSnapshot                   GenerationPricingSnapshot?
   /// Optional, and absent is a meaningful state: an attempt that reached
   /// OUTPUT_VERIFIED before Phase 4C-3B-2H-3B-5 has no record, and the
   /// lifecycle runner discovers it rather than a backfill inventing one.
   mediaValidation                   ManagedOutputMediaValidation?
+  /// The resolution work items that named this attempt as the recovery they
+  /// produced. At most one in practice — the work is unique per validation and a
+  /// request receives one automatic recovery — but the relation is a list
+  /// because nothing in the schema makes that arithmetic true on its own.
+  mediaFailureRecoveryFor           ManagedOutputMediaFailureResolution[] @relation("MediaFailureRecoveryAttempt")
 
   @@unique([generationSceneRequestId, attemptOrdinal])
   @@index([videoProjectId])
@@ -943,11 +948,11 @@ enum ManagedOutputContainerFamily {
 }
 
 model ManagedOutputMediaValidation {
-  id                String                             @id
+  id                String                               @id
   /// One validation per attempt. The uniqueness is what makes two workers
   /// racing to create the first record resolvable: exactly one insert wins.
-  sceneGenerationId String                             @unique
-  status            ManagedOutputMediaValidationStatus @default(PENDING)
+  sceneGenerationId String                               @unique
+  status            ManagedOutputMediaValidationStatus   @default(PENDING)
   /// --- Immutable byte binding -----------------------------------------------
   /// Which bytes this verdict is about, frozen at creation. A validation answers
   /// a question about *specific* bytes; without naming them permanently, a
@@ -966,10 +971,10 @@ model ManagedOutputMediaValidation {
   /// assuming the owner died, not that the work must finish by then.
   leaseExpiresAt    DateTime?
   nextAttemptAt     DateTime?
-  attemptCount      Int                                @default(0)
+  attemptCount      Int                                  @default(0)
   /// Incremented on every transition. With `leaseToken` this is what makes a
   /// stale worker's late finalize match zero rows.
-  version           Int                                @default(0)
+  version           Int                                  @default(0)
   /// --- Terminal verdict -----------------------------------------------------
   invalidReason     ManagedOutputMediaInvalidReason?
   container         ManagedOutputContainerFamily?
@@ -983,15 +988,103 @@ model ManagedOutputMediaValidation {
   /// Zero is legal: a walkthrough with no audio track is valid media.
   audioStreamCount  BigInt?
   validatedAt       DateTime?
-  createdAt         DateTime                           @default(now())
-  updatedAt         DateTime                           @updatedAt
+  createdAt         DateTime                             @default(now())
+  updatedAt         DateTime                             @updatedAt
   /// RESTRICT, never Cascade. A validation record describes a possibly-paid
   /// attempt's output; a future physical deletion must resolve retention policy
   /// deliberately rather than erasing durable validation history through a
   /// cascade that happened to be in the schema.
-  sceneGeneration   SceneGeneration                    @relation(fields: [sceneGenerationId], references: [id], onDelete: Restrict)
+  sceneGeneration   SceneGeneration                      @relation(fields: [sceneGenerationId], references: [id], onDelete: Restrict)
+  /// Absent until a worker first claims this failure. Absent is the ordinary
+  /// state for every VALID verdict and for every failure nobody has swept yet.
+  failureResolution ManagedOutputMediaFailureResolution?
 
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
   @@map("managed_output_media_validations")
+}
+
+// ===========================================================================
+// Phase 4C-3B-2H-3B-6C — durable media-failure resolution.
+//
+// A terminal media verdict now has durable *work* attached to it, rather than
+// being re-derived by every sweep. The work is what makes two things possible
+// that Phase 6B could not do: a planning refusal can be deferred to a future
+// instant instead of re-offered immediately, and an exhausted automatic
+// recovery can be settled exactly once.
+//
+// No backfill. Historical terminal failures are discovered lazily, exactly as
+// the validation records themselves are: a row is created the first time a
+// worker claims it, and an absent row is an eligible state rather than a gap.
+// ===========================================================================
+
+enum MediaFailureResolutionStatus {
+  PENDING
+  RUNNING
+  RESOLVED
+}
+
+/// How one piece of resolution work ended.
+///
+/// `OBSOLETE` is narrow: it means a locked authority read proved no customer
+/// mutation is required. It is never a catch-all for a shape nobody understood.
+enum MediaFailureResolutionKind {
+  RECOVERY_ADMITTED
+  INITIAL_FAILURE_SETTLED
+  USER_REGENERATION_ROLLED_BACK
+  OBSOLETE
+}
+
+/// Why planning refused, as the closed application vocabulary and nothing else.
+///
+/// An enum rather than free text precisely because the alternative is a column
+/// that eventually holds a provider error body or an FX vendor's URL.
+enum MediaRecoveryPlanRefusalCode {
+  PERSISTED_PRICING_IDENTITY_MALFORMED
+  NO_SAFE_CURRENT_ROUTE
+  NO_SAFE_CURRENT_PRICING
+  AMBIGUOUS_CURRENT_PRICING
+}
+
+model ManagedOutputMediaFailureResolution {
+  id                             String                        @id
+  /// One piece of work per terminal verdict. The uniqueness is what makes two
+  /// workers racing to create the first record resolvable: exactly one insert
+  /// wins, and the loser reads what the winner wrote.
+  managedOutputMediaValidationId String                        @unique
+  status                         MediaFailureResolutionStatus  @default(PENDING)
+  /// --- Lease / retry --------------------------------------------------------
+  /// Opaque and random. Carries no organization, scene, attempt or key identity,
+  /// so it discloses nothing if it is ever logged.
+  leaseToken                     String?
+  /// Crash recovery, not a deadline: how long the system waits before assuming
+  /// the owner died.
+  leaseExpiresAt                 DateTime?
+  /// When a deferred row becomes a candidate again. Set on PENDING, and the
+  /// reason an unplannable prefix cannot occupy every bounded sweep.
+  nextAttemptAt                  DateTime?
+  attemptCount                   Int                           @default(0)
+  /// Incremented on every transition. With `leaseToken` this is what makes a
+  /// stale worker's late finalize match zero rows.
+  version                        Int                           @default(0)
+  /// --- Deferral evidence ----------------------------------------------------
+  lastPlanRefusalCode            MediaRecoveryPlanRefusalCode?
+  /// --- Terminal record ------------------------------------------------------
+  resolutionKind                 MediaFailureResolutionKind?
+  /// The exact recovery attempt this work produced or reconciled to. RESTRICT,
+  /// never Cascade: it names a possibly-paid attempt, so a physical deletion
+  /// must resolve retention deliberately.
+  recoveryAttemptId              String?
+  resolvedAt                     DateTime?
+  createdAt                      DateTime                      @default(now())
+  updatedAt                      DateTime                      @updatedAt
+  /// RESTRICT for the same reason the validation itself uses it: this row is
+  /// durable evidence about a possibly-paid attempt's failure.
+  validation                     ManagedOutputMediaValidation  @relation(fields: [managedOutputMediaValidationId], references: [id], onDelete: Restrict)
+  recoveryAttempt                SceneGeneration?              @relation("MediaFailureRecoveryAttempt", fields: [recoveryAttemptId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
+  @@index([recoveryAttemptId])
+  @@map("managed_output_media_failure_resolutions")
 }

@@ -40,8 +40,24 @@ describe("the customer video lifecycle", () => {
     ["DELIVERABLE_VALIDATING", "DELIVERABLE_READY"],
     ["DELIVERABLE_READY", "REVISING"],
     ["REVISING", "GENERATING"],
+    // The revision rollback edge (Phase 4C-3B-2H-3B-6C). A failed regeneration
+    // must be able to give the customer back the video they already had.
+    ["GENERATING", "DELIVERABLE_READY"],
   ] as const)("allows %s -> %s", (from, to) => {
     expect(canTransitionJob(from, to)).toBe(true);
+  });
+
+  it("separates a legal edge from who may persist it", () => {
+    // `GENERATING -> DELIVERABLE_READY` is a legal domain move *and* reserved
+    // from the generic job repository, which owns neither fact about the other.
+    // Deleting the edge to express the access rule would remove a real move from
+    // the domain; leaving the generic route open would let a caller announce a
+    // deliverable without the request and scene rollback that justify it. The
+    // repository side is asserted in `tests/database-public-surface.test.ts` and
+    // against a live database; this is the domain side.
+    expect(canTransitionJob("GENERATING", "DELIVERABLE_READY")).toBe(true);
+    expect(canTransitionJob("GENERATING", "SCENES_READY")).toBe(true);
+    expect(canTransitionScene("REVISING", "READY")).toBe(true);
   });
 
   it.each([
