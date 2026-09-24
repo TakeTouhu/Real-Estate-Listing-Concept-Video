@@ -61,23 +61,77 @@ driver error and continuing to query the same transaction is not recovery — th
 only safe shape is an insert that never raises, leaving the loser free to read
 what the winner wrote.
 
-## Decision 3 — Deferral is the fairness mechanism
+## Decision 3 — Fairness is deferral **and** effective-eligibility ordering
 
-Discovery excludes `PENDING` work whose `nextAttemptAt` has not arrived. That
-single predicate is the whole solution: an unplannable candidate stops being a
-candidate for a retry delay, so the bounded oldest-first window moves past it to
-work that can actually be done, and returns to it when it is due.
+Fairness needs both halves. An earlier draft of this ADR claimed the deferral
+predicate alone was the whole solution; review proved that wrong, and the reason
+is worth recording because the flaw is invisible in a fast test loop.
 
-No unbounded scan, no priority queue, no second index to keep in step. A live
-regression drives more unplannable candidates than the batch holds and proves an
-actionable candidate behind them is reached on the next pass, and that the
-deferred work is not lost.
+**Half one — deferral removes a row until it is due.** Discovery excludes
+`PENDING` work whose `nextAttemptAt` has not arrived, so an unplannable candidate
+stops being a candidate for a retry delay.
+
+That is sufficient only while the scheduler runs *more often* than the retry
+delay. It is not a property the system can assume:
+
+```text
+retry delay 5 min, scheduler every 10 min, batch limit 3
+  pass 1  three old NO_PLAN rows fill the batch, all defer
+  pass 2  ten minutes later, all three are due again -- and ordered by
+          validatedAt they are still the oldest, so they fill the batch again
+  ...     the actionable row behind them is never reached
+```
+
+Deferral hid those rows briefly and then handed them back their place at the
+front of the queue.
+
+**Half two — ordering by when a row actually became eligible**, rather than by
+when its verdict was recorded:
+
+```text
+ORDER BY
+  CASE
+    WHEN work row absent                  THEN validation.validatedAt
+    WHEN work.status = PENDING            THEN work.nextAttemptAt
+    WHEN work.status = RUNNING            THEN work.leaseExpiresAt
+  END ASC,
+  validation.validatedAt ASC,
+  validation.id ASC
+```
+
+Each arm uses the column that made the row eligible, so a deferral **moves the
+row's position** rather than only hiding it: the row sorts behind everything
+that has been waiting since before its new `nextAttemptAt`. An old `NO_PLAN`
+prefix can therefore no longer starve later actionable work, even when the
+scheduler interval is greater than or equal to the retry delay.
+
+`RUNNING` uses `leaseExpiresAt` for the same reason and it is not a detail: a row
+whose owner died has been *waiting* only since the lease expired, however old the
+verdict beneath it. Ordering it by `validatedAt` would let a long-abandoned lease
+jump ahead of work that genuinely waited longer — the same starvation through a
+different column.
+
+`validatedAt` and `id` remain as tie-breakers, so the order is total and a
+bounded batch is reproducible.
+
+**Nothing else changed.** The `WHERE` eligibility logic is untouched, the scan
+stays bounded by the batch limit, and no priority queue, background ranking or
+second index was introduced — this is one `ORDER BY` over the rows the query was
+already reading.
+
+Three live regressions cover it: the fast-scheduler case; the **slow-scheduler**
+case, where the second pass happens at `retryDelay + 1s` with the whole deferred
+prefix eligible again and a single batch slot still goes to the actionable
+candidate; and the reclaimable case, where a lease that expired a second ago
+queues behind a newer verdict that has been waiting far longer. Repeated deferral
+is shown to keep moving `nextAttemptAt` forward rather than parking a row.
 
 ## Decision 4 — One orchestration authority
 
 Phase 6B's runner is **deleted**, not wrapped. Two runners would leave two
 things a composition root could wire, and the one it would most plausibly wire
-is the one without the deferral. What survives from 6B is the *step* — the same
+is the one without the deferral and the eligibility ordering. What survives from
+6B is the *step* — the same
 planner, the same `admitAutomaticMediaRecovery` transaction, the same cap — with
 `MediaFailureResolutionRunner` deciding when to invoke them.
 
@@ -194,6 +248,86 @@ lock Job -> lock Scene
 A later Transaction C `PRIMARY` admission moves the request `PENDING ->
 GENERATING` as it already did. No provider attempt is admitted here.
 
+## Decision 11a — Abandoning a pending revision is its own atomic authority
+
+Revision start commits three aggregates together:
+
+```text
+USER_REGENERATION request = PENDING
+Scene                     = REVISING
+Job                       = GENERATING
+```
+
+Review found that the generic request transition still let that request reach
+`CANCELLED` or `FAILED_TERMINAL` on its own, which leaves:
+
+```text
+request  CANCELLED / FAILED_TERMINAL   <- nothing left to advance
+Scene    REVISING                      <- no active request
+Job      GENERATING                    <- not deliverable, not failed
+```
+
+Nothing can repair that afterwards. Transaction H requires a `GENERATING`
+request with an exhausted recovery, and Decision 15 reserves
+`GENERATING -> DELIVERABLE_READY` from the generic API, so a caller cannot
+restore the Job either. Every later regeneration returns `JOB_NOT_REVISABLE`,
+permanently.
+
+**The reservation is kind-aware, not blanket.** For a `USER_REGENERATION` in
+`PENDING`, generic `-> CANCELLED` and `-> FAILED_TERMINAL` return
+`TRANSITION_RESERVED` and mutate nothing. `INITIAL` requests keep their existing
+generic terminal transitions: an INITIAL that never got an attempt strands
+nothing, and banning it would remove a legitimate route for no benefit. The kind
+is read from the stored row, because which rule applies is not a caller's to
+assert.
+
+**The specialized authority is `rollBackPendingUserRegeneration`**, with the
+system-wide lock order:
+
+```text
+Job -> Scene -> Request
+```
+
+It requires all of:
+
+- request kind `USER_REGENERATION`;
+- request `PENDING`, never delivered;
+- **zero attempts**;
+- Scene `REVISING`, its delivered pointer naming a `DELIVERED` request of its own;
+- Job `GENERATING` with a deliverable pointer;
+- Reservation `CONSUMED`;
+- no other active regeneration in the Job;
+- every sibling Scene `READY`.
+
+Zero attempts is the line between this and Transaction H. Once an attempt exists
+the request is generating against a provider, and how that ends belongs to the
+path holding a media verdict to justify it. This one has neither an attempt nor a
+verdict, which is exactly why it is allowed to be this simple.
+
+Atomically, in one commit:
+
+```text
+request  PENDING -> CANCELLED | FAILED_TERMINAL   (failedAt only for the latter)
+Scene    REVISING -> READY
+Job      GENERATING -> DELIVERABLE_READY
+```
+
+Preserved, and asserted unchanged:
+
+- `currentDeliveredRequestId` — the customer's video;
+- `currentDeliverableVersionId` — the Job's delivered version;
+- the `CONSUMED` reservation, which is not written at all, not even a version
+  bump.
+
+No attempt is created, no quota event, no deliverable event, and **no entitlement
+is consumed** — the request never delivered, so `usedUserRegenerationCount` does
+not move and the same ordinal is immediately reusable.
+
+Exact replay returns `ALREADY_ROLLED_BACK` with no version, event or timestamp
+change. A partial shape raises and is never repaired, for the reason Decision 17
+gives: completing a half-applied rollback would destroy the evidence of how it
+came to be half-applied.
+
 ## Decision 12 — Two Job events in one transaction, rather than a new edge
 
 The revision lifecycle is `DELIVERABLE_READY -> REVISING -> GENERATING`. Both
@@ -280,10 +414,14 @@ transactions already owned were closed:
 | Scene | `REVISING -> READY` | Transaction F or Transaction H |
 | Request | `PENDING -> GENERATING` | Transaction C |
 | Request | `GENERATING -> DELIVERED` | Transaction F |
+| Request (`USER_REGENERATION` only) | `PENDING -> CANCELLED` | `rollBackPendingUserRegeneration` |
+| Request (`USER_REGENERATION` only) | `PENDING -> FAILED_TERMINAL` | `rollBackPendingUserRegeneration` |
 | Reservation | `-> CONSUMED` | Transaction G (deferred) |
 
 `FAILED_TERMINAL` transitions are deliberately **not** reserved globally: other
-failure workflows legitimately use them.
+failure workflows legitimately use them, and an `INITIAL` request reaching a
+terminal state strands nothing. Only the `USER_REGENERATION` pending pair is
+reserved, for the reason Decision 11a gives.
 
 ## Decision 17 — Idempotency, and never repairing a partial settlement
 
@@ -310,7 +448,8 @@ Migrations 1–12 are untouched.
 
 Good:
 
-- A planning refusal can no longer starve later work, and can no longer
+- A planning refusal can no longer starve later work — at any scheduler
+  cadence, including one slower than the retry delay — and can no longer
   terminalize a customer for the platform's own inconsistency.
 - An exhausted media failure now has a customer-visible answer, applied once and
   atomically, with the Unit returned when nothing was delivered.
