@@ -84,9 +84,13 @@ That earlier ledger ran before final verification found a flake this phase intro
 `generation-regeneration-entitlement.db.test.ts` (~50% failure rate, caused by two
 concurrent fixture re-arms colliding on the new deliverable-version insert). The
 flake is fixed test-only and the suite is now green on three consecutive full
-runs, but because the harness treats any suite failure as a kill, the 264/264
-tally is reported with that caveat rather than as settled evidence. See
-`docs/phase-5a-completion.md`.
+runs, but because the harness treats any suite failure as a kill, that 264/264
+tally is kept only as historical record.
+
+The authoritative result is a second **complete** ledger, run once on the
+corrected deterministic tree after all three review corrections: **271 run, 271
+killed, 0 survivors, 0 anchor-missing**, with all 264 earlier definitions
+preserved and M264–M270 added. See `docs/phase-5a-completion.md`.
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 

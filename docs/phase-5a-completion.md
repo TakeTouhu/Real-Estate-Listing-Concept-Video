@@ -274,8 +274,8 @@ Not done, on purpose, and each with a reason rather than an omission:
 | --- | --- |
 | `pnpm typecheck` | clean, 0 errors |
 | `pnpm lint` | clean |
-| `pnpm test` | **4377 passed / 135 files** (from 4332 / 133) |
-| `pnpm test:db` | **1044 passed / 33 files** (from 975 / 31) — green on 3 consecutive runs after the flake fix below |
+| `pnpm test` | **4379 passed / 135 files** (from 4332 / 133) |
+| `pnpm test:db` | **1051 passed / 33 files** (from 975 / 31) |
 | `pnpm build` | success |
 | `prisma validate` | valid |
 | `prisma format` | no change on re-format |
@@ -442,9 +442,52 @@ then **3/3 consecutive passes** of the entire 33-file DB suite.
 The flake history is deliberately not erased: this run is what a contaminated
 ledger looks like, and the reason a clean one was required.
 
-### Corrected complete run
+### Corrected complete run — the authoritative one
 
-_(filled in below)_
+Run once on the corrected, deterministic tree, after all three review
+corrections and after the entitlement flake was fixed. Not an impacted subset.
+
+| | |
+| --- | --- |
+| Mutations run | **271** |
+| Killed | **271** |
+| Survivors | **0** |
+| Anchor-missing | **0** |
+
+All 264 earlier definitions preserved unchanged; **M264–M270** are the seven
+correction mutations. The total is 271, not 264 — reported as measured rather
+than assumed.
+
+### What the seven correction mutations cover
+
+| Mutation | Defect it injects |
+| --- | --- |
+| M264 | the entitlement hold is not locked before its state is trusted |
+| M265 | the reservation state is read from an unlocked join again |
+| M266 | the selected media verdict rows are not locked |
+| M267 | a recomposition replay reports the customer's current deliverable as the plan |
+| M268 | a recomposition replay drops the ordinal-after-current rule |
+| M269 | an initial replay no longer requires the first ordinal |
+| M270 | the replay accepts a current pointer naming another job's version |
+
+### Re-aims, stated rather than buried
+
+**M267** is aimed at *two* sites, not one. Removing the replay's identity guard
+alone is unobservable: an equal id implies an equal ordinal, so the succession
+rule refuses it anyway. Both guards are kept — they assert different things — and
+the mutation removes both, which the strengthened regression observes.
+
+That regression was itself corrected. Its first form used the fixture's stand-in
+prior version, which carries no input rows, so the coverage check refused the
+replay before either cycle guard ran; the test passed for the wrong reason and
+M267 survived. It now uses a **real ordinal-1 plan produced by Transaction I** as
+the current version, so coverage and fingerprint both pass and only the cycle
+guards can refuse.
+
+Three guards in total are documented as structurally redundant rather than
+counted as clean individual kills — the latest-attempt comparison, the
+delivered-pointer null check, and the replay identity check. All are kept, and
+every mutation aimed at them removes each site at once.
 
 All 227 pre-existing definitions were preserved unchanged; M227–M263 are this
 phase's 37 additions. Every one of the 37 is killed by the test suites, none by

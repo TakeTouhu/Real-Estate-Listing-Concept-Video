@@ -1110,9 +1110,10 @@ and ADR-0020.
   0 anchor-missing, with all 227 earlier definitions preserved — is **not** final
   evidence: it ran while `generation-regeneration-entitlement.db.test.ts` had a
   measured ~50% flake, and the harness treats any suite failure as a kill, so
-  false kills cannot be excluded. A clean complete ledger was re-run on the
-  corrected deterministic tree; its result is recorded in
-  `docs/phase-5a-completion.md`. Three guards are structurally redundant and are
+  false kills cannot be excluded. A clean complete ledger was re-run once on the
+  corrected deterministic tree: **271 run, 271 killed, 0 survivors, 0
+  anchor-missing**, with all 264 earlier definitions preserved and seven
+  correction mutations (M264-M270) added. Three guards are structurally redundant and are
   reported as such rather than counted as clean kills: the SQL join already
   restricts the attempt to `MAX(attemptOrdinal)`, the outer joins make the
   delivered-pointer null check implied by every guard below it, and the replay's
