@@ -1232,17 +1232,31 @@ model GenerationDeliverableInput {
 // row until a worker claims one.
 // ===========================================================================
 
+/// `BLOCKED` ends this phase's automatic work and nothing else: the job is not
+/// terminalized, no unit is consumed, no reservation is released and the
+/// deliverable pointer does not move. There is deliberately no `FAILED`.
 enum DeliverableCompositionStatus {
   PENDING
   RUNNING
+  BLOCKED
   OUTPUT_VERIFIED
 }
 
+/// Failures a later attempt could genuinely survive. A deterministic refusal
+/// recorded here would be re-offered every retry interval forever.
 enum DeliverableCompositionRetryCode {
   SOURCE_READ_RETRYABLE
-  SOURCE_INTEGRITY_MISMATCH
   COMPOSER_RETRYABLE
   OUTPUT_PUBLISH_RETRYABLE
+}
+
+/// Refusals decidable against facts that cannot change by themselves: the plan
+/// is immutable, the profile is frozen, and canonical objects are first-wins.
+enum DeliverableCompositionBlockCode {
+  SOURCE_BYTES_LIMIT_EXCEEDED
+  DURATION_INVARIANT_MISMATCH
+  SOURCE_INTEGRITY_MISMATCH
+  OUTPUT_SIZE_LIMIT_EXCEEDED
 }
 
 model GenerationDeliverableComposition {
@@ -1283,6 +1297,12 @@ model GenerationDeliverableComposition {
   /// Closed vocabulary only. No ffmpeg stderr, storage message, OS error, path
   /// or customer text ever reaches this column.
   lastRetryCode        DeliverableCompositionRetryCode?
+  /// --- The terminal block ---------------------------------------------------
+  /// Written together when automatic execution stops for good, and never
+  /// rewritten: a second, different reason would overwrite the one an operator
+  /// is reading. There is no unblock operation in this phase.
+  blockCode            DeliverableCompositionBlockCode?
+  blockedAt            DateTime?
   /// --- The durable output receipt ------------------------------------------
   /// Written together, exactly once, when composition reaches OUTPUT_VERIFIED,
   /// and immutable afterwards: a later receipt describing different bytes is a

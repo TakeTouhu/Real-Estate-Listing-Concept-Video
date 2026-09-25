@@ -17,6 +17,7 @@
 import type { TransitionContext } from "../orchestration/ports";
 import type { CompositionProfile } from "./profile";
 import type {
+  DeliverableCompositionBlockCode,
   DeliverableCompositionRetryCode,
   DeliverableCompositionStatus,
   ManagedDeliverableOutputKey,
@@ -82,6 +83,15 @@ export interface DeliverableCompositionClaim {
   /** Frozen at first claim, reused verbatim by every retry. */
   readonly profile: CompositionProfile;
   readonly outputStorageKey: ManagedDeliverableOutputKey;
+  /**
+   * The length the job was admitted for, carried so the duration invariant can
+   * be proved by the caller rather than inside the claim transaction.
+   *
+   * It is *not* a hint the executor may correct against: a mismatch between
+   * this and the frozen scene durations is a deterministic refusal, never a
+   * redistribution rule.
+   */
+  readonly requestedDurationSeconds: number;
   /** In plan order: position ASC. */
   readonly scenes: readonly CompositionSceneInput[];
 }
@@ -95,6 +105,17 @@ export type ClaimCompositionWorkOutcome =
   | { readonly kind: "NOT_CLAIMABLE" }
   /** Already composed and verified; nothing to do. */
   | { readonly kind: "ALREADY_VERIFIED" }
+  /**
+   * The job's frozen delivery target is outside composition profile v1.
+   *
+   * A returned outcome rather than a thrown defect, and the transaction writes
+   * nothing: no work row, no lease, no job transition, no event. The job was
+   * admitted legitimately under a target this profile version cannot deliver,
+   * which is an ordinary fact about the deployment rather than a corrupted
+   * state — and manufacturing a `RUNNING` row for work that can never run would
+   * make it a candidate forever.
+   */
+  | { readonly kind: "UNSUPPORTED_TARGET" }
   /** No such deliverable version visible to this organization. */
   | { readonly kind: "NOT_FOUND" };
 
@@ -140,6 +161,20 @@ export type DeferCompositionOutcome =
   | { readonly kind: "DEFERRED" }
   | { readonly kind: "LEASE_LOST" };
 
+export interface BlockCompositionInput {
+  readonly claim: DeliverableCompositionClaim;
+  readonly blockCode: DeliverableCompositionBlockCode;
+  readonly blockedAt: number;
+  readonly context: TransitionContext;
+}
+
+export type BlockCompositionOutcome =
+  | { readonly kind: "BLOCKED" }
+  /** This exact block is already durable. No second event is appended. */
+  | { readonly kind: "ALREADY_BLOCKED" }
+  /** Another worker reclaimed the work; this caller may not write history. */
+  | { readonly kind: "LEASE_LOST" };
+
 export interface DeliverableCompositionRecord {
   readonly id: string;
   readonly deliverableVersionId: string;
@@ -147,6 +182,7 @@ export interface DeliverableCompositionRecord {
   readonly attemptCount: number;
   readonly version: number;
   readonly lastRetryCode: DeliverableCompositionRetryCode | null;
+  readonly blockCode: DeliverableCompositionBlockCode | null;
   readonly outputStorageKey: string | null;
   readonly outputSha256: string | null;
   readonly outputSizeBytes: bigint | null;
@@ -178,8 +214,26 @@ export interface DeliverableCompositionRepository {
     input: FinalizeCompositionInput,
   ): Promise<FinalizeCompositionOutcome>;
 
-  /** Return deferred work to `PENDING` with a closed code and a future instant. */
+  /**
+   * Return deferred work to `PENDING` with a closed code and a future instant.
+   *
+   * Only for failures that a later attempt could genuinely survive. A
+   * deterministic refusal deferred here becomes an automatic infinite retry the
+   * moment a scheduler exists; {@link DeliverableCompositionRepository.blockComposition}
+   * is where those go.
+   */
   deferComposition(input: DeferCompositionInput): Promise<DeferCompositionOutcome>;
+
+  /**
+   * End automatic execution for this deliverable with a closed block code.
+   *
+   * Terminates *this phase's work only*. The job is not transitioned, no unit
+   * is consumed, no reservation is released and the deliverable pointer does
+   * not move, so a customer holding an earlier video keeps it. There is no
+   * unblock operation in this phase: an operator path is its own reviewed
+   * surface.
+   */
+  blockComposition(input: BlockCompositionInput): Promise<BlockCompositionOutcome>;
 
   /** Read-only, for tests and operators. Never an authority for execution. */
   findCompositionByVersionId(
@@ -212,10 +266,12 @@ export type MaterializeCompositionSourcesOutcome =
    * A canonical source object's bytes no longer match the receipt the plan
    * froze. Never fed to the composer, never silently replaced with another
    * attempt's output, and never a customer-facing failure on its own.
+   *
+   * Deterministic, not transient: canonical objects are first-wins and the
+   * plan's receipt is immutable, so the next attempt compares the same bytes
+   * against the same digest and reaches the same answer.
    */
-  | { readonly kind: "INTEGRITY_MISMATCH" }
-  /** The plan's total source bytes exceed what one worker may hold. */
-  | { readonly kind: "SOURCE_BUDGET_EXCEEDED" };
+  | { readonly kind: "INTEGRITY_MISMATCH" };
 
 export interface DeliverableCompositionSourceMaterializer {
   /**

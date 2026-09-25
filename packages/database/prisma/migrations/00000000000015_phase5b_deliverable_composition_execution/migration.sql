@@ -1,6 +1,6 @@
 -- Phase 5B — durable deliverable composition execution.
 --
--- One table, two enums, and the shape constraints that keep an impossible row
+-- One table, three enums, and the shape constraints that keep an impossible row
 -- impossible in the database rather than only in TypeScript.
 --
 -- No backfill. Nothing here reads, updates or rewrites an existing orchestration
@@ -10,10 +10,25 @@
 -- Migration 14 is not touched. The deliverable plan's shape is settled.
 
 -- CreateEnum
-CREATE TYPE "DeliverableCompositionStatus" AS ENUM ('PENDING', 'RUNNING', 'OUTPUT_VERIFIED');
+-- `BLOCKED` is an operational state, not a customer failure: it ends this
+-- phase's automatic work and nothing else. There is no `FAILED` here, because
+-- terminalizing a job over an encoder limit would destroy a deliverable the
+-- customer may already hold and settle an entitlement over the platform's own
+-- problem.
+CREATE TYPE "DeliverableCompositionStatus" AS ENUM ('PENDING', 'RUNNING', 'BLOCKED', 'OUTPUT_VERIFIED');
 
 -- CreateEnum
-CREATE TYPE "DeliverableCompositionRetryCode" AS ENUM ('SOURCE_READ_RETRYABLE', 'SOURCE_INTEGRITY_MISMATCH', 'COMPOSER_RETRYABLE', 'OUTPUT_PUBLISH_RETRYABLE');
+-- Retry codes are for failures a later attempt could genuinely survive. A
+-- deterministic refusal recorded here would be re-offered every retry interval
+-- forever, fail identically each time, and tell nobody.
+CREATE TYPE "DeliverableCompositionRetryCode" AS ENUM ('SOURCE_READ_RETRYABLE', 'COMPOSER_RETRYABLE', 'OUTPUT_PUBLISH_RETRYABLE');
+
+-- CreateEnum
+-- Block codes are the opposite: every member is decidable against facts that
+-- cannot change by themselves. The plan is immutable, the profile is frozen and
+-- canonical objects are first-wins, so re-running the identical work reaches the
+-- identical answer.
+CREATE TYPE "DeliverableCompositionBlockCode" AS ENUM ('SOURCE_BYTES_LIMIT_EXCEEDED', 'DURATION_INVARIANT_MISMATCH', 'SOURCE_INTEGRITY_MISMATCH', 'OUTPUT_SIZE_LIMIT_EXCEEDED');
 
 -- CreateTable
 CREATE TABLE "generation_deliverable_compositions" (
@@ -38,6 +53,8 @@ CREATE TABLE "generation_deliverable_compositions" (
     "attemptCount" INTEGER NOT NULL DEFAULT 0,
     "version" INTEGER NOT NULL DEFAULT 0,
     "lastRetryCode" "DeliverableCompositionRetryCode",
+    "blockCode" "DeliverableCompositionBlockCode",
+    "blockedAt" TIMESTAMP(3),
     "outputStorageKey" TEXT,
     "outputSha256" TEXT,
     "outputSizeBytes" BIGINT,
@@ -105,14 +122,22 @@ ALTER TABLE "generation_deliverable_compositions"
     AND ("outputSizeBytes" IS NULL OR ("outputSizeBytes" > 0 AND "outputSizeBytes" <= 9007199254740991))
   );
 
--- Shape: each status admits exactly one arrangement of the lease, retry and
--- receipt columns.
+-- Shape: each status admits exactly one arrangement of the lease, retry, block
+-- and receipt columns.
 --
 -- Without this a row can claim to be OUTPUT_VERIFIED while still holding a
--- lease, or PENDING with no instant at which it becomes due, or RUNNING with a
--- half-written receipt — states TypeScript can refuse and a direct UPDATE
--- cannot. The receipt columns are all-or-none in the verified arm, because a
--- digest without a byte count is not a receipt.
+-- lease, or PENDING with no instant at which it becomes due, or BLOCKED with a
+-- next attempt that a sweep would honour, or RUNNING with a half-written
+-- receipt -- states TypeScript can refuse and a direct UPDATE cannot. The
+-- receipt columns are all-or-none in the verified arm, because a digest without
+-- a byte count is not a receipt; the block columns are all-or-none in the
+-- blocked arm for the same reason, because a terminated row without a stated
+-- reason is the one thing an operator cannot act on.
+--
+-- `lastRetryCode` is deliberately unconstrained by this check. A row that was
+-- deferred for a transient failure and later blocked for a deterministic one
+-- legitimately carries both: the retry code says what went wrong last time it
+-- could have worked, and the block code says why it never will.
 ALTER TABLE "generation_deliverable_compositions"
   ADD CONSTRAINT "deliverable_composition_status_shape_check"
   CHECK (
@@ -121,6 +146,8 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NULL
       AND "leaseExpiresAt" IS NULL
       AND "nextAttemptAt" IS NOT NULL
+      AND "blockCode" IS NULL
+      AND "blockedAt" IS NULL
       AND "outputStorageKey" IS NULL
       AND "outputSha256" IS NULL
       AND "outputSizeBytes" IS NULL
@@ -131,6 +158,20 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NOT NULL
       AND "leaseExpiresAt" IS NOT NULL
       AND "nextAttemptAt" IS NULL
+      AND "blockCode" IS NULL
+      AND "blockedAt" IS NULL
+      AND "outputStorageKey" IS NULL
+      AND "outputSha256" IS NULL
+      AND "outputSizeBytes" IS NULL
+      AND "outputVerifiedAt" IS NULL
+    )
+    OR (
+      "status" = 'BLOCKED'
+      AND "leaseToken" IS NULL
+      AND "leaseExpiresAt" IS NULL
+      AND "nextAttemptAt" IS NULL
+      AND "blockCode" IS NOT NULL
+      AND "blockedAt" IS NOT NULL
       AND "outputStorageKey" IS NULL
       AND "outputSha256" IS NULL
       AND "outputSizeBytes" IS NULL
@@ -141,6 +182,8 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NULL
       AND "leaseExpiresAt" IS NULL
       AND "nextAttemptAt" IS NULL
+      AND "blockCode" IS NULL
+      AND "blockedAt" IS NULL
       AND "outputStorageKey" IS NOT NULL
       AND "outputSha256" IS NOT NULL
       AND "outputSizeBytes" IS NOT NULL

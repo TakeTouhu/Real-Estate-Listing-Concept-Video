@@ -29,9 +29,12 @@
  */
 
 import {
+  COMPOSABLE_TARGETS,
   COMPOSITION_EXECUTION_REASON_CODE,
   DELIVERABLE_COMPOSING_EVENT_TYPE,
   DELIVERABLE_COMPOSING_STATE,
+  DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE,
+  DELIVERABLE_COMPOSITION_BLOCKED_STATE,
   DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
   DeliverableCompositionExecutionDefect,
@@ -44,6 +47,8 @@ import {
   safePositiveByteCount,
   sha256Digest,
   validateCompositionBatchLimit,
+  type BlockCompositionInput,
+  type BlockCompositionOutcome,
   type ClaimCompositionWorkInput,
   type ClaimCompositionWorkOutcome,
   type CompositionProfile,
@@ -57,12 +62,26 @@ import {
   type FinalizeCompositionOutcome,
 } from "@app/domain";
 import { randomId } from "@app/shared";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
 
 const COMPOSITION_ID_PREFIX = "gdcmp";
+
+/**
+ * The composable `(aspect ratio, resolution)` pairs, as bound parameters.
+ *
+ * Built from the domain's own raster table rather than written out in SQL, so
+ * the discovery filter and the claim's profile resolution cannot disagree about
+ * what v1 composes. Every element is a parameter, not interpolated text.
+ */
+const COMPOSABLE_TARGET_PAIRS = Prisma.join(
+  COMPOSABLE_TARGETS.map(
+    (target) =>
+      Prisma.sql`(${target.targetAspectRatio}, ${target.targetOutputResolution})`,
+  ),
+);
 
 /** The job and its pending plan, read under the locks the claim has taken. */
 interface ClaimContextRow {
@@ -131,6 +150,13 @@ export function createDeliverableCompositionExecutionRepository(
       // age alone lets a deferred row reclaim the head of the queue the moment
       // it is deferred, and a slow scheduler then re-offers the same prefix
       // forever.
+      //
+      // Two classes are excluded for exactly that reason. `BLOCKED` rows match
+      // no arm below, because a deterministic refusal that kept appearing in
+      // the batch would be re-claimed and re-refused forever. And a job whose
+      // frozen delivery target is outside profile v1 is filtered here rather
+      // than discovered at claim time — every claim would refuse it, so leaving
+      // it listable lets enough such jobs crowd out work that can be composed.
       const rows = await prisma.$queryRaw<DeliverableCompositionCandidate[]>`
         SELECT v."id"              AS "deliverableVersionId",
                j."id"              AS "generationJobId",
@@ -149,6 +175,8 @@ export function createDeliverableCompositionExecutionRepository(
                   AND w."leaseExpiresAt" <= ${at}
                   AND j."state" = 'COMPOSING'::"GenerationJobState")
                )
+           AND (j."targetAspectRatio", j."targetOutputResolution")
+               IN (${COMPOSABLE_TARGET_PAIRS})
          ORDER BY
            CASE
              WHEN w."id" IS NULL THEN v."createdAt"
@@ -174,6 +202,11 @@ export function createDeliverableCompositionExecutionRepository(
         if (ctx === null) return { kind: "NOT_FOUND" };
 
         if (ctx.workStatus === "OUTPUT_VERIFIED") return { kind: "ALREADY_VERIFIED" };
+        // Stated rather than left to fall out of the due-date arithmetic below.
+        // A BLOCKED row has no lease and no next attempt, so it would be
+        // refused anyway — but "there is no instant at which this becomes due"
+        // is a weak reason for a rule that must never be reachable.
+        if (ctx.workStatus === "BLOCKED") return { kind: "NOT_CLAIMABLE" };
 
         const now = new Date(input.now);
         const first = ctx.workId === null;
@@ -195,14 +228,26 @@ export function createDeliverableCompositionExecutionRepository(
           if (!due) return { kind: "NOT_CLAIMABLE" };
         }
 
+        // The profile: derived once, reused verbatim forever after. Resolved
+        // before anything is read or written, so a job this build cannot
+        // compose leaves the transaction exactly as it found it.
+        let profile: CompositionProfile;
+        if (first) {
+          const resolved = resolveCompositionProfile({
+            targetAspectRatio: ctx.targetAspectRatio,
+            targetOutputResolution: ctx.targetOutputResolution,
+          });
+          if (resolved.kind !== "RESOLVED") return { kind: "UNSUPPORTED_TARGET" };
+          profile = resolved.profile;
+        } else {
+          profile = persistedProfile(ctx);
+        }
+
         const plan = await readPlanInputs(tx, ctx.versionId);
         if (plan.length === 0) {
           throw new DeliverableCompositionExecutionDefect("PLAN_NOT_EXECUTABLE");
         }
         const scenes = proveExecutablePlan(ctx, plan);
-
-        // The profile: derived once, reused verbatim forever after.
-        const profile = first ? freshProfile(ctx) : persistedProfile(ctx);
 
         const leaseExpiresAt = new Date(input.leaseExpiresAt);
         let compositionId: string;
@@ -315,6 +360,7 @@ export function createDeliverableCompositionExecutionRepository(
               organizationId: ctx.organizationId,
               deliverableVersionId: ctx.versionId,
             }),
+            requestedDurationSeconds: ctx.requestedDurationSeconds,
             scenes,
           },
         };
@@ -458,6 +504,75 @@ export function createDeliverableCompositionExecutionRepository(
       });
     },
 
+    async blockComposition(input: BlockCompositionInput): Promise<BlockCompositionOutcome> {
+      return prisma.$transaction(async (tx): Promise<BlockCompositionOutcome> => {
+        const ctx = await lockClaimChain(
+          tx,
+          input.claim.organizationId,
+          input.claim.deliverableVersionId,
+        );
+        if (ctx === null) return { kind: "LEASE_LOST" };
+
+        if (ctx.workStatus === "BLOCKED") {
+          // Replay. A block already recorded is never rewritten: a different
+          // code would overwrite the reason an operator is reading, and a
+          // repeat of the same one would append a second event for a transition
+          // that happened once.
+          const stored = await tx.generationDeliverableComposition.findUniqueOrThrow({
+            where: { deliverableVersionId: input.claim.deliverableVersionId },
+            select: { blockCode: true },
+          });
+          if (stored.blockCode !== input.blockCode) {
+            throw new DeliverableCompositionExecutionDefect("COMPOSITION_BLOCK_CONFLICT");
+          }
+          return { kind: "ALREADY_BLOCKED" };
+        }
+
+        const blocked = await tx.generationDeliverableComposition.updateMany({
+          where: {
+            id: input.claim.compositionId,
+            status: "RUNNING",
+            version: input.claim.version,
+            leaseToken: input.claim.leaseToken,
+          },
+          data: {
+            status: "BLOCKED",
+            leaseToken: null,
+            leaseExpiresAt: null,
+            // Cleared, not merely left alone: a BLOCKED row carrying an instant
+            // at which it becomes due is exactly the automatic retry this state
+            // exists to stop, and the status shape constraint refuses it.
+            nextAttemptAt: null,
+            blockCode: input.blockCode,
+            blockedAt: new Date(input.blockedAt),
+            version: input.claim.version + 1,
+          },
+        });
+        if (blocked.count !== 1) return { kind: "LEASE_LOST" };
+
+        // The deliverable aggregate records that automatic composition stopped.
+        // The job is deliberately left COMPOSING with no job event: nothing
+        // about the job changed, no unit is consumed, no reservation is
+        // released, and terminalizing it would destroy a video the customer may
+        // already hold.
+        await appendGenerationEvent(tx, {
+          organizationId: ctx.organizationId,
+          aggregateType: "DELIVERABLE",
+          aggregateId: ctx.versionId,
+          fromState: DELIVERABLE_COMPOSING_STATE,
+          toState: DELIVERABLE_COMPOSITION_BLOCKED_STATE,
+          context: {
+            ...input.context,
+            eventType: DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE,
+            reasonCode: COMPOSITION_EXECUTION_REASON_CODE,
+          },
+        });
+
+        await assertPointerUnmoved(tx, ctx);
+        return { kind: "BLOCKED" };
+      });
+    },
+
     async findCompositionByVersionId(organizationId, deliverableVersionId) {
       const rows = await prisma.$queryRaw<DeliverableCompositionRecord[]>`
         SELECT w."id"                  AS "id",
@@ -466,6 +581,7 @@ export function createDeliverableCompositionExecutionRepository(
                w."attemptCount"        AS "attemptCount",
                w."version"             AS "version",
                w."lastRetryCode"::text AS "lastRetryCode",
+               w."blockCode"::text     AS "blockCode",
                w."outputStorageKey"    AS "outputStorageKey",
                w."outputSha256"        AS "outputSha256",
                w."outputSizeBytes"     AS "outputSizeBytes"
@@ -611,7 +727,6 @@ function proveExecutablePlan(
   ctx: ClaimContextRow,
   rows: readonly PlanInputRow[],
 ): readonly CompositionSceneInput[] {
-  let totalSeconds = 0;
   const scenes: CompositionSceneInput[] = [];
 
   for (const row of rows) {
@@ -629,7 +744,6 @@ function proveExecutablePlan(
     if (row.snapshotDurationSeconds <= 0) {
       throw new DeliverableCompositionExecutionDefect("PLAN_SOURCE_DISAGREEMENT");
     }
-    totalSeconds += row.snapshotDurationSeconds;
     scenes.push({
       position: row.position,
       generationSceneId: row.generationSceneId,
@@ -644,25 +758,12 @@ function proveExecutablePlan(
     });
   }
 
-  // The composed video must be the length the customer was admitted for. There
-  // is no redistribution rule here on purpose: inventing one would silently
-  // change what was agreed, and the honest answer to a mismatch is to stop.
-  if (totalSeconds !== ctx.requestedDurationSeconds) {
-    throw new DeliverableCompositionExecutionDefect("SCENE_DURATION_SUM_MISMATCH");
-  }
+  // The duration invariant is deliberately **not** checked here. A frozen scene
+  // total that disagrees with the job's admitted length is a deterministic
+  // refusal, and a defect thrown inside this transaction would roll the claim
+  // back and leave the deliverable to be rediscovered and re-refused forever.
+  // The caller proves it against the returned claim and blocks the row.
   return scenes;
-}
-
-/** Derive profile v1 from the job's frozen delivery target, or refuse. */
-function freshProfile(ctx: ClaimContextRow): CompositionProfile {
-  const resolved = resolveCompositionProfile({
-    targetAspectRatio: ctx.targetAspectRatio,
-    targetOutputResolution: ctx.targetOutputResolution,
-  });
-  if (resolved.kind !== "RESOLVED") {
-    throw new DeliverableCompositionExecutionDefect("UNSUPPORTED_COMPOSITION_TARGET");
-  }
-  return resolved.profile;
 }
 
 /**

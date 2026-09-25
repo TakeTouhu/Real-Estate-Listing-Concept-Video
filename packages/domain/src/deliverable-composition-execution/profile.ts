@@ -79,6 +79,26 @@ const RASTERS: Readonly<
   "1:1": { "720p": [720, 720], "1080p": [1080, 1080] },
 };
 
+/**
+ * Every `(aspect ratio, resolution)` pair v1 can compose, derived from the same
+ * table {@link resolveCompositionProfile} reads.
+ *
+ * Exported so candidate discovery can exclude a job whose frozen target this
+ * profile version cannot deliver, without a second hand-written copy of the
+ * list living in SQL. A copy would drift the first time the raster table gained
+ * an entry, and the symptom would be a queue that keeps offering work every
+ * claim refuses — the starvation the bounded batch exists to prevent.
+ */
+export const COMPOSABLE_TARGETS: readonly {
+  readonly targetAspectRatio: string;
+  readonly targetOutputResolution: string;
+}[] = Object.entries(RASTERS).flatMap(([targetAspectRatio, byResolution]) =>
+  Object.keys(byResolution).map((targetOutputResolution) => ({
+    targetAspectRatio,
+    targetOutputResolution,
+  })),
+);
+
 /** The frozen encoder settings for one deliverable version. */
 export interface CompositionProfile {
   readonly profileKey: string;

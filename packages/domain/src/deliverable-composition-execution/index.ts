@@ -1,5 +1,6 @@
 export {
   COMPOSABLE_ASPECT_RATIOS,
+  COMPOSABLE_TARGETS,
   COMPOSITION_AUDIO_MODE,
   COMPOSITION_CRF,
   COMPOSITION_ENCODER_PRESET,
@@ -20,6 +21,7 @@ export type {
   CompositionProfileOutcome,
 } from "./profile";
 export {
+  COMPOSITION_BLOCK_CODES,
   COMPOSITION_EXECUTION_REASON_CODE,
   COMPOSITION_RETRY_CODES,
   COMPOSITION_STATUSES,
@@ -27,6 +29,8 @@ export {
   DEFAULT_COMPOSITION_RETRY_DELAY_MS,
   DELIVERABLE_COMPOSING_EVENT_TYPE,
   DELIVERABLE_COMPOSING_STATE,
+  DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE,
+  DELIVERABLE_COMPOSITION_BLOCKED_STATE,
   DELIVERABLE_OUTPUT_CONTENT_TYPE,
   DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
@@ -38,6 +42,7 @@ export {
   MAX_COMPOSITION_RETRY_DELAY_MS,
   MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES,
   MAX_DELIVERABLE_OUTPUT_BYTES,
+  isCompositionBlockCode,
   isCompositionRetryCode,
   managedDeliverableOutputKey,
   validateCompositionBatchLimit,
@@ -45,12 +50,15 @@ export {
   validateCompositionRetryDelayMs,
 } from "./durable";
 export type {
+  DeliverableCompositionBlockCode,
   DeliverableCompositionExecutionDefectCode,
   DeliverableCompositionRetryCode,
   DeliverableCompositionStatus,
   ManagedDeliverableOutputKey,
 } from "./durable";
 export type {
+  BlockCompositionInput,
+  BlockCompositionOutcome,
   ClaimCompositionWorkInput,
   ClaimCompositionWorkOutcome,
   ComposeDeliverableInput,

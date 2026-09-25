@@ -29,6 +29,19 @@
  * Each candidate is isolated. A defect thrown while executing one is recorded in
  * the report and the sweep continues, because a single inconsistent plan must
  * not stop every other deliverable in the batch from being composed.
+ *
+ * ## Deterministic refusals are proved before any adapter runs
+ *
+ * Two facts about a claim are decidable from frozen numbers alone: whether the
+ * plan's source bytes fit the worker's budget, and whether the frozen scene
+ * durations sum to the length the job was admitted for. Both are checked
+ * immediately after the claim and **before the materializer, composer or
+ * publisher is touched**, and both end in `BLOCKED`.
+ *
+ * Checking them first is not an optimization. Downloading gigabytes to discover
+ * arithmetic that was already knowable wastes a worker; deferring the answer
+ * instead of blocking on it produces an automatic infinite retry that fails
+ * identically every five minutes and tells nobody.
  */
 
 import { randomId } from "@app/shared";
@@ -36,9 +49,11 @@ import {
   DEFAULT_COMPOSITION_LEASE_MS,
   DEFAULT_COMPOSITION_RETRY_DELAY_MS,
   MAX_COMPOSITION_BATCH_SIZE,
+  MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES,
   validateCompositionBatchLimit,
   validateCompositionLeaseMs,
   validateCompositionRetryDelayMs,
+  type DeliverableCompositionBlockCode,
   type DeliverableCompositionRetryCode,
 } from "./durable";
 import type {
@@ -71,10 +86,23 @@ export interface DeliverableCompositionReport {
   readonly finalized: number;
   readonly alreadyFinalized: number;
   readonly deferred: number;
+  /** Deterministic refusals. Counted apart from `deferred` on purpose. */
+  readonly blocked: number;
   readonly leaseLost: number;
   readonly notClaimable: number;
+  /** Claims refused because the job's target is outside profile v1. */
+  readonly unsupportedTarget: number;
   readonly failed: number;
 }
+
+type ExecutionOutcome =
+  | "FINALIZED"
+  | "ALREADY"
+  | "DEFERRED"
+  | "BLOCKED"
+  | "LEASE_LOST"
+  | "NOT_CLAIMABLE"
+  | "UNSUPPORTED_TARGET";
 
 export class DeliverableCompositionRunner {
   readonly #deps: DeliverableCompositionDeps;
@@ -101,12 +129,14 @@ export class DeliverableCompositionRunner {
     let finalized = 0;
     let alreadyFinalized = 0;
     let deferred = 0;
+    let blocked = 0;
     let leaseLost = 0;
     let notClaimable = 0;
+    let unsupportedTarget = 0;
     let failed = 0;
 
     for (const candidate of candidates) {
-      let outcome: "FINALIZED" | "ALREADY" | "DEFERRED" | "LEASE_LOST" | "NOT_CLAIMABLE" | "FAILED";
+      let outcome: ExecutionOutcome | "FAILED";
       try {
         outcome = await this.#execute(candidate.organizationId, candidate.deliverableVersionId);
       } catch {
@@ -128,12 +158,19 @@ export class DeliverableCompositionRunner {
           claimed += 1;
           deferred += 1;
           break;
+        case "BLOCKED":
+          claimed += 1;
+          blocked += 1;
+          break;
         case "LEASE_LOST":
           claimed += 1;
           leaseLost += 1;
           break;
         case "NOT_CLAIMABLE":
           notClaimable += 1;
+          break;
+        case "UNSUPPORTED_TARGET":
+          unsupportedTarget += 1;
           break;
         default:
           failed += 1;
@@ -146,8 +183,10 @@ export class DeliverableCompositionRunner {
       finalized,
       alreadyFinalized,
       deferred,
+      blocked,
       leaseLost,
       notClaimable,
+      unsupportedTarget,
       failed,
     };
   }
@@ -155,7 +194,7 @@ export class DeliverableCompositionRunner {
   async #execute(
     organizationId: string,
     deliverableVersionId: string,
-  ): Promise<"FINALIZED" | "ALREADY" | "DEFERRED" | "LEASE_LOST" | "NOT_CLAIMABLE"> {
+  ): Promise<ExecutionOutcome> {
     const claimedAt = this.#deps.clock();
     const claim = await this.#deps.repository.claimCompositionWork({
       organizationId,
@@ -167,20 +206,31 @@ export class DeliverableCompositionRunner {
       leaseExpiresAt: claimedAt + this.#leaseMs,
       context: this.#deps.context(organizationId),
     });
+    if (claim.kind === "UNSUPPORTED_TARGET") return "UNSUPPORTED_TARGET";
     if (claim.kind !== "CLAIMED") return "NOT_CLAIMABLE";
+
+    // Everything decidable from the claim alone, decided before a byte moves.
+    const deterministic = deterministicRefusal(claim.claim);
+    if (deterministic !== null) return this.#block(claim.claim, deterministic);
 
     return this.#compose(claim.claim);
   }
 
   async #compose(
     claim: DeliverableCompositionClaim,
-  ): Promise<"FINALIZED" | "ALREADY" | "DEFERRED" | "LEASE_LOST"> {
+  ): Promise<"FINALIZED" | "ALREADY" | "DEFERRED" | "BLOCKED" | "LEASE_LOST"> {
     const materialized = await this.#deps.materializer.materialize({
       organizationId: claim.organizationId,
       scenes: claim.scenes,
     });
+    if (materialized.kind === "INTEGRITY_MISMATCH") {
+      // The canonical object is first-wins and the plan's receipt is immutable,
+      // so the next attempt would compare the same bytes against the same
+      // digest. Retrying it is a loop, not recovery.
+      return this.#block(claim, "SOURCE_INTEGRITY_MISMATCH");
+    }
     if (materialized.kind !== "MATERIALIZED") {
-      return this.#defer(claim, sourceRetryCode(materialized.kind));
+      return this.#defer(claim, "SOURCE_READ_RETRYABLE");
     }
 
     try {
@@ -203,6 +253,12 @@ export class DeliverableCompositionRunner {
         key: claim.outputStorageKey,
         localPath: outputPath,
       });
+      if (published.kind === "OUTPUT_TOO_LARGE") {
+        // The plan and the profile are immutable, so the same inputs encode to
+        // the same size on every attempt. Only a different limit or a different
+        // plan changes the answer, and neither happens by waiting.
+        return this.#block(claim, "OUTPUT_SIZE_LIMIT_EXCEEDED");
+      }
       if (published.kind !== "PUBLISHED") return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
 
       const finalized = await this.#deps.repository.finalizeComposition({
@@ -235,15 +291,48 @@ export class DeliverableCompositionRunner {
     });
     return outcome.kind === "DEFERRED" ? "DEFERRED" : "LEASE_LOST";
   }
+
+  async #block(
+    claim: DeliverableCompositionClaim,
+    blockCode: DeliverableCompositionBlockCode,
+  ): Promise<"BLOCKED" | "LEASE_LOST"> {
+    const outcome = await this.#deps.repository.blockComposition({
+      claim,
+      blockCode,
+      blockedAt: this.#deps.clock(),
+      context: this.#deps.context(claim.organizationId),
+    });
+    // A replayed block is still a block: the row already carries this exact
+    // code, and reporting it as a lost lease would misdescribe a settled row.
+    return outcome.kind === "LEASE_LOST" ? "LEASE_LOST" : "BLOCKED";
+  }
 }
 
-function sourceRetryCode(
-  kind: "RETRYABLE_FAILURE" | "INTEGRITY_MISMATCH" | "SOURCE_BUDGET_EXCEEDED",
-): DeliverableCompositionRetryCode {
-  if (kind === "INTEGRITY_MISMATCH") return "SOURCE_INTEGRITY_MISMATCH";
-  // A source budget overrun is recorded as a read failure rather than given its
-  // own code: from the operator's side both mean "this deliverable's sources
-  // could not be brought down on this worker", and the budget is a machine
-  // limit that a differently-sized worker may not hit.
-  return "SOURCE_READ_RETRYABLE";
+/**
+ * The refusals decidable from the claim alone, in a fixed order.
+ *
+ * Fixed rather than incidental: a plan that violates both invariants must block
+ * with the same code on every worker and every attempt, or the durable record
+ * would depend on which check happened to run first.
+ */
+function deterministicRefusal(
+  claim: DeliverableCompositionClaim,
+): DeliverableCompositionBlockCode | null {
+  let totalBytes = 0;
+  let totalSeconds = 0;
+  for (const scene of claim.scenes) {
+    totalBytes += scene.sourceSizeBytes;
+    totalSeconds += scene.durationSeconds;
+  }
+  if (totalBytes > MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES) {
+    return "SOURCE_BYTES_LIMIT_EXCEEDED";
+  }
+  // The composed video must be the length the customer was admitted for. There
+  // is deliberately no redistribution rule: stretching or trimming scenes to
+  // reach the admitted length would silently change what was agreed, and the
+  // honest answer to a mismatch is to stop.
+  if (totalSeconds !== claim.requestedDurationSeconds) {
+    return "DURATION_INVARIANT_MISMATCH";
+  }
+  return null;
 }

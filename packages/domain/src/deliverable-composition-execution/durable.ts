@@ -8,8 +8,22 @@
  * (absent)         → a COMPOSITION_PENDING job whose plan nobody has claimed
  * PENDING          → eligible again at or after nextAttemptAt
  * RUNNING          → one worker holds a lease
+ * BLOCKED          → automatic execution cannot progress against these facts
  * OUTPUT_VERIFIED  → canonical final bytes exist, with a SHA-256 receipt
  * ```
+ *
+ * ## `PENDING` is for transient failures only
+ *
+ * The split between `PENDING` and `BLOCKED` is the difference between "try again
+ * later" and "trying again cannot help". A source object that could not be read
+ * this minute may read fine in five; a plan whose frozen source bytes total
+ * three gigabytes will total three gigabytes forever. Deferring the second kind
+ * produces an automatic infinite retry the moment a scheduler exists — the work
+ * is re-offered every five minutes, fails identically every time, and nothing
+ * in the system ever says so.
+ *
+ * So a deterministic refusal terminates automatic work with a closed
+ * `blockCode`, and `PENDING` is never used as a generic "something went wrong".
  *
  * ## What `OUTPUT_VERIFIED` does and does not claim
  *
@@ -23,23 +37,31 @@
  * deliberately does not reuse `ManagedOutputMediaValidation` — that record is
  * one-to-one with a *provider attempt*, and a composed deliverable is not one.
  *
- * ## No terminal failure state, on purpose
+ * ## `BLOCKED` is not customer failure
  *
- * There is no `FAILED` here. A composition that cannot complete is *operational
- * work*, not a verdict about the customer's job, and the reason is sharpest for
- * recomposition: the customer may already hold a perfectly good video while a
- * regeneration's replacement fails to encode. Terminalizing that job would
- * destroy a deliverable the customer already has, and consuming or releasing an
- * entitlement over an encoder failure charges the platform's problem to them.
- * So failures defer with a closed code and wait for a retry or an operator. A
- * settlement policy for permanently unencodable deliverables is a separate,
- * reviewed decision.
+ * There is no `FAILED` here, and `BLOCKED` is not one. It terminates *this
+ * phase's automatic work* and nothing else: the job does not become
+ * `FAILED_TERMINAL`, no unit is consumed, no reservation is released, the
+ * deliverable pointer does not move, and no customer-facing failure is recorded.
+ *
+ * The reason is sharpest for recomposition: the customer may already hold a
+ * perfectly good video while a regeneration's replacement cannot be encoded.
+ * Terminalizing that job would destroy a deliverable they already have, and
+ * settling an entitlement over an encoder limit charges the platform's problem
+ * to them. A settlement policy for permanently uncomposable deliverables is a
+ * separate, reviewed decision, and Phase 5B deliberately does not implement an
+ * unblock operation either — an operator path is its own reviewed surface.
  */
 
 import { AppError } from "@app/shared";
 
 /** The closed durable status vocabulary. Nothing else may be persisted. */
-export const COMPOSITION_STATUSES = ["PENDING", "RUNNING", "OUTPUT_VERIFIED"] as const;
+export const COMPOSITION_STATUSES = [
+  "PENDING",
+  "RUNNING",
+  "BLOCKED",
+  "OUTPUT_VERIFIED",
+] as const;
 export type DeliverableCompositionStatus = (typeof COMPOSITION_STATUSES)[number];
 
 /**
@@ -54,8 +76,6 @@ export type DeliverableCompositionStatus = (typeof COMPOSITION_STATUSES)[number]
 export const COMPOSITION_RETRY_CODES = [
   /** A canonical source object could not be read this time. */
   "SOURCE_READ_RETRYABLE",
-  /** A source object's bytes no longer match the receipt the plan froze. */
-  "SOURCE_INTEGRITY_MISMATCH",
   /** The composer ran and did not produce a usable result. */
   "COMPOSER_RETRYABLE",
   /** The composed object could not be published or re-read this time. */
@@ -69,6 +89,37 @@ export function isCompositionRetryCode(
   return (
     typeof value === "string" &&
     (COMPOSITION_RETRY_CODES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Why automatic composition stopped for good, in a closed vocabulary.
+ *
+ * Every member is *deterministic against the currently durable facts*: the plan
+ * is immutable, the profile is frozen, and the canonical source objects are
+ * first-wins, so re-running the identical work would reach the identical answer.
+ * That is the whole distinction from a retry code — these say "later will not be
+ * different", and putting one of them in `lastRetryCode` would manufacture an
+ * infinite automatic loop.
+ */
+export const COMPOSITION_BLOCK_CODES = [
+  /** The plan's frozen source bytes exceed what one worker may materialize. */
+  "SOURCE_BYTES_LIMIT_EXCEEDED",
+  /** The frozen scene durations do not sum to the job's requested duration. */
+  "DURATION_INVARIANT_MISMATCH",
+  /** A canonical source object's bytes no longer match the frozen receipt. */
+  "SOURCE_INTEGRITY_MISMATCH",
+  /** The composed object exceeds the deliverable ceiling. */
+  "OUTPUT_SIZE_LIMIT_EXCEEDED",
+] as const;
+export type DeliverableCompositionBlockCode = (typeof COMPOSITION_BLOCK_CODES)[number];
+
+export function isCompositionBlockCode(
+  value: unknown,
+): value is DeliverableCompositionBlockCode {
+  return (
+    typeof value === "string" &&
+    (COMPOSITION_BLOCK_CODES as readonly string[]).includes(value)
   );
 }
 
@@ -145,12 +196,20 @@ export const DELIVERABLE_OUTPUT_CONTENT_TYPE = "video/mp4";
 /**
  * The most local disk one composition may consume for its *sources*, 2 GiB.
  *
- * Checked against the sum of the plan's frozen `sourceSizeBytes` **before any
- * download starts**, so an oversized deliverable costs nothing rather than
- * filling a worker's disk and taking unrelated work down with it.
+ * Checked by the runner against the sum of the plan's frozen `sourceSizeBytes`
+ * after the claim and **before any external adapter is called**, so an
+ * oversized deliverable costs nothing rather than filling a worker's disk and
+ * taking unrelated work down with it.
+ *
+ * The comparison is of frozen numbers against a constant, so its answer never
+ * changes: an overrun is `BLOCKED / SOURCE_BYTES_LIMIT_EXCEEDED`, never a
+ * deferral. Deferring it would re-offer the identical arithmetic every five
+ * minutes forever.
  *
  * A machine-resource limit, not a product or billing rule. It says what one
- * worker will hold at once; it does not say what a customer may buy.
+ * worker will hold at once; it does not say what a customer may buy. Raising it
+ * is a deployment decision, and a row blocked under the old value stays blocked
+ * until an operator path exists — this phase deliberately has none.
  */
 export const MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES = 2 * 1_073_741_824;
 
@@ -244,32 +303,28 @@ export function validateCompositionBatchLimit(value: number): number {
 export type DeliverableCompositionExecutionDefectCode =
   /** The frozen plan and the rows it names no longer agree. */
   | "PLAN_SOURCE_DISAGREEMENT"
-  /** Scene durations do not sum to the job's frozen requested duration. */
-  | "SCENE_DURATION_SUM_MISMATCH"
   /** A job awaiting composition has no plan, or a partial one. */
   | "PLAN_NOT_EXECUTABLE"
-  /** The job's frozen delivery target is outside composition profile v1. */
-  | "UNSUPPORTED_COMPOSITION_TARGET"
   /** Work, job and deliverable disagree about whether composition finished. */
   | "PARTIAL_COMPOSITION_STATE"
   /** A finalize re-presented a different receipt for an already-verified object. */
   | "OUTPUT_RECEIPT_CONFLICT"
+  /** A block re-presented a different code for an already-blocked row. */
+  | "COMPOSITION_BLOCK_CONFLICT"
   /** The job's current deliverable pointer moved during composition. */
   | "CURRENT_DELIVERABLE_POINTER_MOVED";
 
 const DEFECT_MESSAGES: Record<DeliverableCompositionExecutionDefectCode, string> = {
   PLAN_SOURCE_DISAGREEMENT:
     "A frozen composition input no longer agrees with the durable rows it names",
-  SCENE_DURATION_SUM_MISMATCH:
-    "The planned scene durations do not sum to the job's requested duration",
   PLAN_NOT_EXECUTABLE:
     "A job awaiting composition has no complete durable plan to execute",
-  UNSUPPORTED_COMPOSITION_TARGET:
-    "The job's frozen delivery target is not composable under this profile version",
   PARTIAL_COMPOSITION_STATE:
     "Composition work, job and deliverable disagree about whether composition completed",
   OUTPUT_RECEIPT_CONFLICT:
     "A composed deliverable already carries a different durable output receipt",
+  COMPOSITION_BLOCK_CONFLICT:
+    "A blocked composition already carries a different durable block reason",
   CURRENT_DELIVERABLE_POINTER_MOVED:
     "Composition execution changed the job's current deliverable pointer",
 };
@@ -291,12 +346,21 @@ export class DeliverableCompositionExecutionDefect extends Error {
 /** Fixed application-owned event types. Nothing external reaches these. */
 export const DELIVERABLE_COMPOSING_EVENT_TYPE = "deliverable.composing";
 export const DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE = "deliverable.output_verified";
+/**
+ * Recorded on the deliverable aggregate only.
+ *
+ * There is deliberately no matching job event: blocking terminates this phase's
+ * automatic work and changes nothing about the job, and an event on the job
+ * aggregate would assert a job state change that did not happen.
+ */
+export const DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE = "deliverable.composition_blocked";
 export const JOB_COMPOSING_EVENT_TYPE = "job.composing";
 export const JOB_DELIVERABLE_VALIDATING_EVENT_TYPE = "job.deliverable_validating";
 
 /** The states a deliverable aggregate is recorded as entering. */
 export const DELIVERABLE_COMPOSING_STATE = "COMPOSING";
 export const DELIVERABLE_OUTPUT_VERIFIED_STATE = "OUTPUT_VERIFIED";
+export const DELIVERABLE_COMPOSITION_BLOCKED_STATE = "COMPOSITION_BLOCKED";
 
 /** The reason code recorded on every composition-execution transition. */
 export const COMPOSITION_EXECUTION_REASON_CODE = "DELIVERABLE_COMPOSITION_EXECUTION";
