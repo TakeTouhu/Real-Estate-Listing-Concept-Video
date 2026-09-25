@@ -1116,8 +1116,8 @@ and ADR-0020.
   measured ~50% flake, and the harness treats any suite failure as a kill, so
   false kills cannot be excluded. Two further complete ledgers
   followed: 271/271/0/0 on the intermediate tree, superseded when the lock order
-  changed, and the authoritative run on the corrected Reservation → Job tree
-  recorded in `docs/phase-5a-completion.md`. Three guards are structurally redundant and are
+  changed, and the authoritative **272 run, 272 killed, 0 survivors, 0
+  anchor-missing** on the corrected Reservation → Job tree. Three guards are structurally redundant and are
   reported as such rather than counted as clean kills: the SQL join already
   restricts the attempt to `MAX(attemptOrdinal)`, the outer joins make the
   delivered-pointer null check implied by every guard below it, and the replay's

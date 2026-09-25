@@ -275,7 +275,7 @@ Not done, on purpose, and each with a reason rather than an omission:
 | `pnpm typecheck` | clean, 0 errors |
 | `pnpm lint` | clean |
 | `pnpm test` | **4379 passed / 135 files** (from 4332 / 133) |
-| `pnpm test:db` | **1051 passed / 33 files** (from 975 / 31) |
+| `pnpm test:db` | **1053 passed / 33 files** (from 975 / 31) |
 | `pnpm build` | success |
 | `prisma validate` | valid |
 | `prisma format` | no change on re-format |
@@ -474,9 +474,35 @@ code has since changed.
 
 ### Final complete run — the authoritative one
 
-Run once on the corrected **Reservation → Job** tree.
+Run once on the corrected **Reservation → Job** tree, pre-ledger HEAD
+`576926f8b9c38bb7dde6bbd7aeda47e454eeb725`.
 
-_(filled in below)_
+| | |
+| --- | --- |
+| Mutations run | **272** |
+| Killed | **272** |
+| Survivors | **0** |
+| Anchor-missing | **0** |
+
+All 271 earlier definitions preserved; **M271** is the lock-order mutation, which
+reverses Transaction I back to Job → Reservation and is killed by the real-path
+regression (1 unit + 1 db). The total is 272, reported as measured.
+
+**This is the only final mutation evidence.** The two earlier runs describe trees
+whose executable production code differs from this one.
+
+### Restoration — against the final tree only
+
+Verified after the harness exited. Deliberately **not** reusing the evidence from
+`d5edef3`, `88463d6` or `b2f00a6`: the production tree is different.
+
+```text
+pre-ledger HEAD                    576926f8b9c38bb7dde6bbd7aeda47e454eeb725
+harness / python mutation children 0
+sha256sum -c (fresh snapshot)      657 files checked, 0 mismatches
+git status --short                 empty
+git diff --check                   empty
+```
 
 ### What the seven correction mutations cover
 
@@ -562,22 +588,11 @@ comparison then runs against a null digest and raises
 Both guards are kept. They document different facts, they fail closed, and the
 cost of keeping them is one honest note rather than a removed defence.
 
-### Restoration
+### Restoration of the superseded runs, for the record
 
-Verified after the harness exited, not asserted:
-
-```text
-mutation/harness processes         0
-sha256sum -c pre-ledger snapshot   657 files checked, 0 mismatches
-git status --short                 empty
-git diff --check                   empty
-HEAD                               d5edef3 (the Phase 5A commit)
-```
-
-The first process check appeared to report one match; that was this session's own
-shell, whose command line contained the harness name as an argument. A re-check
-naming the full process lines showed no matching process and no `python3` process
-at all.
+The intermediate 271/271 run restored cleanly too — 657/657 against its own
+snapshot at `88463d6`, zero mismatches — but that evidence describes the
+Job → Reservation tree and is not carried forward.
 
 ## Carried forward
 

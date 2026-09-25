@@ -89,9 +89,9 @@ runs, but because the harness treats any suite failure as a kill, that 264/264
 tally is kept only as historical record.
 
 Two further complete ledgers followed: 271/271/0/0 on the intermediate tree,
-superseded when the lock order was corrected, and the authoritative run on the
-final Reservation → Job tree. Only the last is final evidence; all three are
-recorded in `docs/phase-5a-completion.md`.
+superseded when the lock order was corrected, and **272/272/0/0** on the final
+Reservation → Job tree. Only the last is final evidence; all three are recorded
+in `docs/phase-5a-completion.md`.
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 
