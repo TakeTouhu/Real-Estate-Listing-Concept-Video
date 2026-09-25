@@ -3,6 +3,75 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 5B: Durable composition execution and the managed final output
+
+Detail in `docs/phase-5b-completion.md` and ADR-0050. Turns one frozen Phase 5A
+plan into one managed object with a durable SHA-256 receipt. **Nothing runs it**:
+no scheduler, no timer, no production caller, and no test launches a subprocess —
+CI needs no `ffmpeg`. No unit is consumed, no reservation is touched, and the
+customer's current deliverable pointer never moves.
+
+### Added
+
+- **Composition profile v1** (`vtavision-compose:v1`) — a closed table rather
+  than a computation: H.264 in MP4, `yuv420p`, constant 30/1, CRF 18, `medium`,
+  `+faststart`, hard cuts, no audio, and contain-and-pad into one of six
+  even-dimensioned rasters (16:9, 9:16 and 1:1 at 720p and 1080p). Frozen onto
+  the work row at first claim and reused verbatim by every retry; a profile key
+  this build does not implement refuses to run rather than re-deriving today's
+  defaults.
+- **`GenerationDeliverableComposition`** (migration 15) — one durable work row
+  per planned deliverable version, unique on `deliverableVersionId`. It *is* the
+  queue (ADR-0024, unchanged: no broker).
+- **Transaction J1** (`claimCompositionWork`) — the work row and
+  `COMPOSITION_PENDING -> COMPOSING` in one commit on a first claim; a retry
+  claim takes the lease and moves no job, because a second transition event
+  would record a state change that did not happen.
+- **Transaction J2** (`finalizeComposition`) — the durable receipt and
+  `COMPOSING -> DELIVERABLE_VALIDATING`, together or not at all.
+- **`deferComposition`** — returns work to `PENDING` with one of exactly three
+  transient codes and a future instant, leaving the job untouched.
+- **`blockComposition`** — ends automatic execution with one of exactly four
+  deterministic codes. The job stays `COMPOSING`, no unit is consumed, no
+  reservation is read or released, the deliverable pointer does not move, and
+  **no transition event is appended on either aggregate**.
+- **`ManagedDeliverableOutputKey`** —
+  `org/{organizationId}/deliverables/{deliverableVersionId}/output`, a brand
+  deliberately distinct from `ManagedGenerationOutputKey`.
+- **Four adapters behind four ports** — a streaming source materializer that
+  proves every source against the plan's frozen receipt, an `ffmpeg` composer
+  driven through a no-shell fixed-argv `ProcessRunner`, a first-wins publisher
+  that reads its receipt back from the object actually at the key, and the SQL
+  repository.
+- **`DeliverableCompositionRunner`** — one bounded pass, isolating each
+  candidate. No loop, no timer, no production caller.
+
+### Changed
+
+- **`ProcessRunner` moved to its own types-only module**
+  (`packages/storage/src/managed-output/process-runner.ts`), re-exported from
+  `ffprobe.ts` so every existing importer is unchanged. A seam extraction only:
+  no change to the inspector's command, timeouts, error classification or
+  stdout handling, and no new production construction site. A focused regression
+  pins all of that.
+- **`resolveCompositionProfile` guards with `Object.hasOwn`** — the raster table
+  is a plain object literal, so a resolution of `"toString"` previously resolved
+  to a `Function.prototype` member instead of `undefined` and threw while being
+  destructured. `targetOutputResolution` is snapshotted free-form text, so this
+  was reachable input.
+- **`wipeOrchestration`** now deletes composition rows before the deliverable
+  versions they `RESTRICT`.
+
+### Deliberately not done
+
+- No deliverable media validation (Phase 5C); `OUTPUT_VERIFIED` claims only that
+  an object exists at the canonical key with a digest and byte count read from
+  the bytes actually there.
+- No operator path out of `BLOCKED`, and no unblock operation.
+- No `FAILED` state, and no settlement policy for a permanently uncomposable
+  deliverable.
+- No HTTP surface changed: no route, request shape, response shape or endpoint.
+
 ## [Unreleased] — Phase 5A: Durable deliverable composition plan
 
 Detail in `docs/phase-5a-completion.md` and ADR-0049. Answers, durably, which

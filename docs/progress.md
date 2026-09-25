@@ -1124,6 +1124,79 @@ and ADR-0020.
   identity check is dominated by its succession check. All are kept, and the
   mutations aimed at them remove every site at once. Detail in
   `docs/phase-5a-completion.md` and ADR-0049.
+- **Phase 5B** — see GitHub for its lifecycle. Turns one frozen Phase 5A plan
+  into one managed object with a durable SHA-256 receipt, and decides what
+  happens every way that fails. Composition profile v1
+  (`vtavision-compose:v1`) is a closed table rather than a computation: H.264 in
+  MP4, `yuv420p`, constant 30/1, CRF 18, `medium`, `+faststart`, hard cuts, no
+  audio, and contain-and-pad into one of six even-dimensioned rasters. A formula
+  over a free-form aspect string is how `21:9` silently becomes 16:9 — a
+  letterboxed delivery the customer never agreed to, produced by rounding — so an
+  unsupported combination refuses instead. Nothing is inferred from a provider or
+  a model id, and the profile is frozen onto the work row at first claim and
+  reused verbatim by every retry, because a v2 build re-deriving here would
+  encode the second half of a deliverable's history differently from the first.
+
+  One table (migration 15), `GenerationDeliverableComposition`, one row per
+  planned version, and it *is* the queue — ADR-0024 unchanged, no broker. Four
+  short database-only transactions with every external byte between them: J1
+  claims and moves `COMPOSITION_PENDING -> COMPOSING`; J2 writes the receipt and
+  moves `COMPOSING -> DELIVERABLE_VALIDATING`; defer and block end an attempt.
+  Lock order `Job -> Version -> work`; the reservation is neither joined nor
+  locked, because execution moves no entitlement and a lock taken for symmetry
+  would contend with settlement over a row this code never touches.
+
+  The phase's real content is that transient and deterministic failures became
+  different states. `PENDING` means try again later; `BLOCKED` means trying again
+  cannot help. Three retry codes and four block codes, disjoint by construction,
+  because a plan whose frozen sources total three gigabytes totals three
+  gigabytes forever, and deferring that builds an automatic retry that fails
+  identically every five minutes and tells nobody — invisible until a scheduler
+  exists, which is why it had to be decided now. `BLOCKED` is not customer
+  failure and invents no lifecycle state: the job stays `COMPOSING`, no unit is
+  consumed, no reservation is read, the pointer does not move, and **no
+  transition event is appended on either aggregate**, because the job really did
+  not change and a `COMPOSITION_BLOCKED` state would put a value in the event
+  stream no reviewed state machine contains. `lastRetryCode` means exactly one
+  thing — why this work is currently deferred — so it is cleared on claim and on
+  block, and the status CHECK requires it NULL in every arm but `PENDING`.
+
+  The two refusals decidable from the claim alone — the 2 GiB source budget and
+  the scene-duration sum — are proved after the claim and before the
+  materializer, composer or publisher is touched, in a fixed order so a plan
+  violating both always records the same code. There is no redistribution rule
+  for a duration mismatch: stretching scenes to reach the admitted length would
+  silently change what was agreed. An unsupported delivery target is a returned
+  claim outcome that writes nothing, and discovery filters those pairs out using
+  the domain's own raster table, because a row every claim refuses would
+  otherwise crowd out work that can be composed.
+
+  Publication is first-wins and the receipt is always re-read from the object
+  actually at the key, never assumed from the local file — that is what makes
+  "published, then crashed before the database learned of it" recoverable. An
+  ETag is never used as a SHA-256. Sources are streamed while hashed and counted,
+  bounded by the plan's own frozen byte count, and any single receipt
+  disagreement refuses the whole materialization. The composer runs through a
+  fixed-argv no-shell `ProcessRunner`, which moved to a types-only module this
+  phase so the media inspector's dormancy tripwire keeps full strength instead of
+  gaining an exemption; temporary files carry no identity and cleanup is
+  unconditional.
+
+  Writing the suites found two real defects, both fixed: the raster table
+  resolved an unknown resolution through `Object.prototype`, reachable because
+  `targetOutputResolution` is snapshotted free-form text, and the orchestration
+  wipe did not delete composition rows before the versions they `RESTRICT`.
+  Complete mutation ledger over **302 definitions: 302 run, 302 killed, 0
+  survivors, 0 anchor-missing** in 5h 47m, restoration proved against a
+  pre-ledger SHA-256 snapshot of all 678 tracked files with zero mismatches. Two
+  mutations survived a targeted pass first and are reported rather than quietly
+  replaced: both were structurally dominated — the block's `lastRetryCode` clear
+  is unobservable because the CAS requires `RUNNING` and the shape CHECK already
+  forbids a retry code there, and the `BLOCKED` claim guard is dominated by the
+  reclaim CAS's own status predicate. Both assignments are kept and the mutations
+  re-aimed at the guard sets that are observable. Nothing constructs the
+  repository, runner or adapters in production; no test launches a subprocess, so
+  CI needs no `ffmpeg`. Detail in `docs/phase-5b-completion.md` and ADR-0050.
 - **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
   Phase 6B left. First, a planning refusal was an answer: the runner reported
   `NO_PLAN` and moved on, nothing durable recorded that the candidate had been
