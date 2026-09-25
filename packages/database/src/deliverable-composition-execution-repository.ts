@@ -33,8 +33,6 @@ import {
   COMPOSITION_EXECUTION_REASON_CODE,
   DELIVERABLE_COMPOSING_EVENT_TYPE,
   DELIVERABLE_COMPOSING_STATE,
-  DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE,
-  DELIVERABLE_COMPOSITION_BLOCKED_STATE,
   DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
   DeliverableCompositionExecutionDefect,
@@ -333,6 +331,11 @@ export function createDeliverableCompositionExecutionRepository(
               leaseToken: input.leaseToken,
               leaseExpiresAt,
               nextAttemptAt: null,
+              // The work is no longer deferred, so the reason it was deferred
+              // stops being true the instant this lease is taken. Carrying it
+              // into RUNNING would leave a row that is being worked on while
+              // still stating why it is waiting.
+              lastRetryCode: null,
               attemptCount,
               version,
             },
@@ -514,10 +517,11 @@ export function createDeliverableCompositionExecutionRepository(
         if (ctx === null) return { kind: "LEASE_LOST" };
 
         if (ctx.workStatus === "BLOCKED") {
-          // Replay. A block already recorded is never rewritten: a different
-          // code would overwrite the reason an operator is reading, and a
-          // repeat of the same one would append a second event for a transition
-          // that happened once.
+          // Replay, and deliberately a *read only*. A block already recorded is
+          // never rewritten: a different code would overwrite the reason an
+          // operator is reading, and rewriting `blockedAt` with the same code
+          // would move the instant automatic work actually stopped to whenever
+          // the last duplicate happened to arrive.
           const stored = await tx.generationDeliverableComposition.findUniqueOrThrow({
             where: { deliverableVersionId: input.claim.deliverableVersionId },
             select: { blockCode: true },
@@ -527,6 +531,12 @@ export function createDeliverableCompositionExecutionRepository(
           }
           return { kind: "ALREADY_BLOCKED" };
         }
+
+        // The job must still be composing. Named rather than assumed from the
+        // work row: the two are written in different transactions, and a block
+        // recorded against a job that has moved on would terminate work for a
+        // cycle nobody is running.
+        if (ctx.jobState !== "COMPOSING") return { kind: "LEASE_LOST" };
 
         const blocked = await tx.generationDeliverableComposition.updateMany({
           where: {
@@ -543,6 +553,12 @@ export function createDeliverableCompositionExecutionRepository(
             // at which it becomes due is exactly the automatic retry this state
             // exists to stop, and the status shape constraint refuses it.
             nextAttemptAt: null,
+            // Cleared for the same reason. `lastRetryCode` means "why this work
+            // is currently deferred for automatic retry", and blocked work is
+            // not deferred for anything. Leaving an earlier transient code
+            // beside a terminal one would show an operator two competing
+            // reasons; `attemptCount` already records that it was tried.
+            lastRetryCode: null,
             blockCode: input.blockCode,
             blockedAt: new Date(input.blockedAt),
             version: input.claim.version + 1,
@@ -550,24 +566,16 @@ export function createDeliverableCompositionExecutionRepository(
         });
         if (blocked.count !== 1) return { kind: "LEASE_LOST" };
 
-        // The deliverable aggregate records that automatic composition stopped.
-        // The job is deliberately left COMPOSING with no job event: nothing
-        // about the job changed, no unit is consumed, no reservation is
-        // released, and terminalizing it would destroy a video the customer may
-        // already hold.
-        await appendGenerationEvent(tx, {
-          organizationId: ctx.organizationId,
-          aggregateType: "DELIVERABLE",
-          aggregateId: ctx.versionId,
-          fromState: DELIVERABLE_COMPOSING_STATE,
-          toState: DELIVERABLE_COMPOSITION_BLOCKED_STATE,
-          context: {
-            ...input.context,
-            eventType: DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE,
-            reasonCode: COMPOSITION_EXECUTION_REASON_CODE,
-          },
-        });
-
+        // No transition event, on either aggregate, on purpose. The job really
+        // does stay COMPOSING, so a job event would assert a change that did not
+        // happen — and inventing a deliverable lifecycle state to carry the fact
+        // would put a value in the event stream that no reviewed state machine
+        // contains. The work row says it exactly: BLOCKED, with a code and an
+        // instant.
+        //
+        // Nothing else moves either: no unit is consumed, no reservation is read
+        // or released, and the job is not terminalized, because a customer may
+        // already hold a perfectly good video from an earlier cycle.
         await assertPointerUnmoved(tx, ctx);
         return { kind: "BLOCKED" };
       });

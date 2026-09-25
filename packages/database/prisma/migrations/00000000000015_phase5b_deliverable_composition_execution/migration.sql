@@ -134,10 +134,14 @@ ALTER TABLE "generation_deliverable_compositions"
 -- blocked arm for the same reason, because a terminated row without a stated
 -- reason is the one thing an operator cannot act on.
 --
--- `lastRetryCode` is deliberately unconstrained by this check. A row that was
--- deferred for a transient failure and later blocked for a deterministic one
--- legitimately carries both: the retry code says what went wrong last time it
--- could have worked, and the block code says why it never will.
+-- `lastRetryCode` is NULL in every arm but PENDING, and that is the whole
+-- meaning of the column: *why this work is currently deferred for automatic
+-- retry*. Work that is running is not deferred, work that is blocked will never
+-- be retried, and work that is verified is finished -- so a retry reason
+-- surviving into any of those states would show an operator two competing
+-- explanations for one row. `attemptCount` already records that the work was
+-- tried. Retry-reason history, if it is ever wanted, is a separate audited
+-- design rather than an overload of this field.
 ALTER TABLE "generation_deliverable_compositions"
   ADD CONSTRAINT "deliverable_composition_status_shape_check"
   CHECK (
@@ -158,6 +162,7 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NOT NULL
       AND "leaseExpiresAt" IS NOT NULL
       AND "nextAttemptAt" IS NULL
+      AND "lastRetryCode" IS NULL
       AND "blockCode" IS NULL
       AND "blockedAt" IS NULL
       AND "outputStorageKey" IS NULL
@@ -170,6 +175,7 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NULL
       AND "leaseExpiresAt" IS NULL
       AND "nextAttemptAt" IS NULL
+      AND "lastRetryCode" IS NULL
       AND "blockCode" IS NOT NULL
       AND "blockedAt" IS NOT NULL
       AND "outputStorageKey" IS NULL
@@ -182,6 +188,7 @@ ALTER TABLE "generation_deliverable_compositions"
       AND "leaseToken" IS NULL
       AND "leaseExpiresAt" IS NULL
       AND "nextAttemptAt" IS NULL
+      AND "lastRetryCode" IS NULL
       AND "blockCode" IS NULL
       AND "blockedAt" IS NULL
       AND "outputStorageKey" IS NOT NULL

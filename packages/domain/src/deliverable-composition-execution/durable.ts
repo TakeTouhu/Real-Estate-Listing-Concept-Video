@@ -65,7 +65,16 @@ export const COMPOSITION_STATUSES = [
 export type DeliverableCompositionStatus = (typeof COMPOSITION_STATUSES)[number];
 
 /**
- * Why a composition attempt stopped, in a closed application vocabulary.
+ * Why a composition attempt stopped and will be tried again, in a closed
+ * application vocabulary.
+ *
+ * `lastRetryCode` means exactly one thing: *why this work is currently deferred
+ * for automatic retry*. It is therefore cleared the moment the work stops being
+ * deferred — on claim, and on block — rather than kept as a trailing note about
+ * an earlier attempt. `attemptCount` already records that the work was tried,
+ * and a column that sometimes means "why it is waiting" and sometimes means
+ * "what once went wrong" is a column no operator can read. Retry-reason history
+ * is a separate audited design, not an overload of this field.
  *
  * Every member is a *class* of operational failure, not a description of one.
  * No ffmpeg stderr, no S3 message, no OS errno, no path, no bucket, no customer
@@ -346,21 +355,23 @@ export class DeliverableCompositionExecutionDefect extends Error {
 /** Fixed application-owned event types. Nothing external reaches these. */
 export const DELIVERABLE_COMPOSING_EVENT_TYPE = "deliverable.composing";
 export const DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE = "deliverable.output_verified";
-/**
- * Recorded on the deliverable aggregate only.
- *
- * There is deliberately no matching job event: blocking terminates this phase's
- * automatic work and changes nothing about the job, and an event on the job
- * aggregate would assert a job state change that did not happen.
- */
-export const DELIVERABLE_COMPOSITION_BLOCKED_EVENT_TYPE = "deliverable.composition_blocked";
 export const JOB_COMPOSING_EVENT_TYPE = "job.composing";
 export const JOB_DELIVERABLE_VALIDATING_EVENT_TYPE = "job.deliverable_validating";
 
 /** The states a deliverable aggregate is recorded as entering. */
 export const DELIVERABLE_COMPOSING_STATE = "COMPOSING";
 export const DELIVERABLE_OUTPUT_VERIFIED_STATE = "OUTPUT_VERIFIED";
-export const DELIVERABLE_COMPOSITION_BLOCKED_STATE = "COMPOSITION_BLOCKED";
+
+// Blocking appends **no** transition event, and there is deliberately no
+// `COMPOSITION_BLOCKED` state in either vocabulary.
+//
+// The job really does stay `COMPOSING`, so a job event would assert a state
+// change that did not happen; and inventing a deliverable lifecycle state to
+// carry the fact would put a value in the transition-event stream that no
+// reviewed state machine contains, which every later reader would then have to
+// interpret. The durable work row already says it exactly — `status = BLOCKED`
+// with a `blockCode` and a `blockedAt` — and a future operator recovery
+// lifecycle can introduce a reviewed event model if it needs one.
 
 /** The reason code recorded on every composition-execution transition. */
 export const COMPOSITION_EXECUTION_REASON_CODE = "DELIVERABLE_COMPOSITION_EXECUTION";

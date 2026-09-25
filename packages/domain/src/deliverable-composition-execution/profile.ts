@@ -149,7 +149,15 @@ export function resolveCompositionProfile(target: {
   if (!isComposableAspectRatio(target.targetAspectRatio)) {
     return { kind: "UNSUPPORTED_TARGET" };
   }
-  const byResolution = RASTERS[target.targetAspectRatio];
+  const byResolution: object = RASTERS[target.targetAspectRatio];
+  // `Object.hasOwn` before indexing, because the resolution is free-form text
+  // snapshotted onto the job. A plain property read answers `"toString"`,
+  // `"constructor"` and `"valueOf"` with something from `Object.prototype`
+  // instead of `undefined`, and the table would appear to hold a raster for a
+  // target nobody ever added to it.
+  if (!Object.hasOwn(byResolution, target.targetOutputResolution)) {
+    return { kind: "UNSUPPORTED_TARGET" };
+  }
   const raster = (byResolution as Record<string, readonly [number, number] | undefined>)[
     target.targetOutputResolution
   ];
