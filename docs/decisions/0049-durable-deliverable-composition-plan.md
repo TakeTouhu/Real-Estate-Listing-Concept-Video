@@ -207,7 +207,7 @@ are exactly what this transaction exists to make impossible.
 ### Lock order
 
 ```text
-GenerationJob
+GenerationJob            <- must become GenerationReservation first
   → GenerationReservation
     → GenerationScenes (position ASC, id ASC)
       → selected SceneGenerationRequests
@@ -217,8 +217,8 @@ GenerationJob
 
 The same Job-first order Transaction F, the recovery admission and Transaction H
 take, so none of them can close a deadlock cycle with this one. Every row in that
-list is locked; see *Why the Job is locked before the hold* below for the
-measurement that fixed the Job/reservation pair's order.
+list is locked. **The Job/Reservation pair is in the wrong order** — see
+*The Job/Reservation order is WRONG in the current implementation* below.
 
 The locks are taken in two statements rather than one, and not by preference:
 PostgreSQL refuses `FOR UPDATE` on the nullable side of an outer join, and the
@@ -240,35 +240,57 @@ provider call, moves no exposure, consumes no unit and releases none. There is
 **no cost-admission advisory lock**: planning does not cross the paid boundary,
 so serializing it against the gate that does would be contention for nothing.
 
-### Why the Job is locked before the hold
+### The Job/Reservation order is WRONG in the current implementation
 
-The pair's order was chosen by measurement, not by convention. Transaction H is
-the only other operation that locks both rows, and it does so in one statement
-whose `FROM` clause reaches `generation_jobs` before `generation_reservations`. A
-three-session probe against live PostgreSQL — hold the reservation row, run the
-settlement-shaped join, then attempt the Job row `FOR UPDATE NOWAIT` from a third
-session — reports `could not obtain lock on row in relation "generation_jobs"`.
-Settlement therefore **already holds the Job while it waits for the reservation**.
-
-The same probe with the two tables swapped in the `FROM` clause reports the Job
-row as freely acquirable, which is what makes the instrument trustworthy rather
-than a coincidence.
-
-So a staged reservation-then-Job acquisition here would close a real cycle:
-
-```text
-Transaction I : holds reservation, waits for Job
-Transaction H : holds Job,         waits for reservation
-```
-
-Job-then-reservation matches settlement's measured order and cannot deadlock with
-it. The three cost workflows — paid-submission authorization, reconciliation and
-submission outcome — lock the reservation *alone* and never the Job, so none of
-them can participate in a cycle in either direction.
-
-The reservation's state is read **only** under its own row lock. The Job read
-does not join the reservation at all, so no unlocked value exists for a later
-edit to start trusting by accident.
+> **Open defect, found after this ADR was first written.** Transaction I
+> currently locks the Job and *then* the reservation. That is the wrong way
+> round, and it can deadlock against Transaction H.
+>
+> The order was originally chosen from a probe that used a **hand-written
+> two-table join** — `FROM generation_jobs j JOIN generation_reservations res`
+> with the filter on `j."id"` — which made the plan scan jobs first and reported
+> that settlement holds the Job while waiting for the reservation. That probe
+> measured the substitute, not production.
+>
+> Measured again against the **real** `settleExhaustedMediaFailure` path, the
+> answer reverses. `lockSettlementChain` filters on `v."id"`, so the plan reaches
+> `generation_reservations` before `generation_jobs`:
+>
+> | session A holds | settlement blocks on | third session probes | result |
+> | --- | --- | --- | --- |
+> | the reservation row | the reservation | the Job row | **acquired** — settlement does not hold it |
+> | the Job row | the Job | the reservation row | **refused** — settlement holds it |
+>
+> `pg_locks` confirms it directly: while blocked on the reservation, the settling
+> backend holds only table-level `RowShareLock`s and no row lock on
+> `generation_jobs`.
+>
+> So Transaction H takes **Reservation → Job**, and Transaction I's current
+> Job → Reservation order closes a cycle:
+>
+> ```text
+> Transaction I : holds Job,         waits for Reservation
+> Transaction H : holds Reservation, waits for Job
+> ```
+>
+> The window is narrow — Transaction I requires `SCENES_READY` and settlement
+> acts on a `GENERATING` job — but both lock *before* they check state, so a
+> Transaction I call that will ultimately return `NOT_ELIGIBLE` still holds the
+> Job row while settlement is running. PostgreSQL would abort one side with a
+> deadlock error, which surfaces as an unhandled exception rather than a business
+> outcome.
+>
+> **Transaction I must be changed to Reservation → Job.** That is a production
+> change and therefore requires a mutation-ledger re-run; it is not made here,
+> and is recorded as blocking in `docs/phase-5a-completion.md`.
+>
+> The contract itself is now pinned behaviourally against the real settlement
+> path, in `tests/integration/media-failure-settlement-races.db.test.ts`, so
+> whichever order is finally chosen cannot drift again without a test failing.
+>
+> The three cost workflows — paid-submission authorization, reconciliation and
+> submission outcome — lock the reservation and never subsequently lock the Job,
+> so they cannot form the inverse pair either way.
 
 ### The media verdicts are locked too
 

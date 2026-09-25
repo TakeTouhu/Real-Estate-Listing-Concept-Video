@@ -303,33 +303,32 @@ The hold is now locked, and the state used by the decision is the one read *unde
 that lock*. The Job read no longer joins the reservation at all, so no unlocked
 value exists for a later edit to start trusting by accident.
 
-**The prescribed lock order was corrected by measurement.** The review asked for
-a staged reservation-then-Job acquisition, on the premise that settlement already
-takes reservation before Job. It does not. Transaction H locks both in one
-statement whose `FROM` clause reaches `generation_jobs` before
-`generation_reservations`, and a three-session probe — hold the reservation row,
-run the settlement-shaped join, then attempt the Job row `FOR UPDATE NOWAIT` from
-a third session — reports:
+**The lock order is an open defect, and the earlier claim in this report was
+wrong.** This section previously said the prescribed Reservation→Job order had
+been "corrected by measurement" to Job→Reservation. That measurement used a
+hand-written two-table join instead of the real settlement path, and it gave the
+opposite of the truth.
 
-```text
-ERROR:  could not obtain lock on row in relation "generation_jobs"
-```
+Re-measured against the **real** `settleExhaustedMediaFailure`:
 
-Settlement therefore **already holds the Job while it waits for the
-reservation**. The same probe with the two tables swapped reports the Job row as
-freely acquirable, which is what makes the instrument trustworthy rather than a
-coincidence. A staged reservation-then-Job order here would have closed a real
-cycle:
+| session A holds | settlement blocks on | third session probes | result |
+| --- | --- | --- | --- |
+| the reservation row | the reservation | the Job row | **acquired** — settlement does not hold it |
+| the Job row | the Job | the reservation row | **refused** — settlement holds it |
 
-```text
-Transaction I : holds reservation, waits for Job
-Transaction H : holds Job,         waits for reservation
-```
+`pg_locks` confirms it: while blocked on the reservation, the settling backend
+holds only table-level `RowShareLock`s and no row lock on `generation_jobs`.
 
-So the corrected order is **Job → Reservation**, matching settlement's measured
-order. The three cost workflows lock the reservation *alone* and never the Job,
-so none can participate in a cycle either way. No cost-admission advisory lock is
-taken, and no unit is consumed or released.
+Transaction H therefore takes **Reservation → Job**, exactly as the review
+originally specified. Transaction I's current Job → Reservation order closes a
+cycle with it, and **must be changed**. That is a production change requiring a
+mutation-ledger re-run, so it is not made in this correction — it is recorded
+here as blocking merge. The contract is now pinned behaviourally against the real
+path in `tests/integration/media-failure-settlement-races.db.test.ts`, so
+whichever order is chosen cannot drift again unnoticed.
+
+No cost-admission advisory lock is taken by Transaction I, and no unit is
+consumed or released — both unaffected by the ordering question.
 
 ### Blocker B — a recomposition replay could return the customer's current deliverable
 

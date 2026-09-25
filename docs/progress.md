@@ -1102,9 +1102,12 @@ and ADR-0020.
   could report the customer's *current* deliverable as the pending plan, because
   a recomposition legitimately leaves the job pointing at the previous usable
   version; and the selected media verdicts were read unlocked despite the
-  documented contract naming them. The Job→Reservation lock order was settled by
-  measuring live PostgreSQL — settlement holds the Job while waiting for the
-  reservation, so the reverse order would have deadlocked against it.
+  documented contract naming them. The Job/Reservation lock order is an **open
+  defect**: it was chosen from a probe that used a hand-written substitute join
+  rather than the real settlement path, and re-measuring against
+  `settleExhaustedMediaFailure` shows settlement takes Reservation → Job.
+  Transaction I must be reversed to match; that is a production change and is
+  recorded as blocking in `docs/phase-5a-completion.md`.
 
   Mutation ledger: an earlier **complete** run — 264 run, 264 killed, 0 survivors,
   0 anchor-missing, with all 227 earlier definitions preserved — is **not** final
@@ -1131,8 +1134,13 @@ and ADR-0020.
   own outage to the customer, irreversibly. A refusal now **defers**: a durable
   work row returns to `PENDING` with a future `nextAttemptAt`, disappears from
   discovery until then, and the sweep moves on to work it can actually do. That
-  single predicate is the whole fairness mechanism; no unbounded scan and no
-  priority queue. Second, an exhausted recovery settled nothing: when the one
+  deferral is half of the fairness mechanism; the other half is **effective-
+  eligibility ordering** — the candidate sweep orders by the instant each row
+  actually becomes due rather than by its original verdict time, so a deferred
+  row cannot reclaim the head of the queue merely by being old. Neither half
+  alone is sufficient, and ADR-0048 Decision 3 records why: deferral without the
+  ordering lets a slow scheduler re-offer the same prefix, and ordering without
+  deferral has nothing to re-order. No unbounded scan and no priority queue. Second, an exhausted recovery settled nothing: when the one
   automatic retry also came back as unusable media the customer's request stayed
   `GENERATING` forever with a reservation still held. Transaction H now owns
   every customer consequence in one commit, and which shape it takes follows
