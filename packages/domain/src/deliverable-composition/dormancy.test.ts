@@ -313,7 +313,11 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // Pinned by index rather than as the newest: Phase 5B appends migration 15
+    // for composition *execution*, which is a different table and a different
+    // review. What this phase still owns is exactly one migration, at the
+    // position it was added, and no second one named for it.
+    expect(dirs[14]).toBe(MIGRATION_DIR);
     expect(dirs.filter((dir) => dir.includes("phase5a"))).toEqual([MIGRATION_DIR]);
   });
 

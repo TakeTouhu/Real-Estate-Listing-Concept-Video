@@ -840,3 +840,34 @@ rollback behaviour, which belongs to the phase that owns them and needs its own
 mutation evidence. Whoever picks it up should also decide whether the reservation
 belongs in those statements' `FOR UPDATE OF` list, which would be the smallest
 correct fix given the system-wide Reservation → Job order.
+
+## Phase 5B follow-up — the questions `BLOCKED` deliberately leaves open
+
+Phase 5B introduced a terminal-for-this-phase state and, deliberately, no way
+out of it. Three decisions are owed, and none is pre-empted here.
+
+**There is no operator path out of `BLOCKED`.** A blocked row states what
+happened (`blockCode`) and when (`blockedAt`), and nothing re-queues it. That is
+not an oversight: an unblock operation that re-queued work without deciding
+*why* it was blocked would re-enter the automatic retry loop the state exists to
+end. A real operator surface needs its own authorization model, its own audit
+events, and a decision about whether unblocking is per-row or per-cause.
+
+**No settlement policy exists for a permanently uncomposable deliverable.** A
+blocked recomposition leaves the customer holding their previous video and the
+platform holding a reserved unit that will never be consumed or released. Who
+bears that cost — and whether a blocked *initial* composition should eventually
+fail the job rather than sit forever — is a billing decision, not an execution
+one. Phase 5B deliberately terminalizes nothing.
+
+**Retry-reason history is not recorded.** `lastRetryCode` means exactly one
+thing — why this work is currently deferred — so it is cleared on claim and on
+block, and `attemptCount` is the only surviving evidence that earlier attempts
+happened. If an operator ever needs to see *what* an attempt failed on three
+tries ago, that is a separate audited table, not an overload of this column.
+
+**A raised source-byte budget does not unblock what the old one refused.**
+`MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES` is a deployment constant; a row
+blocked with `SOURCE_BYTES_LIMIT_EXCEEDED` under the old value stays blocked
+after it is raised, because nothing re-evaluates a blocked row. Whoever raises it
+needs the operator path above first.
