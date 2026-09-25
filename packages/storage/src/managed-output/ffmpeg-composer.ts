@@ -4,7 +4,7 @@
  * ## No shell, ever
  *
  * Invoked through the same injected `ProcessRunner` seam the media inspector
- * uses, which runs `execFile` with no shell. There is no command *string*
+ * uses, which launches the program directly with no shell. There is no command *string*
  * anywhere in this module — nothing is interpolated, quoted or escaped, because
  * nothing is parsed by a shell. Every variable element is either a path this
  * process created inside its own temporary directory, or a number taken from the
@@ -59,7 +59,7 @@ import {
   type CompositionProfile,
   type DeliverableMediaComposer,
 } from "@app/domain";
-import type { ProcessRunner } from "./ffprobe";
+import type { ProcessRunner } from "./process-runner";
 
 /** 20 minutes by default: long enough for a 60s 1080p encode with headroom. */
 export const DEFAULT_COMPOSE_TIMEOUT_MS = 20 * 60_000;

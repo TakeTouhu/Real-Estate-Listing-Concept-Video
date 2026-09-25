@@ -26,7 +26,6 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES,
   MAX_DELIVERABLE_OUTPUT_BYTES,
   managedGenerationOutputKey,
   safePositiveByteCount,
@@ -37,7 +36,6 @@ import {
   type MaterializeCompositionSourcesOutcome,
   type PublishDeliverableOutcome,
 } from "@app/domain";
-import { MAX_MANAGED_PROVIDER_OUTPUT_BYTES } from "./streaming-transfer";
 import type { ManagedOutputTempFileFactory, S3ManagedObjectReader } from "./media-validation";
 import type { S3ObjectBody } from "./s3-staging-sink";
 
@@ -94,20 +92,10 @@ export function createDeliverableCompositionSourceMaterializer(
 ): DeliverableCompositionSourceMaterializer {
   return {
     async materialize({ organizationId, scenes }): Promise<MaterializeCompositionSourcesOutcome> {
-      // The budget is checked against the plan's own frozen sizes **before any
-      // network call**, so an oversized deliverable costs nothing rather than
-      // filling a worker's disk and taking unrelated work down with it.
-      let planned = 0;
-      for (const scene of scenes) {
-        if (scene.sourceSizeBytes > MAX_MANAGED_PROVIDER_OUTPUT_BYTES) {
-          return { kind: "SOURCE_BUDGET_EXCEEDED" };
-        }
-        planned += scene.sourceSizeBytes;
-      }
-      if (planned > MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES) {
-        return { kind: "SOURCE_BUDGET_EXCEEDED" };
-      }
-
+      // No budget check here. The plan's frozen source total is arithmetic the
+      // caller already has, it is decided before this port is reached, and an
+      // overrun ends the work rather than deferring it — so a second copy of
+      // that rule inside a storage adapter could only disagree with the first.
       const dir = await mkdtemp(join(tmpdir(), "vta-compose-"));
       const release = async (): Promise<void> => {
         try {
@@ -184,9 +172,11 @@ async function materializeOne(
         if (chunk === null) break;
         if (!(chunk instanceof Uint8Array)) return "RETRYABLE";
         const next = total + chunk.byteLength;
-        // An over-limit object never reaches the composer, and never fills the
-        // disk on the way there.
-        if (next > MAX_MANAGED_PROVIDER_OUTPUT_BYTES) return "RETRYABLE";
+        // The plan's frozen byte count is this stream's ceiling, so a longer
+        // object is already proved not to be the planned bytes — concluded
+        // here rather than after another gigabyte of reading, and never by
+        // filling the disk first.
+        if (next > scene.sourceSizeBytes) return "MISMATCH";
         // The chunk counts for nothing until all of it is on disk: a short or
         // stalled write leaves a truncated file, and a truncated file must never
         // be described by a hash of bytes it does not contain.
