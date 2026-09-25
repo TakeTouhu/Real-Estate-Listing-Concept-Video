@@ -373,6 +373,137 @@ RUN("composition admission under contention", () => {
 
   // -------------------------------------------------------------------------
 
+  describe("the Reservation/Job acquisition order", () => {
+    /**
+     * Transaction I holds the **Reservation** while it waits for the **Job**.
+     *
+     * The symmetric half of the settlement regression in
+     * `media-failure-settlement-races.db.test.ts`. Both transactions lock these
+     * two rows, so both must take them in the same order or they close a cycle:
+     *
+     * ```text
+     * Transaction I : holds Job,         waits for Reservation
+     * Transaction H : holds Reservation, waits for Job
+     * ```
+     *
+     * Disjoint business states do not prevent it. Transaction I requires
+     * `SCENES_READY` and settlement acts on a `GENERATING` job, but both take
+     * their row locks *before* concluding eligibility, so a call destined for
+     * `NOT_ELIGIBLE` still holds whatever it locked meanwhile.
+     *
+     * Pinned against the real `admitCompositionPlan`, not a copied statement —
+     * an earlier attempt to establish this contract used a hand-written probe
+     * and got the answer backwards.
+     *
+     * This test fails against the previous Job → Reservation implementation:
+     * that one blocked on the job before ever touching the reservation, so
+     * session C acquired the reservation freely.
+     */
+    it("holds the reservation while blocked on the job, then plans normally", async () => {
+      const chain = await seedPlanChain(prisma);
+
+      const holder = new PrismaClient();
+      const planner = new PrismaClient();
+      const probe = new PrismaClient();
+
+      let releaseHolder: () => void = () => undefined;
+      const holderMayFinish = new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+      let holderHasLock: () => void = () => undefined;
+      const holderReady = new Promise<void>((resolve) => {
+        holderHasLock = resolve;
+      });
+
+      // Session A: hold the JOB row and nothing else.
+      const holderDone = holder
+        .$transaction(
+          async (tx) => {
+            await tx.$queryRaw`
+              SELECT "id" FROM "generation_jobs"
+               WHERE "id" = ${chain.jobId} FOR UPDATE
+            `;
+            holderHasLock();
+            await holderMayFinish;
+          },
+          { timeout: 60_000 },
+        )
+        .catch(() => undefined);
+
+      let plan: ReturnType<typeof settled> | null = null;
+      try {
+        await holderReady;
+
+        // Session B: the real admission path.
+        let planSettled = false;
+        plan = settled(
+          createDeliverableCompositionPlanRepository(planner)
+            .admitCompositionPlan({
+              organizationId: ORG_A,
+              generationJobId: chain.jobId,
+              deliverableVersionId: "gdv_lock_order",
+              context: ctx({ correlationId: "corr_lock_order" }),
+            })
+            .then((value) => {
+              planSettled = true;
+              return value;
+            }),
+        );
+
+        expect(await waitForBlocked(prisma, 1)).toBe(true);
+        expect(planSettled).toBe(false);
+
+        // Session C: the RESERVATION row must already be held by session B.
+        const reservationProbe = await probe
+          .$transaction(async (tx) => {
+            await tx.$queryRaw`
+              SELECT "id" FROM "generation_reservations"
+               WHERE "id" = ${chain.reservationId} FOR UPDATE NOWAIT
+            `;
+            return "acquired" as const;
+          })
+          .then(
+            () => "acquired" as const,
+            (error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error);
+              return message.includes("could not obtain lock") ? ("refused" as const) : "other";
+            },
+          );
+
+        expect(reservationProbe).toBe("refused");
+      } finally {
+        releaseHolder();
+        await holderDone;
+        if (plan !== null) await plan;
+        await Promise.all([holder.$disconnect(), planner.$disconnect(), probe.$disconnect()]);
+      }
+
+      // And the real path then completed normally, exactly once.
+      const versions = await prisma.generationDeliverableVersion.findMany({
+        where: { generationJobId: chain.jobId },
+      });
+      expect(versions).toHaveLength(1);
+      expect(versions[0]!.ordinal).toBe(1);
+      expect(
+        await prisma.generationDeliverableInput.count({
+          where: { deliverableVersionId: versions[0]!.id },
+        }),
+      ).toBe(chain.scenes.length);
+      expect(
+        (await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.jobId } })).state,
+      ).toBe("COMPOSITION_PENDING");
+      expect(
+        await prisma.generationTransitionEvent.count({ where: { aggregateId: versions[0]!.id } }),
+      ).toBe(1);
+      expect(
+        await prisma.generationTransitionEvent.count({ where: { aggregateId: chain.jobId } }),
+      ).toBe(1);
+      expect(await blockedBackends(prisma)).toBe(0);
+    }, 90_000);
+  });
+
+  // -------------------------------------------------------------------------
+
   describe("against a concurrent revision start", () => {
     it("admits the plan and refuses the revision when the job is SCENES_READY", async () => {
       const chain = await seedPlanChain(prisma);

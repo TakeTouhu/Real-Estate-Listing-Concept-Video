@@ -1102,21 +1102,22 @@ and ADR-0020.
   could report the customer's *current* deliverable as the pending plan, because
   a recomposition legitimately leaves the job pointing at the previous usable
   version; and the selected media verdicts were read unlocked despite the
-  documented contract naming them. The Job/Reservation lock order is an **open
-  defect**: it was chosen from a probe that used a hand-written substitute join
-  rather than the real settlement path, and re-measuring against
-  `settleExhaustedMediaFailure` shows settlement takes Reservation → Job.
-  Transaction I must be reversed to match; that is a production change and is
-  recorded as blocking in `docs/phase-5a-completion.md`.
+  documented contract naming them. The lock order took two attempts: the first
+  correction ordered the hold *after* the Job, justified by a probe that used a
+  hand-written substitute join rather than the real settlement path. Re-measured
+  against `settleExhaustedMediaFailure`, settlement takes **Reservation → Job**,
+  and Transaction I now does too. Both orders are pinned behaviourally against
+  their own real paths, and an audit confirms no production workflow takes a Job
+  row lock followed by a reservation row lock.
 
   Mutation ledger: an earlier **complete** run — 264 run, 264 killed, 0 survivors,
   0 anchor-missing, with all 227 earlier definitions preserved — is **not** final
   evidence: it ran while `generation-regeneration-entitlement.db.test.ts` had a
   measured ~50% flake, and the harness treats any suite failure as a kill, so
-  false kills cannot be excluded. A clean complete ledger was re-run once on the
-  corrected deterministic tree: **271 run, 271 killed, 0 survivors, 0
-  anchor-missing**, with all 264 earlier definitions preserved and seven
-  correction mutations (M264-M270) added. Three guards are structurally redundant and are
+  false kills cannot be excluded. Two further complete ledgers
+  followed: 271/271/0/0 on the intermediate tree, superseded when the lock order
+  changed, and the authoritative run on the corrected Reservation → Job tree
+  recorded in `docs/phase-5a-completion.md`. Three guards are structurally redundant and are
   reported as such rather than counted as clean kills: the SQL join already
   restricts the attempt to `MAX(attemptOrdinal)`, the outer joins make the
   delivered-pointer null check implied by every guard below it, and the replay's

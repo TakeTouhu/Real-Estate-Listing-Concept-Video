@@ -303,11 +303,13 @@ The hold is now locked, and the state used by the decision is the one read *unde
 that lock*. The Job read no longer joins the reservation at all, so no unlocked
 value exists for a later edit to start trusting by accident.
 
-**The lock order is an open defect, and the earlier claim in this report was
-wrong.** This section previously said the prescribed Reservation→Job order had
-been "corrected by measurement" to Job→Reservation. That measurement used a
-hand-written two-table join instead of the real settlement path, and it gave the
-opposite of the truth.
+**The lock order took two attempts to get right, and the final order is the
+reverse of the first correction's.**
+
+The first correction locked the reservation but ordered it *after* the Job,
+justified by a probe that used a hand-written two-table join filtered on
+`j."id"`. That plan scanned jobs first and reported Job → Reservation. It
+measured the substitute, not production.
 
 Re-measured against the **real** `settleExhaustedMediaFailure`:
 
@@ -319,16 +321,28 @@ Re-measured against the **real** `settleExhaustedMediaFailure`:
 `pg_locks` confirms it: while blocked on the reservation, the settling backend
 holds only table-level `RowShareLock`s and no row lock on `generation_jobs`.
 
-Transaction H therefore takes **Reservation → Job**, exactly as the review
-originally specified. Transaction I's current Job → Reservation order closes a
-cycle with it, and **must be changed**. That is a production change requiring a
-mutation-ledger re-run, so it is not made in this correction — it is recorded
-here as blocking merge. The contract is now pinned behaviourally against the real
-path in `tests/integration/media-failure-settlement-races.db.test.ts`, so
-whichever order is chosen cannot drift again unnoticed.
+Transaction H takes **Reservation → Job**, and Transaction I now does too.
+Taking the Job first closes a real cycle, and disjoint business states do not
+prevent it: both transactions lock *before* concluding eligibility, so a
+Transaction I call destined for `NOT_ELIGIBLE` still holds what it locked while
+settlement runs.
+
+Both orders are now pinned behaviourally against their own real paths, in
+`media-failure-settlement-races.db.test.ts` and
+`deliverable-composition-races.db.test.ts`.
+
+**Audit of every workflow locking both rows.** Only Transaction H and
+Transaction I lock both, and both take the reservation first. Paid-submission
+authorization, reconciliation and submission outcome lock the reservation alone.
+Transaction F, media recovery, revision start and revision rollback lock the Job
+(and scene/request/attempt) with no reservation row lock. **No production
+workflow establishes a Job row lock followed by a reservation row lock.** Two
+workflows read the reservation's state through a `LEFT JOIN` while holding a Job
+lock — MVCC reads, not row locks, so not a cycle — recorded separately in
+`docs/decisions/TODO.md`.
 
 No cost-admission advisory lock is taken by Transaction I, and no unit is
-consumed or released — both unaffected by the ordering question.
+consumed or released.
 
 ### Blocker B — a recomposition replay could return the customer's current deliverable
 
@@ -441,21 +455,28 @@ then **3/3 consecutive passes** of the entire 33-file DB suite.
 The flake history is deliberately not erased: this run is what a contaminated
 ledger looks like, and the reason a clean one was required.
 
-### Corrected complete run — the authoritative one
+### Intermediate run — superseded by the lock-order correction
 
-Run once on the corrected, deterministic tree, after all three review
-corrections and after the entitlement flake was fixed. Not an impacted subset.
+Run once on the tree that carried the first round of review corrections, after
+the entitlement flake was fixed.
 
 | | |
 | --- | --- |
-| Mutations run | **271** |
-| Killed | **271** |
-| Survivors | **0** |
-| Anchor-missing | **0** |
+| Mutations run | 271 |
+| Killed | 271 |
+| Survivors | 0 |
+| Anchor-missing | 0 |
 
-All 264 earlier definitions preserved unchanged; **M264–M270** are the seven
-correction mutations. The total is 271, not 264 — reported as measured rather
-than assumed.
+All 264 earlier definitions preserved; M264–M270 were the seven correction
+mutations. Valid for the tree it ran on, and **not** final evidence: that tree
+acquired the Job row before the entitlement hold, and the executable production
+code has since changed.
+
+### Final complete run — the authoritative one
+
+Run once on the corrected **Reservation → Job** tree.
+
+_(filled in below)_
 
 ### What the seven correction mutations cover
 

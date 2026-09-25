@@ -820,3 +820,23 @@ actually prove.
 `ManagedOutputMediaValidation` is bound one-to-one to a `SceneGeneration`, so a
 final deliverable needs its own record or a widened binding; which of the two is
 a Phase 5C schema decision and is not pre-empted here.
+
+## Phase 5A follow-up — two unlocked reservation reads under a Job lock
+
+`lockJobAndSceneForTenant` and `lockRevisionRollbackChain` in
+`packages/database/src/orchestration-repositories.ts` read
+`generation_reservations.state` through a `LEFT JOIN` while holding
+`FOR UPDATE OF j, s` / `j, s, r`. Those are plain MVCC reads, not row locks, so
+they cannot participate in a lock cycle and are **not** a deadlock concern.
+
+They are recorded because they are the same *class* of hole Phase 5A closed in
+Transaction I: an authority value read without the lock that makes it
+authoritative. Revision start requires `reservationState === "CONSUMED"` and the
+rollback requires it too, so in both cases a concurrent release between the read
+and the commit would be acted on stale.
+
+Not fixed here, deliberately — changing either one alters revision-start and
+rollback behaviour, which belongs to the phase that owns them and needs its own
+mutation evidence. Whoever picks it up should also decide whether the reservation
+belongs in those statements' `FOR UPDATE OF` list, which would be the smallest
+correct fix given the system-wide Reservation → Job order.

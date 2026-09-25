@@ -108,26 +108,34 @@ export function createDeliverableCompositionPlanRepository(
     async admitCompositionPlan(input: AdmitCompositionPlanInput) {
       return prisma.$transaction(async (tx): Promise<AdmitCompositionPlanOutcome> => {
         // ---- 1. The entitlement and Job locks, held for the whole transaction.
-        // The reservation's *state* is composition-admission authority, so it
-        // must be locked before it is read and stay locked until this commits.
-        // Reading it unlocked was a time-of-check/time-of-use hole: a concurrent
-        // release or reconciliation hold could move it after the read and before
-        // the plan committed, admitting a deliverable against an entitlement
-        // that no longer authorized one.
-        const locked = await lockJobForComposition(
-          tx,
-          input.organizationId,
-          input.generationJobId,
-        );
-        if (locked === null) return { kind: "NOT_FOUND" };
-        // The hold's state is authority, so the value the decision uses is the
-        // one read *under its own row lock* — never the unlocked one carried by
-        // the job read above.
+        // **Reservation first, then Job.** That is the order Transaction H
+        // takes, measured against the real settlement path, and taking them the
+        // other way round closes a deadlock cycle — see
+        // `lockReservationForComposition` below.
+        //
+        // The reservation's *state* is also composition-admission authority, so
+        // it must be locked before it is read and stay locked until this
+        // commits. Reading it unlocked was a time-of-check/time-of-use hole: a
+        // concurrent release or reconciliation hold could move it after the read
+        // and before the plan committed, admitting a deliverable against an
+        // entitlement that no longer authorized one.
         const reservationState = await lockReservationForComposition(
           tx,
           input.organizationId,
           input.generationJobId,
         );
+        const locked = await lockJobForComposition(
+          tx,
+          input.organizationId,
+          input.generationJobId,
+        );
+        // Outcome semantics are unchanged by the reordering, and the order of
+        // these two classifications is what keeps them so: an unknown or
+        // cross-tenant job is `NOT_FOUND`, and only a job this tenant really
+        // owns can go on to be refused for its entitlement. A missing
+        // reservation falls through to the cycle check below, which admits
+        // neither shape and answers `NOT_ELIGIBLE`.
+        if (locked === null) return { kind: "NOT_FOUND" };
         const job: JobContextRow = { ...locked, reservationState };
 
         // ---- 2. Idempotent replay, before anything is judged ineligible. -
@@ -503,31 +511,49 @@ async function lockJobForComposition(
  * could move it after the read and before the plan committed, admitting a
  * deliverable against an entitlement that no longer authorized one.
  *
- * ## Why after the Job, not before it
+ * ## Why before the Job
  *
- * The prescribed correction was a staged reservation-then-Job order, on the
- * premise that settlement already takes reservation before Job. Measured against
- * live PostgreSQL, it does not. Transaction H locks both in one statement whose
- * `FROM` clause reaches `generation_jobs` before `generation_reservations`, and
- * a three-session probe — hold the reservation row, run the settlement-shaped
- * join, then try the Job row `FOR UPDATE NOWAIT` — reports
- * `could not obtain lock on row in relation "generation_jobs"`. Settlement
- * therefore **already holds the Job while it waits for the reservation**, and a
- * staged reservation-then-Job acquisition here would close a real cycle:
+ * Transaction H is the only other operation that locks both of these rows, and
+ * it takes the **reservation first**. That was established against the real
+ * `settleExhaustedMediaFailure` path, not by reading the query:
  *
  * ```text
- * Transaction I : holds reservation, waits for Job
- * Transaction H : holds Job,         waits for reservation
+ * hold the reservation row -> settlement blocks on it, and a third session can
+ *                             still acquire the Job row       (not held)
+ * hold the Job row         -> settlement blocks on it, and a third session is
+ *                             REFUSED the reservation row     (held)
  * ```
  *
- * The same probe with the two tables swapped in the `FROM` clause reports the
- * Job row as freely acquirable, which is what makes the instrument trustworthy
- * rather than a coincidence.
+ * `pg_locks` agrees directly: while blocked on the reservation, the settling
+ * backend holds only table-level `RowShareLock`s and no row lock on
+ * `generation_jobs`. `lockSettlementChain` filters on `v."id"`, so its plan
+ * reaches `generation_reservations` before `generation_jobs` — the aliases
+ * listed after `FOR UPDATE OF` do not decide acquisition order, and neither does
+ * the `FROM` clause's text order.
  *
- * So the order is Job then reservation, matching settlement's measured order.
+ * An earlier version of this comment claimed the opposite, on the strength of a
+ * hand-written two-table probe that filtered on `j."id"` and therefore scanned
+ * jobs first. That probe measured the substitute, not production. Both orders
+ * are now pinned behaviourally, against their real paths, in
+ * `tests/integration/media-failure-settlement-races.db.test.ts` and
+ * `tests/integration/deliverable-composition-races.db.test.ts`.
+ *
+ * Taking the Job first here would close a real cycle:
+ *
+ * ```text
+ * Transaction I : holds Job,         waits for Reservation
+ * Transaction H : holds Reservation, waits for Job
+ * ```
+ *
+ * Disjoint business states do **not** prevent it. Transaction I requires
+ * `SCENES_READY` and settlement acts on a `GENERATING` job, but both take their
+ * row locks *before* concluding eligibility — so a Transaction I call that will
+ * ultimately return `NOT_ELIGIBLE` still holds whatever it locked while
+ * settlement runs.
+ *
  * The three cost workflows — paid-submission authorization, reconciliation and
- * submission outcome — lock `res` *alone* and never the Job, so none of them can
- * participate in a cycle in either direction.
+ * submission outcome — lock the reservation and never subsequently lock the Job,
+ * so none of them can form the inverse pair in either direction.
  *
  * Locking this row is **not** an entitlement mutation. Transaction I authorizes
  * no paid provider call, moves no exposure, consumes no unit and releases none,

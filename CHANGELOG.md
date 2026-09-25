@@ -67,11 +67,12 @@ documented in `docs/phase-5a-completion.md` rather than reported as clean kills.
 - **The entitlement hold is now locked before its state is trusted.**
   `Reservation.state` is composition-admission authority and was read through an
   unlocked join, so a concurrent release could move it after the read and before
-  the plan committed. The lock order is **Job → Reservation**, chosen by
-  measuring live PostgreSQL rather than by convention: settlement locks both in
-  one statement and was shown to hold the Job while waiting for the reservation,
-  so the reverse order would have deadlocked against it. No cost-admission
-  advisory lock, no unit moved.
+  the plan committed. The lock order is **Reservation → Job**, matching
+  Transaction H as measured against the real `settleExhaustedMediaFailure` path;
+  taking the Job first closes a deadlock cycle, and disjoint business states do
+  not prevent it because both transactions lock before concluding eligibility.
+  Both orders are now pinned by real-path regressions. No cost-admission advisory
+  lock, no unit moved.
 - **A recomposition replay can no longer return the customer's current
   deliverable as the pending plan.** Replay now proves the newly planned version
   is a different, later version than the one the customer holds
@@ -87,10 +88,10 @@ flake is fixed test-only and the suite is now green on three consecutive full
 runs, but because the harness treats any suite failure as a kill, that 264/264
 tally is kept only as historical record.
 
-The authoritative result is a second **complete** ledger, run once on the
-corrected deterministic tree after all three review corrections: **271 run, 271
-killed, 0 survivors, 0 anchor-missing**, with all 264 earlier definitions
-preserved and M264–M270 added. See `docs/phase-5a-completion.md`.
+Two further complete ledgers followed: 271/271/0/0 on the intermediate tree,
+superseded when the lock order was corrected, and the authoritative run on the
+final Reservation → Job tree. Only the last is final evidence; all three are
+recorded in `docs/phase-5a-completion.md`.
 
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 

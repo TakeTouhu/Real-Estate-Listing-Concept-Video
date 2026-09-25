@@ -394,19 +394,22 @@ describe("the authorities the transaction must use", () => {
     expect(ports).not.toContain("ordinal");
   });
 
-  it("locks the job, then the entitlement hold, then the scene chain", () => {
+  it("locks the entitlement hold, then the job, then the scene chain", () => {
     const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
-    const job = repo.indexOf("lockJobForComposition(");
-    const hold = repo.indexOf("lockReservationForComposition(");
-    const scenes = repo.indexOf("lockSceneChain(tx");
-    expect(job).toBeGreaterThan(-1);
+    // The *call* sites inside the transaction, not the helper definitions
+    // further down the file — acquisition order is what matters.
+    const body = repo.slice(repo.indexOf("async admitCompositionPlan"));
+    const hold = body.indexOf("await lockReservationForComposition(");
+    const job = body.indexOf("await lockJobForComposition(");
+    const scenes = body.indexOf("await lockSceneChain(tx");
     expect(hold).toBeGreaterThan(-1);
+    expect(job).toBeGreaterThan(-1);
     expect(scenes).toBeGreaterThan(-1);
-    // Job before reservation, matching settlement's *measured* acquisition
-    // order. Reversing the pair would let Transaction I hold the reservation
-    // while waiting for the job that settlement already holds.
-    expect(job).toBeLessThan(hold);
-    expect(hold).toBeLessThan(scenes);
+    // Reservation before job, matching Transaction H's *measured* acquisition
+    // order. Reversing the pair would let Transaction I hold the job while
+    // waiting for the reservation that settlement already holds.
+    expect(hold).toBeLessThan(job);
+    expect(job).toBeLessThan(scenes);
     expect(repo).toContain("FOR UPDATE OF j");
     expect(repo).toContain("FOR UPDATE OF res");
     expect(repo).toContain("FOR UPDATE OF r, a");

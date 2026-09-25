@@ -207,18 +207,20 @@ are exactly what this transaction exists to make impossible.
 ### Lock order
 
 ```text
-GenerationJob            <- must become GenerationReservation first
-  → GenerationReservation
+GenerationReservation
+  → GenerationJob
     → GenerationScenes (position ASC, id ASC)
       → selected SceneGenerationRequests
         → selected latest SceneGenerations
           → their ManagedOutputMediaValidations
 ```
 
-The same Job-first order Transaction F, the recovery admission and Transaction H
-take, so none of them can close a deadlock cycle with this one. Every row in that
-list is locked. **The Job/Reservation pair is in the wrong order** — see
-*The Job/Reservation order is WRONG in the current implementation* below.
+The entitlement hold comes first because Transaction H takes it first. Below it,
+the Job-then-Scene-then-Request-then-Attempt order is the one Transaction F, the
+recovery admission and Transaction H all take, so none of them can close a
+deadlock cycle with this one. Every row in that list is locked; see *Why the hold
+is locked before the Job* below for the measurement that settled the pair's
+order.
 
 The locks are taken in two statements rather than one, and not by preference:
 PostgreSQL refuses `FOR UPDATE` on the nullable side of an outer join, and the
@@ -240,57 +242,83 @@ provider call, moves no exposure, consumes no unit and releases none. There is
 **no cost-admission advisory lock**: planning does not cross the paid boundary,
 so serializing it against the gate that does would be contention for nothing.
 
-### The Job/Reservation order is WRONG in the current implementation
+### Why the hold is locked before the Job, and how that was settled
 
-> **Open defect, found after this ADR was first written.** Transaction I
-> currently locks the Job and *then* the reservation. That is the wrong way
-> round, and it can deadlock against Transaction H.
->
-> The order was originally chosen from a probe that used a **hand-written
-> two-table join** — `FROM generation_jobs j JOIN generation_reservations res`
-> with the filter on `j."id"` — which made the plan scan jobs first and reported
-> that settlement holds the Job while waiting for the reservation. That probe
-> measured the substitute, not production.
->
-> Measured again against the **real** `settleExhaustedMediaFailure` path, the
-> answer reverses. `lockSettlementChain` filters on `v."id"`, so the plan reaches
-> `generation_reservations` before `generation_jobs`:
->
-> | session A holds | settlement blocks on | third session probes | result |
-> | --- | --- | --- | --- |
-> | the reservation row | the reservation | the Job row | **acquired** — settlement does not hold it |
-> | the Job row | the Job | the reservation row | **refused** — settlement holds it |
->
-> `pg_locks` confirms it directly: while blocked on the reservation, the settling
-> backend holds only table-level `RowShareLock`s and no row lock on
-> `generation_jobs`.
->
-> So Transaction H takes **Reservation → Job**, and Transaction I's current
-> Job → Reservation order closes a cycle:
->
-> ```text
-> Transaction I : holds Job,         waits for Reservation
-> Transaction H : holds Reservation, waits for Job
-> ```
->
-> The window is narrow — Transaction I requires `SCENES_READY` and settlement
-> acts on a `GENERATING` job — but both lock *before* they check state, so a
-> Transaction I call that will ultimately return `NOT_ELIGIBLE` still holds the
-> Job row while settlement is running. PostgreSQL would abort one side with a
-> deadlock error, which surfaces as an unhandled exception rather than a business
-> outcome.
->
-> **Transaction I must be changed to Reservation → Job.** That is a production
-> change and therefore requires a mutation-ledger re-run; it is not made here,
-> and is recorded as blocking in `docs/phase-5a-completion.md`.
->
-> The contract itself is now pinned behaviourally against the real settlement
-> path, in `tests/integration/media-failure-settlement-races.db.test.ts`, so
-> whichever order is finally chosen cannot drift again without a test failing.
->
-> The three cost workflows — paid-submission authorization, reconciliation and
-> submission outcome — lock the reservation and never subsequently lock the Job,
-> so they cannot form the inverse pair either way.
+Transaction H is the only other operation that locks both of these rows, and it
+takes the **reservation first**. That was established against the real
+`settleExhaustedMediaFailure` path:
+
+| session A holds | settlement blocks on | third session probes | result |
+| --- | --- | --- | --- |
+| the reservation row | the reservation | the Job row | **acquired** — settlement does not hold it |
+| the Job row | the Job | the reservation row | **refused** — settlement holds it |
+
+`pg_locks` agrees directly: while blocked on the reservation, the settling
+backend holds only table-level `RowShareLock`s and no row lock on
+`generation_jobs`. `lockSettlementChain` filters on `v."id"`, so its plan reaches
+`generation_reservations` before `generation_jobs` — the aliases listed after
+`FOR UPDATE OF` do not decide acquisition order, and neither does the `FROM`
+clause's text order.
+
+Transaction I therefore takes the same order. Taking the Job first closes a real
+cycle:
+
+```text
+Transaction I : holds Job,         waits for Reservation
+Transaction H : holds Reservation, waits for Job
+```
+
+**Disjoint business states do not prevent this.** Transaction I requires
+`SCENES_READY` and settlement acts on a `GENERATING` job, but both take their row
+locks *before* concluding eligibility — so a Transaction I call that will
+ultimately return `NOT_ELIGIBLE` still holds whatever it locked while settlement
+runs.
+
+Both orders are now pinned behaviourally, each against its own real path, in
+`tests/integration/media-failure-settlement-races.db.test.ts` and
+`tests/integration/deliverable-composition-races.db.test.ts`.
+
+### How this contract changed during review
+
+Worth recording, because the final order is the opposite of what an intermediate
+revision of this ADR claimed.
+
+1. The first correction locked the reservation but ordered it **after** the Job,
+   justified by a probe that used a hand-written two-table join filtered on
+   `j."id"`. That plan scanned jobs first and reported Job → Reservation.
+2. The probe measured the substitute, not production. A regression driving the
+   real `settleExhaustedMediaFailure` disproved it, as tabulated above.
+3. Real Transaction H is **Reservation → Job**.
+4. Transaction I was changed to match, and both workflows now carry a real-path
+   lock-order regression so neither can drift again unnoticed.
+
+The lesson is narrower than "measure more": a lock-order probe must drive the
+*real* statement, because acquisition order is a property of the plan, and the
+plan changes with the filter.
+
+### Other workflows that touch these two rows
+
+Audited across `packages/database/src`:
+
+| workflow | locks |
+| --- | --- |
+| Transaction H (settlement) | reservation **and** Job — `FOR UPDATE OF res, j, s, r, a, v, w`, one statement, reservation first |
+| Transaction I (this) | reservation **and** Job — two statements, reservation first |
+| paid-submission authorization | reservation only (`FOR SHARE OF res`) |
+| reconciliation | reservation only (`FOR UPDATE OF res`) |
+| submission outcome | reservation only (`FOR UPDATE OF res`) |
+| Transaction F, media recovery, revision start, revision rollback | Job (and scene/request/attempt) — **no** reservation row lock |
+
+Only the first two lock both, and both take the reservation first. No production
+workflow establishes a Job row lock followed by a reservation row lock.
+
+Two workflows read the reservation's state through a `LEFT JOIN` while holding a
+Job lock — `lockJobAndSceneForTenant` and `lockRevisionRollbackChain` in
+`orchestration-repositories.ts`. Those are plain MVCC reads, not row locks, so
+they cannot participate in a lock cycle. They are recorded separately in
+`docs/decisions/TODO.md`: an unlocked read of an authority value is the same
+class of hole Blocker A closed here, and whether either of them actually relies
+on that value as authority is a question for the phase that owns them.
 
 ### The media verdicts are locked too
 
