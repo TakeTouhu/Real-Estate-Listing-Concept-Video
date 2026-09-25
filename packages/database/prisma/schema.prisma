@@ -1136,7 +1136,7 @@ model ManagedOutputMediaFailureResolution {
 /// name paid provider history, so a physical deletion must resolve retention
 /// deliberately rather than cascading it away.
 model GenerationDeliverableVersion {
-  id               String                       @id
+  id               String                            @id
   generationJobId  String
   /// Job-scoped, starting at 1. A gap or a duplicate is a detectable defect.
   ordinal          Int
@@ -1146,14 +1146,16 @@ model GenerationDeliverableVersion {
   /// provider request hash -- the prefix exists so a future reader cannot
   /// compare two of them by accident.
   inputFingerprint String
-  createdAt        DateTime                     @default(now())
-  generationJob    GenerationJob                @relation("JobDeliverableVersions", fields: [generationJobId], references: [id], onDelete: Restrict)
+  createdAt        DateTime                          @default(now())
+  generationJob    GenerationJob                     @relation("JobDeliverableVersions", fields: [generationJobId], references: [id], onDelete: Restrict)
   inputs           GenerationDeliverableInput[]
   /// The jobs whose current deliverable pointer names this version. At most one
   /// in practice -- the pointer is per job and the composite key confines it to
   /// this version's own job -- but the relation is a list because nothing in the
   /// schema makes that arithmetic true on its own.
-  currentForJobs   GenerationJob[]              @relation("JobCurrentDeliverable")
+  currentForJobs   GenerationJob[]                   @relation("JobCurrentDeliverable")
+  /// The composition execution for this version, absent until a worker claims it.
+  composition      GenerationDeliverableComposition?
 
   @@unique([generationJobId, ordinal])
   /// The composite key `GenerationJob.currentDeliverableVersionId` points
@@ -1209,4 +1211,100 @@ model GenerationDeliverableInput {
   @@index([generationSceneId])
   @@index([sceneGenerationAttemptId])
   @@map("generation_deliverable_inputs")
+}
+
+// ===========================================================================
+// Phase 5B — durable deliverable composition execution
+//
+// One row per deliverable version, recording what the platform has actually
+// done about turning that frozen plan into one managed final object.
+//
+// The encoder profile is columns rather than a JSON blob, and that is the
+// point: it is frozen when the row is created and every retry reuses the
+// persisted values, so a later profile version cannot silently re-encode an
+// existing deliverable differently. Columns make that constrainable by CHECK;
+// a blob would make it a convention.
+//
+// No terminal failure status. A composition that cannot complete is operational
+// work, not a verdict about the customer's job — see ADR-0050.
+//
+// No backfill. Deliverable versions planned by Phase 5A carry no composition
+// row until a worker claims one.
+// ===========================================================================
+
+enum DeliverableCompositionStatus {
+  PENDING
+  RUNNING
+  OUTPUT_VERIFIED
+}
+
+enum DeliverableCompositionRetryCode {
+  SOURCE_READ_RETRYABLE
+  SOURCE_INTEGRITY_MISMATCH
+  COMPOSER_RETRYABLE
+  OUTPUT_PUBLISH_RETRYABLE
+}
+
+model GenerationDeliverableComposition {
+  id                   String                           @id
+  /// One composition per planned deliverable version. The uniqueness is what
+  /// makes two workers racing to create the first record resolvable: exactly
+  /// one insert wins.
+  deliverableVersionId String                           @unique
+  status               DeliverableCompositionStatus     @default(PENDING)
+  /// --- The frozen encoder profile ------------------------------------------
+  /// Written once, at first claim, and never recomputed. A retry that re-derived
+  /// today's defaults could encode the second half of a deliverable's history
+  /// differently from the first.
+  profileKey           String
+  targetWidthPx        Int
+  targetHeightPx       Int
+  frameRateNumerator   Int
+  frameRateDenominator Int
+  videoCodec           String
+  pixelFormat          String
+  fitMode              String
+  transitionMode       String
+  audioMode            String
+  encoderPreset        String
+  crf                  Int
+  /// --- Lease / retry -------------------------------------------------------
+  /// Opaque and random. Carries no organization, job, deliverable, key or
+  /// provider identity, so it discloses nothing if it is ever logged.
+  leaseToken           String?
+  /// Crash recovery, not a deadline: how long the system waits before assuming
+  /// the owner died. Always longer than the composer timeout.
+  leaseExpiresAt       DateTime?
+  nextAttemptAt        DateTime?
+  attemptCount         Int                              @default(0)
+  /// Incremented on every transition. With `leaseToken` this is what makes a
+  /// stale worker's late finalize match zero rows.
+  version              Int                              @default(0)
+  /// Closed vocabulary only. No ffmpeg stderr, storage message, OS error, path
+  /// or customer text ever reaches this column.
+  lastRetryCode        DeliverableCompositionRetryCode?
+  /// --- The durable output receipt ------------------------------------------
+  /// Written together, exactly once, when composition reaches OUTPUT_VERIFIED,
+  /// and immutable afterwards: a later receipt describing different bytes is a
+  /// discrepancy to surface rather than a correction to apply. The key is
+  /// *derived* from the organization and deliverable version, so the same
+  /// deliverable always resolves to the same object and an interrupted publish
+  /// can be retried over itself.
+  outputStorageKey     String?
+  /// Canonical lowercase 64-character hex, enforced by CHECK.
+  outputSha256         String?
+  /// BigInt rather than Int: int4 would silently overflow on a value the
+  /// publisher accepted.
+  outputSizeBytes      BigInt?
+  outputVerifiedAt     DateTime?
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
+  /// RESTRICT, never Cascade. This row records paid generated history composed
+  /// into a customer deliverable, so a physical deletion must resolve retention
+  /// deliberately.
+  deliverableVersion   GenerationDeliverableVersion     @relation(fields: [deliverableVersionId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
+  @@map("generation_deliverable_compositions")
 }

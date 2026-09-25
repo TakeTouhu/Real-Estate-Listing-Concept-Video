@@ -99,3 +99,26 @@ export type {
   ProcessRunOutcome,
   ProcessRunner,
 } from "./ffprobe";
+
+export {
+  COMPOSE_MAX_STDOUT_BYTES,
+  DEFAULT_COMPOSE_PROGRAM,
+  DEFAULT_COMPOSE_TIMEOUT_MS,
+  MAX_COMPOSE_TIMEOUT_MS,
+  createFfmpegDeliverableComposer,
+  ffmpegComposeArgsFor,
+  validateComposeTimeoutMs,
+} from "./ffmpeg-composer";
+export type { FfmpegComposerConfig, FfmpegComposerDeps } from "./ffmpeg-composer";
+export {
+  COMPOSED_FILE_NAME,
+  composedOutputPathFor,
+  createDeliverableCompositionSourceMaterializer,
+  createDeliverableOutputPublisher,
+  sourceFileName,
+} from "./deliverable-composition-io";
+export type {
+  DeliverableCompositionIoConfig,
+  DeliverableCompositionIoDeps,
+  DeliverableObjectClient,
+} from "./deliverable-composition-io";
