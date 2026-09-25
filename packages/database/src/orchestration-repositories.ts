@@ -97,6 +97,21 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   "RESERVING->RESERVED",
   // Transaction G owns this, and Transaction G is deferred.
   "DELIVERABLE_VALIDATING->DELIVERABLE_READY",
+  // Transaction I owns this. A job awaits composition *because* a deliverable
+  // version and its frozen input rows were admitted in the same commit; reaching
+  // it from here would announce that a plan exists with nothing planned, and
+  // nothing downstream knows how to compose a job that has no input set.
+  "SCENES_READY->COMPOSITION_PENDING",
+  // Reserved ahead of their owners, deliberately. The durable composition
+  // execution workflow is Phase 5B's, and until it exists these two edges have
+  // no actor at all — but leaving them generically writable would let a caller
+  // walk a job from COMPOSITION_PENDING to DELIVERABLE_VALIDATING without ever
+  // producing bytes, and the only thing then standing between a customer and an
+  // empty deliverable would be Transaction G's own guard. The generic API must
+  // not be able to assemble the delivery pipeline without its atomic
+  // authorities.
+  "COMPOSITION_PENDING->COMPOSING",
+  "COMPOSING->DELIVERABLE_VALIDATING",
   // Transaction F owns this. A job becomes SCENES_READY *because* its last scene
   // was delivered in the same commit; reaching it from here would announce that
   // every scene is ready without the delivery that made the last one ready.

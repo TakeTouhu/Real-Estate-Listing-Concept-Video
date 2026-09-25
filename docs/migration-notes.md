@@ -709,3 +709,72 @@ this phase exists, so an unreviewed migration trips it.
 
 **Backfill:** none. No existing row is read differently than before, and no
 historical row changes meaning.
+
+## Phase 5A — Durable deliverable composition plan
+
+**Migration `00000000000014_phase5a_deliverable_composition_plan`.** Two tables,
+no enums, and the foreign key that finally binds a column added four migrations
+ago.
+
+### New tables
+
+| Table | Purpose |
+| --- | --- |
+| `generation_deliverable_versions` | one planned customer deliverable: job-scoped `ordinal`, `inputFingerprint` |
+| `generation_deliverable_inputs` | one immutable row per scene frozen into that version |
+
+### Constraints that do real work
+
+| Name | Rule |
+| --- | --- |
+| `generation_deliverable_versions_generationJobId_ordinal_key` | a job has one version per ordinal |
+| `generation_deliverable_versions_id_generationJobId_key` | the composite key the job pointer references |
+| `generation_deliverable_version_ordinal_check` | `ordinal >= 1` |
+| `generation_deliverable_inputs_deliverableVersionId_position_key` | one input per position |
+| `generation_deliverable_inputs_deliverableVersionId_generati_key` | one input per scene |
+| `generation_deliverable_input_position_check` | `position >= 0`, matching `generation_scenes_position_check` |
+| `generation_deliverable_input_receipt_check` | canonical lowercase hex digest, positive size bounded at `Number.MAX_SAFE_INTEGER` |
+
+All six foreign keys are `ON DELETE RESTRICT`. The rows referenced are paid
+generated history, so a physical deletion must resolve retention policy
+deliberately rather than cascading it away.
+
+### The job pointer foreign key
+
+```sql
+ALTER TABLE "generation_jobs"
+  ADD CONSTRAINT "generation_jobs_currentDeliverableVersionId_id_fkey"
+  FOREIGN KEY ("currentDeliverableVersionId", "id")
+  REFERENCES "generation_deliverable_versions"("id", "generationJobId")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+Composite, not single-column, and that is the whole ownership guarantee: a
+single-column key would have accepted another job's version, and one customer's
+video could have been composed of another's. The same pattern
+`generation_scenes(currentDeliveredRequestId, id)` already uses.
+
+This is the **only** statement in the migration touching `generation_jobs`. No
+column is added, dropped, altered or rewritten.
+
+### Backfill: none, and none was needed
+
+Verified before the migration was written, because adding this key to a column
+carrying orphan values would fail the migration:
+
+- the column arrived in migration 10 as a plain nullable `TEXT`, no default, no
+  foreign key;
+- **no migration in 0–13 writes a value into it.** The only `UPDATE` tokens in
+  the whole migration history are `ON UPDATE CASCADE` foreign-key clauses;
+- **no seed script exists**: `packages/database/prisma/` holds only
+  `migrations/` and `schema.prisma`, and no package declares a `seed` entry;
+- no repository method writes it.
+
+The only non-null values anywhere were written by two integration fixtures, after
+schema setup, into a disposable database. Those fixtures now create a real
+`GenerationDeliverableVersion` row. **No production-compatible row could carry a
+non-null pointer, so nothing was nulled and nothing was synthesized.**
+
+The migration contains no `INSERT`, no `UPDATE "`, no `DELETE FROM` and no
+`SELECT`, and a static test in the Phase 5A dormancy suite asserts each of those
+along with the single-statement rule above.

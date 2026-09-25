@@ -116,4 +116,6 @@ flowchart TB
 | `@app/observability` redacting logger | Implemented |
 | `apps/worker` execution loop, generation orchestration | **Not implemented** (Phase 4) |
 | `@app/queue` | **Placeholder.** No transport exists: the `QUEUED` generation row is the durable queue (ADR-0024) |
-| FFmpeg composition, billing, Stripe | **Not implemented** (Phases 5–6) |
+| `@app/domain` deliverable-composition + `@app/database` Transaction I — the durable composition plan (deliverable version, frozen per-scene input rows, Job `COMPOSITION_PENDING`) | Implemented and **dormant** (Phase 5A, ADR-0049); database-only, no runner, no scheduler, no candidate query, and `currentDeliverableVersionId` is never moved |
+| FFmpeg composition and the concrete composition profile | **Not implemented** (Phase 5B). `COMPOSITION_PENDING -> COMPOSING` and `COMPOSING -> DELIVERABLE_VALIDATING` are legal, reserved from the generic API, and have no actor |
+| Deliverable-level validation, Transaction G, unit `CONSUME`, billing, Stripe | **Not implemented** (Phases 5C–6) |

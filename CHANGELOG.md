@@ -3,6 +3,96 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 5A: Durable deliverable composition plan
+
+Detail in `docs/phase-5a-completion.md` and ADR-0049. Answers, durably, which
+immutable scene renditions belong to the next customer deliverable. **Nothing is
+composed**: no `ffmpeg`, no `ffprobe`, no object store, no final deliverable
+object, no unit consumed, and no scheduler or runner exists.
+
+### Added
+
+- **`GenerationDeliverableVersion`** (migration 14) — durable deliverable
+  identity per job: a job-scoped `ordinal` derived as `MAX + 1` inside the
+  admission transaction, and an input fingerprint.
+- **`GenerationDeliverableInput`** — one immutable row per scene in a version,
+  naming the scene, its delivered request, that request's latest
+  `OUTPUT_VERIFIED` attempt, the `VALID` media verdict, and the frozen receipt of
+  the bytes selected. Every foreign key `ON DELETE RESTRICT`.
+- **Transaction I** (`admitCompositionPlan`) — the version, every input row, the
+  `DELIVERABLE` event, `GenerationJob SCENES_READY -> COMPOSITION_PENDING` and
+  its event, in one commit. Database-only; no external I/O is reachable from
+  inside it.
+- **`computeDeliverableInputFingerprint`** — a new versioned hash vocabulary,
+  `sha256:deliverable-input:v1:<hex>`, over the canonical ordered input set plus
+  the job's frozen delivery target. Deliberately distinct from ADR-0012's
+  storyboard fingerprint and ADR-0034's request hash, and from any object digest.
+- **The composite foreign key on `GenerationJob.currentDeliverableVersionId`** —
+  `(currentDeliverableVersionId, id) -> (id, generationJobId)`, so a job can only
+  ever name a deliverable version of its own. The column had carried no foreign
+  key since migration 10.
+
+### Changed
+
+- **Three more job edges are reserved from the generic transition API** —
+  `SCENES_READY -> COMPOSITION_PENDING` (Transaction I owns it), plus
+  `COMPOSITION_PENDING -> COMPOSING` and `COMPOSING -> DELIVERABLE_VALIDATING`,
+  reserved ahead of their Phase 5B owners so the generic API cannot assemble the
+  delivery pipeline without its atomic authorities.
+- **Integration fixtures create a real deliverable version** instead of writing a
+  synthetic `gdv_<suffix>` string into the job pointer, which the new foreign key
+  no longer admits.
+
+### Not done, on purpose
+
+- No composition profile: no codec, bitrate, frame rate, transition, audio mix,
+  crop, padding or watermark policy is frozen. Phase 5B owns it.
+- No actor for `COMPOSITION_PENDING -> COMPOSING`, no runner, no scheduler, and
+  no candidate-discovery query.
+- No unit `CONSUME` and no Transaction G. `currentDeliverableVersionId` is never
+  moved by planning: the customer keeps the video they already have until a
+  validated replacement is published.
+
+### Verified
+
+Complete mutation ledger: **264 run, 264 killed, 0 survivors, 0 anchor-missing**
+— all 227 pre-existing definitions preserved, plus 37 new ones covering the
+per-scene authorities, the latest-attempt rule, the reservation cycle, the
+current-pointer restraint, idempotency, the job lock, every fingerprint
+dimension and the three reserved edges. Two structurally redundant guards are
+documented in `docs/phase-5a-completion.md` rather than reported as clean kills.
+
+### Corrected in review (PR #70)
+
+- **The entitlement hold is now locked before its state is trusted.**
+  `Reservation.state` is composition-admission authority and was read through an
+  unlocked join, so a concurrent release could move it after the read and before
+  the plan committed. The lock order is **Reservation → Job**, matching
+  Transaction H as measured against the real `settleExhaustedMediaFailure` path;
+  taking the Job first closes a deadlock cycle, and disjoint business states do
+  not prevent it because both transactions lock before concluding eligibility.
+  Both orders are now pinned by real-path regressions. No cost-admission advisory
+  lock, no unit moved.
+- **A recomposition replay can no longer return the customer's current
+  deliverable as the pending plan.** Replay now proves the newly planned version
+  is a different, later version than the one the customer holds
+  (`latest.ordinal == current.ordinal + 1`), resolved through the same-job
+  composite key.
+- **The selected media verdicts are locked**, closing the gap between the
+  documented lock contract and `lockSceneChain`.
+
+That earlier ledger ran before final verification found a flake this phase introduced in
+`generation-regeneration-entitlement.db.test.ts` (~50% failure rate, caused by two
+concurrent fixture re-arms colliding on the new deliverable-version insert). The
+flake is fixed test-only and the suite is now green on three consecutive full
+runs, but because the harness treats any suite failure as a kill, that 264/264
+tally is kept only as historical record.
+
+Two further complete ledgers followed: 271/271/0/0 on the intermediate tree,
+superseded when the lock order was corrected, and **272/272/0/0** on the final
+Reservation → Job tree. Only the last is final evidence; all three are recorded
+in `docs/phase-5a-completion.md`.
+
 ## [Unreleased] — Phase 4C-3B-2H-3B-6C: Durable media-failure resolution and settlement
 
 Detail in `docs/phase-4c3b2h3b6c-completion.md` and ADR-0048. Closes the two

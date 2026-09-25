@@ -280,9 +280,10 @@ describe("no new durable shape", () => {
     // change, because `deliveredAt`, `currentDeliveredRequestId` and
     // `stateVersion` already existed.
     // Updated by Phase 4C-3B-2H-3B-6C, which is authorized to add migration 13
-    // for the durable media-failure resolution work table. The pin moving is the
+    // for the durable media-failure resolution work table, and again by Phase 5A
+    // for migration 14 -- the deliverable composition plan. The pin moving is the
     // tripwire working: an unreviewed migration still trips every one of these.
-    expect(dirs.at(-1)).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
+    expect(dirs.at(-1)).toBe("00000000000014_phase5a_deliverable_composition_plan");
     expect(dirs.filter((dir) => dir.includes("6a") || dir.includes("delivery"))).toEqual([]);
   });
 

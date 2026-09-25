@@ -458,4 +458,132 @@ RUN("settlement under contention", () => {
       expect(scene.currentDeliveredRequestId).toBe(chain.predecessorRequestId);
     }, 60_000);
   });
+
+  // -------------------------------------------------------------------------
+
+  describe("the Reservation/Job acquisition order other transactions depend on", () => {
+    /**
+     * Transaction H holds the **Reservation** while it waits for the **Job**.
+     *
+     * `lockSettlementChain` takes the whole chain in one
+     * `SELECT ... FOR UPDATE OF res, j, s, r, a, v, w`, and the order PostgreSQL
+     * actually acquires those rows in is decided by the *plan* — not by the
+     * order the aliases are written after `FOR UPDATE OF`, and not by the order
+     * the tables appear in the `FROM` clause. The statement's `WHERE` is on
+     * `v."id"`, so the plan starts at the validation and reaches
+     * `generation_reservations` before `generation_jobs`.
+     *
+     * That has to be pinned behaviourally, and against the **real**
+     * `settleExhaustedMediaFailure` path. A hand-copied substitute statement
+     * pins the substitute: an earlier attempt at exactly this measurement used a
+     * two-table join with `generation_jobs` first and a `WHERE` on `j."id"`,
+     * which produced the opposite answer and was wrong about production.
+     *
+     * Any transaction that locks both of these rows must take them in this same
+     * order. One that takes the Job first closes a cycle:
+     *
+     * ```text
+     * other transaction : holds Job,         waits for Reservation
+     * Transaction H     : holds Reservation, waits for Job
+     * ```
+     *
+     * Three sessions, no `sleep` as synchronization authority.
+     */
+    it("holds the reservation while blocked on the job, then settles normally", async () => {
+      const chain = await seedFailure(prisma);
+      const claim = await claimFor(chain);
+
+      const holder = new PrismaClient();
+      const settler = new PrismaClient();
+      const probe = new PrismaClient();
+
+      let releaseHolder: () => void = () => undefined;
+      const holderMayFinish = new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+      let holderHasLock: () => void = () => undefined;
+      const holderReady = new Promise<void>((resolve) => {
+        holderHasLock = resolve;
+      });
+
+      // Session A: hold the JOB row and nothing else.
+      const holderDone = holder
+        .$transaction(
+          async (tx) => {
+            await tx.$queryRaw`
+              SELECT "id" FROM "generation_jobs"
+               WHERE "id" = ${chain.jobId} FOR UPDATE
+            `;
+            holderHasLock();
+            await holderMayFinish;
+          },
+          { timeout: 60_000 },
+        )
+        .catch(() => undefined);
+
+      let settlement: Promise<{ ok: boolean; value?: unknown }> | null = null;
+      try {
+        await holderReady;
+
+        // Session B: the real settlement path. It must take its advisory lock,
+        // enter the chain query, acquire the reservation, and then block on
+        // session A's job row.
+        let settlementSettled = false;
+        settlement = createMediaFailureResolutionRepository(settler)
+          .settleExhaustedMediaFailure({ claim, settledAt: NOW, context: ctx() })
+          .then(
+            (value) => {
+              settlementSettled = true;
+              return { ok: true as const, value };
+            },
+            () => {
+              settlementSettled = true;
+              return { ok: false as const };
+            },
+          );
+
+        // Genuinely blocked on a lock, not merely slow.
+        expect(await waitForBlocked(prisma, 1)).toBe(true);
+        expect(settlementSettled).toBe(false);
+
+        // Session C: the RESERVATION row must already be taken. `NOWAIT` turns
+        // "someone holds this" into an error instead of a wait, which is what
+        // makes the observation deterministic.
+        const reservationProbe = await probe
+          .$transaction(async (tx) => {
+            await tx.$queryRaw`
+              SELECT "id" FROM "generation_reservations"
+               WHERE "id" = ${chain.reservationId} FOR UPDATE NOWAIT
+            `;
+            return "acquired" as const;
+          })
+          .then(
+            () => "acquired" as const,
+            (error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error);
+              return message.includes("could not obtain lock") ? ("refused" as const) : "other";
+            },
+          );
+
+        // The invariant. If settlement ever stops taking the reservation before
+        // the job, session C acquires it freely and this fails.
+        expect(reservationProbe).toBe("refused");
+      } finally {
+        // Safe on every path, including a failed assertion above: an unreleased
+        // holder would wedge every later test in this file.
+        releaseHolder();
+        await holderDone;
+        if (settlement !== null) await settlement;
+        await Promise.all([holder.$disconnect(), settler.$disconnect(), probe.$disconnect()]);
+      }
+
+      // The real path then completed, and nothing is left holding a lock.
+      const resolved = await prisma.managedOutputMediaFailureResolution.findUniqueOrThrow({
+        where: { managedOutputMediaValidationId: chain.validationId },
+      });
+      expect(resolved.status).toBe("RESOLVED");
+      expect(resolved.leaseToken).toBeNull();
+      expect(await blockedBackends(prisma)).toBe(0);
+    }, 90_000);
+  });
 });

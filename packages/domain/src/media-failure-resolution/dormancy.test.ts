@@ -275,7 +275,12 @@ describe("durable shape and the cost lock", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
+    // Phase 5A now owns the newest migration, so "this phase's is last" is no
+    // longer this phase's claim to make — the assertion that survives is the one
+    // that was always the point: 6C contributed exactly one migration, at
+    // exactly one position, and nothing was added to it afterwards. The newest
+    // migration is pinned by whichever phase added it.
+    expect(dirs[13]).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
     expect(dirs.filter((dir) => dir.includes("6c"))).toEqual([
       "00000000000013_phase4c3b2h3b6c_media_failure_resolution",
     ]);

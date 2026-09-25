@@ -205,19 +205,40 @@ describe.skipIf(!HAS_DB)("a regeneration right is spent only on delivery", () =>
   it("lets only one of two concurrent admissions succeed", async () => {
     const chain = await seedChain(prisma, "regenrace");
     const scene = chain.scene;
+
+    // Re-armed **once**, before the race, and deliberately not inside each
+    // racing call. Re-arming inside them put the *fixture* in the race: two
+    // concurrent re-arms interleave with the two admissions in several orders,
+    // so which business outcome the loser received depended on scheduling
+    // rather than on the rule under test. This is what the entitlement
+    // admission actually has to survive — two callers arriving at one revisable
+    // job at the same instant.
+    await makeJobRevisable(prisma, chain, "regenrace");
+
+    const admit = (id: string) =>
+      repos.requests.admitUserRegeneration(
+        ORG_A,
+        { id, generationSceneId: scene.id, requestedByUserId: "usr_itest" },
+        ctx({ actorType: "USER", actorUserId: "usr_itest" }),
+      );
     const results = await Promise.allSettled([
-      admitRegen(chain, "genreq_race_a"),
-      admitRegen(chain, "genreq_race_b"),
+      admit("genreq_race_a"),
+      admit("genreq_race_b"),
     ]);
 
-    // Both calls *return*. The loser's unique violation is an expected business
-    // outcome — the customer asked for something already in flight — so it is
-    // translated at the boundary rather than escaping as a database error a
-    // caller would have to recognise by its Prisma code.
+    // Both calls *return*. The loser never reaches the insert at all — it is
+    // refused by a business rule under the job lock — so what this pins is that
+    // no database error escapes as one: a caller handling
+    // `AdmitUserRegenerationOutcome` does not handle `P2002`.
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
     const kinds = results.map((r) => (r.status === "fulfilled" ? r.value.kind : "REJECTED"));
     expect(kinds.filter((k) => k === "ADMITTED")).toHaveLength(1);
-    expect(kinds.filter((k) => k === "REGENERATION_ALREADY_ACTIVE")).toHaveLength(1);
+    // Which refusal the loser receives is a genuine consequence of ordering, and
+    // both are correct: it either sees the job already moved out of
+    // DELIVERABLE_READY by the winner, or sees the winner's request in flight.
+    // Pinning one of them would be pinning the scheduler.
+    const loser = kinds.find((k) => k !== "ADMITTED");
+    expect(["JOB_NOT_REVISABLE", "REGENERATION_ALREADY_ACTIVE"]).toContain(loser);
 
     const admitted = results.filter(
       (r) => r.status === "fulfilled" && r.value.kind === "ADMITTED",

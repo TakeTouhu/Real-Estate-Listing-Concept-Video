@@ -781,3 +781,62 @@ same batch sweeps on it.
 permanently, and no path converts it. None honestly can without provider-side
 actual-cost ingestion. A cost-accounting pass over the audit record is the right
 owner; the lifecycle deliberately does not guess.
+
+## Phase 5A — what the deliverable composition plan deliberately leaves open
+
+Four items, each deferred with a reason rather than omitted.
+
+**The composition profile is not frozen.** No codec, bitrate, frame rate,
+transition, audio mix, crop, padding, letterbox, watermark or interpolation
+algorithm is decided, and `UPSCALE`/`DOWNSCALE` are not implemented. The *inputs*
+to that decision exist — the job records `targetOutputResolution` and each
+attempt records its native-generation normalization facts — but the decision
+itself is a product commitment nobody has made. Recording a guess would store a
+policy nobody chose, as if someone had. **Phase 5B owns it, and must freeze it
+before any byte is produced.**
+
+**Nothing executes a plan.** `COMPOSITION_PENDING -> COMPOSING` and
+`COMPOSING -> DELIVERABLE_VALIDATING` are legal in the state machine, reserved
+from the generic repository, and have no actor. There is deliberately no
+candidate-discovery query either: a queue with nothing draining it suggests work
+is happening that is not. Phase 5B supplies both, together with the `ffmpeg`
+adapter behind a port.
+
+**No unit is consumed, and `GenerationJob.currentDeliverableVersionId` is never
+moved by planning.** Both belong to Transaction G at
+`DELIVERABLE_VALIDATING -> DELIVERABLE_READY`, which remains deferred: a customer
+unit may be consumed only after a usable final deliverable exists *and* has
+passed deliverable-level validation. Until then the customer keeps the video they
+already have.
+
+**A deliverable version carries no metadata beyond its fingerprint.** Anything
+else — encoder settings, output dimensions, the final object's digest — is not
+authoritative at composition-admission time, and a column populated later with a
+value invented now is worse than an absent column. Phase 5B/5C adds what it can
+actually prove.
+
+**Deliverable-level media validation does not exist.** Scene-level validity
+(ADR-0044/0045) says nothing about whether the composed video is playable.
+`ManagedOutputMediaValidation` is bound one-to-one to a `SceneGeneration`, so a
+final deliverable needs its own record or a widened binding; which of the two is
+a Phase 5C schema decision and is not pre-empted here.
+
+## Phase 5A follow-up — two unlocked reservation reads under a Job lock
+
+`lockJobAndSceneForTenant` and `lockRevisionRollbackChain` in
+`packages/database/src/orchestration-repositories.ts` read
+`generation_reservations.state` through a `LEFT JOIN` while holding
+`FOR UPDATE OF j, s` / `j, s, r`. Those are plain MVCC reads, not row locks, so
+they cannot participate in a lock cycle and are **not** a deadlock concern.
+
+They are recorded because they are the same *class* of hole Phase 5A closed in
+Transaction I: an authority value read without the lock that makes it
+authoritative. Revision start requires `reservationState === "CONSUMED"` and the
+rollback requires it too, so in both cases a concurrent release between the read
+and the commit would be acted on stale.
+
+Not fixed here, deliberately — changing either one alters revision-start and
+rollback behaviour, which belongs to the phase that owns them and needs its own
+mutation evidence. Whoever picks it up should also decide whether the reservation
+belongs in those statements' `FOR UPDATE OF` list, which would be the smallest
+correct fix given the system-wide Reservation → Job order.

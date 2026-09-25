@@ -9,6 +9,7 @@ import {
   createSceneGenerationRequestRepository,
 } from "@app/database";
 import {
+  computeDeliverableInputFingerprint,
   createPricingSnapshot,
   createProviderPricingCatalog,
   epochMillisFromDate,
@@ -141,8 +142,18 @@ export function attemptInput(
 
 export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   await prisma.generationScene.updateMany({ data: { currentDeliveredRequestId: null } });
+  // Both pointers are released before anything they name is deleted. The
+  // deliverable pointer's composite foreign key is RESTRICT, exactly like the
+  // scene's, so a job still naming a version pins that version — and the version
+  // pins the job.
+  await prisma.generationJob.updateMany({ data: { currentDeliverableVersionId: null } });
   await prisma.generationTransitionEvent.deleteMany({});
   await prisma.generationPricingSnapshot.deleteMany({});
+  // Before the scenes, requests, attempts and validations they freeze: all five
+  // foreign keys are RESTRICT on purpose, so a planned deliverable cannot be
+  // erased by deleting what it was planned from.
+  await prisma.generationDeliverableInput.deleteMany({});
+  await prisma.generationDeliverableVersion.deleteMany({});
   // Before the validations they belong to, which come before the attempts: both
   // foreign keys are RESTRICT on purpose, so durable failure history cannot be
   // erased through a cascade.
@@ -295,6 +306,7 @@ export async function makeJobRevisable(
   chain: { job: { id: string }; scene: { id: string }; request: { id: string } },
   suffix: string,
 ): Promise<void> {
+  const deliverableVersionId = await seedPriorDeliverable(prisma, chain.job.id, suffix);
   await prisma.$executeRaw`
     UPDATE "scene_generation_requests"
        SET "state" = 'DELIVERED'::"SceneGenerationRequestState",
@@ -312,7 +324,7 @@ export async function makeJobRevisable(
   await prisma.$executeRaw`
     UPDATE "generation_jobs"
        SET "state" = 'DELIVERABLE_READY'::"GenerationJobState",
-           "currentDeliverableVersionId" = ${`gdv_${suffix}`},
+           "currentDeliverableVersionId" = ${deliverableVersionId},
            "stateVersion" = "stateVersion" + 1
      WHERE "id" = ${chain.job.id}
   `;
@@ -344,4 +356,75 @@ export async function makeJobRevisable(
        WHERE "id" = ${existing.id}
     `;
   }
+}
+
+/**
+ * The deliverable a job must already hold before it can be revised.
+ *
+ * Phase 5A gave `currentDeliverableVersionId` a composite foreign key, so the
+ * synthetic `gdv_<suffix>` string these fixtures used to write is no longer
+ * insertable: a non-null pointer must name a real version *of this job*.
+ *
+ * The row it creates stands in for a deliverable published before Transaction I
+ * existed. It deliberately carries **no input rows**, and its fingerprint is the
+ * real domain function applied to an empty input set — a value no admission can
+ * ever produce, because every real job has at least one scene. A fixture that
+ * invented a plausible-looking fingerprint over invented inputs would be
+ * asserting a plan that was never admitted; this one is visibly a placeholder.
+ *
+ * Ordinal 1 is deliberate too: a recomposition planned on top of it receives
+ * ordinal 2, which is exactly what the production sequence would produce.
+ */
+export async function seedPriorDeliverable(
+  prisma: PrismaClient,
+  generationJobId: string,
+  suffix: string,
+): Promise<string> {
+  const id = `gdv_${suffix}`;
+  // Idempotent **per job**, not per id, because `makeJobRevisable` is re-armed
+  // under a fresh suffix: a job that has finished one revision is brought back
+  // to a revisable state so the next one can start, exactly as Transaction H
+  // would leave it. Writing a new pointer string each time used to be free.
+  // Creating a second version is not, and would also be wrong: re-arming a job
+  // returns it to the deliverable it already had.
+  const existing = await prisma.generationDeliverableVersion.findFirst({
+    where: { generationJobId },
+    orderBy: { ordinal: "desc" },
+    select: { id: true },
+  });
+  if (existing !== null) return existing.id;
+
+  const job = await prisma.generationJob.findUniqueOrThrow({
+    where: { id: generationJobId },
+    select: {
+      targetOutputResolution: true,
+      targetAspectRatio: true,
+      requestedDurationSeconds: true,
+    },
+  });
+  // Read-then-create is not a decision under concurrency: two callers re-arming
+  // the same job can both observe no version and then collide on
+  // `(generationJobId, ordinal)`. The loser must get the winner's row, not a
+  // unique violation dressed up as a test failure — a fixture that explodes
+  // under contention makes every concurrency test around it flaky for a reason
+  // that has nothing to do with what the test asserts.
+  const created = await prisma.generationDeliverableVersion.createMany({
+    data: [
+      {
+        id,
+        generationJobId,
+        ordinal: 1,
+        inputFingerprint: computeDeliverableInputFingerprint(job, []),
+      },
+    ],
+    skipDuplicates: true,
+  });
+  if (created.count === 1) return id;
+
+  const winner = await prisma.generationDeliverableVersion.findFirstOrThrow({
+    where: { generationJobId },
+    orderBy: { ordinal: "desc" },
+    select: { id: true },
+  });
+  return winner.id;
 }
