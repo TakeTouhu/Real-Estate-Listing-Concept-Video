@@ -220,6 +220,29 @@ describe("the database boundary can reach nothing external", () => {
     }
   });
 
+  it("gives the runner no way to name a local path of its own", () => {
+    // The materializer owns the temporary directory, so it owns the output path
+    // too. A cross-layer callback handing the runner a path would let the
+    // composed file land outside the directory `release()` removes -- hundreds
+    // of megabytes per attempt, with nothing responsible for them.
+    const runner = code(readFileSync(join(MODULE_DIR, "runner.ts"), "utf8"));
+    for (const banned of ["outputPathFor", "mkdtemp", "tmpdir(", "node:path", "node:os", '"/tmp']) {
+      expect(`${banned}: ${runner.includes(banned)}`).toBe(`${banned}: false`);
+    }
+    // The path it does use comes straight off the materialization outcome.
+    expect(runner.includes("{ outputPath } = materialized")).toBe(true);
+  });
+
+  it("keeps the composed output path out of every other production file", () => {
+    // Exactly one production file may construct it: the module that created the
+    // directory it lives in.
+    const OWNER = "packages/storage/src/managed-output/deliverable-composition-io.ts";
+    for (const { name, text } of productionSources()) {
+      if (name.endsWith(OWNER)) continue;
+      expect(`${name}: ${text.includes("output.mp4")}`).toBe(`${name}: false`);
+    }
+  });
+
   it("splits the four boundaries across four ports, so none can span another", () => {
     const ports = code(readFileSync(join(MODULE_DIR, "ports.ts"), "utf8"));
     for (const port of [

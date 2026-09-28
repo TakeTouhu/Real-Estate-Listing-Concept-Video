@@ -199,10 +199,16 @@ describe("timeouts are bounded, and always shorter than the lease", () => {
     expect(COMPOSE_MAX_STDOUT_BYTES).toBe(65_536);
   });
 
-  it("keeps the default encode well inside the default lease", () => {
-    // The cross-package invariant: a composer allowed to outrun its own lease
-    // would have the work reclaimed underneath it and encoded twice.
+  it("keeps the two defaults in a sane relationship, and claims nothing more", () => {
+    // The *defaults* line up, and that is worth pinning so nobody raises this
+    // one past the lease by accident.
     expect(DEFAULT_COMPOSE_TIMEOUT_MS).toBeLessThan(DEFAULT_COMPOSITION_LEASE_MS);
+    // But it is not an invariant, and this suite does not pretend otherwise: the
+    // ceiling here exceeds the default lease outright, the two values are
+    // configured independently in different packages, and materialization and
+    // publication add further unbounded time. Correctness rests on the runner
+    // probing the canonical key before it encodes, not on this inequality.
+    expect(MAX_COMPOSE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_COMPOSITION_LEASE_MS);
   });
 
   it("refuses an unusable timeout rather than clamping it", () => {

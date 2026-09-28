@@ -77,6 +77,7 @@ export type {
   FinalizeCompositionOutcome,
   MaterializeCompositionSourcesOutcome,
   MaterializedCompositionSource,
+  ProbeDeliverableOutputOutcome,
   PublishDeliverableOutcome,
 } from "./ports";
 export { DeliverableCompositionRunner } from "./runner";

@@ -112,7 +112,6 @@ export {
 export type { FfmpegComposerConfig, FfmpegComposerDeps } from "./ffmpeg-composer";
 export {
   COMPOSED_FILE_NAME,
-  composedOutputPathFor,
   createDeliverableCompositionSourceMaterializer,
   createDeliverableOutputPublisher,
   sourceFileName,

@@ -63,7 +63,23 @@ import type { ProcessRunner } from "./process-runner";
 
 /** 20 minutes by default: long enough for a 60s 1080p encode with headroom. */
 export const DEFAULT_COMPOSE_TIMEOUT_MS = 20 * 60_000;
-/** One hour, absolute. Always shorter than the composition lease. */
+/**
+ * One hour, absolute.
+ *
+ * This is **not** guaranteed to be shorter than the composition lease, and an
+ * earlier version of this comment claimed it was. The two are configured
+ * independently — the lease belongs to the domain runner, this timeout to a
+ * storage adapter — and source materialization and publication add further
+ * unbounded time on top of the encode, so a deployment can legitimately hold a
+ * configuration where a run outlives its own lease.
+ *
+ * Correctness does not depend on the inequality. An encode that outlives its
+ * lease loses `finalizeComposition` and its work is wasted, but publication is
+ * first-wins and the next claim probes the canonical key before materializing
+ * anything: once the object exists, the reclaiming worker finalizes against its
+ * receipt instead of encoding again. That is what makes the lease a
+ * crash-recovery bound rather than a deadline.
+ */
 export const MAX_COMPOSE_TIMEOUT_MS = 60 * 60_000;
 /** ffmpeg writes progress to stderr; stdout stays tiny. */
 export const COMPOSE_MAX_STDOUT_BYTES = 65_536;

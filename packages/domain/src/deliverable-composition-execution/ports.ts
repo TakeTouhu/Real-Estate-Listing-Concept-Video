@@ -257,7 +257,27 @@ export type MaterializeCompositionSourcesOutcome =
   | {
       readonly kind: "MATERIALIZED";
       readonly sources: readonly MaterializedCompositionSource[];
-      /** Releases the temporary directory. Safe to call more than once. */
+      /**
+       * Where the composed file must be written, inside the same private
+       * directory as the sources.
+       *
+       * Returned by the materializer rather than computed by the caller,
+       * because the materializer is what *owns* the directory. A caller
+       * deriving this path from anything it holds — the claim, the deliverable
+       * version id, a storage key — would be naming a location the materializer
+       * knows nothing about, and {@link release} would then leave the composed
+       * file behind: hundreds of megabytes per attempt, on every worker, with
+       * nothing in the system responsible for it.
+       *
+       * Application-created and fixed: nothing about the organization, the job,
+       * the deliverable, the customer or any provider appears in it.
+       */
+      readonly outputPath: string;
+      /**
+       * Releases the temporary directory, including the composed output.
+       *
+       * The sole cleanup authority. Safe to call more than once.
+       */
       readonly release: () => Promise<void>;
     }
   /** Storage could not be read this time. Nothing about the plan is wrong. */
@@ -346,7 +366,53 @@ export type PublishDeliverableOutcome =
   /** The composed object exceeds the deliverable ceiling. */
   | { readonly kind: "OUTPUT_TOO_LARGE" };
 
+/**
+ * What a read-only look at the canonical deliverable key concluded. Closed.
+ *
+ * `ABSENT` and `RETRYABLE_FAILURE` are deliberately separate members. Treating
+ * an unreadable object as absent would send a worker to re-download and
+ * re-encode a deliverable that may already exist, and — worse — would let a
+ * transient storage fault look like permission to compose again.
+ */
+export type ProbeDeliverableOutputOutcome =
+  /** Nothing is at the canonical key. Composition has to happen. */
+  | { readonly kind: "ABSENT" }
+  /**
+   * An object is already there, and this is its receipt, read from its bytes.
+   * The claim can be finalized against this without composing anything.
+   */
+  | {
+      readonly kind: "PUBLISHED";
+      readonly sha256: Sha256Digest;
+      readonly sizeBytes: SafePositiveByteCount;
+    }
+  /** The existing canonical object exceeds the deliverable ceiling. */
+  | { readonly kind: "OUTPUT_TOO_LARGE" }
+  /** The key could not be read this time. Says nothing about what is there. */
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
 export interface DeliverableOutputPublisher {
+  /**
+   * Read the canonical deliverable key without writing anything.
+   *
+   * This is what makes a reclaimed lease converge. A worker whose lease expired
+   * mid-encode may still publish — publication is first-wins and does not check
+   * the lease — and the worker that reclaimed the work would otherwise download
+   * every source and run the encoder again before discovering the object was
+   * already there. Because the composer timeout and the composition lease are
+   * configured independently, that can repeat indefinitely: each replacement
+   * spends longer than its own lease and is superseded before it can finalize,
+   * leaving the row `RUNNING` forever even though the deliverable exists.
+   *
+   * Probing first breaks that: once canonical bytes exist, the next claim reads
+   * their receipt and finalizes. It does not make duplicate execution
+   * impossible — work before the first publication can still be wasted — it
+   * makes recovery *after* publication cost one read instead of one encode.
+   */
+  probeExistingOutput(input: {
+    readonly key: ManagedDeliverableOutputKey;
+  }): Promise<ProbeDeliverableOutputOutcome>;
+
   /**
    * Publish the composed file to the canonical deliverable key, first-wins.
    *

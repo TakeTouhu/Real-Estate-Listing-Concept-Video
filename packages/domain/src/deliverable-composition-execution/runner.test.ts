@@ -38,6 +38,7 @@ import type {
   FinalizeCompositionInput,
   FinalizeCompositionOutcome,
   MaterializeCompositionSourcesOutcome,
+  ProbeDeliverableOutputOutcome,
   PublishDeliverableOutcome,
 } from "./ports";
 import { managedGenerationOutputKey, safePositiveByteCount, sha256Digest } from "../completion/output";
@@ -148,6 +149,10 @@ class FakeRepository implements DeliverableCompositionRepository {
   }
 }
 
+/** The private directory a materialization is pretending to own. */
+const TEMP_DIR = "/tmp/vta-compose-fake";
+const TEMP_OUTPUT = `${TEMP_DIR}/output.mp4`;
+
 class FakeMaterializer implements DeliverableCompositionSourceMaterializer {
   calls = 0;
   released = 0;
@@ -164,8 +169,9 @@ class FakeMaterializer implements DeliverableCompositionSourceMaterializer {
       kind: "MATERIALIZED",
       sources: input.scenes.map((one, index) => ({
         position: one.position,
-        localPath: `/tmp/vta-compose-x/input-${index}`,
+        localPath: `${TEMP_DIR}/input-${String(index).padStart(4, "0")}`,
       })),
+      outputPath: TEMP_OUTPUT,
       release: async () => {
         this.released += 1;
       },
@@ -186,6 +192,8 @@ class FakeComposer implements DeliverableMediaComposer {
 
 class FakePublisher implements DeliverableOutputPublisher {
   calls = 0;
+  probes = 0;
+  readonly publishedPaths: string[] = [];
 
   constructor(
     private readonly outcome: PublishDeliverableOutcome = {
@@ -193,10 +201,18 @@ class FakePublisher implements DeliverableOutputPublisher {
       sha256: sha256Digest("b".repeat(64)),
       sizeBytes: safePositiveByteCount(4_096),
     },
+    /** What the canonical key already holds. Absent unless a test says so. */
+    private readonly existing: ProbeDeliverableOutputOutcome = { kind: "ABSENT" },
   ) {}
 
-  async publish(): Promise<PublishDeliverableOutcome> {
+  async probeExistingOutput(): Promise<ProbeDeliverableOutputOutcome> {
+    this.probes += 1;
+    return this.existing;
+  }
+
+  async publish(input: { readonly localPath: string }): Promise<PublishDeliverableOutcome> {
     this.calls += 1;
+    this.publishedPaths.push(input.localPath);
     return this.outcome;
   }
 }
@@ -236,7 +252,6 @@ function harness(parts: {
     publisher,
     clock: () => NOW,
     context: CONTEXT,
-    outputPathFor: () => "/tmp/vta-compose-x/output.mp4",
   });
   return {
     repository,
@@ -273,8 +288,8 @@ describe("A — a claimable deliverable is composed, published and finalized", (
     const input = h.composer.inputs[0]!;
     expect(input.clips.map((clip) => clip.durationSeconds)).toEqual([5, 5]);
     expect(input.clips.map((clip) => clip.localPath)).toEqual([
-      "/tmp/vta-compose-x/input-0",
-      "/tmp/vta-compose-x/input-1",
+      `${TEMP_DIR}/input-0000`,
+      `${TEMP_DIR}/input-0001`,
     ]);
     expect(input.profile).toEqual(PROFILE);
   });
@@ -571,6 +586,215 @@ describe("I — one bad candidate never poisons the batch", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// K. The materializer owns the output path
+// ---------------------------------------------------------------------------
+
+describe("K — the composed file goes exactly where the materializer put it", () => {
+  it("passes the materializer's own outputPath to the composer and the publisher", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.composer.inputs[0]!.outputPath).toBe(TEMP_OUTPUT);
+    expect(h.publisher.publishedPaths).toEqual([TEMP_OUTPUT]);
+  });
+
+  it("sends the composer and the publisher the same path, never two", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.publisher.publishedPaths[0]).toBe(h.composer.inputs[0]!.outputPath);
+  });
+
+  it("uses whatever path the materializer returns, with no rule of its own", async () => {
+    // A different random directory each run is exactly the production case; the
+    // runner must not hold any opinion about what the path looks like.
+    const elsewhere = "/tmp/vta-compose-9f2a1c/output.mp4";
+    const h = harness({
+      materializer: new FakeMaterializer({
+        kind: "MATERIALIZED",
+        sources: [{ position: 1, localPath: "/tmp/vta-compose-9f2a1c/input-0000" }],
+        outputPath: elsewhere,
+        release: async () => undefined,
+      }),
+    });
+    await h.run();
+    expect(h.composer.inputs[0]!.outputPath).toBe(elsewhere);
+    expect(h.publisher.publishedPaths).toEqual([elsewhere]);
+  });
+
+  it("derives the path from no identifier the claim carries", async () => {
+    const h = harness();
+    await h.run();
+    const used = h.composer.inputs[0]!.outputPath;
+    for (const identity of [ORG, JOB, VERSION, "gdcmp_1", "clease_1", "deliverables"]) {
+      expect(`${identity}: ${used.includes(identity)}`).toBe(`${identity}: false`);
+    }
+  });
+
+  it("releases on every exit path, so the output never outlives the attempt", async () => {
+    const cases: { name: string; h: Harness }[] = [
+      { name: "finalize", h: harness() },
+      { name: "compose failure", h: harness({ composer: new FakeComposer({ kind: "RETRYABLE_FAILURE" }) }) },
+      {
+        name: "publish failure",
+        h: harness({ publisher: new FakePublisher({ kind: "RETRYABLE_FAILURE" }) }),
+      },
+      {
+        name: "oversized output block",
+        h: harness({ publisher: new FakePublisher({ kind: "OUTPUT_TOO_LARGE" }) }),
+      },
+      {
+        name: "lost lease at finalize",
+        h: harness({ repository: new FakeRepository({ finalize: { kind: "LEASE_LOST" } }) }),
+      },
+    ];
+    for (const one of cases) {
+      await one.h.run();
+      expect(`${one.name}: ${one.h.materializer.released}`).toBe(`${one.name}: 1`);
+    }
+  });
+
+  it("releases even when the publisher throws", async () => {
+    class ThrowingPublisher extends FakePublisher {
+      override async publish(): Promise<PublishDeliverableOutcome> {
+        throw new Error("adapter defect");
+      }
+    }
+    const h = harness({ publisher: new ThrowingPublisher() });
+    const report = await h.run();
+    expect(report.failed).toBe(1);
+    expect(h.materializer.released).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L. An already-published canonical object is finalized, never re-encoded
+// ---------------------------------------------------------------------------
+
+describe("L — canonical output that already exists is finalized without encoding", () => {
+  const RECEIPT = {
+    kind: "PUBLISHED" as const,
+    sha256: sha256Digest("7".repeat(64)),
+    sizeBytes: safePositiveByteCount(123_456),
+  };
+
+  function existing(outcome: ProbeDeliverableOutputOutcome) {
+    return harness({ publisher: new FakePublisher(undefined, outcome) });
+  }
+
+  it("probes the canonical key on every claim, before any source is fetched", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.publisher.probes).toBe(1);
+  });
+
+  it("calls no materializer, no composer and no publish when bytes already exist", async () => {
+    const h = existing(RECEIPT);
+    const report = await h.run();
+    expect(h.materializer.calls).toBe(0);
+    expect(h.composer.inputs).toHaveLength(0);
+    expect(h.publisher.calls).toBe(0);
+    expect(report.finalized).toBe(1);
+  });
+
+  it("finalizes against the canonical receipt exactly as read", async () => {
+    const h = existing(RECEIPT);
+    await h.run();
+    const finalize = h.repository.finalized[0]!;
+    expect(finalize.outputSha256).toBe(RECEIPT.sha256);
+    expect(finalize.outputSizeBytes).toBe(RECEIPT.sizeBytes);
+  });
+
+  it("reports a replayed finalize as already-finalized, not as a fresh one", async () => {
+    const h = harness({
+      repository: new FakeRepository({ finalize: { kind: "ALREADY_FINALIZED" } }),
+      publisher: new FakePublisher(undefined, RECEIPT),
+    });
+    const report = await h.run();
+    expect(report.alreadyFinalized).toBe(1);
+    expect(report.finalized).toBe(0);
+  });
+
+  it("reports a lost lease on the replay path too", async () => {
+    const h = harness({
+      repository: new FakeRepository({ finalize: { kind: "LEASE_LOST" } }),
+      publisher: new FakePublisher(undefined, RECEIPT),
+    });
+    const report = await h.run();
+    expect(report.leaseLost).toBe(1);
+    expect(h.composer.inputs).toHaveLength(0);
+  });
+
+  it("continues through the normal data plane when the key is absent", async () => {
+    const h = existing({ kind: "ABSENT" });
+    const report = await h.run();
+    expect(h.materializer.calls).toBe(1);
+    expect(h.composer.inputs).toHaveLength(1);
+    expect(h.publisher.calls).toBe(1);
+    expect(report.finalized).toBe(1);
+  });
+
+  it("defers an unreadable key rather than treating it as absent", async () => {
+    // An unreadable object is not permission to spend a download and an encode.
+    const h = existing({ kind: "RETRYABLE_FAILURE" });
+    const report = await h.run();
+    expect(h.repository.deferred.map((one) => one.retryCode)).toEqual([
+      "OUTPUT_PUBLISH_RETRYABLE",
+    ]);
+    expect(h.materializer.calls).toBe(0);
+    expect(h.composer.inputs).toHaveLength(0);
+    expect(report.deferred).toBe(1);
+    expect(report.blocked).toBe(0);
+  });
+
+  it("blocks an existing oversized object without trying to replace it", async () => {
+    // First-wins means it cannot be replaced, so encoding again would be work in
+    // service of a write that is refused.
+    const h = existing({ kind: "OUTPUT_TOO_LARGE" });
+    const report = await h.run();
+    expect(h.repository.blocked.map((one) => one.blockCode)).toEqual([
+      "OUTPUT_SIZE_LIMIT_EXCEEDED",
+    ]);
+    expect(h.materializer.calls).toBe(0);
+    expect(h.composer.inputs).toHaveLength(0);
+    expect(report.blocked).toBe(1);
+    expect(report.deferred).toBe(0);
+  });
+
+  it("probes after the deterministic refusals, so a bad plan costs no read", async () => {
+    const h = harness({
+      repository: new FakeRepository({
+        claim: {
+          kind: "CLAIMED",
+          claim: claimOf({ scenes: [scene(1, 5), scene(2, 5)], requestedDurationSeconds: 30 }),
+        },
+      }),
+      publisher: new FakePublisher(undefined, RECEIPT),
+    });
+    await h.run();
+    expect(h.repository.blocked.map((one) => one.blockCode)).toEqual([
+      "DURATION_INVARIANT_MISMATCH",
+    ]);
+    expect(h.publisher.probes).toBe(0);
+  });
+
+  it("lets a reclaimed worker converge after a stale worker published", async () => {
+    // The sequence the correction exists for: worker one publishes, loses the
+    // lease, and worker two finds the object rather than encoding it again.
+    const stale = harness({
+      repository: new FakeRepository({ finalize: { kind: "LEASE_LOST" } }),
+    });
+    const first = await stale.run();
+    expect(first.leaseLost).toBe(1);
+    expect(stale.publisher.calls).toBe(1);
+
+    const reclaimed = existing(RECEIPT);
+    const second = await reclaimed.run();
+    expect(second.finalized).toBe(1);
+    expect(reclaimed.composer.inputs).toHaveLength(0);
+    expect(reclaimed.materializer.calls).toBe(0);
+  });
+});
+
 describe("J — the report is counts only", () => {
   it("carries no identifier, key, receipt or path", async () => {
     const h = harness();
@@ -608,7 +832,6 @@ describe("J — the report is counts only", () => {
       publisher: h.publisher,
       clock: () => NOW,
       context: CONTEXT,
-      outputPathFor: () => "/tmp/x/output.mp4",
     });
     for (const bad of [0, -1, 1.5, 26, Number.NaN, Number.POSITIVE_INFINITY]) {
       await expect(runner.runOnce(bad)).rejects.toThrow();

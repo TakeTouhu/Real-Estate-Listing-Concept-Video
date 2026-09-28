@@ -240,10 +240,22 @@ than by luck:
 The loser's work is wasted, never wrong.
 
 The lease is 30 minutes by default and two hours at most — far longer than the
-media lifecycle's, because this work downloads gigabytes and runs an encoder. It
-must always exceed the composer timeout plus the I/O around it, or a healthy long
-encode has its lease stolen and two workers encode the same deliverable for no
-reason.
+media lifecycle's, because this work downloads gigabytes and runs an encoder.
+
+It is **not** guaranteed to exceed the composer timeout, and an earlier draft of
+this ADR claimed it was. The lease belongs to the domain runner and the timeout
+to a storage adapter; they are configured independently, nothing validates one
+against the other, and the adapter's ceiling (one hour) is above the lease's
+default (thirty minutes) outright. Source materialization and publication add
+further unbounded time on top of the encode.
+
+That matters because the consequence is not merely wasted work. A worker whose
+lease expires mid-encode can still publish — publication is first-wins and never
+consults the lease — and the worker that reclaimed the work would then repeat the
+whole download and encode before discovering the object exists, only to be
+superseded in turn. The row stays `RUNNING` indefinitely while the deliverable is
+already sitting at its canonical key. Decision 11 is what closes that, and it is
+why no heartbeat was introduced.
 
 ## Decision 10 — The receipt is read back from the object that is actually there
 
@@ -260,7 +272,43 @@ would durably record a receipt for an object nobody read.
 An ETag is never used as a SHA-256. It is not one for a multipart object, and
 trusting it would record a receipt no reader could reproduce.
 
-## Decision 11 — The managed deliverable key is its own brand
+## Decision 11 — Every claim reads the canonical key before it fetches anything
+
+After the claim succeeds and after the two claim-only refusals of Decision 6,
+and **before a single source is materialized**, the runner reads the canonical
+deliverable key. Four answers, closed:
+
+| Probe answer | What the runner does |
+| --- | --- |
+| `PUBLISHED` | finalize against *that* receipt — no download, no encode, no write |
+| `ABSENT` | continue into materialize → compose → first-wins publish → finalize |
+| `OUTPUT_TOO_LARGE` | block `OUTPUT_SIZE_LIMIT_EXCEEDED` |
+| `RETRYABLE_FAILURE` | defer `OUTPUT_PUBLISH_RETRYABLE` |
+
+`ABSENT` and `RETRYABLE_FAILURE` are deliberately separate. Treating an
+unreadable key as absent would send a worker to spend a full transfer and encode
+on a deliverable that may already exist, and would let a transient storage fault
+read as permission to compose again.
+
+An existing object over the ceiling blocks rather than re-encoding, because
+publication is first-wins: a replacement could not be written even if it were
+produced, so encoding one would be work in service of a refused write.
+
+The probe and the publish path establish their receipt through the same read, so
+the digest a replaying worker finalizes against and the digest the publishing
+worker finalizes against cannot differ.
+
+### What this does and does not claim
+
+It does **not** make duplicate execution impossible, and this ADR does not say
+otherwise. Two workers can still both materialize and both encode, and the
+loser's work is still thrown away. What it removes is the *unbounded* case: once
+canonical bytes exist, recovery costs one read instead of one encode, so a
+reclaimed lease converges instead of looping. That is the property a heartbeat
+would have been introduced to obtain, bought without adding a protocol whose own
+failure modes would then need reviewing.
+
+## Decision 12 — The managed deliverable key is its own brand
 
 ```text
 org/{organizationId}/deliverables/{deliverableVersionId}/output
@@ -280,7 +328,28 @@ the compiler's blessing.
 The key is extensionless for the same reason the generation key is: the receipt
 proves a digest and a byte count, not a container.
 
-## Decision 12 — Four ports, four boundaries, and no shell
+## Decision 13 — The materializer owns the temporary directory, so it owns the output path
+
+The materialization outcome returns `outputPath` alongside `sources` and
+`release`, and the runner passes it verbatim to both the composer and the
+publisher. There is no callback handing the runner a path, and the runner
+constructs none.
+
+The reason is ownership. The materializer creates one random private directory
+per execution; nothing else knows its name. A caller computing the output path
+from what *it* holds — the claim, the deliverable version id, the storage key —
+would be naming a location the materializer never heard of, and `release()` would
+then remove the sources and leave the composed file behind: up to half a gigabyte
+per attempt, on every worker, with nothing in the system responsible for it. An
+earlier draft of this phase had exactly that shape, with a `outputPathFor(claim)`
+callback that could not possibly return a path inside a directory the claim does
+not describe.
+
+So `release()` is the sole cleanup authority for everything the execution wrote,
+and the path itself stays free of identity: a fixed `output.mp4` beside
+`input-0000`, `input-0001`, …, derived from an index and nothing else.
+
+## Decision 14 — Four ports, four boundaries, and no shell
 
 The repository is the only thing that touches a database, the materializer the
 only thing that reads object storage, the composer the only thing that runs a
@@ -315,7 +384,7 @@ exit path and a cleanup failure is swallowed. Leaving a temporary directory
 behind is an operational annoyance; replacing a successful composition's outcome
 with an `rmdir` error is a defect.
 
-## Decision 13 — Sources are proved against the plan's receipt, streaming
+## Decision 15 — Sources are proved against the plan's receipt, streaming
 
 Each canonical source is streamed to disk while being hashed and counted, never
 buffered whole — a 512 MiB clip held in memory per scene is how one worker takes
@@ -331,7 +400,7 @@ exist.
 Any single disagreement refuses the whole materialization. A deliverable
 composed partly from bytes nobody validated is worse than no deliverable.
 
-## Decision 14 — `OUTPUT_VERIFIED` claims less than it sounds like
+## Decision 16 — `OUTPUT_VERIFIED` claims less than it sounds like
 
 It claims exactly this: an object exists at the canonical deliverable key, and
 its digest and byte count were established by reading the bytes that are actually
@@ -343,7 +412,7 @@ was billed. Deliverable-level media validation is Phase 5C's, and it deliberatel
 does not reuse `ManagedOutputMediaValidation` — that record is one-to-one with a
 *provider attempt*, and a composed deliverable is not one.
 
-## Decision 15 — Dormant
+## Decision 17 — Dormant
 
 Nothing constructs the execution repository, the runner, the materializer, the
 composer or the publisher anywhere in production. There is no scheduler, no
@@ -376,6 +445,13 @@ them no button — only a row that says exactly what happened and when. That is
 deliberate: an unblock operation that re-queues work without deciding *why* it
 was blocked would re-enter the loop this phase exists to end.
 
-**Accepted cost.** Duplicate execution wastes a worker's transfer and encode when
-a lease expires under a healthy run. The alternative — a heartbeat protocol —
-adds a failure mode of its own, and the wasted work is bounded by the lease.
+**Accepted cost.** Duplicate execution still wastes a worker's transfer and
+encode when a lease expires before the first publication. The alternative — a
+heartbeat protocol — adds a failure mode of its own, and the waste is bounded:
+once canonical bytes exist, the next claim reads their receipt and finalizes, so
+the loop cannot continue past one publication.
+
+**Accepted cost.** Every claim now performs one extra read of the canonical key,
+including the overwhelmingly common case where nothing is there. That is a single
+`GET` against a key this code already addresses, taken before any transfer, in
+exchange for removing an unbounded re-encode loop.

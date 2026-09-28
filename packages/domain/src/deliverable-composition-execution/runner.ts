@@ -24,6 +24,22 @@
  * finalize is guarded by lease token and row version, so only one writes the
  * receipt. The loser's work is wasted, never wrong.
  *
+ * ## Convergence after a publication, without a heartbeat
+ *
+ * Wasted work is acceptable; *unbounded* wasted work is not. A worker whose
+ * lease expired mid-encode can still publish, because publication does not
+ * consult the lease — and the composer timeout is configured independently of
+ * the lease, so each replacement can outlive its own lease in turn and be
+ * superseded before it finalizes. Left alone, that row stays `RUNNING` forever
+ * while the deliverable already exists.
+ *
+ * So every claim reads the canonical key before fetching a single source. If
+ * bytes are there, this pass finalizes against their receipt and composes
+ * nothing. It does not make duplicate execution impossible — work before the
+ * first publication can still be thrown away — it makes recovery after
+ * publication cost one read instead of one encode, which is what a heartbeat
+ * would otherwise have been introduced to achieve.
+ *
  * ## One bad candidate never poisons the batch
  *
  * Each candidate is isolated. A defect thrown while executing one is recorded in
@@ -64,6 +80,7 @@ import type {
   DeliverableOutputPublisher,
 } from "./ports";
 import type { TransitionContext } from "../orchestration/ports";
+import type { SafePositiveByteCount, Sha256Digest } from "../completion/output";
 
 export interface DeliverableCompositionDeps {
   readonly repository: DeliverableCompositionRepository;
@@ -75,8 +92,6 @@ export interface DeliverableCompositionDeps {
   readonly context: (organizationId: string) => TransitionContext;
   readonly leaseMs?: number;
   readonly retryDelayMs?: number;
-  /** Where the composed file is written. Provided by the materializer's dir. */
-  readonly outputPathFor: (claim: DeliverableCompositionClaim) => string;
 }
 
 /** What one bounded pass did. Counts only — no ids, no keys, no receipts. */
@@ -213,6 +228,40 @@ export class DeliverableCompositionRunner {
     const deterministic = deterministicRefusal(claim.claim);
     if (deterministic !== null) return this.#block(claim.claim, deterministic);
 
+    // Then one read of the canonical key, still before any source is fetched.
+    //
+    // A worker whose lease expired mid-encode can still publish, because
+    // publication is first-wins and does not consult the lease. Without this
+    // probe the reclaiming worker would download every source and run the
+    // encoder again before finding out, and since the composer timeout and the
+    // lease are configured independently, each replacement can outlive its own
+    // lease and be superseded before it finalizes — a row left RUNNING forever
+    // while the deliverable already exists.
+    const existing = await this.#deps.publisher.probeExistingOutput({
+      key: claim.claim.outputStorageKey,
+    });
+    switch (existing.kind) {
+      case "PUBLISHED":
+        // Canonical bytes exist. Finalize against *their* receipt; composing
+        // again could only produce a file nobody would publish.
+        return this.#finalize(claim.claim, existing.sha256, existing.sizeBytes);
+      case "OUTPUT_TOO_LARGE":
+        // Already over the ceiling, and first-wins means it cannot be replaced.
+        // Re-encoding would be work in service of a write that is refused.
+        return this.#block(claim.claim, "OUTPUT_SIZE_LIMIT_EXCEEDED");
+      case "RETRYABLE_FAILURE":
+        // Never read as "absent". An unreadable key is not permission to spend
+        // a full download and encode on a deliverable that may already exist.
+        return this.#defer(claim.claim, "OUTPUT_PUBLISH_RETRYABLE");
+      case "ABSENT":
+        break;
+      default: {
+        const exhaustive: never = existing;
+        void exhaustive;
+        break;
+      }
+    }
+
     return this.#compose(claim.claim);
   }
 
@@ -233,8 +282,13 @@ export class DeliverableCompositionRunner {
       return this.#defer(claim, "SOURCE_READ_RETRYABLE");
     }
 
+    // The materializer owns the directory, so it names the output too. Nothing
+    // here derives a path: a caller-computed location would sit outside the
+    // directory `release()` removes, and the composed file would survive every
+    // attempt.
+    const { outputPath } = materialized;
+
     try {
-      const outputPath = this.#deps.outputPathFor(claim);
       const composed = await this.#deps.composer.compose({
         clips: materialized.sources.map((source, index) => ({
           localPath: source.localPath,
@@ -261,16 +315,7 @@ export class DeliverableCompositionRunner {
       }
       if (published.kind !== "PUBLISHED") return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
 
-      const finalized = await this.#deps.repository.finalizeComposition({
-        claim,
-        outputSha256: published.sha256,
-        outputSizeBytes: published.sizeBytes,
-        verifiedAt: this.#deps.clock(),
-        context: this.#deps.context(claim.organizationId),
-      });
-      if (finalized.kind === "FINALIZED") return "FINALIZED";
-      if (finalized.kind === "ALREADY_FINALIZED") return "ALREADY";
-      return "LEASE_LOST";
+      return this.#finalize(claim, published.sha256, published.sizeBytes);
     } finally {
       // Unconditional, on every path including a thrown defect. A cleanup
       // failure is swallowed rather than allowed to replace the real answer:
@@ -278,6 +323,32 @@ export class DeliverableCompositionRunner {
       // losing the outcome of a successful composition is a defect.
       await materialized.release().catch(() => undefined);
     }
+  }
+
+  /**
+   * Write the durable receipt, whichever path established it.
+   *
+   * Shared by the compose path and the canonical-replay path on purpose: both
+   * are finalizing against a receipt read from the object at the canonical key,
+   * and the only difference is whether this worker is the one that put it there.
+   * A second copy of this mapping could disagree about what `ALREADY_FINALIZED`
+   * means.
+   */
+  async #finalize(
+    claim: DeliverableCompositionClaim,
+    outputSha256: Sha256Digest,
+    outputSizeBytes: SafePositiveByteCount,
+  ): Promise<"FINALIZED" | "ALREADY" | "LEASE_LOST"> {
+    const finalized = await this.#deps.repository.finalizeComposition({
+      claim,
+      outputSha256,
+      outputSizeBytes,
+      verifiedAt: this.#deps.clock(),
+      context: this.#deps.context(claim.organizationId),
+    });
+    if (finalized.kind === "FINALIZED") return "FINALIZED";
+    if (finalized.kind === "ALREADY_FINALIZED") return "ALREADY";
+    return "LEASE_LOST";
   }
 
   async #defer(

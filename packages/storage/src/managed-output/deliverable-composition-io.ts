@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   MAX_DELIVERABLE_OUTPUT_BYTES,
   managedGenerationOutputKey,
@@ -34,10 +34,11 @@ import {
   type DeliverableCompositionSourceMaterializer,
   type DeliverableOutputPublisher,
   type MaterializeCompositionSourcesOutcome,
+  type ProbeDeliverableOutputOutcome,
   type PublishDeliverableOutcome,
 } from "@app/domain";
 import type { ManagedOutputTempFileFactory, S3ManagedObjectReader } from "./media-validation";
-import type { S3ObjectBody } from "./s3-staging-sink";
+import type { S3GetObjectResult, S3ObjectBody } from "./s3-staging-sink";
 
 /** The read-and-write slice of the S3 seam these two boundaries need. */
 export interface DeliverableObjectClient extends S3ManagedObjectReader {
@@ -123,7 +124,10 @@ export function createDeliverableCompositionSourceMaterializer(
         return { kind: "RETRYABLE_FAILURE" };
       }
 
-      return { kind: "MATERIALIZED", sources, release };
+      // The output is named here, beside the sources, because this function is
+      // what created the directory. A caller computing it from anything it holds
+      // would name a location outside the directory `release` removes.
+      return { kind: "MATERIALIZED", sources, outputPath: join(dir, COMPOSED_FILE_NAME), release };
     },
   };
 }
@@ -234,11 +238,58 @@ async function writeAll(
   return true;
 }
 
+/**
+ * Read the canonical deliverable key and report what is there, writing nothing.
+ *
+ * Shares {@link readCanonicalReceipt} with the publish path deliberately: the
+ * receipt a replaying worker finalizes against and the receipt the publishing
+ * worker finalizes against must be established the same way, or the two paths
+ * could record different digests for one object.
+ *
+ * The only difference is that a missing object is an *answer* here rather than a
+ * failure. `ABSENT` is returned only when the store says there is no body at
+ * all; every other unreadable condition stays `RETRYABLE_FAILURE`, because
+ * calling a transient fault "absent" would send a worker to spend a full
+ * download and encode on a deliverable that may already exist.
+ */
+async function probeCanonicalOutput(
+  deps: DeliverableCompositionIoDeps,
+  config: DeliverableCompositionIoConfig,
+  key: string,
+): Promise<ProbeDeliverableOutputOutcome> {
+  let head: S3GetObjectResult;
+  try {
+    head = await deps.client.getObject({
+      bucket: config.bucket,
+      key,
+      expectedBucketOwner: config.expectedBucketOwner,
+    });
+  } catch {
+    return { kind: "RETRYABLE_FAILURE" };
+  }
+  if (head.body === null) return { kind: "ABSENT" };
+  await cancelQuietly(head.body);
+
+  const receipt = await readCanonicalReceipt(deps, config, key);
+  switch (receipt.kind) {
+    case "PUBLISHED":
+      return { kind: "PUBLISHED", sha256: receipt.sha256, sizeBytes: receipt.sizeBytes };
+    case "OUTPUT_TOO_LARGE":
+      return { kind: "OUTPUT_TOO_LARGE" };
+    default:
+      return { kind: "RETRYABLE_FAILURE" };
+  }
+}
+
 export function createDeliverableOutputPublisher(
   deps: DeliverableCompositionIoDeps,
   config: DeliverableCompositionIoConfig,
 ): DeliverableOutputPublisher {
   return {
+    async probeExistingOutput({ key }): Promise<ProbeDeliverableOutputOutcome> {
+      return probeCanonicalOutput(deps, config, key);
+    },
+
     async publish({ key, localPath }): Promise<PublishDeliverableOutcome> {
       let localBytes: number;
       try {
@@ -321,15 +372,4 @@ async function readCanonicalReceipt(
   } finally {
     await cancelQuietly(body);
   }
-}
-
-/**
- * The composed file's path, beside the sources it was made from.
- *
- * Derived from a materialized source path rather than from any identifier, so
- * the output lands in the same private directory and is removed by the same
- * unconditional cleanup.
- */
-export function composedOutputPathFor(anySourceLocalPath: string): string {
-  return join(dirname(anySourceLocalPath), COMPOSED_FILE_NAME);
 }

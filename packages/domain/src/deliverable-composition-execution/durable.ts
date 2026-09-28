@@ -234,12 +234,23 @@ export const MAX_DELIVERABLE_OUTPUT_BYTES = 536_870_912;
  *
  * Crash recovery, not a deadline: it says how long the system waits before
  * assuming the owner died. It is deliberately far longer than the media
- * lifecycle's lease because this work downloads gigabytes and runs an encoder,
- * and it must always exceed the configured composer timeout plus the I/O around
- * it — otherwise a healthy long encode gets its lease stolen and two workers
- * encode the same deliverable for no reason. There is no heartbeat in this
- * phase; duplicate execution is tolerable because the plan and profile are
- * immutable, publication is first-wins, and finalize is CAS-protected.
+ * lifecycle's lease because this work downloads gigabytes and runs an encoder.
+ *
+ * It is **not** guaranteed to exceed the composer timeout. That timeout belongs
+ * to a storage adapter and is configured independently of this value, and source
+ * materialization and publication add further unbounded time, so a deployment
+ * can hold a configuration where a healthy run outlives its own lease. An
+ * earlier version of this comment asserted the inequality; it was wrong, and
+ * nothing enforces it.
+ *
+ * Correctness does not rest on it. There is no heartbeat in this phase, and
+ * duplicate execution is tolerated rather than prevented: the plan and profile
+ * are immutable so both workers intend the same video, publication is
+ * first-wins, and finalize is CAS-protected. What keeps a reclaimed lease from
+ * looping forever is that the next claim reads the canonical key *before*
+ * materializing anything — once the object exists, the reclaiming worker
+ * finalizes against its receipt instead of encoding again. Work before the first
+ * publication can still be wasted; recovery after it costs one read.
  */
 export const DEFAULT_COMPOSITION_LEASE_MS = 30 * 60_000;
 export const MAX_COMPOSITION_LEASE_MS = 2 * 60 * 60_000;

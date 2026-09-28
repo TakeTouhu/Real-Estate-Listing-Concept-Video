@@ -11,7 +11,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   MAX_DELIVERABLE_OUTPUT_BYTES,
@@ -24,7 +24,6 @@ import {
 import { FakeManagedOutputTempFiles } from "../testing/media-fakes";
 import {
   COMPOSED_FILE_NAME,
-  composedOutputPathFor,
   createDeliverableCompositionSourceMaterializer,
   createDeliverableOutputPublisher,
   sourceFileName,
@@ -182,10 +181,74 @@ describe("sources are streamed to private files named by position, never by iden
     }
   });
 
-  it("puts the composed file beside its sources, in the same private directory", () => {
-    expect(composedOutputPathFor("/tmp/vta-compose-abc/input-0000")).toBe(
-      "/tmp/vta-compose-abc/output.mp4",
-    );
+  it("names the composed file itself, inside the directory it created", async () => {
+    const store = storeWith({ attemptId: "sg_a", bytes: A }, { attemptId: "sg_b", bytes: B });
+    const outcome = await materializerFor(store).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A), sceneOf("sg_b", B, { position: 2 })],
+    });
+    if (outcome.kind !== "MATERIALIZED") throw new Error("expected materialization");
+
+    // The caller cannot compute this: the directory name is random and is known
+    // only here. Returning it is what makes `release` the sole cleanup
+    // authority for the composed file as well as the sources.
+    const dir = dirname(outcome.sources[0]!.localPath);
+    expect(dirname(outcome.outputPath)).toBe(dir);
+    expect(basename(outcome.outputPath)).toBe(COMPOSED_FILE_NAME);
+    expect(basename(outcome.outputPath)).toBe("output.mp4");
+    for (const source of outcome.sources) {
+      expect(dirname(source.localPath)).toBe(dir);
+    }
+    await outcome.release();
+  });
+
+  it("gives every materialization its own directory and its own output path", async () => {
+    const store = storeWith({ attemptId: "sg_a", bytes: A });
+    const first = await materializerFor(store).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A)],
+    });
+    const second = await materializerFor(store).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A)],
+    });
+    if (first.kind !== "MATERIALIZED" || second.kind !== "MATERIALIZED") {
+      throw new Error("expected materialization");
+    }
+    expect(first.outputPath).not.toBe(second.outputPath);
+    await first.release();
+    await second.release();
+  });
+
+  it("names the output from no tenant, job or deliverable identity", async () => {
+    const store = storeWith({ attemptId: "sg_a", bytes: A });
+    const outcome = await materializerFor(store).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A)],
+    });
+    if (outcome.kind !== "MATERIALIZED") throw new Error("expected materialization");
+    for (const leak of [ORG, VERSION, "sg_a", "deliverables", "org/"]) {
+      expect(`${leak}: ${outcome.outputPath.includes(leak)}`).toBe(`${leak}: false`);
+    }
+    await outcome.release();
+  });
+
+  it("removes the composed output together with the sources", async () => {
+    const store = storeWith({ attemptId: "sg_a", bytes: A });
+    const outcome = await materializerFor(store).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A)],
+    });
+    if (outcome.kind !== "MATERIALIZED") throw new Error("expected materialization");
+    // Write a composed file where the materializer said to, exactly as the
+    // composer would, then prove `release` takes it with the rest.
+    await writeFile(outcome.outputPath, new Uint8Array([1, 2, 3, 4]));
+    await expect(readFile(outcome.outputPath)).resolves.toBeDefined();
+
+    await outcome.release();
+
+    await expect(readFile(outcome.outputPath)).rejects.toThrow();
+    await expect(readFile(outcome.sources[0]!.localPath)).rejects.toThrow();
   });
 
   it("reads each source from the canonical key the plan named", async () => {
@@ -323,6 +386,58 @@ function publisherFor(store: FakeStore) {
     { bucket: BUCKET },
   );
 }
+
+describe("the canonical key can be read without writing anything", () => {
+  it("reports ABSENT when nothing is there, and writes nothing", async () => {
+    const store = new FakeStore();
+    expect(await publisherFor(store).probeExistingOutput({ key: KEY })).toEqual({
+      kind: "ABSENT",
+    });
+    expect(store.puts).toHaveLength(0);
+  });
+
+  it("returns the existing object's real receipt", async () => {
+    const occupying = new Uint8Array([8, 8, 8, 8, 8]);
+    const store = new FakeStore({ occupiedWith: occupying });
+    expect(await publisherFor(store).probeExistingOutput({ key: KEY })).toEqual({
+      kind: "PUBLISHED",
+      sha256: digestOf(occupying),
+      sizeBytes: occupying.byteLength,
+    });
+    expect(store.puts).toHaveLength(0);
+  });
+
+  it("reports a store failure as retryable, never as absent", async () => {
+    // Calling a transient fault "absent" would send a worker to re-download and
+    // re-encode a deliverable that may already exist.
+    const store = new FakeStore({ getThrows: true });
+    expect(await publisherFor(store).probeExistingOutput({ key: KEY })).toEqual({
+      kind: "RETRYABLE_FAILURE",
+    });
+  });
+
+  it("establishes the receipt the same way the publish path does", async () => {
+    const occupying = new Uint8Array([3, 1, 4, 1, 5, 9]);
+    const probed = await publisherFor(new FakeStore({ occupiedWith: occupying })).probeExistingOutput(
+      { key: KEY },
+    );
+    const published = await withComposedFile(new Uint8Array([2, 2]), (localPath) =>
+      publisherFor(new FakeStore({ occupiedWith: occupying })).publish({ key: KEY, localPath }),
+    );
+    // One object, one receipt, whichever path asked for it.
+    expect(probed).toEqual({ ...published, kind: "PUBLISHED" });
+  });
+
+  it("carries no bucket, key, path or store message in any outcome", async () => {
+    for (const options of [{}, { getThrows: true }, { occupiedWith: new Uint8Array([1]) }]) {
+      const outcome = await publisherFor(new FakeStore(options)).probeExistingOutput({ key: KEY });
+      const serialized = JSON.stringify(outcome);
+      for (const leak of [BUCKET, ORG, VERSION, "unreachable", "/tmp", "org/"]) {
+        expect(`${leak}: ${serialized.includes(leak)}`).toBe(`${leak}: false`);
+      }
+    }
+  });
+});
 
 describe("publication is first-wins and the receipt is read back from the object", () => {
   it("publishes to the canonical key as video/mp4 and returns the real digest", async () => {

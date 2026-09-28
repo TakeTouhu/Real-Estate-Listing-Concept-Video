@@ -162,6 +162,10 @@ sequenceDiagram
   alt deterministic refusal
     R->>DB: block(code) — no event, job untouched
   else
+    R->>S: read the canonical key (no write)
+    alt canonical object already exists
+      R->>DB: J2 finalize against ITS receipt — no download, no encode
+    else absent
     R->>S: stream each source, hash and count
     alt receipt disagrees
       R->>DB: block(SOURCE_INTEGRITY_MISMATCH)
@@ -175,11 +179,64 @@ sequenceDiagram
         R->>DB: J2 finalize — receipt + COMPOSING → DELIVERABLE_VALIDATING
       end
     end
+    end
   end
 ```
 
 Every transient failure along that path takes the same shape: `deferComposition`
 with one of three retry codes and a future instant, leaving the job untouched.
+
+## The two exact-head review corrections
+
+Both were found by the CTO exact-head review of `7e0ceb4` (review 5324596257) and
+are the only production changes in the corrected head.
+
+### Temporary output ownership
+
+The materializer creates the one random private directory and previously exposed
+it *only* through `sources[*].localPath`. The runner asked a separate
+`outputPathFor(claim)` callback where to put the composed file — but the durable
+claim contains no local path, so no correct implementation of that callback
+existed. Any path it returned either did not exist or sat outside the directory
+`release()` removes, leaking up to half a gigabyte per attempt.
+
+The materialization outcome now returns `outputPath` alongside `sources` and
+`release`, fixed as `output.mp4` inside the same directory as the sources, and
+the runner passes it verbatim to the composer and the publisher.
+`DeliverableCompositionDeps.outputPathFor` and the `composedOutputPathFor` helper
+are both gone; no compatibility shim was kept, because this phase has no
+production caller. `release()` is the sole cleanup authority for the sources and
+the composed output together.
+
+### Canonical-output replay without re-encoding
+
+Publication is first-wins and never consults the lease, so a worker whose lease
+expired mid-encode can still publish. The reclaiming worker then repeated the
+whole `materialize → compose → publish` sequence before discovering the object
+was already there. Because the composer timeout and the composition lease are
+configured independently — nothing validates one against the other, and the
+adapter's one-hour ceiling exceeds the lease's thirty-minute default — each
+replacement could outlive its own lease and be superseded in turn, leaving the
+row `RUNNING` indefinitely while the deliverable already existed.
+
+The publisher gained a closed read-only probe —
+`ABSENT | PUBLISHED | OUTPUT_TOO_LARGE | RETRYABLE_FAILURE` — and the runner
+reads the canonical key after the claim-only refusals and before any source is
+fetched:
+
+| Probe answer | Action |
+| --- | --- |
+| `PUBLISHED` | finalize against that receipt; no materialize, no ffmpeg, no publish |
+| `ABSENT` | continue through the normal data plane |
+| `OUTPUT_TOO_LARGE` | block `OUTPUT_SIZE_LIMIT_EXCEEDED`, no re-encode |
+| `RETRYABLE_FAILURE` | defer `OUTPUT_PUBLISH_RETRYABLE`, never read as absent |
+
+No heartbeat was added. The claim is deliberately narrow: duplicate execution is
+still possible and work before the first publication can still be wasted; what is
+removed is the unbounded case, because recovery after a publication costs one read
+instead of one encode. Comments in `durable.ts` and `ffmpeg-composer.ts` that
+asserted the composer timeout is inherently shorter than the lease were false and
+have been corrected rather than quietly dropped.
 
 ## Schema and migration notes
 
