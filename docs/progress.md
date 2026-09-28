@@ -1196,7 +1196,29 @@ and ADR-0020.
   reclaim CAS's own status predicate. Both assignments are kept and the mutations
   re-aimed at the guard sets that are observable. Nothing constructs the
   repository, runner or adapters in production; no test launches a subprocess, so
-  CI needs no `ffmpeg`. Detail in `docs/phase-5b-completion.md` and ADR-0050.
+  CI needs no `ffmpeg`.
+
+  Two correctness corrections followed the CTO exact-head review of `7e0ceb4`.
+  The materializer now owns the composed output path: it creates the one random
+  private directory, so it returns `output.mp4` inside it rather than letting the
+  runner ask a callback that received only the durable claim — which carries no
+  local path, so every path that callback could return fell outside the directory
+  `release()` removes, leaking up to half a gigabyte per attempt. And every claim
+  now reads the canonical key before fetching a source: publication is first-wins
+  and never consults the lease, so a worker whose lease expired mid-encode can
+  still publish, and the reclaiming worker previously repeated the whole download
+  and encode before finding out. Because the composer timeout and the lease are
+  configured independently — nothing validates one against the other, and the
+  adapter's ceiling exceeds the lease's default — each replacement could be
+  superseded in turn, leaving the row `RUNNING` forever beside an existing
+  deliverable. Existing bytes are now finalized against their own receipt; an
+  unreadable key defers rather than reading as absent; an existing oversized
+  object blocks. No heartbeat was added and duplicate execution is still
+  possible — only the unbounded case is gone. Comments and ADR wording asserting
+  the timeout is inherently shorter than the lease were false and were corrected
+  rather than dropped. Impacted mutation pass M272-M313: **42 run, 42 killed, 0
+  survivors, 0 anchor-missing**, restoration proved against a 679-file snapshot.
+  Detail in `docs/phase-5b-completion.md` and ADR-0050.
 - **Phase 4C-3B-2H-3B-6C** — see GitHub for its lifecycle. Closes the two holes
   Phase 6B left. First, a planning refusal was an answer: the runner reported
   `NO_PLAN` and moved on, nothing durable recorded that the candidate had been

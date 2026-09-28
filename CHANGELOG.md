@@ -48,6 +48,30 @@ customer's current deliverable pointer never moves.
 
 ### Changed
 
+- **The source materializer owns the composed output path.** The materialization
+  outcome returns `outputPath` — a fixed `output.mp4` inside the same random
+  private directory as the sources — and the runner passes it verbatim to the
+  composer and the publisher. `DeliverableCompositionDeps.outputPathFor` and the
+  `composedOutputPathFor` helper are removed: the durable claim carries no local
+  path, so no correct implementation of that callback existed, and any path it
+  returned fell outside the directory `release()` removes. `release()` is now the
+  sole cleanup authority for the sources and the composed file together.
+- **Every claim reads the canonical deliverable key before fetching a source.**
+  `DeliverableOutputPublisher.probeExistingOutput` returns a closed
+  `ABSENT | PUBLISHED | OUTPUT_TOO_LARGE | RETRYABLE_FAILURE`. Existing bytes are
+  finalized against their own receipt with no materialize, no `ffmpeg` and no
+  write; an unreadable key defers and is never read as absent; an existing
+  oversized object blocks. Publication is first-wins and never consults the lease,
+  so a worker whose lease expired mid-encode can still publish — without this
+  probe the reclaiming worker repeated the whole download and encode, and since
+  the composer timeout and the lease are configured independently it could be
+  superseded in turn, leaving the row `RUNNING` indefinitely. No heartbeat was
+  added, and duplicate execution remains possible: what is removed is the
+  unbounded case.
+- **Corrected a false claim in comments and ADR-0050** that the composer timeout
+  is inherently shorter than the composition lease. The two are configured in
+  different packages with nothing validating one against the other, and the
+  adapter's ceiling exceeds the lease's default.
 - **`ProcessRunner` moved to its own types-only module**
   (`packages/storage/src/managed-output/process-runner.ts`), re-exported from
   `ffprobe.ts` so every existing importer is unchanged. A seam extraction only:

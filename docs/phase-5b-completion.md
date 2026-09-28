@@ -345,18 +345,21 @@ ledger and its restoration check.
 | `tsc --noEmit`, root `tests/` project | clean |
 | `tsc --noEmit`, all ten workspace targets | clean |
 | ESLint | clean |
-| Unit suite | **4537 passed**, 142 files |
+| Production build | clean |
+| Unit suite | **4563 passed**, 142 files |
 | Database suite | **1105 passed**, 35 files |
-| Phase 5B targeted unit | **158**, 7 files |
+| Phase 5B targeted unit | **184**, 7 files |
 | Phase 5B targeted database | **52**, 2 files |
 | `prisma validate` | clean |
 | Migrations 0–15 on a fresh empty database, with shadow | applied cleanly |
 | `prisma migrate diff` | no difference |
 | Migrations 1–14 | byte-for-byte unchanged |
 
-The Phase 5B targeted counts break down as: runner 30, profile 38, durable
-vocabulary 17, dormancy 21, `ffmpeg` composer 21, composition IO 21, process-runner
-seam 10; database execution matrix 46 and real-PostgreSQL concurrency 6.
+The Phase 5B targeted counts break down as: runner 46, profile 38, durable
+vocabulary 17, dormancy 23, `ffmpeg` composer 21, composition IO 29,
+process-runner seam 10; database execution matrix 46 and real-PostgreSQL
+concurrency 6. The runner, dormancy and composition-IO counts grew with the two
+exact-head corrections.
 
 No test in this phase launches a subprocess, so CI needs no `ffmpeg` binary.
 
@@ -413,7 +416,75 @@ M297  KILLED           4  [tests]  a source is accepted without comparing it to 
 M298  KILLED           1  [tests]  a failed materialization leaves its temporary directory behind
 ```
 
-### Two survivors found before the ledger, and what was done about them
+### The correction pass — impacted definitions only
+
+The two exact-head corrections touched the runner, the composition-IO adapter and
+the `ffmpeg` composer. Re-running the whole 302-definition history for a change of
+that shape would have cost six hours to re-prove code neither correction went
+near, so the pass covered every Phase 5B definition — all 30, including the ones
+whose files were untouched — plus the twelve new ones:
+
+```text
+pre-pass commit  f8a6c72b8f6d27be039b42f6084177c537e199e8
+M272-M313, 42 definitions
+42 run, 42 killed, 0 survivors, 0 anchor-missing
+49 minutes
+```
+
+Restoration was proved the same way: a SHA-256 snapshot of all 679 tracked files
+taken before the pass, re-checked afterwards with zero mismatches, `git status`
+and `git diff --check` empty, `HEAD` unmoved.
+
+The twelve new definitions:
+
+```text
+M300: KILLED (1 unit + 0 db) — an unknown resolution resolves through Object.prototype
+M301: KILLED (2 unit + 0 db) — the composer reaches its process seam through the media inspector again
+M302: KILLED (4 unit + 0 db) — the runner names the composed file itself instead of using the materializer's path
+M303: KILLED (3 unit + 0 db) — the composer and the publisher are given different output paths
+M304: KILLED (3 unit + 0 db) — the materialized output path escapes the directory release removes
+M305: KILLED (1 unit + 0 db) — cleanup removes the sources and leaves the composed output behind
+M313: KILLED (1 unit + 0 db) — the composed file is written over the first source instead of beside it
+M306: KILLED (4 unit + 0 db) — an already-published canonical object is re-downloaded and re-encoded
+M307: KILLED (1 unit + 0 db) — an unreadable canonical key is treated as an empty one
+M308: KILLED (1 unit + 0 db) — an existing oversized canonical object is retried instead of blocked
+M309: KILLED (21 unit + 0 db) — an absent canonical object is reported as already delivered
+M310: KILLED (2 unit + 0 db) — a replayed finalize is reported to the sweep as a fresh one
+M311: KILLED (7 unit + 0 db) — the canonical key is read only after every source has been downloaded
+M312: KILLED (1 unit + 0 db) — the concrete probe calls a storage failure an empty key
+M300  KILLED           1  [tests]  an unknown resolution resolves through Object.prototype
+M301  KILLED           2  [tests]  the composer reaches its process seam through the media inspector again
+M302  KILLED           4  [tests]  the runner names the composed file itself instead of using the materializer's path
+M303  KILLED           3  [tests]  the composer and the publisher are given different output paths
+M304  KILLED           3  [tests]  the materialized output path escapes the directory release removes
+M305  KILLED           1  [tests]  cleanup removes the sources and leaves the composed output behind
+M313  KILLED           1  [tests]  the composed file is written over the first source instead of beside it
+M306  KILLED           4  [tests]  an already-published canonical object is re-downloaded and re-encoded
+M307  KILLED           1  [tests]  an unreadable canonical key is treated as an empty one
+M308  KILLED           1  [tests]  an existing oversized canonical object is retried instead of blocked
+M309  KILLED          21  [tests]  an absent canonical object is reported as already delivered
+M310  KILLED           2  [tests]  a replayed finalize is reported to the sweep as a fresh one
+M311  KILLED           7  [tests]  the canonical key is read only after every source has been downloaded
+M312  KILLED           1  [tests]  the concrete probe calls a storage failure an empty key
+```
+
+**One existing definition was re-aimed, and one new one changed target. Both are
+recorded rather than quietly adjusted.**
+
+M286 — "the deterministic refusals are proved only after the sources are
+downloaded" — anchored on runner text that correction B rewrote, so its anchors
+stopped resolving. The defect it injects is unchanged; only the anchors moved, and
+the harness carries that note inline.
+
+A planned new mutation for "every materialization shares one fixed output
+directory" was dropped before it ran: the replacement it inserted called `mkdir`,
+which that module does not import, so it would have been killed by a missing
+binding rather than by its defect. A kill for the wrong reason is not evidence.
+M313 now targets the output *name* instead — the composed file written over the
+first source rather than beside it — which is a real slip and fails for the right
+reason.
+
+### Two survivors found before the original ledger, and what was done about them
 
 A targeted 30-mutation pass was run first, and two mutations survived it. Both
 were structural rather than test gaps, and both are recorded here because the
