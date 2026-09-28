@@ -298,6 +298,55 @@ The probe and the publish path establish their receipt through the same read, so
 the digest a replaying worker finalizes against and the digest the publishing
 worker finalizes against cannot differ.
 
+### Absence has to be *proved*, and only the adapter can prove it
+
+`ABSENT` is only sound if the object store positively established that the key
+holds nothing. That is a sharper requirement than it looks, because the fake store
+every suite drives models a missing key as an empty success, while real AWS
+`GetObject` **rejects** for one. An adapter that reported an unreadable or empty
+success as absence would assert "nothing has been published here" on the strength
+of a response it could not interpret — and a genuinely missing key would never
+have produced absence at all, so a fresh deliverable would have deferred forever
+instead of composing.
+
+So `S3GetObjectResult.body === null` now has exactly one meaning — *the store
+proved this key does not exist* — and the real adapter is the only place that can
+mint it:
+
+| AWS outcome | Adapter |
+| --- | --- |
+| `NoSuchKey` | normalized to `{contentLength: null, body: null}` |
+| `AccessDenied` / 403 | rethrown — proves nothing (see below) |
+| `NoSuchBucket` | rethrown, **despite also being 404** |
+| throttling, timeout, 5xx, unrecognized | rethrown |
+| success with no `Body` | fixed application error, **never** absence |
+
+The missing-key condition is matched by error *name*, never by status code:
+`NoSuchKey` and `NoSuchBucket` are both 404, and reading "404" as "the key is
+empty" would let a deleted or misconfigured bucket look like a deliverable nobody
+has composed yet — sending a worker to compose into a bucket that is not there.
+
+Callers that need a *required* object keep reading a confirmed absence as
+retryable. A missing provider output or a missing planned source is an unavailable
+source, not a verdict: turning it into `SOURCE_INTEGRITY_MISMATCH` would block a
+deliverable permanently over an operational storage problem. Only the
+deliverable's own canonical probe treats absence as `ABSENT`, because there the
+question actually being asked is "has anything been published here yet?".
+
+#### Production activation prerequisite — `s3:ListBucket`
+
+**Recorded, not wired.** Without `s3:ListBucket` on the managed bucket and prefix,
+AWS answers `AccessDenied` (403) for a key that merely does not exist. The
+application cannot distinguish that from a real permission fault, so it must stay
+`RETRYABLE_FAILURE` — which means composition would never start for a fresh
+deliverable.
+
+The production S3 principal therefore requires the minimum `s3:ListBucket`
+permission for the managed bucket and prefix, so that a missing key returns
+`NoSuchKey` rather than `AccessDenied`. This is a **Phase 9 production-activation
+prerequisite**. No credential, IAM resource, bucket or scheduler is created here,
+and the adapter is still constructed nowhere in production.
+
 ### What this does and does not claim
 
 It does **not** make duplicate execution impossible, and this ADR does not say

@@ -150,6 +150,23 @@ export interface S3GetObjectInput {
 export interface S3GetObjectResult {
   /** The `Content-Length`, a preflight bound only; the streamed count decides. */
   readonly contentLength: number | null;
+  /**
+   * The object's bytes, or `null` with **one** precise meaning: *the object store
+   * positively established that this key does not exist.*
+   *
+   * It does **not** mean "the read succeeded but produced nothing usable". That
+   * second reading is what made absence unprovable: a real AWS `GetObject` for a
+   * missing key *rejects* rather than returning an empty success, so an adapter
+   * that reported a malformed success as `null` would be asserting absence on the
+   * strength of a response it could not interpret — while a genuinely missing key
+   * never reached `null` at all. An adapter with nothing usable to return throws.
+   *
+   * Callers may still read a confirmed absence as retryable when the object is
+   * *required* — a missing provider output or a missing planned source is an
+   * unavailable source, not a verdict about anything. Only the deliverable's own
+   * canonical probe treats it as `ABSENT`, because there the question being asked
+   * is precisely "has anything been published here yet?".
+   */
   readonly body: S3ObjectBody | null;
 }
 /** A pull-based canonical-object body: one chunk per `read`, `null` at EOF. */

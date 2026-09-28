@@ -871,3 +871,27 @@ tries ago, that is a separate audited table, not an overload of this column.
 blocked with `SOURCE_BYTES_LIMIT_EXCEEDED` under the old value stays blocked
 after it is raised, because nothing re-evaluates a blocked row. Whoever raises it
 needs the operator path above first.
+
+## Phase 5B follow-up — `s3:ListBucket` is a production-activation prerequisite
+
+**Recorded, not wired. Blocks nothing until AWS storage is activated.**
+
+The deliverable canonical probe distinguishes "nothing published here yet" from
+"could not read" by normalizing AWS `NoSuchKey` into the object-store seam's
+absence shape. That normalization only works if AWS actually returns `NoSuchKey`.
+
+Without `s3:ListBucket` on the managed bucket and prefix, AWS returns
+`AccessDenied` (403) for a key that simply does not exist. The application cannot
+tell that apart from a genuine permission fault, so it stays `RETRYABLE_FAILURE` —
+correct, but it means a fresh deliverable would defer forever and composition
+would never start.
+
+So whoever wires production AWS storage must grant the production S3 principal the
+minimum `s3:ListBucket` permission for the managed bucket and prefix, and confirm
+that a missing managed-output key returns `NoSuchKey` rather than `AccessDenied`
+before enabling the composition runner.
+
+Nothing in this phase creates a credential, an IAM resource, a bucket or a
+scheduler, and `createS3MultipartClient` is still constructed nowhere in
+production. This note exists so the requirement cannot be lost between here and
+Phase 9.

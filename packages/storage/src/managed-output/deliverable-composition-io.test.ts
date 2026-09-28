@@ -351,6 +351,21 @@ describe("a receipt disagreement is a mismatch; a read failure never is", () => 
     }
   });
 
+  it("treats a missing required source as unavailable, never as an integrity verdict", async () => {
+    // The same `body: null` that proves ABSENCE for the deliverable's own
+    // canonical key means something different for a *planned source*: the plan
+    // froze a receipt for bytes that are supposed to exist, so their absence is
+    // an unavailable source, not evidence that anything was tampered with.
+    // Calling it INTEGRITY_MISMATCH would block the deliverable permanently over
+    // a transient or operational storage problem.
+    const outcome = await materializerFor(new FakeStore({ nullBody: true })).materialize({
+      organizationId: ORG,
+      scenes: [sceneOf("sg_a", A)],
+    });
+    expect(outcome.kind).toBe("RETRYABLE_FAILURE");
+    expect(outcome.kind).not.toBe("INTEGRITY_MISMATCH");
+  });
+
   it("releases more than once without complaining", async () => {
     const store = storeWith({ attemptId: "sg_a", bytes: A });
     const outcome = await materializerFor(store).materialize({
@@ -426,6 +441,17 @@ describe("the canonical key can be read without writing anything", () => {
     );
     // One object, one receipt, whichever path asked for it.
     expect(probed).toEqual({ ...published, kind: "PUBLISHED" });
+  });
+
+  it("reports ABSENT for the absence shape the real AWS adapter produces", async () => {
+    // The real adapter normalizes AWS `NoSuchKey` to `{contentLength: null,
+    // body: null}` before it reaches this port, so this is the exact value the
+    // probe sees for a genuinely fresh canonical key.
+    const store = new FakeStore({ nullBody: true });
+    expect(await publisherFor(store).probeExistingOutput({ key: KEY })).toEqual({
+      kind: "ABSENT",
+    });
+    expect(store.puts).toHaveLength(0);
   });
 
   it("carries no bucket, key, path or store message in any outcome", async () => {
