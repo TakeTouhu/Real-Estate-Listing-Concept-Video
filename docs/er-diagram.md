@@ -387,8 +387,8 @@ Two relationships between `GenerationJob` and `GenerationDeliverableVersion`, an
 they mean different things. The one-to-many is *history*: every version a job has
 ever planned. The optional one-to-one is *publication*: the single version the
 customer currently holds, which composition planning never writes — it moves only
-when a validated deliverable is published, which is Transaction G's fact and is
-deferred.
+when a validated deliverable is published, and that is Transaction G's fact
+(Phase 5C, ADR-0051). Transaction G is the pointer's only writer.
 
 The publication pointer is a **composite** foreign key,
 `(currentDeliverableVersionId, id) -> (id, generationJobId)`, so a job can only
@@ -403,12 +403,46 @@ without joining four tables, and a receipt that ever disagreed with the attempt'
 becomes visible rather than assumed away. No other media metadata is copied:
 duration, dimensions and container stay on the validation that measured them.
 
+## Phase 5B/5C — composition execution and the deliverable verdict
+
+```mermaid
+erDiagram
+    GenerationDeliverableVersion ||--o| GenerationDeliverableComposition : "composed once"
+    GenerationDeliverableVersion ||--o| GenerationDeliverableValidation : "judged once"
+    GenerationJob ||--o| GenerationReservation : "one entitlement hold"
+```
+
+Both children hang off the **version**, and both are optional: a version carries
+no composition row until a worker claims it, and no validation row until one is
+claimed for validation. An absent row is an eligible state, never a gap, so
+neither phase backfills anything.
+
+The split between them is the difference between *execution state* and a
+*verdict*. `GenerationDeliverableComposition` carries a lease, an attempt count,
+a retry code and a block code — the things Phase 5B rewrites on every attempt.
+`GenerationDeliverableValidation` carries a frozen byte binding and, once
+terminal, a permanent answer about those exact bytes. Hanging the verdict off the
+execution row would have made it a verdict about an attempt rather than about the
+deliverable a customer's pointer names.
+
+`GenerationDeliverableValidation` reuses `ManagedOutputMediaInvalidReason` and
+`ManagedOutputContainerFamily` rather than declaring its own. It does **not**
+reuse `ManagedOutputMediaValidation` itself: that table's `sceneGenerationId` is
+unique with a required foreign key, so it is one-to-one with a provider attempt
+by construction.
+
+There is no publication column on either. A deliverable is published when the job
+says `DELIVERABLE_READY`, the job's pointer names the version, and the hold is
+`CONSUMED` — three facts Transaction G writes in one commit. A fourth copy would
+be a fourth thing to disagree.
+
 ## Not implemented yet (later phases)
 
 `CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7). These
 appear in `docs/DataModel.md` but have no tables yet. The Phase 4 generation
 attempt is `scene_generations`, above.
 
-`VideoOutput` (Phase 5) has no table either, and Phase 5A deliberately did not
-create one: a *plan* is not an output. The final deliverable object, its receipt
-and its own media validation belong to Phase 5B/5C, once bytes exist to describe.
+`VideoOutput` (Phase 5) still has no table of that name, and none is needed: the
+final deliverable object's receipt lives on `GenerationDeliverableComposition`
+(Phase 5B) and the verdict about its bytes on `GenerationDeliverableValidation`
+(Phase 5C), each bound to the deliverable version that names them.

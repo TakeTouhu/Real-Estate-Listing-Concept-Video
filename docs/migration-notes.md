@@ -778,3 +778,87 @@ non-null pointer, so nothing was nulled and nothing was synthesized.**
 The migration contains no `INSERT`, no `UPDATE "`, no `DELETE FROM` and no
 `SELECT`, and a static test in the Phase 5A dormancy suite asserts each of those
 along with the single-statement rule above.
+
+## Phase 5C — Deliverable validation
+
+**Migration `00000000000016_phase5c_deliverable_validation`.** One table, one
+enum, and two enums *reused* rather than copied.
+
+### New table
+
+| Table | Purpose |
+| --- | --- |
+| `generation_deliverable_validations` | one durable verdict about one deliverable version's composed object |
+
+Unique on `deliverableVersionId`, foreign key `RESTRICT` to
+`generation_deliverable_versions`. The uniqueness is what makes two workers
+racing to create the first record resolvable: exactly one insert wins, and the
+loser re-reads a row it must not reopen. `RESTRICT` rather than `CASCADE` because
+this row records the verdict that authorized publishing a customer's video and
+spending an entitlement unit; a physical deletion must resolve retention
+deliberately.
+
+### New enum
+
+`DeliverableValidationStatus` — `PENDING`, `RUNNING`, `VALID`, `INVALID_MEDIA`,
+`INTEGRITY_MISMATCH`. `RETRYABLE_FAILURE` is deliberately absent: it is not a
+verdict about the video but the absence of one, and it returns the row to
+`PENDING` with a future instant.
+
+### Enums reused, not copied
+
+`ManagedOutputMediaInvalidReason` and `ManagedOutputContainerFamily` already
+exist, from migration 12. "Is this file playable video" is the same question for a
+provider attempt's output and for a composed deliverable, and a second
+five-member copy would drift from the first the moment either is extended. The
+migration creates **one** type and asserts so in the Phase 5C dormancy suite.
+
+### Constraints that do real work
+
+| Name | Rule |
+| --- | --- |
+| `generation_deliverable_validations_deliverableVersionId_key` | one verdict per deliverable version |
+| `deliverable_validation_counters_check` | `attemptCount` and `version` are never negative |
+| `deliverable_validation_receipt_check` | the frozen binding is canonical lowercase 64-hex and a positive byte count inside `Number.MAX_SAFE_INTEGER` |
+| `deliverable_validation_facts_check` | duration, both dimensions and the video-stream count are positive; the audio count may be zero; all are inside the safe-integer range |
+| `deliverable_validation_status_shape_check` | each status admits exactly one arrangement of the lease, retry and verdict columns |
+
+The shape constraint is the one that matters. Without it a row can claim to be
+`VALID` while still holding a lease, or `PENDING` with no instant at which it
+becomes due, or `INVALID_MEDIA` carrying media facts describing a video it just
+called unusable, or `VALID` with four of the five facts — states TypeScript can
+refuse and a direct `UPDATE` cannot.
+
+Two details inside it are deliberate. The five facts are **all-or-none** in the
+`VALID` arm, because a container with no duration is not a description of
+anything and a partially written fact set is what a later reader would average
+over. And `invalidReason` exists in the `INVALID_MEDIA` arm and nowhere else: an
+`INTEGRITY_MISMATCH` is not a statement about media at all — the object is not the
+bytes that were published — so carrying a media reason there would assert
+something nobody measured.
+
+### No publication column
+
+There is no `publishedAt`, no `consumedAt` and no `isCurrent` on this table. A
+deliverable is published when the job says `DELIVERABLE_READY`, the job's pointer
+names the version, and the hold is `CONSUMED`; Transaction G writes those three
+in one commit. A fourth copy of the same fact would be a fourth thing to
+disagree, and the dormancy suite asserts the columns are absent.
+
+### Backfill: none, and none was needed
+
+Nothing in the migration reads, updates or rewrites an existing row. Deliverable
+versions composed by Phase 5B carry no validation row until a worker claims one,
+and an absent row is an eligible state rather than a gap — the same discipline
+migration 12 chose for attempt-level validations.
+
+Statically asserted in the Phase 5C dormancy suite: exactly one `CREATE TABLE`,
+exactly one `CREATE TYPE`, no statement beginning `UPDATE`, `DELETE`, `TRUNCATE`,
+`DROP` or `ALTER COLUMN`, and every `ALTER TABLE` naming this phase's own new
+table.
+
+### Migrations 0–15
+
+Untouched, byte for byte. `prisma migrate diff --from-migrations … --to-schema-datamodel`
+reports no difference, and `prisma migrate status` reports the database up to
+date after `migrate deploy` applies 16 on top of an existing 15.

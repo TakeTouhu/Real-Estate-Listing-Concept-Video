@@ -350,41 +350,46 @@ RUN("Phase 5C — validation and publication races", () => {
     // One worker finalizes on the lease it holds; another reclaims the row
     // because the lease has expired. Whichever commits first, the other must not
     // write over it.
-    const races = [
-      settled(
-        createDeliverableValidationRepository(first).finalizeValid({
-          claim: stale.claim,
-          facts: FACTS,
-          validatedAt: NOW + 2_000,
-          context: ctx(),
-        }),
-      ),
-      settled(
-        createDeliverableValidationRepository(second).claimDeliverableValidation({
-          organizationId: composed.organizationId,
-          deliverableVersionId: composed.deliverableVersionId,
-          now: NOW + LEASE_MS,
-          leaseToken: "vlease_race_reclaim",
-          leaseExpiresAt: NOW + LEASE_MS * 2,
-        }),
-      ),
-    ];
+    // Kept as two separately-typed promises rather than one array: a
+    // `Promise.all` over two different settled shapes widens into a union that
+    // has lost its discriminant, and the assertions below would then be reading
+    // `value` off an arm that has none.
+    const finalizeRace = settled(
+      createDeliverableValidationRepository(first).finalizeValid({
+        claim: stale.claim,
+        facts: FACTS,
+        validatedAt: NOW + 2_000,
+        context: ctx(),
+      }),
+    );
+    const reclaimRace = settled(
+      createDeliverableValidationRepository(second).claimDeliverableValidation({
+        organizationId: composed.organizationId,
+        deliverableVersionId: composed.deliverableVersionId,
+        now: NOW + LEASE_MS,
+        leaseToken: "vlease_race_reclaim",
+        leaseExpiresAt: NOW + LEASE_MS * 2,
+      }),
+    );
     expect(await waitForBlocked(prisma, 2)).toBe(true);
     await barrier.release();
-    const [finalize, reclaim] = await Promise.all(races);
+    const finalize = await finalizeRace;
+    const reclaim = await reclaimRace;
 
-    expect(finalize.ok && reclaim.ok).toBe(true);
+    // Neither rejected: an expected race is an ordinary result, not an error.
+    expect([finalize.ok, reclaim.ok]).toEqual([true, true]);
+    if (!finalize.ok || !reclaim.ok) throw new Error("expected both to settle");
     const row = await validationOf(prisma, composed.deliverableVersionId);
-    if (finalize.ok && finalize.value.kind !== "LEASE_LOST") {
+    if (finalize.value.kind !== "LEASE_LOST") {
       // The finalize went first: the verdict is terminal and the reclaim was
       // refused rather than reopening it.
       expect(row?.status).toBe("VALID");
-      expect(reclaim.ok && reclaim.value.kind).toBe("ALREADY_VALID");
+      expect(reclaim.value.kind).toBe("ALREADY_VALID");
     } else {
       // The reclaim went first: the stale worker lost, and the row is still
       // being worked on by the reclaimer.
       expect(row?.status).toBe("RUNNING");
-      expect(reclaim.ok && reclaim.value.kind).toBe("CLAIMED");
+      expect(reclaim.value.kind).toBe("CLAIMED");
     }
     expect(
       await prisma.generationTransitionEvent.count({
