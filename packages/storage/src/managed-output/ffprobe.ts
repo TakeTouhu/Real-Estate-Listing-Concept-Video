@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { AppError } from "@app/shared";
+import type { ProcessRunInput, ProcessRunOutcome, ProcessRunner } from "./process-runner";
 import {
   ISO_BMFF_CONTAINER,
   type ManagedOutputMediaFacts,
@@ -46,40 +47,10 @@ import {
  * customer's video is broken. A timeout is neither, and is retryable.
  */
 
-/** A bounded subprocess invocation. No shell, fixed args, capped output. */
-export interface ProcessRunInput {
-  readonly program: string;
-  readonly args: readonly string[];
-  readonly timeoutMs: number;
-  readonly maxStdoutBytes: number;
-}
-
-/**
- * What running the inspector concluded, before any interpretation.
- *
- * Four distinct things can go wrong, and collapsing any two of them would put a
- * false statement in front of a customer:
- *
- * - `EXITED` — the program ran and returned a real exit status. Only here can a
- *   non-zero code be read as evidence about the *file*.
- * - `LAUNCH_FAILED` — the binary is missing or unusable: a *deployment* defect.
- * - `OUTPUT_TOO_LARGE` — it overran the configured stdout ceiling.
- * - `TIMED_OUT` — it exceeded the configured timeout.
- * - `TRANSIENT_FAILURE` — the *host* could not run it this time: `EMFILE`,
- *   `ENOMEM`, an abnormal signal, any other non-numeric system failure. The
- *   binary may be perfectly fine and the file may be perfectly valid, so this is
- *   neither `LAUNCH_FAILED` nor evidence of invalid media — it is retryable.
- */
-export type ProcessRunOutcome =
-  | { readonly kind: "EXITED"; readonly exitCode: number; readonly stdout: string }
-  | { readonly kind: "TIMED_OUT" }
-  | { readonly kind: "OUTPUT_TOO_LARGE" }
-  | { readonly kind: "LAUNCH_FAILED" }
-  | { readonly kind: "TRANSIENT_FAILURE" };
-
-export interface ProcessRunner {
-  run(input: ProcessRunInput): Promise<ProcessRunOutcome>;
-}
+// The subprocess seam moved to `process-runner.ts` when a second adapter needed
+// it; it is re-exported here so every existing importer keeps working and the
+// vocabulary has exactly one definition.
+export type { ProcessRunInput, ProcessRunOutcome, ProcessRunner } from "./process-runner";
 
 /** 15 seconds: generous for metadata inspection, far below any request budget. */
 export const DEFAULT_PROBE_TIMEOUT_MS = 15_000;

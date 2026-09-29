@@ -201,6 +201,13 @@ describe("canonical bytes are re-verified before anything is inspected", () => {
 // ---------------------------------------------------------------------------
 
 describe("storage and materialization failures are retryable, never media verdicts", () => {
+  // `noBody` is the seam's absence shape, and since the S3 read contract was
+  // sharpened it carries one meaning: the store proved this key holds nothing.
+  // For the deliverable's *own* canonical key that is `ABSENT` and permits
+  // composition. Here the object is **required** — a provider attempt's verified
+  // output that is supposed to exist — so its absence is an unavailable source,
+  // never a verdict about the media. Turning it into `INVALID_MEDIA` would fail a
+  // customer's scene over an operational storage problem.
   it.each([
     ["the GET rejects", { getRejects: true }],
     ["the body is absent", { noBody: true }],

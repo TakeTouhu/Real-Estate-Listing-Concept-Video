@@ -263,9 +263,11 @@ describe("no persistence, pricing or resolution surface changed", () => {
     // it.
     // Updated by Phase 4C-3B-2H-3B-6C, which is authorized to add migration 13
     // for the durable media-failure resolution work table, and again by Phase 5A
-    // for migration 14 -- the deliverable composition plan. The pin moving is the
-    // tripwire working: an unreviewed migration still trips every one of these.
-    expect(dirs.at(-1)).toBe("00000000000014_phase5a_deliverable_composition_plan");
+    // for migration 14 -- the deliverable composition plan -- and again by Phase
+    // 5B for migration 15, the durable composition execution work table. The pin
+    // moving is the tripwire working: an unreviewed migration still trips every
+    // one of these.
+    expect(dirs.at(-1)).toBe("00000000000015_phase5b_deliverable_composition_execution");
     expect(dirs.filter((d) => d.toLowerCase().includes("queue"))).toEqual([]);
   });
 
