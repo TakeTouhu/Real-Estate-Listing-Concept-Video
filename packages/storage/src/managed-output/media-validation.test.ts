@@ -5,9 +5,12 @@ import { dirname, basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import {
+  managedDeliverableOutputKey,
   managedGenerationOutputKey,
   safePositiveByteCount,
   sha256Digest,
+  type DeliverableMediaValidationPort,
+  type ManagedOutputMediaValidationPort,
   type ManagedOutputVerificationReceipt,
 } from "@app/domain";
 import {
@@ -710,5 +713,83 @@ describe("the validator never buffers the whole object", () => {
     expect(wrote).toBeGreaterThan(-1);
     expect(hashed).toBeGreaterThan(wrote);
     expect(src.indexOf("total = next")).toBeGreaterThan(wrote);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("one adapter answers the same question for a deliverable", () => {
+  const DELIVERABLE_KEY = managedDeliverableOutputKey({
+    organizationId: "org_mv",
+    deliverableVersionId: "gdv_mv",
+  });
+
+  function deliverableHarness(canonical: Uint8Array, options: { readonly runner?: FakeProcessRunner } = {}) {
+    const world = createFakeS3World();
+    world.canonical.set(DELIVERABLE_KEY, canonical);
+    const client = new FakeS3MultipartClient({ world });
+    const runner =
+      options.runner ?? new FakeProcessRunner({ outcome: exitedWith(ffprobeDocument()) });
+    const validator = new S3ManagedOutputMediaValidator(
+      { bucket: BUCKET },
+      { reader: client, probe: new FfprobeMediaProbe({}, { runner }) },
+    );
+    return { client, runner, validator };
+  }
+
+  it("reads the deliverable key it was given, and only that key", async () => {
+    const data = bytes(9, 8, 7, 6);
+    const h = deliverableHarness(data);
+    const outcome = await h.validator.validateDeliverable({
+      deliverableKey: DELIVERABLE_KEY,
+      expectedReceipt: receiptFor(data),
+    });
+    expect(outcome.kind).toBe("VALID");
+    // The canonical read went to the deliverable's own object. A provider
+    // attempt's key and a deliverable's key are different identities, and the
+    // adapter must never substitute one for the other.
+    expect(h.client.getObjectCalls.map((read) => read.key)).toEqual([DELIVERABLE_KEY]);
+  });
+
+  it("re-verifies the bytes before inspecting them, exactly as the attempt path does", async () => {
+    const data = bytes(4, 5, 6);
+    const h = deliverableHarness(data);
+    const outcome = await h.validator.validateDeliverable({
+      deliverableKey: DELIVERABLE_KEY,
+      // A receipt describing different bytes. Mismatching bytes are never handed
+      // to the inspector, whichever kind of managed object they are.
+      expectedReceipt: receiptFor(bytes(1, 1, 1)),
+    });
+    expect(outcome.kind).toBe("INTEGRITY_MISMATCH");
+    expect(h.runner.runs).toHaveLength(0);
+  });
+
+  it("treats a malformed expected receipt as a caller defect here too", async () => {
+    const data = bytes(1, 2, 3);
+    const h = deliverableHarness(data);
+    await expect(
+      h.validator.validateDeliverable({
+        deliverableKey: DELIVERABLE_KEY,
+        expectedReceipt: { sha256: "nope", sizeBytes: 3 } as unknown as ManagedOutputVerificationReceipt,
+      }),
+    ).rejects.toBeInstanceOf(ManagedOutputMediaValidationDefect);
+    expect(h.runner.runs).toHaveLength(0);
+  });
+
+  it("satisfies both ports with one implementation and one core", () => {
+    const h = deliverableHarness(bytes(1));
+    // Structural, so a future edit that forks the two code paths still fails
+    // here if either signature drifts from its port.
+    const asAttemptPort: ManagedOutputMediaValidationPort = h.validator;
+    const asDeliverablePort: DeliverableMediaValidationPort = h.validator;
+    expect(typeof asAttemptPort.validate).toBe("function");
+    expect(typeof asDeliverablePort.validateDeliverable).toBe("function");
+
+    // And the implementation really is one core, not two copies whose failure
+    // semantics can diverge: each public method is a one-line delegation.
+    const source = readFileSync(join(__dirname, "media-validation.ts"), "utf8");
+    expect(source).toContain("return this.#validateKey(input.destinationKey, input.expectedReceipt);");
+    expect(source).toContain("return this.#validateKey(input.deliverableKey, input.expectedReceipt);");
+    expect(source.match(/#materialize\(/g)).toHaveLength(2);
   });
 });

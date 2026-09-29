@@ -475,8 +475,14 @@ export interface GenerationTransitionEventRecord {
  *   when it never will — and both write the scene's delivered pointer, one
  *   replacing it and one proving it unchanged.
  * - **`DELIVERABLE_VALIDATING -> DELIVERABLE_READY` with `-> CONSUMED`** belong
- *   to Transaction G, which is still deferred. `CONSUMED` spends a customer's
- *   unit, and the quota ledger that makes it safe does not exist yet.
+ *   to Transaction G. It now exists — see
+ *   `deliverable-validation-repository.ts` — and that is precisely why these
+ *   edges stay reserved here: publication moves the customer's deliverable
+ *   pointer and spends their unit, and it is only safe alongside the durable
+ *   `VALID` verdict, the receipt recheck and the pointer write that Transaction G
+ *   applies in the same commit. Reaching `DELIVERABLE_READY` through the generic
+ *   API would deliver a video nobody validated; reaching `CONSUMED` through it
+ *   would charge for one nobody received.
  *
  * The pure state machines still describe every one of these edges, and that
  * separation is deliberate: *legal* and *who may persist it* are different
@@ -501,7 +507,7 @@ export interface GenerationJobRepository {
   findById(organizationId: string, id: string): Promise<GenerationJob | null>;
   /**
    * Refuses `RESERVING -> RESERVED` (Transaction B),
-   * `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` (Transaction G, deferred),
+   * `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` (Transaction G),
    * `GENERATING -> SCENES_READY` (Transaction F),
    * `DELIVERABLE_READY -> REVISING` and `REVISING -> GENERATING` (revision
    * start), and `GENERATING -> DELIVERABLE_READY` (Transaction H).
@@ -534,7 +540,7 @@ export interface GenerationReservationRepository {
     organizationId: string,
     generationJobId: string,
   ): Promise<GenerationReservation | null>;
-  /** Refuses `-> CONSUMED` (Transaction G, deferred). */
+  /** Refuses both edges into `CONSUMED` (Transaction G). */
   transition(input: {
     readonly organizationId: string;
     readonly id: string;

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { AppError } from "@app/shared";
 import {
   parseVerificationReceipt,
-  type ManagedGenerationOutputKey,
+  type DeliverableMediaValidationInput,
+  type DeliverableMediaValidationPort,
   type ManagedOutputMediaFacts,
   type ManagedOutputMediaInvalidReason,
   type ManagedOutputMediaValidationInput,
@@ -276,7 +277,29 @@ async function writeAll(file: ManagedOutputTempFile, chunk: Uint8Array): Promise
   return true;
 }
 
-export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidationPort {
+/**
+ * One adapter, two ports.
+ *
+ * The question — "are the bytes at this managed key still the receipt's bytes,
+ * and are they playable video?" — is identical for a provider attempt's output
+ * and for a composed deliverable, and the streaming, hashing, materialization
+ * and inspection that answer it are identical too. A second class would be a
+ * copy of two hundred lines whose failure semantics must never diverge.
+ *
+ * The two *ports* stay separate, and the method names with them, because the
+ * keys are different brands with different lifecycles: the provider-attempt
+ * runner can only be handed a `ManagedGenerationOutputKey` and the
+ * deliverable runner only a `ManagedDeliverableOutputKey`. The shared core below
+ * takes a plain string precisely because, by then, the brand has done its job —
+ * it is a read, and nothing here can write to either key.
+ *
+ * The byte ceiling is one value for both on purpose: 512 MiB is the same
+ * operational limit in each case, and it is configuration rather than a product
+ * rule.
+ */
+export class S3ManagedOutputMediaValidator
+  implements ManagedOutputMediaValidationPort, DeliverableMediaValidationPort
+{
   readonly #bucket: string;
   readonly #maxBytes: number;
   readonly #expectedBucketOwner: string | undefined;
@@ -304,9 +327,22 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
   async validate(
     input: ManagedOutputMediaValidationInput,
   ): Promise<ManagedOutputMediaValidationOutcome> {
+    return this.#validateKey(input.destinationKey, input.expectedReceipt);
+  }
+
+  async validateDeliverable(
+    input: DeliverableMediaValidationInput,
+  ): Promise<ManagedOutputMediaValidationOutcome> {
+    return this.#validateKey(input.deliverableKey, input.expectedReceipt);
+  }
+
+  async #validateKey(
+    key: string,
+    expectedReceipt: unknown,
+  ): Promise<ManagedOutputMediaValidationOutcome> {
     // A malformed expected receipt is a caller/contract defect — not invalid
     // media, and not something to retry against an external service.
-    const expected = parseVerificationReceipt(input.expectedReceipt);
+    const expected = parseVerificationReceipt(expectedReceipt);
     if (expected === null) {
       throw new ManagedOutputMediaValidationDefect("EXPECTED_RECEIPT_MALFORMED");
     }
@@ -323,7 +359,7 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
     const localPath = join(directory, MEDIA_VALIDATION_TEMP_FILENAME);
 
     try {
-      const materialized = await this.#materialize(input.destinationKey, localPath);
+      const materialized = await this.#materialize(key, localPath);
       if (materialized.kind === "RETRYABLE") return RETRYABLE;
 
       // Integrity first: mismatching bytes are never handed to the inspector.
@@ -355,10 +391,7 @@ export class S3ManagedOutputMediaValidator implements ManagedOutputMediaValidati
    * only once they are actually on disk. Never buffers the object: one chunk is
    * held at a time, written completely before the next is pulled.
    */
-  async #materialize(
-    destinationKey: ManagedGenerationOutputKey,
-    localPath: string,
-  ): Promise<Materialized> {
+  async #materialize(destinationKey: string, localPath: string): Promise<Materialized> {
     let result: S3GetObjectResult;
     try {
       result = await this.#reader.getObject({
