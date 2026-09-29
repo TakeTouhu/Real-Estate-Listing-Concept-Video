@@ -533,6 +533,68 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
       expect(row?.receiptSha256).toBe(composed.sha256);
       expect(row?.attemptCount).toBe(1);
     });
+
+    it("refuses to condemn a deliverable whose composition receipt moved underneath it", async () => {
+      // The sharper half of the same rule. A `VALID` verdict is re-proved by
+      // Transaction G before anything reaches a customer; an unusable verdict is
+      // terminal and never reopened — a later claim reads `ALREADY_TERMINAL` and
+      // stops — so recording one against bytes that are no longer the
+      // composition's would condemn a deliverable nobody measured, permanently.
+      for (const verdict of ["INVALID_MEDIA", "INTEGRITY_MISMATCH"] as const) {
+        await wipeOrchestration(prisma);
+        await seedTenants(prisma);
+        const composed = await seedComposedDeliverable(prisma);
+        const jobBefore = await jobOf(prisma, composed.jobId);
+        const reservationBefore = await reservationOf(prisma, composed.reservationId);
+        const eventsBefore = await eventCount(prisma);
+
+        const held = await claimed(composed.organizationId, composed.deliverableVersionId);
+        // Receipt A was claimed; the composition now names B.
+        await prisma.generationDeliverableComposition.update({
+          where: { deliverableVersionId: composed.deliverableVersionId },
+          data: { outputSha256: "a".repeat(64) },
+        });
+
+        await expect(
+          verdict === "INVALID_MEDIA"
+            ? repository.finalizeInvalidMedia({
+                claim: held,
+                reason: "PROBE_REJECTED",
+                validatedAt: NOW + 1_000,
+              })
+            : repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000 }),
+        ).rejects.toBeInstanceOf(DeliverableValidationDefect);
+
+        // Fails closed: no terminal verdict was persisted, so the row is still
+        // claimable and the deliverable can be judged again against whatever the
+        // composition actually says.
+        const row = await validationOf(prisma, composed.deliverableVersionId);
+        expect(row?.status).toBe("RUNNING");
+        expect(row?.invalidReason).toBeNull();
+        expect(row?.validatedAt).toBeNull();
+        expect(row?.receiptSha256).toBe(composed.sha256);
+
+        // And nothing else moved: not the job, not the customer's pointer, not
+        // the entitlement, not the event stream.
+        const jobAfter = await jobOf(prisma, composed.jobId);
+        expect([jobAfter.state, jobAfter.stateVersion, jobAfter.currentDeliverableVersionId]).toEqual(
+          [jobBefore.state, jobBefore.stateVersion, null],
+        );
+        const reservationAfter = await reservationOf(prisma, composed.reservationId);
+        expect([
+          reservationAfter.state,
+          reservationAfter.stateVersion,
+          reservationAfter.consumedAt,
+          reservationAfter.releasedAt,
+        ]).toEqual([
+          reservationBefore.state,
+          reservationBefore.stateVersion,
+          null,
+          null,
+        ]);
+        expect(await eventCount(prisma)).toBe(eventsBefore);
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

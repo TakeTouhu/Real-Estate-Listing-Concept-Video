@@ -688,6 +688,14 @@ export function createDeliverableValidationRepository(
  * job transition, no unit consumed, no reservation released, no pointer move and
  * no transition event on any aggregate. Two copies of that restraint would be two
  * places for it to be relaxed in.
+ *
+ * It proves the same three-way receipt agreement `finalizeValid` does, and for a
+ * sharper reason. A verdict that a deliverable is *unusable* is terminal and is
+ * never reopened — a later claim reads `ALREADY_TERMINAL` and stops — so
+ * recording one against bytes that are no longer the composition's condemns a
+ * deliverable nobody measured, permanently. `VALID` at least gets re-proved by
+ * Transaction G before anything reaches a customer; this path has no second
+ * gate, which is why the check cannot be weaker here than there.
  */
 async function finalizeTerminalVerdict(
   prisma: PrismaClient,
@@ -697,6 +705,7 @@ async function finalizeTerminalVerdict(
     readonly validationId: string;
     readonly leaseToken: string;
     readonly version: number;
+    readonly expectedReceipt: { readonly sha256: string; readonly sizeBytes: number };
   },
   status: "INVALID_MEDIA" | "INTEGRITY_MISMATCH",
   validatedAt: number,
@@ -722,6 +731,13 @@ async function finalizeTerminalVerdict(
       return { kind: "ALREADY_FINALIZED" };
     }
     if (!holdsClaim(ctx, claim)) return { kind: "LEASE_LOST" };
+    // The same proof `finalizeValid` makes, through the same function rather than
+    // a second comparison that could drift from it: the caller's receipt, the
+    // row's frozen binding and the composition's current receipt must still
+    // identify one set of bytes. Ordered after `holdsClaim` on purpose — a worker
+    // whose row was reclaimed loses as an ordinary `LEASE_LOST`, and only a
+    // caller that genuinely still holds the row can raise a defect here.
+    assertBindingsAgree(ctx, claim.organizationId, claim.expectedReceipt);
 
     const written = await tx.generationDeliverableValidation.updateMany({
       where: {
