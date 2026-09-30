@@ -1124,6 +1124,81 @@ and ADR-0020.
   identity check is dominated by its succession check. All are kept, and the
   mutations aimed at them remove every site at once. Detail in
   `docs/phase-5a-completion.md` and ADR-0049.
+- **Phase 5C** — see GitHub for its lifecycle. Answers the last two questions in
+  the delivery pipeline, and keeps them separate: is the composed object media a
+  customer may be shown, and at what exact moment does it become their video and
+  their unit become spent? `OUTPUT_VERIFIED` never claimed the first — it says an
+  object exists at the canonical key with a digest and byte count read from the
+  bytes actually there, and nothing more.
+
+  The verdict is its own table (migration 16),
+  `GenerationDeliverableValidation`, one row per deliverable *version*. Not
+  `ManagedOutputMediaValidation`: that record's `sceneGenerationId` is `@unique`
+  with a required foreign key, so it is one-to-one with a provider attempt by
+  construction, and widening that binding would make every existing row's column
+  optional and every existing query ambiguous to express a different
+  relationship. Not the composition row either: the version is the immutable
+  identity a customer's pointer names, while the composition row is execution
+  state carrying a lease, an attempt count and a retry code, so a verdict hung
+  off it would be a verdict about an attempt. The media *vocabulary* is reused
+  verbatim — the same five invalid reasons, the same container family, the same
+  five normalized facts — because "is this file playable video" is the same
+  question either way and a second copy would drift. `RETRYABLE_FAILURE` is
+  deliberately not a status: it is not a verdict about the video but the absence
+  of one, and it returns the row to `PENDING` with a future instant.
+
+  The composition's receipt is frozen into the row at creation and never
+  refreshed, and every later write proves **three** receipts agree — the
+  caller's, the row's binding, and the composition's. An earlier draft compared
+  only two, so a composition whose receipt moved underneath a running validation
+  was finalized as a verdict about bytes nobody had measured; a database test
+  found it.
+
+  Transaction G is the publication boundary and a commit of its own:
+  `DELIVERABLE_VALIDATING -> DELIVERABLE_READY`, the job's deliverable pointer,
+  the entitlement consume where one is owed, and all three transition events,
+  together or not at all. Two shapes and no third, read back from the same facts
+  Transaction I admits a cycle for: an initial publication spends the unit, a
+  recomposition replaces a video the customer already paid for and spends
+  nothing. `CONSUMED` has no outgoing edge, so a second consume is impossible by
+  construction as well as by the branch, and `consumedAt` now has exactly one
+  writer. Both edges into `CONSUMED` stay refused by the generic API — reaching
+  `DELIVERABLE_READY` generically would deliver a video nobody validated, and
+  reaching `CONSUMED` generically would charge for one nobody received.
+
+  It is a separate commit from the verdict on purpose. Folding them together
+  would delete the state this system needs — *validated, not yet published* —
+  which is exactly what a crash between them leaves, and a fourth
+  candidate-discovery arm exists to find it. It is also *last*, because it holds
+  the entitlement lock and an entitlement lock held across a
+  hundreds-of-megabytes download contends with every cost workflow there is.
+
+  Lock order `Reservation -> Job -> version -> composition -> validation`, the
+  order Transactions H and I take; the lifecycle transactions never touch the
+  reservation at all, so they cannot form the inverse pair. The lock and the read
+  are separate statements, and that is load-bearing rather than tidy: under
+  `READ COMMITTED` a blocked `FOR UPDATE` re-evaluates only the locked row, while
+  every other table in the same statement is still read from the pre-block
+  snapshot — so two workers racing to create the first record both saw no row,
+  both inserted, and the loser got a raw uniqueness error instead of its own
+  outcome union. A race test against two real connections found that and now pins
+  it, along with both directions of the lock order and the one-unit-per-job
+  guarantee.
+
+  A verdict short of `VALID` changes nothing else: no job transition, no unit, no
+  reservation move, no pointer move, and no transition event on any aggregate —
+  the same restraint Phase 5B chose for `BLOCKED`, and for the same reason, which
+  is sharpest during a recomposition where the customer already holds a perfectly
+  good video. Two guards at both ends stop a pointer regression: discovery offers
+  only the job's highest-ordinal version, and Transaction G refuses any version
+  whose ordinal is not strictly greater than the one the pointer names.
+
+  Still dormant: nothing constructs the repository or the runner, no scheduler,
+  cron or timer exists, no provider is called, no credential is introduced and no
+  payment integration is touched. Human review before publication, the mandatory
+  AI-generated disclosure, and a settlement policy for a permanently unusable
+  deliverable all remain unimplemented and are recorded as such.
+
 - **Phase 5B** — see GitHub for its lifecycle. Turns one frozen Phase 5A plan
   into one managed object with a durable SHA-256 receipt, and decides what
   happens every way that fails. Composition profile v1

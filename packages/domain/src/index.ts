@@ -28,3 +28,4 @@ export * from "./media-recovery/index";
 export * from "./media-failure-resolution/index";
 export * from "./deliverable-composition/index";
 export * from "./deliverable-composition-execution/index";
+export * from "./deliverable-validation/index";

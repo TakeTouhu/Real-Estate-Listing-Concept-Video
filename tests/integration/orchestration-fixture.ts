@@ -154,8 +154,12 @@ export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   // erased by deleting what it was planned from.
   await prisma.generationDeliverableInput.deleteMany({});
   // Before the versions they execute against: RESTRICT again, so a composition
-  // record cannot be erased by deleting the deliverable it composed.
+  // record cannot be erased by deleting the deliverable it composed. The media
+  // verdict about the composed object hangs off the same version, and is RESTRICT
+  // for the sharper reason: it is the record that authorized publishing a
+  // customer's video and spending their unit.
   await prisma.generationDeliverableComposition.deleteMany({});
+  await prisma.generationDeliverableValidation.deleteMany({});
   await prisma.generationDeliverableVersion.deleteMany({});
   // Before the validations they belong to, which come before the attempts: both
   // foreign keys are RESTRICT on purpose, so durable failure history cannot be

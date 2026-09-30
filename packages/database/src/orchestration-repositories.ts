@@ -95,7 +95,10 @@ const EVENT_ID_PREFIX = "genevt";
 const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // Transaction B owns this.
   "RESERVING->RESERVED",
-  // Transaction G owns this, and Transaction G is deferred.
+  // Transaction G owns this. It now exists -- see
+  // `deliverable-validation-repository.ts` -- and the edge stays reserved for
+  // exactly that reason: a job becomes DELIVERABLE_READY *because* a validated
+  // deliverable was published and the pointer moved in the same commit.
   "DELIVERABLE_VALIDATING->DELIVERABLE_READY",
   // Transaction I owns this. A job awaits composition *because* a deliverable
   // version and its frozen input rows were admitted in the same commit; reaching
@@ -163,8 +166,10 @@ const REQUEST_RESERVED_EDGES: readonly `${string}->${string}`[] = [
 ];
 
 const RESERVATION_RESERVED_EDGES: readonly `${string}->${string}`[] = [
-  // Transaction G owns this: consuming a unit and marking a deliverable ready
-  // are one fact, and the quota ledger is deferred.
+  // Transaction G owns both: consuming a unit and publishing a deliverable are
+  // one fact. It now exists -- see `deliverable-validation-repository.ts` -- and
+  // it is the only writer that stamps `consumedAt`, because it is the only place
+  // that knows a customer actually received the video the unit paid for.
   "RESERVED->CONSUMED",
   "RECONCILIATION_HOLD->CONSUMED",
 ];
@@ -1112,9 +1117,9 @@ export function createGenerationReservationRepository(
             // into `CONSUMED` are reserved for Transaction G, so this method
             // can never reach that state — and a write that cannot execute is
             // not a rule, it is a claim the code makes about itself. Transaction
-            // G will stamp `consumedAt` in the commit that actually spends the
-            // unit. A mutation ledger found this by removing the branch and
-            // watching nothing fail.
+            // G stamps `consumedAt` in the commit that actually spends the unit.
+            // A mutation ledger found this by removing the branch and watching
+            // nothing fail.
             ...(input.nextState === "RELEASED" ? { releasedAt: new Date() } : {}),
           },
         });

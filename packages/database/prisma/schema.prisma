@@ -1156,6 +1156,9 @@ model GenerationDeliverableVersion {
   currentForJobs   GenerationJob[]                   @relation("JobCurrentDeliverable")
   /// The composition execution for this version, absent until a worker claims it.
   composition      GenerationDeliverableComposition?
+  /// The media verdict about this version's composed object, absent until a
+  /// worker claims it. One per version, never per composition attempt.
+  validation       GenerationDeliverableValidation?
 
   @@unique([generationJobId, ordinal])
   /// The composite key `GenerationJob.currentDeliverableVersionId` points
@@ -1327,4 +1330,107 @@ model GenerationDeliverableComposition {
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
   @@map("generation_deliverable_compositions")
+}
+
+// ===========================================================================
+// Phase 5C — durable deliverable validation
+//
+// One row per deliverable version, recording what the platform has permanently
+// concluded about whether the composed final object is media a customer may be
+// shown.
+//
+// It is **not** `ManagedOutputMediaValidation`. That table is one-to-one with a
+// `SceneGeneration` — a single provider attempt's output — and its foreign key
+// says so. A composed deliverable is the concatenation of many attempts, with
+// its own canonical key, its own receipt and its own version history. Widening
+// that binding to mean "either an attempt or a deliverable" would make every
+// existing row's `sceneGenerationId` optional and every existing query
+// ambiguous, to express a relationship that is genuinely different.
+//
+// The media *vocabulary* is shared verbatim: `ManagedOutputMediaInvalidReason`
+// and `ManagedOutputContainerFamily` are reused rather than duplicated, because
+// "is this file playable video" is the same question either way, and a second
+// copy of those enums would drift.
+//
+// No publication column. A deliverable is published when the job says
+// `DELIVERABLE_READY`, the job's pointer names this version and the hold is
+// `CONSUMED` — Transaction G writes those three together. A `publishedAt` here
+// would be a fourth place for the same fact to disagree.
+//
+// No backfill. Deliverable versions composed by Phase 5B carry no validation row
+// until a worker claims one, and an absent row is an eligible state, not a gap.
+// ===========================================================================
+
+/// `RETRYABLE_FAILURE` is deliberately absent. It is not a verdict about the
+/// video; it is the absence of one, and it returns the row to `PENDING` with a
+/// future instant. A storage hiccup must never become a permanent record that a
+/// customer's deliverable is unusable.
+enum DeliverableValidationStatus {
+  PENDING
+  RUNNING
+  VALID
+  INVALID_MEDIA
+  INTEGRITY_MISMATCH
+}
+
+model GenerationDeliverableValidation {
+  id                   String                           @id
+  /// One validation per deliverable version, not per composition attempt. The
+  /// version is the immutable identity a customer's pointer names; the
+  /// composition row is execution state carrying a lease, an attempt count and a
+  /// retry code. A verdict hung off execution state would be a verdict about an
+  /// attempt. The uniqueness is also what makes two workers racing to create the
+  /// first record resolvable: exactly one insert wins.
+  deliverableVersionId String                           @unique
+  status               DeliverableValidationStatus      @default(PENDING)
+  /// --- Immutable byte binding ----------------------------------------------
+  /// Which bytes this verdict is about, copied from the composition's durable
+  /// output receipt when the record is created and never recomputed. Without it
+  /// a `VALID` row created against one object could later be read as permission
+  /// to publish a different object that came to occupy the same key — exactly
+  /// what INTEGRITY_MISMATCH exists to detect. Never "repaired" to match a newer
+  /// receipt.
+  receiptSha256        String
+  /// BIGINT for the same reason as `scene_generations.outputSizeBytes`: the
+  /// domain admits any positive safe integer and int4 overflows at 2 GiB.
+  receiptSizeBytes     BigInt
+  /// --- Lease / retry -------------------------------------------------------
+  /// Opaque and random. Carries no organization, job, deliverable, key or
+  /// provider identity, so it discloses nothing if it is ever logged.
+  leaseToken           String?
+  /// Crash recovery, not a deadline: how long the system waits before assuming
+  /// the owner died. Duplicate execution is tolerable because the object is
+  /// immutable, the verdict is derived from its bytes, and finalize is
+  /// CAS-protected against the lease token and the row version.
+  leaseExpiresAt       DateTime?
+  nextAttemptAt        DateTime?
+  attemptCount         Int                              @default(0)
+  /// Incremented on every transition. With `leaseToken` this is what makes a
+  /// stale worker's late finalize match zero rows.
+  version              Int                              @default(0)
+  /// --- Terminal verdict ----------------------------------------------------
+  /// Reused from the provider-attempt vocabulary. The question is identical, and
+  /// a second enum listing the same five reasons would drift from the first.
+  invalidReason        ManagedOutputMediaInvalidReason?
+  container            ManagedOutputContainerFamily?
+  /// The five normalized media facts. BIGINT so a safe JS integer round-trips
+  /// exactly; a CHECK bounds each at Number.MAX_SAFE_INTEGER so the column's
+  /// range and the domain's range are the same range.
+  durationMs           BigInt?
+  videoWidth           BigInt?
+  videoHeight          BigInt?
+  videoStreamCount     BigInt?
+  /// Zero is legal: a walkthrough with no audio track is valid media.
+  audioStreamCount     BigInt?
+  validatedAt          DateTime?
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
+  /// RESTRICT, never Cascade. This row records the verdict that authorized a
+  /// customer's published video and the spending of an entitlement unit; a
+  /// physical deletion must resolve retention deliberately.
+  deliverableVersion   GenerationDeliverableVersion     @relation(fields: [deliverableVersionId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
+  @@map("generation_deliverable_validations")
 }

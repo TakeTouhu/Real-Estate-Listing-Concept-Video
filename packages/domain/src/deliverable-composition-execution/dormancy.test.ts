@@ -378,8 +378,12 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the *last* migration: Phase 5C added one after it. The claim
+    // this tripwire actually makes is narrower and still exact — Phase 5B
+    // contributed exactly one migration, it is still present, and nothing
+    // renamed or split it.
     expect(dirs.filter((dir) => dir.includes("phase5b"))).toEqual([MIGRATION_DIR]);
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 2);
   });
 
   it("creates one table and rewrites no existing row", () => {

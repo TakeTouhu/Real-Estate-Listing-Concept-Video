@@ -804,9 +804,11 @@ adapter behind a port.
 
 **No unit is consumed, and `GenerationJob.currentDeliverableVersionId` is never
 moved by planning.** Both belong to Transaction G at
-`DELIVERABLE_VALIDATING -> DELIVERABLE_READY`, which remains deferred: a customer
-unit may be consumed only after a usable final deliverable exists *and* has
-passed deliverable-level validation. Until then the customer keeps the video they
+`DELIVERABLE_VALIDATING -> DELIVERABLE_READY`. **Implemented by Phase 5C
+(ADR-0051)**, and still dormant: the transaction exists, nothing calls it, and
+the rule it was deferred for is the rule it now enforces — a unit is consumed
+only in the commit that makes a validated deliverable the customer's, and a
+recomposition consumes none at all. Until then the customer keeps the video they
 already have.
 
 **A deliverable version carries no metadata beyond its fingerprint.** Anything
@@ -815,11 +817,15 @@ authoritative at composition-admission time, and a column populated later with a
 value invented now is worse than an absent column. Phase 5B/5C adds what it can
 actually prove.
 
-**Deliverable-level media validation does not exist.** Scene-level validity
+**Deliverable-level media validation does not exist.** ~~Scene-level validity
 (ADR-0044/0045) says nothing about whether the composed video is playable.
 `ManagedOutputMediaValidation` is bound one-to-one to a `SceneGeneration`, so a
 final deliverable needs its own record or a widened binding; which of the two is
-a Phase 5C schema decision and is not pre-empted here.
+a Phase 5C schema decision and is not pre-empted here.~~ **Resolved by Phase 5C
+(ADR-0051):** its own record, `GenerationDeliverableValidation`, one per
+deliverable *version*. The binding was not widened — that would have made every
+existing row's `sceneGenerationId` optional and every existing query ambiguous.
+The media vocabulary is shared verbatim; only the table is new.
 
 ## Phase 5A follow-up — two unlocked reservation reads under a Job lock
 
@@ -895,3 +901,52 @@ Nothing in this phase creates a credential, an IAM resource, a bucket or a
 scheduler, and `createS3MultipartClient` is still constructed nowhere in
 production. This note exists so the requirement cannot be lost between here and
 Phase 9.
+
+## Phase 5C follow-up — what a terminal verdict deliberately leaves open
+
+Phase 5C makes a deliverable's usability durable and publishes only on `VALID`.
+Four decisions are owed, and none is pre-empted here.
+
+**Human review before publication is still missing, and it is a product rule, not
+a nicety.** `CLAUDE.md` requires that AI output is never published automatically
+and that human review and approval are mandatory. Transaction G is the
+*technical* publication boundary; it has no approval gate, and it is dormant for
+exactly that reason. **Activating the validation runner without a review gate in
+front of Transaction G would violate that rule.** Whoever activates it owns
+building the gate first — including where approval is recorded, who may give it,
+and what happens to a deliverable nobody reviews.
+
+**No settlement policy exists for a permanently *unusable* deliverable.** This is
+the sibling of the Phase 5B entry above and needs the same decision from a
+different direction: an `INVALID_MEDIA` or `INTEGRITY_MISMATCH` verdict leaves the
+job in `DELIVERABLE_VALIDATING` with a reserved unit that will never be consumed
+or released, and — on a recomposition — a customer still holding their previous
+video. Whether a permanently unusable *initial* deliverable should eventually fail
+the job, and who bears the cost when it does, is a billing decision. Phase 5C
+terminalizes nothing.
+
+**There is no operator path out of a terminal verdict**, for the same reason
+Phase 5B has none out of `BLOCKED`. Re-validating a row whose bytes were judged
+unplayable would reach the identical answer, because the object is immutable and
+the receipt is frozen; the only honest recovery is a *new composition cycle*, and
+deciding when one is owed is the settlement decision above.
+
+**`RECONCILIATION_HOLD -> CONSUMED` is admitted, and the alternative should be
+revisited if reconciliation policy changes.** A validated deliverable the customer
+is about to receive is treated as sufficient evidence to settle a hold, because
+deferring instead risks a deliverable that can never be published if the hold
+later resolves to `RELEASED`. If reconciliation ever gains a resolution that
+*should* override a completed delivery, this branch is where that decision lands.
+
+## Phase 5C follow-up — the AI-generated disclosure is still unrendered
+
+**Recorded, not wired.** `CLAUDE.md` requires generated videos to display an
+AI-generated disclosure by default. Composition profile v1 renders no overlay,
+no watermark and no end card, and deliverable validation does not check for one —
+it measures container, duration, dimensions and stream counts, and asserts
+nothing about what the frames contain.
+
+So the disclosure is unimplemented at every layer that could carry it: the
+encoder does not draw it, the verdict does not require it, and publication does
+not gate on it. Whoever activates publication owns closing that gap, together
+with the placement rules already open under *Business rules to confirm*.

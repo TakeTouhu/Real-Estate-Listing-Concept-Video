@@ -3,6 +3,85 @@
 All notable changes to this project. Phases correspond to `docs/Roadmap.md`.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Phase 5C: Deliverable validation and the publication boundary
+
+Detail in `docs/phase-5c-completion.md` and ADR-0051. Proves a composed
+deliverable is media a customer may be shown, and — separately — makes it theirs.
+**Nothing runs it**: no scheduler, no timer, no production caller, and no test
+launches a subprocess or reaches an object store. No provider is called, no
+credential is introduced, and no payment integration is touched.
+
+### Added
+
+- **`GenerationDeliverableValidation`** (migration 16) — one durable verdict per
+  deliverable *version*, unique on `deliverableVersionId`. Not
+  `ManagedOutputMediaValidation`, whose `sceneGenerationId` is `@unique` with a
+  required foreign key and is therefore one-to-one with a provider attempt by
+  construction; and not the composition row, which is execution state carrying a
+  lease and a retry code. Statuses: `PENDING`, `RUNNING`, `VALID`,
+  `INVALID_MEDIA`, `INTEGRITY_MISMATCH`. `RETRYABLE_FAILURE` is deliberately not
+  one.
+- **The frozen byte binding** — `receiptSha256` and `receiptSizeBytes`, copied
+  from the composition's durable receipt when the record is created and never
+  refreshed. Every later write proves all three receipts agree: the caller's, the
+  row's binding, and the composition's.
+- **The validation lifecycle** — `claimDeliverableValidation`, `finalizeValid`,
+  `finalizeInvalidMedia`, `finalizeIntegrityMismatch` and `deferValidation`. Five
+  short, database-only transactions; the object-store read and the inspector run
+  strictly between two of them, never inside one.
+- **Transaction G** (`publishDeliverable`) — the publication boundary.
+  `DELIVERABLE_VALIDATING -> DELIVERABLE_READY`, the job's deliverable pointer,
+  the entitlement consume where one is owed, and all three transition events, in
+  one commit. Two shapes and no third: an initial publication (`pointer NULL`
+  with a `RESERVED` or `RECONCILIATION_HOLD` hold) spends the unit; a
+  recomposition (an earlier pointer with a `CONSUMED` hold) spends nothing.
+  Anything else fails closed.
+- **`consumedAt` has a writer** for the first time, and exactly one. Both edges
+  into `CONSUMED` stay refused by the generic reservation API now that their
+  owner exists.
+- **`DeliverableMediaValidationPort`** — a second port over the *same*
+  `S3ManagedOutputMediaValidator`. The question is identical for an attempt's
+  output and a composed deliverable, so the streaming, hashing, materialization
+  and inspection are one private core; the ports and method names stay distinct
+  so neither key brand has to widen.
+- **`DeliverableValidationRunner`** — one bounded pass, no loop, no timer, no
+  production caller.
+
+### Changed
+
+- `S3ManagedOutputMediaValidator` now implements two ports. Its public `validate`
+  and `validateDeliverable` are one-line delegations to one private core, proved
+  by a source assertion rather than by convention.
+- The reserved-edge comments in `packages/database/src/orchestration-repositories.ts`
+  and `packages/domain/src/orchestration/ports.ts` now say Transaction G exists.
+  The edges remain reserved: reaching `DELIVERABLE_READY` generically would
+  deliver a video nobody validated, and reaching `CONSUMED` generically would
+  charge for one nobody received.
+
+### Fixed
+
+- **A verdict could be recorded about bytes nobody measured.** `finalizeValid`
+  proved the caller's receipt against the row's frozen binding and read the
+  composition's receipt without comparing it, so a composition whose receipt moved
+  underneath a running validation was finalized as `VALID`. Found by a database
+  test; all three receipts are now compared in one function.
+- **A creation race surfaced as a raw uniqueness error.** The lock and the read
+  were one statement, and under `READ COMMITTED` a blocked statement re-evaluates
+  only the locked row — every other table in it is still read from the pre-block
+  snapshot. Two workers both saw no validation row and both inserted. The lock and
+  the read are now separate statements; a race test against two real connections
+  pins it.
+
+### Not changed
+
+- No HTTP route, request, response or error. No UI. No API surface of any kind.
+- No provider, credential, scheduler, cron, timer or payment integration.
+- Migrations 0 through 15 are untouched, and migration 16 rewrites no existing
+  row: it creates one table and one enum, and reuses the two existing media enums
+  rather than copying them.
+- A verdict short of `VALID` moves nothing: not the job, not a unit, not the
+  reservation, not the customer's pointer, and not the transition-event stream.
+
 ## [Unreleased] — Phase 5B: Durable composition execution and the managed final output
 
 Detail in `docs/phase-5b-completion.md` and ADR-0050. Turns one frozen Phase 5A
