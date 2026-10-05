@@ -962,16 +962,30 @@ Phase 9.
 ## Phase 5C follow-up — what a terminal verdict deliberately leaves open
 
 Phase 5C makes a deliverable's usability durable and publishes only on `VALID`.
-Four decisions are owed, and none is pre-empted here.
+Four decisions were owed. **Three are still owed. The first has since been
+answered — by removal — in ADR-0052 Decision 2, and is kept below as a
+superseded record rather than deleted.**
 
-**Human review before publication is still missing, and it is a product rule, not
-a nicety.** `CLAUDE.md` requires that AI output is never published automatically
-and that human review and approval are mandatory. Transaction G is the
-*technical* publication boundary; it has no approval gate, and it is dormant for
-exactly that reason. **Activating the validation runner without a review gate in
-front of Transaction G would violate that rule.** Whoever activates it owns
-building the gate first — including where approval is recorded, who may give it,
-and what happens to a deliverable nobody reviews.
+**~~Human review before publication is still missing~~ — SUPERSEDED by ADR-0052
+Decision 2.** This item was written when `CLAUDE.md` required that AI output is
+never published automatically and that human review and approval are mandatory.
+That rule is no longer the product contract: there is **no final-video approval
+workflow** in the initial release, because Transaction G delivers into the
+customer's own private workspace and VTaVision performs no external publication.
+Transaction G therefore needs **no approval gate**, and the absence of one is not
+a defect to repair before activation.
+
+The obligation this item was really protecting has not disappeared — it has
+changed owner. What must stand between a validated deliverable and the customer
+is the **AI-generated disclosure** (ADR-0052 Decision 8), which is unbuilt and is
+tracked as implementation work below. Do not re-derive an approval gate from this
+paragraph; it is kept as the record of a superseded decision, not as live work.
+
+Still live from the original concern: **a deliverable that nobody ever looks at
+is now a normal outcome, not an error state.** A delivered video the customer
+never previews or downloads has still consumed its Unit (ADR-0052 Decision 4),
+and no state machine should wait for a human that the contract no longer
+requires.
 
 **No settlement policy exists for a permanently *unusable* deliverable.** This is
 the sibling of the Phase 5B entry above and needs the same decision from a
@@ -1039,6 +1053,9 @@ them is **built**. Each item below records the settled decision and what remains
       group permissions, no DENY, the six role templates and the full permission
       list. `video.share` is reserved and must not be exposed. At least one
       `OWNER` must always exist and the last `OWNER` cannot be deleted.
+      **Blocked on the decision gate below:** the per-template permission and
+      default-Scope mapping is not approved, so this cannot be implemented
+      without inventing security rules.
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
@@ -1074,6 +1091,26 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`.
+
+### Decision gates — settled in shape, unsettled in value
+
+Neither of these is answerable by writing more documentation, and neither may be
+guessed by whoever implements the surrounding feature.
+
+- [ ] **Approve the role-template permission and default-Scope mapping.**
+      ADR-0052 Decision 10 settles the shape — six templates, additive groups,
+      three scopes, no DENY, the permission vocabulary — and deliberately leaves
+      every template's actual grants unassigned. Until the mapping is approved,
+      the authorization model is not implementable: choosing whether `MANAGER`
+      may `member.manage` or `BILLING` may `unit.consume` is a security decision,
+      not an implementation detail. The binding constraints on any proposed
+      mapping are listed in that decision.
+- [ ] **Decide the recovery-budget denominator.** ADR-0052 Decision 5 sizes the
+      internal recovery budget as `plan maximum user limit × 1` from plan slots,
+      and ADR-0053 Decision 1 records the baseline slots as 3 / 10 / 30. Whether
+      **purchased additional seats raise that denominator** is undecided. It is a
+      cost decision — it sets how much VTaVision spends absorbing its own
+      failures — so neither reading may be implemented as though settled.
 
 ### Live-evidence gates — cannot be closed by documentation
 

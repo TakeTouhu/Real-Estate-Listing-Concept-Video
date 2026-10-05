@@ -35,16 +35,46 @@ the same entitlement concept.
 All prices **tax-exclusive** unless the UI explicitly presents a tax-inclusive
 total.
 
-| Plan | Monthly | Units |
-| --- | --- | --- |
-| Standard | ¥49,800 | 15 |
-| Premium | ¥119,800 | 40 |
-| Enterprise | ¥298,000 | 100 |
+| Plan | Monthly | Units | Included users | HQ ceiling | HQ add-on |
+| --- | --- | --- | --- | --- | --- |
+| Standard | ¥49,800 | 15 | 3 | 1 | unavailable |
+| Premium | ¥119,800 | 40 | 10 | 5 | available |
+| Enterprise | ¥298,000 | 100 | 30 | 10 | available |
 
 Additional user: **¥3,000 / user / month**, tax-exclusive.
 
 **Buying additional users does not increase video generation Units.** User seats
 and generation capacity are separate goods.
+
+### The included-user and HQ columns are recorded, not newly priced
+
+The last three columns are **not new pricing introduced by this ADR.** They are
+the values the implemented plan catalog
+(`packages/domain/src/pricing/customer-plan-catalog.ts`) has carried since the
+pricing phase. They are written here because this ADR is declared authoritative
+for the commercial contract, and an authoritative plan table that omitted them
+would leave code as the only statement of a customer-facing entitlement.
+
+Two semantics travel with them, and both match the implementation:
+
+- **"HQ ceiling" is a limit inside the included Units, never an extra pool.** A
+  Standard customer has 15 Units and may spend **at most 1** of them on HQ. HQ
+  usage is drawn from the included entitlement, not added to it.
+- **Standard's HQ behaviour is therefore not ambiguous:** Standard *may use* its
+  single HQ Unit, and *may not buy more* — which is why Decision 2 lists its HQ
+  package as unavailable. "No HQ package" is not "no HQ".
+
+### Open gate — the recovery-budget denominator
+
+ADR-0052 Decision 5 sizes the internal service-recovery budget as `plan maximum
+user limit × 1`, from **plan slots rather than active users**. The included-user
+values above give that formula its baseline: 3, 10, 30.
+
+**Whether purchased additional seats raise that denominator is not decided here.**
+Deciding it would change how much VTaVision spends absorbing its own failures,
+which is a cost decision and not a documentation one. It is recorded as an open
+gate in `docs/decisions/TODO.md`. Until it is answered, do not implement either
+reading as though it were settled.
 
 ## Decision 2 — Additional Unit packages
 

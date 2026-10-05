@@ -334,6 +334,33 @@ audit.view            audit.export
 - **There must always be at least one OWNER, and the last OWNER cannot be
   deleted.**
 
+### Open gate — the template-to-permission mapping is deliberately not fixed here
+
+This decision settles the **shape** of authorization: six templates, additive
+groups, three scopes, no DENY, and the permission vocabulary above. It does
+**not** settle which permissions and which default Scope each template grants.
+
+That mapping is deliberately absent rather than accidentally missing. Writing it
+now would mean inventing security-sensitive business rules — whether `MANAGER`
+may `member.manage`, whether `BILLING` may `unit.consume`, whether `CREATOR` is
+scoped `GROUP` or `OWN` — that no approved decision covers. A guessed grant
+matrix is worse than an acknowledged gap, because it would look authoritative to
+whoever implements it.
+
+Constraints that **do** bind any future mapping:
+
+- `OWNER` is the only template that may be the last remaining administrator, and
+  the last `OWNER` cannot be deleted;
+- `video.share` must not be granted to any template, because it is reserved;
+- `disclosure.none` is not granted by default to any template — Mode C needs all
+  three of its gates;
+- support-content access, billing mutation and permission mutation stay separate
+  privileges (ADR-0054 Decision 6), so no template may collapse them;
+- every permission change is audited regardless of template.
+
+**The authorization model is not implementable until the mapping is approved.**
+It is recorded as an open decision gate in `docs/decisions/TODO.md`.
+
 ## Decision 11 — User and group deletion
 
 User status is **`active` or `deleted`**. Suspension/deactivation is **not**

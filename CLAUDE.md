@@ -135,18 +135,29 @@ Authenticate
 → Validate project and assets
 → Moderate prompt and images
 → Estimate platform and provider cost
-→ Reserve credits
+→ Reserve the Unit
 → Create idempotent generation attempt
 → Persist the SceneGeneration row as durable executable work
 → Worker discovers and claims an eligible SceneGeneration row
 → Generate scenes through WaveSpeedAI
 → Copy outputs to managed storage
-→ Compose with FFmpeg
-→ Validate output
-→ Require human review
-→ Settle credits exactly once
+→ Compose with FFmpeg, applying the selected disclosure mode and logo setting
+→ Validate the composed output technically
+→ Settle the Unit exactly once
+→ Deliver to the customer's private workspace
 → Notify user
 ```
+
+**There is no approval gate between technical validation and delivery**
+(ADR-0052 Decision 2). Delivery is internal to the customer's organization and is
+not external publication, so no Approve/Reject step, approval record or Reviewer
+role stands between a valid deliverable and the customer. The mandatory human
+step in this flow is *earlier* and is about source material, not the finished
+video: analysis review of the uploaded photographs (`analysis.review`).
+
+What **does** gate delivery is the AI-generated disclosure: a deliverable must
+carry the disclosure required by its selected mode, and Mode C is the only way to
+omit it, under its three gates.
 
 On failure, preserve the reason, retry only retryable errors, prevent duplicate charges, use a dead-letter state after exhaustion, and allow controlled manual retry.
 
