@@ -17,11 +17,26 @@ Protect customer property images, generated videos, billing data, credentials, a
 - **Authenticator-app (TOTP) MFA plus recovery codes**
 - **MFA is mandatory** for `OWNER`, `ADMIN`, any holder of `permission.manage`,
   and any holder of `billing.manage`. Other users may enable it optionally, and
-  an organization may require it for all members.
+  an organization may require it for all members. **This rule is
+  capability-based, not template-based**, so it follows the grant wherever it
+  goes — including through a group or an individual grant.
+- **Therefore `BILLING` is MFA-mandatory**, because the `BILLING` template holds
+  `billing.manage` by default. It is a consequence of the capability rule above,
+  not a separate rule, and it must stay true if the template changes.
 - Role templates `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`,
   plus groups, Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual
   permissions. Group permissions are **additive**; there is **no DENY model**.
   There is **no Reviewer role** — see the AI-transparency section.
+- **The approved per-template grant matrix and each template's default Scope are
+  ADR-0052 Decision 10**, and each template's grant list there is exhaustive.
+  Three separations it exists to enforce: `BILLING` cannot generate video or
+  consume Units; `ADMIN` cannot manage billing; `MANAGER` manages work, not
+  people, and defaults to `GROUP` scope. **`disclosure.none` and `video.share`
+  are granted by no template**, so neither is reachable by assigning a role.
+- **Recovery from a terminal internal technical failure is not a customer
+  capability.** No role template reaches it — not `OWNER`, not `ADMIN`. It is an
+  internal operator privilege, separate from support-content access, billing
+  mutation and permission mutation (ADR-0052 Decision 20, ADR-0054 Decision 6).
 - **At least one `OWNER` must always exist, and the last `OWNER` cannot be
   deleted.**
 - Organization scope resolved from authenticated session
@@ -159,8 +174,14 @@ applicable (ADR-0053 Decision 8).
 Audit uploads, deletions, analysis changes and corrections, generation requests,
 retries, cancellations, provider failures, deliverable availability, downloads,
 disclosure-mode changes, **Mode C consent**, logo changes, billing changes,
-user/group/role/permission changes, and privileged support access including
-break-glass use.
+user/group/role/permission changes, subscription/plan changes and cancellations,
+and privileged support access including break-glass use.
+
+**Operator recovery from a terminal technical failure is separately audited**
+with, at minimum: operator identity, organization, target Job / Deliverable /
+row, recovery reason, the original block or verdict cause, timestamp, and the
+resulting new recovery-cycle identifier. The original terminal evidence is
+immutable and is never rewritten by the recovery (ADR-0052 Decision 20).
 
 Share-link audit events are reserved for the post-release share feature and have
 no initial-release surface.

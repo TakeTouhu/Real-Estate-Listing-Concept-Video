@@ -46,9 +46,16 @@ survives as the `analysis.review` permission.
 
 Membership alone is not the authorization model: the initial release adds groups,
 Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual permissions, with
-**additive** group permissions and **no DENY**. The permission list is ADR-0052
-Decision 10, and it needs durable representation — group membership, scope, and
-per-user grants — that does not exist yet.
+**additive** group permissions and **no DENY**. The permission list **and the
+approved per-template grant matrix with each template's default Scope** are
+ADR-0052 Decision 10. They need durable representation — group membership, scope,
+and per-user grants — that does not exist yet.
+
+Whether the template defaults are **stored as rows** or **derived in code from
+the approved matrix** is an implementation choice this document does not make;
+either way the matrix is authoritative and a stored copy must be reproducible
+from it. Note that `disclosure.none` and `video.share` are granted by **no**
+template, so neither can be reached by assigning a role alone.
 
 User status is **`active` or `deleted`** only; there is deliberately no
 suspension/deactivation state, and deleted users cannot be restored (ADR-0052
@@ -122,7 +129,14 @@ blocks** with the base → oldest-added → newest-added consumption order; the
 **renewal-period binding** (a generation belongs to the period of its
 reservation); the fact that added packages **do not carry over**; and the
 **internal service-recovery budget**, which is organization-wide, derived from
-plan user slots, and must never be rendered to a customer.
+the **base plan's included-user slots** (3 / 10 / 30) and **not** from active
+users or purchased additional seats (ADR-0052 Decision 5), and must never be
+rendered to a customer.
+
+It must also represent a **released** reservation for a permanently failed
+generation or recomposition (ADR-0052 Decision 19): a reservation may not remain
+pending indefinitely, and a failure that delivered no technically valid video
+must settle to `RELEASE`, never `SETTLEMENT`.
 
 ### Subscription
 
@@ -142,4 +156,6 @@ Assets and outputs use explicit lifecycle states and retention dates. Scheduled 
 
 ## Indexes
 
-Index organization scope first for tenant queries, plus project status, job status, creation time, property ID, request hash, and provider prediction lookup. Add partial indexes for active jobs and pending reviews.
+Index organization scope first for tenant queries, plus project status, job status, creation time, property ID, request hash, and provider prediction lookup. Add partial indexes for active jobs and pending **source-photo analysis** reviews
+(`analysis.review`; there is no final-video approval queue to index — ADR-0052
+Decision 2).

@@ -59,7 +59,18 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - Reserve the Unit before generation and settle exactly once. A technically valid
   delivered video consumes the Unit; a moderation block and an exhausted internal
   recovery budget consume none.
-- Never expose the internal service-recovery budget to a customer.
+- **If no technically valid Deliverable was delivered, the reservation must be
+  RELEASED and must never remain pending indefinitely** (ADR-0052 Decision 19).
+  This holds for an initial generation, a paid regeneration and a disclosure/logo
+  recomposition, and `BLOCKED` / `INVALID_MEDIA` / `INTEGRITY_MISMATCH` must not
+  bill differently from one another.
+- Never expose the internal service-recovery budget to a customer. Its
+  denominator is the **base plan's** included-user slots; purchased seats do not
+  raise it.
+- **Customers never recover a terminal internal technical failure** — not
+  `OWNER`, not `ADMIN`. It is an internal operator privilege; terminal evidence
+  is immutable and recovery creates a *new* cycle, per row, never by a global
+  per-cause revert (ADR-0052 Decision 20).
 - **Paid Provider Activation and production scheduler activation are BLOCKED**
   and require explicit CTO authorization (ADR-0054 Decision 7). No cron, timer,
   loop, production credential or paid call may be introduced without it.
@@ -169,7 +180,10 @@ On failure, preserve the reason, retry only retryable errors, prevent duplicate 
 - Verify MIME type from file content.
 - Rate-limit login, uploads, generation, and billing.
 - Remove sensitive EXIF.
-- Audit uploads, generation, approvals, downloads, billing, and admin actions.
+- Audit uploads, generation, source-photo analysis review decisions,
+  Unit-purchase approvals, downloads, billing, plan changes, privileged support
+  access, operator recovery, and admin actions. (There is no final-video approval
+  to audit — ADR-0052 Decision 2.)
 - Do not log secrets, authorization headers, signed URLs, or unsanitized provider payloads.
 - Add tenant-isolation and webhook replay tests.
 

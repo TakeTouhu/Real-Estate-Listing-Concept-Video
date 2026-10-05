@@ -138,12 +138,25 @@ obligations (ADR-0053 Decision 8).
   retryability are separate concepts, and an ambiguous submission enters
   reconciliation rather than an immediate re-POST (ADR-0054 Decision 4).
 - Automatic recovery of VTaVision-side failure is **bounded** by an internal,
-  never-customer-visible budget of `plan maximum user limit × 1` per organization
-  per renewal period (ADR-0052 Decision 5).
+  never-customer-visible budget of `base-plan included-user slots × 1` — 3 / 10 /
+  30 — per organization per renewal period. **Purchased additional seats do not
+  raise it** (ADR-0052 Decision 5).
 - On exhaustion: no automatic extra Unit charge, automatic recovery stops, the
   reserved Unit is released, **the failed generation consumes no Unit**, and the
   case escalates internally. An authorized operator may grant one further manual
   free recovery.
+- **Permanent technical failure terminally settles and releases** (ADR-0052
+  Decision 19). A reservation may not remain pending indefinitely, and if no
+  technically valid Deliverable was delivered the reservation is **RELEASED**,
+  never `CONSUMED` — for an initial generation, a paid regeneration, or a
+  disclosure/logo recomposition alike. A failed regeneration or recomposition
+  preserves the previously delivered valid video as current.
+- `BLOCKED`, `INVALID_MEDIA` and `INTEGRITY_MISMATCH` **must not produce
+  different customer billing outcomes** because the internal failure class
+  differs.
+- **Recovery from a terminal failure is an internal operator action**, never a
+  customer one; terminal evidence is immutable and recovery creates a *new* cycle
+  (ADR-0052 Decision 20).
 - **System recovery/recomposition and customer-requested paid regeneration stay
   distinct** and must not be merged into one counter or one explanation.
 

@@ -107,6 +107,14 @@ Unknown states are treated as non-terminal for a short bounded period, then move
 
 ## Webhook security
 
+**Approved production design: authenticated webhook as the primary low-latency
+path, with mandatory polling fallback (ADR-0054 Decision 4).** If this provider's
+webhook authenticity **cannot** be verified, its webhook is **not** authoritative
+completion evidence and polling becomes the normal authoritative path. An
+unauthenticated internet callback is never accepted as proof that a paid
+generation completed. The webhook authentication contract is **unverified** until
+checked against the live provider and is on the re-verification list above.
+
 - Verify the current provider-supported authentication/signature mechanism.
 - Reject invalid, expired, or replayed events.
 - Deduplicate using provider event ID or stable payload hash.
@@ -116,7 +124,20 @@ Unknown states are treated as non-terminal for a short bounded period, then move
 
 ## Polling fallback
 
+**Polling is mandatory even when authenticated webhooks are in use** (ADR-0054
+Decision 4). It covers the missed webhook, the delayed webhook, transport
+failure, uncertain delivery, and reconciliation after a restart or operator
+investigation. A webhook is an optimization; polling is the guarantee.
+
 Use exponential backoff with jitter, a maximum interval, a hard deadline, and cancellation awareness. Do not poll from browser code. Polling must be restart-safe after worker failure.
+
+**Operator-supplied evidence is exceptional break-glass recovery evidence only**,
+never the normal completion path. All three sources — authenticated webhook,
+polling, operator evidence — normalize into the provider-neutral reconciliation
+contract before any durable state transition.
+
+The exact polling cadence and timeouts (`WAVESPEED_POLL_*`) remain
+**live-evidence values** and are not fixed here.
 
 ## Input URL security
 

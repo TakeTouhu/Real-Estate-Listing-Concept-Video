@@ -30,7 +30,10 @@ branches:** virtual staging, renovation proposal.
 Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`,
 combined with groups, Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional
 individual permissions. Group permissions are additive; there is no DENY model.
-See ADR-0052 Decision 10 for the permission list.
+See ADR-0052 Decision 10 for the permission list, **the approved per-template
+grant matrix and each template's default Scope**. `BILLING` pays for capacity but
+cannot generate video or consume Units; `ADMIN` manages people but not billing;
+`MANAGER` defaults to `GROUP` scope and manages work rather than people.
 
 There is **no Reviewer role** in the initial release. The former Reviewer existed
 to approve finished videos, and that workflow is removed. Reviewing *source
@@ -143,12 +146,20 @@ uses it.
 - A free retry exists **only** for VTaVision-side technical/system failure.
 - An aesthetically disappointing but technically valid video is **not** a
   free-retry case.
-- Moderation-blocked and recovery-budget-exhausted failures consume no Unit.
+- Moderation-blocked failures consume no Unit.
+- **Any permanent technical failure that delivers no technically valid video
+  consumes no Unit and releases its reservation** (ADR-0052 Decision 19) — for an
+  initial generation, a paid regeneration, or a disclosure/logo recomposition
+  alike. A failed regeneration or recomposition keeps the previously delivered
+  valid video as current, and the internal failure class (`BLOCKED`,
+  `INVALID_MEDIA`, `INTEGRITY_MISMATCH`) never changes the customer's bill.
 
 Automatic recovery of VTaVision-side failure is bounded by an **internal-only**
-budget of `plan maximum user limit × 1` per organization per renewal period, never
-exposed to customers (ADR-0052 Decision 5). On exhaustion the reserved Unit is
-released, the generation consumes no Unit, and the customer sees only:
+budget of `base-plan included-user slots × 1` — Standard 3, Premium 10,
+Enterprise 30 — per organization per renewal period, never exposed to customers
+and **not increased by purchased additional seats** (ADR-0052 Decision 5). On
+exhaustion the reserved Unit is released, the generation consumes no Unit, and
+the customer sees only:
 
 ```text
 動画を正常に生成できませんでした。今回の生成ではUnitは消費されていません。
@@ -172,6 +183,16 @@ Deletion follows the 30-day trash lifecycle.
 
 Multi-tenant SaaS with subscription plans and **Units**. Plans, Unit packages,
 storage quotas, payment channels, SLA and legal retention are in ADR-0053.
+
+Standard and Premium are **1-month, auto-renewing, monthly-billed self-service**
+subscriptions with **no minimum commitment and no annual-prepayment discount**;
+Enterprise terms are individually agreed (ADR-0053 Decision 1A). Cancellation
+takes effect at the end of the paid period with no prorated refund, while refunds
+for duplicate or erroneous billing and legally required refunds remain owed
+(Decision 3A). Upgrades are immediate and charge the full unprorated price
+difference, replacing the base-Unit ceiling rather than stacking it; downgrades
+take effect at the next renewal and never delete content or users
+(Decision 3B).
 
 - Plan limits and usage tracking
 - **No automatic overage charge**; customer approval required to buy Units

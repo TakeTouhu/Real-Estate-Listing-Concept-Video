@@ -2,7 +2,8 @@
 
 Status: Accepted (CTO decision, pre-Commercial-Launch)
 Scope: product behaviour, delivery semantics, entitlement consumption, disclosure,
-authorization, lifecycle.
+authorization, lifecycle, settlement of permanent technical failure, and operator
+recovery.
 
 Supersedes, at the **product-contract level only**:
 
@@ -143,11 +144,29 @@ Automatic recovery of VTaVision-side failure is bounded by an **internal-only**
 budget.
 
 ```text
-recovery budget = plan maximum user limit × 1
+recovery budget = base-plan included-user slots × 1
 ```
 
-Per organization, per billing renewal period. Based on **plan user slots**, not
-current active-user count. Shared organization-wide.
+| Plan | Recovery budget per renewal period |
+| --- | --- |
+| Standard | 3 |
+| Premium | 10 |
+| Enterprise | 30 |
+
+Per organization, per billing renewal period, shared organization-wide.
+
+**Purchased additional user seats do not increase this budget.** The denominator
+is the *base plan's* included-user slots (ADR-0053 Decision 1), and it does not
+vary with:
+
+- active-user count;
+- purchased additional user seats;
+- purchased additional Units;
+- temporary membership changes.
+
+A seat is sold as access, not as an entitlement to more absorbed failure. Letting
+purchased seats raise the budget would mean an organization could enlarge
+VTaVision's cost exposure by buying the cheapest add-on in the catalog.
 
 **Never exposed to customers** — not the budget, not the remaining amount, not
 the fact that it is the reason for an outcome.
@@ -334,32 +353,81 @@ audit.view            audit.export
 - **There must always be at least one OWNER, and the last OWNER cannot be
   deleted.**
 
-### Open gate — the template-to-permission mapping is deliberately not fixed here
+### The approved template-to-permission matrix and default Scope
 
-This decision settles the **shape** of authorization: six templates, additive
-groups, three scopes, no DENY, and the permission vocabulary above. It does
-**not** settle which permissions and which default Scope each template grants.
+**Decision gate CLOSED.** Default Scope per template:
 
-That mapping is deliberately absent rather than accidentally missing. Writing it
-now would mean inventing security-sensitive business rules — whether `MANAGER`
-may `member.manage`, whether `BILLING` may `unit.consume`, whether `CREATOR` is
-scoped `GROUP` or `OWN` — that no approved decision covers. A guessed grant
-matrix is worse than an acknowledged gap, because it would look authoritative to
-whoever implements it.
+| Template | Default Scope |
+| --- | --- |
+| `OWNER` | `ORGANIZATION` |
+| `ADMIN` | `ORGANIZATION` |
+| `MANAGER` | `GROUP` |
+| `CREATOR` | `OWN` |
+| `VIEWER` | `OWN` |
+| `BILLING` | `ORGANIZATION` |
 
-Constraints that **do** bind any future mapping:
+**Each template's grant list below is exhaustive: a permission not marked
+granted is not granted by that template by default.** A grant may still be added
+to an individual user, or arrive additively through a group.
 
-- `OWNER` is the only template that may be the last remaining administrator, and
-  the last `OWNER` cannot be deleted;
-- `video.share` must not be granted to any template, because it is reserved;
-- `disclosure.none` is not granted by default to any template — Mode C needs all
-  three of its gates;
-- support-content access, billing mutation and permission mutation stay separate
-  privileges (ADR-0054 Decision 6), so no template may collapse them;
-- every permission change is audited regardless of template.
+| Permission | OWNER | ADMIN | MANAGER | CREATOR | VIEWER | BILLING |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
+| `organization.view` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `organization.manage` | ✓ | ✓ | — | — | — | — |
+| `member.view` | ✓ | ✓ | ✓ | — | — | ✓ |
+| `member.manage` | ✓ | ✓ | — | — | — | — |
+| `group.view` | ✓ | ✓ | ✓ | — | — | — |
+| `group.manage` | ✓ | ✓ | — | — | — | — |
+| `permission.manage` | ✓ | ✓ | — | — | — | — |
+| `property.view` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `property.create` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `property.edit` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `property.delete` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `asset.upload` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `asset.delete` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `analysis.review` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `video.view` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `video.generate` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `video.regenerate` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `video.download` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `disclosure.change` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `disclosure.none` | — | — | — | — | — | — |
+| `unit.consume` | ✓ | ✓ | ✓ | ✓ | — | — |
+| `unit.view` | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| `billing.view` | ✓ | ✓ | — | — | — | ✓ |
+| `billing.manage` | ✓ | — | — | — | — | ✓ |
+| `audit.view` | ✓ | ✓ | — | — | — | — |
+| `audit.export` | ✓ | ✓ | — | — | — | — |
+| `video.share` | — | — | — | — | — | — |
 
-**The authorization model is not implementable until the mapping is approved.**
-It is recorded as an open decision gate in `docs/decisions/TODO.md`.
+Derived facts, stated so they cannot be re-derived incorrectly:
+
+- `permission.manage` default holders: **`OWNER`, `ADMIN`.**
+- `billing.manage` default holders: **`OWNER`, `BILLING`.**
+- `unit.consume` default holders: **`OWNER`, `ADMIN`, `MANAGER`, `CREATOR`.**
+- **`disclosure.none` is granted by no standard template**, so Mode C always
+  requires a deliberate grant on top of a role — plus organization-level
+  enablement and per-video consent.
+- **`video.share` is granted by no standard template**, because it is reserved
+  for post-release (Decision 12).
+
+Three separations the matrix exists to enforce:
+
+- **`BILLING` cannot generate video or consume Units** merely because it can
+  manage billing. Paying for capacity and spending it are different acts.
+- **`ADMIN` cannot manage billing.** An administrator who can add members and
+  change permissions cannot change what the organization is charged.
+- **`MANAGER` does not manage members, groups or permissions**, and is scoped
+  `GROUP` rather than `ORGANIZATION` — it manages *work*, not *people*.
+
+Unchanged global rules: group permissions are additive, there is no DENY model,
+individual grants remain possible, the last `OWNER` cannot be deleted, and every
+permission change is audited.
+
+**MFA remains capability-based, not template-based** (`docs/SecurityCompliance.md`):
+mandatory for `OWNER`, `ADMIN`, and any holder of `permission.manage` or
+`billing.manage`. Because `BILLING` holds `billing.manage` by default, **`BILLING`
+is MFA-mandatory** — a consequence of the capability rule, not a separate one.
 
 ## Decision 11 — User and group deletion
 
@@ -541,6 +609,108 @@ Google SSO, organization-level SSO-required mode, and possible password-login
 disablement for SSO-enforced organizations. These must not be dropped from the
 roadmap.
 
+## Decision 19 — Settlement of permanent technical failure
+
+**Decision gate CLOSED.** This answers the question Phases 5B and 5C each left
+open from their own direction.
+
+The global invariant:
+
+> **If VTaVision does not successfully provide the requested new technically
+> valid Deliverable, the reservation for that unsuccessful generation or
+> recomposition must not remain stuck, and must not become `CONSUMED`.**
+
+Once bounded recovery is exhausted, or the failure is conclusively permanent:
+
+- **terminally settle** the technical failure — a reservation may not sit pending
+  indefinitely;
+- **RELEASE** the applicable reserved Unit;
+- the customer **consumes no Unit** for that failed delivery;
+- **VTaVision bears** the provider, cloud and internal technical cost already
+  incurred.
+
+The customer-facing message is unchanged:
+
+```text
+動画を正常に生成できませんでした。今回の生成ではUnitは消費されていません。
+```
+
+### The three cases
+
+**Initial generation.** If no technically valid deliverable can be produced after
+the approved bounded recovery process, terminally fail the customer generation,
+release the reservation, and consume no Unit.
+
+**Customer-requested paid regeneration.** If the newly requested regeneration
+cannot produce a technically valid deliverable, release the regeneration
+reservation, consume no additional Unit for it, and **retain the previously
+delivered valid video as current** where one exists. A failed regeneration never
+costs the customer the video they already had.
+
+**Disclosure/logo recomposition.** If a recomposition fails: do **not** increment
+the successful disclosure-change count; if the attempt sat at a Unit-charging
+boundary — the 4th or 7th completed change under Decision 9 — **release** the
+reserved Unit, because no new technically valid Deliverable was delivered; and
+preserve the previous valid deliverable.
+
+### Failure class must not change the bill
+
+`BLOCKED`, `INVALID_MEDIA`, `INTEGRITY_MISMATCH` and any equivalent internal
+technical-failure vocabulary **must not produce different customer billing
+outcomes** merely because the internal failure class differs. A customer is
+billed for a delivered valid video, not for which component gave up.
+
+**No new domain state name is invented here.** Whether an existing state already
+unambiguously represents this settlement, or a new one is required, is
+state-machine design and belongs to the implementation package.
+
+## Decision 20 — Operator recovery from terminal technical failure
+
+**Decision gate CLOSED.** Recovery from an internal terminal technical failure is
+an **internal VTaVision operational action**, not a customer action.
+
+**Customers — including `OWNER` and `ADMIN` — cannot unblock an internal
+technical `BLOCKED` row or rewrite a terminal media verdict.** This privilege is
+separate from the customer role templates of Decision 10 and is not reachable
+through any of them; only an explicitly authorized internal operator may initiate
+it (ADR-0054 Decision 6 governs that privilege).
+
+**Terminal evidence is immutable.**
+
+- the original `BLOCKED` row and its `blockCode` / `blockedAt` evidence remains
+  as written;
+- the original `INVALID_MEDIA` / `INTEGRITY_MISMATCH` verdict remains as written;
+- **historical terminal evidence is never mutated back into a retryable state;**
+- where recovery is appropriate, it creates a **new** recovery/composition cycle.
+
+Audit, at minimum: operator identity; organization; target Job / Deliverable /
+row; recovery reason; the original block or verdict cause; timestamp; and the
+resulting new recovery-cycle identifier.
+
+Recovery remains subject to every existing invariant: no blind Provider POST
+retry; reconciliation first for an ambiguous submission; the Safety Guard;
+provider activation rules; bounded recovery; and the tenant boundary.
+
+### Row versus cause
+
+**The authoritative mutation unit is the individual row / work item.**
+
+A future operator tool **may** offer cause-based bulk *selection* — after a known
+configuration defect affected many rows, for example. Cause-level handling means
+exactly this:
+
+```text
+cause filter
+→ enumerate candidate rows
+→ re-evaluate eligibility for EACH row
+→ transactional / CAS-safe action PER row
+→ audit EACH row
+```
+
+**A global "unblock this cause and automatically revert all rows" operation must
+not be introduced.** Bulk selection is a convenience over per-row decisions; it
+is never a substitute for them.
+
 ---
 
 ## Consequences
@@ -564,8 +734,28 @@ than at satisfaction, which is not.
 exhausted budget produces a failure message that does not explain itself. Exposing
 it would turn an internal cost control into a customer-negotiable quantity.
 
+**Accepted cost.** Decision 19 puts the whole cost of a permanently failed
+generation on VTaVision — provider spend, cloud spend and operator time, with no
+Unit recovered. That is the price of a billing rule a customer can trust: they
+are charged for a delivered valid video, never for an attempt. It also means a
+systematic quality regression is expensive quickly, which is the correct
+incentive.
+
+**Accepted cost.** Decision 20 keeps recovery away from customers entirely, so an
+`OWNER` whose job is stuck must wait for VTaVision rather than retry it
+themselves. A customer-visible unblock button would re-enter the automatic retry
+loop that terminal states exist to end, and would let a tenant drive paid
+provider spend from a failure path.
+
+**Accepted cost.** Refusing a cause-level "revert all rows" operation makes bulk
+recovery after a configuration defect slower and more code. Per-row re-evaluation
+is the only version that cannot silently act on a row whose eligibility changed
+since the filter ran.
+
 **Open implementation work** — none of this is built by this ADR. The AI
 disclosure is unrendered at every layer, the authorization model is not
-implemented, disclosure-mode change accounting does not exist, the logo pipeline
-does not exist, and the Phase 3B near-duplicate UX still contradicts Decision 14.
-Tracked in `docs/decisions/TODO.md`.
+implemented (the matrix in Decision 10 is now approved but unbuilt),
+disclosure-mode change accounting does not exist, the logo pipeline does not
+exist, permanent-failure settlement and operator recovery have no code, and the
+Phase 3B near-duplicate UX still contradicts Decision 14. Tracked in
+`docs/decisions/TODO.md`.

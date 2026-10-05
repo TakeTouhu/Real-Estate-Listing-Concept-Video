@@ -341,6 +341,25 @@ recovery cannot continue, the customer sees only the customer-safe meaning:
 The internal recovery budget, its remaining amount, and the fact that it is the
 reason for the outcome are **never** shown to customers (ADR-0052 Decision 5).
 
+The same message and the same billing outcome apply to **every** permanent
+technical failure (ADR-0052 Decision 19) — a failed initial generation, a failed
+paid regeneration, or a failed disclosure/logo recomposition. The reservation is
+released, no Unit is consumed, and a failed regeneration or recomposition leaves
+the customer's **previously delivered valid video still current**. The internal
+failure class is never surfaced and never changes what the customer is told or
+charged: `BLOCKED`, `INVALID_MEDIA` and `INTEGRITY_MISMATCH` all read the same
+way to a customer.
+
+**There is no customer-facing unblock or retry-the-terminal-row control**, for
+any role including `OWNER` and `ADMIN`. Recovery from a terminal internal failure
+is an internal operator action (ADR-0052 Decision 20), so a failure screen offers
+a support reference, not a button.
+
+Support expectations shown to customers must match ADR-0053 Decision 11: online
+support, staffed weekdays 10:00–18:00 JST, inquiries accepted at any hour with
+the response clock running in staffed hours, and an initial-response target by
+plan. Never present Sev1 monitoring as 24/7 staffed support.
+
 ## Accessibility and localization
 
 - WCAG 2.1 AA target

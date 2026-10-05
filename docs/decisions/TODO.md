@@ -750,6 +750,13 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
+> This section predates the initial-release contract. Ten further business rules
+> — contract term, billing cadence, annual prepayment, cancellation/refund,
+> upgrade/downgrade, permanent-failure settlement, operator recovery, support
+> hours and targets, the role matrix and the recovery-budget denominator — were
+> settled later and are recorded under *Decision gates — ALL CLOSED* below. Read
+> both; neither is the complete ledger on its own.
+
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
       to the nearest ¥100 but never into a loss). What remains open is the
@@ -818,10 +825,15 @@ the stale threshold must be **strictly** less than it.
 Two unresolved items, both deliberately left open rather than guessed at.
 
 **No producer exists for `ReconciliationResolutionObservation`.** The resolution
-service consumes conclusive evidence; nothing yet obtains it. The mechanism —
-provider polling, authenticated webhooks, an operator's manual determination, or
-some combination — is a later phase with a different dependency set. What is
-fixed is the *shape* it must normalize into: two closed arms carrying a provider
+service consumes conclusive evidence; nothing yet obtains it. **The mechanism is
+now DECIDED by ADR-0054 Decision 4** — authenticated webhook as the primary
+low-latency path, **mandatory polling fallback** even when webhooks work, and
+operator determination as break-glass evidence only; a webhook whose authenticity
+cannot be verified is not authoritative and polling becomes the normal
+authoritative path. **The producer itself is unbuilt**, and the polling cadence
+and the provider's webhook authentication contract remain live-evidence gates.
+What was already fixed, and is unchanged, is the *shape* it must normalize into:
+two closed arms carrying a provider
 reference or a retryability flag and a closed diagnostic code, with no HTTP
 status, provider body, vendor enum, URL, credential or free text. A producer that
 cannot express its finding in that shape has not established enough to resolve
@@ -909,19 +921,24 @@ correct fix given the system-wide Reservation → Job order.
 Phase 5B introduced a terminal-for-this-phase state and, deliberately, no way
 out of it. Three decisions are owed, and none is pre-empted here.
 
-**There is no operator path out of `BLOCKED`.** A blocked row states what
-happened (`blockCode`) and when (`blockedAt`), and nothing re-queues it. That is
-not an oversight: an unblock operation that re-queued work without deciding
-*why* it was blocked would re-enter the automatic retry loop the state exists to
-end. A real operator surface needs its own authorization model, its own audit
-events, and a decision about whether unblocking is per-row or per-cause.
+**~~There is no operator path out of `BLOCKED`~~ — ANSWERED by ADR-0052 Decision
+20.** The question of who may unblock, and whether unblocking is per-row or
+per-cause, is decided: recovery is an **internal operator privilege** no customer
+role reaches, the terminal row and its `blockCode` / `blockedAt` stay immutable,
+recovery creates a **new** cycle rather than re-queuing the old row, the
+**authoritative mutation unit is the individual row**, and a global
+"unblock this cause and revert all rows" operation is forbidden. The audit fields
+are enumerated there. **The tooling is unbuilt** and tracked as implementation
+work below.
 
-**No settlement policy exists for a permanently uncomposable deliverable.** A
-blocked recomposition leaves the customer holding their previous video and the
-platform holding a reserved unit that will never be consumed or released. Who
-bears that cost — and whether a blocked *initial* composition should eventually
-fail the job rather than sit forever — is a billing decision, not an execution
-one. Phase 5B deliberately terminalizes nothing.
+**~~No settlement policy exists for a permanently uncomposable deliverable~~ —
+ANSWERED by ADR-0052 Decision 19.** If no technically valid Deliverable was
+delivered, the reservation is **RELEASED**, never `CONSUMED`, and must not sit
+pending indefinitely; VTaVision bears the cost already incurred. A blocked
+recomposition preserves the customer's previous video and releases the reserved
+unit, and `BLOCKED` must not bill differently from `INVALID_MEDIA` or
+`INTEGRITY_MISMATCH`. **The terminal settlement path is unbuilt** and tracked
+below. No new state name is chosen here — that is state-machine design.
 
 **Retry-reason history is not recorded.** `lastRetryCode` means exactly one
 thing — why this work is currently deferred — so it is cleared on claim and on
@@ -987,20 +1004,19 @@ never previews or downloads has still consumed its Unit (ADR-0052 Decision 4),
 and no state machine should wait for a human that the contract no longer
 requires.
 
-**No settlement policy exists for a permanently *unusable* deliverable.** This is
-the sibling of the Phase 5B entry above and needs the same decision from a
-different direction: an `INVALID_MEDIA` or `INTEGRITY_MISMATCH` verdict leaves the
-job in `DELIVERABLE_VALIDATING` with a reserved unit that will never be consumed
-or released, and — on a recomposition — a customer still holding their previous
-video. Whether a permanently unusable *initial* deliverable should eventually fail
-the job, and who bears the cost when it does, is a billing decision. Phase 5C
-terminalizes nothing.
+**~~No settlement policy exists for a permanently *unusable* deliverable~~ —
+ANSWERED by ADR-0052 Decision 19**, identically to its Phase 5B sibling. An
+`INVALID_MEDIA` or `INTEGRITY_MISMATCH` verdict must **terminally settle and
+RELEASE** the reserved unit; the customer consumes no Unit, keeps any previously
+delivered valid video, and the internal failure class does not change the bill.
+VTaVision bears the cost already incurred. **Unbuilt**, tracked below.
 
-**There is no operator path out of a terminal verdict**, for the same reason
-Phase 5B has none out of `BLOCKED`. Re-validating a row whose bytes were judged
-unplayable would reach the identical answer, because the object is immutable and
-the receipt is frozen; the only honest recovery is a *new composition cycle*, and
-deciding when one is owed is the settlement decision above.
+**~~There is no operator path out of a terminal verdict~~ — ANSWERED by ADR-0052
+Decision 20**, on the same terms as `BLOCKED`. The instinct recorded here was
+right and is now the rule: re-validating immutable bytes against a frozen receipt
+would reach the identical answer, so **the only recovery is a new composition
+cycle**, initiated by an authorized internal operator, audited, per row, leaving
+the original verdict untouched. **Unbuilt**, tracked below.
 
 **`RECONCILIATION_HOLD -> CONSUMED` is admitted, and the alternative should be
 revisited if reconciliation policy changes.** A validated deliverable the customer
@@ -1019,8 +1035,12 @@ nothing about what the frames contain.
 
 So the disclosure is unimplemented at every layer that could carry it: the
 encoder does not draw it, the verdict does not require it, and publication does
-not gate on it. Whoever activates publication owns closing that gap, together
-with the placement rules already open under *Business rules to confirm*.
+not gate on it. Whoever activates publication owns closing that gap.
+
+**The placement rules are no longer open.** ADR-0052 Decision 8 fixes the exact
+text, the three modes and Mode A's geometry, so this is implementation work
+against a settled specification — not a decision still to be made. The earlier
+cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
@@ -1072,8 +1092,9 @@ them is **built**. Each item below records the settled decision and what remains
       images and the current final video; exclude internal scene media,
       composition temp, 30-day retained old versions and Audit/Billing records.
       No automatic deletion, no automatic overage charge.
-- [ ] **Build the internal service-recovery budget.** `plan maximum user limit ×
-      1` per organization per renewal period, from plan slots not active users,
+- [ ] **Build the internal service-recovery budget.** `base-plan included-user
+      slots × 1` → **3 / 10 / 30** per organization per renewal period, from base
+      plan slots — **not** active users and **not** purchased additional seats —
       shared organization-wide, never exposed. On exhaustion: stop automatic
       recovery, charge no further Unit, release the reserved Unit, escalate
       internally, allow one operator-granted manual free recovery.
@@ -1091,26 +1112,121 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`.
+- [ ] **Build the approved role-template grant matrix.** ADR-0052 Decision 10 now
+      fixes every template's grants and default Scope. Decide whether defaults are
+      stored as rows or derived from the matrix, and make a stored copy
+      reproducible from it. `disclosure.none` and `video.share` must be
+      unreachable by role assignment alone, and MFA enforcement must stay
+      capability-based so `BILLING` is covered through `billing.manage`.
+- [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
+      Decision 19. A failed initial generation, paid regeneration or
+      disclosure/logo recomposition must terminally settle and **RELEASE** the
+      reservation, never `CONSUMED` and never left pending; a failed regeneration
+      or recomposition must preserve the previous valid deliverable as current; a
+      failed recomposition must not increment the disclosure-change count; and
+      `BLOCKED` / `INVALID_MEDIA` / `INTEGRITY_MISMATCH` must settle identically
+      for billing. Includes choosing whether an existing domain state represents
+      this or a new one is required — **the ADR deliberately does not pick one.**
+- [ ] **Build operator recovery tooling.** ADR-0052 Decision 20 plus ADR-0054
+      Decision 6: an internal-only privilege reachable by no customer role, the
+      original `BLOCKED` row and terminal verdict left immutable, a **new**
+      recovery cycle rather than a re-queue, the enumerated audit fields, and
+      per-row transactional/CAS-safe action with per-row eligibility
+      re-evaluation. **No global per-cause revert.**
+- [ ] **Build subscription billing, cancellation and plan changes.** ADR-0053
+      Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
+      renewal; cancellation effective at period end with no proration; the refund
+      exceptions that remain owed; immediate upgrade charging the full unprorated
+      difference with the base-Unit ceiling **replaced minus consumed**;
+      downgrade at renewal with no deletion of content or users and no automatic
+      seat purchase; and sales-assisted Enterprise transitions represented without
+      a Stripe subscription object.
+- [ ] **Build the authenticated-webhook producer and the mandatory polling
+      fallback** for `ReconciliationResolutionObservation` (ADR-0054 Decision 4),
+      with verification, replay safety, deduplication, tenant resolution from
+      stored prediction records, and normalization into the provider-neutral
+      contract before any durable mutation. Polling must run even when webhooks
+      work, and must be restart-safe.
+- [ ] **Build support tooling for the approved response targets** (ADR-0053
+      Decision 11) — enough inquiry tracking to measure an initial response
+      against staffed hours and business days, without attaching the uptime SLA
+      credit schedule to it.
 
-### Decision gates — settled in shape, unsettled in value
+### Decision gates — ALL CLOSED
 
-Neither of these is answerable by writing more documentation, and neither may be
-guessed by whoever implements the surrounding feature.
+Both gates opened by the first PR review are now answered, together with eight
+further decisions. **Each is settled as policy and unbuilt as code**; the
+implementation work each one creates is listed in the section above.
 
-- [ ] **Approve the role-template permission and default-Scope mapping.**
-      ADR-0052 Decision 10 settles the shape — six templates, additive groups,
-      three scopes, no DENY, the permission vocabulary — and deliberately leaves
-      every template's actual grants unassigned. Until the mapping is approved,
-      the authorization model is not implementable: choosing whether `MANAGER`
-      may `member.manage` or `BILLING` may `unit.consume` is a security decision,
-      not an implementation detail. The binding constraints on any proposed
-      mapping are listed in that decision.
-- [ ] **Decide the recovery-budget denominator.** ADR-0052 Decision 5 sizes the
-      internal recovery budget as `plan maximum user limit × 1` from plan slots,
-      and ADR-0053 Decision 1 records the baseline slots as 3 / 10 / 30. Whether
-      **purchased additional seats raise that denominator** is undecided. It is a
-      cost decision — it sets how much VTaVision spends absorbing its own
-      failures — so neither reading may be implemented as though settled.
+- [x] **Role-template permission and default-Scope mapping — CLOSED.** The
+      approved matrix and each template's default Scope are ADR-0052 Decision 10.
+      Each template's grant list there is exhaustive. `disclosure.none` and
+      `video.share` are granted by no template; `permission.manage` is `OWNER` /
+      `ADMIN`; `billing.manage` is `OWNER` / `BILLING`; `unit.consume` is
+      `OWNER` / `ADMIN` / `MANAGER` / `CREATOR`. `BILLING` is MFA-mandatory as a
+      consequence of holding `billing.manage`, not as a separate rule.
+- [x] **Recovery-budget denominator — CLOSED.** Purchased additional seats do
+      **not** raise it. `base-plan included-user slots × 1` → 3 / 10 / 30 per
+      organization per renewal period, invariant to active users, purchased seats,
+      purchased Units and temporary membership changes (ADR-0052 Decision 5).
+- [x] **Standard/Premium contract term and billing cadence — CLOSED.** One-month
+      auto-renewing, monthly Stripe billing, no minimum commitment. Enterprise is
+      individually agreed (ADR-0053 Decision 1A).
+- [x] **Annual-prepayment policy — CLOSED.** Not offered for Standard/Premium in
+      the initial release, and **there is no platform-wide rule granting 5% (or
+      any percentage) for annual prepayment.** Enterprise discounts are
+      individually approved contract terms.
+- [x] **Cancellation and refund baseline — CLOSED.** Standard/Premium
+      cancellation is effective at period end, no proration, unused base and
+      purchased Units not refunded, customer-choice cancellation is not a refund
+      event. **Not a blanket no-refund clause:** duplicate billing, VTaVision
+      billing errors, legally required refunds and applicable contractual
+      remedies remain owed (ADR-0053 Decision 3A).
+- [x] **Self-service plan upgrade/downgrade semantics — CLOSED.** Upgrade
+      immediate, full unprorated price difference, base Units **replaced by the
+      new ceiling minus consumed** (never stacked), purchased packages keep their
+      original period. Downgrade at next renewal, no refund, no content deletion,
+      no silent user deletion and no automatic seat purchase (ADR-0053
+      Decision 3B).
+- [x] **Permanent technical-failure settlement — CLOSED.** No technically valid
+      Deliverable delivered ⇒ reservation **RELEASED**, never `CONSUMED`, never
+      left pending; VTaVision bears the incurred cost; failure class does not
+      change the bill (ADR-0052 Decision 19).
+- [x] **Operator recovery semantics — CLOSED.** Internal operator privilege only,
+      no customer role reaches it, terminal evidence immutable, recovery creates a
+      new cycle, per-row mutation with per-row re-evaluation and audit, no global
+      per-cause revert (ADR-0052 Decision 20; privilege under ADR-0054
+      Decision 6).
+- [x] **Support staffed hours and initial-response targets — CLOSED.** Weekdays
+      10:00–18:00 JST excluding weekends, Japanese public holidays and the
+      year-end/New Year closure; targets 2 business days / 1 business day / 4
+      staffed hours / 1 business day. **Support SLOs, not SLA service credits**,
+      and Sev1 monitoring outside hours is not 24/7 staffed support (ADR-0053
+      Decision 11).
+- [x] **Reconciliation evidence-source architecture — CLOSED.** Authenticated
+      webhook primary, **mandatory polling fallback**, operator evidence
+      break-glass only, all normalized into the provider-neutral contract; an
+      unverifiable webhook is not authoritative evidence (ADR-0054 Decision 4).
+
+### Implementation deltas — runtime code disagrees with the approved contract
+
+Not documentation problems, and **not fixed by editing documentation.** Each must
+be reconciled in a runtime work package.
+
+- [ ] **The runtime pricing code assumes every plan is a 12-month contract with a
+      5% annual-prepayment discount.** `customer-plan-catalog.ts` defines
+      `CONTRACT_MONTHS = 12` and `ANNUAL_PREPAYMENT_DISCOUNT_BPS = bps(500)`, and
+      `customer-pricing.ts:annualContractRawPricing` computes an annual gross and
+      a prepayment price from them. ADR-0053 Decision 1A makes Standard and
+      Premium one-month, monthly-billed, with no prepayment discount, and makes
+      Enterprise individually agreed. **ADR-0053 is authoritative; the code is the
+      delta.** It was deliberately left unchanged by the documentation work
+      package and **must be reconciled before commercial billing is activated.**
+      No caller may treat those constants as a statement of what a Standard or
+      Premium customer agreed to.
+- [ ] **`REVIEWER` survives in code or schema** where the role vocabulary is
+      represented, and the Phase 3B near-duplicate UX still contradicts ADR-0052
+      Decision 14. Both are listed in the implementation section above.
 
 ### Live-evidence gates — cannot be closed by documentation
 
@@ -1134,6 +1250,20 @@ guessed by whoever implements the surrounding feature.
       production-readiness testing. Reaffirmed by ADR-0054 Decision 4; the
       existing entries above for `staleSubmittingAfterMs` and the 600-second TTL
       remain the detailed records.
+- [ ] **Set the polling interval and timeouts from measurement.** ADR-0054
+      Decision 4 makes polling the mandatory authoritative fallback but
+      deliberately fixes no cadence or deadline. The `WAVESPEED_POLL_*` values
+      are live-evidence values, not constants to guess.
+- [ ] **Verify the provider's webhook authentication contract against the live
+      provider.** Until verified, that webhook is **not** authoritative
+      completion evidence and polling is the normal authoritative path (ADR-0054
+      Decision 4). This is part of the Decision 2 re-verification set and is
+      called out separately because the whole webhook design depends on it.
+- [ ] **Validate Standard/Premium monthly economics against the one-month,
+      no-commitment, no-prepayment-discount contract** (ADR-0053 Decision 1A).
+      The approved term removes the contracted revenue floor the runtime pricing
+      code currently assumes, so churn exposure and per-month unit economics need
+      measurement before Commercial Launch.
 - [ ] **Counsel review before Commercial Launch** by counsel familiar with
       Japanese IT/SaaS and real-estate advertising: Terms of Service, Privacy
       Policy, Mode C consent wording, the responsibility boundary,

@@ -217,6 +217,31 @@ Explicitly deferred, and explicitly retained so none of it is lost:
 
 - multi-brand, branch-specific logos and templates
 
+**Support knowledge base and assisted triage**
+
+Not in the initial release, and not to be implemented early. The approved
+direction:
+
+- maintain a customer-facing **product manual / Knowledge Base**;
+- **classify incoming support and incident requests automatically**, triaging on
+  severity, security relevance, billing relevance and support topic;
+- let routine product and how-to questions be answered by a **support chatbot
+  grounded in the approved manual / Knowledge Base**;
+- **escalate anything requiring human judgment or privileged action** to support
+  staff.
+
+Cases that must generally escalate to a human: suspected security incidents;
+possible tenant-boundary or data exposure; billing disputes or billing mutation;
+legal and contractual requests; account or permission recovery requiring
+privileged action; Sev1 incidents; and any case where the chatbot lacks adequate
+authoritative documentation.
+
+**The chatbot must not obtain privileged tenant access merely because it is a
+support interface.** A support surface is not a support privilege — the
+privileged-access rules of ADR-0054 Decision 6 apply to it exactly as they apply
+to a human operator, and nothing about it may reach the operator-recovery
+privilege of ADR-0052 Decision 20.
+
 **Other**
 
 - restore-old-version-as-current

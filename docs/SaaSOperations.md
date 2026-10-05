@@ -35,7 +35,9 @@ Billing rules:
 - a **technically valid delivered video consumes the Unit** regardless of whether
   the customer likes, downloads or uses it (ADR-0052 Decision 4),
 - release the Unit where the generation must not consume one: moderation block,
-  and recovery-budget exhaustion,
+  recovery-budget exhaustion, and **any permanent technical failure that
+  delivered no technically valid Deliverable** (ADR-0052 Decision 19) — a
+  reservation may never remain pending indefinitely,
 - **no automatic overage charge** — customer approval is required to buy Units,
 - consumption order is base Units → oldest added Units → newest added Units,
 - a generation belongs to the period of its **reservation**, even if completion
@@ -49,13 +51,55 @@ Billing rules:
 - Stripe fees are borne by VTaVision — **no card surcharge** — and must be
   included in Safety Guard analysis.
 
+### Contract term, billing cadence and plan changes
+
+| | Standard / Premium (self-service) | Enterprise / sales-assisted |
+| --- | --- | --- |
+| Contract period | **1 month**, auto-renewing | individually agreed (a 12-month proposal is the normal default) |
+| Billing | monthly recurring via Stripe | individually agreed; invoice + bank transfer |
+| Minimum commitment | **none** | contractual |
+| Annual prepayment / discount | **not offered** | individually approved contract terms only |
+
+**There is no platform-wide annual-prepayment discount** (ADR-0053 Decision 1A).
+Note the open **implementation delta**: the runtime pricing code still assumes a
+12-month contract and a 5% prepayment discount for every plan. ADR-0053 is
+authoritative; the code must be reconciled before commercial billing is
+activated.
+
+**Cancellation (Standard/Premium):** requestable any time, effective at the end
+of the paid period, service continues until then, no prorated refund, unused base
+and purchased Units are not refunded. Customer-choice cancellation is not a
+refund event, and a technically valid delivered video is not refundable because
+the customer dislikes it. **Refunds remain owed for duplicate billing, billing
+errors attributable to VTaVision, legally required refunds and applicable
+contractual remedies** (ADR-0053 Decision 3A). Enterprise follows its own
+contract.
+
+**Upgrade:** immediate; charge the **full, unprorated** monthly price difference
+for the current period; base Units become the new plan's ceiling **minus already
+consumed** (Standard 15 with 10 used → Premium gives 30 remaining, never 45 or
+55); storage, concurrency and included-user limits rise immediately; previously
+purchased additional Units keep their original entitlement period.
+
+**Downgrade:** effective at the **next renewal**; no refund; no automatic content
+deletion. If storage then exceeds quota, keep the data and block new
+upload/generation. If membership exceeds the new included-user allowance, **do
+not delete users and do not auto-purchase seats** — the organization reduces
+users or explicitly buys seats (ADR-0053 Decision 3B). Enterprise transitions are
+sales-assisted.
+
 ### Internal service-recovery budget
 
-`recovery budget = plan maximum user limit × 1`, per organization per renewal
-period, based on plan user **slots**, shared organization-wide, and **never
-exposed to customers** (ADR-0052 Decision 5). On exhaustion: stop automatic
+`recovery budget = base-plan included-user slots × 1` — **Standard 3, Premium 10,
+Enterprise 30** — per organization per renewal period, shared organization-wide,
+and **never exposed to customers** (ADR-0052 Decision 5). **Purchased additional
+user seats do not increase it**, and it does not vary with active-user count,
+purchased Units or temporary membership changes. On exhaustion: stop automatic
 recovery, do not auto-charge another Unit, release the reserved Unit, escalate
 internally; an authorized operator may grant one manual free recovery.
+
+Recovery from a terminal technical failure is an internal operator action — see
+*Support tooling and privileged access* below.
 
 ## Service-level objectives
 
@@ -135,6 +179,19 @@ During provider degradation:
 
 Provider replacement is an operationally tested capability, not an automatic silent switch unless output and pricing compatibility are verified.
 
+### Completion evidence
+
+**Authenticated webhook for low latency, mandatory polling as the guarantee**
+(ADR-0054 Decision 4). A webhook whose authenticity cannot be verified is not
+authoritative completion evidence, and polling becomes the normal authoritative
+path; an unauthenticated internet callback is never proof that a paid generation
+completed. Polling runs even when webhooks work, because a missed or delayed
+webhook is indistinguishable from a provider that never finished. Operator
+evidence is break-glass only. All three normalize into the provider-neutral
+reconciliation contract before any durable state change, and provider "success"
+alone never consumes a Unit. Polling cadence and timeouts are live-evidence
+values.
+
 ## Storage operations
 
 Production object storage is **Google Cloud Storage**, behind the existing
@@ -191,6 +248,30 @@ tenant bypass is not an acceptable support process.**
 Support-content access, billing mutation and permission mutation remain
 **separate privileges**.
 
+### Recovery from terminal technical failure
+
+**Customers cannot unblock an internal technical failure.** Not `OWNER`, not
+`ADMIN`. It is an internal VTaVision operator action under the privileged-access
+rules above, and it is **a privilege separate from every customer role template**
+and from support-content access, billing mutation and permission mutation.
+
+- the original `BLOCKED` row and the original `INVALID_MEDIA` /
+  `INTEGRITY_MISMATCH` verdict are **immutable** — terminal evidence is never
+  mutated back into a retryable state;
+- recovery creates a **new** recovery/composition cycle;
+- audit at minimum: operator identity, organization, target Job / Deliverable /
+  row, recovery reason, the original block or verdict cause, timestamp, and the
+  resulting new recovery-cycle identifier;
+- every existing invariant still applies: no blind Provider POST retry,
+  reconciliation first for an ambiguous submission, the Safety Guard, provider
+  activation rules, bounded recovery, and the tenant boundary.
+
+**The mutation unit is the individual row.** A future tool may offer cause-based
+bulk *selection*, but it must enumerate candidate rows, re-evaluate eligibility
+per row, act transactionally / CAS-safely per row, and audit per row. **No global
+"unblock this cause and automatically revert all rows" operation** (ADR-0052
+Decision 20).
+
 Share-link revocation is reserved for the post-release share feature and has no
 initial-release surface.
 
@@ -204,8 +285,33 @@ initial-release surface.
 Support is **fundamentally online** for all plans: Standard self-service plus
 normal online support; Premium adds one initial online onboarding session;
 Enterprise adds assisted onboarding, administrator guidance and priority online
-support; Closed Beta receives hands-on online onboarding. **No 24/7 telephone
-support** unless separately approved.
+support; Closed Beta receives hands-on online onboarding.
+
+### Staffed hours and initial-response targets
+
+```text
+Weekdays 10:00–18:00 JST
+```
+
+Excluded: Saturdays, Sundays, Japanese public holidays, and the designated
+year-end / New Year closure. **Inquiries may be submitted 24 hours a day**, but
+the response clock runs in staffed hours and business days.
+
+| Plan | Initial-response target |
+| --- | --- |
+| Standard | within 2 business days |
+| Premium | within 1 business day |
+| Enterprise | within **4 staffed support hours** |
+| Closed Beta | within 1 business day |
+
+"Initial response" means acknowledgement, context review and next-action
+guidance — **not** resolution within that period.
+
+**These are support SLOs, not SLA service credits.** The Enterprise uptime credit
+schedule must never be attached to support response time. **No 24/7 staffed
+telephone support** is promised. Sev1 monitoring and incident response may run
+outside staffed hours, but **that must not be presented to customers as 24/7
+staffed support** (ADR-0053 Decision 11).
 
 Responding to an ordinary security/procurement questionnaire is **not
 chargeable**. Work materially exceeding ordinary SaaS due diligence is

@@ -2,8 +2,9 @@
 
 Status: Accepted (CTO decision, pre-Commercial-Launch)
 Scope: production cloud, object storage, AI provider policy, cost safety guard,
-scheduler and retry invariants, production security operations, privileged
-support access, and the activation gates that remain **BLOCKED**.
+scheduler and retry invariants, reconciliation evidence sources, production
+security operations, privileged support access, and the activation gates that
+remain **BLOCKED**.
 
 Supersedes, **for the initial production deployment choice only**, the
 S3/Azure-oriented production-storage statements in `docs/SystemArchitecture.md`
@@ -164,10 +165,43 @@ Permanent invariants:
   hard-coded;
 - the **Safety Guard must be able to stop unsafe or costly execution.**
 
-Production reconciliation may ultimately use authenticated webhooks, provider
-polling, operator evidence, or a controlled combination — but **evidence must
-normalize into the provider-neutral domain contract** rather than leaking a
-provider's shape into the domain.
+### Reconciliation evidence source — decision gate CLOSED
+
+The approved initial-production design is **authenticated webhook plus mandatory
+polling fallback.**
+
+**Webhook — primary, when and only when it can be trusted.** If the active
+provider offers a webhook whose authenticity can be verified, it is the primary
+low-latency notification path. It must be authenticated and verified,
+replay-safe, deduplicated, resolved to an internal tenant-scoped request, and
+normalized before any domain mutation.
+
+**If provider webhook authenticity cannot be verified, that webhook is not
+authoritative completion evidence, and polling becomes the normal authoritative
+path.** An unauthenticated internet callback is never accepted as proof that a
+paid generation completed — that is an endpoint anyone can call to assert someone
+else's spend succeeded.
+
+**Polling — mandatory fallback even when authenticated webhooks are in use.** It
+covers the missed webhook, the delayed webhook, transport failure, uncertain
+delivery, and reconciliation after a restart or operator investigation. A webhook
+is an optimization; polling is the guarantee.
+
+**Operator evidence — exceptional only.** Operator-supplied evidence is
+recovery / break-glass evidence, never the normal provider-completion path.
+
+**All three sources normalize into the provider-neutral reconciliation contract
+before any durable state transition.** Every existing invariant survives
+unchanged: no blind Provider POST retry; an ambiguous submission reconciles
+first; duplicate evidence must not cause duplicate completion; provider
+"success" alone **does not** consume a Unit; managed-output ingestion, SHA/byte
+verification, media validation and final Deliverable validation all still occur;
+and Transaction G remains the authoritative customer-delivery boundary.
+
+**Exact polling cadence and timeouts remain live-evidence values** and are not
+set here. **The provider's webhook authentication contract is itself unverified**
+until checked against the live provider, and is on the Decision 2
+re-verification list.
 
 **Nothing in this ADR activates the production scheduler.**
 
@@ -231,6 +265,20 @@ customer notification/assessment where appropriate.
 Support-content access, billing mutation and permission mutation must remain
 **separate privileges**.
 
+### Operator recovery from terminal technical failure is one of these privileges
+
+Recovering a terminally failed internal row — an internal technical `BLOCKED`
+row, or a terminal `INVALID_MEDIA` / `INTEGRITY_MISMATCH` verdict — is an
+**internal operator privilege under this decision**, not a customer capability.
+**No customer role template reaches it**, including `OWNER` and `ADMIN`.
+
+The semantics, the immutability of the original terminal evidence, the required
+audit fields and the per-row (never per-cause-global) mutation rule are ADR-0052
+Decision 20. This decision supplies the privilege it runs under: explicitly
+authorized, identified, reasoned, time-limited, audited and least-privilege, and
+**separate** from support-content access, billing mutation and permission
+mutation.
+
 ## Decision 7 — Activation gates remain BLOCKED
 
 The following remain explicitly **BLOCKED** and require **explicit CTO
@@ -269,10 +317,16 @@ Safety Guard cannot be fully implemented yet — only its inputs and its decisio
 point can be built. A guessed percentage would be worse: it would look like a
 control while encoding an unmeasured assumption.
 
+**Accepted cost.** Requiring polling even where an authenticated webhook works
+means paying for reconciliation traffic that will usually find nothing. The
+alternative is trusting a notification path whose silence is indistinguishable
+from a provider that never finished, on work that has already been paid for.
+
 **Deliberately unresolved, pending measurement.** The stale-`SUBMITTING`
 threshold, the signed-URL TTL, scheduler cadence, batch size, worker concurrency,
-and the rate-limit constants are all gated on production evidence. They are
-recorded as gates in `docs/decisions/TODO.md` rather than guessed here.
+the polling interval and timeouts, the provider's webhook authentication
+contract, and the rate-limit constants are all gated on production evidence. They
+are recorded as gates in `docs/decisions/TODO.md` rather than guessed here.
 
 **Still blocked.** Paid Provider Activation, production credentials, paid
 production calls, and production scheduler activation.

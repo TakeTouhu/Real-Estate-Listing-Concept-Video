@@ -1,8 +1,9 @@
 # ADR-0053 — Initial-release commercial contract
 
 Status: Accepted (CTO decision, pre-Commercial-Launch)
-Scope: plans, pricing, Unit accounting, storage quotas, payment channels, SLA,
-legal retention, responsibility boundary, support, launch gates.
+Scope: plans, pricing, contract term and billing cadence, Unit accounting,
+cancellation and refund, plan upgrade/downgrade, storage quotas, payment
+channels, SLA, legal retention, responsibility boundary, support, launch gates.
 
 Supersedes, at the **product-contract level only**, the placeholder commercial
 language in `docs/SaaSOperations.md` v1.0 ("credits", unspecified plan
@@ -64,17 +65,56 @@ Two semantics travel with them, and both match the implementation:
   single HQ Unit, and *may not buy more* — which is why Decision 2 lists its HQ
   package as unavailable. "No HQ package" is not "no HQ".
 
-### Open gate — the recovery-budget denominator
+### The recovery-budget denominator — decision gate CLOSED
 
-ADR-0052 Decision 5 sizes the internal service-recovery budget as `plan maximum
-user limit × 1`, from **plan slots rather than active users**. The included-user
-values above give that formula its baseline: 3, 10, 30.
+**Purchased additional user seats do not increase the internal service-recovery
+budget.** The denominator is the **base plan's** included-user slots, so the
+budget is 3 / 10 / 30 per organization per renewal period, and it does not vary
+with active users, purchased seats, purchased Units or temporary membership
+changes. The full rule, and why, is ADR-0052 Decision 5.
 
-**Whether purchased additional seats raise that denominator is not decided here.**
-Deciding it would change how much VTaVision spends absorbing its own failures,
-which is a cost decision and not a documentation one. It is recorded as an open
-gate in `docs/decisions/TODO.md`. Until it is answered, do not implement either
-reading as though it were settled.
+## Decision 1A — Contract term, billing cadence and annual prepayment
+
+### Standard and Premium (self-service)
+
+| Property | Value |
+| --- | --- |
+| Contract period | **1 month** |
+| Billing | **monthly recurring, through Stripe** |
+| Renewal | **automatic, monthly** |
+| Minimum commitment | **none** — no 12-month minimum |
+| Annual prepayment | **not offered in the initial release** |
+| Annual-prepayment discount | **none** — no standard 5% |
+
+### Enterprise and sales-assisted
+
+- contract terms are **individually agreed**;
+- the normal/default sales proposal **may** be a 12-month contract;
+- payment cadence is **individually agreed**;
+- discounts are **individually approved contractual terms**.
+
+**There is no platform-wide rule that annual prepayment automatically receives
+5%, or any other fixed percentage.** A discount is something a contract grants,
+not something the catalog promises.
+
+### Implementation delta — the runtime pricing code disagrees
+
+`packages/domain/src/pricing/customer-plan-catalog.ts` currently defines
+`CONTRACT_MONTHS = 12` and `ANNUAL_PREPAYMENT_DISCOUNT_BPS = bps(500)` (5%), and
+`customer-pricing.ts:annualContractRawPricing` computes a 12-month gross and a
+prepayment price from them.
+
+**That code is not authoritative commercial policy.** It encodes an assumption —
+every plan is a 12-month contract with a standard 5% prepayment discount — that
+this decision replaces for Standard and Premium, and reduces to an
+individually-negotiated case for Enterprise.
+
+**This ADR is the authority. The code is a delta to reconcile.** It is
+deliberately **not changed in this documentation work package**, and must be
+reconciled in a future runtime work package **before commercial billing is
+activated**. It is recorded as an open implementation delta in
+`docs/decisions/TODO.md`. Until then, no caller may treat those constants as a
+statement of what a Standard or Premium customer has agreed to.
 
 ## Decision 2 — Additional Unit packages
 
@@ -117,8 +157,89 @@ the reservation and never recomputed.
 unavailable.** The spend has already left the platform.
 
 What consumes a Unit, and what does not, is ADR-0052 Decision 4. In particular a
-moderation-blocked request consumes none, and an exhausted-recovery-budget
-failure consumes none.
+moderation-blocked request consumes none, and a permanently failed generation
+consumes none and has its reservation released (ADR-0052 Decision 19).
+
+## Decision 3A — Subscription cancellation and refund
+
+For **Standard and Premium self-service** subscriptions:
+
+- the customer may **request cancellation at any time**;
+- cancellation takes effect at the **end of the current billing period**;
+- service remains available through the paid period;
+- **no prorated subscription refund**;
+- **unused base Units are not refunded**;
+- **unused purchased additional Units are not refunded** merely because the
+  customer cancels;
+- **customer-choice cancellation is not a refund event**;
+- a **technically valid delivered video is not refundable** merely because the
+  customer dislikes it.
+
+**This is not a blanket no-refund clause.** A refund is owed, and must remain
+possible, for:
+
+- duplicate billing;
+- incorrect billing caused by VTaVision;
+- any other billing error attributable to VTaVision;
+- **any refund legally required**;
+- any separately applicable contractual remedy.
+
+Nothing here overrides mandatory law or excuses VTaVision's own billing errors.
+
+**Enterprise cancellation and refund follow the individually executed Enterprise
+contract**, not this clause.
+
+## Decision 3B — Plan upgrade and downgrade
+
+Self-service **Standard ↔ Premium** plan changes.
+
+### Upgrade — immediate
+
+- effective **immediately**;
+- charge the **full difference** between the current plan's monthly price and the
+  new plan's monthly price for the current billing period;
+- **do not prorate** that difference;
+- the next renewal uses the new plan's normal monthly price.
+
+**Base Units are replaced by the new plan's period ceiling, not stacked.**
+
+```text
+Standard base Units                 15
+already consumed this period        10
+upgrade to Premium (40 base Units)
+remaining base Units  = 40 - 10  =  30
+```
+
+Not `15 + 40`, and not 45 or 55 through double-granting. The customer moves to a
+larger ceiling for the same period; they do not receive a second allowance.
+
+An upgrade immediately raises the applicable base-Unit ceiling, storage quota,
+concurrent-Job limit, included-user limit and other approved plan entitlements.
+
+**Previously purchased additional Units remain valid through their original
+entitlement period** — an upgrade does not void them and does not extend them.
+
+### Downgrade — at renewal
+
+- effective at the **next billing renewal**;
+- **no current-period refund**, and no prorated refund;
+- **no automatic deletion** of stored content;
+- the next renewal uses the downgraded plan's limits.
+
+If storage exceeds the downgraded quota after renewal: keep existing data, block
+new uploads and generation under the existing quota rule (Decision 4), and keep
+preview, download and delete available.
+
+If membership exceeds the new plan's included-user allowance:
+
+- **do not silently delete users;**
+- **do not automatically purchase additional seats;**
+- require the organization to reduce users, or to explicitly purchase the
+  appropriate additional seats, before or at the transition as the product
+  implementation permits.
+
+**Enterprise upgrades and downgrades, and any transition to or from Enterprise,
+are sales-assisted contractual changes**, not self-service automatic ones.
 
 ## Decision 4 — Storage quotas and additional storage
 
@@ -307,8 +428,40 @@ Support is **fundamentally online** for all plans:
 | Enterprise | assisted onboarding + administrator guidance + priority online support |
 | Closed Beta | hands-on online onboarding/support for all companies |
 
-**No 24/7 telephone support** unless separately approved later. This ADR does not
-invent support hours beyond the above.
+### Staffed support hours and initial-response targets
+
+**Decision gate CLOSED.** Support is fundamentally online. Staffed hours:
+
+```text
+Weekdays 10:00–18:00 JST
+```
+
+Excluded: Saturdays, Sundays, Japanese public holidays, and the designated
+year-end / New Year closure.
+
+**Customers may submit inquiries 24 hours a day**, but the response clock runs in
+staffed support hours and business days.
+
+| Plan | Initial-response target |
+| --- | --- |
+| Standard | within **2 business days** |
+| Premium | within **1 business day** |
+| Enterprise | within **4 staffed support hours** |
+| Closed Beta | within **1 business day** |
+
+**"Initial response" means acknowledgement, context review and next-action
+guidance. It is not a promise that the issue will be resolved in that period.**
+
+**These are support targets / SLOs, not contractual uptime SLA service credits.**
+The Enterprise uptime credit schedule in Decision 6 **must not** be attached to
+support response time: they measure different things, and conflating them would
+turn a slow reply into a refund claim.
+
+**No 24/7 staffed telephone support** is promised, now or by implication.
+
+Sev1 monitoring and incident response may operate outside staffed support hours.
+**That must not be described to customers as 24/7 staffed support** — watching
+for incidents is not the same as answering inquiries.
 
 ## Decision 12 — Closed Beta and commercial-launch gates
 
@@ -355,6 +508,32 @@ profitability guard rather than a pass-through.
 A customer whose generation is slow because the provider is slow has no credit
 claim, which is honest about what VTaVision controls — and is why no generation
 completion-time SLA is offered at all initially.
+
+**Explicitly provisional.** Additional-storage pricing (¥1,500 / +50 GB) is
+approved only as a working figure and must be validated against measured
+production storage and egress cost before Commercial Launch.
+
+**Accepted cost.** A one-month Standard/Premium term with no minimum commitment
+and no prepayment discount means no contracted revenue floor and monthly churn
+exposure, in exchange for a self-service funnel nobody has to be sold into. It
+also means the runtime pricing code is wrong about those plans until a future
+work package reconciles it — recorded as an implementation delta rather than
+quietly code-changed here.
+
+**Accepted cost.** Upgrading charges the full monthly price difference without
+proration, so a customer upgrading on the 28th pays the same difference as one
+upgrading on the 2nd. The Unit ceiling they gain is also the full one. Proration
+on both sides would be fairer and considerably more machinery; this is the simple
+rule, stated plainly so it can be disclosed rather than discovered.
+
+**Accepted cost.** Downgrade-at-renewal with no refund means a customer who
+downgrades early keeps paying the higher price to the period end. The alternative
+— immediate downgrade with a credit — would let a customer consume a Premium
+allowance and then pay Standard for it.
+
+**Accepted cost.** Support targets are business-hours only, so an Enterprise
+customer reporting a non-Sev1 problem on Friday evening may wait until Monday.
+Promising faster would mean staffing VTaVision does not have.
 
 **Explicitly provisional.** Additional-storage pricing (¥1,500 / +50 GB) is
 approved only as a working figure and must be validated against measured
