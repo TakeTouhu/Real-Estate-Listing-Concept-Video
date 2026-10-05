@@ -3,27 +3,43 @@
 A commercial, multi-tenant SaaS that generates real-estate interior
 walkthrough-style videos from uploaded property photos.
 
-> **Status: Phase 4 — WaveSpeedAI scene generation (in progress).** Phases 0–3
-> are merged: the monorepo foundation; identity, organizations, RBAC, sessions,
+> **Status: Phase 5C complete.** Phases 0–5C are merged.
+>
+> Delivered: the monorepo foundation; identity, organizations, RBAC, sessions,
 > Prisma persistence and audit logging; property CRUD and a secure photo-upload
 > pipeline (short-lived signed URLs, tenant-scoped object storage, content-based
 > MIME validation, malware-scan hook with quarantine, EXIF removal, orientation
-> correction, normalization, thumbnails, perceptual hashing); and AI image
-> analysis with mandatory human review, correction, and storyboard composition.
+> correction, normalization, thumbnails, perceptual hashing); AI image analysis
+> with **source-photo** review, correction and storyboard composition; scene
+> generation admission with an immutable frozen request; the managed-output
+> integrity, media-validation and failure-settlement lifecycles; and Phase 5's
+> deliverable composition plan (5A), composition execution with a durable
+> SHA-256 receipt (5B), and deliverable validation plus the publication boundary
+> that consumes an entitlement Unit exactly once (5C).
 >
-> Phase 4 is partly delivered. A scene generation can be **admitted** — authorized,
-> capability-checked against the verified provider model, snapshotted immutably,
-> and persisted as durable `QUEUED` work — and the prompt sent to that model is
-> rendered once at admission and frozen on the row. Nothing submits to a provider
-> yet: there is no worker, nothing yet reads that queued work, and no
-> managed-storage output copy, so **the product does not yet generate a video**. See `docs/Roadmap.md`, `docs/progress.md`, and the per-phase
-> completion reports in `docs/`.
+> **The product still does not generate a video.** Every generation and
+> composition runner is dormant: nothing constructs them, there is no scheduler,
+> cron or timer, and no paid provider call has ever been made. **Paid Provider
+> Activation and production scheduler activation are BLOCKED** and require
+> explicit CTO authorization (ADR-0054).
+>
+> Also not yet built, though required for the initial release: the AI-generated
+> disclosure renders at no layer, the company logo pipeline does not exist, and
+> the groups/Scope authorization model is unimplemented. See
+> `docs/decisions/TODO.md`.
+>
+> The approved initial-release product, commercial and production contract is
+> ADR-0052, ADR-0053 and ADR-0054. See also `docs/Roadmap.md`,
+> `docs/progress.md`, and the per-phase completion reports in `docs/`.
 
 ## Design documents
 
-`CLAUDE.md` is the implementation guide. Full specifications live in `docs/`
-(product requirements, architecture, AI pipeline, WaveSpeedAI integration, data
-model, API, UX, security/compliance, SaaS operations, roadmap). Decisions are
+`CLAUDE.md` is the implementation guide. The approved initial-release contract is
+ADR-0052 (product and delivery), ADR-0053 (commercial) and ADR-0054 (production
+platform and activation gates) — read those first, because they supersede stale
+product assumptions in the older v1.0 specifications. Full specifications live in
+`docs/` (product requirements, architecture, AI pipeline, provider integration,
+data model, API, UX, security/compliance, SaaS operations, roadmap). Decisions are
 recorded in `docs/decisions/`.
 
 ### As-built documentation

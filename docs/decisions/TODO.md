@@ -173,12 +173,23 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       of an accidental production deployment but does not remove the underlying
       work below.**
 - [ ] Replace `LocalObjectStorage` (in-process, not durable or multi-instance
-      safe) with a real S3/Azure adapter behind the same `ObjectStorage` port
-      before production launch (ADR-0008). Still required — the guard blocks
-      production use, it does not provide durable storage.
+      safe) with a real adapter behind the same `ObjectStorage` port before
+      production launch (ADR-0008). Still required — the guard blocks production
+      use, it does not provide durable storage.
+      **Target settled (ADR-0054 Decision 1): a Google Cloud Storage adapter**,
+      not S3 or Azure. The port is unchanged and the domain must not depend on
+      Google Cloud SDK types. Note the carried-over work: Phase 5B solved
+      absence-versus-permission semantics for S3 (`NoSuchKey` vs `AccessDenied`,
+      and the `s3:ListBucket` prerequisite); the equivalent must be established
+      against GCS's own error model before the composition probe can be trusted
+      in production.
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
-      a vendor API) behind the `MalwareScanner` port. Still required — the guard
-      blocks production use, it does not provide real scanning.
+      an approved vendor) behind the `MalwareScanner` port. Still required — the
+      guard blocks production use, it does not provide real scanning.
+      **Decision recorded (ADR-0054 Decision 5): production malware scanning is
+      mandatory and `PassthroughMalwareScanner` is not permitted in production.**
+      Uploads stay quarantined until validation and scanning succeed, and failed
+      or unscanned prohibited input is never sent to the AI Provider.
 - [ ] Extend the production-safety guard to boot-time validation of the whole
       adapter set, so a misconfigured production deployment fails before serving
       any traffic rather than on first use (Phase 7 hardening).
@@ -194,8 +205,19 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       specifically, and the GitHub tooling has no create-ref API. Needs a
       maintainer push:
       `git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete refs/tags/phase-2-complete refs/tags/phase-3a1-complete refs/tags/phase-3a2a-complete`
-- [ ] Decide the near-duplicate UX (block vs warn) during Phase 3 analysis
-      review; Phase 2 only reports `duplicateOf`.
+- [x] **Decide the near-duplicate UX (block vs warn).** **Settled by ADR-0052
+      Decision 14: neither.** No customer-facing near-duplicate warning, no
+      generation block, no Unit consequence. Visual similarity between photos is
+      intentionally the customer's responsibility. Perceptual-hash and
+      `duplicateOf` data may remain for internal engineering/quality analysis
+      only, and no new near-duplicate UX may be added.
+- [ ] **Remove the shipped near-duplicate UX that now contradicts ADR-0052
+      Decision 14.** Implementation work, not a documentation fix. The Phase
+      3B-3a/3b analysis-review surface clusters near-duplicates and permits only
+      one member of a group to be approved, and the request carries a
+      `primaryAssetId`. That is customer-facing near-duplicate behaviour and must
+      be removed or neutralized before Commercial Launch. The Phase 3B records
+      stay as historical evidence of what shipped.
 - [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.
 - [ ] Extend the live-PostgreSQL integration suite (added in Phase 3A-2a) to the
       identity and property repositories; it currently covers the analysis
@@ -214,7 +236,14 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       than per service.
 - [ ] **Add rate limiting as one cross-cutting milestone.** `CLAUDE.md` requires
       rate-limiting login, uploads, generation and billing; none of them is
-      limited today, and Phase 3A-3 deliberately did not add it for the analysis
+      limited today. **Shape settled (ADR-0054 Decision 5):** defense in depth
+      across account / organization / IP / endpoint, covering login, password
+      reset, MFA recovery, uploads, generation, downloads and billing;
+      progressive cooldown on login failure; a rate-limited request must not
+      consume a Unit or cause a Provider POST; plan generation concurrency is a
+      **separate** control from abuse limiting. The working value *5 failures /
+      15 minutes* is a configurable starting point, **not** a commercial
+      contract, and the production constants still need measured evidence. and Phase 3A-3 deliberately did not add it for the analysis
       endpoints alone, because protecting one of four surfaces reads as
       protection without being it. Needs a shared limiter (per organization and
       per IP, with a store that survives multiple instances) applied to
@@ -721,14 +750,42 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-- [ ] Credit pricing model and platform margin (Phase 6).
-- [ ] Plan definitions: users, storage, monthly credits, concurrency,
-      retention, branding, support tiers (Phase 6 / SaaSOperations).
-- [ ] Asset/output retention windows and deletion recovery period (Phase 2/5).
-- [ ] Exact AI-generated disclosure text and placement rules beyond the default
-      `AI生成イメージ` (Phase 5).
-- [ ] Supported authentication providers (email vs Entra ID / Google) for
-      Phase 1.
+- [ ] **Unit pricing model and platform margin.** Selling prices are **settled
+      by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
+      to the nearest ¥100 but never into a loss). What remains open is the
+      **margin control**: ADR-0054 Decision 3 deliberately does **not** fix a
+      minimum gross-margin percentage, because no measured business decision has
+      set one. Until it does, the Safety Guard can be built with its inputs and
+      its decision point but not its threshold. Requires measured provider cost,
+      Google Cloud variable cost, payment-processing cost and FX buffer.
+- [x] **Plan definitions: users, storage, monthly Units, concurrency, retention,
+      branding, support tiers.** **Settled by ADR-0053** (plans, Unit packages,
+      storage quotas, payment channels, SLA, support tiers) and **ADR-0052**
+      (concurrency 1/3/5, retention lifecycle, logo on all plans). One figure is
+      explicitly provisional: additional storage at ¥1,500 / +50 GB must be
+      validated against measured production cost and egress before Commercial
+      Launch.
+- [x] **Asset/output retention windows and deletion recovery period.**
+      **Settled by ADR-0052 Decision 17:** source and normalized images while the
+      property/project exists; scene videos 30 days after final completion;
+      composition temp immediately; current final video until the customer
+      deletes it; old final versions 30 days; customer-deleted content 30-day
+      trash then physical deletion; Audit/Billing/Consent on the separate legal
+      lifecycle of ADR-0053 Decision 7 (10/10/7 years).
+- [x] **Exact AI-generated disclosure text and placement rules.** **Settled by
+      ADR-0052 Decision 8.** Text: `本コンテンツは生成AIを使用して作成しています。`
+      Mode A (default) whole video, bottom-right, white, no background box,
+      subtle/low-opacity, ≈1.25% of video height, ≈3% right/bottom margin,
+      scaling for landscape and portrait; Mode B first and last 2 seconds; Mode C
+      omitted, gated by organization enablement + `disclosure.none` + per-video
+      consent. The earlier `AI生成イメージ` label is superseded.
+- [x] **Supported authentication providers.** **Settled by ADR-0052 Decision
+      18:** the initial release is email/password with mandatory email
+      verification, TOTP MFA and recovery codes, with MFA mandatory for `OWNER`,
+      `ADMIN`, `permission.manage` and `billing.manage`. **Microsoft Entra ID SSO
+      and Google SSO are post-release and explicitly retained on the roadmap**,
+      together with organization-level SSO-required mode and possible
+      password-login disablement for SSO-enforced organizations.
 
 ## Phase 0 interim choices to revisit
 
@@ -950,3 +1007,119 @@ So the disclosure is unimplemented at every layer that could carry it: the
 encoder does not draw it, the verdict does not require it, and publication does
 not gate on it. Whoever activates publication owns closing that gap, together
 with the placement rules already open under *Business rules to confirm*.
+
+## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
+
+The product, commercial and production decisions are **settled**. Almost none of
+them is **built**. Each item below records the settled decision and what remains.
+
+### Implementation work — decision settled, nothing built
+
+- [ ] **Render the AI-generated disclosure.** Settled: ADR-0052 Decision 8 fixes
+      the text, the three modes and Mode A's geometry (bottom-right, white, no
+      box, subtle, ≈1.25% of height, ≈3% margin, scaling for both orientations).
+      Unbuilt at every layer: composition profile v1 draws no overlay, the
+      deliverable verdict does not require one, and publication does not gate on
+      one. This is a required initial-release feature, not a nicety.
+- [ ] **Build Mode C gating and consent.** Organization-level enablement,
+      `disclosure.none`, per-video consent with two affirmative checkboxes, and
+      the consent evidence record (`organizationId`, `userId`, target,
+      `disclosureMode = NONE`, `consentTextVersion`, `consentedAt`,
+      organization-level enablement state) retained 10 years.
+- [ ] **Build disclosure-mode change accounting.** Recomposition, not
+      regeneration. Three free changes per content video, then 1 Unit per further
+      block of three; the initial selection is not a change; the count increments
+      only on a successfully produced new deliverable; `A → B → A` is two.
+- [ ] **Build the company logo pipeline.** One organization-level logo,
+      OWNER/ADMIN managed, PNG/WebP with transparency, per-video ON/OFF default
+      ON, placed clear of the disclosure, scaled to output dimensions, applied by
+      recomposition. No forced VTaVision watermark.
+- [ ] **Build the authorization model.** Groups, Scope
+      (`ORGANIZATION`/`GROUP`/`OWN`), optional individual permissions, additive
+      group permissions, no DENY, the six role templates and the full permission
+      list. `video.share` is reserved and must not be exposed. At least one
+      `OWNER` must always exist and the last `OWNER` cannot be deleted.
+- [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
+      state, no restore. On user deletion: immediate access stop; 30 days of
+      admin-only inspection of that user's videos; then physical deletion of all
+      of them including old versions; other users' videos for the same property
+      survive; legally retained evidence survives. On group deletion: users
+      become ungrouped, lose only group-granted permissions, content returns to
+      organization root.
+- [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
+      videos, with the in-trash restrictions (no generate/regenerate, no
+      disclosure change, no upload, no edit; preview/download still allowed when
+      authorized) and no counter resets on restore.
+- [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
+      the correct inclusion rules: count retained source images, normalized
+      images and the current final video; exclude internal scene media,
+      composition temp, 30-day retained old versions and Audit/Billing records.
+      No automatic deletion, no automatic overage charge.
+- [ ] **Build the internal service-recovery budget.** `plan maximum user limit ×
+      1` per organization per renewal period, from plan slots not active users,
+      shared organization-wide, never exposed. On exhaustion: stop automatic
+      recovery, charge no further Unit, release the reserved Unit, escalate
+      internally, allow one operator-granted manual free recovery.
+- [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
+      blocks; base → oldest-added → newest-added consumption order; renewal-period
+      binding to the reservation; no automatic overage; customer-approved
+      purchase; no cancellation after a paid Provider submission.
+- [ ] **Build project rename, settings change and deletion**, with changed
+      settings treated as new generation conditions and existing outputs retained
+      as historical versions.
+- [ ] **Build the Google Cloud Storage adapter** behind the existing
+      `ObjectStorage` port, without the domain depending on Google Cloud SDK
+      types, and establish GCS's absence-versus-permission semantics as the S3
+      equivalent was established in Phase 5B.
+- [ ] **Remove `REVIEWER` from the role vocabulary** where it survives in code
+      or schema, and confirm nothing gates final-video delivery on an approval.
+      Source-photo review becomes `analysis.review`.
+
+### Live-evidence gates — cannot be closed by documentation
+
+- [ ] **Re-verify the AI provider before activation.** ADR-0054 Decision 2 lists
+      the full set: commercial-use rights and terms, current pricing, 720p and
+      1080p support, supported durations, the image-to-video contract,
+      concurrency and rate limits, provider retention, webhook/auth mechanism,
+      cancellation capability, actual output quality, observed failure rate,
+      observed latency, Unit economics. **Only verified routes may be enabled.**
+- [ ] **Set the minimum margin threshold for the Cost Safety Guard.** ADR-0054
+      Decision 3 deliberately fixes no percentage. Needs measured provider cost,
+      Google Cloud variable compute/storage/egress cost, payment-processing cost,
+      retry/recovery expected cost, FX buffer and composition cost.
+- [ ] **Validate the provisional additional-storage price** (¥1,500 / +50 GB)
+      against measured production storage and egress economics before Commercial
+      Launch. Approved only as a working figure.
+- [ ] **Set the production scheduler's timing values from measurement**, not
+      guesses: the stale-`SUBMITTING` threshold from observed p99 submission
+      latency, the signed source-URL TTL from measured provider fetch behaviour
+      with buffer, and cadence, batch size and worker concurrency from load and
+      production-readiness testing. Reaffirmed by ADR-0054 Decision 4; the
+      existing entries above for `staleSubmittingAfterMs` and the 600-second TTL
+      remain the detailed records.
+- [ ] **Counsel review before Commercial Launch** by counsel familiar with
+      Japanese IT/SaaS and real-estate advertising: Terms of Service, Privacy
+      Policy, Mode C consent wording, the responsibility boundary,
+      pricing/Unit/refund rules, SLA, retention and deletion, IP and
+      source-material warranties, and the subprocessor list. The purpose is to
+      validate the responsibility boundary, **not** to make VTaVision an
+      external-publication approver.
+- [ ] **Publish and maintain a subprocessor list** (Google Cloud, Stripe, the
+      active AI provider(s), email-delivery vendors, other material processors),
+      with a formal update mechanism, and version Terms/Privacy/Consent so that
+      who accepted which version and when is determinable.
+- [ ] **Begin the Enterprise contractual SLA only after production measurement**
+      and legal/commercial approval. Closed Beta carries no formal commercial
+      SLA, and no AI generation completion-time SLA is offered.
+- [ ] **Meet the Closed Beta launch gates** (ADR-0053 Decision 12), including the
+      zero-tolerance items: double Unit consumption 0, duplicate Provider
+      charging 0, cross-tenant exposure 0, Sev1 0, loss-making Jobs 0.
+
+### Activation gates — BLOCKED pending explicit CTO authorization
+
+- [ ] Paid Provider Activation
+- [ ] Production Provider credentials
+- [ ] Production AI paid calls
+- [ ] Production scheduler activation (Cloud Scheduler)
+
+Documentation approval is **not** activation authorization (ADR-0054 Decision 7).

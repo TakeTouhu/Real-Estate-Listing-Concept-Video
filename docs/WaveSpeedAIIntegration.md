@@ -1,11 +1,52 @@
 # WaveSpeedAI Integration
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Primary candidate — **NOT ACTIVATED**
+
+Authority: ADR-0054 Decision 2 and Decision 7.
+
+> **WaveSpeedAI is the primary candidate for the initial commercial release.
+> This document is not authorization to activate it.** Paid Provider Activation,
+> production provider credentials and production paid calls all remain
+> **BLOCKED** and require explicit CTO authorization in a future work package.
+>
+> Before any paid production activation, every item in the re-verification list
+> below must be checked against current reality rather than against this
+> document. Only verified production routes may be enabled.
 
 ## Purpose
 
-Define the initial production integration with WaveSpeedAI for image-to-video generation while preserving a provider-replaceable architecture.
+Define the candidate production integration with WaveSpeedAI for image-to-video
+generation while preserving a provider-replaceable architecture.
+
+**Provider and model identity never reaches a customer-facing surface.**
+Customers choose only Normal (720p) or HQ (1080p); VTaVision maps that to a
+verified route internally by quality, cost, availability and Safety Guard
+(ADR-0052 Decision 6).
+
+## Re-verification required before activation
+
+- commercial-use rights and terms
+- current pricing
+- 720p support
+- 1080p support
+- supported durations
+- the image-to-video contract
+- concurrency and rate limits
+- provider retention
+- webhook / auth mechanism
+- cancellation capability
+- actual output quality
+- observed failure rate
+- observed latency
+- Unit economics
+
+A **Cost Safety Guard** decision must precede every paid submission: no route may
+knowingly run at a loss, and if none qualifies, admission is safely rejected or
+paused rather than submitted (ADR-0054 Decision 3).
+
+Initial release prefers **one primary provider and at most one defined fallback
+candidate**. Unconstrained automatic multi-provider routing is out of scope.
 
 ## Configuration
 

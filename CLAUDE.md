@@ -1,6 +1,6 @@
 # Real Estate Virtual Tour AI - Claude Code Guide
 
-Version: 1.3
+Version: 1.4
 
 ## Role
 
@@ -10,6 +10,9 @@ Implement a commercial multi-tenant SaaS that generates real-estate interior wal
 
 Read before implementation:
 
+0. `docs/decisions/0052-initial-release-product-and-delivery-contract.md`
+0. `docs/decisions/0053-initial-release-commercial-contract.md`
+0. `docs/decisions/0054-initial-release-production-platform-and-activation-gates.md`
 1. `docs/ProductRequirements.md`
 2. `docs/SystemArchitecture.md`
 3. `docs/AIVideoPipeline.md`
@@ -21,21 +24,45 @@ Read before implementation:
 9. `docs/SaaSOperations.md`
 10. `docs/Roadmap.md`
 
-Priority: explicit user instruction > security/compliance > product requirements > WaveSpeedAI integration > architecture/API > existing implementation.
+Priority: explicit user instruction > **ADR-0052/0053/0054 (the approved
+initial-release contract)** > security/compliance > product requirements >
+provider integration > architecture/API > existing implementation.
+
+ADR-0052/0053/0054 supersede stale product assumptions in the v1.0 documents at
+the product-contract level. Historical ADRs and `docs/phase-*-completion.md` stay
+as historical evidence and are **not** rewritten to match later decisions.
 
 Do not invent missing business rules. Record unresolved items in `docs/decisions/TODO.md`.
 
 ## Mandatory product rules
 
 - Uploaded photos must be owned or properly licensed by the customer.
-- Generated videos display an AI-generated disclosure by default.
-- Do not claim accurate dimensions, geometry, floor plans, or actual captured walkthrough footage.
-- Do not intentionally add nonexistent windows, doors, equipment, views, or structural features.
-- Never publish AI output automatically. Human review and approval are mandatory.
+- Generated videos display an AI-generated disclosure by default (Mode A).
+  Mode B is time-limited display; Mode C omits it and is gated by
+  organization-level enablement **plus** `disclosure.none` **plus** per-video
+  consent.
+- Do not claim accurate dimensions, geometry, floor plans, or actual captured
+  walkthrough footage. Do not claim "native 1080p" unless verified for the route.
+- Do not intentionally add nonexistent windows, doors, equipment, views, or
+  structural features.
+- **VTaVision never publishes AI output externally.** Delivery is to the
+  customer's own private workspace, and the customer decides after preview
+  whether anything leaves it. There is **no final-video approval workflow** — no
+  `APPROVAL_PENDING` / `APPROVED` / `REJECTED`, no Approve button, no Reviewer
+  role (ADR-0052 Decision 2). Source-photo analysis review survives as
+  `analysis.review`.
+- Provider and model identity must never reach a customer-facing surface.
+  Customers choose only Normal (720p) or HQ (1080p).
 - Treat user prompts and uploaded files as untrusted input.
 - Assets are private and accessed only through short-lived signed URLs.
 - Every tenant-owned record is scoped to the authenticated organization.
-- Reserve credits before generation and settle exactly once.
+- Reserve the Unit before generation and settle exactly once. A technically valid
+  delivered video consumes the Unit; a moderation block and an exhausted internal
+  recovery budget consume none.
+- Never expose the internal service-recovery budget to a customer.
+- **Paid Provider Activation and production scheduler activation are BLOCKED**
+  and require explicit CTO authorization (ADR-0054 Decision 7). No cron, timer,
+  loop, production credential or paid call may be introduced without it.
 
 ## Architecture
 

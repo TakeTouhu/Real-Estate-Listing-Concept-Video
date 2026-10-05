@@ -1,0 +1,544 @@
+# ADR-0052 — Initial-release product and delivery contract
+
+Status: Accepted (CTO decision, pre-Commercial-Launch)
+Scope: product behaviour, delivery semantics, entitlement consumption, disclosure,
+authorization, lifecycle.
+
+Supersedes, at the **product-contract level only**:
+
+- the mandatory final-video approval workflow described in
+  `docs/ProductRequirements.md`, `docs/UXFlow.md`, `docs/AIVideoPipeline.md` and
+  `docs/SecurityCompliance.md` v1.0;
+- the product-level reading of the word *publication* used by ADR-0051 and the
+  Phase 5C records.
+
+Does **not** supersede, rewrite or invalidate: ADR-0001 … ADR-0051 as historical
+records, or any `docs/phase-*-completion.md`. Those remain accurate for the time
+they describe. Where this ADR disagrees with them, this ADR governs the product
+going forward and the historical record stays as evidence of what was decided
+then.
+
+Companion ADRs: ADR-0053 (commercial contract), ADR-0054 (production platform and
+activation gates).
+
+---
+
+## Context
+
+Phase 5C completed the technical delivery pipeline: a composed deliverable is
+proved playable, and Transaction G moves the job to `DELIVERABLE_READY`, sets the
+customer's deliverable pointer and consumes the entitlement unit in one commit.
+
+The engineering contract is therefore settled. The **product** contract around it
+was not, and several v1.0 documents still describe a product that was never
+built and is now explicitly not wanted — most importantly a mandatory
+approve/reject gate on the finished video.
+
+This ADR records the approved initial-release product contract so that
+implementation work has one authority to build against.
+
+**This ADR is documentation. It implements nothing and activates nothing.**
+
+---
+
+## Decision 1 — Initial release is current-state reproduction only
+
+The initial commercial release generates walkthrough-style video that reproduces
+the property **as it currently is**.
+
+Explicitly post-release, and not to be prepared for with initial-release UI
+branches or data-model branches:
+
+- virtual staging
+- renovation proposal
+
+**Preservation-first remains.** The system must not intentionally invent
+nonexistent rooms, windows, doors, fixtures, equipment, views or other material
+property facts.
+
+Preservation-first is a *generation* rule, not a satisfaction guarantee.
+Customer dissatisfaction with an otherwise technically valid video is **not** a
+VTaVision technical failure and carries no free-regeneration entitlement
+(Decision 4).
+
+## Decision 2 — There is no final-video approval workflow
+
+**Removed from the product.** There is no `APPROVAL_PENDING`, `APPROVED` or
+`REJECTED` customer state for a finished video, no mandatory Approve button, and
+no approval record as a precondition of delivery.
+
+The authoritative flow is:
+
+```text
+generation request
+→ generation / composition
+→ technical validation
+→ technically valid deliverable
+→ Unit consumption where applicable
+→ deliverable available in the customer's private VTaVision workspace
+→ customer previews it
+→ customer downloads / uses it, OR requests a paid regeneration
+```
+
+### What "publication" does and does not mean
+
+This is the clarification that supersedes the old product-level reading.
+
+**VTaVision does not externally publish anything.** Delivery makes a deliverable
+available **inside the customer's own private workspace**, visible only to
+authorized members of that organization. That is not external publication, not
+public availability, and not distribution.
+
+External publication happens only by **customer action after download**, or
+through a future, explicitly customer-created sharing mechanism (Decision 12).
+
+ADR-0051 and the Phase 5C records use "publication" and
+`deliverable.published` for the *internal* act of moving the deliverable pointer
+and consuming the unit. That naming is retained in code and in history — renaming
+a merged, audited transaction boundary would invalidate evidence for no product
+benefit. It means **internal availability**, and current product documentation
+must not restate it as external publication.
+
+### What survives, and must not be confused with the above
+
+**Photo-analysis review survives and is unchanged.** The implemented Phase
+3B/3D surface where a user reviews, corrects, approves or rejects *individual
+source photographs before generation* is a different feature from final-video
+approval. It is retained, and its permission is `analysis.review`
+(Decision 10). Nothing in this ADR removes it.
+
+## Decision 3 — The AI disclosure obligation is met inside the video, not by a gate
+
+The historical statement "never publish without human approval" existed partly
+to carry the AI-transparency obligation. That obligation is now met by the
+in-video disclosure of Decision 8, plus the Mode C consent record — not by an
+approval gate.
+
+`CLAUDE.md`'s rule that AI output is not published automatically is satisfied
+because VTaVision performs no external publication at all: the customer decides,
+after preview, whether anything leaves their workspace.
+
+## Decision 4 — Unit consumption and regeneration
+
+A **technically valid completed video delivered to the customer's private
+workspace consumes the applicable Unit.**
+
+Whether the customer likes it, downloads it, or ultimately uses it does not
+change that.
+
+- **Customer-requested content regeneration consumes additional Unit(s).**
+- **A free VTaVision-side retry exists only for technical/system failure** where
+  VTaVision failed to deliver a technically valid completed video.
+- A playable, technically valid video with aesthetically undesirable, strange or
+  unwanted AI expression is **not** a free-retry case.
+
+**System recovery / recomposition and customer-requested paid regeneration stay
+conceptually distinct.** The first is VTaVision repairing its own failure to
+deliver; the second is the customer buying another attempt. They must not be
+merged into one counter, one code path's semantics, or one customer explanation.
+
+## Decision 5 — Internal service-recovery budget
+
+Automatic recovery of VTaVision-side failure is bounded by an **internal-only**
+budget.
+
+```text
+recovery budget = plan maximum user limit × 1
+```
+
+Per organization, per billing renewal period. Based on **plan user slots**, not
+current active-user count. Shared organization-wide.
+
+**Never exposed to customers** — not the budget, not the remaining amount, not
+the fact that it is the reason for an outcome.
+
+While budget remains, a system-failure retry may occur without charging an
+additional customer Unit.
+
+When the budget is exhausted:
+
+- do **not** automatically charge another customer Unit;
+- stop automatic extra recovery;
+- release/return the reserved Unit as appropriate — **the failed generation must
+  not consume a Unit**;
+- escalate internally for support/operator handling;
+- an authorized operator may grant an additional manual free recovery.
+
+Customer-facing message, carrying only the customer-safe meaning:
+
+```text
+動画を正常に生成できませんでした。今回の生成ではUnitは消費されていません。
+```
+
+## Decision 6 — Normal / HQ is the only quality choice
+
+Customers choose exactly one of:
+
+- **Normal** — 720p final output
+- **HQ** — 1080p high-quality final output
+
+Customers do **not** choose a Provider or a model, and **Provider/model names must
+not appear in customer-facing UX**. VTaVision selects the route internally by
+quality, cost, availability and Safety Guard (ADR-0054).
+
+**HQ is a final-output requirement, not a native-resolution promise.** If the
+selected route produces below the final target, composition may upscale. Do not
+claim "native 1080p" unless it is verified for the selected route — the existing
+`nativeMeetsTarget` fact is persisted and audited precisely so that claim is
+checkable.
+
+## Decision 7 — Concurrent generation
+
+Organization-level concurrent **customer video Job** limits:
+
+| Plan | Concurrent Jobs |
+| --- | --- |
+| Standard | 1 |
+| Premium | 3 |
+| Enterprise | 5 |
+
+This is at the customer Job level, **not** the internal count of parallel
+Provider Scene requests. HQ gets no separate or additional concurrency pool.
+
+Requests beyond the limit **queue** rather than fail merely because capacity is
+occupied.
+
+An internal Provider Safety Guard may enforce *lower* execution concurrency than
+the plan entitlement when safety, cost or provider constraints require it
+(ADR-0054).
+
+## Decision 8 — AI disclosure modes
+
+Exact text, in all modes that display it:
+
+```text
+本コンテンツは生成AIを使用して作成しています。
+```
+
+**Mode A — default**
+
+- shown throughout the entire video
+- bottom-right
+- no background box
+- white
+- subtle / low-opacity / semi-transparent
+- visual target ≈ 1.25% of video height
+- ≈ 3% right and bottom safe margin
+- position scales correctly for landscape and portrait
+
+**Mode B**
+
+- same exact text
+- first 2 seconds and last 2 seconds only
+
+**Mode C — no in-video disclosure**
+
+Available in the official initial release, gated by all three of:
+
+1. organization OWNER/ADMIN has enabled Mode C at organization level;
+2. the user holds `disclosure.none`;
+3. explicit per-video/per-generation consent.
+
+### Mode C consent
+
+The consent must communicate:
+
+- generative AI is used;
+- the resulting video contains **no in-file AI disclosure**;
+- the customer is responsible for checking applicable law, real-estate
+  advertising rules, industry requirements and destination-platform rules before
+  external use;
+- VTaVision does not guarantee external-use compliance;
+- this responsibility allocation does **not** exempt VTaVision from its own
+  intentional misconduct or gross negligence;
+- **Mode C is not authorization to perform misleading or illegal advertising.**
+
+Two affirmative checkboxes are required:
+
+1. confirms no AI disclosure will be displayed inside the video;
+2. accepts responsibility for external disclosure / legal / industry / platform
+   compliance.
+
+CTA meaning: `同意して「動画内表示なし」を選択する`
+
+Minimum consent evidence to retain:
+
+`organizationId`, `userId`, target generation/video, `disclosureMode = NONE`,
+`consentTextVersion`, `consentedAt`, and the organization-level Mode C
+permission/enabled state.
+
+**Legal wording must pass Japanese IT/SaaS + real-estate advertising counsel
+review before Commercial Launch.** The wording above states *meaning*, not final
+legal text, and this ADR does not invent final legal text.
+
+## Decision 9 — Changing disclosure mode after generation
+
+Changing A/B/C after generation is a **recomposition**, not a new AI Provider
+content-generation call.
+
+Per content video, in blocks of three:
+
+- changes **1–3**: free of additional Unit charge;
+- the **4th** completed change consumes 1 Unit and buys changes 4–6;
+- the **7th** completed change consumes 1 Unit and buys changes 7–9;
+- and so on, in the same block-of-3 model.
+
+Counting rules:
+
+- the initially selected mode is **not** a change;
+- the count increments **only when a new completed deliverable is successfully
+  produced**;
+- technical failures, retries and cancellation before successful completion do
+  **not** increment it;
+- `A → B → A` counts as **two** changes;
+- Mode C authorization and consent apply **every time** Mode C is selected;
+- customer content regeneration is separate and consumes its normal Unit;
+- a newly generated content video gets a **fresh allowance of 3** free changes.
+
+## Decision 10 — Authorization model
+
+Initial model: **standard role templates + groups + Scope + optional individual
+permissions.**
+
+Users may belong to multiple groups. **Group permissions are additive. There is
+no DENY model in the initial release.**
+
+Scopes: `ORGANIZATION`, `GROUP`, `OWN`.
+
+Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
+
+Permissions:
+
+```text
+organization.view     organization.manage
+member.view           member.manage
+group.view            group.manage
+permission.manage
+property.view         property.create     property.edit     property.delete
+asset.upload          asset.delete
+analysis.review
+video.view            video.generate      video.regenerate  video.download
+disclosure.change     disclosure.none
+unit.consume          unit.view
+billing.view          billing.manage
+audit.view            audit.export
+```
+
+- `video.share` is **reserved for future work only** and must not be exposed as
+  an initial-release feature.
+- `unit.consume` is an independent permission.
+- Only users with `video.download` may download.
+- Mode C requires organization-level enablement **plus** `disclosure.none`
+  **plus** per-video consent.
+- All permission changes are audited.
+- **There must always be at least one OWNER, and the last OWNER cannot be
+  deleted.**
+
+## Decision 11 — User and group deletion
+
+User status is **`active` or `deleted`**. Suspension/deactivation is **not**
+introduced as a third lifecycle state. **Deleted users cannot be restored** — if
+the person needs access again, invite them as a new user.
+
+On user deletion:
+
+- login/access stops immediately;
+- for **30 days**, only administrators may inspect videos generated by that user;
+- after 30 days, **physically delete all videos generated by that user**,
+  including current and old versions;
+- videos generated by *other* users for the same property remain;
+- Audit / Billing / Consent evidence is retained per legal retention
+  (ADR-0053);
+- any unavoidable in-flight result attributable to the deleted user becomes
+  admin-only and follows the same 30-day lifecycle.
+
+On group deletion:
+
+- users remain in the organization as ungrouped/root users;
+- they lose permissions and scope granted **solely** by that group;
+- other group memberships are unaffected;
+- group-assigned properties/videos return to organization root/ungrouped scope,
+  and OWNER/ADMIN may reassign them;
+- **group deletion does not delete content.**
+
+## Decision 12 — Customer share links are post-release
+
+Customer-facing share links are **not** in the initial release and must not be
+implemented or exposed. They remain a formal post-release item.
+
+Recorded future candidate requirements: `video.share` permission; version-fixed
+links; expiry 24h / 7d / 30d with 7d default; optional password and possible
+organization-required password; view-only default; download only when the link
+creator holds `video.download`; manual revoke; invalidate old links where
+appropriate on new-version replacement; audit; a VTaVision-hosted share page that
+shows the AI disclosure **even when the underlying video is Mode C**; traffic
+Safety Guard.
+
+## Decision 13 — Company logo / branding
+
+Included in the initial release:
+
+- one organization-level logo per organization, managed by OWNER/ADMIN;
+- PNG/WebP, including transparent background;
+- per-video display ON/OFF, **default ON**;
+- placed so it does not interfere with the AI disclosure;
+- size/placement scale relative to output dimensions.
+
+Rules:
+
+- AI disclosure mode and company logo are **independent** concepts;
+- changing the organization logo does **not** silently rewrite historical
+  deliverables;
+- changing only the logo on a video uses **recomposition**, not an AI Provider
+  regeneration;
+- **no forced VTaVision watermark** in the initial release;
+- available to **all** initial-release plans.
+
+Multi-brand, branch-specific logos and templates are **not** initial release.
+
+## Decision 14 — Near-duplicate images: no customer warning, no customer block
+
+This closes the open "block vs warn" question.
+
+- **Do not** show customer-facing near-duplicate warnings.
+- **Do not** block generation because images appear visually similar.
+- This is intentionally **customer responsibility**.
+
+Existing perceptual-hash / duplicate-analysis data may remain available
+**internally** for engineering and quality analysis, but near-duplicate
+similarity must not create customer warnings, generation rejection, or Unit
+consequences in the initial release. **No new near-duplicate UX.**
+
+**Implementation delta, stated plainly rather than papered over:** the shipped
+Phase 3B analysis-review surface *does* currently cluster near-duplicates and
+permit only one member of a group to be approved. That is customer-facing
+near-duplicate behaviour, so it contradicts this decision and must be removed or
+neutralized as implementation work. It is recorded as an open task in
+`docs/decisions/TODO.md`. Documentation alone does not resolve it, and the Phase
+3B records stay as historical evidence of what shipped.
+
+## Decision 15 — Content moderation
+
+Use a **conventional generative-video safety policy**, not a bespoke VTaVision
+ideology.
+
+Generation is blocked for clear prohibited-content categories commonly prohibited
+by mainstream generative AI/video services, including:
+
+- sexually explicit / pornographic content
+- sexual exploitation of minors
+- extreme violence / gore / encouragement of violence
+- self-harm or suicide encouragement
+- hate / targeted discriminatory abuse
+- terrorism or violent-extremist support or praise
+- illegal / criminal facilitation
+- non-consensual sexual imagery / severe privacy abuse
+- malicious impersonation / abusive deepfakes
+- fraud / harmful deception
+- anything explicitly prohibited by the active Provider's applicable-use policy
+
+Rules:
+
+- moderation refusal happens **before a paid Provider call** wherever reasonably
+  possible;
+- **a moderation-blocked request must not consume a Unit**;
+- copyright, trademark, portrait rights and source-material authorization
+  **cannot** be treated as perfectly machine-detectable — the customer
+  contractually warrants they hold the necessary rights to uploaded material;
+- content moderation stays **separate** from VTaVision's preservation-first
+  real-estate integrity rules. They answer different questions and must not be
+  collapsed into one check or one error vocabulary.
+
+## Decision 16 — Video project management
+
+Initial release includes project **rename**, **settings change** and
+**deletion**.
+
+When settings change while outputs already exist:
+
+- new settings are **new generation conditions**;
+- existing completed outputs remain **historical versions** rather than being
+  silently rewritten.
+
+Project/property deletion follows the 30-day trash lifecycle (Decision 17).
+
+## Decision 17 — Retention and storage lifecycle
+
+| Asset | Retention |
+| --- | --- |
+| Source images | while property/project exists |
+| Normalized images | while property/project exists |
+| Scene videos | delete 30 days after final completion |
+| Composition temporary files | delete immediately once no longer required |
+| Current final video | until the customer deletes it |
+| Old final-video versions | 30 days |
+| Customer-deleted image/video/property | 30-day trash recovery, then physical deletion |
+| Audit / Billing / Consent | separate legal-retention lifecycle (ADR-0053) |
+
+Old final versions during their 30 days:
+
+- previewable with `video.view`; downloadable with `video.download`;
+- show version, date and disclosure mode;
+- **no "restore old version as current"** feature in the initial release;
+- downloading an old version **consumes no Unit**.
+
+A property in trash: hidden from normal lists; child content follows the trash
+state; no generate/regenerate, no disclosure change, no upload, no edit;
+preview/download remain available when authorized; restore restores property and
+children; histories and counters are **not** reset; physical delete after 30
+days.
+
+Customer storage quota **counts**: retained source images, retained normalized
+images, retained current final video.
+
+Customer storage quota **does not count**: internal Scene media, composition
+temp, 30-day retained old final versions, Audit/Billing records.
+
+Quota sizes, thresholds, blocking behaviour and additional-storage pricing are in
+ADR-0053.
+
+## Decision 18 — Authentication
+
+Initial release: **email/password, mandatory email verification,
+authenticator-app (TOTP) MFA, recovery codes.**
+
+MFA is **mandatory** for OWNER, ADMIN, any user with `permission.manage`, and any
+user with `billing.manage`. Other users may enable it optionally. An organization
+may require MFA for all members.
+
+Password reset, MFA changes, recovery-related changes and security-sensitive
+identity events must be auditable.
+
+**The post-release roadmap must explicitly retain:** Microsoft Entra ID SSO,
+Google SSO, organization-level SSO-required mode, and possible password-login
+disablement for SSO-enforced organizations. These must not be dropped from the
+roadmap.
+
+---
+
+## Consequences
+
+One product authority now exists for the initial release, and the largest stale
+assumption in the repository — a mandatory approve/reject gate on the finished
+video — is explicitly removed rather than left to be discovered mid-phase.
+
+**Accepted cost.** Removing the approval gate moves the "is this fit to publish"
+judgement entirely to the customer, after preview. That is deliberate: VTaVision
+is not the customer's advertising-law approval authority (ADR-0053), and a gate
+that implied otherwise was a liability rather than a safeguard.
+
+**Accepted cost.** Unit consumption on technically valid delivery will sometimes
+charge a customer for a video they dislike. The alternative — free regeneration
+on dissatisfaction — makes generation cost unbounded and uninsurable against
+taste. The boundary is drawn at *technical validity*, which is measurable, rather
+than at satisfaction, which is not.
+
+**Accepted cost.** The internal recovery budget is invisible to customers, so an
+exhausted budget produces a failure message that does not explain itself. Exposing
+it would turn an internal cost control into a customer-negotiable quantity.
+
+**Open implementation work** — none of this is built by this ADR. The AI
+disclosure is unrendered at every layer, the authorization model is not
+implemented, disclosure-mode change accounting does not exist, the logo pipeline
+does not exist, and the Phase 3B near-duplicate UX still contradicts Decision 14.
+Tracked in `docs/decisions/TODO.md`.

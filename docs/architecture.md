@@ -39,8 +39,8 @@ flowchart TB
   end
 
   pg[("PostgreSQL")]
-  objects[("Object storage<br/>in-process today<br/>S3/Azure planned")]
-  wavespeed["WaveSpeedAI API<br/>(adapter only; not called in Phase 2)"]
+  objects[("Object storage<br/>in-process today<br/>Google Cloud Storage planned")]
+  wavespeed["AI provider API<br/>(adapter only; never called — activation BLOCKED)"]
 
   worker["apps/worker<br/>bootstrap + self-check<br/>execution loop (not implemented)"]
 

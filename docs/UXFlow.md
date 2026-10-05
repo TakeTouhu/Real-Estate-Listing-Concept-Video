@@ -1,11 +1,27 @@
 # UX Flow
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Approved initial-release contract (pre-Commercial-Launch)
+
+Authority: ADR-0052, ADR-0053, ADR-0054. Where this document and an ADR
+disagree, the ADR governs.
+
+> **Two different "reviews" appear in this document, and they must not be
+> confused.**
+>
+> - **Source-photo analysis review** — implemented in Phases 3B/3D, retained,
+>   permission `analysis.review`. A user checks and corrects the analyzer's
+>   reading of individual photographs *before* generation. The "Implemented —"
+>   sections below are historical records of that shipped surface and are
+>   preserved as written.
+> - **Final-video approval** — **removed from the product** (ADR-0052 Decision
+>   2). No `APPROVAL_PENDING` / `APPROVED` / `REJECTED` state, no Approve button,
+>   no approval record gating delivery.
 
 ## UX goal
 
-A real-estate professional without AI or video-editing expertise must be able to create, review, and download a compliant promotional video through a guided workflow.
+A real-estate professional without AI or video-editing expertise must be able to
+create, preview, and download a promotional video through a guided workflow.
 
 ## Primary flow
 
@@ -14,16 +30,18 @@ Sign in
 → Select organization
 → Create property
 → Upload photos
-→ Review quality and privacy warnings
+→ Review quality and privacy findings
 → Confirm room classification and photo order
-→ Customize video
-→ Review estimated credits and time
+→ Customize video (incl. Normal/HQ, disclosure mode, logo ON/OFF)
+→ Review estimated Unit use and time
 → Generate
 → Track progress
-→ Review result
-→ Approve, reject, or regenerate scenes
-→ Download or create share link
+→ Preview the delivered video in the private workspace
+→ Download / use it, or request a paid regeneration
 ```
+
+Delivery places the video in the customer's **private workspace**. That is not
+external publication; VTaVision publishes nothing externally.
 
 ## Screens
 
@@ -31,9 +49,10 @@ Sign in
 
 - recent properties and projects
 - active generation jobs
-- pending approvals
-- credit balance and monthly usage
+- Unit balance and monthly usage
 - failed jobs requiring action
+
+There is no "pending approvals" queue: nothing waits on an approval.
 
 ### Property creation
 
@@ -45,12 +64,29 @@ Collect only required listing data. Full address is optional and hidden by defau
 - 3–20 photo guidance
 - upload progress
 - file-type, size, and resolution validation
-- duplicate and privacy warnings
+- privacy warnings
 - clear explanation of blocked versus warning-only files
+
+**No near-duplicate warning.** Visual similarity between photographs is
+intentionally the customer's concern: it produces no warning, no block and no
+Unit consequence (ADR-0052 Decision 14).
 
 ### AI analysis review
 
-Show each image with editable room label, confidence, quality score, privacy flags, and suggested sequence. Users can reorder, exclude, and relabel images. Low-confidence classification cannot silently proceed.
+Show each image with editable room label, confidence, quality score, privacy
+flags, and suggested sequence. Users can reorder, exclude, and relabel images.
+Low-confidence classification cannot silently proceed.
+
+This surface is **retained** under the `analysis.review` permission. It concerns
+source photographs, not the finished video.
+
+> **Known contradiction with the approved contract, recorded rather than
+> rewritten.** The shipped surface described below clusters near-duplicates and
+> allows only one member of a group to be approved. ADR-0052 Decision 14 removes
+> customer-facing near-duplicate warnings and blocks, so that behaviour must be
+> removed or neutralized as implementation work — tracked in
+> `docs/decisions/TODO.md`. The records below are left as written because they
+> are accurate history of what shipped.
 
 #### Implemented — `/properties/{propertyId}/review` (Phase 3B-3a, read-only)
 
@@ -141,17 +177,21 @@ Controls:
 
 - duration
 - aspect ratio
-- resolution
+- **quality: Normal (720p) or HQ (1080p)** — the only quality choice
 - camera motion
 - style preset
 - prompt
 - negative prompt
-- BGM
-- captions
-- logo/brand template
-- AI-generated disclosure
+- AI disclosure mode (A / B / C)
+- company logo ON/OFF (default ON)
 
-Only display options supported by the configured WaveSpeedAI model capability. Show a preview of the storyboard, not a claim of actual geometry.
+Only display options supported by the internally selected, verified route.
+**Never name a Provider or model in the UI** (ADR-0052 Decision 6). Show a
+preview of the storyboard, not a claim of actual geometry.
+
+HQ is a final-output requirement. If the selected route produces below target,
+composition may upscale, and the UI must not claim "native 1080p" unless it is
+verified for that route.
 
 #### Implemented — `/properties/{propertyId}/video-projects` (Phase 3C-6a)
 
@@ -235,34 +275,71 @@ readiness in `docs/decisions/TODO.md`).
 
 Before generation show:
 
-- expected credit use
+- expected Unit use
 - estimated completion time
-- selected provider quality/duration
+- selected quality (Normal / HQ) and duration
 - number of scenes
-- rights and AI-disclosure confirmation
-- cancellation/refund behavior
+- rights confirmation and the selected AI-disclosure mode
+- that a technically valid delivered video consumes the Unit regardless of
+  whether it is liked, downloaded or used
+- that **cancellation is unavailable once a paid Provider request has been
+  submitted**
+
+Mode C additionally requires its own consent step with two affirmative
+checkboxes (ADR-0052 Decision 8); it cannot be chosen as an ordinary dropdown
+value without that consent.
 
 ### Generation progress
 
-Show normalized states: queued, analyzing, generating scenes, composing, validating, awaiting review, completed, failed, cancelled. Never expose WaveSpeedAI prediction IDs or temporary URLs.
+Show normalized states: queued, analyzing, generating scenes, composing,
+validating, completed, failed, cancelled. **There is no "awaiting review"
+state.** Never expose provider prediction IDs, model names or temporary URLs.
 
-### Review
+### Preview
 
+The delivered video appears in the customer's private workspace.
+
+- playback of the delivered video
 - side-by-side source image and generated scene
 - timeline preview
-- quality and privacy warnings
-- regenerate individual scene
-- edit prompt or camera motion
-- approve or reject with comment
-- mandatory AI-generated disclosure preview
+- quality and privacy findings
+- the disclosure mode the video was produced with
+- request a **paid** regeneration (ADR-0052 Decision 4)
+- change disclosure mode — a recomposition, three free changes per video and
+  then 1 Unit per further block of three (ADR-0052 Decision 9)
 
-### Download and sharing
+There is **no approve or reject control** and no comment-on-approval flow.
+Preview exists for the customer's own judgement before they decide to use the
+video.
 
-Provide short-lived signed download links. Share links are optional, revocable, expiry-controlled, and disabled until human approval.
+### Download
+
+Short-lived signed download links, restricted to users holding
+`video.download`.
+
+Old final versions stay available for 30 days: previewable with `video.view`,
+downloadable with `video.download`, labelled with version, date and disclosure
+mode. There is **no "restore old version as current"** feature, and downloading
+an old version **consumes no Unit**.
+
+**Customer-facing share links are not in the initial release** (ADR-0052
+Decision 12). `video.share` is reserved for future work and must not be exposed.
 
 ## Error recovery
 
-Every failure screen includes a user-understandable reason, whether credits were charged/released, retry eligibility, and a support reference ID. Never display raw provider errors.
+Every failure screen includes a user-understandable reason, whether the Unit was
+consumed or released, retry eligibility, and a support reference ID. Never
+display raw provider errors.
+
+Where VTaVision failed to deliver a technically valid video and automatic
+recovery cannot continue, the customer sees only the customer-safe meaning:
+
+```text
+動画を正常に生成できませんでした。今回の生成ではUnitは消費されていません。
+```
+
+The internal recovery budget, its remaining amount, and the fact that it is the
+reason for the outcome are **never** shown to customers (ADR-0052 Decision 5).
 
 ## Accessibility and localization
 
@@ -274,4 +351,6 @@ Every failure screen includes a user-understandable reason, whether credits were
 
 ## Mobile behavior
 
-Upload, status monitoring, review, and approval must work on mobile. Advanced scene editing may use a simplified mobile layout.
+Upload, status monitoring, source-photo analysis review, and delivered-video
+preview must work on mobile. Advanced scene editing may use a simplified mobile
+layout.

@@ -1,14 +1,27 @@
 # Data Model
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Approved initial-release contract (pre-Commercial-Launch)
+
+Authority: ADR-0052, ADR-0053. Where this document and an ADR disagree, the ADR
+governs.
+
+> **This is a forward-looking design sketch, not the implemented schema.** The
+> implemented schema is `packages/database/prisma/schema.prisma`, documented in
+> `docs/er-diagram.md` and `docs/migration-notes.md`, and currently stands at
+> migration 16. Entity shapes below that have not been built are illustrative;
+> where the implemented schema already covers a concept it is authoritative and
+> its names differ (for example `GenerationJob`, `GenerationReservation`,
+> `GenerationDeliverableVersion`, `GenerationDeliverableValidation`).
 
 ## Core principles
 
 - PostgreSQL is the system of record.
 - Every tenant-owned record includes `organization_id`.
 - Public resource IDs are separate from provider job IDs and storage keys.
-- Credit reservation and settlement are transactional and idempotent.
+- Unit reservation and settlement are transactional and idempotent, and settle
+  exactly once. "Credits" below refers to the same entitlement concept now called
+  **Units**.
 - Sensitive provider payloads are not stored raw unless strictly necessary and encrypted.
 
 ## Main entities
@@ -25,7 +38,21 @@ Status: Draft
 
 `id`, `organization_id`, `user_id`, `role`, `created_at`
 
-Roles: `OWNER`, `ADMIN`, `CREATOR`, `REVIEWER`.
+Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
+
+**`REVIEWER` is removed.** It existed to approve finished videos, and that
+workflow no longer exists (ADR-0052 Decision 2). Reviewing *source photographs*
+survives as the `analysis.review` permission.
+
+Membership alone is not the authorization model: the initial release adds groups,
+Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual permissions, with
+**additive** group permissions and **no DENY**. The permission list is ADR-0052
+Decision 10, and it needs durable representation — group membership, scope, and
+per-user grants — that does not exist yet.
+
+User status is **`active` or `deleted`** only; there is deliberately no
+suspension/deactivation state, and deleted users cannot be restored (ADR-0052
+Decision 11).
 
 ### Property
 
@@ -63,13 +90,39 @@ Provider prediction IDs are internal only.
 
 ### VideoOutput
 
-`id`, `organization_id`, `video_project_id`, `generation_job_id`, `version`, `storage_key`, `mime_type`, `size_bytes`, `duration_seconds`, `width`, `height`, `status`, `approved_by`, `approved_at`, `rejection_reason`, timestamps
+`id`, `organization_id`, `video_project_id`, `generation_job_id`, `version`,
+`storage_key`, `mime_type`, `size_bytes`, `duration_seconds`, `width`, `height`,
+`status`, `disclosure_mode`, `logo_enabled`, `disclosure_change_count`,
+timestamps
+
+**`approved_by`, `approved_at` and `rejection_reason` are removed**: there is no
+final-video approval (ADR-0052 Decision 2). Nothing waits on an approval, and no
+approval record gates delivery.
+
+`disclosure_mode` records which of A / B / C the file was produced with — needed
+because old versions must display their own mode for 30 days.
+`disclosure_change_count` carries the block-of-three accounting: it increments
+only when a *new completed deliverable* is successfully produced, not on failure,
+retry or cancellation (ADR-0052 Decision 9).
+
+The implemented equivalent today is `GenerationDeliverableVersion` plus
+`GenerationDeliverableComposition` (its receipt) and
+`GenerationDeliverableValidation` (its verdict); publication is the job's
+`currentDeliverableVersionId` pointer rather than a status on the output row.
 
 ### CreditLedger
 
 `id`, `organization_id`, `generation_job_id`, `type`, `amount`, `balance_after`, `idempotency_key`, `metadata_json`, `created_at`
 
-Types: `PURCHASE`, `RESERVATION`, `SETTLEMENT`, `RELEASE`, `REFUND`, `ADJUSTMENT`.
+Types: `PURCHASE`, `RESERVATION`, `SETTLEMENT`, `RELEASE`, `REFUND`,
+`ADJUSTMENT`.
+
+The ledger must additionally support, per ADR-0053: **added Unit packages as
+blocks** with the base → oldest-added → newest-added consumption order; the
+**renewal-period binding** (a generation belongs to the period of its
+reservation); the fact that added packages **do not carry over**; and the
+**internal service-recovery budget**, which is organization-wide, derived from
+plan user slots, and must never be rendered to a customer.
 
 ### Subscription
 

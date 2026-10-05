@@ -1,7 +1,10 @@
 # System Architecture
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Approved initial-release contract (pre-Commercial-Launch)
+
+Authority: ADR-0054 for the production platform. Historical ADRs keep their
+original platform reasoning as history.
 
 ## Architecture policy
 
@@ -9,7 +12,12 @@ Start as a modular monolith with independently scalable asynchronous video-gener
 
 - Web/API: TypeScript + Next.js
 - Database: PostgreSQL + Prisma
-- Object storage: S3-compatible or Azure Blob Storage
+- Object storage: **Google Cloud Storage** in production (ADR-0054 Decision 1),
+  behind the provider-neutral `ObjectStorage` port. The port is the architecture;
+  the cloud is a deployment choice. **The domain must not depend on Google Cloud
+  SDK types.** The earlier "S3-compatible or Azure Blob Storage" statement is
+  superseded for the initial production deployment; ADR-0008's port decision is
+  unchanged and is what makes the substitution cheap.
 - Queue: **none — superseded 2026-08-18 by ADR-0024.** The `scene_generations`
   row is the durable queue: work is discovered by `state = 'QUEUED'` over the
   existing index, not delivered by a transport. Redis/BullMQ, SQS and Azure
@@ -17,9 +25,19 @@ Start as a modular monolith with independently scalable asynchronous video-gener
   decision that must supersede that ADR, not a default to fall back on
 - Worker: containerized process
 - Video composition: FFmpeg
-- Authentication: email and optional Entra ID / Google
-- Billing: Stripe
-- Observability: OpenTelemetry
+- Authentication: email/password with mandatory verification and TOTP MFA in the
+  initial release. **Entra ID and Google SSO are post-release**, and explicitly
+  retained on the roadmap (ADR-0052 Decision 18).
+- Billing: Stripe for web self-service; invoice/bank transfer for sales-assisted
+  contracts. **Stripe is a payment processor, not the pricing authority**
+  (ADR-0053 Decision 5).
+- Observability: OpenTelemetry, surfaced through Cloud Logging / Cloud Monitoring
+  / Google Cloud Observability in production
+- Production compute: Cloud Run for web/API, Cloud Run Jobs or equivalent worker
+  execution for asynchronous and FFmpeg workloads; Cloud SQL for PostgreSQL;
+  Secret Manager; Artifact Registry; Google Cloud IAM
+- Scheduling: **Cloud Scheduler only after explicit CTO activation approval** —
+  activation remains BLOCKED (ADR-0054 Decision 7)
 
 ## Logical architecture
 
