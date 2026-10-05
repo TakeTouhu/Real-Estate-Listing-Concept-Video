@@ -35,6 +35,14 @@ grant matrix and each template's default Scope**. `BILLING` pays for capacity bu
 cannot generate video or consume Units; `ADMIN` manages people but not billing;
 `MANAGER` defaults to `GROUP` scope and manages work rather than people.
 
+**`permission.manage` is authority within a grant ceiling, not unlimited
+delegation.** `OWNER` may assign every role; **`ADMIN` may assign only
+`MANAGER`, `CREATOR` and `VIEWER`**; the other templates assign no roles.
+Granting `permission.manage` or `billing.manage`, assigning the `OWNER`, `ADMIN`
+or `BILLING` role, and anything touching the last `OWNER` are **`OWNER`-only**.
+No role may escalate itself past its ceiling by any route — direct grant, group
+membership, group permission or Scope.
+
 There is **no Reviewer role** in the initial release. The former Reviewer existed
 to approve finished videos, and that workflow is removed. Reviewing *source
 photographs* survives as the `analysis.review` permission.
@@ -74,7 +82,12 @@ customer-created sharing mechanism — which is **not** in the initial release.
 
 - Duration: limited by the verified capability of the internally selected route
 - Aspect ratio: 16:9, 9:16, 1:1
-- Quality: **Normal (720p)** or **HQ (1080p)** — the only quality choice
+- Quality: **Normal (720p)** or **HQ (1080p)** — the only quality choice.
+  **Additional Units are quality-locked**: a Normal add-on cannot fund HQ and an
+  HQ add-on cannot fund Normal, with no conversion or substitution. HQ may draw
+  on an included Base Unit only while the plan's HQ ceiling (Standard 1,
+  Premium 5, Enterprise 10, *inside* the included pool) remains, and Standard
+  cannot buy HQ add-ons (ADR-0053 Decisions 2 and 3)
 - Camera motion, style preset, prompt, negative prompt
 - AI disclosure mode: A / B / C
 - Company logo ON/OFF (default ON)

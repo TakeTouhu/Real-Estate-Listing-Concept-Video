@@ -284,6 +284,17 @@ Before generation show:
   whether it is liked, downloaded or used
 - that **cancellation is unavailable once a paid Provider request has been
   submitted**
+- **which entitlement will fund it** — an eligible Base Unit, or a Normal or HQ
+  add-on block
+
+**Add-on Units are quality-locked** (ADR-0053 Decision 2), so this must be
+legible *before* purchase and *before* generation rather than discovered at
+funding time. An HQ request cannot be funded by Normal add-on Units, and a Normal
+request cannot be funded by HQ add-on Units. Where no eligible entitlement
+exists, say so plainly and say what would fix it — **never** imply an automatic
+conversion, exchange, refund or package substitution, because none exists. A
+Standard organization that has used its single included HQ entitlement has no
+further HQ route that period, and must be told that at the point it chooses HQ.
 
 Mode C additionally requires its own consent step with two affirmative
 checkboxes (ADR-0052 Decision 8); it cannot be chosen as an ordinary dropdown

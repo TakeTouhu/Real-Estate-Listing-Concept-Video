@@ -1100,11 +1100,21 @@ them is **built**. Each item below records the settled decision and what remains
       recovery, charge no further Unit, release the reserved Unit, escalate
       internally, allow one operator-granted manual free recovery.
 - [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
-      blocks; base → oldest-added → newest-added consumption order; renewal-period
-      binding to the reservation; no automatic overage; customer-approved
-      purchase; no cancellation after a paid Provider submission. **Blocked on
-      the quality-eligibility gate above:** the ledger cannot choose which block
-      an HQ request draws from without that decision.
+      blocks; the eligibility-first consumption order (see the two items below);
+      renewal-period binding to the reservation; no automatic overage;
+      customer-approved
+      purchase; no cancellation after a paid Provider submission.
+- [ ] **Build a quality-tagged additional-Unit ledger.** ADR-0053 Decision 2.
+      Each add-on block carries the quality it was bought at, and the ledger must
+      be able to **refuse** an ineligible block rather than treat added Units as
+      one pool. No conversion, exchange, refund or substitution path may exist.
+- [ ] **Build eligibility-first reservation and consumption.** ADR-0053
+      Decision 3: eligible Base Unit → oldest eligible add-on → newest eligible
+      add-on, FIFO *within* the eligible quality class, with the included HQ
+      ceiling (1 / 5 / 10) enforced as a counter **inside** the Base pool. An HQ
+      request with no eligible entitlement must fail cleanly and legibly —
+      reserving nothing, consuming nothing, and never falling back to a Normal
+      block.
 - [ ] **Build project rename, settings change and deletion**, with changed
       settings treated as new generation conditions and existing outputs retained
       as historical versions.
@@ -1121,9 +1131,21 @@ them is **built**. Each item below records the settled decision and what remains
       reproducible from it. `disclosure.none` and `video.share` must be
       unreachable by role assignment alone, and MFA enforcement must stay
       capability-based so `BILLING` is covered through `billing.manage`.
-      **Partially blocked:** the grant-authority / self-escalation gate above
-      must be answered before the billing separation can be enforced rather than
-      merely defaulted.
+- [ ] **Enforce the role grant ceilings and protected authority.** ADR-0052
+      Decision 10. Every authorization mutation must answer "may *this actor*
+      grant *this*?", not merely "does the actor hold `permission.manage`?":
+      `OWNER` assigns any role, `ADMIN` only `MANAGER`/`CREATOR`/`VIEWER`, and
+      `permission.manage` / `billing.manage` / the `OWNER`,`ADMIN`,`BILLING` role
+      assignments / ownership-equivalent changes / anything touching the last
+      `OWNER` are `OWNER`-only.
+- [ ] **Prevent self-escalation across every grant path.** Direct role change,
+      individual grant, group membership, group permission and Scope
+      manipulation must each be ceiling-checked — the additive group model is the
+      obvious loophole and must not be one. A refused escalation attempt is an
+      audited event, not a silent no-op.
+- [ ] **Audit every role, permission, Scope and group authorization change**,
+      recording the acting user, so a ceiling violation is both preventable and
+      detectable after the fact.
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
       Decision 19. A failed initial generation, paid regeneration or
       disclosure/logo recomposition must terminally settle and **RELEASE** the
@@ -1158,35 +1180,60 @@ them is **built**. Each item below records the settled decision and what remains
       against staffed hours and business days, without attaching the uptime SLA
       credit schedule to it.
 
-### Decision gates — OPEN, found by exact-head review of the closed gates
+### Decision gates — OPEN
 
-Both gates from the first review are closed, but closing them exposed two more.
-**Neither may be guessed by whoever implements the surrounding feature.**
+One gate, surfaced while synchronizing the approved grant-ceiling model.
+**It must not be guessed.**
 
-- [ ] **Decide grant authority and whether privilege self-escalation is
-      prohibited.** The approved matrix gives `ADMIN` `permission.manage` and
-      leaves individual grants possible, while stating that `ADMIN` does not
-      manage billing. Nothing says **who may grant `billing.manage`**, or whether
-      a holder of `permission.manage` may grant it **to themselves**. As written,
-      an `ADMIN` can self-grant it and the stated billing separation does not
-      hold. ADR-0052 Decision 10 now records the three separations as **defaults,
-      not enforced invariants**, precisely so this is not mistaken for settled.
-      It is an access-control policy decision, not an implementation detail.
-- [ ] **Decide quality eligibility inside the Unit consumption order.** `base →
-      oldest added → newest added` does not say how the separately priced Normal
-      (×1.20) and HQ (×1.50) packages interact with it. A Premium customer with an
-      older Normal block and a newer HQ block requesting HQ either spends the
-      cheaper block or breaks oldest-first; treating added Units as
-      interchangeable would also let a **Standard** customer get HQ output from a
-      Normal package, contradicting ADR-0053 Decision 2. Needs both the
-      eligibility rule and the ordering **within** eligible blocks. Revenue moves
-      on the answer. Recorded in ADR-0053 Decision 3.
+- [ ] **Decide who may grant `disclosure.none`.** The approved `OWNER`-only
+      protected-authority list (ADR-0052 Decision 10) does **not** include
+      `disclosure.none`, so on its face an `ADMIN` may grant it within its
+      ceiling — including **to itself**. Because Decision 8 already permits
+      `OWNER`/`ADMIN` to enable Mode C at organization level, **a single `ADMIN`
+      could then hold all three Mode C gates** and produce an undisclosed
+      AI-generated video alone. Whether granting `disclosure.none` should be
+      `OWNER`-protected like `billing.manage`, and whether a `permission.manage`
+      holder may self-grant it, is an AI-transparency and legal question rather
+      than an implementation detail. **The existing Mode C rules are unchanged
+      and still govern** — no template holds it by default, organization-level
+      enablement is required, an explicit grant is required, per-video consent is
+      required. Only the grant authority is open; do not implement either reading
+      as settled.
 
 ### Decision gates — CLOSED
 
-Both gates opened by the first PR review are now answered, together with eight
-further decisions. **Each is settled as policy and unbuilt as code**; the
-implementation work each one creates is listed in the section above.
+Twelve decisions: the two gates from the first PR review, eight recorded with
+them, and the two raised by the exact-head review of those closures. **Each is
+settled as policy and unbuilt as code**; the implementation work each one creates
+is listed in the section above.
+
+- [x] **Grant authority and privilege self-escalation — CLOSED.**
+      `permission.manage` is authority **within a grant ceiling**, not unlimited
+      delegation. `OWNER` may assign every role; **`ADMIN` may assign only
+      `MANAGER`, `CREATOR`, `VIEWER`** and may not assign or promote to `OWNER`,
+      `ADMIN` or `BILLING`; `BILLING`/`MANAGER`/`CREATOR`/`VIEWER` have no
+      role-assignment authority by default. **`OWNER`-only protected authority:**
+      granting/revoking `permission.manage` and `billing.manage`,
+      assigning/removing `OWNER`/`ADMIN`/`BILLING`, ownership-equivalent changes,
+      and any operation affecting the last `OWNER`. **No self-escalation past the
+      ceiling by any route** — direct role change, individual grant, group
+      membership, group permission or Scope manipulation. `ADMIN` specifically
+      cannot self-grant `billing.manage`, cannot re-grant `permission.manage`
+      across the boundary, and cannot promote itself to `OWNER` or into
+      `BILLING`. MFA rules unchanged and still capability-based, so `BILLING`
+      stays mandatory-MFA. ADR-0052 Decision 10.
+- [x] **Normal/HQ quality eligibility in the consumption order — CLOSED.**
+      Add-on Units are **quality-locked**: a Normal add-on is Normal-only, an HQ
+      add-on is HQ-only, and **nothing creates fungibility** — not price, not
+      expiry pressure, not customer preference, and there is no conversion,
+      exchange, refund or substitution. The order is **eligibility-first**:
+      eligible Base Unit → oldest eligible add-on → newest eligible add-on, with
+      FIFO applying **within** the eligible quality class, so skipping an
+      ineligible block is not a FIFO violation. HQ may draw a Base Unit only
+      while the plan's included HQ ceiling (**1 / 5 / 10**, *inside* the Base
+      pool) remains. Standard cannot buy HQ add-ons, so a Standard organization
+      that has spent its one included HQ entitlement has **no further HQ route**
+      that period. ADR-0053 Decisions 2 and 3.
 
 - [x] **Role-template permission and default-Scope mapping — CLOSED.** The
       approved matrix and each template's default Scope are ADR-0052 Decision 10.

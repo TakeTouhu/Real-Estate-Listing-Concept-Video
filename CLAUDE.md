@@ -56,6 +56,19 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - Treat user prompts and uploaded files as untrusted input.
 - Assets are private and accessed only through short-lived signed URLs.
 - Every tenant-owned record is scoped to the authenticated organization.
+- **`permission.manage` is authority within a grant ceiling, never unlimited
+  delegation** (ADR-0052 Decision 10). `OWNER` assigns any role; `ADMIN` assigns
+  only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage` or
+  `billing.manage`, assigning `OWNER` / `ADMIN` / `BILLING`, and anything
+  touching the last `OWNER` are `OWNER`-only. **No role may escalate itself past
+  its ceiling by any route** — direct grant, group membership, group permission
+  or Scope. Check the ceiling on every grant path, not just role change.
+- **Additional Units are quality-locked** (ADR-0053 Decisions 2–3). A Normal
+  add-on cannot fund HQ; an HQ add-on cannot fund Normal; there is no conversion.
+  Consumption is **eligibility-first** — eligible Base Unit, then oldest to
+  newest *within the eligible quality class*; skipping an ineligible block is not
+  a FIFO violation. HQ draws a Base Unit only while the plan's included HQ
+  ceiling remains.
 - Reserve the Unit before generation and settle exactly once. A technically valid
   delivered video consumes the Unit; a moderation block and an exhausted internal
   recovery budget consume none.

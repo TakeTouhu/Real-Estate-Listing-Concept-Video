@@ -411,45 +411,97 @@ Derived facts, stated so they cannot be re-derived incorrectly:
 - **`video.share` is granted by no standard template**, because it is reserved
   for post-release (Decision 12).
 
-Three separations the matrix draws **by default**:
+Three separations the matrix enforces:
 
 - **`BILLING` does not generate video or consume Units** merely because it can
   manage billing. Paying for capacity and spending it are different acts.
-- **`ADMIN` does not manage billing.** An administrator who can add members and
+- **`ADMIN` does not manage billing**, and — under the grant ceiling below —
+  cannot acquire that power either. An administrator who can add members and
   change permissions does not thereby change what the organization is charged.
 - **`MANAGER` does not manage members, groups or permissions**, and is scoped
   `GROUP` rather than `ORGANIZATION` — it manages *work*, not *people*.
 
-**These are default separations, not yet enforced invariants** — and the
-difference matters. `ADMIN` holds `permission.manage` by default, individual
-grants remain possible, and **this ADR defines no rule about who may grant
-`billing.manage` or whether a holder of `permission.manage` may grant it to
-themselves.** As written, an `ADMIN` could grant itself `billing.manage` and the
-second separation above would not hold in practice.
+### Grant ceilings and protected authority
 
-**That is an open decision, recorded rather than guessed** (see the open gate
-below). It is a security rule — who may escalate whose privileges — and inventing
-it here would encode an unapproved access-control policy as though it were
-approved.
+**Decision gate CLOSED.** `permission.manage` is **not** unlimited authority to
+grant any permission or role. It is authority **within an approved ceiling.**
 
-### Open gate — grant authority and privilege self-escalation
+Role-assignment authority:
 
-**Not decided.** Two linked questions the matrix alone does not answer:
+| Holder | May assign / manage | May **not** assign or promote to |
+| --- | --- | --- |
+| `OWNER` | `OWNER`, `ADMIN`, `BILLING`, `MANAGER`, `CREATOR`, `VIEWER` | — (subject to the last-`OWNER` invariant) |
+| `ADMIN` | `MANAGER`, `CREATOR`, `VIEWER` | **`OWNER`, `ADMIN`, `BILLING`** |
+| `BILLING`, `MANAGER`, `CREATOR`, `VIEWER` | nothing | everything — no role-assignment authority by default |
 
-- **who may grant `billing.manage`** (and, more generally, which permissions a
-  holder of `permission.manage` may grant);
-- **whether privilege self-escalation is prohibited**, i.e. whether a user may
-  grant themselves, or their own group, a permission their template does not
-  carry.
+**Protected authority — `OWNER`-only:**
 
-Until this is approved, the three separations above are **defaults that the
-authorization model must not be claimed to enforce**, and an implementation must
-not pick an answer: refusing self-escalation and permitting it are both
-security-relevant commercial choices. Tracked in `docs/decisions/TODO.md`.
+- grant or revoke `permission.manage`;
+- grant or revoke `billing.manage`;
+- assign or remove the `OWNER` role;
+- assign or remove the `ADMIN` role;
+- assign or remove the `BILLING` role;
+- organization-ownership-equivalent changes;
+- **any operation affecting the last `OWNER`.**
+
+So `ADMIN`'s `permission.manage` means **"manage authorization within `ADMIN`'s
+approved grant ceiling"** — the ordinary operational authorization its teams need
+day to day, under the approved role and Scope model. It does **not** mean "grant
+any permission or role in the organization", and **this ADR must not be read as
+giving `ADMIN` unrestricted permission delegation.**
+
+### No self-escalation past the ceiling
+
+**`ADMIN` and every lower role must not be able to elevate themselves beyond
+their grant ceiling.** None of these may be used as a route to a protected
+authority the actor could not grant directly:
+
+- a direct role change;
+- an individual permission grant;
+- group membership;
+- a group permission;
+- Scope manipulation.
+
+Concretely: **`ADMIN` cannot self-grant `billing.manage`**; cannot self-grant or
+re-grant `permission.manage` as a way across the protected boundary; cannot
+promote itself to `OWNER`; and cannot promote itself into `BILLING` as an
+escalation path. The additive group model is not a loophole — a permission that
+cannot be granted directly cannot be acquired by joining or editing a group
+either.
+
+`OWNER` needs no self-grant path: it is already the highest customer-side
+authority, and the `OWNER` template carries both `permission.manage` and
+`billing.manage`.
+
+**Every role, permission, Scope and group authorization change remains audited**,
+including a refused escalation attempt.
 
 Unchanged global rules: group permissions are additive, there is no DENY model,
-individual grants remain possible, the last `OWNER` cannot be deleted, and every
-permission change is audited.
+individual grants remain possible **within the granting actor's ceiling**, the
+last `OWNER` cannot be deleted, and every permission change is audited.
+
+### Open gate — who may grant `disclosure.none`
+
+**Not decided, and deliberately not guessed.** The protected-authority list above
+does not include `disclosure.none`, so on its face an `ADMIN` could grant that
+permission within its ceiling — including to itself.
+
+That matters because Mode C's three gates are organization-level enablement
+(which Decision 8 already permits `OWNER`/**`ADMIN`** to perform), the
+`disclosure.none` permission, and per-video consent. If `disclosure.none` is not
+protected, **a single `ADMIN` can hold all three** and produce an undisclosed
+AI-generated video alone. Whether that is acceptable is an AI-transparency and
+legal question, not an implementation detail.
+
+**The existing Mode C rules are unchanged and still govern:** no standard
+template receives `disclosure.none` by default; organization-level Mode C
+enablement is required; an explicit `disclosure.none` grant is required; and
+per-video consent is required.
+
+What is **open** is only this: whether granting `disclosure.none` is
+`OWNER`-protected like `billing.manage`, and whether a holder of
+`permission.manage` may grant it to themselves. Until that is approved, do not
+implement either reading as settled. Tracked in `docs/decisions/TODO.md`.
 
 **MFA remains capability-based, not template-based** (`docs/SecurityCompliance.md`):
 mandatory for `OWNER`, `ADMIN`, and any holder of `permission.manage` or
@@ -778,6 +830,15 @@ provider spend from a failure path.
 recovery after a configuration defect slower and more code. Per-row re-evaluation
 is the only version that cannot silently act on a row whose eligibility changed
 since the filter ran.
+
+**Accepted cost.** The grant ceiling makes `OWNER` a bottleneck: adding an
+administrator, adding a billing user, or handing out `billing.manage` all require
+an `OWNER`, and an organization whose only `OWNER` is unavailable cannot do those
+things at all. That is the intended shape — the alternative is an `ADMIN` who can
+manufacture its own billing authority, which makes the separation decorative. It
+does mean the authorization model must be implemented as a ceiling check on every
+grant path, including group membership and Scope, rather than as a single
+`permission.manage` boolean.
 
 **Open implementation work** — none of this is built by this ADR. The AI
 disclosure is unrendered at every layer, the authorization model is not

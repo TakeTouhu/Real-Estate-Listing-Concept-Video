@@ -29,10 +29,33 @@ Protect customer property images, generated videos, billing data, credentials, a
   There is **no Reviewer role** — see the AI-transparency section.
 - **The approved per-template grant matrix and each template's default Scope are
   ADR-0052 Decision 10**, and each template's grant list there is exhaustive.
-  Three separations it exists to enforce: `BILLING` cannot generate video or
-  consume Units; `ADMIN` cannot manage billing; `MANAGER` manages work, not
-  people, and defaults to `GROUP` scope. **`disclosure.none` and `video.share`
-  are granted by no template**, so neither is reachable by assigning a role.
+  Three separations it enforces: `BILLING` cannot generate video or consume
+  Units; `ADMIN` cannot manage billing; `MANAGER` manages work, not people, and
+  defaults to `GROUP` scope. **`disclosure.none` and `video.share` are granted by
+  no template**, so neither is reachable by assigning a role.
+- **`permission.manage` is authority within a grant ceiling, not unlimited
+  delegation** (ADR-0052 Decision 10). `OWNER` may assign every role; **`ADMIN`
+  may assign only `MANAGER`, `CREATOR` and `VIEWER`**; `BILLING`, `MANAGER`,
+  `CREATOR` and `VIEWER` have no role-assignment authority by default.
+- **`OWNER`-only protected authority:** granting or revoking `permission.manage`
+  or `billing.manage`; assigning or removing the `OWNER`, `ADMIN` or `BILLING`
+  role; ownership-equivalent changes; and any operation affecting the last
+  `OWNER`. Do not implement `ADMIN` as having unrestricted permission delegation.
+- **No self-escalation past the ceiling.** `ADMIN` and every lower role must not
+  reach a protected authority they could not grant directly — and the ceiling
+  must be checked on **every** grant path, not just direct role change: direct
+  role change, individual grant, group membership, group permission, and Scope
+  manipulation. Specifically, `ADMIN` cannot self-grant `billing.manage`, cannot
+  re-grant `permission.manage` across the protected boundary, and cannot promote
+  itself to `OWNER` or into `BILLING`. The additive group model is not a loophole.
+- **Audit every role, permission, Scope and group authorization change**,
+  including a refused escalation attempt.
+- **Open and not yet decided: who may grant `disclosure.none`.** It is not on the
+  protected list, so an `ADMIN` could currently grant it — including to itself —
+  and because Decision 8 already lets `OWNER`/`ADMIN` enable Mode C at
+  organization level, a single `ADMIN` could then hold all three Mode C gates.
+  The existing Mode C rules are unchanged and still govern; only the grant
+  authority is open. Do not implement either reading as settled.
 - **Recovery from a terminal internal technical failure is not a customer
   capability.** No role template reaches it — not `OWNER`, not `ADMIN`. It is an
   internal operator privilege, separate from support-content access, billing

@@ -51,6 +51,15 @@ approved per-template grant matrix with each template's default Scope** are
 ADR-0052 Decision 10. They need durable representation — group membership, scope,
 and per-user grants — that does not exist yet.
 
+That representation must also support the **grant ceiling**: every authorization
+mutation records the acting user, and the model must be able to answer "may this
+actor grant this?" rather than only "does this actor hold `permission.manage`?".
+`OWNER`-only protected authority (`permission.manage`, `billing.manage`, the
+`OWNER`/`ADMIN`/`BILLING` role assignments, ownership-equivalent changes, and
+anything touching the last `OWNER`) must be enforceable on **every** path —
+direct grant, group membership, group permission and Scope change alike — since
+the additive model otherwise becomes an escalation route.
+
 Whether the template defaults are **stored as rows** or **derived in code from
 the approved matrix** is an implementation choice this document does not make;
 either way the matrix is authoritative and a stored copy must be reproducible
@@ -125,7 +134,14 @@ Types: `PURCHASE`, `RESERVATION`, `SETTLEMENT`, `RELEASE`, `REFUND`,
 `ADJUSTMENT`.
 
 The ledger must additionally support, per ADR-0053: **added Unit packages as
-blocks** with the base → oldest-added → newest-added consumption order; the
+blocks**, each **tagged with the quality it was bought at** (Normal or HQ) —
+add-on Units are quality-locked, so the ledger must be able to refuse an
+ineligible block rather than treat added Units as one pool; the
+**eligibility-first** consumption order (eligible Base Unit → oldest eligible
+add-on → newest eligible add-on, FIFO *within* the eligible quality class); the
+plan's **included HQ ceiling** (1 / 5 / 10) as a counter *inside* the Base pool
+rather than a separate pool, since HQ may draw a Base Unit only while that
+ceiling remains (ADR-0053 Decisions 2 and 3); the
 **renewal-period binding** (a generation belongs to the period of its
 reservation); the fact that added packages **do not carry over**; and the
 **internal service-recovery budget**, which is organization-wide, derived from

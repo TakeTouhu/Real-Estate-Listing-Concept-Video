@@ -121,8 +121,11 @@ and publication and Unit consumption are one atomic, replay-safe commit.
 Scope:
 
 - the approved plans, Units, packages and storage quotas (ADR-0053)
-- Unit ledger, including added-package blocks and the base → oldest → newest
-  consumption order
+- Unit ledger, including **quality-tagged** added-package blocks and the
+  **eligibility-first** consumption order — eligible Base Unit → oldest eligible
+  add-on → newest eligible add-on, FIFO within the eligible quality class, with
+  the included HQ ceiling enforced inside the Base pool (ADR-0053 Decisions 2
+  and 3)
 - estimate, reservation, settlement and release
 - **no automatic overage**; customer-approved Unit purchase
 - Stripe checkout/webhooks for web self-service; invoice/bank transfer for

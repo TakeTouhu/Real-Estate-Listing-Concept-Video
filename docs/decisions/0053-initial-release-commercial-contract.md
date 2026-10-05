@@ -140,38 +140,87 @@ Rules:
 - Additional packages **do not carry over**.
 - Base Units and added Units are **renewal-period based**.
 
+### Additional Units are quality-locked
+
+**Decision gate CLOSED.** An additional Unit carries the quality of the package
+it was bought in, and **there is no cross-quality fallback or conversion:**
+
+- a **Normal** add-on Unit is **Normal-only** and cannot fund an HQ generation;
+- an **HQ** add-on Unit is **HQ-only** and cannot fund a Normal generation.
+
+**Nothing creates fungibility** — not the price difference, not expiry pressure
+on a block about to lapse, not customer preference. The two prices exist because
+the two outputs cost different amounts; a pool that could be spent either way
+would make the ×1.50 package pointless.
+
+A consequence worth stating plainly: because **Standard cannot purchase HQ
+add-on Units**, once a Standard organization has used its single included HQ
+entitlement it has **no route to further HQ output** in that period. Its Normal
+add-on Units are not eligible, and **must not be reinterpreted as generic
+Units.** There is no automatic conversion, exchange, refund or package
+substitution.
+
 ## Decision 3 — Unit consumption order and period binding
 
 Consumption order:
 
+**Decision gate CLOSED.** The order is **eligibility-first**, not an
+unconditional `base → oldest added → newest added` sweep across every block:
+
 ```text
-base Units → oldest added Units → newest added Units
+ELIGIBILITY FIRST
+→ BASE where eligible
+→ OLDEST ELIGIBLE ADD-ON
+→ NEWEST ELIGIBLE ADD-ON
 ```
 
-### Open gate — quality eligibility within that order
+**A Normal request draws from:**
 
-**Not decided.** This order says nothing about the separately priced **Normal**
-and **HQ** packages of Decision 2, and the two rules can collide.
+1. an eligible remaining **Base Unit**;
+2. the **oldest unexpired Normal** add-on block;
+3. the next-oldest Normal add-on block;
+4. and so on, oldest → newest **within Normal add-ons**.
 
-Take a Premium customer holding an **older Normal block** and a **newer HQ
-block**, who requests an HQ video. Oldest-first would consume the **Normal**
-block — spending a ×1.20 Unit on output priced at ×1.50 — while respecting the
-HQ multiplier would **skip** the older block and violate the stated order.
-Treating all added Units as interchangeable has a third consequence: it would
-let a **Standard** customer obtain HQ output from a Normal package, undermining
-Decision 2's rule that Standard cannot buy HQ.
+**HQ add-on blocks are ineligible for a Normal request and are skipped.**
 
-So two things need approval before the ledger is implemented:
+**An HQ request draws from:**
 
-- **quality eligibility** — which blocks an HQ request may draw from, and whether
-  an HQ block may be spent on Normal output;
-- **the ordering *within* eligible blocks**, once ineligible ones are excluded.
+1. an eligible remaining **Base Unit**, *provided the plan's included HQ ceiling
+   remains*;
+2. the **oldest unexpired HQ** add-on block;
+3. the next-oldest HQ add-on block;
+4. and so on, oldest → newest **within HQ add-ons**.
 
-**Neither may be guessed.** Each answer moves revenue, and the interchangeable
-reading additionally changes what a Standard customer can obtain. Note that this
-is a different question from the plan's **included** HQ figure, which Decision 1
-already settles as a ceiling inside the included Units rather than a separate
-pool. Tracked in `docs/decisions/TODO.md`.
+**Normal add-on blocks are ineligible for an HQ request and are skipped.**
+
+**Skipping an ineligible quality block is not a FIFO violation.** FIFO applies
+*within* the eligible add-on class, and only there. A block the request may not
+spend was never in the queue for that request.
+
+### Base Units and the included HQ ceiling
+
+Base Units are the plan's included pool. HQ may draw on a Base Unit only while
+**both** hold:
+
+1. an included Base Unit remains available, **and**
+2. the plan's included HQ ceiling is not yet exhausted.
+
+The approved ceilings are **Standard 1, Premium 5, Enterprise 10** (Decision 1),
+and they sit **inside** the included Base Unit pool — never as an extra pool.
+
+Worked example. A Standard organization has 15 included Base Units and an HQ
+ceiling of 1. After one included HQ generation has consumed a Base Unit, the
+remaining Base Units **may still fund Normal generation** but **cannot fund
+another HQ generation** through the included entitlement. Standard cannot buy HQ
+add-on Units, so there is no further HQ route that period.
+
+### Three cases stated explicitly
+
+| Customer holds | Requests | Result |
+| --- | --- | --- |
+| Premium: older **Normal** block, newer **HQ** block | **HQ** | eligible Base Unit if the HQ base entitlement remains; otherwise the **HQ block**. **Never the older Normal block.** |
+| Premium: older **HQ** block, newer **Normal** block | **Normal** | eligible Base Unit if available; otherwise the **Normal block**. **Never the older HQ block.** |
+| Standard: included HQ ceiling exhausted, Normal add-ons remaining | **HQ** | **Not fundable.** Normal add-ons are not eligible for HQ and must not be reinterpreted as generic Units. |
 
 A generation belongs to the entitlement/billing period in which its
 **reservation/start** occurred, even if completion crosses the renewal boundary.
@@ -559,6 +608,14 @@ allowance and then pay Standard for it.
 **Accepted cost.** Support targets are business-hours only, so an Enterprise
 customer reporting a non-Sev1 problem on Friday evening may wait until Monday.
 Promising faster would mean staffing VTaVision does not have.
+
+**Accepted cost.** Quality-locked add-on Units will sometimes leave a customer
+holding Units they cannot spend on what they want — a Standard organization with
+Normal add-ons and no remaining HQ entitlement most visibly. Fungibility would be
+friendlier and would also make the ×1.50 HQ package pointless, since every HQ
+generation could be funded at the ×1.20 price. The lock is what makes the two
+prices mean anything, so the cost is disclosure: the constraint must be legible
+before purchase, not discovered at generation time.
 
 **Explicitly provisional.** Additional-storage pricing (¥1,500 / +50 GB) is
 approved only as a working figure and must be validated against measured

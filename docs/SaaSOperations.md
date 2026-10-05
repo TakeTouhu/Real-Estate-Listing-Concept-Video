@@ -39,7 +39,13 @@ Billing rules:
   delivered no technically valid Deliverable** (ADR-0052 Decision 19) — a
   reservation may never remain pending indefinitely,
 - **no automatic overage charge** — customer approval is required to buy Units,
-- consumption order is base Units → oldest added Units → newest added Units,
+- consumption order is **eligibility-first**: eligible Base Unit → oldest
+  eligible add-on block → newest eligible add-on block. **Add-on Units are
+  quality-locked** — a Normal add-on cannot fund HQ and an HQ add-on cannot fund
+  Normal, so an ineligible-quality block is **skipped, which is not a FIFO
+  violation** (FIFO applies within the eligible class). HQ may draw a Base Unit
+  only while the plan's included HQ ceiling (1 / 5 / 10, inside the Base pool)
+  remains. Full rules and worked cases: ADR-0053 Decisions 2 and 3,
 - a generation belongs to the period of its **reservation**, even if completion
   crosses the renewal boundary,
 - **cancellation is unavailable once a paid Provider request has been submitted**,
