@@ -411,14 +411,41 @@ Derived facts, stated so they cannot be re-derived incorrectly:
 - **`video.share` is granted by no standard template**, because it is reserved
   for post-release (Decision 12).
 
-Three separations the matrix exists to enforce:
+Three separations the matrix draws **by default**:
 
-- **`BILLING` cannot generate video or consume Units** merely because it can
+- **`BILLING` does not generate video or consume Units** merely because it can
   manage billing. Paying for capacity and spending it are different acts.
-- **`ADMIN` cannot manage billing.** An administrator who can add members and
-  change permissions cannot change what the organization is charged.
+- **`ADMIN` does not manage billing.** An administrator who can add members and
+  change permissions does not thereby change what the organization is charged.
 - **`MANAGER` does not manage members, groups or permissions**, and is scoped
   `GROUP` rather than `ORGANIZATION` — it manages *work*, not *people*.
+
+**These are default separations, not yet enforced invariants** — and the
+difference matters. `ADMIN` holds `permission.manage` by default, individual
+grants remain possible, and **this ADR defines no rule about who may grant
+`billing.manage` or whether a holder of `permission.manage` may grant it to
+themselves.** As written, an `ADMIN` could grant itself `billing.manage` and the
+second separation above would not hold in practice.
+
+**That is an open decision, recorded rather than guessed** (see the open gate
+below). It is a security rule — who may escalate whose privileges — and inventing
+it here would encode an unapproved access-control policy as though it were
+approved.
+
+### Open gate — grant authority and privilege self-escalation
+
+**Not decided.** Two linked questions the matrix alone does not answer:
+
+- **who may grant `billing.manage`** (and, more generally, which permissions a
+  holder of `permission.manage` may grant);
+- **whether privilege self-escalation is prohibited**, i.e. whether a user may
+  grant themselves, or their own group, a permission their template does not
+  carry.
+
+Until this is approved, the three separations above are **defaults that the
+authorization model must not be claimed to enforce**, and an implementation must
+not pick an answer: refusing self-escalation and permitting it are both
+security-relevant commercial choices. Tracked in `docs/decisions/TODO.md`.
 
 Unchanged global rules: group permissions are additive, there is no DENY model,
 individual grants remain possible, the last `OWNER` cannot be deleted, and every

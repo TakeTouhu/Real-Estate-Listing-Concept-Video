@@ -148,6 +148,31 @@ Consumption order:
 base Units → oldest added Units → newest added Units
 ```
 
+### Open gate — quality eligibility within that order
+
+**Not decided.** This order says nothing about the separately priced **Normal**
+and **HQ** packages of Decision 2, and the two rules can collide.
+
+Take a Premium customer holding an **older Normal block** and a **newer HQ
+block**, who requests an HQ video. Oldest-first would consume the **Normal**
+block — spending a ×1.20 Unit on output priced at ×1.50 — while respecting the
+HQ multiplier would **skip** the older block and violate the stated order.
+Treating all added Units as interchangeable has a third consequence: it would
+let a **Standard** customer obtain HQ output from a Normal package, undermining
+Decision 2's rule that Standard cannot buy HQ.
+
+So two things need approval before the ledger is implemented:
+
+- **quality eligibility** — which blocks an HQ request may draw from, and whether
+  an HQ block may be spent on Normal output;
+- **the ordering *within* eligible blocks**, once ineligible ones are excluded.
+
+**Neither may be guessed.** Each answer moves revenue, and the interchangeable
+reading additionally changes what a Standard customer can obtain. Note that this
+is a different question from the plan's **included** HQ figure, which Decision 1
+already settles as a ceiling inside the included Units rather than a separate
+pool. Tracked in `docs/decisions/TODO.md`.
+
 A generation belongs to the entitlement/billing period in which its
 **reservation/start** occurred, even if completion crosses the renewal boundary.
 This matches the already-implemented behaviour: the billing cycle is frozen on

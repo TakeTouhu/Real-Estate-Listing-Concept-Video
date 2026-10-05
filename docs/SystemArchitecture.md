@@ -55,8 +55,17 @@ Generation Worker / Orchestrator  (discovers work by scanning for QUEUED rows)
           ↓
 Managed Video Output
           ↓
-Review / Approval / Download
+Technical Validation
+          ↓
+Private-workspace delivery → customer Preview → Download
 ```
+
+**There is no approval stage.** Delivery is internal to the customer's own
+organization and is not external publication, so no Approve/Reject step stands
+between a technically valid deliverable and the customer (ADR-0052 Decision 2).
+The human step that *does* exist is earlier and concerns source material:
+**source-photo analysis review** (`analysis.review`), between AI analysis and
+storyboard.
 
 ## Domain modules
 

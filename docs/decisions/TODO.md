@@ -754,8 +754,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix and the recovery-budget denominator — were
-> settled later and are recorded under *Decision gates — ALL CLOSED* below. Read
-> both; neither is the complete ledger on its own.
+> settled later and are recorded under *Decision gates — CLOSED* below, with two
+> newly opened gates above it. Read all three places; none is the complete ledger
+> on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
@@ -1101,7 +1102,9 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
       blocks; base → oldest-added → newest-added consumption order; renewal-period
       binding to the reservation; no automatic overage; customer-approved
-      purchase; no cancellation after a paid Provider submission.
+      purchase; no cancellation after a paid Provider submission. **Blocked on
+      the quality-eligibility gate above:** the ledger cannot choose which block
+      an HQ request draws from without that decision.
 - [ ] **Build project rename, settings change and deletion**, with changed
       settings treated as new generation conditions and existing outputs retained
       as historical versions.
@@ -1118,6 +1121,9 @@ them is **built**. Each item below records the settled decision and what remains
       reproducible from it. `disclosure.none` and `video.share` must be
       unreachable by role assignment alone, and MFA enforcement must stay
       capability-based so `BILLING` is covered through `billing.manage`.
+      **Partially blocked:** the grant-authority / self-escalation gate above
+      must be answered before the billing separation can be enforced rather than
+      merely defaulted.
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
       Decision 19. A failed initial generation, paid regeneration or
       disclosure/logo recomposition must terminally settle and **RELEASE** the
@@ -1152,7 +1158,31 @@ them is **built**. Each item below records the settled decision and what remains
       against staffed hours and business days, without attaching the uptime SLA
       credit schedule to it.
 
-### Decision gates — ALL CLOSED
+### Decision gates — OPEN, found by exact-head review of the closed gates
+
+Both gates from the first review are closed, but closing them exposed two more.
+**Neither may be guessed by whoever implements the surrounding feature.**
+
+- [ ] **Decide grant authority and whether privilege self-escalation is
+      prohibited.** The approved matrix gives `ADMIN` `permission.manage` and
+      leaves individual grants possible, while stating that `ADMIN` does not
+      manage billing. Nothing says **who may grant `billing.manage`**, or whether
+      a holder of `permission.manage` may grant it **to themselves**. As written,
+      an `ADMIN` can self-grant it and the stated billing separation does not
+      hold. ADR-0052 Decision 10 now records the three separations as **defaults,
+      not enforced invariants**, precisely so this is not mistaken for settled.
+      It is an access-control policy decision, not an implementation detail.
+- [ ] **Decide quality eligibility inside the Unit consumption order.** `base →
+      oldest added → newest added` does not say how the separately priced Normal
+      (×1.20) and HQ (×1.50) packages interact with it. A Premium customer with an
+      older Normal block and a newer HQ block requesting HQ either spends the
+      cheaper block or breaks oldest-first; treating added Units as
+      interchangeable would also let a **Standard** customer get HQ output from a
+      Normal package, contradicting ADR-0053 Decision 2. Needs both the
+      eligibility rule and the ordering **within** eligible blocks. Revenue moves
+      on the answer. Recorded in ADR-0053 Decision 3.
+
+### Decision gates — CLOSED
 
 Both gates opened by the first PR review are now answered, together with eight
 further decisions. **Each is settled as policy and unbuilt as code**; the
