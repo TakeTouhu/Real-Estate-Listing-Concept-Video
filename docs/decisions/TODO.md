@@ -756,8 +756,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > hours and targets, the role matrix, the recovery-budget denominator, grant
 > ceilings and self-escalation, Normal/HQ Unit eligibility, and `disclosure.none`
 > grant authority — were settled later and are recorded under *Decision gates —
-> CLOSED* below, with one open gate above it. Read all three places; none is the
-> complete ledger on its own.
+> CLOSED* below, with the remaining open gates listed under *Decision gates —
+> OPEN* above it. Read all three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
@@ -921,7 +921,11 @@ correct fix given the system-wide Reservation → Job order.
 ## Phase 5B follow-up — the questions `BLOCKED` deliberately leaves open
 
 Phase 5B introduced a terminal-for-this-phase state and, deliberately, no way
-out of it. Three decisions are owed, and none is pre-empted here.
+out of it. Three decisions were owed. **Two are now answered** — the operator
+path by ADR-0052 Decision 20 and settlement by ADR-0052 Decision 19 — and are
+kept below as answered records. The third entry, retry-reason history, is an
+engineering note about an audited table nobody has needed yet rather than an
+owed product decision.
 
 **~~There is no operator path out of `BLOCKED`~~ — ANSWERED by ADR-0052 Decision
 20.** The question of who may unblock, and whether unblocking is per-row or
@@ -981,9 +985,14 @@ Phase 9.
 ## Phase 5C follow-up — what a terminal verdict deliberately leaves open
 
 Phase 5C makes a deliverable's usability durable and publishes only on `VALID`.
-Four decisions were owed. **Three are still owed. The first has since been
-answered — by removal — in ADR-0052 Decision 2, and is kept below as a
-superseded record rather than deleted.**
+Four decisions were owed. **None is still owed by this section.** Three have
+been answered and are kept below as records rather than deleted: human review
+before publication by **removal** (ADR-0052 Decision 2), settlement of an
+unusable deliverable (ADR-0052 Decision 19), and the operator path out of a
+terminal verdict (ADR-0052 Decision 20). The fourth,
+`RECONCILIATION_HOLD -> CONSUMED`, is an **admitted policy** carrying a revisit
+condition, not an open decision. Open product gates are listed in one place
+only, under *Decision gates — OPEN*.
 
 **~~Human review before publication is still missing~~ — SUPERSEDED by ADR-0052
 Decision 2.** This item was written when `CLAUDE.md` required that AI output is
@@ -1202,8 +1211,31 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, surfaced while recording the `disclosure.none` revocation rule.
-**It must not be guessed.**
+Three gates. The first surfaced while recording the `disclosure.none`
+revocation rule; the other two were raised by the exact-head review of
+`dd02ada`, and each is a conflict between two already-approved decisions rather
+than a gap in one. **None may be guessed.**
+
+- [ ] **Decide who may take actions that change what the organization is
+      charged.** ADR-0053 Decision 4 approved "OWNER/ADMIN purchase and cancel"
+      for the ¥1,500/month storage add-on; ADR-0052 Decision 10 later approved
+      `billing.manage` for `OWNER`/`BILLING` only and stated that `ADMIN` does not
+      manage billing. Together they let `ADMIN` start a recurring charge the
+      billing separation says it cannot, while excluding `BILLING`. The actor is
+      unspecified — not contradicted — for Unit package purchase, self-service
+      plan upgrade/downgrade, subscription cancellation and additional-seat
+      purchase. Tying everything to `billing.manage` would silently remove an
+      approved `ADMIN` right; keeping `OWNER`/`ADMIN` would make the separation
+      decorative. Recorded in ADR-0053 Decision 4.
+- [ ] **Decide recomposition after scene videos are deleted.** ADR-0052
+      Decisions 9 and 13 promise disclosure-mode and logo changes by
+      **recomposition** with no time limit, and say they are not regeneration;
+      Decision 17 deletes scene videos 30 days after completion, and the retained
+      final has disclosure and logo burned in, so a change such as A → C or logo
+      ON → OFF cannot be recomposed from it. After day 30 the options are to
+      retain clean inputs (a VTaVision cost, outside the customer quota), to limit
+      recomposition to the retention window, or to regenerate (a paid provider
+      call the decisions rule out). Recorded in ADR-0052 Decision 17.
 
 - [ ] **Decide whether Mode C gates are re-checked for a request already
       admitted when a gate is withdrawn.** ADR-0052 Decision 10 settles what

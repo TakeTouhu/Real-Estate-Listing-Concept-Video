@@ -114,9 +114,14 @@ Recommended stack:
 
 Provider SDKs must never be called from UI or domain code.
 
-## WaveSpeedAI requirement
+## WaveSpeedAI — primary candidate provider
 
-WaveSpeedAI is the required initial video-generation provider.
+WaveSpeedAI is the **primary candidate** for the initial commercial release, not
+an activated or guaranteed route (ADR-0054 Decision 2). **Only a route verified
+against the current provider may be enabled**, and paid activation stays BLOCKED
+until explicitly authorized (ADR-0054 Decision 7). If re-verification disqualifies
+it, the provider-neutral `VideoGenerationProvider` boundary is what lets another
+verified route replace it — so build to the port, not to WaveSpeedAI.
 
 - Implement `WaveSpeedVideoProvider` behind `VideoGenerationProvider`.
 - Server-side worker calls only.
@@ -125,7 +130,9 @@ WaveSpeedAI is the required initial video-generation provider.
 - Initial candidate model: `wavespeed-ai/open-video/image-to-video`.
 - Keep model ID, capabilities, pricing, limits, and concurrency configurable.
 - Submit asynchronous predictions and store provider prediction IDs internally.
-- Prefer authenticated webhooks; use bounded backoff polling as fallback.
+- Use an authenticated webhook as the primary path **only if its authenticity can
+  be verified**, and run bounded backoff polling as a **mandatory** fallback even
+  when webhooks work (ADR-0054 Decision 4).
 - Copy completed provider output into managed object storage.
 - Never expose temporary provider URLs or provider job IDs to customers.
 - Normalize errors into internal error types.
@@ -166,7 +173,8 @@ Authenticate
 → Create idempotent generation attempt
 → Persist the SceneGeneration row as durable executable work
 → Worker discovers and claims an eligible SceneGeneration row
-→ Generate scenes through WaveSpeedAI
+→ Generate scenes through the verified provider route (WaveSpeedAI is the
+  primary candidate — ADR-0054 Decision 2)
 → Copy outputs to managed storage
 → Compose with FFmpeg, applying the selected disclosure mode and logo setting
 → Validate the composed output technically

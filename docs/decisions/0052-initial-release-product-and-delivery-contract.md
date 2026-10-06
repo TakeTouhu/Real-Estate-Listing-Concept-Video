@@ -757,6 +757,28 @@ temp, 30-day retained old final versions, Audit/Billing records.
 Quota sizes, thresholds, blocking behaviour and additional-storage pricing are in
 ADR-0053.
 
+### Open gate — recomposition after scene videos are deleted
+
+**Not decided; two approved decisions collide after day 30.** Decision 9
+(disclosure-mode change) and Decision 13 (logo change) both promise
+**recomposition** with no time limit, and both say recomposition is *not* a new
+AI provider call. But this decision deletes **scene videos 30 days after final
+completion**, and the only retained output — the current final video — already
+has its disclosure and logo burned in. A change such as Mode A → C, Mode A → B, or
+logo ON → OFF cannot be recomposed from that file.
+
+So after day 30 one of the following must be true, and none is approved:
+
+- **retain clean inputs** — the scene videos or a clean master — for as long as
+  recomposition is offered, which is a cost VTaVision absorbs, since internal
+  scene media does not count toward the customer's quota;
+- **limit recomposition to the retention window**, which narrows the feature
+  Decisions 9 and 13 describe; or
+- **regenerate**, which is a paid provider call and contradicts the rule that a
+  disclosure or logo change is not regeneration.
+
+Do not implement any of them as settled. Tracked in `docs/decisions/TODO.md`.
+
 ## Decision 18 — Authentication
 
 Initial release: **email/password, mandatory email verification,

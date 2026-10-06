@@ -348,6 +348,27 @@ cancellation effective at renewal. If cancellation puts current usage over quota
 existing data remains and new upload/generation is blocked until usage is reduced
 or storage is repurchased.
 
+### Open gate — who may take actions that change what the organization is charged
+
+**Not decided; the approved texts conflict.** "OWNER/ADMIN purchase and cancel"
+above was approved for the storage add-on, while ADR-0052 Decision 10 later
+approved `billing.manage` for `OWNER` and `BILLING` only, kept it `OWNER`-only to
+grant, and stated that `ADMIN` does not manage billing. Read together, the
+storage rule lets `ADMIN` start a recurring ¥1,500/month charge the billing
+separation says it cannot make — and excludes `BILLING`, the one role created to
+make such charges.
+
+The same question is unanswered, rather than contradicted, for every other
+action that changes what the organization pays: purchasing a Normal or HQ Unit
+package ("customer approval is required", Decision 2 — approved by whom?),
+self-service plan upgrade and downgrade (Decision 3B), subscription cancellation
+(Decision 3A), and purchasing additional user seats (Decision 1, and the
+downgrade rule that may require it).
+
+**Do not resolve this by assumption.** Tying all of them to `billing.manage`
+would silently remove an approved `ADMIN` right; keeping `OWNER`/`ADMIN` would
+keep a stated separation decorative. Tracked in `docs/decisions/TODO.md`.
+
 **This price is explicitly provisional and must be validated against production
 cost and egress economics before Commercial Launch.** It is recorded as an open
 gate, not as settled pricing.

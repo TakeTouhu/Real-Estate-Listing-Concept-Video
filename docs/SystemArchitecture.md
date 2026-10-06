@@ -119,7 +119,7 @@ create POST that fails may already have been billed, and `retryable` describes
 the transport rather than the provider's decision. Status and cancellation keep
 their exception behaviour; neither can incur a charge.
 
-WaveSpeedAI is the initial implementation, but provider-specific SDKs and payloads stay inside `packages/video-providers`.
+WaveSpeedAI is the initial *adapter implementation* and the **primary candidate** route — not an activated or guaranteed one; only a verified route may be enabled (ADR-0054 Decision 2). Provider-specific SDKs and payloads stay inside `packages/video-providers`, which is what keeps the route replaceable.
 
 ## Environments
 
