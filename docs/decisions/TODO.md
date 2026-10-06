@@ -758,7 +758,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master, additional-seat cancellation, mid-period purchases, downgrade fit and
 > charged-recomposition quality — were settled later and are recorded under *Decision gates — CLOSED*
-> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
+> below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1223,8 +1223,10 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Separate member management from seat purchase, and forbid implicit
       charges.** Adding a member when no seat remains must fail and require an
       explicit seat purchase by a `billing.manage` holder; reaching the storage
-      limit must never auto-purchase storage; no `ADMIN` action may create a
-      charge.
+      limit must never auto-purchase storage; no member-management or upload
+      action may create a charge implicitly. Explicit commercial actions remain
+      available to any `billing.manage` holder, including an `ADMIN` an `OWNER`
+      has explicitly granted it.
 - [ ] **Build mid-period add-on purchase** (ADR-0053 Decision 5A): immediate
       seat and storage entitlement activation, first-period proration, renewal
       transition to the full monthly amount, and purchase audit/evidence.
@@ -1258,9 +1260,19 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+Two gates, raised by the exact-head review of `21286c4`. **Neither may be
+guessed.**
+
+- [ ] **Decide whether a logo-only recomposition consumes a Unit.** ADR-0052
+      Decision 13 makes it a recomposition, not regeneration, but no rule says
+      whether it is free, charged, or counted toward Decision 9's
+      free-three-then-charged disclosure allowance, nor how one change of both
+      disclosure and logo is counted. Recorded at ADR-0052 Decision 13.
+- [ ] **Decide whether the +50 GB storage add-on can be stacked.** A single
+      optional entitlement, or a repeatable block an organization may hold
+      several of — which sets the quota, the recurring charge, and whether a
+      cancellation removes one block or all added capacity. Recorded at ADR-0053
+      Decision 4.
 
 ### Decision gates — CLOSED
 

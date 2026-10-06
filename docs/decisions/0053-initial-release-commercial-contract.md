@@ -384,14 +384,27 @@ Additional storage — **PROVISIONAL**:
 +50 GB = ¥1,500 / month, tax-exclusive
 ```
 
-Organization-level; purchase and cancel require **`billing.manage`** — `OWNER`/`BILLING`
-by default (Decision 5A; this supersedes the earlier "OWNER/ADMIN purchase and
-cancel"); no auto-overage;
-usable immediately on purchase with a prorated first period (Decision 5A);
-cancellation effective at renewal with no prorated refund. The add-on **is
-initial-release scope**; only its price is provisional. If cancellation puts current usage over quota,
-existing data remains and new upload/generation is blocked until usage is reduced
-or storage is repurchased.
+Organization-level. The add-on **is initial-release scope**; only its price is
+provisional.
+
+- purchase and cancellation require **`billing.manage`** — `OWNER`/`BILLING` by
+  default (Decision 5A; this supersedes the earlier "OWNER/ADMIN purchase and
+  cancel");
+- usable **immediately** on purchase, with a **prorated first period** and the
+  full monthly price from the next renewal (Decision 5A);
+- cancellation takes effect at the **next renewal**, with no prorated refund;
+- no automatic purchase and no automatic overage charge;
+- if cancellation puts current usage over quota, existing data remains and new
+  upload/generation is blocked until usage is reduced or storage is repurchased.
+
+**Open gate — quantity.** Whether the add-on is a single optional +50 GB
+entitlement or a repeatable +50 GB block an organization may hold several of —
+and so whether a cancellation removes one block or all added capacity — is **not
+decided**. Tracked in `docs/decisions/TODO.md`.
+
+**This price is explicitly provisional and must be validated against production
+cost and egress economics before Commercial Launch.** It is recorded as an open
+gate, not as settled pricing.
 
 ## Decision 5 — Billing and payment channels
 
@@ -521,9 +534,9 @@ matches the other renewal-effective changes — subscription cancellation
 (Decision 4) — and the no-automatic-purchase rule. **Enterprise** seat changes
 follow the executed Enterprise contract instead.
 
-**Storage limit.** At the limit nothing is auto-purchased and no `ADMIN` action
-creates a charge implicitly; `OWNER`/`BILLING` may explicitly purchase or cancel
-the storage add-on.
+**Storage limit.** At the limit nothing is auto-purchased and no upload or
+member-management action creates a charge implicitly; a `billing.manage` holder
+may explicitly purchase or cancel the storage add-on.
 
 **Enterprise.** Commercial changes remain sales-assisted and contract-governed.
 `OWNER`/`BILLING` may initiate or request a change where the product supports it,

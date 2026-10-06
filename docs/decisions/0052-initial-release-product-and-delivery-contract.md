@@ -713,6 +713,11 @@ Rules:
 - changing only the logo on a video uses **recomposition**, not an AI Provider
   regeneration — from the Clean Master once scene videos have expired
   (Decision 17);
+- **open gate — whether a logo-only recomposition consumes a Unit.** No approved
+  rule says. Decision 9's free-three-then-charged accounting is written for
+  disclosure-mode changes, and nothing states whether a logo-only change is free,
+  charged, or counted toward that allowance — or how a single change of both is
+  counted. Not to be assumed; tracked in `docs/decisions/TODO.md`;
 - **no forced VTaVision watermark** in the initial release;
 - available to **all** initial-release plans.
 

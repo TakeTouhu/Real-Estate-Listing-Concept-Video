@@ -130,8 +130,13 @@ equipment, unnatural motion, prohibited content, a missing or wrong disclosure f
 the selected mode, wrong duration, and wrong output format. Retry only retryable
 scene failures within configured limits.
 
-Validation decides **technical validity**, which is what consumes a Unit. It does
-not decide whether the customer will like the result.
+Validation decides **technical validity**, which is what settles an applicable
+reserved Unit as consumed. It does not decide whether the customer will like the
+result, and it never *creates* a charge: a generation or regeneration consumes
+its reserved Unit, but a disclosure-mode recomposition consumes one only at a
+charging boundary (the 4th, 7th, … completed change; changes 1–3 are free —
+ADR-0052 Decision 9). Whether a logo-only recomposition consumes a Unit is an
+open decision (ADR-0052 Decision 13) and must not be assumed either way.
 
 ## Delivery, not publication
 
