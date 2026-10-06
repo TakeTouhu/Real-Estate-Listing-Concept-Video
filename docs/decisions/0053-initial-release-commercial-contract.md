@@ -410,17 +410,46 @@ entitlement remains, nothing is auto-purchased and no member-management action
 creates a charge: a holder of `billing.manage` must explicitly purchase an
 additional seat, after which ordinary user management proceeds.
 
-### Open gate — when a seat cancellation takes effect
+### Additional-seat cancellation
 
-**Not decided.** Who may cancel an additional seat is settled above
-(`billing.manage`). **When** it takes effect is not: unlike the storage add-on
-(effective at renewal, with a defined over-quota result) and the subscription
-(Decision 3A), nothing states whether seat cancellation is immediate or at
-renewal, whether the current month is prorated, or what happens if active
-membership then exceeds the remaining seat entitlement. The downgrade rule
-(Decision 3B) covers the over-capacity case only at a plan transition. Do not
-infer it from the storage or subscription rules; tracked in
-`docs/decisions/TODO.md`.
+**Decision gate CLOSED.** Requesting it requires `billing.manage`, like every
+other commercial mutation. For Standard/Premium self-service:
+
+- **Timing.** A seat cancellation takes effect at the **next billing renewal**,
+  never immediately.
+- **No proration.** No prorated refund or credit is issued for the current
+  period; the seats already paid for remain usable until the period ends.
+- **Precondition.** A reduction may be **scheduled only if current membership
+  already fits within the post-cancellation entitlement** (included users plus
+  the remaining additional seats).
+
+  ```text
+  Premium: 10 included + 3 additional = 13 seats; 12 current members
+  cancel 2 additional seats → next-period entitlement 10 + 1 = 11
+  12 > 11 → the reduction cannot be scheduled yet
+  ```
+
+  The organization must first bring membership to 11 or fewer; then the
+  reduction may be scheduled. The system never chooses, deletes or deactivates
+  members to make room, and never repurchases seats.
+- **While a reduction is pending**, existing members stay active through the
+  current paid period, but any member addition or invitation that would make
+  membership exceed the **next-period** entitlement is blocked. The UI explains
+  that a scheduled seat reduction limits member growth until renewal or until
+  the reduction is cancelled or changed. Exact wording is not fixed here.
+- **At renewal**, the paid additional-seat quantity becomes the scheduled reduced
+  quantity and billing uses it; no proration credit is issued for the previous
+  period; no member is removed. Because the reduction could only be scheduled
+  when membership already fitted, and growth past it was blocked meanwhile, the
+  organization enters the new period within entitlement. Any concurrent change
+  that would breach the committed next-period capacity is refused rather than
+  allowed to create an over-capacity state.
+
+A seat cancellation is **not** user deletion, and never triggers it. This rule
+matches the other renewal-effective changes — subscription cancellation
+(Decision 3A), plan downgrade (Decision 3B) and storage add-on cancellation
+(Decision 4) — and the no-automatic-purchase rule. **Enterprise** seat changes
+follow the executed Enterprise contract instead.
 
 **Storage limit.** At the limit nothing is auto-purchased and no `ADMIN` action
 creates a charge implicitly; `OWNER`/`BILLING` may explicitly purchase or cancel

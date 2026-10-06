@@ -341,7 +341,10 @@ applies only to new requests — never to a job already running.
 explicitly granted it (ADR-0053
 Decision 5A). An `ADMIN` adding a member when no seat remains, or uploading at
 the storage limit, is told that a billing user must purchase capacity; nothing is
-bought implicitly.
+bought implicitly. While a seat reduction is scheduled, adding or inviting a
+member past the next-period entitlement is blocked with an explanation, and a
+reduction cannot be scheduled until membership already fits it; the product
+never picks members to remove (ADR-0053 Decision 5A).
 
 There is **no approve or reject control** and no comment-on-approval flow.
 Preview exists for the customer's own judgement before they decide to use the

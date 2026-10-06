@@ -211,7 +211,8 @@ Enterprise terms are individually agreed (ADR-0053 Decision 1A). **Every
 charge-changing action — Unit packages, seats, storage add-on, upgrade,
 downgrade, cancellation — requires `billing.manage`** (`OWNER`/`BILLING` by
 default, and `ADMIN` only through an explicit `OWNER` grant; ADR-0053 Decision
-5A). Cancellation
+5A). Additional-seat cancellation takes effect at renewal, unprorated, and can be
+scheduled only once membership already fits the reduced entitlement. Cancellation
 takes effect at the end of the paid period with no prorated refund, while refunds
 for duplicate or erroneous billing and legally required refunds remain owed
 (Decision 3A). Upgrades are immediate and charge the full unprorated price

@@ -87,7 +87,9 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - **Every charge-changing customer action requires `billing.manage`**
   (`OWNER`/`BILLING` by default — `ADMIN` only if an `OWNER` explicitly grants
   it; ADR-0053 Decision 5A). Member
-  management never buys seats; nothing is auto-purchased.
+  management never buys seats; nothing is auto-purchased. Seat cancellation is
+  renewal-effective and unprorated, schedulable only when membership already
+  fits, and never removes members.
 - Keep one internal, overlay-free **Clean Master** per deliverable; produce the
   customer output from it and recompose later disclosure/logo changes from it
   with **no provider call**. It is outside customer quota and never

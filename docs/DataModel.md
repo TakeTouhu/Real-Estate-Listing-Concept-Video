@@ -184,6 +184,11 @@ must settle to `RELEASE`, never `SETTLEMENT`.
 
 `id`, `organization_id`, `provider`, `provider_customer_id_encrypted`, `provider_subscription_id_encrypted`, `plan_id`, `status`, `current_period_end`, timestamps
 
+A **scheduled additional-seat reduction** must be representable as pending
+until the next renewal, so member additions can be checked against the
+committed next-period entitlement before then (ADR-0053 Decision 5A). No field
+names are chosen here.
+
 ### AuditLog
 
 `id`, `organization_id`, `actor_user_id`, `action`, `resource_type`, `resource_id`, `request_id`, `ip_hash`, `metadata_sanitized_json`, `created_at`

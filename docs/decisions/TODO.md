@@ -750,14 +750,14 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Sixteen further business
+> This section predates the initial-release contract. Seventeen further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
-> grant authority, in-flight Mode C, commercial-mutation authority and the Clean
-> Master — were settled later and are recorded under *Decision gates — CLOSED*
-> below; any still-open gate is under *Decision gates — OPEN*, just above it. Read all
+> grant authority, in-flight Mode C, commercial-mutation authority, the Clean
+> Master and additional-seat cancellation — were settled later and are recorded under *Decision gates — CLOSED*
+> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1222,7 +1222,13 @@ them is **built**. Each item below records the settled decision and what remains
       charges.** Adding a member when no seat remains must fail and require an
       explicit seat purchase by a `billing.manage` holder; reaching the storage
       limit must never auto-purchase storage; no `ADMIN` action may create a
-      charge. Enterprise changes route to the sales-assisted path rather than
+      charge.
+- [ ] **Build scheduled additional-seat reductions** (ADR-0053 Decision 5A):
+      validate current membership against the post-cancellation entitlement
+      before scheduling; block member additions and invitations past the pending
+      next-period entitlement; transition the seat quantity at renewal with no
+      proration; audit the commercial mutation; and never silently remove or
+      deactivate members or repurchase seats. Enterprise changes route to the sales-assisted path rather than
       changing a contract amount automatically.
 - [ ] **Build the authenticated-webhook producer and the mandatory polling
       fallback** for `ReconciliationResolutionObservation` (ADR-0054 Decision 4),
@@ -1237,27 +1243,27 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, raised by the exact-head review of `614dd61`. **It must not be
-guessed.**
-
-- [ ] **Decide when an additional-seat cancellation takes effect.** Authority is
-      settled (`billing.manage`, ADR-0053 Decision 5A); timing is not. Nothing
-      states whether it is immediate or at renewal, whether the current month is
-      prorated, or what happens when active membership then exceeds the remaining
-      seat entitlement. The storage add-on (renewal, defined over-quota result)
-      and subscription cancellation (Decision 3A) each have their own rule, and
-      the downgrade rule covers over-capacity only at a plan transition — none
-      may be assumed to apply. Recorded in ADR-0053 Decision 5A.
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
 
 ### Decision gates — CLOSED
 
-Sixteen decisions: the two gates from the first PR review, eight recorded with
-them, the two raised by the exact-head review of those closures, the
+Seventeen decisions: the two gates from the first PR review, eight recorded
+with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
-and the three closed last — in-flight Mode C, commercial-mutation authority and
-the Clean Master. **Each is settled as policy and unbuilt as code**; the
+the three closed next — in-flight Mode C, commercial-mutation authority and the
+Clean Master — and additional-seat cancellation, closed last. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **Additional-seat cancellation — CLOSED.** Effective at the **next
+      renewal**, never immediately; **no proration**; current-period seats stay
+      usable. A reduction may be scheduled **only if current membership already
+      fits** the post-cancellation entitlement; while it is pending, member
+      growth past the next-period entitlement is blocked; at renewal the seat
+      quantity drops and billing follows. No member is ever silently removed or
+      deactivated and no seat is repurchased automatically. Enterprise follows
+      its contract. ADR-0053 Decision 5A.
 - [x] **Mode C in-flight behaviour — CLOSED.** Mode C conditions are **frozen at
       generation admission**. The admitted job's disclosure mode, Mode C consent,
       and the `disclosure.none` and organization-level eligibility used to admit

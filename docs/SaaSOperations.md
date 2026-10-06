@@ -71,7 +71,11 @@ Billing rules:
 `OWNER`/`BILLING` by default; an `ADMIN` only if an `OWNER` has explicitly granted
 it `billing.manage` (ADR-0053 Decision 5A). That covers
 Unit packages, seats, the storage add-on, upgrade, downgrade and cancellation.
-Member management never buys a seat, reaching a limit never buys anything, and
+**Seat cancellation** takes effect at the next renewal with no proration, can be
+scheduled only when current membership already fits the reduced entitlement,
+and blocks member growth past that entitlement while pending (ADR-0053
+Decision 5A). Member management never buys a seat, reaching a limit never buys
+anything, and
 Enterprise changes stay sales-assisted.
 
 Note the open **implementation delta**: the runtime pricing code still assumes a

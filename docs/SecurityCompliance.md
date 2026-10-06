@@ -218,7 +218,8 @@ applicable (ADR-0053 Decision 8).
 Audit uploads, deletions, analysis changes and corrections, generation requests,
 retries, cancellations, provider failures, deliverable availability, downloads,
 disclosure-mode changes, **Mode C consent**, logo changes, billing changes,
-user/group/role/permission changes, subscription/plan changes and cancellations,
+user/group/role/permission changes, subscription/plan changes and cancellations, seat purchases and scheduled seat
+reductions,
 and privileged support access including break-glass use.
 
 **Operator recovery from a terminal technical failure is separately audited**
