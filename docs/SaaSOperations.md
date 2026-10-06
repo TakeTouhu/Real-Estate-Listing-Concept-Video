@@ -32,7 +32,8 @@ Billing rules:
   no enqueue step — ADR-0024),
 - settle exactly once after terminal outcome — Phase 5C's Transaction G is the
   only writer of `consumedAt`,
-- a **technically valid delivered video consumes the Unit** regardless of whether
+- a **technically valid delivered generation or paid regeneration consumes its
+  reserved Unit** (free recompositions reserve none) regardless of whether
   the customer likes, downloads or uses it (ADR-0052 Decision 4),
 - release the Unit where the generation must not consume one: moderation block,
   recovery-budget exhaustion, and **any permanent technical failure that
@@ -107,9 +108,13 @@ many users must be removed, and **no user is selected, deleted or deactivated an
 no seat is bought**. While pending, member growth past that entitlement is
 blocked (ADR-0053 Decision 3B).
 
-**Mid-period purchases** of a seat or the +50 GB storage add-on are usable
+**Mid-period purchases** of a seat or a +50 GB storage block are usable
 immediately, with a prorated first charge and the full monthly price from the
-next renewal (ADR-0053 Decision 5A). Enterprise transitions are
+next renewal (ADR-0053 Decision 5A). **Storage blocks are repeatable** up to the
+plan cap — Standard 2 (150 GB total), Premium 5 (450 GB total); Enterprise is
+contract-governed, not capped by a guessed constant — and a purchase that would
+reach the next plan's base storage is **rejected**. Cancellation is per block at
+renewal, never deleting data (ADR-0053 Decision 4). Enterprise transitions are
 sales-assisted.
 
 ### Internal service-recovery budget

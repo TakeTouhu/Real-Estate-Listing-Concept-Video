@@ -353,6 +353,19 @@ scheduled downgrade recalculates the next-period capacity. Exact UI wording is
 not fixed here. Because scheduling required fit and growth past it is blocked,
 renewal cannot arrive over capacity.
 
+#### Open gate — storage blocks above the target plan's cap
+
+**Not decided.** A Premium organization may hold up to 5 storage blocks, Standard
+at most 2 (Decision 4). Nothing approved says what happens when a Premium
+organization holding 3–5 blocks schedules a downgrade to Standard: whether the
+excess blocks must first be cancelled before the downgrade can be scheduled (as
+membership must first fit), whether they are cancelled at renewal along with the
+plan change, or whether they may be retained above Standard's cap. Paid blocks
+must not be silently discarded, and each answer changes what is billed and how
+much capacity the organization keeps, so none is assumed. Tracked in
+`docs/decisions/TODO.md`. (Enterprise transitions are sales-assisted, so this
+arises only for Premium → Standard.)
+
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
 
@@ -387,20 +400,56 @@ Additional storage — **PROVISIONAL**:
 Organization-level. The add-on **is initial-release scope**; only its price is
 provisional.
 
-- purchase and cancellation require **`billing.manage`** — `OWNER`/`BILLING` by
-  default (Decision 5A; this supersedes the earlier "OWNER/ADMIN purchase and
-  cancel");
-- usable **immediately** on purchase, with a **prorated first period** and the
-  full monthly price from the next renewal (Decision 5A);
-- cancellation takes effect at the **next renewal**, with no prorated refund;
-- no automatic purchase and no automatic overage charge;
-- if cancellation puts current usage over quota, existing data remains and new
-  upload/generation is blocked until usage is reduced or storage is repurchased.
+**It is a repeatable +50 GB block** (decision gate CLOSED). An organization may
+hold several blocks, up to its plan's cap, and pays **active blocks × ¥1,500 /
+month**, tax-exclusive.
 
-**Open gate — quantity.** Whether the add-on is a single optional +50 GB
-entitlement or a repeatable +50 GB block an organization may hold several of —
-and so whether a cancellation removes one block or all added capacity — is **not
-decided**. Tracked in `docs/decisions/TODO.md`.
+| Plan | Base storage | Max add-on blocks | Max total storage |
+| --- | --- | --- | --- |
+| Standard | 50 GB | **2** | **150 GB** |
+| Premium | 200 GB | **5** | **450 GB** |
+| Enterprise | 500 GB | no cap derived from a higher tier — see below | — |
+
+**Why the caps.** A lower plan must not reach or exceed the **base** storage of the
+next plan up by buying blocks, so storage stays an upgrade path: a third Standard
+block would reach 200 GB (Premium's base), a sixth Premium block would reach
+500 GB (Enterprise's base). When a Standard organization needs more than 150 GB,
+or a Premium one more than 450 GB, the product guides it to the next plan.
+
+**Enforced at purchase, not warned about afterwards.** A purchase is validated
+against base storage + currently active blocks + the proposed block, and is
+**rejected** if the total would equal or exceed the next plan's base storage
+(Standard: must stay below 200 GB; Premium: below 500 GB). This is an entitlement
+rule, not a UI recommendation.
+
+**Enterprise** may hold repeatable blocks with **no** Standard/Premium-style cap,
+because there is no higher tier to compare against. That is **not** unlimited
+storage: any Enterprise commercial or operational ceiling is governed by the
+sales-assisted contract, production cost validation and the Safety Guard, and no
+fixed maximum is invented here.
+
+Purchase and cancellation of each block:
+
+- require **`billing.manage`** — `OWNER`/`BILLING` by default (Decision 5A; this
+  supersedes the earlier "OWNER/ADMIN purchase and cancel");
+- a purchased block is usable **immediately**, with a **prorated first period**
+  and the full monthly price from the next renewal (Decision 5A);
+- cancellation is **per block** and takes effect at the **next renewal**, with no
+  prorated refund — e.g. an organization holding 3 blocks schedules cancelling 1
+  and keeps 2 from the next renewal;
+- no automatic purchase, no automatic replacement purchase, and no automatic
+  overage charge;
+- if a reduction leaves quota below retained usage, existing data remains and new
+  upload/generation is blocked until usage is reduced, capacity is explicitly
+  repurchased, or the entitlement otherwise changes. **Nothing is deleted.**
+
+**Plan changes re-evaluate capacity and block count.** On an **upgrade**, the
+existing paid blocks are not discarded: every block count a lower plan can hold is
+within the higher plan's cap (Standard's 2 ≤ Premium's 5; Premium's 5 within
+Enterprise), so capacity becomes the new base plus the same blocks. A
+**downgrade** that would leave more blocks than the target plan allows is an open
+gate — see *Open gate — storage blocks above the target plan's cap* under
+Decision 3B.
 
 **This price is explicitly provisional and must be validated against production
 cost and egress economics before Commercial Launch.** It is recorded as an open
@@ -514,8 +563,9 @@ IMMEDIATE USE + PRORATED FIRST PERIOD + FULL MONTHLY PRICE FROM NEXT RENEWAL
 ```
 
 - an explicitly purchased **additional seat** (¥3,000 / user / month,
-  tax-exclusive) or **+50 GB storage add-on** (¥1,500 / month, tax-exclusive,
-  price provisional per Decision 4) is **usable immediately**;
+  tax-exclusive) or **+50 GB storage block** (¥1,500 / month per block,
+  tax-exclusive, price provisional, within the plan's block cap per Decision 4)
+  is **usable immediately**;
 - the **first charge is prorated** for the remaining portion of the current
   billing period;
 - from the **next renewal**, the normal full monthly price applies;

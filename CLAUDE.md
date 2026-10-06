@@ -90,9 +90,13 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   management never buys seats; nothing is auto-purchased. Seat cancellation is
   renewal-effective and unprorated, schedulable only when membership already
   fits, and never removes members; a downgrade follows the same fit-first rule.
-  A seat or storage add-on bought mid-period is usable immediately with a
-  prorated first charge. A charged disclosure change consumes a Unit of the
-  original video's quality, or does not happen.
+  A seat or +50 GB storage block bought mid-period is usable immediately with a
+  prorated first charge. Storage blocks are repeatable up to the plan cap
+  (Standard 2 / 150 GB, Premium 5 / 450 GB); a purchase that would reach the next
+  plan's base is rejected. A charged disclosure change consumes a Unit of the
+  original video's quality, or does not happen; a logo-only change is free, and
+  disclosure + logo together counts as one disclosure change. Technical validity
+  never creates a charge on its own.
 - Keep one internal, overlay-free **Clean Master** per deliverable; produce the
   customer output from it and recompose later disclosure/logo changes from it
   with **no provider call**. It is outside customer quota and never

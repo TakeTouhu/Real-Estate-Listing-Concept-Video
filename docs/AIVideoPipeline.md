@@ -130,13 +130,22 @@ equipment, unnatural motion, prohibited content, a missing or wrong disclosure f
 the selected mode, wrong duration, and wrong output format. Retry only retryable
 scene failures within configured limits.
 
-Validation decides **technical validity**, which is what settles an applicable
-reserved Unit as consumed. It does not decide whether the customer will like the
-result, and it never *creates* a charge: a generation or regeneration consumes
-its reserved Unit, but a disclosure-mode recomposition consumes one only at a
-charging boundary (the 4th, 7th, … completed change; changes 1–3 are free —
-ADR-0052 Decision 9). Whether a logo-only recomposition consumes a Unit is an
-open decision (ADR-0052 Decision 13) and must not be assumed either way.
+Validation decides **technical validity**, which is **required for delivery** but
+does not by itself create a charge. A Unit is consumed only when the admitted
+operation carries an applicable customer Unit reservation under the product
+contract:
+
+- a generation or paid regeneration consumes its reserved Unit;
+- a **charged** disclosure recomposition — the 4th, 7th, … completed change —
+  consumes a Unit of the original video's quality (ADR-0052 Decision 9);
+- disclosure changes 1–3 and **logo-only** recompositions are **free**: they
+  reserve no Unit, so a valid result consumes nothing (ADR-0052 Decisions 9
+  and 13);
+- a disclosure + logo change in one operation is one disclosure change;
+- a charged recomposition that fails technically **releases** its reservation
+  (ADR-0052 Decision 19).
+
+Validity also does not decide whether the customer will like the result.
 
 ## Delivery, not publication
 

@@ -188,7 +188,10 @@ A **scheduled additional-seat reduction** and a **scheduled plan downgrade** mus
 each be representable as pending until the next renewal, so member additions can
 be checked against the committed next-period entitlement before then (ADR-0053
 Decisions 3B and 5A). Add-on purchases need their purchase time and prorated
-first charge recorded as billing evidence. No field names are chosen here.
+first charge recorded as billing evidence. Storage add-ons are a **count of
+active +50 GB blocks**, with scheduled per-block cancellations, so the plan cap
+(ADR-0053 Decision 4) can be checked at purchase and the recurring charge derived
+as blocks × price. No field names are chosen here.
 
 ### AuditLog
 

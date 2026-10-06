@@ -136,6 +136,9 @@ One organization-level logo, OWNER/ADMIN managed, PNG/WebP including transparent
 background, per-video ON/OFF with default ON, placed so it does not interfere
 with the disclosure, scaled relative to output dimensions. Disclosure mode and
 logo are independent. **No forced VTaVision watermark.** Available on all plans.
+**Changing only the logo on a video is free** — no Unit, not counted as a
+disclosure change — and a disclosure + logo change together counts as one
+disclosure change (ADR-0052 Decisions 9 and 13).
 Multi-brand and branch-specific templates are post-release.
 
 ## Room classification

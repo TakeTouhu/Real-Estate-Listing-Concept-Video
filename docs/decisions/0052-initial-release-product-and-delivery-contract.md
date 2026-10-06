@@ -328,7 +328,18 @@ Counting rules:
 - `A → B → A` counts as **two** changes;
 - Mode C authorization and consent apply **every time** Mode C is selected;
 - customer content regeneration is separate and consumes its normal Unit;
-- a newly generated content video gets a **fresh allowance of 3** free changes.
+- a newly generated content video gets a **fresh allowance of 3** free changes;
+- a change that alters **both** disclosure mode and logo in one operation is
+  **one** disclosure change, charged (or not) by this accounting alone; a
+  **logo-only** change is free and is not counted here (Decision 13).
+
+```text
+disclosure changes 1–3   free, even if the logo also changes
+4th completed change     1 Unit of the original video's quality, logo or not
+changes 5–6              covered by that block
+7th completed change     1 Unit of the original video's quality
+logo-only change         free, not counted
+```
 
 ### Which Unit a charged disclosure change consumes
 
@@ -713,11 +724,14 @@ Rules:
 - changing only the logo on a video uses **recomposition**, not an AI Provider
   regeneration — from the Clean Master once scene videos have expired
   (Decision 17);
-- **open gate — whether a logo-only recomposition consumes a Unit.** No approved
-  rule says. Decision 9's free-three-then-charged accounting is written for
-  disclosure-mode changes, and nothing states whether a logo-only change is free,
-  charged, or counted toward that allowance — or how a single change of both is
-  counted. Not to be assumed; tracked in `docs/decisions/TODO.md`;
+- **a logo-only recomposition is free** (decision gate CLOSED): it consumes no
+  Unit, reserves no customer Unit, and does **not** increment the
+  disclosure-change count. It is still recomposition from the Clean Master, still
+  passes normal technical validation before it becomes a new deliverable/version,
+  and if it fails technically the previous valid deliverable is retained;
+- **a change of disclosure mode and logo in the same operation counts as one
+  disclosure change** under Decision 9 — no separate logo charge, no separate
+  logo counter. Logo participation never adds a Unit;
 - **no forced VTaVision watermark** in the initial release;
 - available to **all** initial-release plans.
 

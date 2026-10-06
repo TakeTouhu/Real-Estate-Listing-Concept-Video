@@ -750,14 +750,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Twenty further business
+> This section predates the initial-release contract. Twenty-two further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master, additional-seat cancellation, mid-period purchases, downgrade fit and
-> charged-recomposition quality — were settled later and are recorded under *Decision gates — CLOSED*
+> charged-recomposition quality, logo-only recomposition and storage blocks — were
+> settled later and are recorded under *Decision gates — CLOSED*
 > below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
 > three places; none is the complete ledger on its own.
 
@@ -1236,6 +1237,16 @@ them is **built**. Each item below records the settled decision and what remains
       block member growth past the pending entitlement, recalculate when the
       downgrade is cancelled or changed, and never select, delete or deactivate
       users or buy seats.
+- [ ] **Distinguish free from charged recomposition** (ADR-0052 Decisions 9
+      and 13): no Unit reservation or consumption for logo-only changes or
+      disclosure changes 1–3; a combined disclosure + logo change counted once;
+      validation must never turn a free recomposition into a charge.
+- [ ] **Build repeatable storage blocks** (ADR-0053 Decision 4): block-count
+      representation; recurring charge = active blocks × price; immediate
+      prorated block purchase; per-plan cap enforced at purchase (Standard 2 /
+      150 GB, Premium 5 / 450 GB; Enterprise contract-governed, no guessed
+      constant); per-block renewal cancellation; quota re-evaluation after any
+      block or plan change; over-quota data retained, never auto-deleted.
 - [ ] **Build quality-aware charged disclosure recomposition** (ADR-0052
       Decision 9): preserve the original video's quality, apply the
       eligibility-first order for it, count Base Units used for HQ against the
@@ -1260,30 +1271,40 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Two gates, raised by the exact-head review of `21286c4`. **Neither may be
+One gate, exposed while recording the storage block caps. **It must not be
 guessed.**
 
-- [ ] **Decide whether a logo-only recomposition consumes a Unit.** ADR-0052
-      Decision 13 makes it a recomposition, not regeneration, but no rule says
-      whether it is free, charged, or counted toward Decision 9's
-      free-three-then-charged disclosure allowance, nor how one change of both
-      disclosure and logo is counted. Recorded at ADR-0052 Decision 13.
-- [ ] **Decide whether the +50 GB storage add-on can be stacked.** A single
-      optional entitlement, or a repeatable block an organization may hold
-      several of — which sets the quota, the recurring charge, and whether a
-      cancellation removes one block or all added capacity. Recorded at ADR-0053
-      Decision 4.
+- [ ] **Decide what happens to storage blocks above the target plan's cap on a
+      downgrade.** Premium may hold up to 5 blocks, Standard at most 2. When a
+      Premium organization with 3–5 blocks schedules a downgrade to Standard,
+      nothing says whether the excess must be cancelled before the downgrade can
+      be scheduled, is cancelled at renewal with the plan change, or may be kept
+      above Standard's cap. Paid blocks must not be silently discarded. Recorded
+      at ADR-0053 Decision 3B.
 
 ### Decision gates — CLOSED
 
-Twenty decisions: the two gates from the first PR review, eight recorded with
-them, the two raised by the exact-head review of those closures, the
+Twenty-two decisions: the two gates from the first PR review, eight recorded
+with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
-additional-seat cancellation, and the three closed last — mid-period purchases,
-downgrade fit, and charged-recomposition quality. **Each is settled as policy and unbuilt as code**; the
+additional-seat cancellation, mid-period purchases, downgrade fit,
+charged-recomposition quality, and the two closed last — logo-only
+recomposition and repeatable storage blocks. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **Logo-only recomposition — CLOSED.** **Free**: no Unit reserved or
+      consumed, no disclosure-change count increment; still validated before
+      delivery, and a failure keeps the previous deliverable. A disclosure +
+      logo change in one operation is **one** disclosure change; logo never adds
+      a Unit. ADR-0052 Decisions 9 and 13.
+- [x] **Storage add-on quantity — CLOSED.** A **repeatable +50 GB block**,
+      charged at active blocks × ¥1,500/month. Caps keep each plan below the
+      next plan's base: **Standard max 2 blocks / 150 GB**, **Premium max 5 /
+      450 GB**, enforced by rejecting the purchase. Enterprise has no
+      tier-derived cap and no invented maximum — its ceiling is contractual and
+      Safety-Guard governed, not "unlimited". Cancellation is per block at
+      renewal, no refund, no deletion. ADR-0053 Decision 4.
 - [x] **Mid-period seat / storage add-on purchase — CLOSED.** Usable
       **immediately**, first charge **prorated** for the rest of the period,
       full monthly price from the next renewal; requires `billing.manage`;

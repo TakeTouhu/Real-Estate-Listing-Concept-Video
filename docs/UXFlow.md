@@ -280,7 +280,7 @@ Before generation show:
 - selected quality (Normal / HQ) and duration
 - number of scenes
 - rights confirmation and the selected AI-disclosure mode
-- that a technically valid delivered video consumes the Unit regardless of
+- that a technically valid delivered generation consumes its Unit regardless of
   whether it is liked, downloaded or used
 - that **cancellation is unavailable once a paid Provider request has been
   submitted**
@@ -332,6 +332,15 @@ The delivered video appears in the customer's private workspace.
   recomposition, with no provider call, after scene videos have expired. A
   charged change uses a Unit of the **original video's quality**; if none is
   eligible, say so before the change and do not offer a different-quality Unit
+
+**A logo-only change is free** and does not use up a disclosure change; a
+disclosure + logo change together counts as one disclosure change (ADR-0052
+Decisions 9 and 13).
+
+**Storage purchase** offers +50 GB blocks only while the plan's cap allows one
+more — Standard up to 150 GB, Premium up to 450 GB — and otherwise points the
+organization to the next plan rather than accepting the purchase (ADR-0053
+Decision 4).
 
 **A running job's disclosure and logo settings are locked** once it is admitted
 (ADR-0052 Decision 10). The UI must not offer to change them mid-flight, and a
