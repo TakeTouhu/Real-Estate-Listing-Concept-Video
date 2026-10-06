@@ -63,7 +63,15 @@ Protect customer property images, generated videos, billing data, credentials, a
   new Mode C initiations but deletes no consent evidence, modifies no completed
   video, and removes no audit history. Because the authority is `OWNER`-only, it
   is always exercised by a mandatory-MFA actor; no additional step-up mechanism
-  is introduced.
+  is introduced. **Mode C eligibility is frozen at admission**: a job admitted as
+  Mode C keeps it through delivery, and revocation or organization-level
+  disablement governs only jobs admitted later (ADR-0052 Decision 10).
+- **Charge-changing customer actions require `billing.manage`** (ADR-0053
+  Decision 5A) — `OWNER`/`BILLING`, never `ADMIN` by default. `billing.view`
+  authorizes no mutation, and no member-management or upload action may create a
+  charge implicitly.
+- **The Clean Master is internal**: never customer-exposed or downloadable, and
+  deleted with its content's lifecycle (ADR-0052 Decision 17).
 - **Recovery from a terminal internal technical failure is not a customer
   capability.** No role template reaches it — not `OWNER`, not `ADMIN`. It is an
   internal operator privilege, separate from support-content access, billing

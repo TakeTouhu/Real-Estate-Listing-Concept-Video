@@ -111,6 +111,18 @@ selected route.
 logo on an existing video. Neither is a new AI Provider content call (ADR-0052
 Decisions 9 and 13).
 
+Composition therefore preserves one overlay-free **Clean Master** per deliverable
+and produces the customer-facing output from it by applying the disclosure/logo
+layer. Scene videos are still deleted 30 days after final completion; after that,
+a disclosure or logo change recomposes from the Clean Master — validate, then
+publish as the new version — with **no provider call** (ADR-0052 Decision 17).
+
+**Disclosure conditions are frozen at admission** (ADR-0052 Decision 10). A job
+admitted as Mode C stays Mode C through delivery even if `disclosure.none` is
+revoked or organization-level Mode C is disabled while it runs: there is no
+pre-delivery re-check and no automatic C → A fallback. Those changes govern only
+generations admitted afterwards.
+
 ## Quality validation
 
 Detect broken frames, flicker, abrupt structural changes, disappearing/duplicated

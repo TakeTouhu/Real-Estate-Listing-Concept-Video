@@ -328,7 +328,19 @@ The delivered video appears in the customer's private workspace.
 - the disclosure mode the video was produced with
 - request a **paid** regeneration (ADR-0052 Decision 4)
 - change disclosure mode — a recomposition, three free changes per video and
-  then 1 Unit per further block of three (ADR-0052 Decision 9)
+  then 1 Unit per further block of three (ADR-0052 Decision 9); still a
+  recomposition, with no provider call, after scene videos have expired
+
+**A running job's disclosure and logo settings are locked** once it is admitted
+(ADR-0052 Decision 10). The UI must not offer to change them mid-flight, and a
+later change to the organization's Mode C setting or a user's `disclosure.none`
+applies only to new requests — never to a job already running.
+
+**Purchases, plan changes and cancellation are shown only to holders of
+`billing.manage`** — `OWNER` and `BILLING` by default, not `ADMIN` (ADR-0053
+Decision 5A). An `ADMIN` adding a member when no seat remains, or uploading at
+the storage limit, is told that a billing user must purchase capacity; nothing is
+bought implicitly.
 
 There is **no approve or reject control** and no comment-on-approval flow.
 Preview exists for the customer's own judgement before they decide to use the

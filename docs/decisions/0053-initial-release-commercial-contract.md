@@ -238,7 +238,8 @@ consumes none and has its reservation released (ADR-0052 Decision 19).
 
 For **Standard and Premium self-service** subscriptions:
 
-- the customer may **request cancellation at any time**;
+- the customer may **request cancellation at any time** — by a holder of
+  `billing.manage` (Decision 5A);
 - cancellation takes effect at the **end of the current billing period**;
 - service remains available through the paid period;
 - **no prorated subscription refund**;
@@ -265,7 +266,8 @@ contract**, not this clause.
 
 ## Decision 3B — Plan upgrade and downgrade
 
-Self-service **Standard ↔ Premium** plan changes.
+Self-service **Standard ↔ Premium** plan changes, each requiring
+`billing.manage` (Decision 5A).
 
 ### Upgrade — immediate
 
@@ -309,8 +311,8 @@ If membership exceeds the new plan's included-user allowance:
 - **do not silently delete users;**
 - **do not automatically purchase additional seats;**
 - require the organization to reduce users, or to explicitly purchase the
-  appropriate additional seats, before or at the transition as the product
-  implementation permits.
+  appropriate additional seats — a `billing.manage` action (Decision 5A) —
+  before or at the transition as the product implementation permits.
 
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
@@ -343,35 +345,12 @@ Additional storage — **PROVISIONAL**:
 +50 GB = ¥1,500 / month, tax-exclusive
 ```
 
-Organization-level; OWNER/ADMIN purchase and cancel; no auto-overage;
+Organization-level; purchase and cancel require **`billing.manage`** — `OWNER`/`BILLING`
+by default (Decision 5A; this supersedes the earlier "OWNER/ADMIN purchase and
+cancel"); no auto-overage;
 cancellation effective at renewal. If cancellation puts current usage over quota,
 existing data remains and new upload/generation is blocked until usage is reduced
 or storage is repurchased.
-
-### Open gate — who may take actions that change what the organization is charged
-
-**Not decided; the approved texts conflict.** "OWNER/ADMIN purchase and cancel"
-above was approved for the storage add-on, while ADR-0052 Decision 10 later
-approved `billing.manage` for `OWNER` and `BILLING` only, kept it `OWNER`-only to
-grant, and stated that `ADMIN` does not manage billing. Read together, the
-storage rule lets `ADMIN` start a recurring ¥1,500/month charge the billing
-separation says it cannot make — and excludes `BILLING`, the one role created to
-make such charges.
-
-The same question is unanswered, rather than contradicted, for every other
-action that changes what the organization pays: purchasing a Normal or HQ Unit
-package ("customer approval is required", Decision 2 — approved by whom?),
-self-service plan upgrade and downgrade (Decision 3B), subscription cancellation
-(Decision 3A), and purchasing additional user seats (Decision 1, and the
-downgrade rule that may require it).
-
-**Do not resolve this by assumption.** Tying all of them to `billing.manage`
-would silently remove an approved `ADMIN` right; keeping `OWNER`/`ADMIN` would
-keep a stated separation decorative. Tracked in `docs/decisions/TODO.md`.
-
-**This price is explicitly provisional and must be validated against production
-cost and egress economics before Commercial Launch.** It is recorded as an open
-gate, not as settled pricing.
 
 ## Decision 5 — Billing and payment channels
 
@@ -391,6 +370,49 @@ analysis** (ADR-0054).
 possible commercial contract record.** Sales-assisted customers must be
 representable without a Stripe subscription object. The authoritative
 selling-price catalog belongs inside VTaVision's own commercial model.
+
+## Decision 5A — Authority for commercial mutations
+
+**Decision gate CLOSED.** One rule:
+
+> **Any customer action that changes what the organization is charged requires
+> `billing.manage`.**
+
+Under the default role matrix (ADR-0052 Decision 10) that means **`OWNER` and
+`BILLING`**. **`ADMIN` does not hold `billing.manage`** and is not authorized for
+these actions merely because it manages operational content and users. `ADMIN`
+may still *view* billing where it holds `billing.view`; viewing authorizes no
+mutation.
+
+It applies to at least:
+
+- purchasing additional Unit packages;
+- purchasing or cancelling additional user seats;
+- purchasing or cancelling the storage add-on (superseding the earlier
+  "OWNER/ADMIN purchase and cancel" in Decision 4);
+- Standard/Premium self-service plan upgrade and downgrade;
+- Standard/Premium subscription cancellation;
+- any other self-service action that alters a recurring or one-time charge.
+
+**Member management is not seat purchase.** `ADMIN` may manage users within
+already-purchased capacity, as the authorization model permits. When no seat
+entitlement remains, nothing is auto-purchased and no member-management action
+creates a charge: a holder of `billing.manage` must explicitly purchase an
+additional seat, after which ordinary user management proceeds.
+
+**Storage limit.** At the limit nothing is auto-purchased and no `ADMIN` action
+creates a charge implicitly; `OWNER`/`BILLING` may explicitly purchase or cancel
+the storage add-on.
+
+**Enterprise.** Commercial changes remain sales-assisted and contract-governed.
+`OWNER`/`BILLING` may initiate or request a change where the product supports it,
+but the application must **not** assume a self-service action changes an
+Enterprise contract amount; the executed contract, quotation and approval process
+govern.
+
+**Not a billing action.** Unrelated high-risk ownership operations — organization
+deletion, for example — stay governed by the authorization and ownership contract
+(ADR-0052 Decision 10), not by `billing.manage` alone.
 
 ## Decision 6 — SLA
 

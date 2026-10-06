@@ -67,6 +67,12 @@ Billing rules:
 | Annual prepayment / discount | **not offered** | individually approved contract terms only |
 
 **There is no platform-wide annual-prepayment discount** (ADR-0053 Decision 1A).
+**Every charge-changing customer action requires `billing.manage`** —
+`OWNER`/`BILLING` by default, never `ADMIN` (ADR-0053 Decision 5A). That covers
+Unit packages, seats, the storage add-on, upgrade, downgrade and cancellation.
+Member management never buys a seat, reaching a limit never buys anything, and
+Enterprise changes stay sales-assisted.
+
 Note the open **implementation delta**: the runtime pricing code still assumes a
 12-month contract and a 5% prepayment discount for every plan. ADR-0053 is
 authoritative; the code must be reconciled before commercial billing is
@@ -205,10 +211,13 @@ provider-neutral `ObjectStorage` port. The domain must not depend on Google Clou
 SDK types (ADR-0054 Decision 1).
 
 Retention (ADR-0052 Decision 17): source and normalized images while the
-property/project exists; scene videos 30 days after final completion;
-composition temp files immediately; current final video until the customer
-deletes it; old final versions 30 days; customer-deleted content 30-day trash
-then physical deletion; Audit/Billing/Consent on the separate legal lifecycle.
+property/project exists; scene videos 30 days after final completion; the
+internal overlay-free **Clean Master** with its content's lifecycle (outside
+customer quota, never customer-downloadable); composition temp files promptly;
+current final video until the customer-content lifecycle deletes it; old final
+versions 30 days; customer-deleted content 30-day trash then physical deletion;
+Audit/Billing/Consent on the separate legal lifecycle. The Clean Master is a
+VTaVision storage cost, not something the storage add-on buys.
 
 Quota thresholds: 80% warn OWNER/ADMIN, 90% stronger warning plus creators, 100%
 block new uploads and generation while preview/download/delete still work. **No

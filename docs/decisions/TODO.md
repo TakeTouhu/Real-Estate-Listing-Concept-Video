@@ -750,14 +750,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Thirteen further business
+> This section predates the initial-release contract. Sixteen further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
-> ceilings and self-escalation, Normal/HQ Unit eligibility, and `disclosure.none`
-> grant authority — were settled later and are recorded under *Decision gates —
-> CLOSED* below, with the remaining open gates listed under *Decision gates —
-> OPEN* above it. Read all three places; none is the complete ledger on its own.
+> ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
+> grant authority, in-flight Mode C, commercial-mutation authority and the Clean
+> Master — were settled later and are recorded under *Decision gates — CLOSED*
+> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
+> three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
@@ -1086,8 +1087,14 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Enforce prospective revocation for new Mode C requests.** A revoked user
       cannot initiate a new Mode C generation or recomposition; revocation
       deletes no consent evidence, modifies no completed deliverable, and removes
-      no audit history. Behaviour for a request already admitted is the open
-      gate below and must not be guessed.
+      no audit history.
+- [ ] **Persist and freeze the admitted generation's disclosure contract.**
+      ADR-0052 Decision 10: disclosure mode, Mode C consent, and the
+      `disclosure.none` and organization-level eligibility used at admission are
+      captured immutably with the job. Reject mutation of an in-flight job's
+      disclosure/logo output settings; apply later permission and organization
+      changes only to newly admitted generations. No pre-delivery re-check and no
+      automatic C → A fallback.
 - [ ] **Build disclosure-mode change accounting.** Recomposition, not
       regeneration. Three free changes per content video, then 1 Unit per further
       block of three; the initial selection is not a change; the count increments
@@ -1120,8 +1127,15 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
-      composition temp, 30-day retained old versions and Audit/Billing records.
-      No automatic deletion, no automatic overage charge.
+      the internal Clean Master, composition temp, 30-day retained old versions
+      and Audit/Billing records. No automatic deletion, no automatic overage
+      charge.
+- [ ] **Produce and store a durable overlay-free Clean Master** at final
+      composition (ADR-0052 Decision 17) and produce every customer deliverable
+      from it by applying the disclosure/logo layer. Retain and delete it with
+      its content's lifecycle, including trash/recovery and legal hold; never
+      expose or allow download of it; and support disclosure/logo recomposition
+      after scene-video deletion with **no provider call**.
 - [ ] **Build the internal service-recovery budget.** `base-plan included-user
       slots × 1` → **3 / 10 / 30** per organization per renewal period, from base
       plan slots — **not** active users and **not** purchased additional seats —
@@ -1198,6 +1212,18 @@ them is **built**. Each item below records the settled decision and what remains
       downgrade at renewal with no deletion of content or users and no automatic
       seat purchase; and sales-assisted Enterprise transitions represented without
       a Stripe subscription object.
+- [ ] **Enforce `billing.manage` on every commercial mutation** (ADR-0053
+      Decision 5A): Unit packages, seats, storage add-on, upgrade, downgrade,
+      cancellation, and any other charge-changing action. `ADMIN`'s
+      `billing.view` must not authorize any of them, and any existing storage
+      add-on authorization built on the superseded "OWNER/ADMIN" rule must be
+      reconciled.
+- [ ] **Separate member management from seat purchase, and forbid implicit
+      charges.** Adding a member when no seat remains must fail and require an
+      explicit seat purchase by a `billing.manage` holder; reaching the storage
+      limit must never auto-purchase storage; no `ADMIN` action may create a
+      charge. Enterprise changes route to the sales-assisted path rather than
+      changing a contract amount automatically.
 - [ ] **Build the authenticated-webhook producer and the mandatory polling
       fallback** for `ReconciliationResolutionObservation` (ADR-0054 Decision 4),
       with verification, replay safety, deduplication, tenant resolution from
@@ -1211,53 +1237,42 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Three gates. The first surfaced while recording the `disclosure.none`
-revocation rule; the other two were raised by the exact-head review of
-`dd02ada`, and each is a conflict between two already-approved decisions rather
-than a gap in one. **None may be guessed.**
-
-- [ ] **Decide who may take actions that change what the organization is
-      charged.** ADR-0053 Decision 4 approved "OWNER/ADMIN purchase and cancel"
-      for the ¥1,500/month storage add-on; ADR-0052 Decision 10 later approved
-      `billing.manage` for `OWNER`/`BILLING` only and stated that `ADMIN` does not
-      manage billing. Together they let `ADMIN` start a recurring charge the
-      billing separation says it cannot, while excluding `BILLING`. The actor is
-      unspecified — not contradicted — for Unit package purchase, self-service
-      plan upgrade/downgrade, subscription cancellation and additional-seat
-      purchase. Tying everything to `billing.manage` would silently remove an
-      approved `ADMIN` right; keeping `OWNER`/`ADMIN` would make the separation
-      decorative. Recorded in ADR-0053 Decision 4.
-- [ ] **Decide recomposition after scene videos are deleted.** ADR-0052
-      Decisions 9 and 13 promise disclosure-mode and logo changes by
-      **recomposition** with no time limit, and say they are not regeneration;
-      Decision 17 deletes scene videos 30 days after completion, and the retained
-      final has disclosure and logo burned in, so a change such as A → C or logo
-      ON → OFF cannot be recomposed from it. After day 30 the options are to
-      retain clean inputs (a VTaVision cost, outside the customer quota), to limit
-      recomposition to the retention window, or to regenerate (a paid provider
-      call the decisions rule out). Recorded in ADR-0052 Decision 17.
-
-- [ ] **Decide whether Mode C gates are re-checked for a request already
-      admitted when a gate is withdrawn.** ADR-0052 Decision 10 settles what
-      revoking `disclosure.none` does to **new** Mode C initiations (blocked) and
-      to **completed** videos (untouched). It does not settle a Mode C
-      generation or recomposition **admitted before** the revocation — or before
-      organization-level Mode C was disabled, the same question for gate 1 — that
-      has not yet produced its deliverable. The approved wording is framed at
-      initiation, which points toward admission-time evaluation, but does not say
-      so for in-flight work. Re-checking before delivery would also need a
-      settlement answer for the reserved Unit, since Decision 19 is written for
-      technical failure rather than a withdrawn authorization. An
-      AI-transparency choice with billing consequences; **this does not reopen
-      the closed `disclosure.none` grant-authority decision.**
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
 
 ### Decision gates — CLOSED
 
-Thirteen decisions: the two gates from the first PR review, eight recorded with
-them, the two raised by the exact-head review of those closures, and the
-`disclosure.none` grant authority that synchronizing the grant ceiling exposed.
-**Each is settled as policy and unbuilt as code**; the implementation work each
-one creates is listed in the section above.
+Sixteen decisions: the two gates from the first PR review, eight recorded with
+them, the two raised by the exact-head review of those closures, the
+`disclosure.none` grant authority that synchronizing the grant ceiling exposed,
+and the three closed last — in-flight Mode C, commercial-mutation authority and
+the Clean Master. **Each is settled as policy and unbuilt as code**; the
+implementation work each one creates is listed in the section above.
+
+- [x] **Mode C in-flight behaviour — CLOSED.** Mode C conditions are **frozen at
+      generation admission**. The admitted job's disclosure mode, Mode C consent,
+      and the `disclosure.none` and organization-level eligibility used to admit
+      it are immutable through delivery. Revoking `disclosure.none` or disabling
+      organization-level Mode C while it runs affects **only generations admitted
+      afterwards**: no pre-delivery re-check, no automatic C → A fallback, no
+      Unit release for a later authorization change. ADR-0052 Decision 10.
+- [x] **Commercial-mutation authority — CLOSED.** Any customer action that
+      changes what the organization is charged requires **`billing.manage`** —
+      `OWNER`/`BILLING` by default, never `ADMIN`. Covers Unit packages, seats,
+      the storage add-on (superseding "OWNER/ADMIN purchase and cancel"),
+      Standard/Premium upgrade, downgrade and cancellation. Member management is
+      separate from seat purchase and never creates a charge; nothing is
+      auto-purchased; Enterprise stays sales-assisted; organization deletion is
+      not a billing action. ADR-0053 Decision 5A.
+- [x] **Recomposition after scene-video deletion — CLOSED.** One overlay-free
+      **Clean Master** per deliverable — no burned-in disclosure or logo — is
+      retained with its content's lifecycle (trash/recovery included, deleted at
+      final physical deletion, subject to legal hold). Scene videos still delete
+      after 30 days. The Clean Master is internal, excluded from customer quota,
+      not customer-downloadable, consumes no Unit and is not billed. Later
+      disclosure/logo changes recompose from it with **no provider call**.
+      ADR-0052 Decision 17.
 
 - [x] **`disclosure.none` grant authority — CLOSED.** A **protected permission**
       with **`OWNER`-only** grant and revoke authority. `ADMIN` may not grant,

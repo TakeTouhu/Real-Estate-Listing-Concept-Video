@@ -108,6 +108,14 @@ Avoid exposing full addresses where not required.
 
 Unique constraint: `(organization_id, idempotency_key)`.
 
+**The admitted disclosure contract is immutable on the job** (ADR-0052
+Decision 10). At admission the job must capture, and never afterwards mutate: its
+disclosure mode, the per-generation Mode C consent, the `disclosure.none`
+eligibility and the organization-level Mode C eligibility used to admit it, and
+the per-generation disclosure/logo settings that define its output. Organization
+and user authorization state stays mutable, but a change to it affects only jobs
+admitted later. No field names are chosen here.
+
 ### ProviderGeneration
 
 `id`, `organization_id`, `generation_job_id`, `storyboard_scene_id`, `provider`, `model_id`, `provider_prediction_id_encrypted`, `request_hash`, `status`, `estimated_provider_cost`, `actual_provider_cost`, `temporary_output_expires_at`, timestamps
@@ -135,6 +143,14 @@ The implemented equivalent today is `GenerationDeliverableVersion` plus
 `GenerationDeliverableComposition` (its receipt) and
 `GenerationDeliverableValidation` (its verdict); publication is the job's
 `currentDeliverableVersionId` pointer rather than a status on the output row.
+
+**Clean Master** (ADR-0052 Decision 17): each deliverable needs one durable,
+**overlay-free** master — no burned-in disclosure or logo — from which the
+customer-facing output is produced by applying the disclosure/logo layer, and
+from which later disclosure/logo changes are recomposed after scene videos are
+deleted. It is internal: excluded from customer quota, never customer-exposed or
+downloadable, retained and deleted with its content's lifecycle (trash/recovery
+included, legal hold where applicable). Its representation is not chosen here.
 
 ### CreditLedger
 

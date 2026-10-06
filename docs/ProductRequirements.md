@@ -120,7 +120,11 @@ eligible (ADR-0052 Decision 10). Consent evidence and required wording meaning
 are in ADR-0052 Decision 8. Final legal wording requires counsel review before
 Commercial Launch.
 
-**Changing mode after generation is a recomposition**, not a new provider call.
+**Changing mode after generation is a recomposition**, not a new provider call
+— including after scene videos are deleted, by recomposing from the internal
+overlay-free Clean Master (ADR-0052 Decision 17). Mode C eligibility is
+**frozen at generation admission**: a later permission or organization change
+affects only new generations (ADR-0052 Decision 10).
 Three free changes per content video, then 1 Unit buys the next block of three
 (ADR-0052 Decision 9).
 
@@ -203,7 +207,10 @@ storage quotas, payment channels, SLA and legal retention are in ADR-0053.
 
 Standard and Premium are **1-month, auto-renewing, monthly-billed self-service**
 subscriptions with **no minimum commitment and no annual-prepayment discount**;
-Enterprise terms are individually agreed (ADR-0053 Decision 1A). Cancellation
+Enterprise terms are individually agreed (ADR-0053 Decision 1A). **Every
+charge-changing action — Unit packages, seats, storage add-on, upgrade,
+downgrade, cancellation — requires `billing.manage`** (`OWNER`/`BILLING` by
+default, not `ADMIN`; ADR-0053 Decision 5A). Cancellation
 takes effect at the end of the paid period with no prorated refund, while refunds
 for duplicate or erroneous billing and legally required refunds remain owed
 (Decision 3A). Upgrades are immediate and charge the full unprorated price

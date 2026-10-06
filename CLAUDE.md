@@ -80,6 +80,18 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   This holds for an initial generation, a paid regeneration and a disclosure/logo
   recomposition, and `BLOCKED` / `INVALID_MEDIA` / `INTEGRITY_MISMATCH` must not
   bill differently from one another.
+- **Mode C conditions are frozen at generation admission** (ADR-0052
+  Decision 10): an admitted job's disclosure contract is immutable; later
+  permission or organization changes affect only newly admitted generations. No
+  pre-delivery re-check, no automatic C → A fallback.
+- **Every charge-changing customer action requires `billing.manage`**
+  (`OWNER`/`BILLING` by default, never `ADMIN`; ADR-0053 Decision 5A). Member
+  management never buys seats; nothing is auto-purchased.
+- Keep one internal, overlay-free **Clean Master** per deliverable; produce the
+  customer output from it and recompose later disclosure/logo changes from it
+  with **no provider call**. It is outside customer quota and never
+  customer-downloadable; scene videos still delete after 30 days (ADR-0052
+  Decision 17).
 - Never expose the internal service-recovery budget to a customer. Its
   denominator is the **base plan's** included-user slots; purchased seats do not
   raise it.

@@ -307,7 +307,9 @@ legal text, and this ADR does not invent final legal text.
 ## Decision 9 — Changing disclosure mode after generation
 
 Changing A/B/C after generation is a **recomposition**, not a new AI Provider
-content-generation call.
+content-generation call. It recomposes from scene videos while they are retained,
+and from the overlay-free **Clean Master** afterwards (Decision 17), so it never
+requires a provider call.
 
 Per content video, in blocks of three:
 
@@ -553,6 +555,8 @@ schema is chosen here.
 
 - the user **cannot initiate a new Mode C generation** requiring
   `disclosure.none`;
+- a Mode C generation **already admitted** before the revocation completes as
+  admitted (see *Mode C conditions are frozen at generation admission* below);
 - existing **Mode C consent evidence is retained** — it remains historical
   evidence of what was consented to when, on the legal-retention schedule of
   ADR-0053 Decision 7;
@@ -560,26 +564,43 @@ schema is chosen here.
   invalidated solely because the permission was later revoked;
 - existing **audit history is not deleted.**
 
-#### Open gate — a Mode C request already admitted when a gate is withdrawn
+#### Mode C conditions are frozen at generation admission
 
-**Not decided here.** The rules above settle what revocation does to *new* Mode C
-initiations, and to *completed* videos. They do not settle the case in between: a
-Mode C generation or recomposition **admitted before** the user's
-`disclosure.none` was revoked — or before organization-level Mode C was disabled,
-which raises the same question for gate 1 — that has **not yet produced its
-deliverable.**
+**Decision gate CLOSED.** The disclosure mode and Mode C eligibility are
+evaluated **once, when a generation is admitted**. If the Mode C requirements are
+satisfied at that point, the generation is admitted as Mode C, and it keeps that
+frozen condition through completion and delivery:
 
-The approved revocation rule is framed at **initiation** ("cannot initiate a new
-Mode C generation"), which points toward evaluating the gates once, at
-admission — but it does not say so for work already in flight, and the gate-1
-case is not addressed anywhere. Either answer is defensible: treating the gates
-as satisfied at admission honours consent already given; re-checking before
-delivery means no undisclosed video is produced after the authority to request
-one was withdrawn. It is an AI-transparency choice with billing consequences
-— a re-check that refuses delivery would also need a settlement answer for the
-reserved Unit, and Decision 19 is written for technical failure rather than a
-withdrawn authorization — so neither is implemented as settled. **This does not reopen the grant-authority decision
-above, which is closed.** Tracked in `docs/decisions/TODO.md`.
+```text
+admission-time contract → freeze → execute → deliver according to that contract
+```
+
+Two kinds of state must be kept distinct:
+
+- **Mutable organization and user authorization state.** An `OWNER` may revoke a
+  user's `disclosure.none`, and `OWNER`/`ADMIN` may disable organization-level
+  Mode C, at any time — including while a job is running. Those changes apply
+  **only to generations admitted after the change.**
+- **Immutable admitted-job configuration and evidence.** For a job already
+  admitted, none of the following may be mutated: its disclosure mode; its
+  per-generation Mode C consent; the effective `disclosure.none` eligibility used
+  to admit it; the organization-level Mode C eligibility snapshot used to admit
+  it; and any other per-generation disclosure or logo setting that would alter
+  the admitted output contract.
+
+Consequently:
+
+- **there is no pre-delivery re-check** that turns an admitted Mode C job into
+  Mode A because a later organization or permission setting changed;
+- **there is no automatic Mode C → Mode A fallback** for an admitted job;
+- **no Unit is released** merely because an authorization or configuration
+  change happened after a valid admission;
+- completed historical videos remain unchanged, as already decided;
+- every **new** generation — including a later disclosure-mode recomposition,
+  which is its own admission — is evaluated against the organization and user
+  state current at **its own** admission time.
+
+No schema field names are chosen here.
 
 #### MFA
 
@@ -650,7 +671,8 @@ Rules:
 - changing the organization logo does **not** silently rewrite historical
   deliverables;
 - changing only the logo on a video uses **recomposition**, not an AI Provider
-  regeneration;
+  regeneration — from the Clean Master once scene videos have expired
+  (Decision 17);
 - **no forced VTaVision watermark** in the initial release;
 - available to **all** initial-release plans.
 
@@ -729,8 +751,9 @@ Project/property deletion follows the 30-day trash lifecycle (Decision 17).
 | Source images | while property/project exists |
 | Normalized images | while property/project exists |
 | Scene videos | delete 30 days after final completion |
-| Composition temporary files | delete immediately once no longer required |
-| Current final video | until the customer deletes it |
+| **Clean Master** (internal, overlay-free) | retained with the associated retained video/property content; follows the same trash/recovery lifecycle; physically deleted when that content is physically deleted, subject to legal hold where applicable |
+| Composition temporary files | delete promptly, once no longer required |
+| Current final video | until the applicable customer-content lifecycle deletes it |
 | Old final-video versions | 30 days |
 | Customer-deleted image/video/property | 30-day trash recovery, then physical deletion |
 | Audit / Billing / Consent | separate legal-retention lifecycle (ADR-0053) |
@@ -751,33 +774,58 @@ days.
 Customer storage quota **counts**: retained source images, retained normalized
 images, retained current final video.
 
-Customer storage quota **does not count**: internal Scene media, composition
-temp, 30-day retained old final versions, Audit/Billing records.
+Customer storage quota **does not count**: internal Scene media, the internal
+**Clean Master**, composition temp, 30-day retained old final versions,
+Audit/Billing records.
 
 Quota sizes, thresholds, blocking behaviour and additional-storage pricing are in
 ADR-0053.
 
-### Open gate — recomposition after scene videos are deleted
+### Clean Master — recomposition after scene videos are deleted
 
-**Not decided; two approved decisions collide after day 30.** Decision 9
-(disclosure-mode change) and Decision 13 (logo change) both promise
-**recomposition** with no time limit, and both say recomposition is *not* a new
-AI provider call. But this decision deletes **scene videos 30 days after final
-completion**, and the only retained output — the current final video — already
-has its disclosure and logo burned in. A change such as Mode A → C, Mode A → B, or
-logo ON → OFF cannot be recomposed from that file.
+**Decision gate CLOSED.** Decisions 9 and 13 promise disclosure-mode and logo
+changes by recomposition with no time limit, and this decision deletes scene
+videos after 30 days. The two are reconciled by retaining **one overlay-free
+Clean Master** per deliverable.
 
-So after day 30 one of the following must be true, and none is approved:
+**Definition.** During or following final composition, one durable Clean Master
+is preserved. It contains the finished content needed to recreate the
+deliverable — the final edited visual sequence and the other non-brand,
+non-disclosure composition elements — and it **must not** contain a burned-in AI
+disclosure or a burned-in organization logo. The customer-facing deliverable is
+produced *from* the Clean Master by applying the selected disclosure and logo
+layer. Codec, container and runtime representation are not specified here.
 
-- **retain clean inputs** — the scene videos or a clean master — for as long as
-  recomposition is offered, which is a cost VTaVision absorbs, since internal
-  scene media does not count toward the customer's quota;
-- **limit recomposition to the retention window**, which narrows the feature
-  Decisions 9 and 13 describe; or
-- **regenerate**, which is a paid provider call and contradicts the rule that a
-  disclosure or logo change is not regeneration.
+**Scene videos still delete 30 days after final completion.** They are **not**
+retained indefinitely to support later disclosure or logo changes; that is
+exactly what the Clean Master replaces.
 
-Do not implement any of them as settled. Tracked in `docs/decisions/TODO.md`.
+**Retention.** The Clean Master is retained with the associated retained
+video/property content; if the customer deletes that content, it follows the same
+approved trash/recovery lifecycle; it is physically deleted when that content
+reaches final physical deletion. No orphan Clean Master is kept after its owning
+content is physically deleted, absent a separate legal hold.
+
+**Internal only.** It is an internal derived asset: **not counted toward the
+customer's storage quota** — an accepted VTaVision infrastructure cost, and not
+something the +50 GB storage add-on buys — and **not directly downloadable or
+otherwise customer-exposed.** Customers see only customer-facing final versions.
+
+**Later changes.** After scene videos are deleted, a disclosure-mode or logo
+change runs:
+
+```text
+Clean Master → apply requested disclosure/logo → validate → publish as the new deliverable/version
+```
+
+No AI provider generation call is required, so these remain **recomposition, not
+regeneration**. All Decision 9 disclosure-change accounting is unchanged, and a
+logo-only change does not become a provider regeneration because scene videos have
+expired.
+
+**Cost.** Creating and retaining the Clean Master consumes **no customer Unit** and
+is **not separately billed**; it is a VTaVision infrastructure cost. No storage-cost
+estimate is recorded here as a contractual or product figure.
 
 ## Decision 18 — Authentication
 
@@ -950,6 +998,16 @@ manufacture its own billing authority, which makes the separation decorative. It
 does mean the authorization model must be implemented as a ceiling check on every
 grant path, including group membership and Scope, rather than as a single
 `permission.manage` boolean.
+
+**Accepted cost.** Retaining one Clean Master per retained deliverable, outside
+the customer quota, is a standing storage cost VTaVision absorbs so that a
+disclosure or logo change never becomes a paid regeneration. It is deliberately
+one master, not every scene video.
+
+**Accepted cost.** Freezing Mode C at admission means a video admitted as Mode C
+before a revocation is still delivered without disclosure. The alternative — a
+pre-delivery re-check — would make admission meaningless as a contract and would
+need a settlement rule for a withdrawn authorization.
 
 **Open implementation work** — none of this is built by this ADR. The AI
 disclosure is unrendered at every layer, the authorization model is not
