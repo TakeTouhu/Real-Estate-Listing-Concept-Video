@@ -330,17 +330,41 @@ Counting rules:
 - customer content regeneration is separate and consumes its normal Unit;
 - a newly generated content video gets a **fresh allowance of 3** free changes.
 
-### Open gate — which Unit a charged disclosure change consumes
+### Which Unit a charged disclosure change consumes
 
-**Not decided.** The 4th, 7th and later completed changes consume 1 Unit, but
-ADR-0053's quality-locked, eligibility-first consumption order is defined for
-**generation requests**, and this decision never says which quality class a
-charged recomposition belongs to. For an HQ video whose plan has exhausted its
-included HQ ceiling — a Standard organization, say — the fourth change could be
-refused for lack of an eligible HQ Unit, or could draw a Normal Base Unit or
-Normal add-on because no provider generation occurs. The outcomes differ
-materially for the customer and for revenue, so neither is assumed. Tracked in
-`docs/decisions/TODO.md`.
+**Decision gate CLOSED. A charged disclosure recomposition uses the quality of
+the original video.** That it is a recomposition and calls no provider does
+**not** make its Unit generic.
+
+- original **Normal** video → consumes a **Normal-eligible** Unit;
+- original **HQ** video → consumes an **HQ-eligible** Unit;
+- no cross-quality substitution and no conversion in either direction.
+
+It follows ADR-0053's quality-locked, eligibility-first order (Decisions 2–3)
+for the original video's quality:
+
+| Original | Draws from, in order | Ineligible |
+| --- | --- | --- |
+| Normal | eligible remaining Base Unit → oldest unexpired Normal add-on → … newest Normal add-on | HQ add-ons |
+| HQ | eligible remaining Base Unit **only while the included HQ ceiling remains** → oldest unexpired HQ add-on → … newest HQ add-on | Normal add-ons |
+
+A Base Unit used for an HQ disclosure recomposition **counts against the plan's
+included HQ ceiling** (Standard 1, Premium 5, Enterprise 10) exactly as any other
+HQ-quality consumption would.
+
+**No eligible Unit, no charged recomposition.** If a change reaches a charging
+boundary (the 4th, 7th, …) and no Unit eligible for the original video's quality
+exists, the recomposition is **not performed**: no different-quality Unit is
+consumed, no Unit is converted, and the paid change is **not** given away free.
+The customer must first obtain an eligible entitlement. For example, a Standard
+organization whose HQ video reaches a charged change after its single included
+HQ entitlement is spent cannot proceed that period — Standard cannot buy HQ
+add-ons, and a Normal add-on is not eligible.
+
+**Failure settlement is unchanged** (Decision 19): if an eligible Unit was
+reserved and the recomposition fails technically, the completed-change count does
+not increment, the reservation is **released**, the Unit is not consumed, and the
+previous valid video is retained.
 
 ## Decision 10 — Authorization model
 

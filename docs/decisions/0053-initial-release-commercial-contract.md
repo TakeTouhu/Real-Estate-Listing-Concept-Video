@@ -42,7 +42,9 @@ total.
 | Premium | ¥119,800 | 40 | 10 | 5 | available |
 | Enterprise | ¥298,000 | 100 | 30 | 10 | available |
 
-Additional user: **¥3,000 / user / month**, tax-exclusive.
+Additional user: **¥3,000 / user / month**, tax-exclusive — usable immediately
+on purchase with a prorated first period, full price from the next renewal
+(Decision 5A).
 
 **Buying additional users does not increase video generation Units.** User seats
 and generation capacity are separate goods.
@@ -302,10 +304,14 @@ concurrent-Job limit, included-user limit and other approved plan entitlements.
 **Previously purchased additional Units remain valid through their original
 entitlement period** — an upgrade does not void them and does not extend them.
 
-### Downgrade — at renewal
+### Downgrade — at renewal, and only once membership fits
 
-- effective at the **next billing renewal**;
-- **no current-period refund**, and no prorated refund;
+**A plan downgrade never takes effect during the current paid period.**
+
+- it may be requested and scheduled during the current period;
+- it takes effect **only at the next billing renewal**; until then the current
+  plan and all its entitlements stay in force;
+- **no current-period refund and no proration**;
 - **no automatic deletion** of stored content;
 - the next renewal uses the downgraded plan's limits.
 
@@ -313,24 +319,39 @@ If storage exceeds the downgraded quota after renewal: keep existing data, block
 new uploads and generation under the existing quota rule (Decision 4), and keep
 preview, download and delete available.
 
-If membership exceeds the new plan's included-user allowance:
+**Membership must fit before the downgrade can be scheduled — decision gate
+CLOSED.** A downgrade must never create an over-capacity membership state.
+Current membership must fit within the **next-period entitlement**: the target
+plan's included users plus the additional seats that will remain active next
+period.
 
-- **do not silently delete users;**
-- **do not automatically purchase additional seats;**
-- require the organization to reduce users, or to explicitly purchase the
-  appropriate additional seats — a `billing.manage` action (Decision 5A) —
-  before or at the transition as the product implementation permits.
+```text
+Premium → Standard
+Standard included users                      3
+additional seats remaining next period       5
+next-period entitlement                      8
+current members                             10
+→ warn: 2 users must be removed before the downgrade can proceed
+→ the downgrade cannot be scheduled while membership is 10
+→ once membership is 8 or fewer, it may be scheduled for the next renewal
+```
 
-#### Open gate — a downgrade that reaches renewal still over capacity
+If membership exceeds the next-period entitlement:
 
-**Not decided.** The rule above says what must not happen (no silent deletion, no
-automatic seat purchase) and what the organization must do, but not what the
-system does if renewal arrives while membership still exceeds the downgraded
-plan's allowance plus purchased seats: refuse or defer the downgrade and keep
-billing the old plan, apply it and enter an over-capacity state, restrict member
-access, or require fit before the downgrade can be scheduled at all — as
-additional-seat cancellation now does (Decision 5A). Each changes what is billed
-and who can sign in, so none is assumed. Tracked in `docs/decisions/TODO.md`.
+- show a clear warning to the person managing the downgrade, stating that users
+  must be removed before the plan change can proceed;
+- **do not** select, delete or deactivate users on the organization's behalf;
+- **do not** automatically purchase seats;
+- **do not** apply or schedule the downgrade while the organization is over
+  capacity.
+
+**While a downgrade is pending**, the next-period membership entitlement is
+recorded, and any member addition or invitation that would exceed it is blocked;
+the UI must make clear that the lower next-period limit is the reason. Otherwise
+the current paid plan governs access until renewal. Cancelling or changing the
+scheduled downgrade recalculates the next-period capacity. Exact UI wording is
+not fixed here. Because scheduling required fit and growth past it is blocked,
+renewal cannot arrive over capacity.
 
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
@@ -366,7 +387,9 @@ Additional storage — **PROVISIONAL**:
 Organization-level; purchase and cancel require **`billing.manage`** — `OWNER`/`BILLING`
 by default (Decision 5A; this supersedes the earlier "OWNER/ADMIN purchase and
 cancel"); no auto-overage;
-cancellation effective at renewal. If cancellation puts current usage over quota,
+usable immediately on purchase with a prorated first period (Decision 5A);
+cancellation effective at renewal with no prorated refund. The add-on **is
+initial-release scope**; only its price is provisional. If cancellation puts current usage over quota,
 existing data remains and new upload/generation is blocked until usage is reduced
 or storage is repurchased.
 
@@ -469,17 +492,28 @@ other commercial mutation. For Standard/Premium self-service:
   that would breach the committed next-period capacity is refused rather than
   allowed to create an over-capacity state.
 
-#### Open gate — first-period timing and charge for a mid-period purchase
+#### Mid-period purchase of a seat or the storage add-on
 
-**Not decided.** Cancellation timing is settled for seats and the storage add-on;
-**purchase** timing is not. When an additional seat or the +50 GB storage add-on
-is bought partway through a period, nothing states whether it is usable
-immediately, or whether the first charge is the full monthly price, prorated, or
-deferred to renewal. Decision 5A's "after which ordinary user management
-proceeds" suggests immediate access but fixes no charge, and an organization at
-its storage limit buying capacity to resume work needs the same answer.
-Independent billing implementations would otherwise charge different amounts
-for the same purchase. Tracked in `docs/decisions/TODO.md`.
+**Decision gate CLOSED.** Both follow one shape:
+
+```text
+IMMEDIATE USE + PRORATED FIRST PERIOD + FULL MONTHLY PRICE FROM NEXT RENEWAL
+```
+
+- an explicitly purchased **additional seat** (¥3,000 / user / month,
+  tax-exclusive) or **+50 GB storage add-on** (¥1,500 / month, tax-exclusive,
+  price provisional per Decision 4) is **usable immediately**;
+- the **first charge is prorated** for the remaining portion of the current
+  billing period;
+- from the **next renewal**, the normal full monthly price applies;
+- purchase requires `billing.manage`; nothing is purchased automatically, and no
+  member-management or upload action creates a charge;
+- there is no automatic storage-overage billing.
+
+Cancellation stays as already decided — at the next renewal, with no prorated
+refund — so proration applies to the first period of a purchase only, never to a
+cancellation. The proration calculation method (day basis, rounding) is an
+implementation detail of the billing integration and is not fixed here.
 
 A seat cancellation is **not** user deletion, and never triggers it. This rule
 matches the other renewal-effective changes — subscription cancellation
@@ -731,9 +765,16 @@ on both sides would be fairer and considerably more machinery; this is the simpl
 rule, stated plainly so it can be disclosed rather than discovered.
 
 **Accepted cost.** Downgrade-at-renewal with no refund means a customer who
-downgrades early keeps paying the higher price to the period end. The alternative
+downgrades early keeps paying the higher price to the period end, and requiring
+membership to fit first means some customers must remove users before they can
+downgrade at all. The alternative
 — immediate downgrade with a credit — would let a customer consume a Premium
 allowance and then pay Standard for it.
+
+**Accepted cost.** Purchases are prorated but cancellations are not. That
+asymmetry is deliberate: a customer buying capacity mid-period pays only for what
+they can use, while a cancellation never generates a refund for capacity already
+paid for.
 
 **Accepted cost.** Support targets are business-hours only, so an Enterprise
 customer reporting a non-Sev1 problem on Friday evening may wait until Monday.
@@ -746,10 +787,6 @@ friendlier and would also make the ×1.50 HQ package pointless, since every HQ
 generation could be funded at the ×1.20 price. The lock is what makes the two
 prices mean anything, so the cost is disclosure: the constraint must be legible
 before purchase, not discovered at generation time.
-
-**Explicitly provisional.** Additional-storage pricing (¥1,500 / +50 GB) is
-approved only as a working figure and must be validated against measured
-production storage and egress cost before Commercial Launch.
 
 **Not decided here.** No minimum gross-margin percentage is fixed — see ADR-0054
 Decision 3. Final legal wording for Terms, Privacy and Mode C consent is counsel's

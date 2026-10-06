@@ -98,11 +98,18 @@ consumed** (Standard 15 with 10 used → Premium gives 30 remaining, never 45 or
 55); storage, concurrency and included-user limits rise immediately; previously
 purchased additional Units keep their original entitlement period.
 
-**Downgrade:** effective at the **next renewal**; no refund; no automatic content
-deletion. If storage then exceeds quota, keep the data and block new
-upload/generation. If membership exceeds the new included-user allowance, **do
-not delete users and do not auto-purchase seats** — the organization reduces
-users or explicitly buys seats (ADR-0053 Decision 3B). Enterprise transitions are
+**Downgrade:** never effective in the current period — only at the **next
+renewal**; no refund; no automatic content deletion. If storage then exceeds
+quota, keep the data and block new upload/generation. **It can be scheduled only
+once current membership fits** the target plan's included users plus the
+additional seats remaining next period; otherwise the administrator is warned how
+many users must be removed, and **no user is selected, deleted or deactivated and
+no seat is bought**. While pending, member growth past that entitlement is
+blocked (ADR-0053 Decision 3B).
+
+**Mid-period purchases** of a seat or the +50 GB storage add-on are usable
+immediately, with a prorated first charge and the full monthly price from the
+next renewal (ADR-0053 Decision 5A). Enterprise transitions are
 sales-assisted.
 
 ### Internal service-recovery budget

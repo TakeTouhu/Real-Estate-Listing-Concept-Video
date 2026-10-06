@@ -750,14 +750,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Seventeen further business
+> This section predates the initial-release contract. Twenty further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
-> Master and additional-seat cancellation — were settled later and are recorded under *Decision gates — CLOSED*
-> below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
+> Master, additional-seat cancellation, mid-period purchases, downgrade fit and
+> charged-recomposition quality — were settled later and are recorded under *Decision gates — CLOSED*
+> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1209,8 +1210,9 @@ them is **built**. Each item below records the settled decision and what remains
       renewal; cancellation effective at period end with no proration; the refund
       exceptions that remain owed; immediate upgrade charging the full unprorated
       difference with the base-Unit ceiling **replaced minus Base Units consumed**;
-      downgrade at renewal with no deletion of content or users and no automatic
-      seat purchase; and sales-assisted Enterprise transitions represented without
+      downgrade at renewal, schedulable only once membership fits, with no
+      deletion of content or users and no automatic seat purchase; and
+      sales-assisted Enterprise transitions represented without
       a Stripe subscription object.
 - [ ] **Enforce `billing.manage` on every commercial mutation** (ADR-0053
       Decision 5A): Unit packages, seats, storage add-on, upgrade, downgrade,
@@ -1223,6 +1225,19 @@ them is **built**. Each item below records the settled decision and what remains
       explicit seat purchase by a `billing.manage` holder; reaching the storage
       limit must never auto-purchase storage; no `ADMIN` action may create a
       charge.
+- [ ] **Build mid-period add-on purchase** (ADR-0053 Decision 5A): immediate
+      seat and storage entitlement activation, first-period proration, renewal
+      transition to the full monthly amount, and purchase audit/evidence.
+- [ ] **Build downgrade scheduling with the membership-fit rule** (ADR-0053
+      Decision 3B): validate membership against the next-period entitlement
+      before scheduling, warn the administrator how many users must be removed,
+      block member growth past the pending entitlement, recalculate when the
+      downgrade is cancelled or changed, and never select, delete or deactivate
+      users or buy seats.
+- [ ] **Build quality-aware charged disclosure recomposition** (ADR-0052
+      Decision 9): preserve the original video's quality, apply the
+      eligibility-first order for it, count Base Units used for HQ against the
+      HQ ceiling, and refuse the charged change when no eligible Unit exists.
 - [ ] **Build scheduled additional-seat reductions** (ADR-0053 Decision 5A):
       validate current membership against the post-cancellation entitlement
       before scheduling; block member additions and invitations past the pending
@@ -1243,31 +1258,39 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Three gates, raised by the exact-head reviews of `b677a36` and `5db701b`. **None
-may be guessed.**
-
-- [ ] **Decide first-period timing and charge for mid-period purchases of an
-      additional seat or the storage add-on.** Usable immediately or at renewal;
-      first charge full, prorated or deferred. Cancellation timing is settled for
-      both; purchase timing is not. ADR-0053 Decision 5A.
-- [ ] **Decide what happens when a downgrade reaches renewal still over
-      capacity.** Refuse or defer the downgrade and keep billing the old plan,
-      apply it over capacity, restrict access, or require fit before scheduling
-      as seat cancellation does. ADR-0053 Decision 3B.
-- [ ] **Decide which Unit a charged disclosure change consumes.** The 4th/7th
-      change costs 1 Unit, but the quality-locked consumption order covers
-      generation requests only; for an HQ video with no HQ entitlement left, the
-      change could be refused or could draw a Normal Unit. ADR-0052 Decision 9.
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
 
 ### Decision gates — CLOSED
 
-Seventeen decisions: the two gates from the first PR review, eight recorded
-with them, the two raised by the exact-head review of those closures, the
+Twenty decisions: the two gates from the first PR review, eight recorded with
+them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
-the three closed next — in-flight Mode C, commercial-mutation authority and the
-Clean Master — and additional-seat cancellation, closed last. **Each is settled as policy and unbuilt as code**; the
+in-flight Mode C, commercial-mutation authority, the Clean Master,
+additional-seat cancellation, and the three closed last — mid-period purchases,
+downgrade fit, and charged-recomposition quality. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **Mid-period seat / storage add-on purchase — CLOSED.** Usable
+      **immediately**, first charge **prorated** for the rest of the period,
+      full monthly price from the next renewal; requires `billing.manage`;
+      nothing auto-purchased. Cancellation unchanged (renewal-effective, no
+      prorated refund). The storage add-on **is initial-release scope**; only its
+      price is provisional. ADR-0053 Decision 5A.
+- [x] **Downgrade over capacity — CLOSED.** A downgrade never takes effect in
+      the current period and is **schedulable only once current membership fits**
+      the next-period entitlement (target plan's included users plus remaining
+      additional seats). Otherwise the administrator is warned how many users
+      must be removed; nothing is selected, deleted or deactivated and no seat
+      is bought. While pending, member growth past that entitlement is blocked,
+      so renewal cannot arrive over capacity. ADR-0053 Decision 3B.
+- [x] **Charged disclosure-recomposition Unit quality — CLOSED.** Uses the
+      **original video's quality**, through the same eligibility-first order;
+      a Base Unit used for HQ counts against the HQ ceiling; with no eligible
+      Unit the charged change is **not performed** — no cross-quality use, no
+      conversion, no free change. Failure settlement unchanged. ADR-0052
+      Decision 9.
 - [x] **Additional-seat cancellation — CLOSED.** Effective at the **next
       renewal**, never immediately; **no proration**; current-period seats stay
       usable. A reduction may be scheduled **only if current membership already
@@ -1373,8 +1396,8 @@ implementation work each one creates is listed in the section above.
       immediate, full unprorated price difference, base Units **replaced by the
       new ceiling minus Base Units consumed** (never stacked), purchased packages keep their
       original period. Downgrade at next renewal, no refund, no content deletion,
-      no silent user deletion and no automatic seat purchase (ADR-0053
-      Decision 3B).
+      no silent user deletion and no automatic seat purchase — and, as closed
+      later, schedulable only once membership fits (ADR-0053 Decision 3B).
 - [x] **Permanent technical-failure settlement — CLOSED.** No technically valid
       Deliverable delivered ⇒ reservation **RELEASED**, never `CONSUMED`, never
       left pending; VTaVision bears the incurred cost; failure class does not

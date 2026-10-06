@@ -329,7 +329,9 @@ The delivered video appears in the customer's private workspace.
 - request a **paid** regeneration (ADR-0052 Decision 4)
 - change disclosure mode — a recomposition, three free changes per video and
   then 1 Unit per further block of three (ADR-0052 Decision 9); still a
-  recomposition, with no provider call, after scene videos have expired
+  recomposition, with no provider call, after scene videos have expired. A
+  charged change uses a Unit of the **original video's quality**; if none is
+  eligible, say so before the change and do not offer a different-quality Unit
 
 **A running job's disclosure and logo settings are locked** once it is admitted
 (ADR-0052 Decision 10). The UI must not offer to change them mid-flight, and a
@@ -342,7 +344,10 @@ explicitly granted it (ADR-0053
 Decision 5A). An `ADMIN` adding a member when no seat remains, or uploading at
 the storage limit, is told that a billing user must purchase capacity; nothing is
 bought implicitly. While a seat reduction is scheduled, adding or inviting a
-member past the next-period entitlement is blocked with an explanation, and a
+member past the next-period entitlement is blocked with an explanation — and the
+same applies while a plan downgrade is pending. A downgrade that would leave
+membership over the next-period entitlement shows a warning stating how many
+users must be removed before it can proceed. A
 reduction cannot be scheduled until membership already fits it; the product
 never picks members to remove (ADR-0053 Decision 5A).
 

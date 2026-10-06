@@ -184,10 +184,11 @@ must settle to `RELEASE`, never `SETTLEMENT`.
 
 `id`, `organization_id`, `provider`, `provider_customer_id_encrypted`, `provider_subscription_id_encrypted`, `plan_id`, `status`, `current_period_end`, timestamps
 
-A **scheduled additional-seat reduction** must be representable as pending
-until the next renewal, so member additions can be checked against the
-committed next-period entitlement before then (ADR-0053 Decision 5A). No field
-names are chosen here.
+A **scheduled additional-seat reduction** and a **scheduled plan downgrade** must
+each be representable as pending until the next renewal, so member additions can
+be checked against the committed next-period entitlement before then (ADR-0053
+Decisions 3B and 5A). Add-on purchases need their purchase time and prorated
+first charge recorded as billing evidence. No field names are chosen here.
 
 ### AuditLog
 

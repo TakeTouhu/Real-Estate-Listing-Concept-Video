@@ -89,7 +89,10 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   it; ADR-0053 Decision 5A). Member
   management never buys seats; nothing is auto-purchased. Seat cancellation is
   renewal-effective and unprorated, schedulable only when membership already
-  fits, and never removes members.
+  fits, and never removes members; a downgrade follows the same fit-first rule.
+  A seat or storage add-on bought mid-period is usable immediately with a
+  prorated first charge. A charged disclosure change consumes a Unit of the
+  original video's quality, or does not happen.
 - Keep one internal, overlay-free **Clean Master** per deliverable; produce the
   customer output from it and recompose later disclosure/logo changes from it
   with **no provider call**. It is outside customer quota and never

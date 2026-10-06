@@ -125,7 +125,9 @@ Commercial Launch.
 overlay-free Clean Master (ADR-0052 Decision 17). Mode C eligibility is
 **frozen at generation admission**: a later permission or organization change
 affects only new generations (ADR-0052 Decision 10).
-Three free changes per content video, then 1 Unit buys the next block of three
+Three free changes per content video, then 1 Unit — of the **original video's
+quality**, Normal or HQ, with no cross-quality substitution — buys the next block
+of three
 (ADR-0052 Decision 9).
 
 ## Company logo
@@ -217,8 +219,10 @@ takes effect at the end of the paid period with no prorated refund, while refund
 for duplicate or erroneous billing and legally required refunds remain owed
 (Decision 3A). Upgrades are immediate and charge the full unprorated price
 difference, replacing the base-Unit ceiling rather than stacking it; downgrades
-take effect at the next renewal and never delete content or users
-(Decision 3B).
+take effect only at the next renewal, can be scheduled only once membership
+already fits the next-period entitlement, and never delete content or users
+(Decision 3B). A seat or storage add-on bought mid-period is usable immediately
+with a prorated first charge (Decision 5A).
 
 - Plan limits and usage tracking
 - **No automatic overage charge**; customer approval required to buy Units
