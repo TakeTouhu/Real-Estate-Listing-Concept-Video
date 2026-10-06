@@ -439,9 +439,13 @@ Three separations the matrix enforces:
 
 - **`BILLING` does not generate video or consume Units** merely because it can
   manage billing. Paying for capacity and spending it are different acts.
-- **`ADMIN` does not manage billing**, and — under the grant ceiling below —
-  cannot acquire that power either. An administrator who can add members and
-  change permissions does not thereby change what the organization is charged.
+- **`ADMIN` does not manage billing** by role, and — under the grant ceiling
+  below — cannot acquire that power **on its own**: not by self-grant, role
+  change, group or Scope. An administrator who can add members and change
+  permissions does not thereby change what the organization is charged. What
+  remains possible is an **explicit `OWNER` grant** of `billing.manage` to a
+  specific `ADMIN`, which is `OWNER`-only protected authority; that `ADMIN` then
+  acts as any other holder (ADR-0053 Decision 5A).
 - **`MANAGER` does not manage members, groups or permissions**, and is scoped
   `GROUP` rather than `ORGANIZATION` — it manages *work*, not *people*.
 

@@ -29,9 +29,10 @@ Protect customer property images, generated videos, billing data, credentials, a
   There is **no Reviewer role** — see the AI-transparency section.
 - **The approved per-template grant matrix and each template's default Scope are
   ADR-0052 Decision 10**, and each template's grant list there is exhaustive.
-  Three separations it enforces: `BILLING` cannot generate video or consume
-  Units; `ADMIN` cannot manage billing; `MANAGER` manages work, not people, and
-  defaults to `GROUP` scope. **`disclosure.none` and `video.share` are granted by
+  Three separations it enforces by role: `BILLING` does not generate video or
+  consume Units; `ADMIN` does not manage billing (unless an `OWNER` explicitly
+  grants it `billing.manage` — ADR-0053 Decision 5A); `MANAGER` manages work,
+  not people, and defaults to `GROUP` scope. **`disclosure.none` and `video.share` are granted by
   no template**, so neither is reachable by assigning a role.
 - **`permission.manage` is authority within a grant ceiling, not unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` may assign every role; **`ADMIN`
