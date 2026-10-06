@@ -300,6 +300,17 @@ Mode C additionally requires its own consent step with two affirmative
 checkboxes (ADR-0052 Decision 8); it cannot be chosen as an ordinary dropdown
 value without that consent.
 
+Mode C is offered only to a user who personally holds an explicit
+`disclosure.none` grant **and** whose organization has Mode C enabled. Enabling
+it at organization level does not make the enabling `ADMIN` eligible, and the UI
+must not suggest otherwise.
+
+**The `disclosure.none` grant/revoke control is shown only to `OWNER`s**, and
+only as a per-user action — never as a group setting, a role default or a Scope
+option, because the permission cannot travel by any of those routes (ADR-0052
+Decision 10). A user whose grant is revoked loses the option for new requests;
+their completed Mode C videos and the consent records behind them are unchanged.
+
 ### Generation progress
 
 Show normalized states: queued, analyzing, generating scenes, composing,

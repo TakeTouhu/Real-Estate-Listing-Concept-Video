@@ -37,25 +37,33 @@ Protect customer property images, generated videos, billing data, credentials, a
   delegation** (ADR-0052 Decision 10). `OWNER` may assign every role; **`ADMIN`
   may assign only `MANAGER`, `CREATOR` and `VIEWER`**; `BILLING`, `MANAGER`,
   `CREATOR` and `VIEWER` have no role-assignment authority by default.
-- **`OWNER`-only protected authority:** granting or revoking `permission.manage`
-  or `billing.manage`; assigning or removing the `OWNER`, `ADMIN` or `BILLING`
-  role; ownership-equivalent changes; and any operation affecting the last
-  `OWNER`. Do not implement `ADMIN` as having unrestricted permission delegation.
+- **`OWNER`-only protected authority:** granting or revoking `permission.manage`,
+  `billing.manage` or **`disclosure.none`**; assigning or removing the `OWNER`,
+  `ADMIN` or `BILLING` role; ownership-equivalent changes; and any operation
+  affecting the last `OWNER`. Do not implement `ADMIN` as having unrestricted
+  permission delegation.
 - **No self-escalation past the ceiling.** `ADMIN` and every lower role must not
   reach a protected authority they could not grant directly — and the ceiling
   must be checked on **every** grant path, not just direct role change: direct
   role change, individual grant, group membership, group permission, and Scope
   manipulation. Specifically, `ADMIN` cannot self-grant `billing.manage`, cannot
-  re-grant `permission.manage` across the protected boundary, and cannot promote
-  itself to `OWNER` or into `BILLING`. The additive group model is not a loophole.
+  re-grant `permission.manage` across the protected boundary, **cannot acquire
+  `disclosure.none` for itself or any other user**, and cannot promote itself to
+  `OWNER` or into `BILLING`. The additive group model is not a loophole.
+- **`disclosure.none` is individual-only** (ADR-0052 Decision 10). It is an
+  explicit grant to a specific user and may **not** arrive through a group
+  permission, group inheritance, a role template or implicit Scope expansion —
+  so group-based authorization is never a route to it, for any actor. Holding it
+  is a *use* privilege, not a *delegation* privilege: a holder gains no authority
+  to grant or revoke it.
 - **Audit every role, permission, Scope and group authorization change**,
-  including a refused escalation attempt.
-- **Open and not yet decided: who may grant `disclosure.none`.** It is not on the
-  protected list, so an `ADMIN` could currently grant it — including to itself —
-  and because Decision 8 already lets `OWNER`/`ADMIN` enable Mode C at
-  organization level, a single `ADMIN` could then hold all three Mode C gates.
-  The existing Mode C rules are unchanged and still govern; only the grant
-  authority is open. Do not implement either reading as settled.
+  including a refused escalation attempt. Each `disclosure.none` grant and
+  revocation must leave durable evidence of the organization, affected user,
+  acting `OWNER`, action and timestamp. **Revocation is prospective**: it blocks
+  new Mode C initiations but deletes no consent evidence, modifies no completed
+  video, and removes no audit history. Because the authority is `OWNER`-only, it
+  is always exercised by a mandatory-MFA actor; no additional step-up mechanism
+  is introduced.
 - **Recovery from a terminal internal technical failure is not a customer
   capability.** No role template reaches it — not `OWNER`, not `ADMIN`. It is an
   internal operator privilege, separate from support-content access, billing
@@ -154,8 +162,12 @@ The exact in-video disclosure text is:
 - **Mode A (default)** shows it for the whole video; **Mode B** for the first and
   last 2 seconds; **Mode C** omits it from the file entirely.
 - **Mode C is gated by all three of**: organization-level enablement by
-  OWNER/ADMIN, the `disclosure.none` permission, and explicit per-video consent
-  with two affirmative checkboxes (ADR-0052 Decision 8).
+  OWNER/ADMIN, an explicit individual `disclosure.none` grant that only an
+  `OWNER` can give, and explicit per-video consent with two affirmative
+  checkboxes (ADR-0052 Decisions 8 and 10). **Enabling Mode C at organization
+  level does not by itself authorize anyone** to omit the disclosure; an `ADMIN`
+  who enables it still cannot use it without an `OWNER`'s grant. No dual control
+  is required — the control is grant authority.
 - Do not present output as a measured floor plan, dimensional proof, or an actual
   captured walkthrough.
 - **There is no human approval gate, and no Reviewer role.** The former

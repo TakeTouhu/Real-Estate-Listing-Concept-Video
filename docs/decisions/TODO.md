@@ -750,13 +750,14 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Ten further business rules
-> — contract term, billing cadence, annual prepayment, cancellation/refund,
+> This section predates the initial-release contract. Thirteen further business
+> rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
-> hours and targets, the role matrix and the recovery-budget denominator — were
-> settled later and are recorded under *Decision gates — CLOSED* below, with two
-> newly opened gates above it. Read all three places; none is the complete ledger
-> on its own.
+> hours and targets, the role matrix, the recovery-budget denominator, grant
+> ceilings and self-escalation, Normal/HQ Unit eligibility, and `disclosure.none`
+> grant authority — were settled later and are recorded under *Decision gates —
+> CLOSED* below, with one open gate above it. Read all three places; none is the
+> complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
@@ -1060,7 +1061,24 @@ them is **built**. Each item below records the settled decision and what remains
       `disclosure.none`, per-video consent with two affirmative checkboxes, and
       the consent evidence record (`organizationId`, `userId`, target,
       `disclosureMode = NONE`, `consentTextVersion`, `consentedAt`,
-      organization-level enablement state) retained 10 years.
+      organization-level enablement state) retained 10 years. Organization
+      enablement must **not** be treated as authorizing any user on its own.
+- [ ] **Treat `disclosure.none` as `OWNER`-only protected authority.** ADR-0052
+      Decision 10. Reject every grant or revoke attempt by `ADMIN` or any lower
+      role — including an `ADMIN` acting on itself — as a refused, audited
+      authorization change rather than a silent no-op.
+- [ ] **Make `disclosure.none` individual-only in representation and
+      enforcement.** No group permission, group inheritance, role template or
+      Scope expansion may carry it, and the model should make that impossible
+      rather than merely unused, so no indirect path — group membership, group
+      edit, role change or Scope change — can confer it.
+- [ ] **Audit every `disclosure.none` grant and revocation** with the
+      organization, affected user, acting `OWNER`, action and timestamp.
+- [ ] **Enforce prospective revocation for new Mode C requests.** A revoked user
+      cannot initiate a new Mode C generation or recomposition; revocation
+      deletes no consent evidence, modifies no completed deliverable, and removes
+      no audit history. Behaviour for a request already admitted is the open
+      gate below and must not be guessed.
 - [ ] **Build disclosure-mode change accounting.** Recomposition, not
       regeneration. Three free changes per content video, then 1 Unit per further
       block of three; the initial selection is not a change; the count increments
@@ -1182,31 +1200,47 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, surfaced while synchronizing the approved grant-ceiling model.
+One gate, surfaced while recording the `disclosure.none` revocation rule.
 **It must not be guessed.**
 
-- [ ] **Decide who may grant `disclosure.none`.** The approved `OWNER`-only
-      protected-authority list (ADR-0052 Decision 10) does **not** include
-      `disclosure.none`, so on its face an `ADMIN` may grant it within its
-      ceiling — including **to itself**. Because Decision 8 already permits
-      `OWNER`/`ADMIN` to enable Mode C at organization level, **a single `ADMIN`
-      could then hold all three Mode C gates** and produce an undisclosed
-      AI-generated video alone. Whether granting `disclosure.none` should be
-      `OWNER`-protected like `billing.manage`, and whether a `permission.manage`
-      holder may self-grant it, is an AI-transparency and legal question rather
-      than an implementation detail. **The existing Mode C rules are unchanged
-      and still govern** — no template holds it by default, organization-level
-      enablement is required, an explicit grant is required, per-video consent is
-      required. Only the grant authority is open; do not implement either reading
-      as settled.
+- [ ] **Decide whether Mode C gates are re-checked for a request already
+      admitted when a gate is withdrawn.** ADR-0052 Decision 10 settles what
+      revoking `disclosure.none` does to **new** Mode C initiations (blocked) and
+      to **completed** videos (untouched). It does not settle a Mode C
+      generation or recomposition **admitted before** the revocation — or before
+      organization-level Mode C was disabled, the same question for gate 1 — that
+      has not yet produced its deliverable. The approved wording is framed at
+      initiation, which points toward admission-time evaluation, but does not say
+      so for in-flight work. Re-checking before delivery would also need a
+      settlement answer for the reserved Unit, since Decision 19 is written for
+      technical failure rather than a withdrawn authorization. An
+      AI-transparency choice with billing consequences; **this does not reopen
+      the closed `disclosure.none` grant-authority decision.**
 
 ### Decision gates — CLOSED
 
-Twelve decisions: the two gates from the first PR review, eight recorded with
-them, and the two raised by the exact-head review of those closures. **Each is
-settled as policy and unbuilt as code**; the implementation work each one creates
-is listed in the section above.
+Thirteen decisions: the two gates from the first PR review, eight recorded with
+them, the two raised by the exact-head review of those closures, and the
+`disclosure.none` grant authority that synchronizing the grant ceiling exposed.
+**Each is settled as policy and unbuilt as code**; the implementation work each
+one creates is listed in the section above.
 
+- [x] **`disclosure.none` grant authority — CLOSED.** A **protected permission**
+      with **`OWNER`-only** grant and revoke authority. `ADMIN` may not grant,
+      revoke, self-grant, or obtain it indirectly through its own
+      authorization-management actions, and no lower role may grant or revoke
+      it. It is **individual-only**: never via group permission, group
+      inheritance, a role template or implicit Scope expansion, so group-based
+      authorization is never a route to it. An `OWNER` may grant it to
+      themselves, another `OWNER`, an `ADMIN` or another eligible individual
+      user; holding it is a **use** privilege, not a delegation privilege. Mode C
+      stays three-gate, organization enablement stays `OWNER`/`ADMIN` and
+      authorizes no one by itself, and **no dual control** is required. Grant and
+      revoke are audited (organization, affected user, acting `OWNER`, action,
+      timestamp). **Revocation is prospective**: new Mode C initiations blocked;
+      consent evidence, completed videos and audit history untouched. Always
+      exercised by a mandatory-MFA actor; no step-up mechanism invented. ADR-0052
+      Decisions 8 and 10.
 - [x] **Grant authority and privilege self-escalation — CLOSED.**
       `permission.manage` is authority **within a grant ceiling**, not unlimited
       delegation. `OWNER` may assign every role; **`ADMIN` may assign only

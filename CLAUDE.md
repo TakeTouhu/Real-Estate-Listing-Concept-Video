@@ -39,8 +39,11 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - Uploaded photos must be owned or properly licensed by the customer.
 - Generated videos display an AI-generated disclosure by default (Mode A).
   Mode B is time-limited display; Mode C omits it and is gated by
-  organization-level enablement **plus** `disclosure.none` **plus** per-video
-  consent.
+  organization-level enablement **plus** an explicit individual
+  `disclosure.none` grant **plus** per-video consent. **Only an `OWNER` grants or
+  revokes `disclosure.none`**; it can never come from a template, group or Scope,
+  and organization-level enablement alone authorizes no one (ADR-0052
+  Decisions 8 and 10).
 - Do not claim accurate dimensions, geometry, floor plans, or actual captured
   walkthrough footage. Do not claim "native 1080p" unless verified for the route.
 - Do not intentionally add nonexistent windows, doors, equipment, views, or
@@ -58,9 +61,9 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - Every tenant-owned record is scoped to the authenticated organization.
 - **`permission.manage` is authority within a grant ceiling, never unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` assigns any role; `ADMIN` assigns
-  only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage` or
-  `billing.manage`, assigning `OWNER` / `ADMIN` / `BILLING`, and anything
-  touching the last `OWNER` are `OWNER`-only. **No role may escalate itself past
+  only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage`,
+  `billing.manage` or `disclosure.none`, assigning `OWNER` / `ADMIN` / `BILLING`,
+  and anything touching the last `OWNER` are `OWNER`-only. **No role may escalate itself past
   its ceiling by any route** — direct grant, group membership, group permission
   or Scope. Check the ceiling on every grant path, not just role change.
 - **Additional Units are quality-locked** (ADR-0053 Decisions 2–3). A Normal

@@ -38,8 +38,9 @@ cannot generate video or consume Units; `ADMIN` manages people but not billing;
 **`permission.manage` is authority within a grant ceiling, not unlimited
 delegation.** `OWNER` may assign every role; **`ADMIN` may assign only
 `MANAGER`, `CREATOR` and `VIEWER`**; the other templates assign no roles.
-Granting `permission.manage` or `billing.manage`, assigning the `OWNER`, `ADMIN`
-or `BILLING` role, and anything touching the last `OWNER` are **`OWNER`-only**.
+Granting `permission.manage`, `billing.manage` or `disclosure.none`, assigning the
+`OWNER`, `ADMIN` or `BILLING` role, and anything touching the last `OWNER` are
+**`OWNER`-only**.
 No role may escalate itself past its ceiling by any route — direct grant, group
 membership, group permission or Scope.
 
@@ -111,8 +112,11 @@ Exact text: `本コンテンツは生成AIを使用して作成しています�
 | **C** | no in-video disclosure — gated (see below) |
 
 Mode C requires **all three**: organization-level Mode C enablement by
-OWNER/ADMIN, the `disclosure.none` permission, and explicit per-video consent
-with two affirmative checkboxes. Consent evidence and required wording meaning
+OWNER/ADMIN, an **explicit individual `disclosure.none` grant**, and explicit
+per-video consent with two affirmative checkboxes. **Only an `OWNER` may grant or
+revoke `disclosure.none`**; it cannot come from a role template, a group or a
+Scope, and enabling Mode C at organization level does not by itself make anyone
+eligible (ADR-0052 Decision 10). Consent evidence and required wording meaning
 are in ADR-0052 Decision 8. Final legal wording requires counsel review before
 Commercial Launch.
 

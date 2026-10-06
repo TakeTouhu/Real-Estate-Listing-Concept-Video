@@ -255,8 +255,22 @@ Exact text, in all modes that display it:
 Available in the official initial release, gated by all three of:
 
 1. organization OWNER/ADMIN has enabled Mode C at organization level;
-2. the user holds `disclosure.none`;
+2. the requesting user holds an **explicit, individually granted**
+   `disclosure.none` — a grant only an `OWNER` can give or take away
+   (Decision 10);
 3. explicit per-video/per-generation consent.
+
+**Organization-level enablement does not by itself authorize no-disclosure
+generation.** It makes Mode C *available* in the organization; each user who
+would use it still needs gate 2. An `ADMIN` may enable Mode C for the
+organization, but cannot thereby make itself eligible: unless an `OWNER` has
+explicitly granted `disclosure.none` to that `ADMIN`, the `ADMIN` cannot select
+Mode C.
+
+**No dual control is required.** The approved control is *grant authority*, not
+separation of duties: the three gates need not be satisfied by different people,
+and an `OWNER` acting alone may enable Mode C, grant `disclosure.none` to
+themselves, and give per-video consent.
 
 ### Mode C consent
 
@@ -407,7 +421,9 @@ Derived facts, stated so they cannot be re-derived incorrectly:
 - `unit.consume` default holders: **`OWNER`, `ADMIN`, `MANAGER`, `CREATOR`.**
 - **`disclosure.none` is granted by no standard template**, so Mode C always
   requires a deliberate grant on top of a role — plus organization-level
-  enablement and per-video consent.
+  enablement and per-video consent. That grant is **`OWNER`-only** and
+  **individual-only** (see *`disclosure.none` — protected and individual-only*
+  below).
 - **`video.share` is granted by no standard template**, because it is reserved
   for post-release (Decision 12).
 
@@ -438,6 +454,7 @@ Role-assignment authority:
 
 - grant or revoke `permission.manage`;
 - grant or revoke `billing.manage`;
+- **grant or revoke `disclosure.none`**;
 - assign or remove the `OWNER` role;
 - assign or remove the `ADMIN` role;
 - assign or remove the `BILLING` role;
@@ -463,45 +480,108 @@ authority the actor could not grant directly:
 - Scope manipulation.
 
 Concretely: **`ADMIN` cannot self-grant `billing.manage`**; cannot self-grant or
-re-grant `permission.manage` as a way across the protected boundary; cannot
-promote itself to `OWNER`; and cannot promote itself into `BILLING` as an
-escalation path. The additive group model is not a loophole — a permission that
-cannot be granted directly cannot be acquired by joining or editing a group
-either.
+re-grant `permission.manage` as a way across the protected boundary; **cannot
+acquire `disclosure.none` — for itself or for any other user**; cannot promote
+itself to `OWNER`; and cannot promote itself into `BILLING` as an escalation
+path. The additive group model is not a loophole — a permission that cannot be
+granted directly cannot be acquired by joining or editing a group either.
 
-`OWNER` needs no self-grant path: it is already the highest customer-side
-authority, and the `OWNER` template carries both `permission.manage` and
-`billing.manage`.
+`OWNER` needs no self-grant path for `permission.manage` or `billing.manage`: it
+is already the highest customer-side authority, and the `OWNER` template carries
+both. `disclosure.none` is the deliberate exception — the template does **not**
+carry it, so even an `OWNER` holds it only by an explicit individual grant, which
+an `OWNER` may give to themselves.
 
 **Every role, permission, Scope and group authorization change remains audited**,
 including a refused escalation attempt.
 
 Unchanged global rules: group permissions are additive, there is no DENY model,
 individual grants remain possible **within the granting actor's ceiling**, the
-last `OWNER` cannot be deleted, and every permission change is audited.
+last `OWNER` cannot be deleted, and every permission change is audited. The one
+exception to "additive" is `disclosure.none`, which no group may carry at all
+(next section).
 
-### Open gate — who may grant `disclosure.none`
+### `disclosure.none` — protected and individual-only
 
-**Not decided, and deliberately not guessed.** The protected-authority list above
-does not include `disclosure.none`, so on its face an `ADMIN` could grant that
-permission within its ceiling — including to itself.
+**Decision gate CLOSED.** `disclosure.none` is a **protected permission**, and
+its grant authority is **`OWNER`-only.**
 
-That matters because Mode C's three gates are organization-level enablement
-(which Decision 8 already permits `OWNER`/**`ADMIN`** to perform), the
-`disclosure.none` permission, and per-video consent. If `disclosure.none` is not
-protected, **a single `ADMIN` can hold all three** and produce an undisclosed
-AI-generated video alone. Whether that is acceptable is an AI-transparency and
-legal question, not an implementation detail.
+- only an `OWNER` may **grant** it, and only an `OWNER` may **revoke** it;
+- `ADMIN` may **not** grant it, may **not** revoke it, may **not** self-grant it,
+  and may **not** obtain it indirectly through its own authorization-management
+  actions;
+- no lower role may grant or revoke it.
 
-**The existing Mode C rules are unchanged and still govern:** no standard
-template receives `disclosure.none` by default; organization-level Mode C
-enablement is required; an explicit `disclosure.none` grant is required; and
-per-video consent is required.
+**It is individual-only.** It must be an explicit grant to a specific user, and
+it may **not** arrive through:
 
-What is **open** is only this: whether granting `disclosure.none` is
-`OWNER`-protected like `billing.manage`, and whether a holder of
-`permission.manage` may grant it to themselves. Until that is approved, do not
-implement either reading as settled. Tracked in `docs/decisions/TODO.md`.
+- a group permission;
+- group inheritance;
+- a standard role template;
+- implicit Scope expansion.
+
+**Group-based authorization is not a route to `disclosure.none`**, for any actor.
+This is the one place the additive group model is deliberately closed: a group
+cannot carry the permission at all, so joining, editing or inheriting a group can
+never confer it.
+
+An `OWNER` may grant it to themselves, to another `OWNER`, to an `ADMIN`, or to
+another eligible individual user — at minimum an `active` member of the same
+organization, which Decision 11 and tenant scoping already require of every
+grant.
+
+**Holding `disclosure.none` is a *use* privilege, not a *delegation* privilege.**
+A recipient — including an `ADMIN` who holds `permission.manage` — gains no
+authority to grant or revoke it merely by holding it. Nor does holding it confer
+any other permission: the holder still needs whatever the underlying action
+requires.
+
+#### Audit and revocation
+
+**Every grant and every revocation of `disclosure.none` is audited**, with
+durable evidence sufficient to identify the organization, the affected user, the
+acting `OWNER`, the action (grant or revoke), and the timestamp. No storage
+schema is chosen here.
+
+**Revocation is prospective.** After revocation:
+
+- the user **cannot initiate a new Mode C generation** requiring
+  `disclosure.none`;
+- existing **Mode C consent evidence is retained** — it remains historical
+  evidence of what was consented to when, on the legal-retention schedule of
+  ADR-0053 Decision 7;
+- existing **completed videos are not retroactively modified**, and are not
+  invalidated solely because the permission was later revoked;
+- existing **audit history is not deleted.**
+
+#### Open gate — a Mode C request already admitted when a gate is withdrawn
+
+**Not decided here.** The rules above settle what revocation does to *new* Mode C
+initiations, and to *completed* videos. They do not settle the case in between: a
+Mode C generation or recomposition **admitted before** the user's
+`disclosure.none` was revoked — or before organization-level Mode C was disabled,
+which raises the same question for gate 1 — that has **not yet produced its
+deliverable.**
+
+The approved revocation rule is framed at **initiation** ("cannot initiate a new
+Mode C generation"), which points toward evaluating the gates once, at
+admission — but it does not say so for work already in flight, and the gate-1
+case is not addressed anywhere. Either answer is defensible: treating the gates
+as satisfied at admission honours consent already given; re-checking before
+delivery means no undisclosed video is produced after the authority to request
+one was withdrawn. It is an AI-transparency choice with billing consequences
+— a re-check that refuses delivery would also need a settlement answer for the
+reserved Unit, and Decision 19 is written for technical failure rather than a
+withdrawn authorization — so neither is implemented as settled. **This does not reopen the grant-authority decision
+above, which is closed.** Tracked in `docs/decisions/TODO.md`.
+
+#### MFA
+
+The existing capability-based MFA rule already covers this authority without
+change: `OWNER` is mandatory-MFA, and grant and revocation of `disclosure.none`
+are `OWNER`-only, so **they are always performed by a mandatory-MFA actor.** No
+additional step-up or re-authentication mechanism is introduced by this
+decision.
 
 **MFA remains capability-based, not template-based** (`docs/SecurityCompliance.md`):
 mandatory for `OWNER`, `ADMIN`, and any holder of `permission.manage` or
@@ -832,9 +912,12 @@ is the only version that cannot silently act on a row whose eligibility changed
 since the filter ran.
 
 **Accepted cost.** The grant ceiling makes `OWNER` a bottleneck: adding an
-administrator, adding a billing user, or handing out `billing.manage` all require
-an `OWNER`, and an organization whose only `OWNER` is unavailable cannot do those
-things at all. That is the intended shape — the alternative is an `ADMIN` who can
+administrator, adding a billing user, handing out `billing.manage`, and granting
+or revoking `disclosure.none` all require an `OWNER`, and an organization whose
+only `OWNER` is unavailable cannot do those things at all. For `disclosure.none`
+this is the point rather than a side effect: whether a video may omit its AI
+disclosure is decided by the organization's highest authority, one user at a
+time, never by a group or an administrator acting on its own behalf. That is the intended shape — the alternative is an `ADMIN` who can
 manufacture its own billing authority, which makes the separation decorative. It
 does mean the authorization model must be implemented as a ceiling check on every
 grant path, including group membership and Scope, rather than as a single

@@ -54,11 +54,21 @@ and per-user grants — that does not exist yet.
 That representation must also support the **grant ceiling**: every authorization
 mutation records the acting user, and the model must be able to answer "may this
 actor grant this?" rather than only "does this actor hold `permission.manage`?".
-`OWNER`-only protected authority (`permission.manage`, `billing.manage`, the
-`OWNER`/`ADMIN`/`BILLING` role assignments, ownership-equivalent changes, and
-anything touching the last `OWNER`) must be enforceable on **every** path —
-direct grant, group membership, group permission and Scope change alike — since
-the additive model otherwise becomes an escalation route.
+`OWNER`-only protected authority (`permission.manage`, `billing.manage`,
+`disclosure.none`, the `OWNER`/`ADMIN`/`BILLING` role assignments,
+ownership-equivalent changes, and anything touching the last `OWNER`) must be
+enforceable on **every** path — direct grant, group membership, group permission
+and Scope change alike — since the additive model otherwise becomes an
+escalation route.
+
+**`disclosure.none` must be representable only as an individual grant.** The
+model must make it impossible — not merely unused — for a group permission,
+group inheritance, a role template or a Scope expansion to carry it, and its
+revocation must be prospective: removing the grant deletes no `ConsentRecord`
+and touches no completed deliverable. Each grant and revocation needs durable
+evidence of the organization, affected user, acting `OWNER`, action and
+timestamp; whether that lives in `AuditLog` alone or alongside a dedicated record
+is an implementation choice this document does not make (ADR-0052 Decision 10).
 
 Whether the template defaults are **stored as rows** or **derived in code from
 the approved matrix** is an implementation choice this document does not make;
