@@ -337,7 +337,8 @@ later change to the organization's Mode C setting or a user's `disclosure.none`
 applies only to new requests — never to a job already running.
 
 **Purchases, plan changes and cancellation are shown only to holders of
-`billing.manage`** — `OWNER` and `BILLING` by default, not `ADMIN` (ADR-0053
+`billing.manage`** — `OWNER` and `BILLING` by default, and an `ADMIN` only if an `OWNER` has
+explicitly granted it (ADR-0053
 Decision 5A). An `ADMIN` adding a member when no seat remains, or uploading at
 the storage limit, is told that a billing user must purchase capacity; nothing is
 bought implicitly.

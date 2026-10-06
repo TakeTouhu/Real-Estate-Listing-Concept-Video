@@ -85,7 +85,8 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   permission or organization changes affect only newly admitted generations. No
   pre-delivery re-check, no automatic C → A fallback.
 - **Every charge-changing customer action requires `billing.manage`**
-  (`OWNER`/`BILLING` by default, never `ADMIN`; ADR-0053 Decision 5A). Member
+  (`OWNER`/`BILLING` by default — `ADMIN` only if an `OWNER` explicitly grants
+  it; ADR-0053 Decision 5A). Member
   management never buys seats; nothing is auto-purchased.
 - Keep one internal, overlay-free **Clean Master** per deliverable; produce the
   customer output from it and recompose later disclosure/logo changes from it

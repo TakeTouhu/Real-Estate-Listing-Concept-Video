@@ -757,7 +757,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
 > grant authority, in-flight Mode C, commercial-mutation authority and the Clean
 > Master — were settled later and are recorded under *Decision gates — CLOSED*
-> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
+> below; any still-open gate is under *Decision gates — OPEN*, just above it. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1237,9 +1237,17 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+One gate, raised by the exact-head review of `614dd61`. **It must not be
+guessed.**
+
+- [ ] **Decide when an additional-seat cancellation takes effect.** Authority is
+      settled (`billing.manage`, ADR-0053 Decision 5A); timing is not. Nothing
+      states whether it is immediate or at renewal, whether the current month is
+      prorated, or what happens when active membership then exceeds the remaining
+      seat entitlement. The storage add-on (renewal, defined over-quota result)
+      and subscription cancellation (Decision 3A) each have their own rule, and
+      the downgrade rule covers over-capacity only at a plan transition — none
+      may be assumed to apply. Recorded in ADR-0053 Decision 5A.
 
 ### Decision gates — CLOSED
 
@@ -1259,7 +1267,8 @@ implementation work each one creates is listed in the section above.
       Unit release for a later authorization change. ADR-0052 Decision 10.
 - [x] **Commercial-mutation authority — CLOSED.** Any customer action that
       changes what the organization is charged requires **`billing.manage`** —
-      `OWNER`/`BILLING` by default, never `ADMIN`. Covers Unit packages, seats,
+      `OWNER`/`BILLING` by default; `ADMIN` only via an explicit `OWNER` grant, never
+      by role. Covers Unit packages, seats,
       the storage add-on (superseding "OWNER/ADMIN purchase and cancel"),
       Standard/Premium upgrade, downgrade and cancellation. Member management is
       separate from seat purchase and never creates a charge; nothing is

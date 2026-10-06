@@ -67,7 +67,8 @@ Protect customer property images, generated videos, billing data, credentials, a
   Mode C keeps it through delivery, and revocation or organization-level
   disablement governs only jobs admitted later (ADR-0052 Decision 10).
 - **Charge-changing customer actions require `billing.manage`** (ADR-0053
-  Decision 5A) — `OWNER`/`BILLING`, never `ADMIN` by default. `billing.view`
+  Decision 5A) — `OWNER`/`BILLING` by default; an `ADMIN` only through an explicit
+  `OWNER` grant, never by role alone. `billing.view`
   authorizes no mutation, and no member-management or upload action may create a
   charge implicitly.
 - **The Clean Master is internal**: never customer-exposed or downloadable, and

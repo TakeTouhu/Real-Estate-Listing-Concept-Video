@@ -384,6 +384,16 @@ these actions merely because it manages operational content and users. `ADMIN`
 may still *view* billing where it holds `billing.view`; viewing authorizes no
 mutation.
 
+**The rule is capability-based, not role-based.** What authorizes a commercial
+mutation is holding `billing.manage`, not the role name. Granting it is
+`OWNER`-only protected authority (ADR-0052 Decision 10), and no approved decision
+restricts which individual an `OWNER` may grant it to — so an `ADMIN` to whom an
+`OWNER` has **explicitly** granted `billing.manage` may perform these actions,
+exactly as any other holder may. What is excluded is an `ADMIN` acting on its
+role alone, or acquiring the permission by any route an `OWNER` did not take: the
+grant ceiling and self-escalation rules already forbid that. Any such holder is
+also mandatory-MFA under the existing capability rule.
+
 It applies to at least:
 
 - purchasing additional Unit packages;
@@ -399,6 +409,18 @@ already-purchased capacity, as the authorization model permits. When no seat
 entitlement remains, nothing is auto-purchased and no member-management action
 creates a charge: a holder of `billing.manage` must explicitly purchase an
 additional seat, after which ordinary user management proceeds.
+
+### Open gate — when a seat cancellation takes effect
+
+**Not decided.** Who may cancel an additional seat is settled above
+(`billing.manage`). **When** it takes effect is not: unlike the storage add-on
+(effective at renewal, with a defined over-quota result) and the subscription
+(Decision 3A), nothing states whether seat cancellation is immediate or at
+renewal, whether the current month is prorated, or what happens if active
+membership then exceeds the remaining seat entitlement. The downgrade rule
+(Decision 3B) covers the over-capacity case only at a plan transition. Do not
+infer it from the storage or subscription rules; tracked in
+`docs/decisions/TODO.md`.
 
 **Storage limit.** At the limit nothing is auto-purchased and no `ADMIN` action
 creates a charge implicitly; `OWNER`/`BILLING` may explicitly purchase or cancel

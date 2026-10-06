@@ -68,7 +68,8 @@ Billing rules:
 
 **There is no platform-wide annual-prepayment discount** (ADR-0053 Decision 1A).
 **Every charge-changing customer action requires `billing.manage`** —
-`OWNER`/`BILLING` by default, never `ADMIN` (ADR-0053 Decision 5A). That covers
+`OWNER`/`BILLING` by default; an `ADMIN` only if an `OWNER` has explicitly granted
+it `billing.manage` (ADR-0053 Decision 5A). That covers
 Unit packages, seats, the storage add-on, upgrade, downgrade and cancellation.
 Member management never buys a seat, reaching a limit never buys anything, and
 Enterprise changes stay sales-assisted.
