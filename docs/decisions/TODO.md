@@ -1091,10 +1091,12 @@ them is **built**. Each item below records the settled decision and what remains
       (`ORGANIZATION`/`GROUP`/`OWN`), optional individual permissions, additive
       group permissions, no DENY, the six role templates and the full permission
       list. `video.share` is reserved and must not be exposed. At least one
-      `OWNER` must always exist and the last `OWNER` cannot be deleted.
-      **Blocked on the decision gate below:** the per-template permission and
-      default-Scope mapping is not approved, so this cannot be implemented
-      without inventing security rules.
+      `OWNER` must always exist and the last `OWNER` cannot be deleted. **No
+      longer blocked:** the per-template permissions and default Scopes, the
+      grant ceilings and the `disclosure.none` rules are all approved in ADR-0052
+      Decision 10. What remains is implementation, itemized below — the grant
+      matrix, ceiling enforcement on every grant path, self-escalation
+      prevention, authorization-change audit, and the `disclosure.none` items.
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all

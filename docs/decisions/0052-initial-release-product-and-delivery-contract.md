@@ -334,7 +334,9 @@ Initial model: **standard role templates + groups + Scope + optional individual
 permissions.**
 
 Users may belong to multiple groups. **Group permissions are additive. There is
-no DENY model in the initial release.**
+no DENY model in the initial release.** One permission is excluded from groups
+entirely: `disclosure.none` is individual-only (see *`disclosure.none` —
+protected and individual-only* below).
 
 Scopes: `ORGANIZATION`, `GROUP`, `OWN`.
 
@@ -382,7 +384,11 @@ audit.view            audit.export
 
 **Each template's grant list below is exhaustive: a permission not marked
 granted is not granted by that template by default.** A grant may still be added
-to an individual user, or arrive additively through a group.
+to an individual user, or arrive additively through a group — **except
+`disclosure.none`, which can only ever be an explicit individual grant by an
+`OWNER` and which no group may carry** (see *`disclosure.none` — protected and
+individual-only* below). Any other grant is also bounded by the granting actor's
+ceiling.
 
 | Permission | OWNER | ADMIN | MANAGER | CREATOR | VIEWER | BILLING |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: |
