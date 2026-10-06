@@ -281,10 +281,17 @@ Self-service **Standard ↔ Premium** plan changes, each requiring
 
 ```text
 Standard base Units                 15
-already consumed this period        10
+Base Units consumed this period     10
 upgrade to Premium (40 base Units)
 remaining base Units  = 40 - 10  =  30
 ```
+
+Only **Base** Units consumed this period reduce the new ceiling. Units drawn
+from purchased add-on blocks were consumed from those blocks, which keep their
+own entitlement (below); counting them against the new Base ceiling as well
+would charge one consumption to two entitlements. So with 15 Base and 2 add-on
+Units consumed, the upgrade leaves `40 - 15 = 25` Base Units plus the add-on
+block's remaining 3.
 
 Not `15 + 40`, and not 45 or 55 through double-granting. The customer moves to a
 larger ceiling for the same period; they do not receive a second allowance.
@@ -313,6 +320,17 @@ If membership exceeds the new plan's included-user allowance:
 - require the organization to reduce users, or to explicitly purchase the
   appropriate additional seats — a `billing.manage` action (Decision 5A) —
   before or at the transition as the product implementation permits.
+
+#### Open gate — a downgrade that reaches renewal still over capacity
+
+**Not decided.** The rule above says what must not happen (no silent deletion, no
+automatic seat purchase) and what the organization must do, but not what the
+system does if renewal arrives while membership still exceeds the downgraded
+plan's allowance plus purchased seats: refuse or defer the downgrade and keep
+billing the old plan, apply it and enter an over-capacity state, restrict member
+access, or require fit before the downgrade can be scheduled at all — as
+additional-seat cancellation now does (Decision 5A). Each changes what is billed
+and who can sign in, so none is assumed. Tracked in `docs/decisions/TODO.md`.
 
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
@@ -418,7 +436,8 @@ other commercial mutation. For Standard/Premium self-service:
 - **Timing.** A seat cancellation takes effect at the **next billing renewal**,
   never immediately.
 - **No proration.** No prorated refund or credit is issued for the current
-  period; the seats already paid for remain usable until the period ends.
+  period. Members already occupying the paid seats stay active until the period
+  ends.
 - **Precondition.** A reduction may be **scheduled only if current membership
   already fits within the post-cancellation entitlement** (included users plus
   the remaining additional seats).
@@ -434,7 +453,12 @@ other commercial mutation. For Standard/Premium self-service:
   members to make room, and never repurchases seats.
 - **While a reduction is pending**, existing members stay active through the
   current paid period, but any member addition or invitation that would make
-  membership exceed the **next-period** entitlement is blocked. The UI explains
+  membership exceed the **next-period** entitlement is blocked. **Scheduling a
+  reduction therefore gives up any unused paid capacity above the next-period
+  entitlement for the rest of the period**, without refund — e.g. Premium with
+  8 members and 3 additional seats may schedule cancelling all 3, but may then
+  grow only to 10, not 13. Cancelling or changing the scheduled reduction
+  restores it. The UI explains
   that a scheduled seat reduction limits member growth until renewal or until
   the reduction is cancelled or changed. Exact wording is not fixed here.
 - **At renewal**, the paid additional-seat quantity becomes the scheduled reduced
@@ -444,6 +468,18 @@ other commercial mutation. For Standard/Premium self-service:
   organization enters the new period within entitlement. Any concurrent change
   that would breach the committed next-period capacity is refused rather than
   allowed to create an over-capacity state.
+
+#### Open gate — first-period timing and charge for a mid-period purchase
+
+**Not decided.** Cancellation timing is settled for seats and the storage add-on;
+**purchase** timing is not. When an additional seat or the +50 GB storage add-on
+is bought partway through a period, nothing states whether it is usable
+immediately, or whether the first charge is the full monthly price, prorated, or
+deferred to renewal. Decision 5A's "after which ordinary user management
+proceeds" suggests immediate access but fixes no charge, and an organization at
+its storage limit buying capacity to resume work needs the same answer.
+Independent billing implementations would otherwise charge different amounts
+for the same purchase. Tracked in `docs/decisions/TODO.md`.
 
 A seat cancellation is **not** user deletion, and never triggers it. This rule
 matches the other renewal-effective changes — subscription cancellation

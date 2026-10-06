@@ -330,6 +330,18 @@ Counting rules:
 - customer content regeneration is separate and consumes its normal Unit;
 - a newly generated content video gets a **fresh allowance of 3** free changes.
 
+### Open gate — which Unit a charged disclosure change consumes
+
+**Not decided.** The 4th, 7th and later completed changes consume 1 Unit, but
+ADR-0053's quality-locked, eligibility-first consumption order is defined for
+**generation requests**, and this decision never says which quality class a
+charged recomposition belongs to. For an HQ video whose plan has exhausted its
+included HQ ceiling — a Standard organization, say — the fourth change could be
+refused for lack of an eligible HQ Unit, or could draw a Normal Base Unit or
+Normal add-on because no provider generation occurs. The outcomes differ
+materially for the customer and for revenue, so neither is assumed. Tracked in
+`docs/decisions/TODO.md`.
+
 ## Decision 10 — Authorization model
 
 Initial model: **standard role templates + groups + Scope + optional individual

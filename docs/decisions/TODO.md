@@ -757,7 +757,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master and additional-seat cancellation — were settled later and are recorded under *Decision gates — CLOSED*
-> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
+> below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1208,7 +1208,7 @@ them is **built**. Each item below records the settled decision and what remains
       Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
       renewal; cancellation effective at period end with no proration; the refund
       exceptions that remain owed; immediate upgrade charging the full unprorated
-      difference with the base-Unit ceiling **replaced minus consumed**;
+      difference with the base-Unit ceiling **replaced minus Base Units consumed**;
       downgrade at renewal with no deletion of content or users and no automatic
       seat purchase; and sales-assisted Enterprise transitions represented without
       a Stripe subscription object.
@@ -1243,9 +1243,21 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+Three gates, raised by the exact-head reviews of `b677a36` and `5db701b`. **None
+may be guessed.**
+
+- [ ] **Decide first-period timing and charge for mid-period purchases of an
+      additional seat or the storage add-on.** Usable immediately or at renewal;
+      first charge full, prorated or deferred. Cancellation timing is settled for
+      both; purchase timing is not. ADR-0053 Decision 5A.
+- [ ] **Decide what happens when a downgrade reaches renewal still over
+      capacity.** Refuse or defer the downgrade and keep billing the old plan,
+      apply it over capacity, restrict access, or require fit before scheduling
+      as seat cancellation does. ADR-0053 Decision 3B.
+- [ ] **Decide which Unit a charged disclosure change consumes.** The 4th/7th
+      change costs 1 Unit, but the quality-locked consumption order covers
+      generation requests only; for an HQ video with no HQ entitlement left, the
+      change could be refused or could draw a Normal Unit. ADR-0052 Decision 9.
 
 ### Decision gates — CLOSED
 
@@ -1359,7 +1371,7 @@ implementation work each one creates is listed in the section above.
       remedies remain owed (ADR-0053 Decision 3A).
 - [x] **Self-service plan upgrade/downgrade semantics — CLOSED.** Upgrade
       immediate, full unprorated price difference, base Units **replaced by the
-      new ceiling minus consumed** (never stacked), purchased packages keep their
+      new ceiling minus Base Units consumed** (never stacked), purchased packages keep their
       original period. Downgrade at next renewal, no refund, no content deletion,
       no silent user deletion and no automatic seat purchase (ADR-0053
       Decision 3B).

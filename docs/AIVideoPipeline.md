@@ -24,7 +24,7 @@ Upload
 → Scene ordering
 → Storyboard generation
 → Prompt compilation
-→ WaveSpeedAI scene generation
+→ Scene generation through the verified provider route
 → Managed-storage copy
 → FFmpeg composition
 → Audio/captions/branding
@@ -84,8 +84,8 @@ paused (ADR-0054 Decision 3).
 Validate scene
 → create short-lived signed input URL
 → compile preservation-first prompt
-→ submit asynchronous WaveSpeedAI prediction
-→ store prediction ID internally
+→ submit an asynchronous prediction to the verified provider route
+→ store the provider's prediction ID internally
 → webhook or bounded polling
 → obtain temporary output
 → copy into managed object storage

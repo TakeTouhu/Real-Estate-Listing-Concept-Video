@@ -93,7 +93,7 @@ contractual remedies** (ADR-0053 Decision 3A). Enterprise follows its own
 contract.
 
 **Upgrade:** immediate; charge the **full, unprorated** monthly price difference
-for the current period; base Units become the new plan's ceiling **minus already
+for the current period; base Units become the new plan's ceiling **minus Base Units already
 consumed** (Standard 15 with 10 used → Premium gives 30 remaining, never 45 or
 55); storage, concurrency and included-user limits rise immediately; previously
 purchased additional Units keep their original entitlement period.
