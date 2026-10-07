@@ -750,15 +750,15 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Twenty-two further business
+> This section predates the initial-release contract. Twenty-four further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
 > ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master, additional-seat cancellation, mid-period purchases, downgrade fit and
-> charged-recomposition quality, logo-only recomposition and storage blocks — were
-> settled later and are recorded under *Decision gates — CLOSED*
+> charged-recomposition quality, logo-only recomposition, storage blocks, storage
+> blocks on downgrade and Scope semantics — were settled later and are recorded under *Decision gates — CLOSED*
 > below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
 > three places; none is the complete ledger on its own.
 
@@ -1112,8 +1112,9 @@ them is **built**. Each item below records the settled decision and what remains
       `OWNER` must always exist and the last `OWNER` cannot be deleted. **No
       longer blocked on the matrix:** the per-template permissions and default
       Scopes, the grant ceilings and the `disclosure.none` rules are all
-      approved in ADR-0052 Decision 10. **Scope enforcement is still blocked** on
-      the open gate defining what `GROUP` and `OWN` select. What remains is implementation, itemized below — the grant
+      approved in ADR-0052 Decision 10, as are the Scope predicates. Changing a
+      Property's responsible user or group remains blocked on the open gate
+      above. What remains is implementation, itemized below — the grant
       matrix, ceiling enforcement on every grant path, self-escalation
       prevention, authorization-change audit, and the `disclosure.none` items.
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
@@ -1242,6 +1243,18 @@ them is **built**. Each item below records the settled decision and what remains
       and 13): no Unit reservation or consumption for logo-only changes or
       disclosure changes 1–3; a combined disclosure + logo change counted once;
       validation must never turn a free recomposition into a charge.
+- [ ] **Build Property-rooted Scope enforcement** (ADR-0052 Decision 10):
+      durable Property → responsible user and Property → zero-or-one group
+      relationships and user → group memberships; the `GROUP` union predicate
+      and the `OWN` assignment predicate; child-resource reachability inherited
+      from the Property; reassignment and membership-change effects; no
+      authorship-based row authorization; no implicit scope widening through
+      individual grants; tenant-safe row-level checks throughout.
+- [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
+      to schedule a downgrade while next-period blocks exceed the target cap;
+      require explicit scheduled cancellation of the excess; never cancel blocks
+      automatically; compute next-period entitlement; apply the existing
+      over-quota rule to actual bytes after renewal.
 - [ ] **Build repeatable storage blocks** (ADR-0053 Decision 4): block-count
       representation; recurring charge = active blocks × price; immediate
       prorated block purchase; per-plan cap enforced at purchase (Standard 2 /
@@ -1272,37 +1285,46 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Two gates. The first was exposed while recording the storage block caps; the
-second was raised by the exact-head review of `790ed33`. **Neither may be
+One gate, exposed while recording the Scope predicates. **It must not be
 guessed.**
 
-- [ ] **Define what the `GROUP` and `OWN` scopes select.** ADR-0052 Decision 10
-      names the scopes and assigns them as template defaults (`MANAGER` →
-      `GROUP`, `CREATOR`/`VIEWER` → `OWN`) but never defines their predicates:
-      what `OWN` covers (created property, uploaded asset, requested video),
-      how scope propagates from a property to its children, how content becomes
-      group-assigned, and what a multi-group user sees. These set how much
-      tenant-internal access each role confers. Recorded at ADR-0052 Decision 10.
-
-- [ ] **Decide what happens to storage blocks above the target plan's cap on a
-      downgrade.** Premium may hold up to 5 blocks, Standard at most 2. When a
-      Premium organization with 3–5 blocks schedules a downgrade to Standard,
-      nothing says whether the excess must be cancelled before the downgrade can
-      be scheduled, is cancelled at renewal with the plan change, or may be kept
-      above Standard's cap. Paid blocks must not be silently discarded. Recorded
-      at ADR-0053 Decision 3B.
+- [ ] **Decide who may set a Property's responsible user and group, and what
+      they are at creation.** ADR-0052 Decision 10 settles what `OWN` and `GROUP`
+      select, but names no permission or scope that authorizes changing a
+      Property's responsible user or group assignment (Decision 11 only lets
+      `OWNER`/`ADMIN` reassign Properties left ungrouped by a group deletion),
+      and does not fix the assignments at creation. An `OWN`-scoped `CREATOR` or
+      `GROUP`-scoped `MANAGER` could otherwise lose reach to a Property they just
+      created, and a `CREATOR` able to set a group could share a Property with a
+      whole group. Recorded at ADR-0052 Decision 10.
 
 ### Decision gates — CLOSED
 
-Twenty-two decisions: the two gates from the first PR review, eight recorded
+Twenty-four decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
 additional-seat cancellation, mid-period purchases, downgrade fit,
-charged-recomposition quality, and the two closed last — logo-only
-recomposition and repeatable storage blocks. **Each is settled as policy and unbuilt as code**; the
+charged-recomposition quality, logo-only recomposition, repeatable storage
+blocks, and the two closed last — storage blocks on downgrade and Scope
+semantics. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **Scope semantics — CLOSED.** The **Property is the authorization root**;
+      children inherit its reachability, with no authorship-based ownership.
+      `ORGANIZATION` = every Property in the organization (never cross-tenant);
+      `GROUP` = Properties assigned to **any** of the actor's groups (union; a
+      Property has zero or one group; ungrouped Properties are not reachable
+      through `GROUP`); `OWN` = Properties **explicitly assigned** to the actor
+      as responsible user — not created/uploaded/requested-by. Reassignment and
+      membership changes take effect through the Property; audit history is not
+      rewritten. Individual grants never widen scope. ADR-0052 Decision 10.
+- [x] **Storage blocks on downgrade — CLOSED.** Premium → Standard cannot be
+      scheduled while next-period blocks exceed 2; a `billing.manage` holder
+      must explicitly schedule cancellation of the excess. Nothing is cancelled
+      automatically. Only the block count must fit — stored bytes over quota
+      after renewal keep the existing no-delete rule. Downgrade and block
+      cancellation are separate mutations. ADR-0053 Decision 3B.
 - [x] **Logo-only recomposition — CLOSED.** **Free**: no Unit reserved or
       consumed, no disclosure-change count increment; still validated before
       delivery, and a failure keeps the previous deliverable. A disclosure +

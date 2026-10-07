@@ -57,6 +57,11 @@ Protect customer property images, generated videos, billing data, credentials, a
   so group-based authorization is never a route to it, for any actor. Holding it
   is a *use* privilege, not a *delegation* privilege: a holder gains no authority
   to grant or revoke it.
+- **Row access is Property-rooted** (ADR-0052 Decision 10): tenant boundary AND
+  permission AND a Property-derived scope predicate. `OWN` means explicit
+  responsible-user assignment, never authorship; `GROUP` is the union of the
+  user's groups; children inherit their Property's reachability; and an
+  individual grant never widens scope.
 - **Audit every role, permission, Scope and group authorization change**,
   including a refused escalation attempt. Each `disclosure.none` grant and
   revocation must leave durable evidence of the organization, affected user,

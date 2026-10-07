@@ -389,15 +389,83 @@ protected and individual-only* below).
 
 Scopes: `ORGANIZATION`, `GROUP`, `OWN`.
 
-**Open gate — what `GROUP` and `OWN` select.** The scopes are named and assigned
-as template defaults, but their row predicates are **not decided**: whether `OWN`
-means a property the user created, an asset they uploaded, or a video they
-requested; how scope propagates from a property to its assets, analyses,
-projects and videos; and which rows a user in several groups sees under `GROUP`
-(and how content becomes group-assigned at all). These decide how much
-tenant-internal access each template actually confers, so they are security
-rules, not implementation details, and must not be inferred. Tracked in
-`docs/decisions/TODO.md`.
+### Scope semantics — what `ORGANIZATION`, `GROUP` and `OWN` select
+
+**Decision gate CLOSED.** A **permission** says *what* an actor may do; a
+**scope** says *which Property-rooted rows* they may do it to.
+
+**The Property is the authorization root for customer content.** Every child
+resource inherits the reachability of its parent Property, including — where they
+exist — source and normalized assets, analysis and review records, generation
+requests, jobs and scenes as customer-content workflow objects, videos,
+deliverables and deliverable versions, and other Property-owned generation or
+media records. **There is no separate ownership rule for a child**: who uploaded
+an asset, clicked Generate, created an analysis or requested a video neither
+grants nor withholds access to it.
+
+```text
+authorized = tenant boundary AND permission AND Property-derived scope predicate
+```
+
+| Scope | Reaches a Property when… |
+| --- | --- |
+| `ORGANIZATION` | it belongs to the actor's organization. **Never cross-tenant.** |
+| `GROUP` | it is assigned to **any** group the actor is currently a member of |
+| `OWN` | the actor is its **explicitly assigned responsible user** |
+
+**`GROUP`.** In the initial release a Property is assigned to **zero or one**
+group; multi-group Property assignment is not introduced. A user in several
+groups reaches the **union** of the Properties assigned to those groups — e.g. a
+`MANAGER` in groups A and B reaches Properties in A and in B, not one in C. An
+**ungrouped** Property is **not** reachable through `GROUP` alone; another path,
+such as `ORGANIZATION` scope, may still reach it.
+
+**`OWN`.** It does **not** mean created-by, uploaded-by, requested-by or
+generated-by. It means the Property is **explicitly assigned** to the user as its
+responsible user. Creation may initialize that assignment where the product flow
+chooses, but authorization never rests on the immutable creator identity.
+
+**Changes take effect through the Property.**
+
+- **Group reassignment** of a Property moves its `GROUP` reach; its children
+  follow automatically.
+- **Removing a user from a group** immediately ends reach derived solely from
+  that membership; other memberships and other paths still apply. Group reach is
+  additive and there is still no DENY model. Group deletion follows Decision 11.
+- **Responsible-user reassignment** moves `OWN` reach from the old assignee to
+  the new one; children follow without any child row being reassigned. Creator,
+  uploader and requester history and audit attribution are **not** rewritten —
+  assignment is authorization state, authorship is historical evidence.
+
+**Individual grants do not widen scope.** A grant answers *what* a user may do,
+not *which* rows they reach. Unless the authorization model explicitly carries a
+scope with the grant, it does not bypass the user's applicable scope: a
+`GROUP`-scoped user does not gain organization-wide rows, nor an `OWN`-scoped user
+unrelated Properties, by receiving another content permission. There is no
+implicit scope-escalation path.
+
+**Non-Property permissions keep their own semantics.** Organization, member,
+group, permission, billing and audit administration are not Property-rooted and
+are not given Property row semantics here; their role and grant-ceiling rules
+are unchanged.
+
+**Durable relationships this requires** (no names chosen here): Property →
+responsible user, for `OWN`; Property → zero-or-one group, for `GROUP`; user →
+group memberships.
+
+#### Open gate — who may set a Property's responsible user and group
+
+**Not decided.** The predicates above are settled, but nothing approved says
+**which permission and scope authorize changing** a Property's responsible user
+or group assignment ("authorized administration may reassign" names no
+permission — Decision 11 only lets `OWNER`/`ADMIN` reassign Properties left
+ungrouped by a group deletion), or what a Property's assignments are **at
+creation**. That matters
+directly: an `OWN`-scoped `CREATOR` who creates a Property not assigned to them,
+or a `GROUP`-scoped `MANAGER` who creates an ungrouped one, would immediately
+lose reach to it; and if a `CREATOR` could assign its Property to a group, that
+would share it with every member of that group. These are access-control rules,
+so they are not inferred. Tracked in `docs/decisions/TODO.md`.
 
 Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
 

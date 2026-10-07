@@ -59,6 +59,11 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
 - Treat user prompts and uploaded files as untrusted input.
 - Assets are private and accessed only through short-lived signed URLs.
 - Every tenant-owned record is scoped to the authenticated organization.
+- **Customer-content row access is Property-rooted** (ADR-0052 Decision 10):
+  `ORGANIZATION` = the organization's Properties, `GROUP` = Properties assigned
+  to any of the user's groups, `OWN` = Properties explicitly assigned to the user
+  as responsible user. Children inherit their Property; never authorize rows by
+  creator/uploader/requester; an individual grant never widens scope.
 - **`permission.manage` is authority within a grant ceiling, never unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` assigns any role; `ADMIN` assigns
   only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage`,

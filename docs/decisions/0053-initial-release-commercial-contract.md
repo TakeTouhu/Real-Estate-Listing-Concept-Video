@@ -353,18 +353,40 @@ scheduled downgrade recalculates the next-period capacity. Exact UI wording is
 not fixed here. Because scheduling required fit and growth past it is blocked,
 renewal cannot arrive over capacity.
 
-#### Open gate — storage blocks above the target plan's cap
+#### Storage blocks above the target plan's cap
 
-**Not decided.** A Premium organization may hold up to 5 storage blocks, Standard
-at most 2 (Decision 4). Nothing approved says what happens when a Premium
-organization holding 3–5 blocks schedules a downgrade to Standard: whether the
-excess blocks must first be cancelled before the downgrade can be scheduled (as
-membership must first fit), whether they are cancelled at renewal along with the
-plan change, or whether they may be retained above Standard's cap. Paid blocks
-must not be silently discarded, and each answer changes what is billed and how
-much capacity the organization keeps, so none is assumed. Tracked in
-`docs/decisions/TODO.md`. (Enterprise transitions are sales-assisted, so this
-arises only for Premium → Standard.)
+**Decision gate CLOSED.** Storage blocks may **not** be carried into a downgraded
+plan beyond that plan's block cap. For Premium → Standard (Standard allows 2):
+
+- if the organization holds more than 2 blocks, the downgrade **cannot be
+  scheduled** until a `billing.manage` holder has **explicitly** scheduled
+  cancellation of enough blocks that the **next-period** block count is ≤ 2;
+- the system **never** cancels blocks automatically, never chooses which
+  entitlements to remove, and never silently discards paid capacity;
+- the downgrade and the block cancellations are **separate commercial
+  mutations**, each requiring `billing.manage`, and neither creates the other;
+- both take effect at the next renewal under their own rules (this decision and
+  Decision 4).
+
+```text
+Premium + 4 blocks → Standard (max 2)
+schedule cancellation of ≥ 2 blocks first
+→ next period: Standard, ≤ 2 blocks
+```
+
+**Block count must fit; stored bytes need not.** Only the next-period **block
+count** must fit the target cap. The customer is **not** required to delete
+stored data to schedule the downgrade. If retained usage exceeds the new quota
+after renewal, the existing rule applies: data is kept, new uploads and
+generation are blocked, preview/download/delete remain available, and the
+customer may reduce usage or change entitlement later.
+
+Enterprise transitions remain sales-assisted; no automatic semantics are defined
+for them here.
+
+Because they are separate mutations with no coupling, cancelling a scheduled
+downgrade does **not** cancel the block reductions scheduled to make it possible,
+and vice versa; each is changed only by its own explicit `billing.manage` action.
 
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
@@ -447,9 +469,9 @@ Purchase and cancellation of each block:
 existing paid blocks are not discarded: every block count a lower plan can hold is
 within the higher plan's cap (Standard's 2 ≤ Premium's 5; Premium's 5 within
 Enterprise), so capacity becomes the new base plus the same blocks. A
-**downgrade** that would leave more blocks than the target plan allows is an open
-gate — see *Open gate — storage blocks above the target plan's cap* under
-Decision 3B.
+**downgrade** that would leave more blocks than the target plan allows cannot be
+scheduled until excess blocks are explicitly cancelled — see *Storage blocks above
+the target plan's cap* under Decision 3B.
 
 **This price is explicitly provisional and must be validated against production
 cost and egress economics before Commercial Launch.** It is recorded as an open

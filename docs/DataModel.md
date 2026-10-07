@@ -86,6 +86,15 @@ Decision 11).
 
 Avoid exposing full addresses where not required.
 
+**The Property is the authorization root for customer content** (ADR-0052
+Decision 10). `created_by` here and on child rows is **authorship history only**
+and must never decide row access. Scope needs durable relationships that do not
+exist yet: Property → **responsible user** (for `OWN`), Property → **zero or one
+group** (for `GROUP`), and user → group memberships. Child rows — assets,
+analyses, projects, jobs, scenes, deliverables and versions — reach their scope
+through their Property rather than through any ownership column of their own. No
+names are chosen here.
+
 ### MediaAsset
 
 `id`, `organization_id`, `property_id`, `storage_key`, `original_filename`, `mime_type`, `size_bytes`, `width`, `height`, `sha256`, `perceptual_hash`, `status`, `created_by`, timestamps

@@ -35,6 +35,12 @@ grant matrix and each template's default Scope**. `BILLING` pays for capacity bu
 cannot generate video or consume Units; `ADMIN` manages people but not billing;
 `MANAGER` defaults to `GROUP` scope and manages work rather than people.
 
+**Scope is Property-rooted** (ADR-0052 Decision 10): `ORGANIZATION` reaches every
+Property in the organization, `GROUP` the Properties assigned to any of the
+user's groups, and `OWN` the Properties explicitly assigned to the user as
+responsible user — never "whatever I created". Everything under a Property
+follows it, and an extra permission never widens the rows a user can reach.
+
 **`permission.manage` is authority within a grant ceiling, not unlimited
 delegation.** `OWNER` may assign every role; **`ADMIN` may assign only
 `MANAGER`, `CREATOR` and `VIEWER`**; the other templates assign no roles.
