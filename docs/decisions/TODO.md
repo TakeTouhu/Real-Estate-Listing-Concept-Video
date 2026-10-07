@@ -1287,8 +1287,16 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, exposed while recording the Scope predicates. **It must not be
+Two gates. The first was exposed while recording the Scope predicates; the
+second was raised by the exact-head review of `55e9f7a`. **Neither may be
 guessed.**
+
+- [ ] **Decide who may change a member's Scope, and to what.** ADR-0052
+      Decision 10 fixes each template's default Scope and requires Scope changes
+      to be ceiling-checked and audited, but defines no Scope-assignment
+      authority or ceiling. Without one, an `ADMIN` able to assign `MANAGER`
+      might also widen that manager from `GROUP` to `ORGANIZATION`. Recorded at
+      ADR-0052 Decision 10.
 
 - [ ] **Decide who may set a Property's responsible user and group, and what
       they are at creation.** ADR-0052 Decision 10 settles what `OWN` and `GROUP`

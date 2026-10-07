@@ -105,7 +105,14 @@ names are chosen here.
 
 ### VideoProject
 
-`id`, `organization_id`, `property_id`, `name`, `status`, `duration_seconds`, `aspect_ratio`, `resolution`, `style_preset`, `camera_motion`, `prompt`, `negative_prompt`, `include_music`, `include_captions`, `brand_template_id`, `created_by`, timestamps
+`id`, `organization_id`, `property_id`, `name`, `status`, `duration_seconds`, `aspect_ratio`, `resolution`, `style_preset`, `camera_motion`, `prompt`, `negative_prompt`, `created_by`, timestamps
+
+**Not initial-release fields.** `include_music`, `include_captions` and
+`brand_template_id` appeared in the v1.0 sketch. BGM and captions are not
+initial-release commitments (`docs/ProductRequirements.md`), and multi-brand or
+branch-specific templates are post-release (ADR-0052 Decision 13) — the initial
+release has one organization-level logo with per-video ON/OFF. Do not build schema
+or settings branches for them.
 
 ### StoryboardScene
 

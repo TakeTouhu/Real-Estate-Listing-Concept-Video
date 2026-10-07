@@ -453,6 +453,17 @@ are unchanged.
 responsible user, for `OWN`; Property → zero-or-one group, for `GROUP`; user →
 group memberships.
 
+#### Open gate — who may change a member's Scope
+
+**Not decided.** The matrix fixes each template's **default** Scope, and this
+decision treats Scope changes as ceiling-checked and audited, but nothing approved
+says **who may change a member's Scope, or which transitions they may grant**. For
+example, if an `ADMIN` who may assign `MANAGER` could also move that manager from
+`GROUP` to `ORGANIZATION`, it would widen tenant-internal access well beyond the
+template default; another implementation could forbid exactly that. This is an
+access-control ceiling, separate from the Property-assignment gate below, and is
+not inferred. Tracked in `docs/decisions/TODO.md`.
+
 #### Open gate — who may set a Property's responsible user and group
 
 **Not decided.** The predicates above are settled, but nothing approved says
