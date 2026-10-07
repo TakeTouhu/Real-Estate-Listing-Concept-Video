@@ -1252,8 +1252,10 @@ them is **built**. Each item below records the settled decision and what remains
       individual grants; tenant-safe row-level checks throughout.
 - [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
       to schedule a downgrade while next-period blocks exceed the target cap;
-      require explicit scheduled cancellation of the excess; never cancel blocks
-      automatically; compute next-period entitlement; apply the existing
+      require explicit scheduled cancellation of the excess; while the downgrade
+      is pending, reject any block purchase or cancellation reversal that would
+      push next-period blocks over the target cap; never cancel blocks or the
+      downgrade automatically; compute next-period entitlement; apply the existing
       over-quota rule to actual bytes after renewal.
 - [ ] **Build repeatable storage blocks** (ADR-0053 Decision 4): block-count
       representation; recurring charge = active blocks × price; immediate

@@ -109,7 +109,9 @@ no seat is bought**. While pending, member growth past that entitlement is
 blocked (ADR-0053 Decision 3B). A Premium → Standard downgrade also cannot be
 scheduled while more than 2 storage blocks would remain next period; a
 `billing.manage` holder must explicitly schedule cancelling the excess — nothing
-is cancelled automatically, and stored data need not be deleted first.
+is cancelled automatically, and stored data need not be deleted first. While the
+downgrade is pending, a block purchase or cancellation reversal that would exceed
+Standard's cap is rejected until the downgrade is explicitly changed.
 
 **Mid-period purchases** of a seat or a +50 GB storage block are usable
 immediately, with a prorated first charge and the full monthly price from the

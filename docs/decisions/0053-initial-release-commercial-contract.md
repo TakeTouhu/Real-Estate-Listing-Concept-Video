@@ -388,6 +388,13 @@ Because they are separate mutations with no coupling, cancelling a scheduled
 downgrade does **not** cancel the block reductions scheduled to make it possible,
 and vice versa; each is changed only by its own explicit `billing.manage` action.
 
+**The cap holds while the downgrade is pending.** Any block mutation that would
+make the next-period block count exceed the pending target plan's cap — reversing
+a scheduled block cancellation, or purchasing a new block — is **rejected**. To
+make it, the customer must first explicitly cancel or change the downgrade. The
+system never resolves the conflict by changing either mutation itself, so renewal
+cannot arrive with a pending Standard downgrade and more than 2 blocks.
+
 **Enterprise upgrades and downgrades, and any transition to or from Enterprise,
 are sales-assisted contractual changes**, not self-service automatic ones.
 
