@@ -750,7 +750,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Twenty-four further business
+> This section predates the initial-release contract. Twenty-six further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
@@ -758,8 +758,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master, additional-seat cancellation, mid-period purchases, downgrade fit and
 > charged-recomposition quality, logo-only recomposition, storage blocks, storage
-> blocks on downgrade and Scope semantics — were settled later and are recorded under *Decision gates — CLOSED*
-> below; still-open gates are under *Decision gates — OPEN*, just above it. Read all
+> blocks on downgrade, Scope semantics, Property assignment authority and
+> role-fixed Scope — were settled later and are recorded under *Decision gates — CLOSED*
+> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1083,7 +1084,7 @@ them is **built**. Each item below records the settled decision and what remains
       enforcement.** No group permission, group inheritance, role template or
       Scope expansion may carry it, and the model should make that impossible
       rather than merely unused, so no indirect path — group membership, group
-      edit, role change or Scope change — can confer it.
+      edit or role change — can confer it.
 - [ ] **Audit every `disclosure.none` grant and revocation** with the
       organization, affected user, acting `OWNER`, action and timestamp.
 - [ ] **Enforce prospective revocation for new Mode C requests.** A revoked user
@@ -1112,9 +1113,8 @@ them is **built**. Each item below records the settled decision and what remains
       `OWNER` must always exist and the last `OWNER` cannot be deleted. **No
       longer blocked on the matrix:** the per-template permissions and default
       Scopes, the grant ceilings and the `disclosure.none` rules are all
-      approved in ADR-0052 Decision 10, as are the Scope predicates. Changing a
-      Property's responsible user or group remains blocked on the open gate
-      above. What remains is implementation, itemized below — the grant
+      approved in ADR-0052 Decision 10, as are the Scope predicates, role-fixed
+      Scope and Property assignment authority. What remains is implementation, itemized below — the grant
       matrix, ceiling enforcement on every grant path, self-escalation
       prevention, authorization-change audit, and the `disclosure.none` items.
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
@@ -1173,7 +1173,7 @@ them is **built**. Each item below records the settled decision and what remains
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`.
 - [ ] **Build the approved role-template grant matrix.** ADR-0052 Decision 10 now
-      fixes every template's grants and default Scope. Decide whether defaults are
+      fixes every template's grants and its role-fixed Scope. Decide whether defaults are
       stored as rows or derived from the matrix, and make a stored copy
       reproducible from it. `disclosure.none` and `video.share` must be
       unreachable by role assignment alone, and MFA enforcement must stay
@@ -1190,7 +1190,7 @@ them is **built**. Each item below records the settled decision and what remains
       manipulation must each be ceiling-checked — the additive group model is the
       obvious loophole and must not be one. A refused escalation attempt is an
       audited event, not a silent no-op.
-- [ ] **Audit every role, permission, Scope and group authorization change**,
+- [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
@@ -1250,6 +1250,13 @@ them is **built**. Each item below records the settled decision and what remains
       from the Property; reassignment and membership-change effects; no
       authorship-based row authorization; no implicit scope widening through
       individual grants; tenant-safe row-level checks throughout.
+- [ ] **Build Property assignment and role-fixed Scope** (ADR-0052 Decision
+      10): `OWNER`/`ADMIN`-only Property reassignment; creation-time assignment
+      rules by creator role, including `MANAGER` group-selection validation and
+      `CREATOR` responsible-user initialization; the fixed role → Scope mapping
+      with no standalone Scope mutation; Scope derived on role change without
+      rewriting assignments; grants never widening Scope; and audit evidence for
+      every assignment and role change.
 - [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
       to schedule a downgrade while next-period blocks exceed the target cap;
       require explicit scheduled cancellation of the excess; while the downgrade
@@ -1287,39 +1294,36 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Two gates. The first was exposed while recording the Scope predicates; the
-second was raised by the exact-head review of `55e9f7a`. **Neither may be
-guessed.**
-
-- [ ] **Decide who may change a member's Scope, and to what.** ADR-0052
-      Decision 10 fixes each template's default Scope and requires Scope changes
-      to be ceiling-checked and audited, but defines no Scope-assignment
-      authority or ceiling. Without one, an `ADMIN` able to assign `MANAGER`
-      might also widen that manager from `GROUP` to `ORGANIZATION`. Recorded at
-      ADR-0052 Decision 10.
-
-- [ ] **Decide who may set a Property's responsible user and group, and what
-      they are at creation.** ADR-0052 Decision 10 settles what `OWN` and `GROUP`
-      select, but names no permission or scope that authorizes changing a
-      Property's responsible user or group assignment (Decision 11 only lets
-      `OWNER`/`ADMIN` reassign Properties left ungrouped by a group deletion),
-      and does not fix the assignments at creation. An `OWN`-scoped `CREATOR` or
-      `GROUP`-scoped `MANAGER` could otherwise lose reach to a Property they just
-      created, and a `CREATOR` able to set a group could share a Property with a
-      whole group. Recorded at ADR-0052 Decision 10.
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
 
 ### Decision gates — CLOSED
 
-Twenty-four decisions: the two gates from the first PR review, eight recorded
+Twenty-six decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
 additional-seat cancellation, mid-period purchases, downgrade fit,
 charged-recomposition quality, logo-only recomposition, repeatable storage
-blocks, and the two closed last — storage blocks on downgrade and Scope
-semantics. **Each is settled as policy and unbuilt as code**; the
+blocks, storage blocks on downgrade, Scope semantics, and the two closed last —
+Property assignment authority and role-fixed Scope. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **Scope is fixed by role — CLOSED.** `OWNER`/`ADMIN`/`BILLING` →
+      `ORGANIZATION`, `MANAGER` → `GROUP`, `CREATOR`/`VIEWER` → `OWN`. There is
+      **no standalone scope change** for anyone, `OWNER` included; only a role
+      change moves scope, under the role-assignment ceiling. Grants never change
+      scope. A role change does not rewrite Property assignments. ADR-0052
+      Decision 10.
+- [x] **Property assignment authority — CLOSED.** Changing a Property's
+      responsible user or group is an **`OWNER`/`ADMIN`-only** authorization
+      mutation; `property.edit` alone is not enough. At creation: `OWNER`/`ADMIN`
+      may set or leave both unset; a `MANAGER`'s Property defaults its
+      responsible user to the creator and **must** be placed in one of the
+      `MANAGER`'s own groups (never ungrouped); a `CREATOR`'s Property is fixed
+      to the creator as responsible user and may stay ungrouped. Creator identity
+      is still not the `OWN` predicate. ADR-0052 Decision 10.
 - [x] **Scope semantics — CLOSED.** The **Property is the authorization root**;
       children inherit its reachability, with no authorship-based ownership.
       `ORGANIZATION` = every Property in the organization (never cross-tenant);
@@ -1445,7 +1449,7 @@ implementation work each one creates is listed in the section above.
       that period. ADR-0053 Decisions 2 and 3.
 
 - [x] **Role-template permission and default-Scope mapping — CLOSED.** The
-      approved matrix and each template's default Scope are ADR-0052 Decision 10.
+      approved matrix and each role's fixed Scope are ADR-0052 Decision 10.
       Each template's grant list there is exhaustive. `disclosure.none` and
       `video.share` are granted by no template; `permission.manage` is `OWNER` /
       `ADMIN`; `billing.manage` is `OWNER` / `BILLING`; `unit.consume` is

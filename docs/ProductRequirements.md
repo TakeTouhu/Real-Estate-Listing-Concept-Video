@@ -31,7 +31,7 @@ Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`,
 combined with groups, Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional
 individual permissions. Group permissions are additive; there is no DENY model.
 See ADR-0052 Decision 10 for the permission list, **the approved per-template
-grant matrix and each template's default Scope**. `BILLING` pays for capacity but
+grant matrix and each role's fixed Scope**. `BILLING` pays for capacity but
 cannot generate video or consume Units; `ADMIN` manages people but not billing;
 `MANAGER` defaults to `GROUP` scope and manages work rather than people.
 
@@ -39,7 +39,9 @@ cannot generate video or consume Units; `ADMIN` manages people but not billing;
 Property in the organization, `GROUP` the Properties assigned to any of the
 user's groups, and `OWN` the Properties explicitly assigned to the user as
 responsible user — never "whatever I created". Everything under a Property
-follows it, and an extra permission never widens the rows a user can reach.
+follows it, and an extra permission never widens the rows a user can reach. Scope is **fixed by role** — it changes only when the role changes — and only
+`OWNER`/`ADMIN` may change a Property's responsible user or group after
+creation.
 
 **`permission.manage` is authority within a grant ceiling, not unlimited
 delegation.** `OWNER` may assign every role; **`ADMIN` may assign only

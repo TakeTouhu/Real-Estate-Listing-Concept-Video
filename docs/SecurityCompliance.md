@@ -27,7 +27,7 @@ Protect customer property images, generated videos, billing data, credentials, a
   plus groups, Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual
   permissions. Group permissions are **additive**; there is **no DENY model**.
   There is **no Reviewer role** — see the AI-transparency section.
-- **The approved per-template grant matrix and each template's default Scope are
+- **The approved per-template grant matrix and each role's fixed Scope are
   ADR-0052 Decision 10**, and each template's grant list there is exhaustive.
   Three separations it enforces by role: `BILLING` does not generate video or
   consume Units; `ADMIN` does not manage billing (unless an `OWNER` explicitly
@@ -62,7 +62,12 @@ Protect customer property images, generated videos, billing data, credentials, a
   responsible-user assignment, never authorship; `GROUP` is the union of the
   user's groups; children inherit their Property's reachability; and an
   individual grant never widens scope.
-- **Audit every role, permission, Scope and group authorization change**,
+- **Scope is fixed by role; there is no standalone scope change.** Only a role
+  change moves a member's scope, under the role-assignment ceiling, so an `ADMIN`
+  cannot widen anyone to `ORGANIZATION`. Changing a Property's responsible user
+  or group is an `OWNER`/`ADMIN`-only authorization mutation; `property.edit`
+  alone does not authorize it (ADR-0052 Decision 10).
+- **Audit every role, permission, group and Property-assignment change**,
   including a refused escalation attempt. Each `disclosure.none` grant and
   revocation must leave durable evidence of the organization, affected user,
   acting `OWNER`, action and timestamp. **Revocation is prospective**: it blocks

@@ -438,11 +438,11 @@ chooses, but authorization never rests on the immutable creator identity.
   assignment is authorization state, authorship is historical evidence.
 
 **Individual grants do not widen scope.** A grant answers *what* a user may do,
-not *which* rows they reach. Unless the authorization model explicitly carries a
-scope with the grant, it does not bypass the user's applicable scope: a
-`GROUP`-scoped user does not gain organization-wide rows, nor an `OWN`-scoped user
-unrelated Properties, by receiving another content permission. There is no
-implicit scope-escalation path.
+not *which* rows they reach. A grant never carries or changes a scope: a
+`MANAGER` given another content permission still has `GROUP` scope, a `CREATOR`
+still has `OWN`, and an `ADMIN` given `billing.manage` by an `OWNER` is still an
+`ORGANIZATION`-scoped `ADMIN`. Neither direct grants, groups nor permission
+templates are a route to wider scope.
 
 **Non-Property permissions keep their own semantics.** Organization, member,
 group, permission, billing and audit administration are not Property-rooted and
@@ -453,30 +453,73 @@ are unchanged.
 responsible user, for `OWN`; Property → zero-or-one group, for `GROUP`; user →
 group memberships.
 
-#### Open gate — who may change a member's Scope
+#### Scope is fixed by role
 
-**Not decided.** The matrix fixes each template's **default** Scope, and this
-decision treats Scope changes as ceiling-checked and audited, but nothing approved
-says **who may change a member's Scope, or which transitions they may grant**. For
-example, if an `ADMIN` who may assign `MANAGER` could also move that manager from
-`GROUP` to `ORGANIZATION`, it would widen tenant-internal access well beyond the
-template default; another implementation could forbid exactly that. This is an
-access-control ceiling, separate from the Property-assignment gate below, and is
-not inferred. Tracked in `docs/decisions/TODO.md`.
+**Decision gate CLOSED.** In the initial release **scope is not independently
+mutable — the role determines it.**
 
-#### Open gate — who may set a Property's responsible user and group
+| Role | Scope |
+| --- | --- |
+| `OWNER` | `ORGANIZATION` |
+| `ADMIN` | `ORGANIZATION` |
+| `MANAGER` | `GROUP` |
+| `CREATOR` | `OWN` |
+| `VIEWER` | `OWN` |
+| `BILLING` | `ORGANIZATION` |
 
-**Not decided.** The predicates above are settled, but nothing approved says
-**which permission and scope authorize changing** a Property's responsible user
-or group assignment ("authorized administration may reassign" names no
-permission — Decision 11 only lets `OWNER`/`ADMIN` reassign Properties left
-ungrouped by a group deletion), or what a Property's assignments are **at
-creation**. That matters
-directly: an `OWN`-scoped `CREATOR` who creates a Property not assigned to them,
-or a `GROUP`-scoped `MANAGER` who creates an ungrouped one, would immediately
-lose reach to it; and if a `CREATOR` could assign its Property to a group, that
-would share it with every member of that group. These are access-control rules,
-so they are not inferred. Tracked in `docs/decisions/TODO.md`.
+`BILLING`'s `ORGANIZATION` scope gives it no content permission: scope sets reach
+only for permissions and resources to which scope is relevant, and `BILLING` holds
+no Property-content permission (see the matrix below).
+
+**There is no standalone scope change.** No one — including an `OWNER` — can change
+a member's scope while keeping their role: `MANAGER` cannot become
+`ORGANIZATION`-scoped, nor `CREATOR` or `VIEWER` `GROUP`- or
+`ORGANIZATION`-scoped. A **role change** is the only way scope changes, and it sets
+the fixed scope of the new role (a `MANAGER` made `ADMIN` becomes
+`ORGANIZATION`-scoped *because* the role changed). Role changes stay under the
+existing role-assignment ceiling: `OWNER` assigns any role, `ADMIN` only
+`MANAGER`/`CREATOR`/`VIEWER`, and `OWNER`/`ADMIN`/`BILLING` assignments are
+`OWNER`-only — so an `ADMIN` can never widen anyone to `ORGANIZATION` scope.
+
+**Reach is adjusted without changing scope.** For `GROUP`, through group
+membership and Property group assignment; for `OWN`, through Property
+responsible-user assignment.
+
+**A role change does not rewrite Property assignments.** Existing
+responsible-user and group assignments remain as data and audit state, and access
+is evaluated against the new role's scope: a `CREATOR` made `MANAGER` is then
+judged by `GROUP`; a `MANAGER` made `CREATOR` by the Properties explicitly assigned
+to them. Nothing is created or removed automatically to preserve prior
+visibility.
+
+#### Property assignment authority and creation defaults
+
+**Decision gate CLOSED.** Changing a Property's **responsible user** or **group** is
+an **authorization mutation**, not ordinary editing, so `property.edit` alone does
+not authorize it. **Only `OWNER` and `ADMIN` may change either assignment on an
+existing Property.** `MANAGER`, `CREATOR`, `VIEWER` and `BILLING` may not. Every
+selected user or group must belong to the same organization.
+
+Assignments at creation depend on the creator's role:
+
+| Creator | Responsible user | Group |
+| --- | --- | --- |
+| `OWNER` / `ADMIN` | may be selected or left unset | may be selected or left unset |
+| `MANAGER` | defaults to the creating `MANAGER` | **required**: exactly one group the `MANAGER` belongs to — selected automatically if they belong to one, chosen if several. **No ungrouped Property.** |
+| `CREATOR` | fixed to the creating `CREATOR` | may stay unset; a `CREATOR` cannot use group assignment to widen access |
+
+These defaults exist so that no creator immediately loses reach to what they just
+created. After creation, any change requires `OWNER` or `ADMIN`. **The creator
+identity is still not the `OWN` predicate**: creation merely initializes the
+responsible user, and a later `OWNER`/`ADMIN` reassignment moves `OWN` reach
+without rewriting creator history. Uploaded-, requested- and generated-by remain
+non-authoritative for reachability.
+
+**Audit.** A Property assignment change records the organization, the Property,
+the acting user, previous and new responsible user, previous and new group, and
+the timestamp. A role change records the target user, previous and new role, the
+resulting fixed scope, the acting user and the timestamp. There is no separate
+"scope changed" event, because no standalone scope mutation exists.
 
 Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
 
@@ -507,11 +550,12 @@ audit.view            audit.export
 - **There must always be at least one OWNER, and the last OWNER cannot be
   deleted.**
 
-### The approved template-to-permission matrix and default Scope
+### The approved template-to-permission matrix and Scope
 
-**Decision gate CLOSED.** Default Scope per template:
+**Decision gate CLOSED.** Scope per template — fixed by role (see *Scope is fixed
+by role* above):
 
-| Template | Default Scope |
+| Template | Scope |
 | --- | --- |
 | `OWNER` | `ORGANIZATION` |
 | `ADMIN` | `ORGANIZATION` |
@@ -625,7 +669,8 @@ authority the actor could not grant directly:
 - an individual permission grant;
 - group membership;
 - a group permission;
-- Scope manipulation.
+- Scope manipulation (scope is fixed by role, so there is no scope mutation to
+  exploit — only a role change, which the role ceiling governs).
 
 Concretely: **`ADMIN` cannot self-grant `billing.manage`**; cannot self-grant or
 re-grant `permission.manage` as a way across the protected boundary; **cannot
@@ -640,7 +685,7 @@ both. `disclosure.none` is the deliberate exception — the template does **not*
 carry it, so even an `OWNER` holds it only by an explicit individual grant, which
 an `OWNER` may give to themselves.
 
-**Every role, permission, Scope and group authorization change remains audited**,
+**Every role, permission, group and Property-assignment change remains audited**,
 including a refused escalation attempt.
 
 Unchanged global rules: group permissions are additive, there is no DENY model,

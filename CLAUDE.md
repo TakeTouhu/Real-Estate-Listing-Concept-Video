@@ -63,7 +63,9 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   `ORGANIZATION` = the organization's Properties, `GROUP` = Properties assigned
   to any of the user's groups, `OWN` = Properties explicitly assigned to the user
   as responsible user. Children inherit their Property; never authorize rows by
-  creator/uploader/requester; an individual grant never widens scope.
+  creator/uploader/requester; an individual grant never widens scope. Scope is
+  fixed by role (no standalone scope change), and only `OWNER`/`ADMIN` may change
+  a Property's responsible user or group.
 - **`permission.manage` is authority within a grant ceiling, never unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` assigns any role; `ADMIN` assigns
   only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage`,

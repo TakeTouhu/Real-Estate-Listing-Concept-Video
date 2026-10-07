@@ -47,7 +47,7 @@ survives as the `analysis.review` permission.
 Membership alone is not the authorization model: the initial release adds groups,
 Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual permissions, with
 **additive** group permissions and **no DENY**. The permission list **and the
-approved per-template grant matrix with each template's default Scope** are
+approved per-template grant matrix with each role's fixed Scope** are
 ADR-0052 Decision 10. They need durable representation — group membership, scope,
 and per-user grants — that does not exist yet.
 
@@ -58,8 +58,9 @@ actor grant this?" rather than only "does this actor hold `permission.manage`?".
 `disclosure.none`, the `OWNER`/`ADMIN`/`BILLING` role assignments,
 ownership-equivalent changes, and anything touching the last `OWNER`) must be
 enforceable on **every** path — direct grant, group membership, group permission
-and Scope change alike — since the additive model otherwise becomes an
-escalation route.
+and role change alike — since the additive model otherwise becomes an escalation
+route. Scope itself is **fixed by role** and is not stored as an independently
+editable per-member value (ADR-0052 Decision 10).
 
 **`disclosure.none` must be representable only as an individual grant.** The
 model must make it impossible — not merely unused — for a group permission,
@@ -93,7 +94,9 @@ exist yet: Property → **responsible user** (for `OWN`), Property → **zero or
 group** (for `GROUP`), and user → group memberships. Child rows — assets,
 analyses, projects, jobs, scenes, deliverables and versions — reach their scope
 through their Property rather than through any ownership column of their own. No
-names are chosen here.
+names are chosen here. Changing either assignment is an `OWNER`/`ADMIN`-only authorization
+mutation with its own audit record, and creation-time values depend on the
+creator's role (ADR-0052 Decision 10).
 
 ### MediaAsset
 
