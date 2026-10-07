@@ -389,6 +389,16 @@ protected and individual-only* below).
 
 Scopes: `ORGANIZATION`, `GROUP`, `OWN`.
 
+**Open gate — what `GROUP` and `OWN` select.** The scopes are named and assigned
+as template defaults, but their row predicates are **not decided**: whether `OWN`
+means a property the user created, an asset they uploaded, or a video they
+requested; how scope propagates from a property to its assets, analyses,
+projects and videos; and which rows a user in several groups sees under `GROUP`
+(and how content becomes group-assigned at all). These decide how much
+tenant-internal access each template actually confers, so they are security
+rules, not implementation details, and must not be inferred. Tracked in
+`docs/decisions/TODO.md`.
+
 Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
 
 Permissions:

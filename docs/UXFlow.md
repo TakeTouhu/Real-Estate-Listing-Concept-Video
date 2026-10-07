@@ -418,7 +418,8 @@ plan. Never present Sev1 monitoring as 24/7 staffed support.
 - keyboard-accessible controls
 - visible focus states
 - Japanese-first copy with localization-ready message catalogs
-- captions and disclosure legible in supported aspect ratios
+- the AI disclosure legible in every supported aspect ratio (captions are not an
+  initial-release commitment)
 
 ## Mobile behavior
 

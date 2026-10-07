@@ -26,12 +26,15 @@ Upload
 → Prompt compilation
 → Scene generation through the verified provider route
 → Managed-storage copy
-→ FFmpeg composition
-→ Audio/captions/branding
+→ FFmpeg composition (Clean Master)
+→ AI-disclosure overlay and company logo, per the admitted settings
 → Output quality validation
 → Unit consumption where applicable
 → Available in the customer's private workspace
 ```
+
+BGM and captions are **not initial-release commitments** (`docs/ProductRequirements.md`)
+and are not steps of this pipeline; nothing here may add or block release on them.
 
 There is **no human approval step** (ADR-0052 Decision 2). Availability in the
 customer's private workspace is not external publication.

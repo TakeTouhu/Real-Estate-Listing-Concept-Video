@@ -1110,9 +1110,10 @@ them is **built**. Each item below records the settled decision and what remains
       group permissions, no DENY, the six role templates and the full permission
       list. `video.share` is reserved and must not be exposed. At least one
       `OWNER` must always exist and the last `OWNER` cannot be deleted. **No
-      longer blocked:** the per-template permissions and default Scopes, the
-      grant ceilings and the `disclosure.none` rules are all approved in ADR-0052
-      Decision 10. What remains is implementation, itemized below — the grant
+      longer blocked on the matrix:** the per-template permissions and default
+      Scopes, the grant ceilings and the `disclosure.none` rules are all
+      approved in ADR-0052 Decision 10. **Scope enforcement is still blocked** on
+      the open gate defining what `GROUP` and `OWN` select. What remains is implementation, itemized below — the grant
       matrix, ceiling enforcement on every grant path, self-escalation
       prevention, authorization-change audit, and the `disclosure.none` items.
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
@@ -1271,8 +1272,17 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, exposed while recording the storage block caps. **It must not be
+Two gates. The first was exposed while recording the storage block caps; the
+second was raised by the exact-head review of `790ed33`. **Neither may be
 guessed.**
+
+- [ ] **Define what the `GROUP` and `OWN` scopes select.** ADR-0052 Decision 10
+      names the scopes and assigns them as template defaults (`MANAGER` →
+      `GROUP`, `CREATOR`/`VIEWER` → `OWN`) but never defines their predicates:
+      what `OWN` covers (created property, uploaded asset, requested video),
+      how scope propagates from a property to its children, how content becomes
+      group-assigned, and what a multi-group user sees. These set how much
+      tenant-internal access each role confers. Recorded at ADR-0052 Decision 10.
 
 - [ ] **Decide what happens to storage blocks above the target plan's cap on a
       downgrade.** Premium may hold up to 5 blocks, Standard at most 2. When a
