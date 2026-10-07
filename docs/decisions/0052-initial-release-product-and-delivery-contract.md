@@ -494,7 +494,8 @@ visibility.
 
 #### Property assignment authority and creation defaults
 
-**Decision gate CLOSED.** Changing a Property's **responsible user** or **group** is
+**Decision gate CLOSED** for the rules below; three narrower questions they expose
+remain **open gates** after this subsection. Changing a Property's **responsible user** or **group** is
 an **authorization mutation**, not ordinary editing, so `property.edit` alone does
 not authorize it. **Only `OWNER` and `ADMIN` may change either assignment on an
 existing Property.** `MANAGER`, `CREATOR`, `VIEWER` and `BILLING` may not. Every
@@ -505,8 +506,12 @@ Assignments at creation depend on the creator's role:
 | Creator | Responsible user | Group |
 | --- | --- | --- |
 | `OWNER` / `ADMIN` | may be selected or left unset | may be selected or left unset |
-| `MANAGER` | defaults to the creating `MANAGER` | **required**: exactly one group the `MANAGER` belongs to — selected automatically if they belong to one, chosen if several. **No ungrouped Property.** |
-| `CREATOR` | fixed to the creating `CREATOR` | may stay unset; a `CREATOR` cannot use group assignment to widen access |
+| `MANAGER` | defaults to the creating `MANAGER` (whether it may be overridden, and to whom, is an **open gate** below) | **required**: exactly one group the `MANAGER` belongs to — selected automatically if they belong to one, chosen if several. **No ungrouped Property.** |
+| `CREATOR` | fixed to the creating `CREATOR` | may stay unset; a `CREATOR` cannot use group assignment to widen access (whether it may select a group at all is an **open gate** below) |
+
+No creation row exists for `VIEWER` or `BILLING`; neither template holds
+`property.create`. What happens when one of them receives that permission by
+individual or group grant is an **open gate** below.
 
 These defaults exist so that no creator immediately loses reach to what they just
 created. After creation, any change requires `OWNER` or `ADMIN`. **The creator
@@ -520,6 +525,39 @@ the acting user, previous and new responsible user, previous and new group, and
 the timestamp. A role change records the target user, previous and new role, the
 resulting fixed scope, the acting user and the timestamp. There is no separate
 "scope changed" event, because no standalone scope mutation exists.
+
+#### Open gate — creation-time assignment for a granted `property.create`
+
+**Not decided.** The creation table covers the templates that hold
+`property.create` by default. A permission absent from a template may still be
+granted individually or through a group (see the matrix below), so a `VIEWER` or
+`BILLING` user could receive `property.create`. Nothing approved says whether such
+a grant is permitted, or — if it is — what the responsible user and group are at
+creation; an `OWN`-scoped `VIEWER` given no initial assignment would lose reach to
+the Property it just created. Tracked in `docs/decisions/TODO.md`.
+
+#### Open gate — creation-time selection latitude for `MANAGER` and `CREATOR`
+
+**Not decided.** For a `MANAGER`, the responsible user *defaults to* the creating
+`MANAGER`, but nothing approved says whether the `MANAGER` may choose someone else
+at creation, or which users would be eligible. For a `CREATOR`, the group *may stay
+unset* and a `CREATOR` may not use group assignment to widen access, but nothing
+approved says whether a `CREATOR` may select a group at all — for example, one it
+belongs to — given that any group selection makes the Property reachable to that
+group's `GROUP`-scoped members. Both are creation-time authorization choices and
+are not inferred. Tracked in `docs/decisions/TODO.md`.
+
+#### Open gate — group deletion by a non-`OWNER`/`ADMIN` holder of `group.manage`
+
+**Not decided.** Only `OWNER` and `ADMIN` may change an existing Property's group,
+and `group.manage` is held by default only by `OWNER` and `ADMIN`. But
+`group.manage` is not protected authority, so it can be granted individually or
+through a group to a lower role, and Decision 11 returns a deleted group's
+Properties to ungrouped scope. A `MANAGER` or `CREATOR` holding a granted
+`group.manage` could therefore clear every Property's group assignment in a group
+by deleting it. Nothing approved says whether group deletion is `OWNER`/`ADMIN`-only,
+whether `group.manage` may be granted below `ADMIN`, or whether this is an accepted
+exception. Tracked in `docs/decisions/TODO.md`.
 
 Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
 
@@ -824,7 +862,8 @@ On group deletion:
 - they lose permissions and scope granted **solely** by that group;
 - other group memberships are unaffected;
 - group-assigned properties/videos return to organization root/ungrouped scope,
-  and OWNER/ADMIN may reassign them;
+  and OWNER/ADMIN may reassign them (who may delete a group when `group.manage`
+  is granted below `ADMIN` is an open gate in Decision 10);
 - **group deletion does not delete content.**
 
 ## Decision 12 — Customer share links are post-release

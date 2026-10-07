@@ -760,7 +760,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > charged-recomposition quality, logo-only recomposition, storage blocks, storage
 > blocks on downgrade, Scope semantics, Property assignment authority and
 > role-fixed Scope — were settled later and are recorded under *Decision gates — CLOSED*
-> below; *Decision gates — OPEN*, just above it, is currently empty. Read all
+> below; *Decision gates — OPEN*, just above it, holds three Property-assignment
+> questions not yet decided. Read all
 > three places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1294,9 +1295,32 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+Three gates, raised by the exact-head review of `900a093` against the newly
+recorded Property assignment rules. **None may be guessed.**
+
+- [ ] **Decide what a granted `property.create` means for `VIEWER` and
+      `BILLING`.** ADR-0052 Decision 10's creation table covers only the
+      templates that hold `property.create` by default. Nothing approved says
+      whether the permission may be granted to a `VIEWER` or `BILLING` user
+      individually or through a group, or — if it may — what the responsible
+      user and group are at creation. An `OWN`-scoped `VIEWER` with no initial
+      assignment would lose reach to what it just created. Recorded at ADR-0052
+      Decision 10.
+- [ ] **Decide the creation-time selection latitude of `MANAGER` and
+      `CREATOR`.** A `MANAGER`'s responsible user *defaults to* the creating
+      `MANAGER`; nothing approved says whether it may be overridden at creation
+      or which users are eligible. A `CREATOR`'s group *may stay unset*; nothing
+      approved says whether a `CREATOR` may select a group at all, e.g. one it
+      belongs to, given that any selection opens the Property to that group's
+      `GROUP`-scoped members. Recorded at ADR-0052 Decision 10.
+- [ ] **Decide who may delete a group when `group.manage` is granted below
+      `ADMIN`.** Only `OWNER`/`ADMIN` may change an existing Property's group,
+      yet `group.manage` is not protected authority and Decision 11 returns a
+      deleted group's Properties to ungrouped scope, so a `MANAGER` or `CREATOR`
+      holding a granted `group.manage` could clear those assignments by deleting
+      the group. Options include making group deletion `OWNER`/`ADMIN`-only,
+      barring `group.manage` below `ADMIN`, or accepting the exception. Recorded
+      at ADR-0052 Decision 10 and referenced from Decision 11.
 
 ### Decision gates — CLOSED
 
