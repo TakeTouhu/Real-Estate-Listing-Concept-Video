@@ -1359,8 +1359,9 @@ implementation work each one creates is listed in the section above.
       conversion, no free change. Failure settlement unchanged. ADR-0052
       Decision 9.
 - [x] **Additional-seat cancellation — CLOSED.** Effective at the **next
-      renewal**, never immediately; **no proration**; current-period seats stay
-      usable. A reduction may be scheduled **only if current membership already
+      renewal**, never immediately; **no proration**; existing members stay
+      active through the current period, but unused paid capacity above the
+      next-period entitlement is given up once a reduction is scheduled. A reduction may be scheduled **only if current membership already
       fits** the post-cancellation entitlement; while it is pending, member
       growth past the next-period entitlement is blocked; at renewal the seat
       quantity drops and billing follows. No member is ever silently removed or

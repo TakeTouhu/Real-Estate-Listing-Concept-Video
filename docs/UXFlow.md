@@ -340,7 +340,10 @@ Decisions 9 and 13).
 **Storage purchase** offers +50 GB blocks only while the plan's cap allows one
 more — Standard up to 150 GB, Premium up to 450 GB — and otherwise points the
 organization to the next plan rather than accepting the purchase (ADR-0053
-Decision 4).
+Decision 4). **While a downgrade is pending, the purchase surface checks the
+pending target plan's cap too**: a block that would leave more next-period blocks
+than the target plan allows is not offered, and the UI explains that the
+scheduled downgrade is the reason (ADR-0053 Decision 3B).
 
 **A running job's disclosure and logo settings are locked** once it is admitted
 (ADR-0052 Decision 10). The UI must not offer to change them mid-flight, and a
