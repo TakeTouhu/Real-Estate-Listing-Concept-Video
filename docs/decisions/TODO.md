@@ -762,7 +762,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > role-fixed Scope, the `property.create` capability ceiling, fixed
 > `MANAGER`/`CREATOR` creation-time assignments and protected group deletion —
 > were settled later and are recorded under *Decision gates — CLOSED* below;
-> *Decision gates — OPEN*, just above it, is currently empty. Read all three
+> *Decision gates — OPEN*, just above it, holds the Phase 6A gates. Read all three
 > places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1311,9 +1311,25 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+Two gates, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
+**Neither may be guessed.** Every gate raised during the initial-release contract
+audit is closed and recorded below.
+
+- [ ] **Decide how a multi-Unit job is funded** — *blocks Phase 6A*. A job costs
+      1–3 Units (1–30 s → 1, 31–60 s → 2, 61–90 s → 3), so it can need more Units
+      than any single source has left. ADR-0053 Decision 3 states the
+      eligibility-first order per Unit; the Phase 6A work package requires one
+      funding source per reservation. Either each Unit is allocated independently
+      (a reservation may draw Base plus a block, each Unit frozen to one source),
+      or the whole reservation comes from one source that covers it (which can
+      skip remaining Base Units or refuse a request the eligible total covers).
+- [ ] **Decide what a customer regeneration costs in Units** — does not block
+      Phase 6A. Today one job entitlement covers an initial generation and up to
+      two per-scene user regenerations, and a replacement publication consumes
+      nothing; ADR-0052 Decision 4 says customer-requested content regeneration
+      consumes additional Unit(s). Whether a per-scene regeneration costs the
+      scene's Units, the whole video's, or one Unit is undecided, and must be
+      settled before paid regeneration is built.
 
 ### Decision gates — CLOSED
 
