@@ -173,12 +173,23 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       of an accidental production deployment but does not remove the underlying
       work below.**
 - [ ] Replace `LocalObjectStorage` (in-process, not durable or multi-instance
-      safe) with a real S3/Azure adapter behind the same `ObjectStorage` port
-      before production launch (ADR-0008). Still required — the guard blocks
-      production use, it does not provide durable storage.
+      safe) with a real adapter behind the same `ObjectStorage` port before
+      production launch (ADR-0008). Still required — the guard blocks production
+      use, it does not provide durable storage.
+      **Target settled (ADR-0054 Decision 1): a Google Cloud Storage adapter**,
+      not S3 or Azure. The port is unchanged and the domain must not depend on
+      Google Cloud SDK types. Note the carried-over work: Phase 5B solved
+      absence-versus-permission semantics for S3 (`NoSuchKey` vs `AccessDenied`,
+      and the `s3:ListBucket` prerequisite); the equivalent must be established
+      against GCS's own error model before the composition probe can be trusted
+      in production.
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
-      a vendor API) behind the `MalwareScanner` port. Still required — the guard
-      blocks production use, it does not provide real scanning.
+      an approved vendor) behind the `MalwareScanner` port. Still required — the
+      guard blocks production use, it does not provide real scanning.
+      **Decision recorded (ADR-0054 Decision 5): production malware scanning is
+      mandatory and `PassthroughMalwareScanner` is not permitted in production.**
+      Uploads stay quarantined until validation and scanning succeed, and failed
+      or unscanned prohibited input is never sent to the AI Provider.
 - [ ] Extend the production-safety guard to boot-time validation of the whole
       adapter set, so a misconfigured production deployment fails before serving
       any traffic rather than on first use (Phase 7 hardening).
@@ -194,8 +205,19 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       specifically, and the GitHub tooling has no create-ref API. Needs a
       maintainer push:
       `git push origin refs/tags/phase-0-complete refs/tags/phase-1-complete refs/tags/phase-2-complete refs/tags/phase-3a1-complete refs/tags/phase-3a2a-complete`
-- [ ] Decide the near-duplicate UX (block vs warn) during Phase 3 analysis
-      review; Phase 2 only reports `duplicateOf`.
+- [x] **Decide the near-duplicate UX (block vs warn).** **Settled by ADR-0052
+      Decision 14: neither.** No customer-facing near-duplicate warning, no
+      generation block, no Unit consequence. Visual similarity between photos is
+      intentionally the customer's responsibility. Perceptual-hash and
+      `duplicateOf` data may remain for internal engineering/quality analysis
+      only, and no new near-duplicate UX may be added.
+- [ ] **Remove the shipped near-duplicate UX that now contradicts ADR-0052
+      Decision 14.** Implementation work, not a documentation fix. The Phase
+      3B-3a/3b analysis-review surface clusters near-duplicates and permits only
+      one member of a group to be approved, and the request carries a
+      `primaryAssetId`. That is customer-facing near-duplicate behaviour and must
+      be removed or neutralized before Commercial Launch. The Phase 3B records
+      stay as historical evidence of what shipped.
 - [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.
 - [ ] Extend the live-PostgreSQL integration suite (added in Phase 3A-2a) to the
       identity and property repositories; it currently covers the analysis
@@ -214,7 +236,14 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       than per service.
 - [ ] **Add rate limiting as one cross-cutting milestone.** `CLAUDE.md` requires
       rate-limiting login, uploads, generation and billing; none of them is
-      limited today, and Phase 3A-3 deliberately did not add it for the analysis
+      limited today. **Shape settled (ADR-0054 Decision 5):** defense in depth
+      across account / organization / IP / endpoint, covering login, password
+      reset, MFA recovery, uploads, generation, downloads and billing;
+      progressive cooldown on login failure; a rate-limited request must not
+      consume a Unit or cause a Provider POST; plan generation concurrency is a
+      **separate** control from abuse limiting. The working value *5 failures /
+      15 minutes* is a configurable starting point, **not** a commercial
+      contract, and the production constants still need measured evidence. and Phase 3A-3 deliberately did not add it for the analysis
       endpoints alone, because protecting one of four surfaces reads as
       protection without being it. Needs a shared limiter (per organization and
       per IP, with a store that survives multiple instances) applied to
@@ -721,14 +750,57 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-- [ ] Credit pricing model and platform margin (Phase 6).
-- [ ] Plan definitions: users, storage, monthly credits, concurrency,
-      retention, branding, support tiers (Phase 6 / SaaSOperations).
-- [ ] Asset/output retention windows and deletion recovery period (Phase 2/5).
-- [ ] Exact AI-generated disclosure text and placement rules beyond the default
-      `AI生成イメージ` (Phase 5).
-- [ ] Supported authentication providers (email vs Entra ID / Google) for
-      Phase 1.
+> This section predates the initial-release contract. Twenty-nine further business
+> rules — contract term, billing cadence, annual prepayment, cancellation/refund,
+> upgrade/downgrade, permanent-failure settlement, operator recovery, support
+> hours and targets, the role matrix, the recovery-budget denominator, grant
+> ceilings and self-escalation, Normal/HQ Unit eligibility, `disclosure.none`
+> grant authority, in-flight Mode C, commercial-mutation authority, the Clean
+> Master, additional-seat cancellation, mid-period purchases, downgrade fit and
+> charged-recomposition quality, logo-only recomposition, storage blocks, storage
+> blocks on downgrade, Scope semantics, Property assignment authority,
+> role-fixed Scope, the `property.create` capability ceiling, fixed
+> `MANAGER`/`CREATOR` creation-time assignments and protected group deletion —
+> were settled later and are recorded under *Decision gates — CLOSED* below;
+> *Decision gates — OPEN*, just above it, is currently empty. Read all three
+> places; none is the complete ledger on its own.
+
+- [ ] **Unit pricing model and platform margin.** Selling prices are **settled
+      by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
+      to the nearest ¥100 but never into a loss). What remains open is the
+      **margin control**: ADR-0054 Decision 3 deliberately does **not** fix a
+      minimum gross-margin percentage, because no measured business decision has
+      set one. Until it does, the Safety Guard can be built with its inputs and
+      its decision point but not its threshold. Requires measured provider cost,
+      Google Cloud variable cost, payment-processing cost and FX buffer.
+- [x] **Plan definitions: users, storage, monthly Units, concurrency, retention,
+      branding, support tiers.** **Settled by ADR-0053** (plans, Unit packages,
+      storage quotas, payment channels, SLA, support tiers) and **ADR-0052**
+      (concurrency 1/3/5, retention lifecycle, logo on all plans). One figure is
+      explicitly provisional: additional storage at ¥1,500 / +50 GB must be
+      validated against measured production cost and egress before Commercial
+      Launch.
+- [x] **Asset/output retention windows and deletion recovery period.**
+      **Settled by ADR-0052 Decision 17:** source and normalized images while the
+      property/project exists; scene videos 30 days after final completion;
+      composition temp immediately; current final video until the customer
+      deletes it; old final versions 30 days; customer-deleted content 30-day
+      trash then physical deletion; Audit/Billing/Consent on the separate legal
+      lifecycle of ADR-0053 Decision 7 (10/10/7 years).
+- [x] **Exact AI-generated disclosure text and placement rules.** **Settled by
+      ADR-0052 Decision 8.** Text: `本コンテンツは生成AIを使用して作成しています。`
+      Mode A (default) whole video, bottom-right, white, no background box,
+      subtle/low-opacity, ≈1.25% of video height, ≈3% right/bottom margin,
+      scaling for landscape and portrait; Mode B first and last 2 seconds; Mode C
+      omitted, gated by organization enablement + `disclosure.none` + per-video
+      consent. The earlier `AI生成イメージ` label is superseded.
+- [x] **Supported authentication providers.** **Settled by ADR-0052 Decision
+      18:** the initial release is email/password with mandatory email
+      verification, TOTP MFA and recovery codes, with MFA mandatory for `OWNER`,
+      `ADMIN`, `permission.manage` and `billing.manage`. **Microsoft Entra ID SSO
+      and Google SSO are post-release and explicitly retained on the roadmap**,
+      together with organization-level SSO-required mode and possible
+      password-login disablement for SSO-enforced organizations.
 
 ## Phase 0 interim choices to revisit
 
@@ -761,10 +833,15 @@ the stale threshold must be **strictly** less than it.
 Two unresolved items, both deliberately left open rather than guessed at.
 
 **No producer exists for `ReconciliationResolutionObservation`.** The resolution
-service consumes conclusive evidence; nothing yet obtains it. The mechanism —
-provider polling, authenticated webhooks, an operator's manual determination, or
-some combination — is a later phase with a different dependency set. What is
-fixed is the *shape* it must normalize into: two closed arms carrying a provider
+service consumes conclusive evidence; nothing yet obtains it. **The mechanism is
+now DECIDED by ADR-0054 Decision 4** — authenticated webhook as the primary
+low-latency path, **mandatory polling fallback** even when webhooks work, and
+operator determination as break-glass evidence only; a webhook whose authenticity
+cannot be verified is not authoritative and polling becomes the normal
+authoritative path. **The producer itself is unbuilt**, and the polling cadence
+and the provider's webhook authentication contract remain live-evidence gates.
+What was already fixed, and is unchanged, is the *shape* it must normalize into:
+two closed arms carrying a provider
 reference or a retryability flag and a closed diagnostic code, with no HTTP
 status, provider body, vendor enum, URL, credential or free text. A producer that
 cannot express its finding in that shape has not established enough to resolve
@@ -850,21 +927,30 @@ correct fix given the system-wide Reservation → Job order.
 ## Phase 5B follow-up — the questions `BLOCKED` deliberately leaves open
 
 Phase 5B introduced a terminal-for-this-phase state and, deliberately, no way
-out of it. Three decisions are owed, and none is pre-empted here.
+out of it. Three decisions were owed. **Two are now answered** — the operator
+path by ADR-0052 Decision 20 and settlement by ADR-0052 Decision 19 — and are
+kept below as answered records. The third entry, retry-reason history, is an
+engineering note about an audited table nobody has needed yet rather than an
+owed product decision.
 
-**There is no operator path out of `BLOCKED`.** A blocked row states what
-happened (`blockCode`) and when (`blockedAt`), and nothing re-queues it. That is
-not an oversight: an unblock operation that re-queued work without deciding
-*why* it was blocked would re-enter the automatic retry loop the state exists to
-end. A real operator surface needs its own authorization model, its own audit
-events, and a decision about whether unblocking is per-row or per-cause.
+**~~There is no operator path out of `BLOCKED`~~ — ANSWERED by ADR-0052 Decision
+20.** The question of who may unblock, and whether unblocking is per-row or
+per-cause, is decided: recovery is an **internal operator privilege** no customer
+role reaches, the terminal row and its `blockCode` / `blockedAt` stay immutable,
+recovery creates a **new** cycle rather than re-queuing the old row, the
+**authoritative mutation unit is the individual row**, and a global
+"unblock this cause and revert all rows" operation is forbidden. The audit fields
+are enumerated there. **The tooling is unbuilt** and tracked as implementation
+work below.
 
-**No settlement policy exists for a permanently uncomposable deliverable.** A
-blocked recomposition leaves the customer holding their previous video and the
-platform holding a reserved unit that will never be consumed or released. Who
-bears that cost — and whether a blocked *initial* composition should eventually
-fail the job rather than sit forever — is a billing decision, not an execution
-one. Phase 5B deliberately terminalizes nothing.
+**~~No settlement policy exists for a permanently uncomposable deliverable~~ —
+ANSWERED by ADR-0052 Decision 19.** If no technically valid Deliverable was
+delivered, the reservation is **RELEASED**, never `CONSUMED`, and must not sit
+pending indefinitely; VTaVision bears the cost already incurred. A blocked
+recomposition preserves the customer's previous video and releases the reserved
+unit, and `BLOCKED` must not bill differently from `INVALID_MEDIA` or
+`INTEGRITY_MISMATCH`. **The terminal settlement path is unbuilt** and tracked
+below. No new state name is chosen here — that is state-machine design.
 
 **Retry-reason history is not recorded.** `lastRetryCode` means exactly one
 thing — why this work is currently deferred — so it is cleared on claim and on
@@ -905,31 +991,49 @@ Phase 9.
 ## Phase 5C follow-up — what a terminal verdict deliberately leaves open
 
 Phase 5C makes a deliverable's usability durable and publishes only on `VALID`.
-Four decisions are owed, and none is pre-empted here.
+Four decisions were owed. **None is still owed by this section.** Three have
+been answered and are kept below as records rather than deleted: human review
+before publication by **removal** (ADR-0052 Decision 2), settlement of an
+unusable deliverable (ADR-0052 Decision 19), and the operator path out of a
+terminal verdict (ADR-0052 Decision 20). The fourth,
+`RECONCILIATION_HOLD -> CONSUMED`, is an **admitted policy** carrying a revisit
+condition, not an open decision. Open product gates are listed in one place
+only, under *Decision gates — OPEN*.
 
-**Human review before publication is still missing, and it is a product rule, not
-a nicety.** `CLAUDE.md` requires that AI output is never published automatically
-and that human review and approval are mandatory. Transaction G is the
-*technical* publication boundary; it has no approval gate, and it is dormant for
-exactly that reason. **Activating the validation runner without a review gate in
-front of Transaction G would violate that rule.** Whoever activates it owns
-building the gate first — including where approval is recorded, who may give it,
-and what happens to a deliverable nobody reviews.
+**~~Human review before publication is still missing~~ — SUPERSEDED by ADR-0052
+Decision 2.** This item was written when `CLAUDE.md` required that AI output is
+never published automatically and that human review and approval are mandatory.
+That rule is no longer the product contract: there is **no final-video approval
+workflow** in the initial release, because Transaction G delivers into the
+customer's own private workspace and VTaVision performs no external publication.
+Transaction G therefore needs **no approval gate**, and the absence of one is not
+a defect to repair before activation.
 
-**No settlement policy exists for a permanently *unusable* deliverable.** This is
-the sibling of the Phase 5B entry above and needs the same decision from a
-different direction: an `INVALID_MEDIA` or `INTEGRITY_MISMATCH` verdict leaves the
-job in `DELIVERABLE_VALIDATING` with a reserved unit that will never be consumed
-or released, and — on a recomposition — a customer still holding their previous
-video. Whether a permanently unusable *initial* deliverable should eventually fail
-the job, and who bears the cost when it does, is a billing decision. Phase 5C
-terminalizes nothing.
+The obligation this item was really protecting has not disappeared — it has
+changed owner. What must stand between a validated deliverable and the customer
+is the **AI-generated disclosure** (ADR-0052 Decision 8), which is unbuilt and is
+tracked as implementation work below. Do not re-derive an approval gate from this
+paragraph; it is kept as the record of a superseded decision, not as live work.
 
-**There is no operator path out of a terminal verdict**, for the same reason
-Phase 5B has none out of `BLOCKED`. Re-validating a row whose bytes were judged
-unplayable would reach the identical answer, because the object is immutable and
-the receipt is frozen; the only honest recovery is a *new composition cycle*, and
-deciding when one is owed is the settlement decision above.
+Still live from the original concern: **a deliverable that nobody ever looks at
+is now a normal outcome, not an error state.** A delivered video the customer
+never previews or downloads has still consumed its Unit (ADR-0052 Decision 4),
+and no state machine should wait for a human that the contract no longer
+requires.
+
+**~~No settlement policy exists for a permanently *unusable* deliverable~~ —
+ANSWERED by ADR-0052 Decision 19**, identically to its Phase 5B sibling. An
+`INVALID_MEDIA` or `INTEGRITY_MISMATCH` verdict must **terminally settle and
+RELEASE** the reserved unit; the customer consumes no Unit, keeps any previously
+delivered valid video, and the internal failure class does not change the bill.
+VTaVision bears the cost already incurred. **Unbuilt**, tracked below.
+
+**~~There is no operator path out of a terminal verdict~~ — ANSWERED by ADR-0052
+Decision 20**, on the same terms as `BLOCKED`. The instinct recorded here was
+right and is now the rule: re-validating immutable bytes against a frozen receipt
+would reach the identical answer, so **the only recovery is a new composition
+cycle**, initiated by an authorized internal operator, audited, per row, leaving
+the original verdict untouched. **Unbuilt**, tracked below.
 
 **`RECONCILIATION_HOLD -> CONSUMED` is admitted, and the alternative should be
 revisited if reconciliation policy changes.** A validated deliverable the customer
@@ -948,5 +1052,570 @@ nothing about what the frames contain.
 
 So the disclosure is unimplemented at every layer that could carry it: the
 encoder does not draw it, the verdict does not require it, and publication does
-not gate on it. Whoever activates publication owns closing that gap, together
-with the placement rules already open under *Business rules to confirm*.
+not gate on it. Whoever activates publication owns closing that gap.
+
+**The placement rules are no longer open.** ADR-0052 Decision 8 fixes the exact
+text, the three modes and Mode A's geometry, so this is implementation work
+against a settled specification — not a decision still to be made. The earlier
+cross-reference to *Business rules to confirm* is stale; that item is closed.
+
+## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
+
+The product, commercial and production decisions are **settled**. Almost none of
+them is **built**. Each item below records the settled decision and what remains.
+
+### Implementation work — decision settled, nothing built
+
+- [ ] **Render the AI-generated disclosure.** Settled: ADR-0052 Decision 8 fixes
+      the text, the three modes and Mode A's geometry (bottom-right, white, no
+      box, subtle, ≈1.25% of height, ≈3% margin, scaling for both orientations).
+      Unbuilt at every layer: composition profile v1 draws no overlay, the
+      deliverable verdict does not require one, and publication does not gate on
+      one. This is a required initial-release feature, not a nicety.
+- [ ] **Build Mode C gating and consent.** Organization-level enablement,
+      `disclosure.none`, per-video consent with two affirmative checkboxes, and
+      the consent evidence record (`organizationId`, `userId`, target,
+      `disclosureMode = NONE`, `consentTextVersion`, `consentedAt`,
+      organization-level enablement state) retained 10 years. Organization
+      enablement must **not** be treated as authorizing any user on its own.
+- [ ] **Treat `disclosure.none` as `OWNER`-only protected authority.** ADR-0052
+      Decision 10. Reject every grant or revoke attempt by `ADMIN` or any lower
+      role — including an `ADMIN` acting on itself — as a refused, audited
+      authorization change rather than a silent no-op.
+- [ ] **Make `disclosure.none` individual-only in representation and
+      enforcement.** No group permission, group inheritance, role template or
+      Scope expansion may carry it, and the model should make that impossible
+      rather than merely unused, so no indirect path — group membership, group
+      edit or role change — can confer it.
+- [ ] **Audit every `disclosure.none` grant and revocation** with the
+      organization, affected user, acting `OWNER`, action and timestamp.
+- [ ] **Enforce prospective revocation for new Mode C requests.** A revoked user
+      cannot initiate a new Mode C generation or recomposition; revocation
+      deletes no consent evidence, modifies no completed deliverable, and removes
+      no audit history.
+- [ ] **Persist and freeze the admitted generation's disclosure contract.**
+      ADR-0052 Decision 10: disclosure mode, Mode C consent, and the
+      `disclosure.none` and organization-level eligibility used at admission are
+      captured immutably with the job. Reject mutation of an in-flight job's
+      disclosure/logo output settings; apply later permission and organization
+      changes only to newly admitted generations. No pre-delivery re-check and no
+      automatic C → A fallback.
+- [ ] **Build disclosure-mode change accounting.** Recomposition, not
+      regeneration. Three free changes per content video, then 1 Unit per further
+      block of three; the initial selection is not a change; the count increments
+      only on a successfully produced new deliverable; `A → B → A` is two.
+- [ ] **Build the company logo pipeline.** One organization-level logo,
+      OWNER/ADMIN managed, PNG/WebP with transparency, per-video ON/OFF default
+      ON, placed clear of the disclosure, scaled to output dimensions, applied by
+      recomposition. No forced VTaVision watermark.
+- [ ] **Build the authorization model.** Groups, Scope
+      (`ORGANIZATION`/`GROUP`/`OWN`), optional individual permissions, additive
+      group permissions, no DENY, the six role templates and the full permission
+      list. `video.share` is reserved and must not be exposed. At least one
+      `OWNER` must always exist and the last `OWNER` cannot be deleted. **No
+      longer blocked on the matrix:** the per-template permissions and default
+      Scopes, the grant ceilings and the `disclosure.none` rules are all
+      approved in ADR-0052 Decision 10, as are the Scope predicates, role-fixed
+      Scope and Property assignment authority. What remains is implementation, itemized below — the grant
+      matrix, ceiling enforcement on every grant path, self-escalation
+      prevention, authorization-change audit, and the `disclosure.none` items.
+- [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
+      state, no restore. On user deletion: immediate access stop; 30 days of
+      admin-only inspection of that user's videos; then physical deletion of all
+      of them including old versions; other users' videos for the same property
+      survive; legally retained evidence survives. Group deletion is
+      **`OWNER`/`ADMIN`-only** (ADR-0052 Decision 11): a protected check that a
+      granted `group.manage` cannot satisfy for any other role. On group
+      deletion: users become ungrouped, lose only group-granted permissions,
+      Properties become ungrouped and content returns to organization root with
+      no content or child resource deleted; record organization, group, acting
+      user and role, affected Property count or identifiers, and timestamp.
+- [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
+      videos, with the in-trash restrictions (no generate/regenerate, no
+      disclosure change, no upload, no edit; preview/download still allowed when
+      authorized) and no counter resets on restore.
+- [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
+      the correct inclusion rules: count retained source images, normalized
+      images and the current final video; exclude internal scene media,
+      the internal Clean Master, composition temp, 30-day retained old versions
+      and Audit/Billing records. No automatic deletion, no automatic overage
+      charge.
+- [ ] **Produce and store a durable overlay-free Clean Master** at final
+      composition (ADR-0052 Decision 17) and produce every customer deliverable
+      from it by applying the disclosure/logo layer. Retain and delete it with
+      its content's lifecycle, including trash/recovery and legal hold; never
+      expose or allow download of it; and support disclosure/logo recomposition
+      after scene-video deletion with **no provider call**.
+- [ ] **Build the internal service-recovery budget.** `base-plan included-user
+      slots × 1` → **3 / 10 / 30** per organization per renewal period, from base
+      plan slots — **not** active users and **not** purchased additional seats —
+      shared organization-wide, never exposed. On exhaustion: stop automatic
+      recovery, charge no further Unit, release the reserved Unit, escalate
+      internally, allow one operator-granted manual free recovery.
+- [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
+      blocks; the eligibility-first consumption order (see the two items below);
+      renewal-period binding to the reservation; no automatic overage;
+      customer-approved
+      purchase; no cancellation after a paid Provider submission.
+- [ ] **Build a quality-tagged additional-Unit ledger.** ADR-0053 Decision 2.
+      Each add-on block carries the quality it was bought at, and the ledger must
+      be able to **refuse** an ineligible block rather than treat added Units as
+      one pool. No conversion, exchange, refund or substitution path may exist.
+- [ ] **Build eligibility-first reservation and consumption.** ADR-0053
+      Decision 3: eligible Base Unit → oldest eligible add-on → newest eligible
+      add-on, FIFO *within* the eligible quality class, with the included HQ
+      ceiling (1 / 5 / 10) enforced as a counter **inside** the Base pool. An HQ
+      request with no eligible entitlement must fail cleanly and legibly —
+      reserving nothing, consuming nothing, and never falling back to a Normal
+      block.
+- [ ] **Build project rename, settings change and deletion**, with changed
+      settings treated as new generation conditions and existing outputs retained
+      as historical versions.
+- [ ] **Build the Google Cloud Storage adapter** behind the existing
+      `ObjectStorage` port, without the domain depending on Google Cloud SDK
+      types, and establish GCS's absence-versus-permission semantics as the S3
+      equivalent was established in Phase 5B.
+- [ ] **Remove `REVIEWER` from the role vocabulary** where it survives in code
+      or schema, and confirm nothing gates final-video delivery on an approval.
+      Source-photo review becomes `analysis.review`.
+- [ ] **Build the approved role-template grant matrix.** ADR-0052 Decision 10 now
+      fixes every template's grants and its role-fixed Scope. Decide whether defaults are
+      stored as rows or derived from the matrix, and make a stored copy
+      reproducible from it. `disclosure.none` and `video.share` must be
+      unreachable by role assignment alone, and MFA enforcement must stay
+      capability-based so `BILLING` is covered through `billing.manage`.
+- [ ] **Enforce the role grant ceilings and protected authority.** ADR-0052
+      Decision 10. Every authorization mutation must answer "may *this actor*
+      grant *this*?", not merely "does the actor hold `permission.manage`?":
+      `OWNER` assigns any role, `ADMIN` only `MANAGER`/`CREATOR`/`VIEWER`, and
+      `permission.manage` / `billing.manage` / the `OWNER`,`ADMIN`,`BILLING` role
+      assignments / ownership-equivalent changes / anything touching the last
+      `OWNER` are `OWNER`-only.
+- [ ] **Prevent self-escalation across every grant path.** Direct role change,
+      individual grant, group membership, group permission and Scope
+      manipulation must each be ceiling-checked — the additive group model is the
+      obvious loophole and must not be one. A refused escalation attempt is an
+      audited event, not a silent no-op.
+- [ ] **Audit every role, permission, group and Property-assignment change**,
+      recording the acting user, so a ceiling violation is both preventable and
+      detectable after the fact.
+- [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
+      Decision 19. A failed initial generation, paid regeneration or
+      disclosure/logo recomposition must terminally settle and **RELEASE** the
+      reservation, never `CONSUMED` and never left pending; a failed regeneration
+      or recomposition must preserve the previous valid deliverable as current; a
+      failed recomposition must not increment the disclosure-change count; and
+      `BLOCKED` / `INVALID_MEDIA` / `INTEGRITY_MISMATCH` must settle identically
+      for billing. Includes choosing whether an existing domain state represents
+      this or a new one is required — **the ADR deliberately does not pick one.**
+- [ ] **Build operator recovery tooling.** ADR-0052 Decision 20 plus ADR-0054
+      Decision 6: an internal-only privilege reachable by no customer role, the
+      original `BLOCKED` row and terminal verdict left immutable, a **new**
+      recovery cycle rather than a re-queue, the enumerated audit fields, and
+      per-row transactional/CAS-safe action with per-row eligibility
+      re-evaluation. **No global per-cause revert.**
+- [ ] **Build subscription billing, cancellation and plan changes.** ADR-0053
+      Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
+      renewal; cancellation effective at period end with no proration; the refund
+      exceptions that remain owed; immediate upgrade charging the full unprorated
+      difference with the base-Unit ceiling **replaced minus Base Units consumed**;
+      downgrade at renewal, schedulable only once membership fits, with no
+      deletion of content or users and no automatic seat purchase; and
+      sales-assisted Enterprise transitions represented without
+      a Stripe subscription object.
+- [ ] **Enforce `billing.manage` on every commercial mutation** (ADR-0053
+      Decision 5A): Unit packages, seats, storage add-on, upgrade, downgrade,
+      cancellation, and any other charge-changing action. `ADMIN`'s
+      `billing.view` must not authorize any of them, and any existing storage
+      add-on authorization built on the superseded "OWNER/ADMIN" rule must be
+      reconciled.
+- [ ] **Separate member management from seat purchase, and forbid implicit
+      charges.** Adding a member when no seat remains must fail and require an
+      explicit seat purchase by a `billing.manage` holder; reaching the storage
+      limit must never auto-purchase storage; no member-management or upload
+      action may create a charge implicitly. Explicit commercial actions remain
+      available to any `billing.manage` holder, including an `ADMIN` an `OWNER`
+      has explicitly granted it.
+- [ ] **Build mid-period add-on purchase** (ADR-0053 Decision 5A): immediate
+      seat and storage entitlement activation, first-period proration, renewal
+      transition to the full monthly amount, and purchase audit/evidence.
+- [ ] **Build downgrade scheduling with the membership-fit rule** (ADR-0053
+      Decision 3B): validate membership against the next-period entitlement
+      before scheduling, warn the administrator how many users must be removed,
+      block member growth past the pending entitlement, recalculate when the
+      downgrade is cancelled or changed, and never select, delete or deactivate
+      users or buy seats.
+- [ ] **Distinguish free from charged recomposition** (ADR-0052 Decisions 9
+      and 13): no Unit reservation or consumption for logo-only changes or
+      disclosure changes 1–3; a combined disclosure + logo change counted once;
+      validation must never turn a free recomposition into a charge.
+- [ ] **Build Property-rooted Scope enforcement** (ADR-0052 Decision 10):
+      durable Property → responsible user and Property → zero-or-one group
+      relationships and user → group memberships; the `GROUP` union predicate
+      and the `OWN` assignment predicate; child-resource reachability inherited
+      from the Property; reassignment and membership-change effects; no
+      authorship-based row authorization; no implicit scope widening through
+      individual grants; tenant-safe row-level checks throughout.
+- [ ] **Build Property assignment and role-fixed Scope** (ADR-0052 Decision
+      10): `OWNER`/`ADMIN`-only Property reassignment; creation-time assignment
+      rules by creator role — `MANAGER` responsible user fixed to the creator
+      and group validated as exactly one of the creator's current groups (never
+      ungrouped), `CREATOR` responsible user fixed to the creator and group
+      fixed to unset, `OWNER`/`ADMIN` same-organization validation; the fixed
+      role → Scope mapping with no standalone Scope mutation; Scope derived on
+      role change without rewriting assignments; grants never widening Scope;
+      and audit evidence for every Property creation (organization, Property,
+      creating user and role, initial responsible user and group, timestamp),
+      assignment change and role change.
+- [ ] **Enforce the `property.create` capability ceiling** (ADR-0052 Decision
+      10): effective-permission calculation that combines template, direct and
+      group grants and then applies the role ceiling, so `property.create` is
+      never effective for `VIEWER` or `BILLING` from any source; grant
+      validation that does not present a direct `property.create` for those
+      roles as a supported configuration; and tests covering direct and
+      group-derived grants for both roles.
+- [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
+      to schedule a downgrade while next-period blocks exceed the target cap;
+      require explicit scheduled cancellation of the excess; while the downgrade
+      is pending, reject any block purchase or cancellation reversal that would
+      push next-period blocks over the target cap; never cancel blocks or the
+      downgrade automatically; compute next-period entitlement; apply the existing
+      over-quota rule to actual bytes after renewal.
+- [ ] **Build repeatable storage blocks** (ADR-0053 Decision 4): block-count
+      representation; recurring charge = active blocks × price; immediate
+      prorated block purchase; per-plan cap enforced at purchase (Standard 2 /
+      150 GB, Premium 5 / 450 GB; Enterprise contract-governed, no guessed
+      constant); per-block renewal cancellation; quota re-evaluation after any
+      block or plan change; over-quota data retained, never auto-deleted.
+- [ ] **Build quality-aware charged disclosure recomposition** (ADR-0052
+      Decision 9): preserve the original video's quality, apply the
+      eligibility-first order for it, count Base Units used for HQ against the
+      HQ ceiling, and refuse the charged change when no eligible Unit exists.
+- [ ] **Build scheduled additional-seat reductions** (ADR-0053 Decision 5A):
+      validate current membership against the post-cancellation entitlement
+      before scheduling; block member additions and invitations past the pending
+      next-period entitlement; transition the seat quantity at renewal with no
+      proration; audit the commercial mutation; and never silently remove or
+      deactivate members or repurchase seats. Enterprise changes route to the sales-assisted path rather than
+      changing a contract amount automatically.
+- [ ] **Build the authenticated-webhook producer and the mandatory polling
+      fallback** for `ReconciliationResolutionObservation` (ADR-0054 Decision 4),
+      with verification, replay safety, deduplication, tenant resolution from
+      stored prediction records, and normalization into the provider-neutral
+      contract before any durable mutation. Polling must run even when webhooks
+      work, and must be restart-safe.
+- [ ] **Build support tooling for the approved response targets** (ADR-0053
+      Decision 11) — enough inquiry tracking to measure an initial response
+      against staffed hours and business days, without attaching the uptime SLA
+      credit schedule to it.
+
+### Decision gates — OPEN
+
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
+
+### Decision gates — CLOSED
+
+Twenty-nine decisions: the two gates from the first PR review, eight recorded
+with them, the two raised by the exact-head review of those closures, the
+`disclosure.none` grant authority that synchronizing the grant ceiling exposed,
+in-flight Mode C, commercial-mutation authority, the Clean Master,
+additional-seat cancellation, mid-period purchases, downgrade fit,
+charged-recomposition quality, logo-only recomposition, repeatable storage
+blocks, storage blocks on downgrade, Scope semantics, Property assignment
+authority, role-fixed Scope, and the three closed last — the `property.create`
+capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
+protected group deletion. **Each is settled as policy and unbuilt as code**; the
+implementation work each one creates is listed in the section above.
+
+- [x] **`property.create` capability ceiling — CLOSED.** Effective Property
+      creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A
+      `VIEWER` or `BILLING` user never holds an effective `property.create` —
+      not by direct grant, not through a group — because the ceiling applies
+      after every grant source is combined; such a configuration is not
+      supported. A `VIEWER` who needs to create gets an authorized role change.
+      ADR-0052 Decision 10.
+- [x] **`MANAGER`/`CREATOR` creation-time assignments — CLOSED.** A
+      `MANAGER`'s Property has its responsible user **fixed** to the creating
+      `MANAGER` and exactly one of the `MANAGER`'s current groups (automatic if
+      one, chosen if several; never ungrouped, never another group). A
+      `CREATOR`'s Property has its responsible user fixed to the creator and its
+      group **fixed to unset** — a `CREATOR` selects no group, not even its own.
+      `OWNER`/`ADMIN` creation is unchanged. ADR-0052 Decision 10.
+- [x] **Group deletion — CLOSED.** **`OWNER`/`ADMIN`-only**, even where
+      another role holds `group.manage`; deletion is a protected sub-operation
+      with its own check, and the other group-management operations are not
+      redefined. The deletion consequences are unchanged: members stay in the
+      organization, group-derived access ends, Properties become ungrouped,
+      content and child resources survive, audit history is retained, and
+      `OWNER`/`ADMIN` may reassign. ADR-0052 Decision 11.
+- [x] **Scope is fixed by role — CLOSED.** `OWNER`/`ADMIN`/`BILLING` →
+      `ORGANIZATION`, `MANAGER` → `GROUP`, `CREATOR`/`VIEWER` → `OWN`. There is
+      **no standalone scope change** for anyone, `OWNER` included; only a role
+      change moves scope, under the role-assignment ceiling. Grants never change
+      scope. A role change does not rewrite Property assignments. ADR-0052
+      Decision 10.
+- [x] **Property assignment authority — CLOSED.** Changing a Property's
+      responsible user or group is an **`OWNER`/`ADMIN`-only** authorization
+      mutation; `property.edit` alone is not enough. At creation: `OWNER`/`ADMIN`
+      may set or leave both unset; a `MANAGER`'s and a `CREATOR`'s Property
+      have the creator as responsible user (see the creation-time entry above
+      for the fixed values). Creator identity is still not the `OWN` predicate.
+      ADR-0052 Decision 10.
+- [x] **Scope semantics — CLOSED.** The **Property is the authorization root**;
+      children inherit its reachability, with no authorship-based ownership.
+      `ORGANIZATION` = every Property in the organization (never cross-tenant);
+      `GROUP` = Properties assigned to **any** of the actor's groups (union; a
+      Property has zero or one group; ungrouped Properties are not reachable
+      through `GROUP`); `OWN` = Properties **explicitly assigned** to the actor
+      as responsible user — not created/uploaded/requested-by. Reassignment and
+      membership changes take effect through the Property; audit history is not
+      rewritten. Individual grants never widen scope. ADR-0052 Decision 10.
+- [x] **Storage blocks on downgrade — CLOSED.** Premium → Standard cannot be
+      scheduled while next-period blocks exceed 2; a `billing.manage` holder
+      must explicitly schedule cancellation of the excess. Nothing is cancelled
+      automatically. Only the block count must fit — stored bytes over quota
+      after renewal keep the existing no-delete rule. Downgrade and block
+      cancellation are separate mutations. ADR-0053 Decision 3B.
+- [x] **Logo-only recomposition — CLOSED.** **Free**: no Unit reserved or
+      consumed, no disclosure-change count increment; still validated before
+      delivery, and a failure keeps the previous deliverable. A disclosure +
+      logo change in one operation is **one** disclosure change; logo never adds
+      a Unit. ADR-0052 Decisions 9 and 13.
+- [x] **Storage add-on quantity — CLOSED.** A **repeatable +50 GB block**,
+      charged at active blocks × ¥1,500/month. Caps keep each plan below the
+      next plan's base: **Standard max 2 blocks / 150 GB**, **Premium max 5 /
+      450 GB**, enforced by rejecting the purchase. Enterprise has no
+      tier-derived cap and no invented maximum — its ceiling is contractual and
+      Safety-Guard governed, not "unlimited". Cancellation is per block at
+      renewal, no refund, no deletion. ADR-0053 Decision 4.
+- [x] **Mid-period seat / storage add-on purchase — CLOSED.** Usable
+      **immediately**, first charge **prorated** for the rest of the period,
+      full monthly price from the next renewal; requires `billing.manage`;
+      nothing auto-purchased. Cancellation unchanged (renewal-effective, no
+      prorated refund). The storage add-on **is initial-release scope**; only its
+      price is provisional. ADR-0053 Decision 5A.
+- [x] **Downgrade over capacity — CLOSED.** A downgrade never takes effect in
+      the current period and is **schedulable only once current membership fits**
+      the next-period entitlement (target plan's included users plus remaining
+      additional seats). Otherwise the administrator is warned how many users
+      must be removed; nothing is selected, deleted or deactivated and no seat
+      is bought. While pending, member growth past that entitlement is blocked,
+      so renewal cannot arrive over capacity. ADR-0053 Decision 3B.
+- [x] **Charged disclosure-recomposition Unit quality — CLOSED.** Uses the
+      **original video's quality**, through the same eligibility-first order;
+      a Base Unit used for HQ counts against the HQ ceiling; with no eligible
+      Unit the charged change is **not performed** — no cross-quality use, no
+      conversion, no free change. Failure settlement unchanged. ADR-0052
+      Decision 9.
+- [x] **Additional-seat cancellation — CLOSED.** Effective at the **next
+      renewal**, never immediately; **no proration**; existing members stay
+      active through the current period, but unused paid capacity above the
+      next-period entitlement is given up once a reduction is scheduled. A reduction may be scheduled **only if current membership already
+      fits** the post-cancellation entitlement; while it is pending, member
+      growth past the next-period entitlement is blocked; at renewal the seat
+      quantity drops and billing follows. No member is ever silently removed or
+      deactivated and no seat is repurchased automatically. Enterprise follows
+      its contract. ADR-0053 Decision 5A.
+- [x] **Mode C in-flight behaviour — CLOSED.** Mode C conditions are **frozen at
+      generation admission**. The admitted job's disclosure mode, Mode C consent,
+      and the `disclosure.none` and organization-level eligibility used to admit
+      it are immutable through delivery. Revoking `disclosure.none` or disabling
+      organization-level Mode C while it runs affects **only generations admitted
+      afterwards**: no pre-delivery re-check, no automatic C → A fallback, no
+      Unit release for a later authorization change. ADR-0052 Decision 10.
+- [x] **Commercial-mutation authority — CLOSED.** Any customer action that
+      changes what the organization is charged requires **`billing.manage`** —
+      `OWNER`/`BILLING` by default; `ADMIN` only via an explicit `OWNER` grant, never
+      by role. Covers Unit packages, seats,
+      the storage add-on (superseding "OWNER/ADMIN purchase and cancel"),
+      Standard/Premium upgrade, downgrade and cancellation. Member management is
+      separate from seat purchase and never creates a charge; nothing is
+      auto-purchased; Enterprise stays sales-assisted; organization deletion is
+      not a billing action. ADR-0053 Decision 5A.
+- [x] **Recomposition after scene-video deletion — CLOSED.** One overlay-free
+      **Clean Master** per deliverable — no burned-in disclosure or logo — is
+      retained with its content's lifecycle (trash/recovery included, deleted at
+      final physical deletion, subject to legal hold). Scene videos still delete
+      after 30 days. The Clean Master is internal, excluded from customer quota,
+      not customer-downloadable, consumes no Unit and is not billed. Later
+      disclosure/logo changes recompose from it with **no provider call**.
+      ADR-0052 Decision 17.
+
+- [x] **`disclosure.none` grant authority — CLOSED.** A **protected permission**
+      with **`OWNER`-only** grant and revoke authority. `ADMIN` may not grant,
+      revoke, self-grant, or obtain it indirectly through its own
+      authorization-management actions, and no lower role may grant or revoke
+      it. It is **individual-only**: never via group permission, group
+      inheritance, a role template or implicit Scope expansion, so group-based
+      authorization is never a route to it. An `OWNER` may grant it to
+      themselves, another `OWNER`, an `ADMIN` or another eligible individual
+      user; holding it is a **use** privilege, not a delegation privilege. Mode C
+      stays three-gate, organization enablement stays `OWNER`/`ADMIN` and
+      authorizes no one by itself, and **no dual control** is required. Grant and
+      revoke are audited (organization, affected user, acting `OWNER`, action,
+      timestamp). **Revocation is prospective**: new Mode C initiations blocked;
+      consent evidence, completed videos and audit history untouched. Always
+      exercised by a mandatory-MFA actor; no step-up mechanism invented. ADR-0052
+      Decisions 8 and 10.
+- [x] **Grant authority and privilege self-escalation — CLOSED.**
+      `permission.manage` is authority **within a grant ceiling**, not unlimited
+      delegation. `OWNER` may assign every role; **`ADMIN` may assign only
+      `MANAGER`, `CREATOR`, `VIEWER`** and may not assign or promote to `OWNER`,
+      `ADMIN` or `BILLING`; `BILLING`/`MANAGER`/`CREATOR`/`VIEWER` have no
+      role-assignment authority by default. **`OWNER`-only protected authority:**
+      granting/revoking `permission.manage` and `billing.manage`,
+      assigning/removing `OWNER`/`ADMIN`/`BILLING`, ownership-equivalent changes,
+      and any operation affecting the last `OWNER`. **No self-escalation past the
+      ceiling by any route** — direct role change, individual grant, group
+      membership, group permission or Scope manipulation. `ADMIN` specifically
+      cannot self-grant `billing.manage`, cannot re-grant `permission.manage`
+      across the boundary, and cannot promote itself to `OWNER` or into
+      `BILLING`. MFA rules unchanged and still capability-based, so `BILLING`
+      stays mandatory-MFA. ADR-0052 Decision 10.
+- [x] **Normal/HQ quality eligibility in the consumption order — CLOSED.**
+      Add-on Units are **quality-locked**: a Normal add-on is Normal-only, an HQ
+      add-on is HQ-only, and **nothing creates fungibility** — not price, not
+      expiry pressure, not customer preference, and there is no conversion,
+      exchange, refund or substitution. The order is **eligibility-first**:
+      eligible Base Unit → oldest eligible add-on → newest eligible add-on, with
+      FIFO applying **within** the eligible quality class, so skipping an
+      ineligible block is not a FIFO violation. HQ may draw a Base Unit only
+      while the plan's included HQ ceiling (**1 / 5 / 10**, *inside* the Base
+      pool) remains. Standard cannot buy HQ add-ons, so a Standard organization
+      that has spent its one included HQ entitlement has **no further HQ route**
+      that period. ADR-0053 Decisions 2 and 3.
+
+- [x] **Role-template permission and default-Scope mapping — CLOSED.** The
+      approved matrix and each role's fixed Scope are ADR-0052 Decision 10.
+      Each template's grant list there is exhaustive. `disclosure.none` and
+      `video.share` are granted by no template; `permission.manage` is `OWNER` /
+      `ADMIN`; `billing.manage` is `OWNER` / `BILLING`; `unit.consume` is
+      `OWNER` / `ADMIN` / `MANAGER` / `CREATOR`. `BILLING` is MFA-mandatory as a
+      consequence of holding `billing.manage`, not as a separate rule.
+- [x] **Recovery-budget denominator — CLOSED.** Purchased additional seats do
+      **not** raise it. `base-plan included-user slots × 1` → 3 / 10 / 30 per
+      organization per renewal period, invariant to active users, purchased seats,
+      purchased Units and temporary membership changes (ADR-0052 Decision 5).
+- [x] **Standard/Premium contract term and billing cadence — CLOSED.** One-month
+      auto-renewing, monthly Stripe billing, no minimum commitment. Enterprise is
+      individually agreed (ADR-0053 Decision 1A).
+- [x] **Annual-prepayment policy — CLOSED.** Not offered for Standard/Premium in
+      the initial release, and **there is no platform-wide rule granting 5% (or
+      any percentage) for annual prepayment.** Enterprise discounts are
+      individually approved contract terms.
+- [x] **Cancellation and refund baseline — CLOSED.** Standard/Premium
+      cancellation is effective at period end, no proration, unused base and
+      purchased Units not refunded, customer-choice cancellation is not a refund
+      event. **Not a blanket no-refund clause:** duplicate billing, VTaVision
+      billing errors, legally required refunds and applicable contractual
+      remedies remain owed (ADR-0053 Decision 3A).
+- [x] **Self-service plan upgrade/downgrade semantics — CLOSED.** Upgrade
+      immediate, full unprorated price difference, base Units **replaced by the
+      new ceiling minus Base Units consumed** (never stacked), purchased packages keep their
+      original period. Downgrade at next renewal, no refund, no content deletion,
+      no silent user deletion and no automatic seat purchase — and, as closed
+      later, schedulable only once membership fits (ADR-0053 Decision 3B).
+- [x] **Permanent technical-failure settlement — CLOSED.** No technically valid
+      Deliverable delivered ⇒ reservation **RELEASED**, never `CONSUMED`, never
+      left pending; VTaVision bears the incurred cost; failure class does not
+      change the bill (ADR-0052 Decision 19).
+- [x] **Operator recovery semantics — CLOSED.** Internal operator privilege only,
+      no customer role reaches it, terminal evidence immutable, recovery creates a
+      new cycle, per-row mutation with per-row re-evaluation and audit, no global
+      per-cause revert (ADR-0052 Decision 20; privilege under ADR-0054
+      Decision 6).
+- [x] **Support staffed hours and initial-response targets — CLOSED.** Weekdays
+      10:00–18:00 JST excluding weekends, Japanese public holidays and the
+      year-end/New Year closure; targets 2 business days / 1 business day / 4
+      staffed hours / 1 business day. **Support SLOs, not SLA service credits**,
+      and Sev1 monitoring outside hours is not 24/7 staffed support (ADR-0053
+      Decision 11).
+- [x] **Reconciliation evidence-source architecture — CLOSED.** Authenticated
+      webhook primary, **mandatory polling fallback**, operator evidence
+      break-glass only, all normalized into the provider-neutral contract; an
+      unverifiable webhook is not authoritative evidence (ADR-0054 Decision 4).
+
+### Implementation deltas — runtime code disagrees with the approved contract
+
+Not documentation problems, and **not fixed by editing documentation.** Each must
+be reconciled in a runtime work package.
+
+- [ ] **The runtime pricing code assumes every plan is a 12-month contract with a
+      5% annual-prepayment discount.** `customer-plan-catalog.ts` defines
+      `CONTRACT_MONTHS = 12` and `ANNUAL_PREPAYMENT_DISCOUNT_BPS = bps(500)`, and
+      `customer-pricing.ts:annualContractRawPricing` computes an annual gross and
+      a prepayment price from them. ADR-0053 Decision 1A makes Standard and
+      Premium one-month, monthly-billed, with no prepayment discount, and makes
+      Enterprise individually agreed. **ADR-0053 is authoritative; the code is the
+      delta.** It was deliberately left unchanged by the documentation work
+      package and **must be reconciled before commercial billing is activated.**
+      No caller may treat those constants as a statement of what a Standard or
+      Premium customer agreed to.
+- [ ] **`REVIEWER` survives in code or schema** where the role vocabulary is
+      represented, and the Phase 3B near-duplicate UX still contradicts ADR-0052
+      Decision 14. Both are listed in the implementation section above.
+
+### Live-evidence gates — cannot be closed by documentation
+
+- [ ] **Re-verify the AI provider before activation.** ADR-0054 Decision 2 lists
+      the full set: commercial-use rights and terms, current pricing, 720p and
+      1080p support, supported durations, the image-to-video contract,
+      concurrency and rate limits, provider retention, webhook/auth mechanism,
+      cancellation capability, actual output quality, observed failure rate,
+      observed latency, Unit economics. **Only verified routes may be enabled.**
+- [ ] **Set the minimum margin threshold for the Cost Safety Guard.** ADR-0054
+      Decision 3 deliberately fixes no percentage. Needs measured provider cost,
+      Google Cloud variable compute/storage/egress cost, payment-processing cost,
+      retry/recovery expected cost, FX buffer and composition cost.
+- [ ] **Validate the provisional additional-storage price** (¥1,500 / +50 GB)
+      against measured production storage and egress economics before Commercial
+      Launch. Approved only as a working figure.
+- [ ] **Set the production scheduler's timing values from measurement**, not
+      guesses: the stale-`SUBMITTING` threshold from observed p99 submission
+      latency, the signed source-URL TTL from measured provider fetch behaviour
+      with buffer, and cadence, batch size and worker concurrency from load and
+      production-readiness testing. Reaffirmed by ADR-0054 Decision 4; the
+      existing entries above for `staleSubmittingAfterMs` and the 600-second TTL
+      remain the detailed records.
+- [ ] **Set the polling interval and timeouts from measurement.** ADR-0054
+      Decision 4 makes polling the mandatory authoritative fallback but
+      deliberately fixes no cadence or deadline. The `WAVESPEED_POLL_*` values
+      are live-evidence values, not constants to guess.
+- [ ] **Verify the provider's webhook authentication contract against the live
+      provider.** Until verified, that webhook is **not** authoritative
+      completion evidence and polling is the normal authoritative path (ADR-0054
+      Decision 4). This is part of the Decision 2 re-verification set and is
+      called out separately because the whole webhook design depends on it.
+- [ ] **Validate Standard/Premium monthly economics against the one-month,
+      no-commitment, no-prepayment-discount contract** (ADR-0053 Decision 1A).
+      The approved term removes the contracted revenue floor the runtime pricing
+      code currently assumes, so churn exposure and per-month unit economics need
+      measurement before Commercial Launch.
+- [ ] **Counsel review before Commercial Launch** by counsel familiar with
+      Japanese IT/SaaS and real-estate advertising: Terms of Service, Privacy
+      Policy, Mode C consent wording, the responsibility boundary,
+      pricing/Unit/refund rules, SLA, retention and deletion, IP and
+      source-material warranties, and the subprocessor list. The purpose is to
+      validate the responsibility boundary, **not** to make VTaVision an
+      external-publication approver.
+- [ ] **Publish and maintain a subprocessor list** (Google Cloud, Stripe, the
+      active AI provider(s), email-delivery vendors, other material processors),
+      with a formal update mechanism, and version Terms/Privacy/Consent so that
+      who accepted which version and when is determinable.
+- [ ] **Begin the Enterprise contractual SLA only after production measurement**
+      and legal/commercial approval. Closed Beta carries no formal commercial
+      SLA, and no AI generation completion-time SLA is offered.
+- [ ] **Meet the Closed Beta launch gates** (ADR-0053 Decision 12), including the
+      zero-tolerance items: double Unit consumption 0, duplicate Provider
+      charging 0, cross-tenant exposure 0, Sev1 0, loss-making Jobs 0.
+
+### Activation gates — BLOCKED pending explicit CTO authorization
+
+- [ ] Paid Provider Activation
+- [ ] Production Provider credentials
+- [ ] Production AI paid calls
+- [ ] Production scheduler activation (Cloud Scheduler)
+
+Documentation approval is **not** activation authorization (ADR-0054 Decision 7).

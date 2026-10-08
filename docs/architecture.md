@@ -39,8 +39,8 @@ flowchart TB
   end
 
   pg[("PostgreSQL")]
-  objects[("Object storage<br/>in-process today<br/>S3/Azure planned")]
-  wavespeed["WaveSpeedAI API<br/>(adapter only; not called in Phase 2)"]
+  objects[("Object storage<br/>in-process today<br/>Google Cloud Storage planned")]
+  wavespeed["AI provider API<br/>(adapter only; never called — activation BLOCKED)"]
 
   worker["apps/worker<br/>bootstrap + self-check<br/>execution loop (not implemented)"]
 
@@ -104,7 +104,7 @@ flowchart TB
 | `PromptModerator` port + offline documented-rules default | Implemented (Phase 3C-3, ADR-0014); **no real moderation vendor** |
 | `@app/ai-providers` `ImageAnalysisProvider` + deterministic offline adapter | Implemented (Phase 3A-1); **no real vision vendor** (ADR-0009) |
 | `AnalysisService`, `AssetAnalysis` persistence | Implemented (Phase 3A-2) |
-| Human review: `approve` / `reject`, immutable per revision | Implemented (Phase 3B) |
+| **Source-photo analysis review**: `approve` / `reject` on an `AssetAnalysis`, immutable per revision — the `analysis.review` permission, **not** final-video approval, which does not exist (ADR-0052 Decision 2) | Implemented (Phase 3B) |
 | Human corrections: room override and order priority, separate from the decision | Implemented (Phase 3D, ADR-0015) |
 | Analysis review UI, storyboard UI | Implemented (Phases 3B-3, 3C-6, 3D-4b) |
 | `@app/domain` generation module: state machine, request identity, immutable request snapshot, capability contract, `GenerationService.startScene` | Implemented (Phases 4A, 4B-1; ADR-0016, 0017, 0018) |
@@ -118,5 +118,5 @@ flowchart TB
 | `@app/queue` | **Placeholder.** No transport exists: the `QUEUED` generation row is the durable queue (ADR-0024) |
 | `@app/domain` deliverable-composition + `@app/database` Transaction I — the durable composition plan (deliverable version, frozen per-scene input rows, Job `COMPOSITION_PENDING`) | Implemented and **dormant** (Phase 5A, ADR-0049); database-only, no runner, no scheduler, no candidate query, and `currentDeliverableVersionId` is never moved |
 | `@app/domain` deliverable-composition-execution + `@app/database` Transactions J1/J2 + the FFmpeg composer, source materializer and first-wins publisher | Implemented and **dormant** (Phase 5B, ADR-0050); composition profile v1 frozen per work row, no runner constructed, no scheduler, and the deliverable pointer is never moved |
-| `@app/domain` deliverable-validation + `@app/database` Transaction G — the deliverable media verdict and the publication boundary (Job `DELIVERABLE_READY`, `currentDeliverableVersionId`, reservation `CONSUMED`) | Implemented and **dormant** (Phase 5C, ADR-0051); nothing constructs the repository or the runner, no scheduler exists, and human review before publication is still unimplemented |
+| `@app/domain` deliverable-validation + `@app/database` Transaction G — the deliverable media verdict and the publication boundary (Job `DELIVERABLE_READY`, `currentDeliverableVersionId`, reservation `CONSUMED`) | Implemented and **dormant** (Phase 5C, ADR-0051); nothing constructs the repository or the runner, no scheduler exists, and the AI-generated disclosure the deliverable must carry (ADR-0052 Decision 8) is unrendered at every layer. **No final-video human approval is required** — that gate was removed by ADR-0052 Decision 2 |
 | Billing, Stripe, credit ledger, overage purchase | **Not implemented** (Phase 6). The unit consume is an entitlement-ledger fact, not a charge |

@@ -1,11 +1,52 @@
 # WaveSpeedAI Integration
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Primary candidate — **NOT ACTIVATED**
+
+Authority: ADR-0054 Decision 2 and Decision 7.
+
+> **WaveSpeedAI is the primary candidate for the initial commercial release.
+> This document is not authorization to activate it.** Paid Provider Activation,
+> production provider credentials and production paid calls all remain
+> **BLOCKED** and require explicit CTO authorization in a future work package.
+>
+> Before any paid production activation, every item in the re-verification list
+> below must be checked against current reality rather than against this
+> document. Only verified production routes may be enabled.
 
 ## Purpose
 
-Define the initial production integration with WaveSpeedAI for image-to-video generation while preserving a provider-replaceable architecture.
+Define the candidate production integration with WaveSpeedAI for image-to-video
+generation while preserving a provider-replaceable architecture.
+
+**Provider and model identity never reaches a customer-facing surface.**
+Customers choose only Normal (720p) or HQ (1080p); VTaVision maps that to a
+verified route internally by quality, cost, availability and Safety Guard
+(ADR-0052 Decision 6).
+
+## Re-verification required before activation
+
+- commercial-use rights and terms
+- current pricing
+- 720p support
+- 1080p support
+- supported durations
+- the image-to-video contract
+- concurrency and rate limits
+- provider retention
+- webhook / auth mechanism
+- cancellation capability
+- actual output quality
+- observed failure rate
+- observed latency
+- Unit economics
+
+A **Cost Safety Guard** decision must precede every paid submission: no route may
+knowingly run at a loss, and if none qualifies, admission is safely rejected or
+paused rather than submitted (ADR-0054 Decision 3).
+
+Initial release prefers **one primary provider and at most one defined fallback
+candidate**. Unconstrained automatic multi-provider routing is out of scope.
 
 ## Configuration
 
@@ -66,6 +107,14 @@ Unknown states are treated as non-terminal for a short bounded period, then move
 
 ## Webhook security
 
+**Approved production design: authenticated webhook as the primary low-latency
+path, with mandatory polling fallback (ADR-0054 Decision 4).** If this provider's
+webhook authenticity **cannot** be verified, its webhook is **not** authoritative
+completion evidence and polling becomes the normal authoritative path. An
+unauthenticated internet callback is never accepted as proof that a paid
+generation completed. The webhook authentication contract is **unverified** until
+checked against the live provider and is on the re-verification list above.
+
 - Verify the current provider-supported authentication/signature mechanism.
 - Reject invalid, expired, or replayed events.
 - Deduplicate using provider event ID or stable payload hash.
@@ -75,7 +124,20 @@ Unknown states are treated as non-terminal for a short bounded period, then move
 
 ## Polling fallback
 
+**Polling is mandatory even when authenticated webhooks are in use** (ADR-0054
+Decision 4). It covers the missed webhook, the delayed webhook, transport
+failure, uncertain delivery, and reconciliation after a restart or operator
+investigation. A webhook is an optimization; polling is the guarantee.
+
 Use exponential backoff with jitter, a maximum interval, a hard deadline, and cancellation awareness. Do not poll from browser code. Polling must be restart-safe after worker failure.
+
+**Operator-supplied evidence is exceptional break-glass recovery evidence only**,
+never the normal completion path. All three sources — authenticated webhook,
+polling, operator evidence — normalize into the provider-neutral reconciliation
+contract before any durable state transition.
+
+The exact polling cadence and timeouts (`WAVESPEED_POLL_*`) remain
+**live-evidence values** and are not fixed here.
 
 ## Input URL security
 

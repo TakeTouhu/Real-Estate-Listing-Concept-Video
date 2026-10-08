@@ -1,14 +1,27 @@
 # Data Model
 
-Version: 1.0
-Status: Draft
+Version: 2.0
+Status: Approved initial-release contract (pre-Commercial-Launch)
+
+Authority: ADR-0052, ADR-0053. Where this document and an ADR disagree, the ADR
+governs.
+
+> **This is a forward-looking design sketch, not the implemented schema.** The
+> implemented schema is `packages/database/prisma/schema.prisma`, documented in
+> `docs/er-diagram.md` and `docs/migration-notes.md`, and currently stands at
+> migration 16. Entity shapes below that have not been built are illustrative;
+> where the implemented schema already covers a concept it is authoritative and
+> its names differ (for example `GenerationJob`, `GenerationReservation`,
+> `GenerationDeliverableVersion`, `GenerationDeliverableValidation`).
 
 ## Core principles
 
 - PostgreSQL is the system of record.
 - Every tenant-owned record includes `organization_id`.
 - Public resource IDs are separate from provider job IDs and storage keys.
-- Credit reservation and settlement are transactional and idempotent.
+- Unit reservation and settlement are transactional and idempotent, and settle
+  exactly once. "Credits" below refers to the same entitlement concept now called
+  **Units**.
 - Sensitive provider payloads are not stored raw unless strictly necessary and encrypted.
 
 ## Main entities
@@ -25,13 +38,70 @@ Status: Draft
 
 `id`, `organization_id`, `user_id`, `role`, `created_at`
 
-Roles: `OWNER`, `ADMIN`, `CREATOR`, `REVIEWER`.
+Role templates: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING`.
+
+**`REVIEWER` is removed.** It existed to approve finished videos, and that
+workflow no longer exists (ADR-0052 Decision 2). Reviewing *source photographs*
+survives as the `analysis.review` permission.
+
+Membership alone is not the authorization model: the initial release adds groups,
+Scope (`ORGANIZATION` / `GROUP` / `OWN`) and optional individual permissions, with
+**additive** group permissions and **no DENY**. The permission list **and the
+approved per-template grant matrix with each role's fixed Scope** are
+ADR-0052 Decision 10. They need durable representation — group membership, scope,
+and per-user grants — that does not exist yet.
+
+That representation must also support the **grant ceiling**: every authorization
+mutation records the acting user, and the model must be able to answer "may this
+actor grant this?" rather than only "does this actor hold `permission.manage`?".
+`OWNER`-only protected authority (`permission.manage`, `billing.manage`,
+`disclosure.none`, the `OWNER`/`ADMIN`/`BILLING` role assignments,
+ownership-equivalent changes, and anything touching the last `OWNER`) must be
+enforceable on **every** path — direct grant, group membership, group permission
+and role change alike — since the additive model otherwise becomes an escalation
+route. Scope itself is **fixed by role** and is not stored as an independently
+editable per-member value (ADR-0052 Decision 10). The model must also bound the
+**effective** permission set by role after combining template, direct and group
+grants: `property.create` is never effective for a `VIEWER` or `BILLING` user,
+whatever grant rows exist.
+
+**`disclosure.none` must be representable only as an individual grant.** The
+model must make it impossible — not merely unused — for a group permission,
+group inheritance, a role template or a Scope expansion to carry it, and its
+revocation must be prospective: removing the grant deletes no `ConsentRecord`
+and touches no completed deliverable. Each grant and revocation needs durable
+evidence of the organization, affected user, acting `OWNER`, action and
+timestamp; whether that lives in `AuditLog` alone or alongside a dedicated record
+is an implementation choice this document does not make (ADR-0052 Decision 10).
+
+Whether the template defaults are **stored as rows** or **derived in code from
+the approved matrix** is an implementation choice this document does not make;
+either way the matrix is authoritative and a stored copy must be reproducible
+from it. Note that `disclosure.none` and `video.share` are granted by **no**
+template, so neither can be reached by assigning a role alone.
+
+User status is **`active` or `deleted`** only; there is deliberately no
+suspension/deactivation state, and deleted users cannot be restored (ADR-0052
+Decision 11).
 
 ### Property
 
 `id`, `organization_id`, `name`, `property_type`, `address_masked`, `description`, `status`, `created_by`, timestamps
 
 Avoid exposing full addresses where not required.
+
+**The Property is the authorization root for customer content** (ADR-0052
+Decision 10). `created_by` here and on child rows is **authorship history only**
+and must never decide row access. Scope needs durable relationships that do not
+exist yet: Property → **responsible user** (for `OWN`), Property → **zero or one
+group** (for `GROUP`), and user → group memberships. Child rows — assets,
+analyses, projects, jobs, scenes, deliverables and versions — reach their scope
+through their Property rather than through any ownership column of their own. No
+names are chosen here. Changing either assignment is an `OWNER`/`ADMIN`-only authorization
+mutation with its own audit record, and creation-time values depend on the
+creator's role — fixed for `MANAGER` and `CREATOR` — with the creation itself
+audited (ADR-0052 Decision 10). Deleting a group ungroups its Properties without
+deleting any content, and is `OWNER`/`ADMIN`-only (Decision 11).
 
 ### MediaAsset
 
@@ -43,7 +113,14 @@ Avoid exposing full addresses where not required.
 
 ### VideoProject
 
-`id`, `organization_id`, `property_id`, `name`, `status`, `duration_seconds`, `aspect_ratio`, `resolution`, `style_preset`, `camera_motion`, `prompt`, `negative_prompt`, `include_music`, `include_captions`, `brand_template_id`, `created_by`, timestamps
+`id`, `organization_id`, `property_id`, `name`, `status`, `duration_seconds`, `aspect_ratio`, `resolution`, `style_preset`, `camera_motion`, `prompt`, `negative_prompt`, `created_by`, timestamps
+
+**Not initial-release fields.** `include_music`, `include_captions` and
+`brand_template_id` appeared in the v1.0 sketch. BGM and captions are not
+initial-release commitments (`docs/ProductRequirements.md`), and multi-brand or
+branch-specific templates are post-release (ADR-0052 Decision 13) — the initial
+release has one organization-level logo with per-video ON/OFF. Do not build schema
+or settings branches for them.
 
 ### StoryboardScene
 
@@ -55,6 +132,14 @@ Avoid exposing full addresses where not required.
 
 Unique constraint: `(organization_id, idempotency_key)`.
 
+**The admitted disclosure contract is immutable on the job** (ADR-0052
+Decision 10). At admission the job must capture, and never afterwards mutate: its
+disclosure mode, the per-generation Mode C consent, the `disclosure.none`
+eligibility and the organization-level Mode C eligibility used to admit it, and
+the per-generation disclosure/logo settings that define its output. Organization
+and user authorization state stays mutable, but a change to it affects only jobs
+admitted later. No field names are chosen here.
+
 ### ProviderGeneration
 
 `id`, `organization_id`, `generation_job_id`, `storyboard_scene_id`, `provider`, `model_id`, `provider_prediction_id_encrypted`, `request_hash`, `status`, `estimated_provider_cost`, `actual_provider_cost`, `temporary_output_expires_at`, timestamps
@@ -63,17 +148,74 @@ Provider prediction IDs are internal only.
 
 ### VideoOutput
 
-`id`, `organization_id`, `video_project_id`, `generation_job_id`, `version`, `storage_key`, `mime_type`, `size_bytes`, `duration_seconds`, `width`, `height`, `status`, `approved_by`, `approved_at`, `rejection_reason`, timestamps
+`id`, `organization_id`, `video_project_id`, `generation_job_id`, `version`,
+`storage_key`, `mime_type`, `size_bytes`, `duration_seconds`, `width`, `height`,
+`status`, `disclosure_mode`, `logo_enabled`, `disclosure_change_count`,
+timestamps
+
+**`approved_by`, `approved_at` and `rejection_reason` are removed**: there is no
+final-video approval (ADR-0052 Decision 2). Nothing waits on an approval, and no
+approval record gates delivery.
+
+`disclosure_mode` records which of A / B / C the file was produced with — needed
+because old versions must display their own mode for 30 days.
+`disclosure_change_count` carries the block-of-three accounting: it increments
+only when a *new completed deliverable* is successfully produced, not on failure,
+retry or cancellation (ADR-0052 Decision 9).
+
+The implemented equivalent today is `GenerationDeliverableVersion` plus
+`GenerationDeliverableComposition` (its receipt) and
+`GenerationDeliverableValidation` (its verdict); publication is the job's
+`currentDeliverableVersionId` pointer rather than a status on the output row.
+
+**Clean Master** (ADR-0052 Decision 17): each deliverable needs one durable,
+**overlay-free** master — no burned-in disclosure or logo — from which the
+customer-facing output is produced by applying the disclosure/logo layer, and
+from which later disclosure/logo changes are recomposed after scene videos are
+deleted. It is internal: excluded from customer quota, never customer-exposed or
+downloadable, retained and deleted with its content's lifecycle (trash/recovery
+included, legal hold where applicable). Its representation is not chosen here.
 
 ### CreditLedger
 
 `id`, `organization_id`, `generation_job_id`, `type`, `amount`, `balance_after`, `idempotency_key`, `metadata_json`, `created_at`
 
-Types: `PURCHASE`, `RESERVATION`, `SETTLEMENT`, `RELEASE`, `REFUND`, `ADJUSTMENT`.
+Types: `PURCHASE`, `RESERVATION`, `SETTLEMENT`, `RELEASE`, `REFUND`,
+`ADJUSTMENT`.
+
+The ledger must additionally support, per ADR-0053: **added Unit packages as
+blocks**, each **tagged with the quality it was bought at** (Normal or HQ) —
+add-on Units are quality-locked, so the ledger must be able to refuse an
+ineligible block rather than treat added Units as one pool; the
+**eligibility-first** consumption order (eligible Base Unit → oldest eligible
+add-on → newest eligible add-on, FIFO *within* the eligible quality class); the
+plan's **included HQ ceiling** (1 / 5 / 10) as a counter *inside* the Base pool
+rather than a separate pool, since HQ may draw a Base Unit only while that
+ceiling remains (ADR-0053 Decisions 2 and 3); the
+**renewal-period binding** (a generation belongs to the period of its
+reservation); the fact that added packages **do not carry over**; and the
+**internal service-recovery budget**, which is organization-wide, derived from
+the **base plan's included-user slots** (3 / 10 / 30) and **not** from active
+users or purchased additional seats (ADR-0052 Decision 5), and must never be
+rendered to a customer.
+
+It must also represent a **released** reservation for a permanently failed
+generation or recomposition (ADR-0052 Decision 19): a reservation may not remain
+pending indefinitely, and a failure that delivered no technically valid video
+must settle to `RELEASE`, never `SETTLEMENT`.
 
 ### Subscription
 
 `id`, `organization_id`, `provider`, `provider_customer_id_encrypted`, `provider_subscription_id_encrypted`, `plan_id`, `status`, `current_period_end`, timestamps
+
+A **scheduled additional-seat reduction** and a **scheduled plan downgrade** must
+each be representable as pending until the next renewal, so member additions can
+be checked against the committed next-period entitlement before then (ADR-0053
+Decisions 3B and 5A). Add-on purchases need their purchase time and prorated
+first charge recorded as billing evidence. Storage add-ons are a **count of
+active +50 GB blocks**, with scheduled per-block cancellations, so the plan cap
+(ADR-0053 Decision 4) can be checked at purchase and the recurring charge derived
+as blocks × price. No field names are chosen here.
 
 ### AuditLog
 
@@ -89,4 +231,6 @@ Assets and outputs use explicit lifecycle states and retention dates. Scheduled 
 
 ## Indexes
 
-Index organization scope first for tenant queries, plus project status, job status, creation time, property ID, request hash, and provider prediction lookup. Add partial indexes for active jobs and pending reviews.
+Index organization scope first for tenant queries, plus project status, job status, creation time, property ID, request hash, and provider prediction lookup. Add partial indexes for active jobs and pending **source-photo analysis** reviews
+(`analysis.review`; there is no final-video approval queue to index — ADR-0052
+Decision 2).
