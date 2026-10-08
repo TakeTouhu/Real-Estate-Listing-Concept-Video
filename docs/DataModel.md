@@ -60,7 +60,10 @@ ownership-equivalent changes, and anything touching the last `OWNER`) must be
 enforceable on **every** path — direct grant, group membership, group permission
 and role change alike — since the additive model otherwise becomes an escalation
 route. Scope itself is **fixed by role** and is not stored as an independently
-editable per-member value (ADR-0052 Decision 10).
+editable per-member value (ADR-0052 Decision 10). The model must also bound the
+**effective** permission set by role after combining template, direct and group
+grants: `property.create` is never effective for a `VIEWER` or `BILLING` user,
+whatever grant rows exist.
 
 **`disclosure.none` must be representable only as an individual grant.** The
 model must make it impossible — not merely unused — for a group permission,
@@ -96,7 +99,9 @@ analyses, projects, jobs, scenes, deliverables and versions — reach their scop
 through their Property rather than through any ownership column of their own. No
 names are chosen here. Changing either assignment is an `OWNER`/`ADMIN`-only authorization
 mutation with its own audit record, and creation-time values depend on the
-creator's role (ADR-0052 Decision 10).
+creator's role — fixed for `MANAGER` and `CREATOR` — with the creation itself
+audited (ADR-0052 Decision 10). Deleting a group ungroups its Properties without
+deleting any content, and is `OWNER`/`ADMIN`-only (Decision 11).
 
 ### MediaAsset
 

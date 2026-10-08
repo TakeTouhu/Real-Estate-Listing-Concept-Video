@@ -750,7 +750,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 
 ## Business rules to confirm (later phases)
 
-> This section predates the initial-release contract. Twenty-six further business
+> This section predates the initial-release contract. Twenty-nine further business
 > rules — contract term, billing cadence, annual prepayment, cancellation/refund,
 > upgrade/downgrade, permanent-failure settlement, operator recovery, support
 > hours and targets, the role matrix, the recovery-budget denominator, grant
@@ -758,11 +758,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > grant authority, in-flight Mode C, commercial-mutation authority, the Clean
 > Master, additional-seat cancellation, mid-period purchases, downgrade fit and
 > charged-recomposition quality, logo-only recomposition, storage blocks, storage
-> blocks on downgrade, Scope semantics, Property assignment authority and
-> role-fixed Scope — were settled later and are recorded under *Decision gates — CLOSED*
-> below; *Decision gates — OPEN*, just above it, holds three Property-assignment
-> questions not yet decided. Read all
-> three places; none is the complete ledger on its own.
+> blocks on downgrade, Scope semantics, Property assignment authority,
+> role-fixed Scope, the `property.create` capability ceiling, fixed
+> `MANAGER`/`CREATOR` creation-time assignments and protected group deletion —
+> were settled later and are recorded under *Decision gates — CLOSED* below;
+> *Decision gates — OPEN*, just above it, is currently empty. Read all three
+> places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
       by ADR-0053** (plans, per-Unit package multipliers ×1.20 / ×1.50, rounding
@@ -1122,9 +1123,13 @@ them is **built**. Each item below records the settled decision and what remains
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
       of them including old versions; other users' videos for the same property
-      survive; legally retained evidence survives. On group deletion: users
-      become ungrouped, lose only group-granted permissions, content returns to
-      organization root.
+      survive; legally retained evidence survives. Group deletion is
+      **`OWNER`/`ADMIN`-only** (ADR-0052 Decision 11): a protected check that a
+      granted `group.manage` cannot satisfy for any other role. On group
+      deletion: users become ungrouped, lose only group-granted permissions,
+      Properties become ungrouped and content returns to organization root with
+      no content or child resource deleted; record organization, group, acting
+      user and role, affected Property count or identifiers, and timestamp.
 - [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
       videos, with the in-trash restrictions (no generate/regenerate, no
       disclosure change, no upload, no edit; preview/download still allowed when
@@ -1253,11 +1258,22 @@ them is **built**. Each item below records the settled decision and what remains
       individual grants; tenant-safe row-level checks throughout.
 - [ ] **Build Property assignment and role-fixed Scope** (ADR-0052 Decision
       10): `OWNER`/`ADMIN`-only Property reassignment; creation-time assignment
-      rules by creator role, including `MANAGER` group-selection validation and
-      `CREATOR` responsible-user initialization; the fixed role → Scope mapping
-      with no standalone Scope mutation; Scope derived on role change without
-      rewriting assignments; grants never widening Scope; and audit evidence for
-      every assignment and role change.
+      rules by creator role — `MANAGER` responsible user fixed to the creator
+      and group validated as exactly one of the creator's current groups (never
+      ungrouped), `CREATOR` responsible user fixed to the creator and group
+      fixed to unset, `OWNER`/`ADMIN` same-organization validation; the fixed
+      role → Scope mapping with no standalone Scope mutation; Scope derived on
+      role change without rewriting assignments; grants never widening Scope;
+      and audit evidence for every Property creation (organization, Property,
+      creating user and role, initial responsible user and group, timestamp),
+      assignment change and role change.
+- [ ] **Enforce the `property.create` capability ceiling** (ADR-0052 Decision
+      10): effective-permission calculation that combines template, direct and
+      group grants and then applies the role ceiling, so `property.create` is
+      never effective for `VIEWER` or `BILLING` from any source; grant
+      validation that does not present a direct `property.create` for those
+      roles as a supported configuration; and tests covering direct and
+      group-derived grants for both roles.
 - [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
       to schedule a downgrade while next-period blocks exceed the target cap;
       require explicit scheduled cancellation of the excess; while the downgrade
@@ -1295,45 +1311,45 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Three gates, raised by the exact-head review of `900a093` against the newly
-recorded Property assignment rules. **None may be guessed.**
-
-- [ ] **Decide what a granted `property.create` means for `VIEWER` and
-      `BILLING`.** ADR-0052 Decision 10's creation table covers only the
-      templates that hold `property.create` by default. Nothing approved says
-      whether the permission may be granted to a `VIEWER` or `BILLING` user
-      individually or through a group, or — if it may — what the responsible
-      user and group are at creation. An `OWN`-scoped `VIEWER` with no initial
-      assignment would lose reach to what it just created. Recorded at ADR-0052
-      Decision 10.
-- [ ] **Decide the creation-time selection latitude of `MANAGER` and
-      `CREATOR`.** A `MANAGER`'s responsible user *defaults to* the creating
-      `MANAGER`; nothing approved says whether it may be overridden at creation
-      or which users are eligible. A `CREATOR`'s group *may stay unset*; nothing
-      approved says whether a `CREATOR` may select a group at all, e.g. one it
-      belongs to, given that any selection opens the Property to that group's
-      `GROUP`-scoped members. Recorded at ADR-0052 Decision 10.
-- [ ] **Decide who may delete a group when `group.manage` is granted below
-      `ADMIN`.** Only `OWNER`/`ADMIN` may change an existing Property's group,
-      yet `group.manage` is not protected authority and Decision 11 returns a
-      deleted group's Properties to ungrouped scope, so a `MANAGER` or `CREATOR`
-      holding a granted `group.manage` could clear those assignments by deleting
-      the group. Options include making group deletion `OWNER`/`ADMIN`-only,
-      barring `group.manage` below `ADMIN`, or accepting the exception. Recorded
-      at ADR-0052 Decision 10 and referenced from Decision 11.
+**None known.** Every gate raised during the initial-release contract audit is
+closed and recorded below. A genuinely new product decision found later belongs
+here, recorded rather than guessed.
 
 ### Decision gates — CLOSED
 
-Twenty-six decisions: the two gates from the first PR review, eight recorded
+Twenty-nine decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
 additional-seat cancellation, mid-period purchases, downgrade fit,
 charged-recomposition quality, logo-only recomposition, repeatable storage
-blocks, storage blocks on downgrade, Scope semantics, and the two closed last —
-Property assignment authority and role-fixed Scope. **Each is settled as policy and unbuilt as code**; the
+blocks, storage blocks on downgrade, Scope semantics, Property assignment
+authority, role-fixed Scope, and the three closed last — the `property.create`
+capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
+protected group deletion. **Each is settled as policy and unbuilt as code**; the
 implementation work each one creates is listed in the section above.
 
+- [x] **`property.create` capability ceiling — CLOSED.** Effective Property
+      creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A
+      `VIEWER` or `BILLING` user never holds an effective `property.create` —
+      not by direct grant, not through a group — because the ceiling applies
+      after every grant source is combined; such a configuration is not
+      supported. A `VIEWER` who needs to create gets an authorized role change.
+      ADR-0052 Decision 10.
+- [x] **`MANAGER`/`CREATOR` creation-time assignments — CLOSED.** A
+      `MANAGER`'s Property has its responsible user **fixed** to the creating
+      `MANAGER` and exactly one of the `MANAGER`'s current groups (automatic if
+      one, chosen if several; never ungrouped, never another group). A
+      `CREATOR`'s Property has its responsible user fixed to the creator and its
+      group **fixed to unset** — a `CREATOR` selects no group, not even its own.
+      `OWNER`/`ADMIN` creation is unchanged. ADR-0052 Decision 10.
+- [x] **Group deletion — CLOSED.** **`OWNER`/`ADMIN`-only**, even where
+      another role holds `group.manage`; deletion is a protected sub-operation
+      with its own check, and the other group-management operations are not
+      redefined. The deletion consequences are unchanged: members stay in the
+      organization, group-derived access ends, Properties become ungrouped,
+      content and child resources survive, audit history is retained, and
+      `OWNER`/`ADMIN` may reassign. ADR-0052 Decision 11.
 - [x] **Scope is fixed by role — CLOSED.** `OWNER`/`ADMIN`/`BILLING` →
       `ORGANIZATION`, `MANAGER` → `GROUP`, `CREATOR`/`VIEWER` → `OWN`. There is
       **no standalone scope change** for anyone, `OWNER` included; only a role
@@ -1343,11 +1359,10 @@ implementation work each one creates is listed in the section above.
 - [x] **Property assignment authority — CLOSED.** Changing a Property's
       responsible user or group is an **`OWNER`/`ADMIN`-only** authorization
       mutation; `property.edit` alone is not enough. At creation: `OWNER`/`ADMIN`
-      may set or leave both unset; a `MANAGER`'s Property defaults its
-      responsible user to the creator and **must** be placed in one of the
-      `MANAGER`'s own groups (never ungrouped); a `CREATOR`'s Property is fixed
-      to the creator as responsible user and may stay ungrouped. Creator identity
-      is still not the `OWN` predicate. ADR-0052 Decision 10.
+      may set or leave both unset; a `MANAGER`'s and a `CREATOR`'s Property
+      have the creator as responsible user (see the creation-time entry above
+      for the fixed values). Creator identity is still not the `OWN` predicate.
+      ADR-0052 Decision 10.
 - [x] **Scope semantics — CLOSED.** The **Property is the authorization root**;
       children inherit its reachability, with no authorship-based ownership.
       `ORGANIZATION` = every Property in the organization (never cross-tenant);

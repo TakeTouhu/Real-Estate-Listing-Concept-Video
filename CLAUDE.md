@@ -65,7 +65,10 @@ Do not invent missing business rules. Record unresolved items in `docs/decisions
   as responsible user. Children inherit their Property; never authorize rows by
   creator/uploader/requester; an individual grant never widens scope. Scope is
   fixed by role (no standalone scope change), and only `OWNER`/`ADMIN` may change
-  a Property's responsible user or group.
+  a Property's responsible user or group, or delete a group — `group.manage`
+  alone does not authorize deletion. `property.create` is never effective for
+  `VIEWER` or `BILLING` from any grant source, and a `MANAGER`'s or `CREATOR`'s
+  creation-time assignments are fixed by role (ADR-0052 Decisions 10–11).
 - **`permission.manage` is authority within a grant ceiling, never unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` assigns any role; `ADMIN` assigns
   only `MANAGER` / `CREATOR` / `VIEWER`. Granting `permission.manage`,

@@ -32,7 +32,7 @@ Protect customer property images, generated videos, billing data, credentials, a
   Three separations it enforces by role: `BILLING` does not generate video or
   consume Units; `ADMIN` does not manage billing (unless an `OWNER` explicitly
   grants it `billing.manage` — ADR-0053 Decision 5A); `MANAGER` manages work,
-  not people, and defaults to `GROUP` scope. **`disclosure.none` and `video.share` are granted by
+  not people, and is `GROUP`-scoped by role. **`disclosure.none` and `video.share` are granted by
   no template**, so neither is reachable by assigning a role.
 - **`permission.manage` is authority within a grant ceiling, not unlimited
   delegation** (ADR-0052 Decision 10). `OWNER` may assign every role; **`ADMIN`
@@ -66,7 +66,16 @@ Protect customer property images, generated videos, billing data, credentials, a
   change moves a member's scope, under the role-assignment ceiling, so an `ADMIN`
   cannot widen anyone to `ORGANIZATION`. Changing a Property's responsible user
   or group is an `OWNER`/`ADMIN`-only authorization mutation; `property.edit`
-  alone does not authorize it (ADR-0052 Decision 10).
+  alone does not authorize it (ADR-0052 Decision 10). **Group deletion**, which
+  ungroups Properties, is equally `OWNER`/`ADMIN`-only, and a granted
+  `group.manage` does not satisfy it (Decision 11).
+- **The `property.create` role ceiling bounds the effective permission, not
+  only grants.** `property.create` is never effective for a `VIEWER` or
+  `BILLING` user, whether it arrives by direct grant or through a group; the
+  ceiling is applied after every grant source is combined. Creation-time
+  Property assignments are fixed by role: a `MANAGER` is the responsible user
+  and must choose one of its own groups, a `CREATOR` is the responsible user
+  with no group (ADR-0052 Decision 10).
 - **Audit every role, permission, group and Property-assignment change**,
   including a refused escalation attempt. Each `disclosure.none` grant and
   revocation must leave durable evidence of the organization, affected user,

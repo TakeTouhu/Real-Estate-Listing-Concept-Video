@@ -58,6 +58,13 @@ There is no "pending approvals" queue: nothing waits on an approval.
 
 Collect only required listing data. Full address is optional and hidden by default. Require confirmation that the user owns or licenses uploaded photos.
 
+The responsible-user and group controls follow the creator's role (ADR-0052
+Decision 10): `OWNER`/`ADMIN` may choose either or leave it unset; a `MANAGER` is
+shown as the fixed responsible user and picks one of its own groups (pre-selected
+when it has only one, with no "no group" option); a `CREATOR` is shown as the
+fixed responsible user with no group control. `VIEWER` and `BILLING` are offered
+no create action.
+
 ### Upload
 
 - drag-and-drop and mobile upload
