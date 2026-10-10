@@ -49,6 +49,7 @@ import {
   JOB_DELIVERABLE_READY_EVENT_TYPE,
   RESERVATION_CONSUMED_EVENT_TYPE,
   deliverableValidationReceipt,
+  frozenFundingCoversReservation,
   isDeliverableInvalidReason,
   managedDeliverableOutputKey,
   safePositiveByteCount,
@@ -117,6 +118,8 @@ interface ReservationRow {
   readonly reservationId: string;
   readonly reservationState: string;
   readonly reservationVersion: number;
+  readonly reservationFunding: string;
+  readonly reservedTotalVideoUnits: number;
 }
 
 export function createDeliverableValidationRepository(
@@ -502,6 +505,13 @@ export function createDeliverableValidationRepository(
           ) {
             throw new DeliverableValidationDefect("RESERVATION_NOT_CONSUMABLE");
           }
+          // Phase 6A: the Units this commit spends are the frozen allocations,
+          // read here and never reselected. A ledger-funded hold whose set does
+          // not fund exactly what it reserved, in the job's own quality, is not
+          // spent — it fails closed, because consuming it would deliver Units
+          // nobody funded or spend more than the customer asked for. A legacy
+          // hold recorded no funding source and is consumed as before.
+          await assertFrozenFundingIntact(tx, reservation, ctx.jobId);
         } else if (reservation === null || reservation.reservationState !== "CONSUMED") {
           // A job holding a deliverable whose entitlement is not spent has
           // delivered something nobody was charged for. Fails closed.
@@ -903,9 +913,11 @@ async function lockReservationForPublication(
   generationJobId: string,
 ): Promise<ReservationRow | null> {
   const rows = await tx.$queryRaw<ReservationRow[]>`
-    SELECT res."id"           AS "reservationId",
-           res."state"::text  AS "reservationState",
-           res."stateVersion" AS "reservationVersion"
+    SELECT res."id"                      AS "reservationId",
+           res."state"::text             AS "reservationState",
+           res."stateVersion"            AS "reservationVersion",
+           res."funding"::text           AS "reservationFunding",
+           res."reservedTotalVideoUnits" AS "reservedTotalVideoUnits"
       FROM "generation_reservations" res
       JOIN "generation_jobs" j ON j."id" = res."generationJobId"
       JOIN "video_projects" p ON p."id" = j."videoProjectId"
@@ -914,6 +926,39 @@ async function lockReservationForPublication(
        FOR UPDATE OF res
   `;
   return rows[0] ?? null;
+}
+
+/**
+ * A ledger-funded hold's frozen allocations fund exactly what it reserved.
+ *
+ * Read after the reservation lock and never locked themselves: allocation rows
+ * have no update path, so there is nothing to race. The comparison is the
+ * domain's, so Transaction G and the ledger cannot disagree about what "funded"
+ * means.
+ */
+async function assertFrozenFundingIntact(
+  tx: Tx,
+  reservation: ReservationRow,
+  generationJobId: string,
+): Promise<void> {
+  if (reservation.reservationFunding !== "ALLOCATED") return;
+  const job = await tx.generationJob.findUniqueOrThrow({
+    where: { id: generationJobId },
+    select: { qualityTier: true },
+  });
+  const allocations = await tx.generationReservationAllocation.findMany({
+    where: { reservationId: reservation.reservationId },
+    select: { quality: true, quantity: true },
+  });
+  if (
+    !frozenFundingCoversReservation({
+      quality: job.qualityTier,
+      reservedUnits: reservation.reservedTotalVideoUnits,
+      allocations,
+    })
+  ) {
+    throw new DeliverableValidationDefect("RESERVATION_FUNDING_INCOMPLETE");
+  }
 }
 
 // ---------------------------------------------------------------------------

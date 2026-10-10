@@ -1117,6 +1117,9 @@ RUN("Transaction F — atomic validated scene delivery", () => {
           reservedHighQualityUnits: 0,
           billingCycleStartedAt: new Date("2026-01-01T00:00:00.000Z"),
           billingCycleEndsAt: new Date("2026-02-01T00:00:00.000Z"),
+          // Seeded directly, outside the ledger: the pre-Phase-6A shape, with no
+          // recorded funding source. Not what `reserve()` produces.
+          funding: "UNALLOCATED_LEGACY",
         },
       });
       const before = await prisma.generationReservation.findUniqueOrThrow({

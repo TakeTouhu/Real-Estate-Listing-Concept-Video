@@ -282,6 +282,8 @@ export type DeliverableValidationDefectCode =
   | "FOREIGN_DELIVERABLE_VERSION"
   /** The reservation does not admit a consume in this cycle. */
   | "RESERVATION_NOT_CONSUMABLE"
+  /** A ledger-funded reservation's frozen allocations do not fund what it reserved. */
+  | "RESERVATION_FUNDING_INCOMPLETE"
   /** `validate()` returned something the closed outcome parser rejects. */
   | "VALIDATOR_RESULT_MALFORMED"
   /** `validate()` threw. Not evidence about the media. */
@@ -304,6 +306,8 @@ const DEFECT_MESSAGES: Record<DeliverableValidationDefectCode, string> = {
     "Publication would name a deliverable version belonging to another job",
   RESERVATION_NOT_CONSUMABLE:
     "The entitlement hold does not admit a consume for this publication",
+  RESERVATION_FUNDING_INCOMPLETE:
+    "The entitlement hold's frozen funding does not cover the Units it reserved",
   VALIDATOR_RESULT_MALFORMED:
     "The deliverable media validator returned a result outside its contract",
   VALIDATOR_FAILED: "The deliverable media validator failed unexpectedly",

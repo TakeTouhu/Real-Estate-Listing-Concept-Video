@@ -762,7 +762,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > role-fixed Scope, the `property.create` capability ceiling, fixed
 > `MANAGER`/`CREATOR` creation-time assignments and protected group deletion —
 > were settled later and are recorded under *Decision gates — CLOSED* below;
-> *Decision gates — OPEN*, just above it, is currently empty. Read all three
+> *Decision gates — OPEN*, just above it, holds the regeneration-Unit gate. Read all three
 > places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1152,16 +1152,24 @@ them is **built**. Each item below records the settled decision and what remains
       shared organization-wide, never exposed. On exhaustion: stop automatic
       recovery, charge no further Unit, release the reserved Unit, escalate
       internally, allow one operator-granted manual free recovery.
-- [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
-      blocks; the eligibility-first consumption order (see the two items below);
-      renewal-period binding to the reservation; no automatic overage;
-      customer-approved
-      purchase; no cancellation after a paid Provider submission.
-- [ ] **Build a quality-tagged additional-Unit ledger.** ADR-0053 Decision 2.
+- [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
+      Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
+      eligibility-first order (see the two items below) and renewal-period
+      binding frozen on the reservation. **Still unbuilt:** the customer-approved
+      purchase flow that grants a block, renewal scheduling that opens periods, no
+      automatic overage at the purchase boundary, and no cancellation after a paid
+      Provider submission.
+- [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
+      (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
+      composite foreign key; an HQ block on a plan that sells none is refused.*
+      ADR-0053 Decision 2.
       Each add-on block carries the quality it was bought at, and the ledger must
       be able to **refuse** an ineligible block rather than treat added Units as
       one pool. No conversion, exchange, refund or substitution path may exist.
-- [ ] **Build eligibility-first reservation and consumption.** ADR-0053
+- [x] **Build eligibility-first reservation and consumption.** *Built in Phase
+      6A (ADR-0055): multi-source allocation per the CTO's Option A, frozen at
+      reservation, all-or-nothing, settled with the reservation by Transaction G
+      and every release path.* ADR-0053
       Decision 3: eligible Base Unit → oldest eligible add-on → newest eligible
       add-on, FIFO *within* the eligible quality class, with the included HQ
       ceiling (1 / 5 / 10) enforced as a counter **inside** the Base pool. An HQ
@@ -1311,13 +1319,21 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-**None known.** Every gate raised during the initial-release contract audit is
-closed and recorded below. A genuinely new product decision found later belongs
-here, recorded rather than guessed.
+One gate, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
+**It may not be guessed.** Every other gate is closed and recorded below.
+
+- [ ] **Decide what a customer regeneration costs in Units** — does not block
+      Phase 6A, which builds no regeneration pricing and does not treat today's
+      free regeneration as commercial policy. Today one job entitlement covers an initial generation and up to
+      two per-scene user regenerations, and a replacement publication consumes
+      nothing; ADR-0052 Decision 4 says customer-requested content regeneration
+      consumes additional Unit(s). Whether a per-scene regeneration costs the
+      scene's Units, the whole video's, or one Unit is undecided, and must be
+      settled before paid regeneration is built.
 
 ### Decision gates — CLOSED
 
-Twenty-nine decisions: the two gates from the first PR review, eight recorded
+Thirty decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1326,8 +1342,20 @@ charged-recomposition quality, logo-only recomposition, repeatable storage
 blocks, storage blocks on downgrade, Scope semantics, Property assignment
 authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
-protected group deletion. **Each is settled as policy and unbuilt as code**; the
-implementation work each one creates is listed in the section above.
+protected group deletion — and, from the Phase 6A gap analysis, multi-Unit
+reservation funding. **Each is settled as policy**; the implementation work each
+one creates is listed in the section above.
+
+- [x] **Multi-Unit reservation funding — CLOSED (Option A).** A reservation may
+      span multiple funding sources. Allocation is eligibility-first across the
+      whole quantity: available Base Units (for HQ, limited by both remaining
+      Base capacity and the remaining included HQ ceiling), then eligible add-on
+      blocks oldest → newest within the request's quality; partial Base capacity
+      is used before any add-on; Normal and HQ blocks never substitute. The
+      allocation set is frozen at reservation, consume and release act on it
+      without reselecting, renewal and later purchases never rebind it, and
+      reservation is all-or-nothing. Standard HQ jobs needing 2–3 Units cannot be
+      admitted, with no Normal fallback. Phase 6A.
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A
@@ -1542,7 +1570,10 @@ implementation work each one creates is listed in the section above.
 Not documentation problems, and **not fixed by editing documentation.** Each must
 be reconciled in a runtime work package.
 
-- [ ] **The runtime pricing code assumes every plan is a 12-month contract with a
+- [x] **Reconciled in Phase 6A:** `CONTRACT_MONTHS`, `ANNUAL_PREPAYMENT_DISCOUNT_BPS`
+      and both annual-prepayment functions are removed (ADR-0055 Decision 7). The
+      original item, kept as evidence:
+      **The runtime pricing code assumes every plan is a 12-month contract with a
       5% annual-prepayment discount.** `customer-plan-catalog.ts` defines
       `CONTRACT_MONTHS = 12` and `ANNUAL_PREPAYMENT_DISCOUNT_BPS = bps(500)`, and
       `customer-pricing.ts:annualContractRawPricing` computes an annual gross and

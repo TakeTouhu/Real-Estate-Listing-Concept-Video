@@ -11,6 +11,7 @@ import {
   ctx,
   domainSnapshot,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   H3_MAX_IDENTITY,
   HAS_DB,
   ORG_A,
@@ -230,9 +231,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           reservationId: "genres_resb",
           generationJobId: job.id,
           expectedJobVersion: moved.value.stateVersion,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx({ eventType: "RESERVED" }),
       );
@@ -275,9 +274,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           reservationId: "genres_lost",
           generationJobId: job.id,
           expectedJobVersion: 99,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx(),
       );
@@ -316,9 +313,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
             reservationId: "genres_roll",
             generationJobId: job.id,
             expectedJobVersion: moved.value.stateVersion,
-            billingCycleKey: "2026-09",
-            billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-            billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+            reservedAt: FIXTURE_RESERVED_AT,
           },
           poisoned,
         ),
@@ -344,9 +339,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
       const base = {
         generationJobId: job.id,
         expectedJobVersion: moved.value.stateVersion,
-        billingCycleKey: "2026-09",
-        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        reservedAt: FIXTURE_RESERVED_AT,
       };
       const first = await repos.reservations.reserve(
         ORG_A,
@@ -380,9 +373,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           reservationId: "genres_cycle",
           generationJobId: job.id,
           expectedJobVersion: moved.value.stateVersion,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx(),
       );
@@ -434,9 +425,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           reservationId: "genres_release",
           generationJobId: job.id,
           expectedJobVersion: moved.value.stateVersion,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx(),
       );
@@ -477,9 +466,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
           reservationId: "genres_noconsume",
           generationJobId: job.id,
           expectedJobVersion: moved.value.stateVersion,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx(),
       );
@@ -505,6 +492,7 @@ describe.skipIf(!HAS_DB)("generation orchestration persistence", () => {
         billingCycleKey: "2026-09",
         billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
         billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        funding: "UNALLOCATED_LEGACY" as const,
       };
       await expect(
         prisma.generationReservation.create({

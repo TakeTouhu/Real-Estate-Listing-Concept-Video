@@ -1,6 +1,15 @@
 import type { PrismaClient } from "@prisma/client";
+import { createGenerationReservationRepository } from "@app/database";
 import { managedGenerationOutputKey } from "@app/domain";
-import { ASSET_A, ASSET_B, ORG_A, PROJECT_A, PROJECT_B, STORYBOARD_SCENE } from "./orchestration-fixture";
+import {
+  ASSET_A,
+  ASSET_B,
+  ctx,
+  ORG_A,
+  PROJECT_A,
+  PROJECT_B,
+  STORYBOARD_SCENE,
+} from "./orchestration-fixture";
 
 /**
  * A job whose scenes are all composable, built as durable rows.
@@ -75,6 +84,12 @@ export interface ChainOptions {
   readonly requestedDurationSeconds?: number;
   /** Per-position overrides, applied to the scene at that position. */
   readonly scenes?: Readonly<Record<number, SceneOptions>>;
+  /**
+   * Fund the hold through the real Phase 6A `reserve()` at this instant, instead
+   * of seeding a legacy reservation by hand. The job is created `RESERVING`,
+   * reserved — allocations and all — and only then moved to `jobState`.
+   */
+  readonly fundFromLedgerAt?: Date;
 }
 
 let seq = 0;
@@ -96,6 +111,7 @@ export async function seedPlanChain(
   const requiredVideoUnits =
     requestedDurationSeconds <= 30 ? 1 : requestedDurationSeconds <= 60 ? 2 : 3;
 
+  const ledgerFunded = options.fundFromLedgerAt !== undefined;
   await prisma.generationJob.create({
     data: {
       id: jobId,
@@ -107,24 +123,47 @@ export async function seedPlanChain(
       requestedDurationSeconds,
       requiredVideoUnits,
       requiredHighQualityUnits: 0,
-      state: (options.jobState ?? "SCENES_READY") as never,
+      state: (ledgerFunded ? "RESERVING" : (options.jobState ?? "SCENES_READY")) as never,
     },
   });
 
-  await prisma.generationReservation.create({
-    data: {
-      id: reservationId,
-      generationJobId: jobId,
-      billingCycleKey: "2026-09",
-      billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-      billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
-      reservedTotalVideoUnits: requiredVideoUnits,
-      reservedHighQualityUnits: 0,
-      state: (options.reservationState ?? "RESERVED") as never,
-      ...(options.reservationState === "CONSUMED" ? { consumedAt: new Date() } : {}),
-      ...(options.reservationState === "RELEASED" ? { releasedAt: new Date() } : {}),
-    },
-  });
+  if (options.fundFromLedgerAt !== undefined) {
+    const reserved = await createGenerationReservationRepository(prisma).reserve(
+      organizationId,
+      {
+        reservationId,
+        generationJobId: jobId,
+        expectedJobVersion: 0,
+        reservedAt: options.fundFromLedgerAt,
+      },
+      ctx(),
+    );
+    if (reserved.kind !== "RESERVED") throw new Error(`fixture: reserve returned ${reserved.kind}`);
+    // The generation edges in between belong to other phases' transactions;
+    // what this fixture needs is the shape they leave behind.
+    await prisma.generationJob.update({
+      where: { id: jobId },
+      data: { state: (options.jobState ?? "SCENES_READY") as never, stateVersion: 2 },
+    });
+  } else {
+    await prisma.generationReservation.create({
+      data: {
+        id: reservationId,
+        generationJobId: jobId,
+        billingCycleKey: "2026-09",
+        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
+        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        // Seeded directly, outside the ledger: the pre-Phase-6A shape, with no
+        // recorded funding source. Not what `reserve()` produces.
+        funding: "UNALLOCATED_LEGACY",
+        reservedTotalVideoUnits: requiredVideoUnits,
+        reservedHighQualityUnits: 0,
+        state: (options.reservationState ?? "RESERVED") as never,
+        ...(options.reservationState === "CONSUMED" ? { consumedAt: new Date() } : {}),
+        ...(options.reservationState === "RELEASED" ? { releasedAt: new Date() } : {}),
+      },
+    });
+  }
 
   const scenes: PlannedScene[] = [];
   for (let position = 0; position < count; position += 1) {

@@ -592,6 +592,12 @@ enum GenerationJobState {
   CANCELLED
 }
 
+/// Phase 6A. See `GenerationReservation.funding`.
+enum GenerationReservationFunding {
+  UNALLOCATED_LEGACY
+  ALLOCATED
+}
+
 enum GenerationReservationState {
   RESERVING
   RESERVED
@@ -729,23 +735,38 @@ model GenerationJob {
 /// 30 September and delivered on 1 October consumes September: the allowance
 /// was committed when the platform began spending on the customer's behalf.
 model GenerationReservation {
-  id                       String                     @id
-  generationJobId          String                     @unique
+  id                       String                            @id
+  generationJobId          String                            @unique
   billingCycleKey          String
   billingCycleStartedAt    DateTime
   billingCycleEndsAt       DateTime
+  /// Phase 6A. `ALLOCATED` rows draw on the Unit ledger and carry the period
+  /// that funds them; `UNALLOCATED_LEGACY` rows predate it, record no funding
+  /// source, and are never assigned one by inference. A CHECK keeps the two
+  /// columns agreeing. No database default: every writer must say which it is.
+  funding                  GenerationReservationFunding
+  /// The funding period, frozen at reservation. The composite foreign key with
+  /// `billingCycleKey` means the cycle a reservation names — and therefore the
+  /// cost-admission lock every settlement takes for it — is always its period's.
+  entitlementPeriodId      String?
   reservedTotalVideoUnits  Int
   reservedHighQualityUnits Int
-  state                    GenerationReservationState @default(RESERVING)
-  stateVersion             Int                        @default(0)
-  reservedAt               DateTime                   @default(now())
+  state                    GenerationReservationState        @default(RESERVING)
+  stateVersion             Int                               @default(0)
+  reservedAt               DateTime                          @default(now())
   consumedAt               DateTime?
   releasedAt               DateTime?
-  createdAt                DateTime                   @default(now())
-  updatedAt                DateTime                   @updatedAt
-  generationJob            GenerationJob              @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
+  createdAt                DateTime                          @default(now())
+  updatedAt                DateTime                          @updatedAt
+  generationJob            GenerationJob                     @relation(fields: [generationJobId], references: [id], onDelete: Restrict)
+  entitlementPeriod        UnitEntitlementPeriod?            @relation(fields: [entitlementPeriodId, billingCycleKey], references: [id, billingCycleKey], onDelete: Restrict)
+  allocations              GenerationReservationAllocation[]
 
+  /// The composite key allocations point through, so an allocation can only
+  /// ever name its own reservation's period.
+  @@unique([id, entitlementPeriodId])
   @@index([billingCycleKey])
+  @@index([entitlementPeriodId])
   @@map("generation_reservations")
 }
 
@@ -1433,4 +1454,120 @@ model GenerationDeliverableValidation {
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
   @@map("generation_deliverable_validations")
+}
+
+// ===========================================================================
+// Phase 6A — the Unit entitlement ledger (ADR-0053 Decisions 1–3, ADR-0055)
+//
+// Three tables. A period is one organization's entitlement for one renewal
+// period, with the plan snapshot frozen on it. A block is one purchased package
+// of additional Units, quality-locked for life and bound to one period. An
+// allocation is one frozen slice of a reservation's funding: Base or one named
+// block, of one quality, for a quantity.
+//
+// **No balance column anywhere.** What remains is derived from the allocations
+// of reservations that still occupy entitlement — held or consumed, never
+// released — so the reservation's own compare-and-set is the only thing that
+// settles an allocation, and it settles all of them in one commit. A counter
+// beside it would be a second fact that could disagree.
+//
+// No foreign key to `organizations`, matching `generation_transition_events`:
+// commercial history must not be deletable through an organization row.
+// ===========================================================================
+
+enum EntitlementPlanKey {
+  STANDARD
+  PREMIUM
+  ENTERPRISE
+}
+
+enum UnitEntitlementSourceType {
+  BASE
+  ADD_ON_BLOCK
+}
+
+/// One organization's Unit entitlement for one renewal period. Immutable.
+model UnitEntitlementPeriod {
+  id                        String                            @id
+  organizationId            String
+  /// Unique per organization. The reservation names it, and the cost-admission
+  /// lock is keyed by it.
+  billingCycleKey           String
+  /// --- Plan snapshot, frozen at opening ------------------------------------
+  /// Derived from the plan catalog, never accepted from a caller, and never read
+  /// back from the catalog afterwards.
+  planKey                   EntitlementPlanKey
+  baseUnits                 Int
+  /// A ceiling inside `baseUnits`; a CHECK forbids it exceeding them.
+  includedHighQualityUnits  Int
+  highQualityAddOnAvailable Boolean
+  /// Inclusive start, exclusive end. Periods of one organization never overlap.
+  startsAt                  DateTime
+  endsAt                    DateTime
+  /// The commercial record that opened it. Never required to be Stripe:
+  /// Enterprise periods come from individually executed contracts.
+  commercialReference       String?
+  createdAt                 DateTime                          @default(now())
+  addOnBlocks               UnitAddOnBlock[]
+  reservations              GenerationReservation[]
+  allocations               GenerationReservationAllocation[]
+
+  @@unique([organizationId, billingCycleKey])
+  @@unique([id, organizationId])
+  @@unique([id, billingCycleKey])
+  @@index([organizationId, startsAt])
+  @@map("unit_entitlement_periods")
+}
+
+/// One purchased package of additional Units. Quality-locked; never converted.
+model UnitAddOnBlock {
+  id                  String                            @id
+  organizationId      String
+  entitlementPeriodId String
+  quality             GenerationQualityTier
+  quantity            Int
+  /// The purchase or order identity. Unique per organization, so a replayed
+  /// grant finds the block it already made instead of crediting it twice.
+  commercialReference String
+  /// The FIFO key, with `id` as the tie-break.
+  purchasedAt         DateTime
+  createdAt           DateTime                          @default(now())
+  /// The composite key keeps a block inside its period's organization.
+  entitlementPeriod   UnitEntitlementPeriod             @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  allocations         GenerationReservationAllocation[]
+
+  @@unique([organizationId, commercialReference])
+  /// The composite key allocations point through, so an allocation can only
+  /// name a block of its own period and its own quality.
+  @@unique([id, entitlementPeriodId, quality])
+  @@index([entitlementPeriodId, quality, purchasedAt])
+  @@map("unit_add_on_blocks")
+}
+
+/// One frozen slice of a reservation's funding. Never updated, never reselected.
+model GenerationReservationAllocation {
+  id                  String                    @id
+  reservationId       String
+  /// Immutable tenant scope, supplied by the reserving transaction.
+  organizationId      String
+  entitlementPeriodId String
+  /// 1-based draw order of the eligibility-first plan: the FIFO evidence.
+  ordinal             Int
+  sourceType          UnitEntitlementSourceType
+  /// Present exactly when `sourceType` is `ADD_ON_BLOCK`, by CHECK.
+  addOnBlockId        String?
+  quality             GenerationQualityTier
+  quantity            Int
+  createdAt           DateTime                  @default(now())
+  reservation         GenerationReservation     @relation(fields: [reservationId, entitlementPeriodId], references: [id, entitlementPeriodId], onDelete: Restrict)
+  entitlementPeriod   UnitEntitlementPeriod     @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  /// MATCH SIMPLE: a Base allocation's null `addOnBlockId` leaves this unchecked,
+  /// and a block allocation's period and quality must equal the block's own.
+  addOnBlock          UnitAddOnBlock?           @relation(fields: [addOnBlockId, entitlementPeriodId, quality], references: [id, entitlementPeriodId, quality], onDelete: Restrict)
+
+  @@unique([reservationId, ordinal])
+  @@unique([reservationId, addOnBlockId])
+  @@index([entitlementPeriodId])
+  @@index([addOnBlockId])
+  @@map("generation_reservation_allocations")
 }

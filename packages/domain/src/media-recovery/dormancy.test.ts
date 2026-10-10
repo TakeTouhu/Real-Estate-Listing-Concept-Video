@@ -371,7 +371,9 @@ describe("no new durable shape", () => {
     // 5B for migration 15, the durable composition execution work table. The pin
     // moving is the tripwire working: an unreviewed migration still trips every
     // one of these.
-    expect(dirs.at(-1)).toBe("00000000000016_phase5c_deliverable_validation");
+    // Advanced again by Phase 6A, which is authorized to add migration 17 for
+    // the Unit entitlement ledger.
+    expect(dirs.at(-1)).toBe("00000000000017_phase6a_unit_entitlement_ledger");
     expect(dirs.filter((dir) => dir.includes("6b") || dir.includes("recovery"))).toEqual([]);
   });
 
