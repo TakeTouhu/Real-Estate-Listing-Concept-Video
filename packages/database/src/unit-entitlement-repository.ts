@@ -201,11 +201,76 @@ function blockFactsMatch(row: BlockRow, input: GrantAddOnBlockInput): boolean {
   );
 }
 
+/** PostgreSQL `INTEGER`'s upper bound: a block quantity beyond it cannot be stored. */
+const MAX_INT4 = 2_147_483_647;
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
 function isValidInstant(value: Date): boolean {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
 export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntitlementRepository {
+  /** The grant itself, under the period's cost-admission lock. */
+  function grantWithin(input: GrantAddOnBlockInput): Promise<GrantAddOnBlockOutcome> {
+    return prisma.$transaction(async (tx): Promise<GrantAddOnBlockOutcome> => {
+      const periodRow = await tx.unitEntitlementPeriod.findFirst({
+        where: { id: input.entitlementPeriodId, organizationId: input.organizationId },
+      });
+      if (periodRow === null) return { kind: "PERIOD_NOT_FOUND" };
+      await acquireCostAdmissionLock(tx, input.organizationId, periodRow.billingCycleKey);
+
+      const existing = await tx.unitAddOnBlock.findUnique({
+        where: {
+          organizationId_commercialReference: {
+            organizationId: input.organizationId,
+            commercialReference: input.commercialReference,
+          },
+        },
+      });
+      if (existing !== null) {
+        return blockFactsMatch(existing, input)
+          ? { kind: "ALREADY_GRANTED", block: toBlock(existing) }
+          : { kind: "CONFLICT" };
+      }
+      if (input.quality === "HIGH_QUALITY" && !periodRow.highQualityAddOnAvailable) {
+        return { kind: "HIGH_QUALITY_ADD_ON_NOT_AVAILABLE" };
+      }
+
+      const row = await tx.unitAddOnBlock.create({
+        data: {
+          id: input.id,
+          organizationId: input.organizationId,
+          entitlementPeriodId: input.entitlementPeriodId,
+          quality: input.quality,
+          quantity: input.quantity,
+          commercialReference: input.commercialReference,
+          purchasedAt: input.purchasedAt,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: input.organizationId,
+          actorUserId: input.actorUserId,
+          action: ENTITLEMENT_AUDIT_ACTION.AddOnBlockGranted,
+          resourceType: "unit_add_on_block",
+          resourceId: row.id,
+          metadata: {
+            entitlementPeriodId: row.entitlementPeriodId,
+            billingCycleKey: periodRow.billingCycleKey,
+            quality: row.quality,
+            quantity: row.quantity,
+            commercialReference: row.commercialReference,
+            purchasedAt: row.purchasedAt.toISOString(),
+          },
+        },
+      });
+      return { kind: "GRANTED", block: toBlock(row) };
+    });
+  }
+
   return {
     /**
      * Open one organization's entitlement for one period.
@@ -299,20 +364,23 @@ export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntit
       if (
         !Number.isSafeInteger(input.quantity) ||
         input.quantity <= 0 ||
+        input.quantity > MAX_INT4 ||
         input.commercialReference.length === 0 ||
         !isValidInstant(input.purchasedAt)
       ) {
         return { kind: "INVALID_BLOCK" };
       }
 
-      return prisma.$transaction(async (tx): Promise<GrantAddOnBlockOutcome> => {
-        const periodRow = await tx.unitEntitlementPeriod.findFirst({
-          where: { id: input.entitlementPeriodId, organizationId: input.organizationId },
-        });
-        if (periodRow === null) return { kind: "PERIOD_NOT_FOUND" };
-        await acquireCostAdmissionLock(tx, input.organizationId, periodRow.billingCycleKey);
-
-        const existing = await tx.unitAddOnBlock.findUnique({
+      try {
+        return await grantWithin(input);
+      } catch (error) {
+        // The purchase reference is unique per organization, but the lock this
+        // grant holds is per period: two grants of one reference into different
+        // periods both pass the read above and collide on the insert. The loser
+        // re-reads what the winner committed and answers exactly as a sequential
+        // replay would, instead of surfacing a constraint error.
+        if (!isUniqueViolation(error)) throw error;
+        const winner = await prisma.unitAddOnBlock.findUnique({
           where: {
             organizationId_commercialReference: {
               organizationId: input.organizationId,
@@ -320,45 +388,11 @@ export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntit
             },
           },
         });
-        if (existing !== null) {
-          return blockFactsMatch(existing, input)
-            ? { kind: "ALREADY_GRANTED", block: toBlock(existing) }
-            : { kind: "CONFLICT" };
-        }
-        if (input.quality === "HIGH_QUALITY" && !periodRow.highQualityAddOnAvailable) {
-          return { kind: "HIGH_QUALITY_ADD_ON_NOT_AVAILABLE" };
-        }
-
-        const row = await tx.unitAddOnBlock.create({
-          data: {
-            id: input.id,
-            organizationId: input.organizationId,
-            entitlementPeriodId: input.entitlementPeriodId,
-            quality: input.quality,
-            quantity: input.quantity,
-            commercialReference: input.commercialReference,
-            purchasedAt: input.purchasedAt,
-          },
-        });
-        await tx.auditLog.create({
-          data: {
-            organizationId: input.organizationId,
-            actorUserId: input.actorUserId,
-            action: ENTITLEMENT_AUDIT_ACTION.AddOnBlockGranted,
-            resourceType: "unit_add_on_block",
-            resourceId: row.id,
-            metadata: {
-              entitlementPeriodId: row.entitlementPeriodId,
-              billingCycleKey: periodRow.billingCycleKey,
-              quality: row.quality,
-              quantity: row.quantity,
-              commercialReference: row.commercialReference,
-              purchasedAt: row.purchasedAt.toISOString(),
-            },
-          },
-        });
-        return { kind: "GRANTED", block: toBlock(row) };
-      });
+        if (winner === null) throw error;
+        return blockFactsMatch(winner, input)
+          ? { kind: "ALREADY_GRANTED", block: toBlock(winner) }
+          : { kind: "CONFLICT" };
+      }
     },
 
     async findPeriodAt(organizationId, at) {

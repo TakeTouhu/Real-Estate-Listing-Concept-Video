@@ -160,7 +160,12 @@ omission. Every reservation made through `reserve()` is `ALLOCATED`.
 supply. The plan snapshot is derived from the catalog, not accepted. A block
 carries a commercial reference that is unique per organization, so a replayed
 purchase is credited once; it is never required to be a Stripe object, because
-Enterprise and sales-assisted entitlements have none. An HQ block on a plan that
+Enterprise and sales-assisted entitlements have none. Grants into different
+periods hold different cycle locks, so two grants of one reference into two
+periods are ordered only by that unique index: the loser re-reads the winner and
+answers `ALREADY_GRANTED` or `CONFLICT` exactly as a sequential replay would,
+never a constraint error. A quantity beyond PostgreSQL `INTEGER` is refused as
+`INVALID_BLOCK` before any write. An HQ block on a plan that
 sells none is refused. Both writes leave an `audit_logs` entry. Nothing here
 takes a payment, calls Stripe or decides a price.
 

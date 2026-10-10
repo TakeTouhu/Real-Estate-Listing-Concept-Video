@@ -298,6 +298,69 @@ RUN("Phase 6A — the Unit entitlement ledger", () => {
     });
   });
 
+  describe("granting under contention", () => {
+    it("answers a same-reference grant into another period as CONFLICT when it loses the insert", async () => {
+      const november = await openPeriod("premium");
+      const december = await openPeriod("premium", DECEMBER);
+      // Commit a December grant of the reference from another connection exactly
+      // between this November grant's read and its insert. They hold different
+      // cycle locks, so only the unique index orders them.
+      let injected = false;
+      const intercepted = prisma.$extends({
+        query: {
+          unitAddOnBlock: {
+            async create({ args, query }) {
+              if (!injected) {
+                injected = true;
+                const rival = await ledger.grantAddOnBlock({
+                  id: "uab_itest_rival",
+                  organizationId: ORG_A,
+                  entitlementPeriodId: december.id,
+                  quality: "NORMAL",
+                  quantity: 10,
+                  commercialReference: "order_contended",
+                  purchasedAt: IN_DECEMBER,
+                  actorUserId: null,
+                });
+                expect(rival.kind).toBe("GRANTED");
+              }
+              return query(args);
+            },
+          },
+        },
+      });
+      const contender = createUnitEntitlementRepository(intercepted as unknown as PrismaClient);
+      const outcome = await contender.grantAddOnBlock({
+        id: "uab_itest_loser",
+        organizationId: ORG_A,
+        entitlementPeriodId: november.id,
+        quality: "NORMAL",
+        quantity: 10,
+        commercialReference: "order_contended",
+        purchasedAt: IN_NOVEMBER,
+        actorUserId: null,
+      });
+      expect(injected).toBe(true);
+      expect(outcome).toEqual({ kind: "CONFLICT" });
+      expect(await prisma.unitAddOnBlock.count({ where: { commercialReference: "order_contended" } })).toBe(1);
+    });
+
+    it("refuses a quantity PostgreSQL INTEGER cannot hold, before any write", async () => {
+      const period = await openPeriod("premium");
+      const input = {
+        id: "uab_itest_huge",
+        organizationId: ORG_A,
+        entitlementPeriodId: period.id,
+        quality: "NORMAL" as const,
+        commercialReference: "order_huge",
+        purchasedAt: IN_NOVEMBER,
+        actorUserId: null,
+      };
+      expect((await ledger.grantAddOnBlock({ ...input, quantity: 2_147_483_648 })).kind).toBe("INVALID_BLOCK");
+      expect((await ledger.grantAddOnBlock({ ...input, quantity: 2_147_483_647 })).kind).toBe("GRANTED");
+    });
+  });
+
   describe("eligibility-first funding, frozen at reservation", () => {
     it("funds 3 Normal Units on Premium as Base 2 + Normal add-on 1", async () => {
       const period = await openPeriod("premium");
