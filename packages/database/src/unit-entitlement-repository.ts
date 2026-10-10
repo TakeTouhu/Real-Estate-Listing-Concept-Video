@@ -16,11 +16,12 @@
  *   organization and cycle — the outermost lock in the system — so a grant and a
  *   reservation against the same period are ordered. It takes nothing after it
  *   but its own inserts.
- * - **Reading a balance** takes no lock. Callers that act on a balance hold the
- *   cost-admission lock themselves.
+ * - **Reading a balance** takes no lock, but reads one `REPEATABLE READ`
+ *   snapshot. Callers that act on a balance hold the cost-admission lock
+ *   themselves.
  */
 
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import {
   entitlementSnapshotForPlan,
   periodEntitlementBalance,
@@ -364,11 +365,28 @@ export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntit
       return findPeriodContaining(prisma, organizationId, at);
     },
 
+    /**
+     * One snapshot for the whole read.
+     *
+     * `loadPeriodBalance` is two queries. Under `READ COMMITTED`, a block grant
+     * committing between them followed by a reservation against that block
+     * would hand the domain an allocation naming a block it was never shown,
+     * and a consistent ledger would read as a defect. `REPEATABLE READ` takes
+     * one snapshot for every statement in the transaction; a read-only one
+     * never fails to serialize. Transaction B needs no such thing: it reads the
+     * balance under the period's cost-admission lock, which every grant and
+     * every reservation also takes.
+     */
     async balance(organizationId, entitlementPeriodId) {
-      const row = await prisma.unitEntitlementPeriod.findFirst({
-        where: { id: entitlementPeriodId, organizationId },
-      });
-      return row === null ? null : loadPeriodBalance(prisma, toEntitlementPeriod(row));
+      return prisma.$transaction(
+        async (tx) => {
+          const row = await tx.unitEntitlementPeriod.findFirst({
+            where: { id: entitlementPeriodId, organizationId },
+          });
+          return row === null ? null : loadPeriodBalance(tx, toEntitlementPeriod(row));
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+      );
     },
 
     async allocationsForReservation(organizationId, reservationId) {

@@ -75,7 +75,11 @@ no job move, no event.
 
 `reserve()` takes `reservedAt` from the server clock instead of a caller-supplied
 cycle. The organization's period containing `reservedAt` funds the reservation,
-and its billing-cycle key and bounds become the reservation's for life. The
+and its billing-cycle key and bounds become the reservation's for life; the row's
+own `reservedAt` is that same instant, so it can never claim to have been
+reserved outside the interval it is bound to. A replay for a job that already
+holds a reservation is answered `ALREADY_RESERVED` whenever it arrives, before
+any period is looked up. The
 allocation rows are inserted in the same commit as the reservation, numbered in
 draw order.
 
@@ -106,17 +110,32 @@ The database holds the shape as well as the code:
 cost-admission advisory lock (organization + cycle) -> reservation row -> everything else
 ```
 
-Transaction B now takes the cost-admission lock **first**, before it reads an
-existing reservation, computes the balance, moves the job or writes a row. That
-serializes it against every other reservation, block grant and settlement on the
-same period, so two concurrent reservations cannot both spend the last Unit. The
-period lookup before the lock reads an immutable row and only decides which lock
-to take.
+Transaction B takes the cost-admission lock before it computes the balance,
+moves the job or writes a row. That serializes it against every other
+reservation, block grant and settlement on the same period, so two concurrent
+reservations cannot both spend the last Unit. The period lookup before the lock
+reads an immutable row and only decides which lock to take.
+
+Before that, and before anything else, Transaction B takes a **job-scoped
+reservation-admission lock**. Two attempts on one job may carry instants in
+different periods — or one in none — and would otherwise take different
+cost-admission locks, or none, so the loser reported `LOST` or
+`NO_ENTITLEMENT_PERIOD` instead of `ALREADY_RESERVED`. It is the only lock ever
+taken before the cost-admission lock, and it cannot form a cycle with it: only
+`reserve()` takes it, always first, so no holder of the cost-admission lock or of
+any row lock ever waits for it.
+
+The public balance read takes no lock but reads one `REPEATABLE READ` snapshot:
+its block and allocation queries would otherwise see different `READ COMMITTED`
+snapshots, and a grant plus a reservation committing between them would make a
+consistent ledger read as a defect. Transaction B needs no such snapshot — it
+reads the balance under the cost-admission lock, which every grant and
+reservation also takes.
 
 Granting a block takes the same lock. Opening a period takes a separate
 organization-scoped advisory lock and nothing after it, so it cannot form a
-cycle. Both formulas live in `packages/database/src/cost-admission-lock.ts`, the
-one module that holds advisory-lock formulas.
+cycle. All three formulas live in `packages/database/src/cost-admission-lock.ts`,
+the one module that holds advisory-lock formulas.
 
 Transaction G is unchanged in its order (`reservation → job → version →
 composition → validation`). It reads the allocations after taking the

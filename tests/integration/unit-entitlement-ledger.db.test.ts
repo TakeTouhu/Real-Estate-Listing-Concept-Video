@@ -313,6 +313,8 @@ RUN("Phase 6A — the Unit entitlement ledger", () => {
       ]);
       expect(reserved.allocations.map((a) => a.ordinal)).toEqual([1, 2]);
       expect(reserved.reservation.funding).toBe("ALLOCATED");
+      // The instant that selected the period is the one the row records.
+      expect(reserved.reservation.reservedAt).toEqual(IN_NOVEMBER);
       expect(reserved.reservation.entitlementPeriodId).toBe(period.id);
       expect(reserved.reservation.billingCycleKey).toBe(period.billingCycleKey);
       const after = await balance(period.id);
@@ -461,6 +463,53 @@ RUN("Phase 6A — the Unit entitlement ledger", () => {
       // got past the first one — never LOST, and never a constraint error.
       expect(outcomes.map((o) => o.kind).sort()).toEqual(["ALREADY_RESERVED", "RESERVED"]);
       expect(await prisma.generationReservationAllocation.count({ where: { reservation: { generationJobId: job.id } } })).toBe(1);
+    });
+
+    it("serializes two attempts on one job whose instants select different periods", async () => {
+      await openPeriod("premium");
+      await openPeriod("premium", DECEMBER);
+      const job = await reservingJob("NORMAL", 30);
+      const outcomes = await Promise.all([
+        reserve(job, IN_NOVEMBER, ORG_A, "genres_cross_1"),
+        reserve(job, IN_DECEMBER, ORG_A, "genres_cross_2"),
+      ]);
+      // Different cost-admission locks, one job: the second still waits for the
+      // first and is answered as a replay, never LOST.
+      expect(outcomes.map((o) => o.kind).sort()).toEqual(["ALREADY_RESERVED", "RESERVED"]);
+      expect(
+        await prisma.generationReservationAllocation.count({ where: { reservation: { generationJobId: job.id } } }),
+      ).toBe(1);
+    });
+
+    it("reads a balance from one snapshot even when a grant and a reservation commit mid-read", async () => {
+      const period = await openPeriod("standard");
+      await spendNormalBase(15);
+      // Commit a new block and a reservation against it from another connection,
+      // exactly between the balance read's block query and its allocation query.
+      // Read under READ COMMITTED, the second query would see an allocation for a
+      // block the first never returned, and a consistent ledger would throw.
+      let injected = false;
+      const intercepted = prisma.$extends({
+        query: {
+          generationReservationAllocation: {
+            async findMany({ args, query }) {
+              if (!injected) {
+                injected = true;
+                await grant(period.id, "NORMAL", 5, IN_NOVEMBER);
+                await reserveNew("NORMAL", 30);
+              }
+              return query(args);
+            },
+          },
+        },
+      });
+      const torn = createUnitEntitlementRepository(intercepted as unknown as PrismaClient);
+
+      const read = await torn.balance(ORG_A, period.id);
+      expect(injected).toBe(true);
+      // The snapshot from before the injection: no block yet, Base spent.
+      expect(read).toEqual({ baseRemainingUnits: 0, includedHighQualityRemainingUnits: 1, blocks: [] });
+      expect((await balance(period.id)).blocks.map((b) => b.remainingUnits)).toEqual([4]);
     });
 
     it("cannot overspend under concurrent reservations of different jobs", async () => {

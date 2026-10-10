@@ -57,7 +57,10 @@ import {
   validateFxSnapshot,
 } from "@app/domain";
 import { AppError, randomId } from "@app/shared";
-import { acquireCostAdmissionLock } from "./cost-admission-lock";
+import {
+  acquireCostAdmissionLock,
+  acquireReservationAdmissionLock,
+} from "./cost-admission-lock";
 import { findPeriodContaining, loadPeriodBalance, toAllocation } from "./unit-entitlement-repository";
 
 /**
@@ -999,12 +1002,20 @@ export function createGenerationReservationRepository(
      *
      * ## Locks
      *
-     * The cost-admission lock for the period's organization and cycle is taken
-     * **first**, as every workflow that takes it does; it serializes this
-     * reservation against every other reservation, block grant and settlement on
-     * the same period, so two concurrent reservations cannot both spend the last
-     * Unit. The period lookup before it reads an immutable row and decides only
-     * which lock to take.
+     * ```text
+     * reservation-admission lock (job) -> cost-admission lock (organization + cycle) -> job, reservation rows
+     * ```
+     *
+     * The job-scoped reservation-admission lock comes first and serializes
+     * attempts on one job, whatever period their instants select. The
+     * cost-admission lock for the period's organization and cycle comes next,
+     * before the balance is read and before any row is written; it serializes
+     * this reservation against every other reservation, block grant and
+     * settlement on the same period, so two concurrent reservations cannot both
+     * spend the last Unit. Nothing that holds the cost-admission lock ever waits
+     * for the reservation-admission lock — only `reserve()` takes it, and takes
+     * it first — so the two cannot form a cycle. The period lookup between them
+     * reads an immutable row and decides only which cost-admission lock to take.
      */
     async reserve(
       organizationId: string,
@@ -1012,6 +1023,15 @@ export function createGenerationReservationRepository(
       context: TransitionContext,
     ): Promise<ReserveGenerationJobOutcome> {
       return prisma.$transaction(async (tx): Promise<ReserveGenerationJobOutcome> => {
+        // ---- One reservation attempt per job at a time. ---------------------
+        // Two calls for the same job may carry instants in different periods,
+        // or one in none, so they would take different cost-admission locks —
+        // or none — and could not otherwise see each other: the loser reported
+        // LOST or NO_ENTITLEMENT_PERIOD instead of ALREADY_RESERVED. Serialized
+        // here, the second always runs after the first has committed and is
+        // answered as a replay.
+        await acquireReservationAdmissionLock(tx, organizationId, input.generationJobId);
+
         const job = await tx.generationJob.findFirst({
           where: { id: input.generationJobId, ...jobScope(organizationId) },
         });
@@ -1019,27 +1039,19 @@ export function createGenerationReservationRepository(
         // telling a caller which of the two it was discloses existence.
         if (job === null) return { kind: "LOST" };
 
-        // A replay is answered first, whenever it arrives. A reservation, once
-        // made, is never deleted, so finding one needs no lock — and the answer
-        // must not depend on whether a period still covers the replay's instant.
-        // The same check is repeated under the lock below for the race.
-        const prior = await tx.generationReservation.findUnique({
-          where: { generationJobId: input.generationJobId },
-          select: { id: true },
-        });
-        if (prior !== null) return { kind: "ALREADY_RESERVED" };
-
-        const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
-        if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
-
-        // ---- The outermost lock, before the job or any reservation row. ----
-        await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
-
+        // A replay is answered first, whenever it arrives: the answer must not
+        // depend on whether a period still covers the replay's instant.
         const existing = await tx.generationReservation.findUnique({
           where: { generationJobId: input.generationJobId },
           select: { id: true },
         });
         if (existing !== null) return { kind: "ALREADY_RESERVED" };
+
+        const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
+        if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
+
+        // ---- The cost-admission lock, before the balance and every write. ---
+        await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
 
         // ---- Plan the funding before anything is written. ------------------
         const balance = await loadPeriodBalance(tx, period);
@@ -1080,6 +1092,9 @@ export function createGenerationReservationRepository(
             billingCycleEndsAt: period.endsAt,
             funding: "ALLOCATED",
             entitlementPeriodId: period.id,
+            // The instant that selected the period, so the row can never claim
+            // to have been reserved outside the interval it is bound to.
+            reservedAt: input.reservedAt,
             // Copied from the job, which was itself derived at admission.
             reservedTotalVideoUnits: job.requiredVideoUnits,
             reservedHighQualityUnits: job.requiredHighQualityUnits,

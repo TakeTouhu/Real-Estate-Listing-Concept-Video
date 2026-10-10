@@ -84,6 +84,20 @@ describe("durable shape", () => {
 });
 
 describe("lock order", () => {
+  it("takes the job-scoped reservation-admission lock before anything else", () => {
+    const body = reserveBody();
+    const admission = body.indexOf("acquireReservationAdmissionLock(tx");
+    expect(admission).toBeGreaterThan(-1);
+    for (const later of [
+      "tx.generationJob.findFirst(",
+      "tx.generationReservation.findUnique(",
+      "findPeriodContaining(tx",
+      "acquireCostAdmissionLock(tx",
+    ]) {
+      expect(body.indexOf(later)).toBeGreaterThan(admission);
+    }
+  });
+
   it("takes the cost-admission lock before the job move and every reservation write", () => {
     const body = reserveBody();
     const lock = body.indexOf("acquireCostAdmissionLock(tx");

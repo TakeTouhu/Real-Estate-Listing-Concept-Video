@@ -107,3 +107,28 @@ export async function acquireEntitlementPeriodOpeningLock(
     )::text AS locked
   `;
 }
+
+/**
+ * The reservation-admission lock (Phase 6A): one reservation attempt per job at
+ * a time.
+ *
+ * Taken by `reserve()` **first**, before the cost-admission lock. Two attempts
+ * for one job may carry instants in different periods — or one in none — and
+ * would otherwise take different cost-admission locks, or none, and never see
+ * each other. It is the only lock ever taken before the cost-admission lock, and
+ * it cannot form a cycle with it: only `reserve()` takes it, always as its first
+ * statement, so no transaction holding the cost-admission lock or any row lock
+ * ever waits for it.
+ */
+export async function acquireReservationAdmissionLock(
+  tx: Tx,
+  organizationId: string,
+  generationJobId: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtext(${`reservation-admission:${organizationId}`}),
+      hashtext(${generationJobId})
+    )::text AS locked
+  `;
+}
