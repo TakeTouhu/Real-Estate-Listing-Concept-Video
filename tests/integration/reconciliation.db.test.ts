@@ -37,6 +37,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -85,7 +86,6 @@ const DEADLINE = epochMillis(BOUNDARY + POLICY.reconciliationWindowMs);
 const INSIDE = epochMillis(DEADLINE - 60_000);
 const AFTER = epochMillis(DEADLINE + 60_000);
 
-const CYCLE = "2026-09";
 
 function code(value: string): SubmissionDiagnosticCode {
   const parsed = parseSubmissionDiagnosticCode(value);
@@ -199,9 +199,7 @@ async function seedReconcilingAttempt(
       reservationId: `genres_${suffix}`,
       generationJobId: created.job.id,
       expectedJobVersion: moved.value.stateVersion,
-      billingCycleKey: CYCLE,
-      billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-      billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+      reservedAt: FIXTURE_RESERVED_AT,
     },
     ctx(),
   );
@@ -820,6 +818,11 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
 
     it("resolves an attempt whose reservation vanished entirely", async () => {
       const { attemptId, job } = await seedReconcilingAttempt("anommissing");
+      // Its frozen allocations first: RESTRICT keeps a reservation's funding from
+      // being erased with it.
+      await prisma.generationReservationAllocation.deleteMany({
+        where: { reservation: { generationJobId: job.id } },
+      });
       await prisma.generationReservation.deleteMany({ where: { generationJobId: job.id } });
       expect(
         await reconciliation().resolveReconciliation({

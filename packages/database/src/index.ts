@@ -37,6 +37,10 @@ export { createMediaFailureResolutionRepository } from "./media-failure-resoluti
 export { createDeliverableCompositionPlanRepository } from "./deliverable-composition-repository";
 export { createDeliverableCompositionExecutionRepository } from "./deliverable-composition-execution-repository";
 export { createDeliverableValidationRepository } from "./deliverable-validation-repository";
+export {
+  ENTITLEMENT_AUDIT_ACTION,
+  createUnitEntitlementRepository,
+} from "./unit-entitlement-repository";
 // `cost-admission-lock` is deliberately absent. A caller outside this package
 // holding that lock would hold it without the transaction that makes it mean
 // anything, and one key formula is worth nothing if it can be taken from

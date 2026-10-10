@@ -27,6 +27,16 @@ export const ALLOWED_TRANSITION_METADATA_KEYS: readonly string[] = [
   "attemptKind",
   "attemptOrdinal",
   "billingCycleKey",
+  /**
+   * How a reservation was funded from the Unit ledger (Phase 6A), written with
+   * its `RESERVING -> RESERVED` event. An opaque period id and three counts —
+   * the frozen allocation rows are the evidence, and these are the index into
+   * them. No block ids: a list would be an array, which the sanitizer refuses.
+   */
+  "entitlementPeriodId",
+  "baseAllocatedUnits",
+  "addOnAllocatedUnits",
+  "allocationCount",
   "correlationId",
   /**
    * How the customer's entitlement bookkeeping looked when a provider outcome

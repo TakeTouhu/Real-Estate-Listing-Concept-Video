@@ -85,3 +85,25 @@ export async function acquireCostAdmissionLock(
     )::text AS locked
   `;
 }
+
+/**
+ * The entitlement-period opening lock (Phase 6A), kept in this module so every
+ * advisory-lock formula in the system lives in one file.
+ *
+ * Scoped to one organization and taken only by `openPeriod`, to make its
+ * overlap check and its insert one decision. Nothing that takes it takes any
+ * other lock afterwards except its own inserts, and nothing holding another lock
+ * waits for it, so it sits outside the cost-admission order rather than inside
+ * it and cannot form a cycle with anything.
+ */
+export async function acquireEntitlementPeriodOpeningLock(
+  tx: Tx,
+  organizationId: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtext(${`entitlement-periods:${organizationId}`}),
+      hashtext('open')
+    )::text AS locked
+  `;
+}

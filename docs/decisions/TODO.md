@@ -762,7 +762,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 > role-fixed Scope, the `property.create` capability ceiling, fixed
 > `MANAGER`/`CREATOR` creation-time assignments and protected group deletion —
 > were settled later and are recorded under *Decision gates — CLOSED* below;
-> *Decision gates — OPEN*, just above it, holds the Phase 6A gates. Read all three
+> *Decision gates — OPEN*, just above it, holds the regeneration-Unit gate. Read all three
 > places; none is the complete ledger on its own.
 
 - [ ] **Unit pricing model and platform margin.** Selling prices are **settled
@@ -1311,20 +1311,12 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Two gates, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
-**Neither may be guessed.** Every gate raised during the initial-release contract
-audit is closed and recorded below.
+One gate, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
+**It may not be guessed.** Every other gate is closed and recorded below.
 
-- [ ] **Decide how a multi-Unit job is funded** — *blocks Phase 6A*. A job costs
-      1–3 Units (1–30 s → 1, 31–60 s → 2, 61–90 s → 3), so it can need more Units
-      than any single source has left. ADR-0053 Decision 3 states the
-      eligibility-first order per Unit; the Phase 6A work package requires one
-      funding source per reservation. Either each Unit is allocated independently
-      (a reservation may draw Base plus a block, each Unit frozen to one source),
-      or the whole reservation comes from one source that covers it (which can
-      skip remaining Base Units or refuse a request the eligible total covers).
 - [ ] **Decide what a customer regeneration costs in Units** — does not block
-      Phase 6A. Today one job entitlement covers an initial generation and up to
+      Phase 6A, which builds no regeneration pricing and does not treat today's
+      free regeneration as commercial policy. Today one job entitlement covers an initial generation and up to
       two per-scene user regenerations, and a replacement publication consumes
       nothing; ADR-0052 Decision 4 says customer-requested content regeneration
       consumes additional Unit(s). Whether a per-scene regeneration costs the
@@ -1333,7 +1325,7 @@ audit is closed and recorded below.
 
 ### Decision gates — CLOSED
 
-Twenty-nine decisions: the two gates from the first PR review, eight recorded
+Thirty decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1342,8 +1334,20 @@ charged-recomposition quality, logo-only recomposition, repeatable storage
 blocks, storage blocks on downgrade, Scope semantics, Property assignment
 authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
-protected group deletion. **Each is settled as policy and unbuilt as code**; the
-implementation work each one creates is listed in the section above.
+protected group deletion — and, from the Phase 6A gap analysis, multi-Unit
+reservation funding. **Each is settled as policy**; the implementation work each
+one creates is listed in the section above.
+
+- [x] **Multi-Unit reservation funding — CLOSED (Option A).** A reservation may
+      span multiple funding sources. Allocation is eligibility-first across the
+      whole quantity: available Base Units (for HQ, limited by both remaining
+      Base capacity and the remaining included HQ ceiling), then eligible add-on
+      blocks oldest → newest within the request's quality; partial Base capacity
+      is used before any add-on; Normal and HQ blocks never substitute. The
+      allocation set is frozen at reservation, consume and release act on it
+      without reselecting, renewal and later purchases never rebind it, and
+      reservation is all-or-nothing. Standard HQ jobs needing 2–3 Units cannot be
+      admitted, with no Normal fallback. Phase 6A.
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A

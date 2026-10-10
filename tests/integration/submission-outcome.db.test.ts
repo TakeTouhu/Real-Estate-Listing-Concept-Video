@@ -29,6 +29,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -88,7 +89,6 @@ function code(value: string): SubmissionDiagnosticCode {
   return parsed.code;
 }
 const STALE_AT = staleSubmittingBoundary(BOUNDARY, POLICY);
-const CYCLE = "2026-09";
 const FX_ID = "fx_outcome";
 
 const FX: FxSnapshot = {
@@ -179,9 +179,7 @@ async function seedSubmittingAttempt(
         reservationId: `genres_${suffix}`,
         generationJobId: created.job.id,
         expectedJobVersion: moved.value.stateVersion,
-        billingCycleKey: CYCLE,
-        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        reservedAt: FIXTURE_RESERVED_AT,
       },
       ctx(),
     );

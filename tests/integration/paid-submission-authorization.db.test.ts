@@ -21,6 +21,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -126,6 +127,8 @@ async function seedAuthorizableChain(
     readonly videoProjectId?: string;
     readonly seconds?: number;
     readonly reserve?: boolean;
+    /** When the hold is made; it selects the entitlement period and with it the cycle. */
+    readonly reservedAt?: Date;
   } = {},
 ) {
   const organizationId = options.organizationId ?? ORG_A;
@@ -162,9 +165,7 @@ async function seedAuthorizableChain(
         reservationId: `genres_${suffix}`,
         generationJobId: created.job.id,
         expectedJobVersion: moved.value.stateVersion,
-        billingCycleKey: CYCLE,
-        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        reservedAt: options.reservedAt ?? FIXTURE_RESERVED_AT,
       },
       ctx(),
     );
@@ -769,11 +770,28 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     });
 
     it("does not count a sibling from another billing cycle", async () => {
-      const sibling = await seedAuthorizableChain(prisma, "cyclesib", { seconds: 20 });
-      await prisma.generationReservation.updateMany({
-        where: { generationJobId: sibling.job.id },
-        data: { billingCycleKey: "2026-08" },
+      // A genuinely earlier cycle: August's own period, and a hold made in it.
+      // Rewriting a September hold's cycle by hand — as this test once did — is
+      // now refused by the database, because a reservation's cycle is its
+      // period's.
+      const august = await repositories(prisma).entitlements.openPeriod({
+        id: "uep_itest_paid_2026_08",
+        organizationId: ORG_A,
+        planKey: "enterprise",
+        billingCycleKey: "2026-08",
+        startsAt: new Date("2026-08-01T00:00:00.000Z"),
+        endsAt: new Date("2026-09-01T00:00:00.000Z"),
+        commercialReference: null,
+        actorUserId: null,
       });
+      expect(["OPENED", "ALREADY_OPEN"]).toContain(august.kind);
+      const sibling = await seedAuthorizableChain(prisma, "cyclesib", {
+        seconds: 20,
+        reservedAt: new Date("2026-08-20T00:00:00.000Z"),
+      });
+      expect((await prisma.generationReservation.findUniqueOrThrow({
+        where: { generationJobId: sibling.job.id },
+      })).billingCycleKey).toBe("2026-08");
       await prisma.sceneGeneration.update({
         where: { id: sibling.attempt.id },
         data: { orchestrationState: "PROCESSING", submissionBoundaryEnteredAt: new Date() },

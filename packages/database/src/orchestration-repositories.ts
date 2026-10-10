@@ -50,12 +50,15 @@ import {
   computeGenerationRequestHash,
   isTargetOutputResolution,
   nextUserRegenerationOrdinal,
+  planUnitAllocation,
   requiredUnitsFor,
   riskProfileKeyForQualityTier,
   sanitizeTransitionMetadata,
   validateFxSnapshot,
 } from "@app/domain";
 import { AppError, randomId } from "@app/shared";
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
+import { findPeriodContaining, loadPeriodBalance, toAllocation } from "./unit-entitlement-repository";
 
 /**
  * Persistence for generation orchestration.
@@ -586,6 +589,8 @@ function toReservation(r: ReservationRow): GenerationReservation {
     billingCycleKey: r.billingCycleKey,
     billingCycleStartedAt: r.billingCycleStartedAt,
     billingCycleEndsAt: r.billingCycleEndsAt,
+    funding: r.funding,
+    entitlementPeriodId: r.entitlementPeriodId,
     reservedTotalVideoUnits: r.reservedTotalVideoUnits,
     reservedHighQualityUnits: r.reservedHighQualityUnits,
     state: r.state,
@@ -967,7 +972,8 @@ export function createGenerationReservationRepository(
 ): GenerationReservationRepository {
   return {
     /**
-     * Transaction B: create the hold and move the job, in one commit.
+     * Transaction B: fund the hold from the Unit ledger, create it and move the
+     * job, in one commit.
      *
      * Split into two commits — as an earlier version was — a crash between them
      * leaves a reservation whose job never moved, or a moved job with no hold
@@ -977,6 +983,28 @@ export function createGenerationReservationRepository(
      * reservation covering fewer units than the job it belongs to is an
      * under-charge no reconciliation could detect, because both rows would look
      * internally consistent.
+     *
+     * ## Funding (Phase 6A)
+     *
+     * The period is the organization's period containing `reservedAt`, and its
+     * billing cycle becomes the reservation's for life. The allocation set is
+     * planned by the domain — Base first, then eligible blocks oldest first, in
+     * the job's own quality only — and frozen in this commit. Consume and
+     * release never reselect it, and a later period or purchase never rebinds
+     * it.
+     *
+     * **All or nothing.** The balance is checked before any write, so a short
+     * entitlement returns with nothing written: no reservation, no allocation,
+     * no job move, no event.
+     *
+     * ## Locks
+     *
+     * The cost-admission lock for the period's organization and cycle is taken
+     * **first**, as every workflow that takes it does; it serializes this
+     * reservation against every other reservation, block grant and settlement on
+     * the same period, so two concurrent reservations cannot both spend the last
+     * Unit. The period lookup before it reads an immutable row and decides only
+     * which lock to take.
      */
     async reserve(
       organizationId: string,
@@ -991,11 +1019,28 @@ export function createGenerationReservationRepository(
         // telling a caller which of the two it was discloses existence.
         if (job === null) return { kind: "LOST" };
 
+        const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
+        if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
+
+        // ---- The outermost lock, before the job or any reservation row. ----
+        await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
+
         const existing = await tx.generationReservation.findUnique({
           where: { generationJobId: input.generationJobId },
           select: { id: true },
         });
         if (existing !== null) return { kind: "ALREADY_RESERVED" };
+
+        // ---- Plan the funding before anything is written. ------------------
+        const balance = await loadPeriodBalance(tx, period);
+        const funding = planUnitAllocation({
+          quality: job.qualityTier,
+          units: job.requiredVideoUnits,
+          balance,
+        });
+        if (!funding.ok) {
+          return { kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: funding.eligibleUnits };
+        }
 
         const moved = await tx.generationJob.updateMany({
           where: {
@@ -1019,15 +1064,31 @@ export function createGenerationReservationRepository(
           data: {
             id: input.reservationId,
             generationJobId: input.generationJobId,
-            billingCycleKey: input.billingCycleKey,
-            billingCycleStartedAt: input.billingCycleStartedAt,
-            billingCycleEndsAt: input.billingCycleEndsAt,
+            // The period's cycle, never the caller's.
+            billingCycleKey: period.billingCycleKey,
+            billingCycleStartedAt: period.startsAt,
+            billingCycleEndsAt: period.endsAt,
+            funding: "ALLOCATED",
+            entitlementPeriodId: period.id,
             // Copied from the job, which was itself derived at admission.
             reservedTotalVideoUnits: job.requiredVideoUnits,
             reservedHighQualityUnits: job.requiredHighQualityUnits,
             state: "RESERVING",
             stateVersion: 0,
           },
+        });
+        await tx.generationReservationAllocation.createMany({
+          data: funding.allocations.map((allocation, index) => ({
+            id: `${created.id}_alloc_${index + 1}`,
+            reservationId: created.id,
+            organizationId,
+            entitlementPeriodId: period.id,
+            ordinal: index + 1,
+            sourceType: allocation.sourceType,
+            addOnBlockId: allocation.addOnBlockId,
+            quality: allocation.quality,
+            quantity: allocation.quantity,
+          })),
         });
         await appendGenerationEvent(tx, {
           organizationId,
@@ -1045,16 +1106,38 @@ export function createGenerationReservationRepository(
         if (held.count === 0) {
           throw new AppError("INTERNAL_ERROR", "Reservation vanished inside its own creation");
         }
+        // The funding summary travels with the RESERVED event, so the append-only
+        // history names the period and the split without a join. The rows are
+        // the evidence; this is the index into them.
+        const baseUnits = funding.allocations
+          .filter((allocation) => allocation.sourceType === "BASE")
+          .reduce((total, allocation) => total + allocation.quantity, 0);
         await appendGenerationEvent(tx, {
           organizationId,
           aggregateType: "RESERVATION",
           aggregateId: created.id,
           fromState: "RESERVING",
           toState: "RESERVED",
-          context,
+          context: {
+            ...context,
+            metadata: sanitizeTransitionMetadata({
+              ...context.metadata,
+              entitlementPeriodId: period.id,
+              billingCycleKey: period.billingCycleKey,
+              qualityTier: job.qualityTier,
+              totalVideoUnits: job.requiredVideoUnits,
+              baseAllocatedUnits: baseUnits,
+              addOnAllocatedUnits: job.requiredVideoUnits - baseUnits,
+              allocationCount: funding.allocations.length,
+            }),
+          },
         });
         const reservation = await tx.generationReservation.findUniqueOrThrow({
           where: { id: created.id },
+        });
+        const allocations = await tx.generationReservationAllocation.findMany({
+          where: { reservationId: created.id },
+          orderBy: { ordinal: "asc" },
         });
         await appendGenerationEvent(tx, {
           organizationId,
@@ -1075,6 +1158,7 @@ export function createGenerationReservationRepository(
           kind: "RESERVED",
           job: toJob(reloaded, organizationId),
           reservation: toReservation(reservation),
+          allocations: allocations.map(toAllocation),
         };
       });
     },

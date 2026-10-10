@@ -1,6 +1,7 @@
 # Phase 6A gap analysis — Unit entitlement and ledger foundation
 
-Status: **implementation paused at a decision gate** (see *Blocking decision*).
+Status: the multi-Unit funding gate is **CLOSED by CTO decision (Option A)**;
+implementation resumed on this branch.
 Base: `main @ 9a4639256af9228d690b72d92b86e2ef79d9818a` (PR #73 merged; migration
 16 is the latest; no open decision gate in `docs/decisions/TODO.md`; the only
 open PR, #46, is unrelated governance work).
@@ -61,47 +62,44 @@ first, then computes availability. A migration 17 would add the entitlement
 period, the add-on block and the frozen allocation of a reservation, nullable for
 history (historical reservations have no recorded source and none is guessed).
 
-## Blocking decision — how a multi-Unit job is funded
+## Multi-Unit funding — decision gate CLOSED (Option A)
 
-The work package requires that a reservation durably identify **"which
-entitlement source funds it — Base Unit or a specific additional Unit block"**,
-and that there be **"no consumption from two entitlement sources for one
-reservation."** ADR-0053 Decision 3 states the order per Unit (*"draws from an
-eligible remaining Base Unit … the oldest unexpired Normal add-on block …"*).
+A job costs 1–3 Units, so it can need more Units than any single source holds.
+The CTO chose **Option A**:
 
-Both read naturally when a job costs one Unit. **A job here costs 1–3 Units**
-(the duration rule above), so a job can need more Units than any one source has
-left. Example: a Premium organization with 2 Base Units left and a +10 Normal
-block requests a 90-second Normal video (3 Units).
+- **A reservation may span multiple funding sources.** It does not require one
+  source to cover the whole quantity.
+- **Allocation is eligibility-first across the whole quantity.** Normal: available
+  Base Units, then the oldest eligible Normal block, then the next-oldest, until N
+  is met. HQ: Base Units limited by both the remaining Base capacity and the
+  remaining included HQ ceiling, then the oldest eligible HQ block, then the
+  next-oldest. Normal and HQ blocks never substitute for one another.
+- **Partial Base capacity is used before any add-on**, and add-ons continue
+  oldest → newest within the eligible quality class.
+- **The allocation set is frozen at reservation.** Each allocation names the
+  reservation, the source type, the entitlement period, the specific block where
+  applicable, the quality and the quantity. Consume and release act on the frozen
+  set and never rerun selection; renewal and later purchases never rebind it.
+- **Reservation is all-or-nothing.** If the eligible total is below N, admission
+  fails with no reservation, no allocation and no balance change.
 
-| Option | Reservation funded by | Example result | Consequence |
-| --- | --- | --- | --- |
-| **A — per-Unit allocation** | each Unit independently, in eligibility-first order; a reservation holds 1–3 frozen allocations, **each from exactly one source** | 2 Base + 1 from the Normal block | Never refuses a fundable request; literal per-Unit reading of ADR-0053 Decision 3; one reservation draws from more than one source |
-| **B — single source per reservation** | the first eligible source that can cover **all** of the job's Units | Base skipped (only 2 left); 3 from the Normal block — or refused if no single block has 3 | One source per reservation; can skip remaining Base Units or refuse a request whose eligible total suffices |
+Examples the CTO fixed: Premium Normal needing 3 with 2 Base left and a +10 Normal
+block → Base 2 + block 1; Premium HQ needing 2 with 1 Base and 1 HQ ceiling left
+and a +2 HQ block → Base 1 + HQ block 1.
 
-The same question arises for HQ: a 60-second HQ job on Premium with 1 included
-HQ Unit left and a +2 HQ block is `1 Base + 1 HQ block` under A, and `2 from the
-HQ block` under B.
+**Standard HQ consequence, not a gate.** Standard's HQ ceiling is 1 and it holds
+no HQ add-on, so a Standard HQ job needing 2 or 3 Units cannot be admitted, and
+there is no fallback to Normal Units.
 
-This is a product/billing rule the approved contract does not settle, and the
-explicit work-package wording and the per-Unit ADR wording point different ways.
-**It is not guessed.** Recommendation: **Option A**, with "one source" applied
-per allocated Unit — it follows ADR-0053's per-Unit order exactly, never refuses
-a request the customer's eligible entitlement covers, and still freezes every
-Unit to exactly one source and spends each exactly once.
+## Still open — regeneration Units
 
-## Non-blocking findings for the CTO
-
-- **Standard HQ is limited to ≤ 30 seconds.** Standard's HQ ceiling is 1, it
-  cannot buy HQ add-ons, and an HQ job of 31–90 s needs 2–3 HQ Units. Under
-  either option, a Standard organization can never fund an HQ video longer than
-  30 seconds. This follows from approved rules rather than creating one; it is
-  stated so it is not discovered by a customer.
 - **Customer regeneration is not charged today.** The existing model lets one
   job entitlement cover an initial generation and up to two per-scene user
   regenerations, and Transaction G consumes nothing on a replacement
   publication. ADR-0052 Decision 4 says customer-requested content regeneration
   consumes additional Unit(s). How a per-scene regeneration maps to Units (the
-  scene's duration, the whole video's, or one Unit) is undecided. This does not
-  block Phase 6A, which keeps the existing Phase 5C regeneration semantics; it
-  must be decided before paid regeneration is built.
+  scene's duration, the whole video's, or one Unit) is undecided and **stays an
+  open gate**. Phase 6A does not answer it, does not treat today's free
+  regeneration as commercial policy, and builds no regeneration pricing; its
+  reservation infrastructure takes a Unit quantity from its caller and chooses
+  none for regeneration.

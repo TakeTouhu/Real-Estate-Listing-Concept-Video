@@ -7,6 +7,7 @@ import {
   createGenerationTransitionEventRepository,
   createSceneGenerationAttemptRepository,
   createSceneGenerationRequestRepository,
+  createUnitEntitlementRepository,
 } from "@app/database";
 import {
   computeDeliverableInputFingerprint,
@@ -42,6 +43,27 @@ export const ASSET_B = "ast_itest_orch_b";
 /** Deliberately points at a storyboard scene that does not exist. */
 export const STORYBOARD_SCENE = "sbs_itest_orch_gone";
 
+/**
+ * The fixture's entitlement period (Phase 6A).
+ *
+ * Every reservation now draws on the Unit ledger, so every tenant the fixture
+ * seeds holds one: September 2026, keyed `2026-09` — the cycle every suite
+ * already asserted — with Enterprise Base Units and two large blocks, one per
+ * quality, so suites that are not about entitlement never run out of it. The
+ * ledger's own behaviour is proved in `unit-entitlement-ledger.db.test.ts`
+ * against periods sized to the approved plans.
+ */
+export const FIXTURE_CYCLE = "2026-09";
+export const FIXTURE_PERIOD_STARTS_AT = new Date("2026-09-01T00:00:00.000Z");
+export const FIXTURE_PERIOD_ENDS_AT = new Date("2026-10-01T00:00:00.000Z");
+/** Inside the fixture period: every reservation a suite makes lands in it. */
+export const FIXTURE_RESERVED_AT = new Date("2026-09-15T00:00:00.000Z");
+const FIXTURE_BLOCK_UNITS = 1_000_000;
+
+export function fixturePeriodId(organizationId: string): string {
+  return `uep_fixture_${organizationId}`;
+}
+
 export function repositories(prisma: PrismaClient) {
   return {
     jobs: createGenerationJobRepository(prisma),
@@ -51,6 +73,7 @@ export function repositories(prisma: PrismaClient) {
     attempts: createSceneGenerationAttemptRepository(prisma),
     pricing: createGenerationPricingSnapshotRepository(prisma),
     events: createGenerationTransitionEventRepository(prisma),
+    entitlements: createUnitEntitlementRepository(prisma),
   };
 }
 
@@ -171,6 +194,9 @@ export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   });
   await prisma.sceneGenerationRequest.deleteMany({});
   await prisma.generationScene.deleteMany({});
+  // Allocations before the reservations they fund: RESTRICT, so a reservation's
+  // frozen funding cannot be erased by deleting the reservation.
+  await prisma.generationReservationAllocation.deleteMany({});
   await prisma.generationReservation.deleteMany({});
   await prisma.generationJob.deleteMany({});
   await prisma.fxRateSnapshot.deleteMany({});
@@ -181,6 +207,7 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
     [ORG_A, PROP_A, PROJECT_A, ASSET_A],
     [ORG_B, PROP_B, PROJECT_B, ASSET_B],
   ] as const) {
+    await seedFixtureEntitlement(prisma, org);
     await prisma.property.upsert({
       where: { id: prop },
       update: {},
@@ -225,10 +252,73 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
   }
 }
 
+/**
+ * The organization row and the fixture period, through the real ledger API.
+ *
+ * Idempotent: a replay of the same period returns `ALREADY_OPEN`, and a replay
+ * of the same purchase `ALREADY_GRANTED`. The organization row exists because
+ * opening a period writes an audit entry, and `audit_logs` names a real
+ * organization.
+ */
+export async function seedFixtureEntitlement(
+  prisma: PrismaClient,
+  organizationId: string,
+): Promise<void> {
+  await prisma.organization.upsert({
+    where: { id: organizationId },
+    update: {},
+    create: { id: organizationId, name: organizationId, slug: organizationId },
+  });
+  const ledger = createUnitEntitlementRepository(prisma);
+  const opened = await ledger.openPeriod({
+    id: fixturePeriodId(organizationId),
+    organizationId,
+    planKey: "enterprise",
+    billingCycleKey: FIXTURE_CYCLE,
+    startsAt: FIXTURE_PERIOD_STARTS_AT,
+    endsAt: FIXTURE_PERIOD_ENDS_AT,
+    commercialReference: null,
+    actorUserId: null,
+  });
+  if (opened.kind !== "OPENED" && opened.kind !== "ALREADY_OPEN") {
+    throw new Error(`fixture period: ${opened.kind}`);
+  }
+  for (const quality of ["NORMAL", "HIGH_QUALITY"] as const) {
+    const granted = await ledger.grantAddOnBlock({
+      id: `uab_fixture_${organizationId}_${quality}`,
+      organizationId,
+      entitlementPeriodId: fixturePeriodId(organizationId),
+      quality,
+      quantity: FIXTURE_BLOCK_UNITS,
+      commercialReference: `fixture-${quality}`,
+      purchasedAt: FIXTURE_PERIOD_STARTS_AT,
+      actorUserId: null,
+    });
+    if (granted.kind !== "GRANTED" && granted.kind !== "ALREADY_GRANTED") {
+      throw new Error(`fixture block: ${granted.kind}`);
+    }
+  }
+}
+
+/** Everything the ledger holds for the fixture tenants, allocations first. */
+export async function dropFixtureEntitlement(prisma: PrismaClient): Promise<void> {
+  const orgs = [ORG_A, ORG_B];
+  await prisma.generationReservationAllocation.deleteMany({
+    where: { organizationId: { in: orgs } },
+  });
+  await prisma.unitAddOnBlock.deleteMany({ where: { organizationId: { in: orgs } } });
+  await prisma.unitEntitlementPeriod.deleteMany({ where: { organizationId: { in: orgs } } });
+  await prisma.auditLog.deleteMany({ where: { organizationId: { in: orgs } } });
+  await prisma.organization.deleteMany({ where: { id: { in: orgs } } });
+}
+
 export async function dropTenants(prisma: PrismaClient): Promise<void> {
   await prisma.videoProject.deleteMany({ where: { id: { in: [PROJECT_A, PROJECT_B] } } });
   await prisma.mediaAsset.deleteMany({ where: { id: { in: [ASSET_A, ASSET_B] } } });
   await prisma.property.deleteMany({ where: { id: { in: [PROP_A, PROP_B] } } });
+  // Every caller wipes the orchestration rows first; the reservations that held
+  // the fixture period through RESTRICT are gone by now.
+  await dropFixtureEntitlement(prisma);
 }
 
 /**
@@ -348,6 +438,9 @@ export async function makeJobRevisable(
         billingCycleKey: "2026-09",
         billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
         billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        // Seeded directly, outside the ledger: the pre-Phase-6A shape, with no
+        // recorded funding source. Not what `reserve()` produces.
+        funding: "UNALLOCATED_LEGACY",
         reservedTotalVideoUnits: 1,
         reservedHighQualityUnits: 1,
         state: "CONSUMED",

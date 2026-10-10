@@ -37,6 +37,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   H3_MAX_IDENTITY,
   HAS_DB,
   ORG_A,
@@ -66,7 +67,6 @@ import {
 const prisma = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
-const CYCLE = "2026-09";
 const CREDENTIAL = "fal-key-itest-0000";
 const OUTPUT_URL = "https://fal.media/files/panda/itest.mp4?X-Fal-Signature=SECRETSIGNATURE";
 
@@ -188,9 +188,7 @@ async function seedFalProcessingAttempt(suffix: string, predictionId: string) {
       reservationId: `genres_${suffix}`,
       generationJobId: created.job.id,
       expectedJobVersion: moved.value.stateVersion,
-      billingCycleKey: CYCLE,
-      billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-      billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+      reservedAt: FIXTURE_RESERVED_AT,
     },
     ctx(),
   );

@@ -394,7 +394,9 @@ describe("nothing about the existing adapters changed shape", () => {
     // 5B for migration 15, the durable composition execution work table. The pin
     // moving is the tripwire working: an unreviewed migration still trips every
     // one of these.
-    expect(dirs.at(-1)).toBe("00000000000016_phase5c_deliverable_validation");
+    // Advanced again by Phase 6A, which is authorized to add migration 17 for
+    // the Unit entitlement ledger.
+    expect(dirs.at(-1)).toBe("00000000000017_phase6a_unit_entitlement_ledger");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(
