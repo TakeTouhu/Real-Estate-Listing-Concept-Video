@@ -1152,16 +1152,24 @@ them is **built**. Each item below records the settled decision and what remains
       shared organization-wide, never exposed. On exhaustion: stop automatic
       recovery, charge no further Unit, release the reserved Unit, escalate
       internally, allow one operator-granted manual free recovery.
-- [ ] **Build Unit accounting per ADR-0053.** Added packages as non-carrying
-      blocks; the eligibility-first consumption order (see the two items below);
-      renewal-period binding to the reservation; no automatic overage;
-      customer-approved
-      purchase; no cancellation after a paid Provider submission.
-- [ ] **Build a quality-tagged additional-Unit ledger.** ADR-0053 Decision 2.
+- [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
+      Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
+      eligibility-first order (see the two items below) and renewal-period
+      binding frozen on the reservation. **Still unbuilt:** the customer-approved
+      purchase flow that grants a block, renewal scheduling that opens periods, no
+      automatic overage at the purchase boundary, and no cancellation after a paid
+      Provider submission.
+- [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
+      (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
+      composite foreign key; an HQ block on a plan that sells none is refused.*
+      ADR-0053 Decision 2.
       Each add-on block carries the quality it was bought at, and the ledger must
       be able to **refuse** an ineligible block rather than treat added Units as
       one pool. No conversion, exchange, refund or substitution path may exist.
-- [ ] **Build eligibility-first reservation and consumption.** ADR-0053
+- [x] **Build eligibility-first reservation and consumption.** *Built in Phase
+      6A (ADR-0055): multi-source allocation per the CTO's Option A, frozen at
+      reservation, all-or-nothing, settled with the reservation by Transaction G
+      and every release path.* ADR-0053
       Decision 3: eligible Base Unit → oldest eligible add-on → newest eligible
       add-on, FIFO *within* the eligible quality class, with the included HQ
       ceiling (1 / 5 / 10) enforced as a counter **inside** the Base pool. An HQ
@@ -1562,7 +1570,10 @@ one creates is listed in the section above.
 Not documentation problems, and **not fixed by editing documentation.** Each must
 be reconciled in a runtime work package.
 
-- [ ] **The runtime pricing code assumes every plan is a 12-month contract with a
+- [x] **Reconciled in Phase 6A:** `CONTRACT_MONTHS`, `ANNUAL_PREPAYMENT_DISCOUNT_BPS`
+      and both annual-prepayment functions are removed (ADR-0055 Decision 7). The
+      original item, kept as evidence:
+      **The runtime pricing code assumes every plan is a 12-month contract with a
       5% annual-prepayment discount.** `customer-plan-catalog.ts` defines
       `CONTRACT_MONTHS = 12` and `ANNUAL_PREPAYMENT_DISCOUNT_BPS = bps(500)`, and
       `customer-pricing.ts:annualContractRawPricing` computes an annual gross and

@@ -8,7 +8,7 @@ open PR, #46, is unrelated governance work).
 
 Authority: ADR-0053 Decisions 1, 1A, 2, 3; ADR-0052 Decisions 4, 9, 19.
 
-## What exists today
+## What existed before Phase 6A
 
 | Concern | Current runtime | Where |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Authority: ADR-0053 Decisions 1, 1A, 2, 3; ADR-0052 Decisions 4, 9, 19.
 | Audit | `GenerationTransitionEvent` (append-only machine history, allowlisted metadata) per aggregate; `AuditLog` for person actions | `schema.prisma` |
 | Production callers | None — generation stays dormant behind the activation gates | — |
 
-## Gaps Phase 6A must close
+## Gaps Phase 6A closes
 
 1. **No entitlement exists to reserve against.** A durable, period-bound
    entitlement (organization, plan snapshot, Base Units, HQ ceiling, period
@@ -50,7 +50,7 @@ Authority: ADR-0053 Decisions 1, 1A, 2, 3; ADR-0052 Decisions 4, 9, 19.
    the same plan catalog and have no production caller, so they can be removed
    safely in this package without any payment flow.
 
-## Design direction (not yet implemented)
+## Design direction (implemented in Phase 6A — see ADR-0055)
 
 Remaining capacity is **derived from reservation state**, not stored as a
 counter: an allocation is held while its reservation is `RESERVING` / `RESERVED`
@@ -58,9 +58,10 @@ counter: an allocation is held while its reservation is `RESERVING` / `RESERVED`
 Consume and release therefore stay exactly-once through the existing reservation
 CAS in Transactions G and H and the existing release paths, with no new lock in
 them and no counter to drift. Reserving takes the existing cost-admission lock
-first, then computes availability. A migration 17 would add the entitlement
-period, the add-on block and the frozen allocation of a reservation, nullable for
-history (historical reservations have no recorded source and none is guessed).
+first, then computes availability. Migration 17 adds the entitlement period,
+the add-on block and the frozen allocation of a reservation; historical
+reservations are labelled `UNALLOCATED_LEGACY` with no recorded source, and none
+is guessed.
 
 ## Multi-Unit funding — decision gate CLOSED (Option A)
 
