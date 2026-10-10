@@ -1019,6 +1019,16 @@ export function createGenerationReservationRepository(
         // telling a caller which of the two it was discloses existence.
         if (job === null) return { kind: "LOST" };
 
+        // A replay is answered first, whenever it arrives. A reservation, once
+        // made, is never deleted, so finding one needs no lock — and the answer
+        // must not depend on whether a period still covers the replay's instant.
+        // The same check is repeated under the lock below for the race.
+        const prior = await tx.generationReservation.findUnique({
+          where: { generationJobId: input.generationJobId },
+          select: { id: true },
+        });
+        if (prior !== null) return { kind: "ALREADY_RESERVED" };
+
         const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
         if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
 

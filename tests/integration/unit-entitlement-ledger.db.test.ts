@@ -440,6 +440,16 @@ RUN("Phase 6A — the Unit entitlement ledger", () => {
       expect(await ledgerRowCounts()).toEqual(before);
     });
 
+    it("answers a replay as ALREADY_RESERVED even when no period covers its instant", async () => {
+      await openPeriod("premium");
+      const job = await reservingJob("NORMAL", 30);
+      expect((await reserve(job)).kind).toBe("RESERVED");
+      const before = await ledgerRowCounts();
+      const late = await reserve(job, new Date("2027-03-01T00:00:00.000Z"), ORG_A, "genres_late_replay");
+      expect(late.kind).toBe("ALREADY_RESERVED");
+      expect(await ledgerRowCounts()).toEqual(before);
+    });
+
     it("lets exactly one of two concurrent reservations of one job win", async () => {
       await openPeriod("premium");
       const job = await reservingJob("NORMAL", 90);
@@ -447,7 +457,9 @@ RUN("Phase 6A — the Unit entitlement ledger", () => {
         reserve(job, IN_NOVEMBER, ORG_A, "genres_race_1"),
         reserve(job, IN_NOVEMBER, ORG_A, "genres_race_2"),
       ]);
-      expect(outcomes.filter((o) => o.kind === "RESERVED")).toHaveLength(1);
+      // The loser is told it was a duplicate — by the re-check under the lock if it
+      // got past the first one — never LOST, and never a constraint error.
+      expect(outcomes.map((o) => o.kind).sort()).toEqual(["ALREADY_RESERVED", "RESERVED"]);
       expect(await prisma.generationReservationAllocation.count({ where: { reservation: { generationJobId: job.id } } })).toBe(1);
     });
 
