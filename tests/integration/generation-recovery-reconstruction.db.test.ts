@@ -12,6 +12,7 @@ import {
   attemptInput,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -100,9 +101,7 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
         reservationId: RESERVATION,
         generationJobId: JOB,
         expectedJobVersion: reserving.value.stateVersion,
-        billingCycleKey: "2026-09",
-        billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-        billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+        reservedAt: FIXTURE_RESERVED_AT,
       },
       ctx({ correlationId: "corr_rec_request" }),
     );

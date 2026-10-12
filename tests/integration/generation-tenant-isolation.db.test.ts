@@ -4,6 +4,7 @@ import {
   attemptInput,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   ORG_A,
   ORG_B,
@@ -77,9 +78,7 @@ describe.skipIf(!HAS_DB)("organization A cannot reach organization B's generatio
           reservationId: "genres_tenantb",
           generationJobId: b.job.id,
           expectedJobVersion: moved.value.stateVersion,
-          billingCycleKey: "2026-09",
-          billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-          billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+          reservedAt: FIXTURE_RESERVED_AT,
         },
         ctx(),
       );

@@ -204,6 +204,9 @@ export async function seedFailure(
       billingCycleKey: "2026-09",
       billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
       billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+      // Seeded directly, outside the ledger: the pre-Phase-6A shape, with no
+      // recorded funding source. Not what `reserve()` produces.
+      funding: "UNALLOCATED_LEGACY",
       reservedTotalVideoUnits: 2,
       reservedHighQualityUnits: 2,
       state: reservationState,

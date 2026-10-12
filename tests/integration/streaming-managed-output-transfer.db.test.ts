@@ -37,6 +37,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -69,7 +70,6 @@ const prisma = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 const rival = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-14T00:00:00.000Z"));
-const CYCLE = "2026-09";
 const RAW_URL = "https://fal.media/files/panda/itest.mp4?X-Fal-Signature=SECRETSIGNATURE";
 
 function validatedPolicy(): ReconciliationPolicy {
@@ -185,9 +185,7 @@ async function seedAcceptedProcessingAttempt(suffix: string) {
       reservationId: `genres_${suffix}`,
       generationJobId: created.job.id,
       expectedJobVersion: moved.value.stateVersion,
-      billingCycleKey: CYCLE,
-      billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-      billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+      reservedAt: FIXTURE_RESERVED_AT,
     },
     ctx(),
   );

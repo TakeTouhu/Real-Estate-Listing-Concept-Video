@@ -28,6 +28,15 @@ export const GENERATION_QUALITY_TIERS: readonly GenerationQualityTier[] = [
 ];
 
 /**
+ * Whether a reservation draws on the Unit ledger.
+ *
+ * `UNALLOCATED_LEGACY` names only the shape of rows written before Phase 6A: no
+ * funding source was recorded for them, and the ledger neither infers one nor
+ * counts them. Every reservation made through the ledger is `ALLOCATED`.
+ */
+export type GenerationReservationFunding = "UNALLOCATED_LEGACY" | "ALLOCATED";
+
+/**
  * The customer-visible lifecycle of one video.
  *
  * `REVISING` sits after `DELIVERABLE_READY` rather than before it: a customer

@@ -38,6 +38,7 @@ import {
   ASSET_A,
   ctx,
   dropTenants,
+  FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
   ORG_A,
@@ -70,7 +71,6 @@ const other = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
 const BOUNDARY = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 const VERIFIED_AT = epochMillis(BOUNDARY + 3_600_000);
-const CYCLE = "2026-09";
 
 function validatedPolicy(): ReconciliationPolicy {
   const result = validateReconciliationPolicy({
@@ -194,9 +194,7 @@ async function seedAcceptedProcessingAttempt(
       reservationId: `genres_${suffix}`,
       generationJobId: created.job.id,
       expectedJobVersion: moved.value.stateVersion,
-      billingCycleKey: CYCLE,
-      billingCycleStartedAt: new Date("2026-09-01T00:00:00.000Z"),
-      billingCycleEndsAt: new Date("2026-10-01T00:00:00.000Z"),
+      reservedAt: FIXTURE_RESERVED_AT,
     },
     ctx(),
   );

@@ -8,8 +8,6 @@ import {
 import {
   addOnPackagePrice,
   additionalUserMonthlyPriceYenExTax,
-  annualContractRawPricing,
-  annualPrepaymentFinalPrice,
   finalizeCustomerPrice,
   consumptionForScene,
   videoUnitsForSeconds,
@@ -50,6 +48,18 @@ describe("the customer plan catalog carries the frozen commercial contract", () 
     expect(entry.includedUsers).toBe(users);
     expect(entry.includedVideoUnits).toBe(units);
     expect(entry.includedHighQualityUnits).toBe(hq);
+  });
+
+  it.each([
+    ["standard", 5, null],
+    ["premium", 10, 2],
+    ["enterprise", 25, 5],
+  ] as const)("%s: Normal package +%i, HQ package %s", (key, normal, hq) => {
+    // ADR-0053 Decision 2. Standard sells no HQ package at all.
+    const entry = plan(key);
+    expect(entry.normalAddOnPackageUnits).toBe(normal);
+    expect(entry.highQualityAddOnPackageUnits).toBe(hq);
+    expect(entry.highQualityAddOnAvailable).toBe(hq !== null);
   });
 
   it("keeps high-quality units inside the total entitlement, not beside it", () => {
@@ -97,28 +107,17 @@ describe("seats are priced apart from generation entitlement", () => {
   });
 });
 
-describe("annual prepayment discounts exactly 5%", () => {
-  it.each([
-    ["standard", 597_600, 567_720, 567_700],
-    ["premium", 1_437_600, 1_365_720, 1_365_700],
-    ["enterprise", 3_576_000, 3_397_200, 3_397_200],
-  ] as const)("%s: gross ¥%i, raw ¥%i, final ¥%i", (key, gross, raw, final) => {
-    const pricing = annualContractRawPricing(plan(key));
-    expect(pricing.grossAnnualYenExTax).toBe(gross);
-    expect(pricing.prepaymentRawYenExTax).toBe(raw);
-
-    const finalized = annualPrepaymentFinalPrice(plan(key), NO_FLOOR);
-    if (!finalized.ok) throw new Error("expected a price");
-    expect(finalized.value.finalYenExTax).toBe(final);
-  });
-
-  it("derives the gross annual figure from the monthly contract", () => {
-    // Not a stored total: a monthly price and an annual price that disagree is
-    // the failure this derivation prevents.
-    const premium = plan("premium");
-    expect(annualContractRawPricing(premium).grossAnnualYenExTax).toBe(
-      premium.monthlyPriceYenExTax * 12,
-    );
+describe("no plan promises a contract term or an annual-prepayment discount", () => {
+  // ADR-0053 Decision 1A: Standard and Premium are one-month subscriptions with
+  // no annual-prepayment product, and Enterprise terms are individually agreed.
+  // The catalog once exported a 12-month term and a 5% discount; neither may
+  // return as a platform-wide constant.
+  it("exports neither constant from the pricing domain", async () => {
+    const pricing: Record<string, unknown> = await import("./index");
+    expect(pricing).not.toHaveProperty("CONTRACT_MONTHS");
+    expect(pricing).not.toHaveProperty("ANNUAL_PREPAYMENT_DISCOUNT_BPS");
+    expect(pricing).not.toHaveProperty("annualContractRawPricing");
+    expect(pricing).not.toHaveProperty("annualPrepaymentFinalPrice");
   });
 });
 
@@ -230,20 +229,6 @@ describe("a final customer price cannot be produced without safety validation", 
     expect(finalized.error.reason).toBe("ROUNDED_PRICE_WOULD_BE_UNPROFITABLE");
   });
 
-  it("keeps annual prepayment on the same safety path", () => {
-    // Standard's raw prepayment is ¥567,720; nearest-¥100 is ¥567,700, which a
-    // floor of ¥567,710 forbids — so it rounds up rather than quoting a loss.
-    const finalized = annualPrepaymentFinalPrice(plan("standard"), yen(567_710));
-    if (!finalized.ok) throw new Error("expected a price");
-    expect(finalized.value.finalYenExTax).toBe(567_800);
-    expect(finalized.value.roundedAwayFromNearestForSafety).toBe(true);
-  });
-
-  it("refuses an annual prepayment that cannot clear its floor", () => {
-    const finalized = annualPrepaymentFinalPrice(plan("standard"), yen(600_000));
-    expect(finalized.ok).toBe(false);
-  });
-
   /**
    * The floor's *requiredness* is a compile-time property, and only a
    * compile-time assertion can hold it. Every runtime test passes a floor, so
@@ -262,19 +247,8 @@ describe("a final customer price cannot be produced without safety validation", 
     const finalizeArity: Assert<
       IsExactly<Parameters<typeof finalizeCustomerPrice>["length"], 2>
     > = true;
-    const annualArity: Assert<
-      IsExactly<Parameters<typeof annualPrepaymentFinalPrice>["length"], 2>
-    > = true;
 
-    expect([addOnArity, finalizeArity, annualArity]).toEqual([true, true, true]);
-  });
-
-  it("exposes no raw-pricing path that also rounds", () => {
-    // `annualContractRawPricing` returns exact figures only. If it grew a
-    // final price, rounding would have a second home and the two could
-    // disagree about safety.
-    const raw = annualContractRawPricing(plan("standard"));
-    expect(Object.keys(raw).sort()).toEqual(["grossAnnualYenExTax", "prepaymentRawYenExTax"]);
+    expect([addOnArity, finalizeArity]).toEqual([true, true]);
   });
 });
 

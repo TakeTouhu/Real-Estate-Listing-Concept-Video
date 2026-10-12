@@ -862,3 +862,68 @@ table.
 Untouched, byte for byte. `prisma migrate diff --from-migrations … --to-schema-datamodel`
 reports no difference, and `prisma migrate status` reports the database up to
 date after `migrate deploy` applies 16 on top of an existing 15.
+
+## Phase 6A — Unit entitlement ledger
+
+**Migration `00000000000017_phase6a_unit_entitlement_ledger`.** Three tables,
+three enums, and two columns on `generation_reservations`. ADR-0055.
+
+### New tables
+
+| Table | Purpose |
+| --- | --- |
+| `unit_entitlement_periods` | one organization's Unit entitlement for one renewal period, plan snapshot frozen on it |
+| `unit_add_on_blocks` | one purchased, quality-locked package of additional Units, bound to one period |
+| `generation_reservation_allocations` | one frozen slice of a reservation's funding: Base, or one named block |
+
+None has a foreign key to `organizations`, matching `generation_transition_events`:
+commercial history must not be deletable through an organization row. Every
+foreign key is `RESTRICT`.
+
+### New enums
+
+`EntitlementPlanKey` (`STANDARD`, `PREMIUM`, `ENTERPRISE`),
+`UnitEntitlementSourceType` (`BASE`, `ADD_ON_BLOCK`) and
+`GenerationReservationFunding` (`UNALLOCATED_LEGACY`, `ALLOCATED`).
+`GenerationQualityTier` is **reused** for block and allocation quality.
+
+### Changed table: `generation_reservations`
+
+| Column | Rule |
+| --- | --- |
+| `funding` | `NOT NULL`, **no default**. Existing rows take `UNALLOCATED_LEGACY` in the statement that adds the column; the default is then dropped, so no new row can become legacy by omission |
+| `entitlementPeriodId` | nullable; `NULL` exactly for legacy rows, by `generation_reservations_funding_period_check` |
+
+Composite foreign key `(entitlementPeriodId, billingCycleKey)` →
+`unit_entitlement_periods (id, billingCycleKey)`: a ledger-funded reservation's
+cycle is its period's. Legacy rows, with a `NULL` period, are unaffected.
+
+**No backfill of funding.** No existing row is read, updated or deleted, and no
+allocation is inserted for history: a source that was never recorded is not
+reconstructed.
+
+### Constraints that do real work
+
+| Name | Rule |
+| --- | --- |
+| `unit_entitlement_periods_organizationId_billingCycleKey_key` | one period per organization and cycle key |
+| `unit_entitlement_periods_shape_check` | non-negative Base Units; HQ ceiling inside them; `endsAt > startsAt`; non-empty keys |
+| `unit_add_on_blocks_organizationId_commercialReference_key` | a purchase is credited once per organization |
+| `unit_add_on_blocks_shape_check` | positive quantity, non-empty purchase reference |
+| `generation_reservation_allocations_shape_check` | positive quantity, 1-based ordinal, block id exactly on add-on allocations |
+| `generation_reservation_allocations_one_base_key` | **partial** unique index: at most one Base row per reservation |
+| `generation_reservation_allocations_reservationId_ordinal_key` | one row per draw position |
+| `…_addOnBlockId_entitlemen_fkey` | a block allocation names a block of the same period and the same quality |
+| `…_entitlementPeriodId_org_fkey` | an allocation stays in its period's organization |
+| `…_reservationId_entitleme_fkey` | an allocation names its own reservation's period |
+
+Prisma cannot express the partial index, so it lives in the migration SQL; the
+committed schema still diffs clean against the migrations (`prisma migrate diff
+--exit-code`). Period overlap per organization is refused by `openPeriod` under an
+organization-scoped advisory lock rather than by an exclusion constraint, which
+would need the `btree_gist` extension.
+
+### Rollback
+
+Forward-only, like every migration here. Reverting the application leaves the
+new tables unused and `funding` set on every row; nothing older reads them.

@@ -139,6 +139,17 @@ Scope:
 Completion criteria: generation and billing remain idempotent under retries,
 duplicate webhooks and worker crashes; no route is knowingly submitted at a loss.
 
+**Phase 6A — Unit entitlement / ledger foundation** (ADR-0055, migration 17):
+entitlement periods with a frozen plan snapshot, quality-tagged add-on blocks,
+multi-source eligibility-first allocation frozen at reservation, all-or-nothing
+funding, and Transaction G spending the frozen set. Implemented and dormant; the
+stale 12-month / 5% constants are removed. **Not yet built in Phase 6:** purchase
+checkout and the customer-approved block grant, renewal scheduling, Stripe and
+sales-assisted billing, seats and storage blocks, upgrade/downgrade, charged
+disclosure recomposition, the internal recovery budget, the Cost Safety Guard
+threshold, and reconciliation/admin controls. What a customer regeneration costs
+in Units is an open decision gate.
+
 ## Phase 7 — SaaS operations and production readiness
 
 Scope:

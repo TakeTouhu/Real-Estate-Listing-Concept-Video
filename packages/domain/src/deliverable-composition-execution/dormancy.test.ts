@@ -383,7 +383,8 @@ describe("durable shape", () => {
     // contributed exactly one migration, it is still present, and nothing
     // renamed or split it.
     expect(dirs.filter((dir) => dir.includes("phase5b"))).toEqual([MIGRATION_DIR]);
-    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 2);
+    // Phase 6A's migration 17 follows Phase 5C's, so it is now third from last.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 3);
   });
 
   it("creates one table and rewrites no existing row", () => {

@@ -1,3 +1,4 @@
+import type { GenerationReservationAllocation } from "../entitlement/ports";
 import type { ResolutionNormalization, TargetOutputResolution } from "../generation/model-catalog";
 import type { FxSnapshot, PricingSnapshot } from "../pricing/index";
 import type { AttemptOutcomePersistence } from "./certainty";
@@ -7,6 +8,7 @@ import type {
   GenerationAttemptState,
   GenerationJobState,
   GenerationQualityTier,
+  GenerationReservationFunding,
   GenerationReservationState,
   GenerationSceneState,
   GenerationTransitionActorType,
@@ -127,6 +129,17 @@ export interface GenerationReservation {
   readonly billingCycleKey: string;
   readonly billingCycleStartedAt: Date;
   readonly billingCycleEndsAt: Date;
+  /**
+   * How this reservation is funded.
+   *
+   * `ALLOCATED`: drawn from the Unit ledger, with a frozen allocation set naming
+   * the entitlement period and every source. `UNALLOCATED_LEGACY`: written before
+   * the ledger existed, so no funding source was ever recorded, and none is
+   * inferred now — the ledger counts nothing against it.
+   */
+  readonly funding: GenerationReservationFunding;
+  /** The period that funds an `ALLOCATED` reservation; `null` for legacy rows. */
+  readonly entitlementPeriodId: string | null;
   readonly reservedTotalVideoUnits: number;
   readonly reservedHighQualityUnits: number;
   readonly state: GenerationReservationState;
@@ -151,9 +164,15 @@ export interface ReserveGenerationJobInput {
   readonly reservationId: string;
   readonly generationJobId: string;
   readonly expectedJobVersion: number;
-  readonly billingCycleKey: string;
-  readonly billingCycleStartedAt: Date;
-  readonly billingCycleEndsAt: Date;
+  /**
+   * The instant the reservation is made, from the server clock.
+   *
+   * It selects the entitlement period — the organization's period whose bounds
+   * contain it — and with it the billing cycle, which the reservation then keeps
+   * for life. The cycle is no longer accepted from the caller: a caller-supplied
+   * cycle could draw on any period it liked.
+   */
+  readonly reservedAt: Date;
 }
 
 export type ReserveGenerationJobOutcome =
@@ -161,9 +180,17 @@ export type ReserveGenerationJobOutcome =
       readonly kind: "RESERVED";
       readonly job: GenerationJob;
       readonly reservation: GenerationReservation;
+      readonly allocations: readonly GenerationReservationAllocation[];
     }
   | { readonly kind: "LOST" }
-  | { readonly kind: "ALREADY_RESERVED" };
+  | { readonly kind: "ALREADY_RESERVED" }
+  /** The organization holds no entitlement period covering `reservedAt`. Nothing was written. */
+  | { readonly kind: "NO_ENTITLEMENT_PERIOD" }
+  /**
+   * The eligible sources cannot cover the job. Nothing was written: no
+   * reservation, no allocation, and the job did not move.
+   */
+  | { readonly kind: "INSUFFICIENT_ENTITLEMENT"; readonly eligibleUnits: number };
 
 export interface GenerationScene {
   readonly id: string;

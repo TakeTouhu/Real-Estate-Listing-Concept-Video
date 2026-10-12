@@ -285,8 +285,18 @@ describe("no new durable shape", () => {
     // 5B for migration 15, the durable composition execution work table. The pin
     // moving is the tripwire working: an unreviewed migration still trips every
     // one of these.
-    expect(dirs.at(-1)).toBe("00000000000016_phase5c_deliverable_validation");
-    expect(dirs.filter((dir) => dir.includes("6a") || dir.includes("delivery"))).toEqual([]);
+    // Advanced again by Phase 6A, which is authorized to add migration 17 for
+    // the Unit entitlement ledger.
+    expect(dirs.at(-1)).toBe("00000000000017_phase6a_unit_entitlement_ledger");
+    // "6a" here means Phase 4C-3B-2H-3B-6A. The top-level Phase 6A's ledger
+    // migration shares the substring and is the one authorized exception.
+    expect(
+      dirs.filter(
+        (dir) =>
+          (dir.includes("6a") && dir !== "00000000000017_phase6a_unit_entitlement_ledger") ||
+          dir.includes("delivery"),
+      ),
+    ).toEqual([]);
   });
 
   it("adds no delivery column, status or second pointer to the schema", () => {

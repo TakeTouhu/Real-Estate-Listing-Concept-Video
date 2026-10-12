@@ -27,13 +27,22 @@ export interface CustomerPlan {
   /** A ceiling *within* `includedVideoUnits`, never an additional pool. */
   readonly includedHighQualityUnits: number;
   readonly highQualityAddOnAvailable: boolean;
+  /** Units in one Normal add-on package (ADR-0053 Decision 2). */
+  readonly normalAddOnPackageUnits: number;
+  /** Units in one HQ add-on package, or `null` where the plan sells none. */
+  readonly highQualityAddOnPackageUnits: number | null;
 }
 
-/** Every plan is a 12-month contract; payment cadence is a later billing concern. */
-export const CONTRACT_MONTHS = 12;
-
-/** Annual prepayment discount: 5%, so the customer pays 95%. */
-export const ANNUAL_PREPAYMENT_DISCOUNT_BPS: Bps = bps(500);
+/*
+ * There is deliberately no contract-term or annual-prepayment constant here.
+ *
+ * This catalog once declared every plan a 12-month contract with a standard 5%
+ * annual-prepayment discount. ADR-0053 Decision 1A replaced that: Standard and
+ * Premium are one-month, monthly-renewing subscriptions with no minimum term, no
+ * annual-prepayment product and no standard discount, and Enterprise terms and
+ * discounts are individually agreed. A platform-wide term or discount would
+ * restate a commercial promise nobody makes, so neither is represented.
+ */
 
 /** Identical on every plan, and it buys a seat — never generation entitlement. */
 export const ADDITIONAL_USER_PRICE_YEN_EX_TAX_PER_MONTH: Yen = yen(3_000);
@@ -51,6 +60,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     includedHighQualityUnits: 1,
     // Standard may *use* its one high-quality unit but may not buy more.
     highQualityAddOnAvailable: false,
+    normalAddOnPackageUnits: 5,
+    highQualityAddOnPackageUnits: null,
   },
   {
     key: "premium",
@@ -59,6 +70,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     includedVideoUnits: 40,
     includedHighQualityUnits: 5,
     highQualityAddOnAvailable: true,
+    normalAddOnPackageUnits: 10,
+    highQualityAddOnPackageUnits: 2,
   },
   {
     key: "enterprise",
@@ -67,6 +80,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     includedVideoUnits: 100,
     includedHighQualityUnits: 10,
     highQualityAddOnAvailable: true,
+    normalAddOnPackageUnits: 25,
+    highQualityAddOnPackageUnits: 5,
   },
 ] as const);
 

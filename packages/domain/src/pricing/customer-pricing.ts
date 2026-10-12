@@ -1,15 +1,12 @@
 import { pricingFailure, pricingOk, type PricingResult } from "./errors";
 import {
   ADDITIONAL_USER_PRICE_YEN_EX_TAX_PER_MONTH,
-  ANNUAL_PREPAYMENT_DISCOUNT_BPS,
-  CONTRACT_MONTHS,
   HIGH_QUALITY_ADD_ON_MULTIPLIER_BPS,
   NORMAL_ADD_ON_MULTIPLIER_BPS,
   type CustomerPlan,
 } from "./customer-plan-catalog";
 import {
   ONE_HUNDRED_PERCENT_BPS,
-  applyBpsToYen,
   roundYenToNearestHundred,
   roundYenUpToHundred,
   scaleYen,
@@ -80,35 +77,6 @@ export function additionalUserMonthlyPriceYenExTax(additionalUsers: number): Pri
   return pricingOk(scaleYen(ADDITIONAL_USER_PRICE_YEN_EX_TAX_PER_MONTH, additionalUsers, 1));
 }
 
-export interface AnnualContractRawPricing {
-  readonly grossAnnualYenExTax: Yen;
-  /** Exact and unrounded. Not a quotable price — see `finalizeCustomerPrice`. */
-  readonly prepaymentRawYenExTax: Yen;
-}
-
-/**
- * The raw arithmetic of the two ways of paying for one 12-month contract.
- *
- * Returns no final figure on purpose. Rounding a customer price is the step
- * that can push it under a profitability floor, so it is not something a pure
- * calculation may do on its own — a caller that wants a quotable number passes
- * this through {@link finalizeCustomerPrice} and supplies the floor.
- *
- * The gross figure is derived from the frozen monthly price rather than stored,
- * so a monthly price and an annual total cannot disagree.
- */
-export function annualContractRawPricing(plan: CustomerPlan): AnnualContractRawPricing {
-  const gross = scaleYen(plan.monthlyPriceYenExTax, CONTRACT_MONTHS, 1);
-  return {
-    grossAnnualYenExTax: gross,
-    prepaymentRawYenExTax: applyBpsToYen(
-      gross,
-      (ONE_HUNDRED_PERCENT_BPS -
-        ANNUAL_PREPAYMENT_DISCOUNT_BPS) as typeof ANNUAL_PREPAYMENT_DISCOUNT_BPS,
-    ),
-  };
-}
-
 export interface FinalCustomerPrice {
   /** Exact, unrounded, before any customer-facing rounding. */
   readonly rawYenExTax: Yen;
@@ -157,17 +125,6 @@ export function finalizeCustomerPrice(
     finalYenExTax: safeUp,
     roundedAwayFromNearestForSafety: true,
   });
-}
-
-/** The quotable annual prepayment price, which cannot be produced unvalidated. */
-export function annualPrepaymentFinalPrice(
-  plan: CustomerPlan,
-  minimumSafePriceYenExTax: Yen,
-): PricingResult<FinalCustomerPrice> {
-  return finalizeCustomerPrice(
-    annualContractRawPricing(plan).prepaymentRawYenExTax,
-    minimumSafePriceYenExTax,
-  );
 }
 
 /**
@@ -221,8 +178,8 @@ export interface AddOnPackagePrice extends FinalCustomerPrice {
  * `minimumSafePriceYenExTax` is the profitability floor, and it is required.
  * A defaulted floor would make the commercial rule opt-in, and a safety rule a
  * caller can skip by omitting a parameter is not a safety rule. Finalization is
- * delegated to {@link finalizeCustomerPrice}, so add-ons and annual prepayment
- * cannot diverge in how they round.
+ * delegated to {@link finalizeCustomerPrice}, so every customer price rounds the
+ * same way.
  */
 export function addOnPackagePrice(
   plan: CustomerPlan,

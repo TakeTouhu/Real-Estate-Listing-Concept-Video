@@ -436,10 +436,43 @@ says `DELIVERABLE_READY`, the job's pointer names the version, and the hold is
 `CONSUMED` — three facts Transaction G writes in one commit. A fourth copy would
 be a fourth thing to disagree.
 
+## Phase 6A — the Unit entitlement ledger
+
+```mermaid
+erDiagram
+    UnitEntitlementPeriod ||--o{ UnitAddOnBlock : "holds (same organization)"
+    UnitEntitlementPeriod ||--o{ GenerationReservation : "funds (id + billingCycleKey)"
+    UnitEntitlementPeriod ||--o{ GenerationReservationAllocation : "is drawn by"
+    GenerationReservation ||--o{ GenerationReservationAllocation : "frozen funding (same period)"
+    UnitAddOnBlock ||--o{ GenerationReservationAllocation : "is drawn by (same period, same quality)"
+```
+
+A period is one organization's entitlement for one renewal period, with the plan
+snapshot frozen on it. A block is one purchased package, quality-locked for life.
+An allocation is one frozen slice of a reservation's funding — Base when
+`addOnBlockId` is null, otherwise one named block.
+
+Every relationship into an allocation is a **composite** foreign key, and each
+one carries a rule: `(reservationId, entitlementPeriodId)` keeps an allocation on
+its own reservation's period; `(entitlementPeriodId, organizationId)` keeps it,
+and every block, inside the period's organization; `(addOnBlockId,
+entitlementPeriodId, quality)` lets a block allocation name only a block of the
+same period **and the same quality**. A reservation names its period through
+`(entitlementPeriodId, billingCycleKey)`, so its cycle — and the cost-admission
+lock every settlement takes for it — is always its period's.
+
+There is no balance column. What remains is derived from the allocations of
+reservations that still occupy entitlement (held or consumed, never released),
+so the reservation's own state is the only thing that settles an allocation.
+Reservations written before migration 17 are `UNALLOCATED_LEGACY`, with no
+period and no allocation.
+
 ## Not implemented yet (later phases)
 
-`CreditLedger` / `Subscription` (Phase 6), `ConsentRecord` (Phase 6–7). These
-appear in `docs/DataModel.md` but have no tables yet. The Phase 4 generation
+`Subscription` (Phase 6), `ConsentRecord` (Phase 6–7). These appear in
+`docs/DataModel.md` but have no tables yet. `CreditLedger` is superseded by the
+Phase 6A ledger above: purchases arrive as blocks, and reservation, consumption
+and release are the reservation's own states over its frozen allocations. The Phase 4 generation
 attempt is `scene_generations`, above.
 
 `VideoOutput` (Phase 5) still has no table of that name, and none is needed: the
