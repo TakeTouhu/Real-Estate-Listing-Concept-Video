@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import type { AuditLog } from "../identity/types";
 import type { AuditLogRepository } from "../identity/ports";
-import type { Role } from "../identity/roles";
+import type { Permission, Role } from "../identity/roles";
 import { StoryboardService, type StoryboardView } from "../storyboard/storyboard-service";
 import {
   PRESERVATION_RULES,
@@ -359,6 +359,36 @@ describe("startScene — authorization", () => {
     const h = harness({ role });
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
     expect(error.code).toBe("FORBIDDEN");
+  });
+
+  it("needs video.generate and unit.consume together, whichever source each comes from", async () => {
+    async function viewerGranted(...permissions: Permission[]) {
+      const h = harness({ role: "VIEWER" });
+      for (const permission of permissions) {
+        await h.deps.repos.permissionGrants.insertIfAbsent(
+          { organizationId: ORG, userId: ACTOR, permission, grantedByUserId: "usr_owner", grantedAt: h.deps.clock.now() },
+          {
+            organizationId: ORG,
+            actorUserId: "usr_owner",
+            action: "permission.granted",
+            resourceType: "membership",
+            resourceId: `${ORG}:${ACTOR}`,
+            metadata: {},
+          },
+        );
+      }
+      return h;
+    }
+    const onlyUnits = await viewerGranted("unit.consume");
+    expect((await rejectionOf(onlyUnits.service.startScene(ACTOR, ORG, PROJECT, SCENE))).message).toContain(
+      "'video.generate'",
+    );
+    const onlyGenerate = await viewerGranted("video.generate");
+    expect((await rejectionOf(onlyGenerate.service.startScene(ACTOR, ORG, PROJECT, SCENE))).message).toContain(
+      "'unit.consume'",
+    );
+    const both = await viewerGranted("video.generate", "unit.consume");
+    expect((await both.service.startScene(ACTOR, ORG, PROJECT, SCENE)).state).toBe("QUEUED");
   });
 
   it("denies a non-member with FORBIDDEN", async () => {

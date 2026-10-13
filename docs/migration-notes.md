@@ -1000,3 +1000,30 @@ other row kept its role, and the type's values were the six templates in order.
 Forward-only. Reverting the application after this migration leaves `MANAGER`,
 `VIEWER` and `BILLING` values that the old code does not know, and `REVIEWER` is
 gone; a rollback would need its own migration mapping them back.
+
+## Phase 6D — individual permission grants
+
+**Migration `00000000000020_phase6d_permission_grants`.** One table created.
+ADR-0058.
+
+### New table
+
+`member_permission_grants`: `organizationId`, `userId`, `permission`,
+`grantedByUserId`, `grantedAt`.
+
+| Constraint | Rule |
+| --- | --- |
+| Primary key | (`organizationId`, `userId`, `permission`): a member holds a permission by grant at most once |
+| Foreign key | (`organizationId`, `userId`) → `memberships`, `ON DELETE CASCADE`: removing a member removes their grants |
+| `member_permission_grants_permission_check` | `permission` is one of the 26 grantable permissions; never `video.share` |
+
+`grantedByUserId` has no foreign key: it is attribution, like
+`invitations.invitedByUserId`. A revocation deletes the row; the audit log keeps
+the history.
+
+Additive only. No existing table, column or row is read, updated or deleted.
+
+### Rollback
+
+Forward-only. Reverting the application leaves the table unused, and every
+member's permissions fall back to the role template; nothing older reads it.

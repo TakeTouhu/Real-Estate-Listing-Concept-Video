@@ -47,7 +47,7 @@ export default async function ReviewPage({
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
 
-  for (const { organization, role } of organizations) {
+  for (const { organization, role, permissions } of organizations) {
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
@@ -60,7 +60,7 @@ export default async function ReviewPage({
       organization.id,
       propertyId,
     );
-    const board = buildReviewBoard(assets, analyses, role);
+    const board = buildReviewBoard(assets, analyses, permissions);
     const thumbnails = await thumbnailUrls(current.user.id, organization.id, assets);
 
     return (

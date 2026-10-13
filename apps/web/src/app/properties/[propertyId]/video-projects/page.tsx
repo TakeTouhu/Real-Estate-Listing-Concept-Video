@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import {
   CAMERA_MOTIONS,
-  hasPermission,
   humanizeCameraMotion,
   TARGET_OUTPUT_RESOLUTIONS,
 } from "@app/domain";
@@ -50,7 +49,7 @@ export default async function VideoProjectsPage({
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
 
-  for (const { organization, role } of organizations) {
+  for (const { organization, role, permissions } of organizations) {
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
@@ -78,7 +77,7 @@ export default async function VideoProjectsPage({
           organizationId={organization.id}
           propertyId={property.id}
           projects={projects.map(toVideoProjectDto)}
-          canCreate={hasPermission(role, "video.generate")}
+          canCreate={permissions.includes("video.generate")}
           cameraMotionOptions={CAMERA_MOTION_OPTIONS}
           targetOutputResolutionOptions={TARGET_OUTPUT_RESOLUTIONS}
         />

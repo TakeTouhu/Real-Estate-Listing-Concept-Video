@@ -4,10 +4,11 @@ import type {
   Invitation,
   Membership,
   Organization,
+  PermissionGrant,
   Session,
   User,
 } from "./types";
-import type { Role } from "./roles";
+import type { Permission, Role } from "./roles";
 
 /** Injectable clock so services are deterministic under test. */
 export interface Clock {
@@ -67,6 +68,29 @@ export interface InvitationRepository {
   listByOrganization(organizationId: string): Promise<Invitation[]>;
 }
 
+/** The audit entry a grant change commits together with the change itself. */
+export type GrantChangeAudit = Omit<AuditLog, "id" | "createdAt">;
+
+export interface PermissionGrantRepository {
+  /** A member's grants, in no particular order. */
+  listForMember(organizationId: string, userId: string): Promise<PermissionGrant[]>;
+  /**
+   * Record a grant and its audit entry atomically, unless the member already
+   * holds it. `created` is false when it already existed — including when a
+   * concurrent grant won the race — and then nothing is written: the existing
+   * grant is returned unchanged.
+   */
+  insertIfAbsent(
+    grant: PermissionGrant,
+    audit: GrantChangeAudit,
+  ): Promise<{ readonly grant: PermissionGrant; readonly created: boolean }>;
+  /**
+   * Remove a grant and record its audit entry atomically; false, writing
+   * nothing, when there was none to remove.
+   */
+  remove(organizationId: string, userId: string, permission: Permission, audit: GrantChangeAudit): Promise<boolean>;
+}
+
 export interface SessionRepository {
   create(input: Omit<Session, "createdAt">): Promise<Session>;
   findByTokenHash(tokenHash: string): Promise<Session | null>;
@@ -84,6 +108,8 @@ export interface IdentityRepositories {
   readonly credentials: CredentialRepository;
   readonly organizations: OrganizationRepository;
   readonly memberships: MembershipRepository;
+  /** Removing a membership removes its grants with it. */
+  readonly permissionGrants: PermissionGrantRepository;
   readonly invitations: InvitationRepository;
   readonly sessions: SessionRepository;
   readonly auditLogs: AuditLogRepository;

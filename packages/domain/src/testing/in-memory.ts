@@ -2,6 +2,7 @@ import type {
   AuditLogRepository,
   Clock,
   CredentialRepository,
+  GrantChangeAudit,
   IdentityRepositories,
   IdentityServiceDeps,
   IdGenerator,
@@ -9,6 +10,7 @@ import type {
   MembershipRepository,
   OrganizationRepository,
   PasswordHasher,
+  PermissionGrantRepository,
   SessionRepository,
   TokenService,
   UserRepository,
@@ -19,10 +21,11 @@ import type {
   Invitation,
   Membership,
   Organization,
+  PermissionGrant,
   Session,
   User,
 } from "../identity/types";
-import type { Role } from "../identity/roles";
+import type { Permission, Role } from "../identity/roles";
 
 /** Mutable clock for deterministic tests. */
 export class TestClock implements Clock {
@@ -115,7 +118,11 @@ class InMemoryOrganizationRepository implements OrganizationRepository {
 
 class InMemoryMembershipRepository implements MembershipRepository {
   private readonly rows = new Map<string, Membership>();
-  constructor(private readonly clock: Clock) {}
+  constructor(
+    private readonly clock: Clock,
+    /** Mirrors the grants' foreign key: removing a membership removes its grants. */
+    private readonly onRemove: (organizationId: string, userId: string) => void,
+  ) {}
   private key(organizationId: string, userId: string): string {
     return `${organizationId}::${userId}`;
   }
@@ -145,7 +152,42 @@ class InMemoryMembershipRepository implements MembershipRepository {
   }
   remove(organizationId: string, userId: string): Promise<void> {
     this.rows.delete(this.key(organizationId, userId));
+    this.onRemove(organizationId, userId);
     return Promise.resolve();
+  }
+}
+
+class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
+  private readonly rows = new Map<string, PermissionGrant>();
+  constructor(private readonly auditLogs: AuditLogRepository) {}
+  private key(organizationId: string, userId: string, permission: Permission): string {
+    return `${organizationId}::${userId}::${permission}`;
+  }
+  listForMember(organizationId: string, userId: string): Promise<PermissionGrant[]> {
+    return Promise.resolve(
+      [...this.rows.values()].filter((g) => g.organizationId === organizationId && g.userId === userId),
+    );
+  }
+  async insertIfAbsent(
+    grant: PermissionGrant,
+    audit: GrantChangeAudit,
+  ): Promise<{ grant: PermissionGrant; created: boolean }> {
+    const key = this.key(grant.organizationId, grant.userId, grant.permission);
+    const existing = this.rows.get(key);
+    if (existing) return { grant: existing, created: false };
+    this.rows.set(key, grant);
+    await this.auditLogs.append(audit);
+    return { grant, created: true };
+  }
+  async remove(organizationId: string, userId: string, permission: Permission, audit: GrantChangeAudit): Promise<boolean> {
+    if (!this.rows.delete(this.key(organizationId, userId, permission))) return false;
+    await this.auditLogs.append(audit);
+    return true;
+  }
+  removeAllForMember(organizationId: string, userId: string): void {
+    for (const [key, grant] of this.rows) {
+      if (grant.organizationId === organizationId && grant.userId === userId) this.rows.delete(key);
+    }
   }
 }
 
@@ -220,14 +262,19 @@ export interface TestRepositories extends IdentityRepositories {
 }
 
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
+  const auditLogs = new InMemoryAuditLogRepository(clock);
+  const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
     organizations: new InMemoryOrganizationRepository(clock),
-    memberships: new InMemoryMembershipRepository(clock),
+    memberships: new InMemoryMembershipRepository(clock, (organizationId, userId) =>
+      permissionGrants.removeAllForMember(organizationId, userId),
+    ),
+    permissionGrants,
     invitations: new InMemoryInvitationRepository(clock),
     sessions: new InMemorySessionRepository(clock),
-    auditLogs: new InMemoryAuditLogRepository(clock),
+    auditLogs,
   };
 }
 

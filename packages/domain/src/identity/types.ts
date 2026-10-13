@@ -1,4 +1,4 @@
-import type { Role } from "./roles";
+import type { Permission, Role } from "./roles";
 
 export type OrganizationStatus = "ACTIVE" | "SUSPENDED";
 export type UserStatus = "ACTIVE" | "DISABLED";
@@ -34,6 +34,15 @@ export interface Membership {
   readonly userId: string;
   readonly role: Role;
   readonly createdAt: Date;
+}
+
+/** One individual permission granted to one member (ADR-0052 Decision 10). */
+export interface PermissionGrant {
+  readonly organizationId: string;
+  readonly userId: string;
+  readonly permission: Permission;
+  readonly grantedByUserId: string;
+  readonly grantedAt: Date;
 }
 
 export interface Invitation {

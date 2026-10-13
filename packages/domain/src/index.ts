@@ -7,6 +7,7 @@ export * from "./identity/adapters";
 export * from "./identity/auth-service";
 export * from "./identity/organization-service";
 export * from "./identity/membership-service";
+export * from "./identity/permission-grant-service";
 export { normalizeEmail } from "./identity/util";
 
 export * from "./property/index";

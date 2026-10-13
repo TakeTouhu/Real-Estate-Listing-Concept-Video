@@ -1,11 +1,10 @@
 /**
  * The standard role templates and the permission matrix (ADR-0052 Decision 10,
- * Phase 6C).
+ * Phase 6C), and the individual-grant ceiling on top of them (Phase 6D).
  *
  * Each template's grant list is exhaustive: a permission a template does not
- * list, it does not grant. Individual grants and group permissions are later
- * packages; until they exist a member's effective permissions are exactly its
- * template's.
+ * list, it does not grant. A member's effective permissions are its template's
+ * plus its individual grants; group permissions are a later package.
  */
 
 export type Role = "OWNER" | "ADMIN" | "MANAGER" | "CREATOR" | "VIEWER" | "BILLING";
@@ -146,4 +145,73 @@ export function mayAssignRole(actorRole: Role, role: Role): boolean {
   if (actorRole === "OWNER") return true;
   if (actorRole === "ADMIN") return !OWNER_ONLY_ROLES.includes(role);
   return false;
+}
+
+/** `video.share` is reserved for after the initial release and never granted. */
+export const GRANTABLE_PERMISSIONS: readonly Permission[] = PERMISSIONS.filter(
+  (permission) => permission !== "video.share",
+);
+
+/** Only an `OWNER` may grant or revoke these (ADR-0052 Decision 10, protected authority). */
+export const PROTECTED_PERMISSIONS: readonly Permission[] = [
+  "permission.manage",
+  "billing.manage",
+  "disclosure.none",
+];
+
+/** Roles for which `property.create` never becomes effective, from any grant source. */
+const CANNOT_CREATE_PROPERTY: readonly Role[] = ["VIEWER", "BILLING"];
+
+export function isPermission(value: unknown): value is Permission {
+  return typeof value === "string" && (PERMISSIONS as readonly string[]).includes(value);
+}
+
+/**
+ * What a member may actually do: its template's permissions plus its individual
+ * grants, in vocabulary order. Grants add up — there is no DENY — but
+ * `property.create` is a ceiling on the recipient's role, so it is never
+ * effective for a `VIEWER` or `BILLING` member, however it was granted.
+ */
+export function effectivePermissions(role: Role, granted: readonly Permission[]): readonly Permission[] {
+  return PERMISSIONS.filter(
+    (permission) =>
+      (ROLE_PERMISSIONS[role].includes(permission) || granted.includes(permission)) &&
+      !(permission === "property.create" && CANNOT_CREATE_PROPERTY.includes(role)),
+  );
+}
+
+/** Why a grant or revocation is refused; `null` when it is allowed. */
+export type GrantRefusal = "not_grantable" | "target_role" | "protected" | "not_held" | "recipient_ceiling";
+
+/**
+ * The individual-grant ceiling (ADR-0052 Decision 10): may a member holding
+ * `actorRole` and `actorPermissions` grant `permission` to, or revoke it from, a
+ * member holding `targetRole`? The caller has already required
+ * `permission.manage`.
+ *
+ * - The actor must be able to manage the target's role at all (`mayAssignRole`),
+ *   so an `ADMIN` grants only to `MANAGER`, `CREATOR` and `VIEWER` members and
+ *   never to itself.
+ * - `permission.manage`, `billing.manage` and `disclosure.none` are `OWNER`-only.
+ * - Anyone else delegates only what it effectively holds.
+ * - `property.create` is never granted to a `VIEWER` or `BILLING` member; it can
+ *   still be revoked from one, should a grant predate a role change.
+ */
+export function grantRefusal(
+  operation: "grant" | "revoke",
+  actorRole: Role,
+  actorPermissions: readonly Permission[],
+  targetRole: Role,
+  permission: Permission,
+): GrantRefusal | null {
+  if (!GRANTABLE_PERMISSIONS.includes(permission)) return "not_grantable";
+  if (!mayAssignRole(actorRole, targetRole)) return "target_role";
+  if (actorRole !== "OWNER") {
+    if (PROTECTED_PERMISSIONS.includes(permission)) return "protected";
+    if (!actorPermissions.includes(permission)) return "not_held";
+  }
+  if (operation === "grant" && permission === "property.create" && CANNOT_CREATE_PROPERTY.includes(targetRole)) {
+    return "recipient_ceiling";
+  }
+  return null;
 }

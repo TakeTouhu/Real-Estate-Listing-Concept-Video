@@ -4,6 +4,7 @@ import type {
   Invitation as DbInvitation,
   Membership as DbMembership,
   Organization as DbOrganization,
+  PermissionGrant as DbPermissionGrant,
   PrismaClient,
   Session as DbSession,
   User as DbUser,
@@ -16,6 +17,7 @@ import type {
   InvitationRepository,
   MembershipRepository,
   OrganizationRepository,
+  PermissionGrantRepository,
   Role,
   SessionRepository,
   UserRepository,
@@ -26,9 +28,11 @@ import type {
   Invitation,
   Membership,
   Organization,
+  PermissionGrant,
   Session,
   User,
 } from "@app/domain";
+import { isPermission } from "@app/domain";
 
 function toOrganization(r: DbOrganization): Organization {
   return {
@@ -38,6 +42,29 @@ function toOrganization(r: DbOrganization): Organization {
     status: r.status,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+  };
+}
+
+function auditLogData(input: Omit<AuditLog, "id" | "createdAt">): Prisma.AuditLogUncheckedCreateInput {
+  return {
+    organizationId: input.organizationId,
+    actorUserId: input.actorUserId,
+    action: input.action,
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    metadata: input.metadata as Prisma.InputJsonValue,
+  };
+}
+
+function toPermissionGrant(r: DbPermissionGrant): PermissionGrant {
+  // The table's CHECK admits only the grantable vocabulary.
+  if (!isPermission(r.permission)) throw new Error(`Unknown permission in grant: ${r.permission}`);
+  return {
+    organizationId: r.organizationId,
+    userId: r.userId,
+    permission: r.permission,
+    grantedByUserId: r.grantedByUserId,
+    grantedAt: r.grantedAt,
   };
 }
 
@@ -194,6 +221,44 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     },
   };
 
+  const permissionGrants: PermissionGrantRepository = {
+    async listForMember(organizationId, userId) {
+      return (await prisma.permissionGrant.findMany({ where: { organizationId, userId } })).map(toPermissionGrant);
+    },
+    async insertIfAbsent(grant, audit) {
+      const where = {
+        organizationId_userId_permission: {
+          organizationId: grant.organizationId,
+          userId: grant.userId,
+          permission: grant.permission,
+        },
+      };
+      try {
+        // The grant and its audit entry commit together, or neither does.
+        return await prisma.$transaction(async (tx) => {
+          const row = await tx.permissionGrant.create({ data: grant });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { grant: toPermissionGrant(row), created: true };
+        });
+      } catch (error) {
+        // A concurrent grant of the same permission won the race: answer as a
+        // replay, writing nothing.
+        if ((error as { code?: unknown }).code !== "P2002") throw error;
+        const existing = await prisma.permissionGrant.findUnique({ where });
+        if (!existing) throw error;
+        return { grant: toPermissionGrant(existing), created: false };
+      }
+    },
+    async remove(organizationId, userId, permission, audit) {
+      return prisma.$transaction(async (tx) => {
+        const { count } = await tx.permissionGrant.deleteMany({ where: { organizationId, userId, permission } });
+        if (count === 0) return false;
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return true;
+      });
+    },
+  };
+
   const invitations: InvitationRepository = {
     async create(input) {
       return toInvitation(
@@ -259,18 +324,7 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
 
   const auditLogs: AuditLogRepository = {
     async append(input) {
-      return toAuditLog(
-        await prisma.auditLog.create({
-          data: {
-            organizationId: input.organizationId,
-            actorUserId: input.actorUserId,
-            action: input.action,
-            resourceType: input.resourceType,
-            resourceId: input.resourceId,
-            metadata: input.metadata as Prisma.InputJsonValue,
-          },
-        }),
-      );
+      return toAuditLog(await prisma.auditLog.create({ data: auditLogData(input) }));
     },
     async listByOrganization(organizationId) {
       return (
@@ -282,5 +336,5 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     },
   };
 
-  return { users, credentials, organizations, memberships, invitations, sessions, auditLogs };
+  return { users, credentials, organizations, memberships, permissionGrants, invitations, sessions, auditLogs };
 }

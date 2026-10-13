@@ -15,6 +15,7 @@ erDiagram
   ORGANIZATIONS ||--o{ PROPERTIES : owns
   USERS ||--o| CREDENTIALS : "authenticates with"
   USERS ||--o{ MEMBERSHIPS : joins
+  MEMBERSHIPS ||--o{ MEMBER_PERMISSION_GRANTS : "is granted (CASCADE)"
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
@@ -53,6 +54,14 @@ erDiagram
     string userId PK_FK
     enum   role "OWNER|ADMIN|MANAGER|CREATOR|VIEWER|BILLING"
     datetime createdAt
+  }
+
+  MEMBER_PERMISSION_GRANTS {
+    string organizationId PK_FK
+    string userId PK_FK
+    string permission PK "CHECK: grantable vocabulary, never video.share"
+    string grantedByUserId
+    datetime grantedAt
   }
 
   INVITATIONS {
@@ -487,6 +496,13 @@ No new entity. `memberships.role` and `invitations.role` carry the six ADR-0052
 templates; `REVIEWER` is gone (migration 19 mapped it to `VIEWER`). Groups,
 individual permission grants and the Property responsible-user and group
 assignments that row Scope needs are later packages, so none appears here yet.
+
+## Phase 6D — individual permission grants
+
+`member_permission_grants` holds a permission granted to one member on top of
+its role template, one row per (organization, user, permission), cascading from
+the membership. A CHECK admits the 26 grantable permissions. Groups and the
+Property responsible-user and group assignments are still later packages.
 
 ## Not implemented yet (later phases)
 

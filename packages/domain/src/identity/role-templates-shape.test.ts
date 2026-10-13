@@ -35,14 +35,16 @@ function sourceFiles(dir: string): string[] {
 const ALL_SOURCES = ["apps", "packages", "tests"].flatMap((root) => sourceFiles(join(REPO_ROOT, root)));
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is this phase's", () => {
+  it("adds exactly one migration, and it is this phase's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the newest: Phase 6D added migration 20 after it. Phase 6C still
+    // contributed exactly one migration, in place.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(19);
     expect(dirs.filter((dir) => dir.includes("phase6c"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(20);
+    expect(dirs).toHaveLength(21);
   });
 
   it("recreates the Role type and maps REVIEWER to VIEWER in both tables, touching nothing else", () => {
