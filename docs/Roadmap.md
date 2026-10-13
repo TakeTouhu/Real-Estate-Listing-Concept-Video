@@ -160,9 +160,16 @@ role-assignment ceiling of every role it touches and audits each refusal;
 permission, reads included. Built first because every commercial mutation
 requires `billing.manage`, which did not exist.
 
+**Phase 6D — individual permission grants** (ADR-0058, migration 20): a
+member's effective permissions are its template plus its individual grants, with
+`property.create` never effective for `VIEWER` or `BILLING`; grants and
+revocations go through the grant ceiling (`permission.manage`, the target's role,
+`OWNER`-only `permission.manage` / `billing.manage` / `disclosure.none`, delegate
+only what you hold), each refusal audited. Dormant: no route or page grants.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** individual permission grants with their `OWNER`-only protected authority,
-groups and group permissions, and Property-rooted row Scope.
+it:** groups and group permissions, and Property-rooted row Scope. MFA for
+`permission.manage` and `billing.manage` holders before any member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and

@@ -1078,17 +1078,20 @@ them is **built**. Each item below records the settled decision and what remains
       `disclosureMode = NONE`, `consentTextVersion`, `consentedAt`,
       organization-level enablement state) retained 10 years. Organization
       enablement must **not** be treated as authorizing any user on its own.
-- [ ] **Treat `disclosure.none` as `OWNER`-only protected authority.** ADR-0052
+- [x] **Treat `disclosure.none` as `OWNER`-only protected authority.** ADR-0052
       Decision 10. Reject every grant or revoke attempt by `ADMIN` or any lower
       role — including an `ADMIN` acting on itself — as a refused, audited
-      authorization change rather than a silent no-op.
+      authorization change rather than a silent no-op. *Done in Phase 6D
+      (ADR-0058).*
 - [ ] **Make `disclosure.none` individual-only in representation and
       enforcement.** No group permission, group inheritance, role template or
       Scope expansion may carry it, and the model should make that impossible
       rather than merely unused, so no indirect path — group membership, group
       edit or role change — can confer it.
-- [ ] **Audit every `disclosure.none` grant and revocation** with the
-      organization, affected user, acting `OWNER`, action and timestamp.
+- [x] **Audit every `disclosure.none` grant and revocation** with the
+      organization, affected user, acting `OWNER`, action and timestamp. *Done
+      in Phase 6D (ADR-0058): `permission.granted` / `permission.revoked`, as for
+      every grant.*
 - [ ] **Enforce prospective revocation for new Mode C requests.** A revoked user
       cannot initiate a new Mode C generation or recomposition; revocation
       deletes no consent evidence, modifies no completed deliverable, and removes
@@ -1208,7 +1211,10 @@ them is **built**. Each item below records the settled decision and what remains
       `OWNER` are `OWNER`-only. *Role-assignment ceiling built in Phase 6C
       (ADR-0057) on invitation, acceptance, role change and removal. **Still
       unbuilt:** the `OWNER`-only grant of `permission.manage` and
-      `billing.manage`, which needs individual grants.*
+      `billing.manage`, which needs individual grants.* *Individual-grant
+      ceiling built in Phase 6D (ADR-0058): `permission.manage`, `billing.manage`
+      and `disclosure.none` are `OWNER`-only to grant and revoke; an `ADMIN`
+      grants only to `MANAGER`/`CREATOR`/`VIEWER` members and only what it holds.*
 - [ ] **Prevent self-escalation across every grant path.** Direct role change,
       individual grant, group membership, group permission and Scope
       manipulation must each be ceiling-checked — the additive group model is the
@@ -1216,7 +1222,9 @@ them is **built**. Each item below records the settled decision and what remains
       audited event, not a silent no-op. *Direct role change, invitation and its
       acceptance built in Phase 6C (ADR-0057), each refusal audited as
       `member.role_change_refused`. **Still unbuilt:** the individual-grant,
-      group and group-permission paths.*
+      group and group-permission paths.* *Individual-grant path built in Phase
+      6D (ADR-0058), each refusal audited as `permission.grant_refused`. **Still
+      unbuilt:** the group and group-permission paths.*
 - [ ] **Confirm the Phase 6C choices ADR-0052 did not make** (ADR-0057). None
       changes any member's access today; each matters once individual grants
       exist. (1) Existing `REVIEWER` members and invitations became `VIEWER`, the
@@ -1224,6 +1232,13 @@ them is **built**. Each item below records the settled decision and what remains
       storyboard check `video.generate`; starting or refreshing a source-photo
       analysis checks `asset.upload` — the ADR names no permission for these.
       (3) Starting a scene checks `video.generate` **and** `unit.consume`.
+- [ ] **Confirm the Phase 6D choices ADR-0052 did not make** (ADR-0058).
+      (1) A non-`OWNER` grants or revokes only a permission it effectively holds.
+      (2) Individual grants survive a role change; effective permissions
+      recompute from the new role with the `property.create` ceiling applied.
+      (3) Granting `property.create` to a `VIEWER` or `BILLING` member is refused
+      rather than stored as an ineffective row. (4) A repeated grant is a no-op;
+      revoking an absent grant is `NOT_FOUND`.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.
@@ -1307,7 +1322,9 @@ them is **built**. Each item below records the settled decision and what remains
       never effective for `VIEWER` or `BILLING` from any source; grant
       validation that does not present a direct `property.create` for those
       roles as a supported configuration; and tests covering direct and
-      group-derived grants for both roles.
+      group-derived grants for both roles. *Direct grants built in Phase 6D
+      (ADR-0058): refused at grant time and filtered from the effective set.
+      **Still unbuilt:** group-derived grants.*
 - [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
       to schedule a downgrade while next-period blocks exceed the target cap;
       require explicit scheduled cancellation of the excess; while the downgrade

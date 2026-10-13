@@ -1,6 +1,6 @@
 # Phase 6D gap analysis — individual permission grants and protected authority
 
-Status: implementing on branch `claude/project-thread-az06z2`.
+Status: implemented on branch `claude/project-thread-az06z2`.
 Base: `main @ 6f1aaafd81e2da786c9cee33ec2f386673d56379` (PR #76, Phase 6C, merged
 2026-10-13; migration 19 is the latest).
 
