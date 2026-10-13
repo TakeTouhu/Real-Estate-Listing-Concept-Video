@@ -1,8 +1,9 @@
 # Phase 6B gap analysis — the subscription record and period renewal
 
-Status: implemented on branch `phase-6b-subscription-renewal`.
+Status: implemented on branch `claude/project-thread-az06z2`.
 Base: `main @ 2c529555095966a6cf5921fd4665197942567259` (PR #74, Phase 6A, merged
-2026-10-12; migration 17 is the latest; no open pull request).
+2026-10-12; migration 17 is the latest; the only open pull request, #46, is
+unrelated governance work).
 
 Authority: ADR-0053 Decisions 1, 1A, 2, 3 and 5; ADR-0055; ADR-0054 Decision 7.
 
