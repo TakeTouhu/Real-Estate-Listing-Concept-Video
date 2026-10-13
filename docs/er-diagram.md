@@ -467,9 +467,23 @@ so the reservation's own state is the only thing that settles an allocation.
 Reservations written before migration 17 are `UNALLOCATED_LEGACY`, with no
 period and no allocation.
 
+## Phase 6B — the organization subscription
+
+```mermaid
+erDiagram
+    Organization ||--o| OrganizationSubscription : "is sold (RESTRICT)"
+    OrganizationSubscription ||..o{ UnitEntitlementPeriod : "renews (derived, no foreign key)"
+```
+
+One subscription per organization: plan, channel, renewal anchor and commercial
+reference. Its periods are opened on demand in the ledger with a deterministic id
+`uep_<subscription>_<n>` and commercial reference `subscription:<subscription>:<n>`;
+the link is that derivation, not a foreign key, because a period may also be
+opened by hand for a contract the subscription does not describe.
+
 ## Not implemented yet (later phases)
 
-`Subscription` (Phase 6), `ConsentRecord` (Phase 6–7). These appear in
+`ConsentRecord` (Phase 6–7). These appear in
 `docs/DataModel.md` but have no tables yet. `CreditLedger` is superseded by the
 Phase 6A ledger above: purchases arrive as blocks, and reservation, consumption
 and release are the reservation's own states over its frozen allocations. The Phase 4 generation
