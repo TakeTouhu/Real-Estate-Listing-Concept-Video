@@ -134,8 +134,6 @@ describe.skipIf(!HAS_DB)("grants through the real repositories", () => {
     expect(await holds(ADMIN, "billing.manage")).toBe(false);
     await grants.grant(OWNER, ORG_A, ADMIN, "billing.manage");
     expect(await holds(ADMIN, "billing.manage")).toBe(true);
-    // The same user's standing in another organization is untouched.
-    expect(await holds(CREATOR, "audit.view", ORG_B)).toBe(false);
 
     const audit = await prisma.auditLog.findMany({ where: { organizationId: ORG_A } });
     expect(audit).toEqual([
@@ -145,6 +143,21 @@ describe.skipIf(!HAS_DB)("grants through the real repositories", () => {
         resourceId: `${ORG_A}:${ADMIN}`,
         metadata: { targetUserId: ADMIN, targetRole: "ADMIN", permission: "billing.manage" },
       }),
+    ]);
+  });
+
+  it("never carries a grant into another organization the member belongs to", async () => {
+    await grants.grant(OWNER, ORG_A, CREATOR, "audit.view");
+    expect(await holds(CREATOR, "audit.view")).toBe(true);
+    expect(await holds(CREATOR, "audit.view", ORG_B)).toBe(false);
+  });
+
+  it("revokes only the permission named, leaving the member's other grants", async () => {
+    await grants.grant(OWNER, ORG_A, CREATOR, "audit.view");
+    await grants.grant(OWNER, ORG_A, CREATOR, "audit.export");
+    await grants.revoke(OWNER, ORG_A, CREATOR, "audit.view");
+    expect((await deps.repos.permissionGrants.listForMember(ORG_A, CREATOR)).map((g) => g.permission)).toEqual([
+      "audit.export",
     ]);
   });
 
