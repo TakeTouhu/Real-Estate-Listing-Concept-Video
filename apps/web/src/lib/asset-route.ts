@@ -18,9 +18,9 @@ import { getPropertyServices } from "./property";
  * nothing and lands in the same place.
  *
  * **This is URL integrity, not authorization.** `assets.list` authorizes
- * organization membership only, exactly as every read on these routes already
- * does, and grants the caller nothing they could not already do. The action's
- * own `video:review` (or `property:write`) check still runs afterwards in the
+ * `property.view` only, exactly as every read on these routes already does, and
+ * grants the caller nothing they could not already do. The action's own
+ * `analysis.review` (or `asset.upload`) check still runs afterwards in the
  * domain, untouched — a member without permission still gets `403` on a
  * well-formed path, and lifecycle and tenancy rules stay where they are.
  *

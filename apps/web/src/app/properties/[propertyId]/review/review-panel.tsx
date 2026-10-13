@@ -33,7 +33,7 @@ interface Props {
  * Approve / reject controls.
  *
  * Mounted only where a decision is actually available: never for a decided
- * revision, never for a viewer without `video:review`, and with no approve
+ * revision, never for a viewer without `analysis.review`, and with no approve
  * control for a photo carrying a blocking finding. Those are decisions the
  * server already made — this component renders them, it does not re-derive them.
  *

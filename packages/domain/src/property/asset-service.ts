@@ -79,7 +79,7 @@ export class AssetService {
       this.deps.identity,
       actorUserId,
       input.organizationId,
-      "property:write",
+      "asset.upload",
     );
     const property = await this.deps.properties.findById(input.organizationId, input.propertyId);
     if (!property || property.status === "DELETED") {
@@ -151,7 +151,7 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<CompleteUploadResult> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
     const asset = await this.requireAsset(organizationId, assetId);
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", `Asset is not awaiting upload (status ${asset.status})`);
@@ -316,7 +316,7 @@ export class AssetService {
   }
 
   async list(actorUserId: string, organizationId: string, propertyId: string): Promise<MediaAsset[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     return this.deps.assets.listByProperty(organizationId, propertyId);
   }
 
@@ -330,7 +330,7 @@ export class AssetService {
     assetId: string,
     variant: "normalized" | "thumbnail" = "normalized",
   ): Promise<SignedUrl> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     const asset = await this.requireAsset(organizationId, assetId);
     if (asset.status !== "READY") {
       throw new AppError("VALIDATION_FAILED", "Asset is not available for download");
@@ -358,7 +358,7 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<RequestUploadResult> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
     const asset = await this.requireAsset(organizationId, assetId);
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", "Only pending or failed uploads can be retried");
@@ -402,7 +402,7 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<MediaAsset> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.delete");
     const asset = await this.requireAsset(organizationId, assetId);
     const now = this.deps.clock.now();
     const updated = await this.deps.assets.requestDeletion(organizationId, asset.id, now);

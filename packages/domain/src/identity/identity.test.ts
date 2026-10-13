@@ -115,7 +115,7 @@ describe("tenant isolation", () => {
       members.invite(outsider.id, { organizationId: organization.id, email: "z@example.com", role: "CREATOR" }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    // A CREATOR member lacks member:manage.
+    // A CREATOR member lacks member.manage.
     const { token } = await members.invite(owner.id, {
       organizationId: organization.id,
       email: "c@example.com",

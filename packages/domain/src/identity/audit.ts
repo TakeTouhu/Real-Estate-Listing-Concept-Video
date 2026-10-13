@@ -11,6 +11,8 @@ export const AuditAction = {
   InvitationAccepted: "invitation.accepted",
   MemberRoleChanged: "member.role_changed",
   MemberRemoved: "member.removed",
+  /** A member's attempt to give or take a role past its ceiling (ADR-0052 Decision 10). */
+  RoleChangeRefused: "member.role_change_refused",
 } as const;
 
 export type AuditActionValue = (typeof AuditAction)[keyof typeof AuditAction];

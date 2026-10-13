@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * Read a project's storyboard: the project, its scenes, and whether the
  * storyboard still matches the approved photos it was composed from.
  *
- * Any organization member may read. A project that has never been composed
+ * A member holding `video.view` may read. A project that has never been composed
  * returns no scenes and `fresh: false` — existing semantics, with no status
  * invented for the case.
  */

@@ -550,7 +550,7 @@ describe("tenant isolation for properties and assets", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("denies asset writes to a REVIEWER (insufficient role)", async () => {
+  it("denies asset writes to a VIEWER (insufficient role)", async () => {
     const ctx = await setup();
     const auth = new AuthService(ctx.deps, { sessionTtlSeconds: 3600 });
     const members = new MembershipService(ctx.deps, { invitationTtlSeconds: 3600 });
@@ -563,15 +563,15 @@ describe("tenant isolation for properties and assets", () => {
     const { token } = await members.invite(ctx.ownerId, {
       organizationId: ctx.orgId,
       email: "r@example.com",
-      role: "REVIEWER",
+      role: "VIEWER",
     });
-    const reviewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
-    await members.acceptInvitation(reviewer.id, token);
+    const viewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
+    await members.acceptInvitation(viewer.id, token);
 
-    // A reviewer may read but not write.
-    expect((await ctx.properties.list(reviewer.id, ctx.orgId)).length).toBe(1);
+    // A viewer may read but not write.
+    expect((await ctx.properties.list(viewer.id, ctx.orgId)).length).toBe(1);
     await expect(
-      ctx.assets.requestUpload(reviewer.id, {
+      ctx.assets.requestUpload(viewer.id, {
         organizationId: ctx.orgId,
         propertyId: property.id,
         originalFilename: "x.jpg",

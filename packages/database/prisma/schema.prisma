@@ -24,8 +24,10 @@ enum UserStatus {
 enum Role {
   OWNER
   ADMIN
+  MANAGER
   CREATOR
-  REVIEWER
+  VIEWER
+  BILLING
 }
 
 enum InvitationStatus {

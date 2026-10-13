@@ -36,7 +36,7 @@ function correctionField<T>(
  * property in the URL, maps JSON's omitted/null/value states onto
  * `CorrectionField`, and translates errors. Everything else — the room
  * vocabulary, the positive-integer priority rule, the empty-correction refusal,
- * the `SUCCEEDED` + `UNREVIEWED` lifecycle, `video:review`, tenant scoping,
+ * the `SUCCEEDED` + `UNREVIEWED` lifecycle, `analysis.review`, tenant scoping,
  * provenance, no-op semantics and the audit event — is decided by
  * `AnalysisService.correct` and is deliberately not restated here.
  *

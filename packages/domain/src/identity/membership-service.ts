@@ -1,8 +1,8 @@
 import { AppError } from "@app/shared";
 import { AuditAction, recordAudit } from "./audit";
-import { authorizeOrganization } from "./authorization";
+import { authorizeOrganization, type AuthContext } from "./authorization";
 import type { IdentityServiceDeps } from "./ports";
-import type { Role } from "./roles";
+import { hasPermission, mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
 import type { Invitation, Membership } from "./types";
 import { normalizeEmail } from "./util";
 
@@ -22,6 +22,23 @@ export interface InviteResult {
   readonly token: string;
 }
 
+/** What a refused role change was trying to do, for its audit entry. */
+interface RefusedChange {
+  readonly operation: "invite" | "change_role" | "remove_member" | "accept_invitation";
+  readonly resourceType: "organization" | "membership" | "invitation";
+  readonly resourceId: string;
+  readonly metadata: Record<string, unknown>;
+}
+
+/**
+ * Who holds which role, under the role-assignment ceiling (ADR-0052 Decision 10).
+ *
+ * Every path that gives or takes a role — invitation, its acceptance, role
+ * change, removal — asks `mayAssignRole` of every role it touches, so no member
+ * can reach a role it could not assign directly. A member refused on any of
+ * these paths is audited: a refused escalation attempt is an event, not a silent
+ * no-op.
+ */
 export class MembershipService {
   constructor(
     private readonly deps: IdentityServiceDeps,
@@ -29,8 +46,15 @@ export class MembershipService {
   ) {}
 
   async invite(actorUserId: string, input: InviteInput): Promise<InviteResult> {
-    await authorizeOrganization(this.deps, actorUserId, input.organizationId, "member:manage");
     const email = normalizeEmail(input.email);
+    const refused: RefusedChange = {
+      operation: "invite",
+      resourceType: "organization",
+      resourceId: input.organizationId,
+      metadata: { email, requestedRole: input.role },
+    };
+    const actor = await this.requireMemberPermission(actorUserId, input.organizationId, "member.manage", refused);
+    if (!mayAssignRole(actor.role, input.role)) await this.refuse(actor, refused);
     if (await this.deps.repos.invitations.findPending(input.organizationId, email)) {
       throw new AppError("VALIDATION_FAILED", "A pending invitation already exists for this email");
     }
@@ -71,6 +95,30 @@ export class MembershipService {
     if (existing) {
       throw new AppError("VALIDATION_FAILED", "User is already a member of this organization");
     }
+    // Acceptance is where the role is actually granted, so the ceiling is asked
+    // again of the inviter as it is now: an invitation outlives nothing its
+    // inviter has since lost.
+    const inviter = await this.deps.repos.memberships.find(invitation.organizationId, invitation.invitedByUserId);
+    if (
+      inviter === null ||
+      !hasPermission(inviter.role, "member.manage") ||
+      !mayAssignRole(inviter.role, invitation.role)
+    ) {
+      await recordAudit(this.deps, {
+        organizationId: invitation.organizationId,
+        actorUserId: userId,
+        action: AuditAction.RoleChangeRefused,
+        resourceType: "invitation",
+        resourceId: invitation.id,
+        metadata: {
+          operation: "accept_invitation",
+          requestedRole: invitation.role,
+          invitedByUserId: invitation.invitedByUserId,
+          inviterRole: inviter?.role ?? null,
+        },
+      });
+      throw new AppError("FORBIDDEN", "This invitation can no longer be accepted");
+    }
     const membership = await this.deps.repos.memberships.create({
       organizationId: invitation.organizationId,
       userId,
@@ -87,13 +135,13 @@ export class MembershipService {
       action: AuditAction.InvitationAccepted,
       resourceType: "membership",
       resourceId: `${invitation.organizationId}:${userId}`,
-      metadata: { role: invitation.role },
+      metadata: { role: invitation.role, scope: scopeForRole(invitation.role) },
     });
     return membership;
   }
 
   async listMembers(actorUserId: string, organizationId: string): Promise<Membership[]> {
-    await authorizeOrganization(this.deps, actorUserId, organizationId, "member:read");
+    await authorizeOrganization(this.deps, actorUserId, organizationId, "member.view");
     return this.deps.repos.memberships.listByOrganization(organizationId);
   }
 
@@ -103,9 +151,18 @@ export class MembershipService {
     targetUserId: string,
     role: Role,
   ): Promise<Membership> {
-    await authorizeOrganization(this.deps, actorUserId, organizationId, "member:manage");
+    const refused = (currentRole: Role | null): RefusedChange => ({
+      operation: "change_role",
+      resourceType: "membership",
+      resourceId: `${organizationId}:${targetUserId}`,
+      metadata: { targetUserId, currentRole, requestedRole: role },
+    });
+    const actor = await this.requireMemberPermission(actorUserId, organizationId, "permission.manage", refused(null));
     const target = await this.deps.repos.memberships.find(organizationId, targetUserId);
     if (!target) throw new AppError("NOT_FOUND", "Membership not found");
+    if (!mayAssignRole(actor.role, target.role) || !mayAssignRole(actor.role, role)) {
+      await this.refuse(actor, refused(target.role));
+    }
     if (target.role === "OWNER" && role !== "OWNER") {
       await this.assertNotLastOwner(organizationId, targetUserId);
     }
@@ -116,7 +173,7 @@ export class MembershipService {
       action: AuditAction.MemberRoleChanged,
       resourceType: "membership",
       resourceId: `${organizationId}:${targetUserId}`,
-      metadata: { role, previousRole: target.role },
+      metadata: { targetUserId, role, previousRole: target.role, scope: scopeForRole(role) },
     });
     return updated;
   }
@@ -126,9 +183,17 @@ export class MembershipService {
     organizationId: string,
     targetUserId: string,
   ): Promise<void> {
-    await authorizeOrganization(this.deps, actorUserId, organizationId, "member:manage");
+    const refused = (currentRole: Role | null): RefusedChange => ({
+      operation: "remove_member",
+      resourceType: "membership",
+      resourceId: `${organizationId}:${targetUserId}`,
+      metadata: { targetUserId, currentRole },
+    });
+    const actor = await this.requireMemberPermission(actorUserId, organizationId, "member.manage", refused(null));
     const target = await this.deps.repos.memberships.find(organizationId, targetUserId);
     if (!target) throw new AppError("NOT_FOUND", "Membership not found");
+    // Removing a member takes its role away, so the ceiling is asked of it.
+    if (!mayAssignRole(actor.role, target.role)) await this.refuse(actor, refused(target.role));
     if (target.role === "OWNER") {
       await this.assertNotLastOwner(organizationId, targetUserId);
     }
@@ -140,6 +205,34 @@ export class MembershipService {
       resourceType: "membership",
       resourceId: `${organizationId}:${targetUserId}`,
     });
+  }
+
+  /**
+   * The actor's membership, holding `permission`. A non-member is refused as any
+   * other organization access is, unaudited; a member lacking the permission is
+   * refused and audited.
+   */
+  private async requireMemberPermission(
+    actorUserId: string,
+    organizationId: string,
+    permission: Permission,
+    refused: RefusedChange,
+  ): Promise<AuthContext> {
+    const actor = await authorizeOrganization(this.deps, actorUserId, organizationId);
+    if (!hasPermission(actor.role, permission)) await this.refuse(actor, refused);
+    return actor;
+  }
+
+  private async refuse(actor: AuthContext, refused: RefusedChange): Promise<never> {
+    await recordAudit(this.deps, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: AuditAction.RoleChangeRefused,
+      resourceType: refused.resourceType,
+      resourceId: refused.resourceId,
+      metadata: { operation: refused.operation, actorRole: actor.role, ...refused.metadata },
+    });
+    throw new AppError("FORBIDDEN", `Role ${actor.role} may not make this role change`);
   }
 
   private async assertNotLastOwner(organizationId: string, targetUserId: string): Promise<void> {

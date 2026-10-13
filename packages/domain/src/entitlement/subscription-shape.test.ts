@@ -31,14 +31,16 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is this phase's", () => {
+  it("adds exactly one migration, and it is this phase's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the newest: Phase 6C added migration 19 after it. Phase 6B still
+    // contributed exactly one migration, in place.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(18);
     expect(dirs.filter((dir) => dir.includes("phase6b"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(19);
+    expect(dirs).toHaveLength(20);
   });
 
   it("creates one table, rewrites nothing, and holds the channel rule in the schema", () => {

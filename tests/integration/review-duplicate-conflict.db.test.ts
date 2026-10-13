@@ -143,7 +143,7 @@ beforeEach(async () => {
     data: { id: ORG, name: "Dup Conflict", slug: `slug-${ORG}` },
   });
   await prisma.membership.create({
-    data: { organizationId: ORG, userId: REVIEWER, role: "REVIEWER" },
+    data: { organizationId: ORG, userId: REVIEWER, role: "CREATOR" },
   });
   await prisma.property.create({
     data: {

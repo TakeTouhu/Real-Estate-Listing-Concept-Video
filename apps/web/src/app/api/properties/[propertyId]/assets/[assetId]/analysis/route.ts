@@ -36,7 +36,7 @@ export async function POST(
   }
 }
 
-/** Read one asset's analysis. Any organization member may read. */
+/** Read one asset's analysis. A member holding `property.view` may read. */
 export async function GET(
   request: Request,
   context: { params: Promise<{ propertyId: string; assetId: string }> },

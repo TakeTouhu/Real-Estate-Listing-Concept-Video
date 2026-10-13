@@ -44,7 +44,7 @@ interface Props {
    * domain code into the browser bundle.
    */
   readonly minimumScenes: number;
-  /** Whether this member's role carries `property:write`. Decided by the server. */
+  /** Whether this member's role carries `video.generate`. Decided by the server. */
   readonly canCompose: boolean;
 }
 

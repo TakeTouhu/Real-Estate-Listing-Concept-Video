@@ -71,7 +71,7 @@ export class GenerationService {
    * The ordering is exact and every early exit is side-effect-free until a row
    * is actually created:
    *
-   * 1. authorize `property:write` — before any read, capability lookup, write
+   * 1. authorize `video.generate` and `unit.consume` — before any read, capability lookup, write
    *    or audit;
    * 2. `assertFresh` — the hard pre-spend gate, keeping its distinct
    *    `NEVER_COMPOSED` / `STALE` messages;
@@ -95,7 +95,7 @@ export class GenerationService {
    *   because generating on a model the caller did not ask for is the one
    *   outcome worse than refusing.
    *
-   * @throws AppError FORBIDDEN when the actor lacks `property:write`.
+   * @throws AppError FORBIDDEN when the actor lacks `video.generate` or `unit.consume`.
    * @throws AppError NOT_FOUND when the project, or the scene within it, is not
    *   this organization's — the two are indistinguishable.
    * @throws AppError VALIDATION_FAILED when the storyboard is stale/absent, the
@@ -114,8 +114,12 @@ export class GenerationService {
     modelKey?: string,
   ): Promise<SceneGeneration> {
     // (1) Authorization first. Nothing — not even a project read — happens for a
-    // caller who lacks write access to this organization.
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    // caller who may not generate, or may not spend the organization's Units
+    // (`unit.consume` is an independent permission, ADR-0052 Decision 10).
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, [
+      "video.generate",
+      "unit.consume",
+    ]);
 
     // (2) The hard freshness gate, with its precise messages. A stale or
     // never-composed storyboard is refused here, before anything billable.

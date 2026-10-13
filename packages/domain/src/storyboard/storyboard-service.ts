@@ -102,7 +102,7 @@ export class StoryboardService {
     propertyId: string,
     input: CreateProjectInput,
   ): Promise<VideoProject> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
 
     const property = await this.deps.properties.findById(organizationId, propertyId);
     if (!property) throw new AppError("NOT_FOUND", "Property not found");
@@ -173,7 +173,7 @@ export class StoryboardService {
     videoProjectId: string,
     bounds: DurationBounds,
   ): Promise<ComposedStoryboard> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
 
     const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
     if (!project) throw new AppError("NOT_FOUND", "Video project not found");
@@ -280,7 +280,7 @@ export class StoryboardService {
     organizationId: string,
     videoProjectId: string,
   ): Promise<{ project: VideoProject; freshness: FreshnessState }> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
 
     const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
     if (!project) throw new AppError("NOT_FOUND", "Video project not found");
@@ -296,7 +296,7 @@ export class StoryboardService {
 
   /**
    * A project with its scenes and whether the storyboard still matches its
-   * inputs. Read-level authorization: any organization member may look.
+   * inputs. Read-level authorization: `video.view`.
    *
    * A project that has never been composed reads as no scenes and not fresh —
    * existing semantics, with no status invented for the case.
@@ -321,7 +321,7 @@ export class StoryboardService {
     organizationId: string,
     propertyId: string,
   ): Promise<readonly VideoProject[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
     const property = await this.deps.properties.findById(organizationId, propertyId);
     if (!property) throw new AppError("NOT_FOUND", "Property not found");
     return this.deps.storyboards.projects.listByProperty(organizationId, propertyId);

@@ -97,6 +97,7 @@ interface Ctx {
   service: AnalysisService;
   ownerId: string;
   creatorId: string;
+  viewerId: string;
   outsiderId: string;
   orgId: string;
   otherOrgId: string;
@@ -158,6 +159,7 @@ beforeEach(async () => {
   const orgs = new OrganizationService(deps);
   const owner = await auth.register({ email: "o@e.com", password: PASSWORD, name: "Owner" });
   const creator = await auth.register({ email: "c@e.com", password: PASSWORD, name: "Creator" });
+  const viewer = await auth.register({ email: "v@e.com", password: PASSWORD, name: "Viewer" });
   const outsider = await auth.register({ email: "x@e.com", password: PASSWORD, name: "Out" });
   const { organization: org } = await orgs.createOrganization(owner.id, { name: "Acme" });
   const { organization: other } = await orgs.createOrganization(owner.id, { name: "Other" });
@@ -165,6 +167,11 @@ beforeEach(async () => {
     organizationId: org.id,
     userId: creator.id,
     role: "CREATOR",
+  });
+  await deps.repos.memberships.create({
+    organizationId: org.id,
+    userId: viewer.id,
+    role: "VIEWER",
   });
 
   const analyses = new InMemoryAssetAnalysisRepository(deps.clock);
@@ -191,6 +198,7 @@ beforeEach(async () => {
     service,
     ownerId: owner.id,
     creatorId: creator.id,
+    viewerId: viewer.id,
     outsiderId: outsider.id,
     orgId: org.id,
     otherOrgId: other.id,
@@ -315,8 +323,8 @@ describe("authentication, authorization and tenant isolation", () => {
     ).toBe(401);
   });
 
-  it("returns 403 for a CREATOR, who may analyze but not review", async () => {
-    currentUser.value = { user: { id: ctx.creatorId } };
+  it("returns 403 for a VIEWER, who may read analyses but not review them", async () => {
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(403);
     expect(
       (await reject(req({ organizationId: ctx.orgId, reason: "no" }), params())).status,
@@ -500,28 +508,18 @@ describe("POST /analysis/correction — lifecycle, authorization and tenancy", (
     expect(res.status).toBe(401);
   });
 
-  it("allows a REVIEWER and refuses a CREATOR", async () => {
+  it("allows a CREATOR and refuses a VIEWER", async () => {
     await analyzed("ast_1");
-    const reviewer = await new AuthService(ctx.deps, { sessionTtlSeconds: 3600 }).register({
-      email: "r@e.com",
-      password: PASSWORD,
-      name: "Reviewer",
-    });
-    await ctx.deps.repos.memberships.create({
-      organizationId: ctx.orgId,
-      userId: reviewer.id,
-      role: "REVIEWER",
-    });
-
-    currentUser.value = { user: { id: reviewer.id } };
-    expect(
-      (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,
-    ).toBe(200);
-
-    currentUser.value = { user: { id: ctx.creatorId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect(
       (await correct(req({ organizationId: ctx.orgId, roomType: "BALCONY" }), params())).status,
     ).toBe(403);
+
+    // `analysis.review` belongs to every content-working template since Phase 6C.
+    currentUser.value = { user: { id: ctx.creatorId } };
+    expect(
+      (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,
+    ).toBe(200);
   });
 
   it("returns 422 once the revision has been decided", async () => {
@@ -660,9 +658,9 @@ describe("nested property/asset route integrity", () => {
   });
 
   it("does not flatten an unrelated domain failure into 404", async () => {
-    // A CREATOR on a correctly-addressed asset is a permission problem, and must
+    // A VIEWER on a correctly-addressed asset is a permission problem, and must
     // stay a 403 rather than being hidden behind the route-integrity check.
-    currentUser.value = { user: { id: ctx.creatorId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(403);
     expect(
       (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,

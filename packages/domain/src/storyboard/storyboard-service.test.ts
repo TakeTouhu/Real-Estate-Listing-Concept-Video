@@ -261,13 +261,13 @@ describe("createProject", () => {
     expect(stored.project).toBeNull();
   });
 
-  it("denies a non-member and a REVIEWER", async () => {
+  it("denies a non-member and a VIEWER", async () => {
     const stranger = harness({ role: null, project: null });
     await expect(stranger.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
       /access/i,
     );
-    const reviewer = harness({ role: "REVIEWER", project: null });
-    await expect(reviewer.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
+    const viewer = harness({ role: "VIEWER", project: null });
+    await expect(viewer.service.createProject(ACTOR, ORG, PROP, input)).rejects.toThrow(
       /permission/i,
     );
   });
@@ -331,12 +331,12 @@ describe("authorization and tenancy", () => {
     await expect(service.compose(ACTOR, ORG, PROJECT, BOUNDS)).rejects.toThrow(/access/i);
   });
 
-  it("denies a REVIEWER, who lacks property:write", async () => {
-    const { service } = harness({ role: "REVIEWER" });
+  it("denies a VIEWER, who lacks video.generate", async () => {
+    const { service } = harness({ role: "VIEWER" });
     await expect(service.compose(ACTOR, ORG, PROJECT, BOUNDS)).rejects.toThrow(/permission/i);
   });
 
-  it("permits a role that holds property:write", async () => {
+  it("permits a role that holds video.generate", async () => {
     const { service, stored } = harness({ role: "CREATOR" });
     await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
     expect(stored.project!.status).toBe("STORYBOARD_READY");
@@ -648,9 +648,13 @@ describe("getStoryboard and listProjects", () => {
     expect(view.fresh).toBe(true);
   });
 
-  it("lets any member read, and hides another tenant's project", async () => {
-    const reviewer = harness({ role: "REVIEWER" });
-    await expect(reviewer.service.getStoryboard(ACTOR, ORG, PROJECT)).resolves.toBeDefined();
+  it("lets a VIEWER read, refuses BILLING, and hides another tenant's project", async () => {
+    const viewer = harness({ role: "VIEWER" });
+    await expect(viewer.service.getStoryboard(ACTOR, ORG, PROJECT)).resolves.toBeDefined();
+    const billing = harness({ role: "BILLING" });
+    await expect(billing.service.getStoryboard(ACTOR, ORG, PROJECT)).rejects.toThrow(
+      /lacks permission 'video.view'/,
+    );
 
     const foreign = harness({ project: project({ organizationId: "org_other" }) });
     await expect(foreign.service.getStoryboard(ACTOR, ORG, PROJECT)).rejects.toThrow(/not found/i);
