@@ -78,7 +78,9 @@ permission. A member without `permission.manage` is refused before the target is
 read (target role `null`). A non-member is refused like any other organization
 access and writes nothing into that organization's audit trail. A grant records
 `permission.granted` and a revocation `permission.revoked`, each with the target
-and its role.
+and its role, **in the same database transaction as the change**. A crash or a
+failed audit write therefore leaves neither, and a permission never becomes
+effective, or stops being so, unrecorded.
 
 A grant the member already holds changes nothing: no second row and no second
 audit entry, including when concurrent grants race. Revoking a grant that does
@@ -110,6 +112,9 @@ Recorded in `docs/decisions/TODO.md` for confirmation:
   `permission.manage` or `billing.manage`, so it must exist before any
   member-management or grant UI ships.
 - One extra read (the member's grants) per authorization.
+- The repository, not the service, writes a grant change's audit entry, because
+  only it can put both in one transaction. The Phase 6C membership changes do
+  not do this yet; that is recorded in `TODO.md`.
 
 ## Not decided here
 

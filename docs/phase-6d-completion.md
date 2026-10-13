@@ -15,7 +15,9 @@ Commits, oldest first:
 | `119b7c4` | the gap analysis |
 | `69439d7` | migration 20, effective permissions and the grant ceiling, `PermissionGrantService`, the Prisma and in-memory repositories, the membership paths and web gates on effective permissions, the suites, the advanced migration tripwires |
 | `45cae0d` | two database tests: cross-organization reads and single-permission revocation |
-| *(this commit)* | ADR-0058, the phase documentation and this record |
+| `065e8f3` | ADR-0058, the phase documentation and this record |
+| `6f024fe` | each grant change committed together with its audit entry (review of PR #77), with database tests that make the audit write fail |
+| *(this commit)* | this record, ADR-0058 and `TODO.md` updated for `6f024fe`, and the re-run mutation pass |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -41,8 +43,10 @@ file that would have to contain its own hash.
   - `property.create` is never granted to `VIEWER` / `BILLING`;
   - `video.share` is never granted.
 
-  Every refusal is audited as `permission.grant_refused`. Grants and revocations
-  are audited exactly once, also under concurrency.
+  Every refusal is audited as `permission.grant_refused`. A grant or
+  revocation is written in one transaction with its own audit entry, so a crash
+  or a failed audit write leaves neither; each is audited exactly once, also
+  under concurrency.
 
 Behavior a member can notice: none yet. No route or page grants or revokes, so
 every member's effective permissions still equal its template's.
@@ -79,20 +83,20 @@ sequenceDiagram
     GS->>AU: permission.grant_refused {operation, reason, actorRole, targetUserId, targetRole, permission}
     GS-->>A: FORBIDDEN
   end
-  GS->>R: insertIfAbsent (P2002 from a concurrent grant answers as a replay)
-  opt created
-    GS->>AU: permission.granted {targetUserId, targetRole, permission}
-  end
+  GS->>R: insertIfAbsent(grant, permission.granted {targetUserId, targetRole, permission})
+  R->>AU: one transaction: the grant row and its audit row, or neither
+  Note over R,AU: P2002 from a concurrent grant answers as a replay and writes nothing
   GS-->>A: the grant
 ```
 
 A revocation follows the same path, judged as `revoke` (so `property.create` can
-be taken back from a `VIEWER` or `BILLING` member). It deletes the row, answers
-`NOT_FOUND` when there was none, and records `permission.revoked`.
+be taken back from a `VIEWER` or `BILLING` member). It deletes the row and
+records `permission.revoked` in one transaction, and answers `NOT_FOUND`,
+writing nothing, when there was no row.
 
 ## Verification
 
-Measured on the committed tree `d1ff987` (commit `45cae0d`), against a local
+Measured on the committed tree `e6fa9b9` (commit `6f024fe`), against a local
 PostgreSQL 16 configured like CI.
 
 | Check | Result |
@@ -100,7 +104,7 @@ PostgreSQL 16 configured like CI.
 | `pnpm lint` | clean |
 | `pnpm typecheck` (root, all packages, `tests/integration`) | clean |
 | `pnpm test` | **4884 / 4884**, 156 files (identity: 169, including the grant ceiling 26, the grant service 37 and the shape test 5) |
-| `pnpm test:db` | **1227 / 1227**, 41 files (the permission-grants suite: 11) |
+| `pnpm test:db` | **1230 / 1230**, 41 files (the permission-grants suite: 14) |
 | `pnpm build` | Next.js production build succeeded |
 | `prisma migrate status` | 21 migrations, schema up to date |
 | `prisma migrate diff --from-migrations … --to-schema-datamodel --exit-code` | no difference |
@@ -111,13 +115,18 @@ CI on the pull request's exact head is reported with the pull request.
 
 One textual edit per definition, at an anchor that must occur exactly once, run
 against the suite or suites listed for it; every mutated file is restored and
-re-hashed, and a SHA-256 manifest of all 733 files in the working tree is
+re-hashed, and a SHA-256 manifest of all 735 files in the working tree is
 compared before and after the pass.
 
-**Authoritative: 40 run, 40 killed, 0 survivors, 0 anchor-missing**, in one
-uninterrupted pass against the tree `d1ff987` (commit `45cae0d`), the reviewed
+**Authoritative: 48 run, 48 killed, 0 survivors, 0 anchor-missing**, in one
+uninterrupted pass against the tree `e6fa9b9` (commit `6f024fe`), the reviewed
 runtime tree. The only later commit is this one, which changes documentation
-only. All 733 files were byte-identical after the pass.
+only. All 735 files were byte-identical after the pass.
+
+It supersedes the first pass (40 of 40 killed against `d1ff987`, commit
+`45cae0d`): `6f024fe` moved the grant and revocation audit writes into the
+repositories, so V04, V05, V07 and V11 were re-anchored there, and V14 to V16
+and R06 to R10 were added for the audit entry and the shared transaction.
 
 | ID | Category | Mutation | File | Killed by |
 | --- | --- | --- | --- | --- |
@@ -141,22 +150,30 @@ only. All 733 files were byte-identical after the pass.
 | V01 | service | `permission.manage` is not required | `permission-grant-service.ts` | identity: 4 failing |
 | V02 | audit | a refusal writes no audit entry | `permission-grant-service.ts` | identity: 17 failing |
 | V03 | audit | a refusal does not refuse | `permission-grant-service.ts` | identity: 17 failing |
-| V04 | audit | a repeated grant is audited again | `permission-grant-service.ts` | identity: 1 failing |
-| V05 | audit | a grant writes no audit entry | `permission-grant-service.ts` | identity: 2 failing |
+| V04 | audit | a repeated grant is audited again (in-memory repository) | `in-memory.ts` | identity: 1 failing |
+| V05 | audit | a grant writes no audit entry (in-memory repository) | `in-memory.ts` | identity: 2 failing |
 | V06 | service | revoking a grant that does not exist succeeds | `permission-grant-service.ts` | identity: 2 failing |
-| V07 | audit | a revocation writes no audit entry | `permission-grant-service.ts` | identity: 1 failing |
+| V07 | audit | a revocation writes no audit entry (in-memory repository) | `in-memory.ts` | identity: 1 failing |
 | V08 | service | a revocation is judged as a grant | `permission-grant-service.ts` | identity: 4 failing |
 | V09 | service | listing grants needs only membership | `permission-grant-service.ts` | identity: 1 failing |
 | V10 | service | listing a non-member's grants is not NOT_FOUND | `permission-grant-service.ts` | identity: 1 failing |
-| V11 | audit | a grant's audit entry omits the target's role | `permission-grant-service.ts` | identity: 1 failing |
+| V11 | audit | a grant change's audit entry omits the target's role | `permission-grant-service.ts` | identity: 2 failing |
 | V12 | service | the grant records its recipient as its granter | `permission-grant-service.ts` | identity: 1 failing |
 | V13 | service | a target that is not a member is not NOT_FOUND | `permission-grant-service.ts` | identity: 1 failing |
+| V14 | audit | a grant is audited as a revocation | `permission-grant-service.ts` | identity: 3 failing |
+| V15 | audit | a revocation is audited as a grant | `permission-grant-service.ts` | identity: 1 failing |
+| V16 | audit | a grant change is attributed to its target, not its actor | `permission-grant-service.ts` | identity: 2 failing |
 | I01 | cascade | removing an in-memory membership keeps its grants | `in-memory.ts` | identity: 1 failing |
-| R01 | repository | every insert failure is answered as a replay | `repositories.ts` | db: 1 failing |
-| R02 | repository | a replayed grant is reported as created | `repositories.ts` | db: 2 failing |
-| R03 | repository | removal always reports a grant removed | `repositories.ts` | db: 1 failing |
+| R01 | repository | every insert failure is answered as a replay | `repositories.ts` | db: 2 failing |
+| R02 | repository | a replayed grant is reported as created | `repositories.ts` | db: 1 failing |
+| R03 | repository | removal always reports a grant removed | `repositories.ts` | db: 2 failing |
 | R04 | repository | a member's grants are read across organizations | `repositories.ts` | db: 1 failing |
 | R05 | repository | revoking one permission removes every grant of the member | `repositories.ts` | db: 1 failing |
+| R06 | atomic audit | a grant writes no audit row | `repositories.ts` | db: 3 failing |
+| R07 | atomic audit | the grant row commits outside its audit entry's transaction | `repositories.ts` | db: 1 failing |
+| R08 | atomic audit | the revocation commits outside its audit entry's transaction | `repositories.ts` | db: 1 failing |
+| R09 | atomic audit | a revocation writes no audit row | `repositories.ts` | db: 2 failing |
+| R10 | atomic audit | a replayed grant writes an audit row | `repositories.ts` | db: 2 failing |
 | S20 | call site | starting a scene needs only `unit.consume` | `generation-service.ts` | generation: 1 failing |
 | W01 | web | the review board offers decisions to a video viewer | `review-view.ts` | review-view: 2 failing |
 | D01 | migration | the CHECK admits `video.share` | `migration.sql` | identity: 1 failing |
@@ -214,6 +231,9 @@ production scheduler activation and live Stripe charges all remain **BLOCKED**.
   `billing.manage`, before any member-management or grant UI ships.
 - The Phase 6C and 6D choices ADR-0052 did not make, recorded in
   `docs/decisions/TODO.md` for confirmation.
+- The Phase 6C membership changes (role change, removal, invitation
+  acceptance) still append their audit entry after the change, not in its
+  transaction. Recorded in `docs/decisions/TODO.md`.
 - **Open decision gates** from earlier packages:
   - what a customer regeneration costs in Units;
   - what happens to a self-service renewal whose payment fails.

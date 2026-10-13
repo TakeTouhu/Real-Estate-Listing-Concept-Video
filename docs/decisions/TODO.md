@@ -1239,6 +1239,12 @@ them is **built**. Each item below records the settled decision and what remains
       (3) Granting `property.create` to a `VIEWER` or `BILLING` member is refused
       rather than stored as an ineffective row. (4) A repeated grant is a no-op;
       revoking an absent grant is `NOT_FOUND`.
+- [ ] **Commit each membership change together with its audit entry.** A role
+      change, a member removal and an invitation acceptance (Phase 6C,
+      ADR-0057) append their audit entry after the change, so a crash between
+      the two leaves the change unaudited. Individual grants already commit
+      both in one transaction (ADR-0058); the membership changes should do the
+      same before any member-management UI ships.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.
