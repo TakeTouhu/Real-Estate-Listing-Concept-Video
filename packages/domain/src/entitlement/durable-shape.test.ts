@@ -46,9 +46,11 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the last: Phase 6B added migration 18 after it. Phase 6A still
+    // contributed exactly one migration, in place.
     expect(dirs.filter((dir) => dir.includes("phase6a"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(18);
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(17);
+    expect(dirs).toHaveLength(19);
   });
 
   it("creates the three ledger tables and rewrites no existing row", () => {

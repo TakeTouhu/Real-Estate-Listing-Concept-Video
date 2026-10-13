@@ -93,15 +93,16 @@ enum RoomType {
 }
 
 model Organization {
-  id          String             @id
-  name        String
-  slug        String             @unique
-  status      OrganizationStatus @default(ACTIVE)
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  memberships Membership[]
-  invitations Invitation[]
-  auditLogs   AuditLog[]
+  id           String                    @id
+  name         String
+  slug         String                    @unique
+  status       OrganizationStatus        @default(ACTIVE)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  memberships  Membership[]
+  invitations  Invitation[]
+  auditLogs    AuditLog[]
+  subscription OrganizationSubscription?
 
   @@map("organizations")
 }
@@ -1570,4 +1571,30 @@ model GenerationReservationAllocation {
   @@index([entitlementPeriodId])
   @@index([addOnBlockId])
   @@map("generation_reservation_allocations")
+}
+
+/// How a subscription was sold (ADR-0053 Decision 5). Enterprise is
+/// sales-assisted only; a CHECK holds that.
+enum SubscriptionChannel {
+  SELF_SERVICE
+  SALES_ASSISTED
+}
+
+/// One organization's commercial subscription (Phase 6B, ADR-0056): its plan,
+/// the channel it was sold through, and the instant its monthly renewal periods
+/// are counted from. Periods are opened from it on demand; none is stored here.
+model OrganizationSubscription {
+  id                  String              @id
+  organizationId      String              @unique
+  planKey             EntitlementPlanKey
+  channel             SubscriptionChannel
+  /// The start of renewal period 0.
+  anchorAt            DateTime
+  /// The commercial record it came from. Never required to be Stripe.
+  commercialReference String
+  createdAt           DateTime            @default(now())
+  /// RESTRICT: billing evidence outlives casual deletion (ADR-0053 Decision 7).
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@map("organization_subscriptions")
 }

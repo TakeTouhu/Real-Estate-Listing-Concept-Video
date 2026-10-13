@@ -1222,6 +1222,12 @@ them is **built**. Each item below records the settled decision and what remains
       recovery cycle rather than a re-queue, the enumerated audit fields, and
       per-row transactional/CAS-safe action with per-row eligibility
       re-evaluation. **No global per-cause revert.**
+- [x] **Record which plan an organization is on, and renew its periods.**
+      *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
+      organization (plan, channel, anchor, commercial reference; Enterprise
+      sales-assisted only), monthly periods derived from the anchor, and
+      on-demand idempotent renewal through the Phase 6A ledger with no scheduler.*
+      Dormant: no application code provisions or renews yet.
 - [ ] **Build subscription billing, cancellation and plan changes.** ADR-0053
       Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
       renewal; cancellation effective at period end with no proration; the refund
@@ -1319,8 +1325,9 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-One gate, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
-**It may not be guessed.** Every other gate is closed and recorded below.
+Two gates: one found by the Phase 6A gap analysis
+(`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056). **Neither may be
+guessed.** Every other gate is closed and recorded below.
 
 - [ ] **Decide what a customer regeneration costs in Units** — does not block
       Phase 6A, which builds no regeneration pricing and does not treat today's
@@ -1330,6 +1337,14 @@ One gate, found by the Phase 6A gap analysis (`docs/phase-6a-gap-analysis.md`).
       consumes additional Unit(s). Whether a per-scene regeneration costs the
       scene's Units, the whole video's, or one Unit is undecided, and must be
       settled before paid regeneration is built.
+- [ ] **Decide what happens to a self-service renewal whose payment fails** —
+      does not block Phase 6B, which provisions no self-service subscription from
+      a payment and wires no caller. Renewal today opens the period containing an
+      instant for any provisioned subscription, which is right for sales-assisted
+      contracts. No approved decision covers dunning: whether a failed monthly
+      charge withholds the new period's Units, grants them during a grace window,
+      or suspends generation, and when the subscription ends. Must be settled
+      before self-service Stripe billing is built.
 
 ### Decision gates — CLOSED
 

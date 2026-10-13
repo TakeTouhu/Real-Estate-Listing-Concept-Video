@@ -308,6 +308,8 @@ export async function dropFixtureEntitlement(prisma: PrismaClient): Promise<void
   });
   await prisma.unitAddOnBlock.deleteMany({ where: { organizationId: { in: orgs } } });
   await prisma.unitEntitlementPeriod.deleteMany({ where: { organizationId: { in: orgs } } });
+  // RESTRICT on the organization: a subscription must go before its organization.
+  await prisma.organizationSubscription.deleteMany({ where: { organizationId: { in: orgs } } });
   await prisma.auditLog.deleteMany({ where: { organizationId: { in: orgs } } });
   await prisma.organization.deleteMany({ where: { id: { in: orgs } } });
 }

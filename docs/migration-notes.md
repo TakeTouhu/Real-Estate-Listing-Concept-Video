@@ -927,3 +927,42 @@ would need the `btree_gist` extension.
 
 Forward-only, like every migration here. Reverting the application leaves the
 new tables unused and `funding` set on every row; nothing older reads them.
+
+## Phase 6B — the organization subscription
+
+**Migration `00000000000018_phase6b_organization_subscriptions`.** One table and
+one enum. ADR-0056.
+
+### New table
+
+| Table | Purpose |
+| --- | --- |
+| `organization_subscriptions` | one organization's plan, sales channel, renewal anchor and commercial reference |
+
+### New enum
+
+`SubscriptionChannel` (`SELF_SERVICE`, `SALES_ASSISTED`). `EntitlementPlanKey`
+(migration 17) is **reused** for the plan.
+
+### Constraints that do real work
+
+| Name | Rule |
+| --- | --- |
+| `organization_subscriptions_organizationId_key` | one subscription per organization; orders two concurrent first provisions |
+| `organization_subscriptions_shape_check` | non-empty commercial reference; `ENTERPRISE` only on `SALES_ASSISTED` |
+| `organization_subscriptions_organizationId_fkey` | `RESTRICT`: an organization cannot be deleted from under its commercial record |
+
+Unlike the Phase 6A ledger tables, this one has a foreign key to
+`organizations`: a subscription for an organization that does not exist is a
+defect, and `RESTRICT` still keeps commercial history from being deleted through
+the organization row.
+
+**No backfill.** No existing organization is given a subscription; provisioning
+is an explicit input. No existing table, column or row is read, updated or
+deleted.
+
+### Rollback
+
+Forward-only. Reverting the application leaves the table unused; nothing older
+reads it.
+

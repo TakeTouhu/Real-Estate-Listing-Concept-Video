@@ -143,12 +143,21 @@ duplicate webhooks and worker crashes; no route is knowingly submitted at a loss
 entitlement periods with a frozen plan snapshot, quality-tagged add-on blocks,
 multi-source eligibility-first allocation frozen at reservation, all-or-nothing
 funding, and Transaction G spending the frozen set. Implemented and dormant; the
-stale 12-month / 5% constants are removed. **Not yet built in Phase 6:** purchase
-checkout and the customer-approved block grant, renewal scheduling, Stripe and
-sales-assisted billing, seats and storage blocks, upgrade/downgrade, charged
-disclosure recomposition, the internal recovery budget, the Cost Safety Guard
-threshold, and reconciliation/admin controls. What a customer regeneration costs
-in Units is an open decision gate.
+stale 12-month / 5% constants are removed.
+
+**Phase 6B — the organization subscription and period renewal** (ADR-0056,
+migration 18): one subscription per organization (plan, `SELF_SERVICE` or
+`SALES_ASSISTED` channel, renewal anchor, commercial reference; Enterprise
+sales-assisted only), monthly periods derived from the anchor, and renewal that
+opens the period containing an instant on demand and idempotently — no
+scheduler. Implemented and dormant.
+
+**Not yet built in Phase 6:** purchase checkout and the customer-approved block
+grant, Stripe and sales-assisted billing, subscription cancellation, seats and
+storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
+recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
+controls. Two decision gates are open: what a customer regeneration costs in
+Units, and what happens to a self-service renewal whose payment fails.
 
 ## Phase 7 — SaaS operations and production readiness
 
