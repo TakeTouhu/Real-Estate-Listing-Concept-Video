@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
+import { authorizeOrganization } from "./authorization";
 import { ROLES, type Role } from "./roles";
 import type { AuditLog } from "./types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
@@ -255,5 +256,34 @@ describe("acceptInvitation", () => {
     await expect(fx.members.acceptInvitation(invitee.id, token)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await roleOf(invitee.id)).toBeUndefined();
     expect(refusals()[0]!.metadata).toMatchObject({ inviterRole: null });
+  });
+});
+
+describe("listMembers", () => {
+  it.each(["OWNER", "ADMIN", "MANAGER", "BILLING"] as const)("lets a %s, who holds member.view, list members", async (role) => {
+    expect(await fx.members.listMembers(fx.ids[role], fx.orgId)).toHaveLength(ROLES.length + 1);
+  });
+
+  it.each(["CREATOR", "VIEWER"] as const)("refuses a %s, who does not hold member.view", async (role) => {
+    await expect(fx.members.listMembers(fx.ids[role], fx.orgId)).rejects.toThrow(/lacks permission 'member\.view'/);
+  });
+});
+
+describe("authorizeOrganization", () => {
+  it("requires every permission it is given, not only the first", async () => {
+    await expect(
+      authorizeOrganization(fx.deps, fx.ids.CREATOR, fx.orgId, ["organization.view", "billing.manage"]),
+    ).rejects.toThrow(/lacks permission 'billing\.manage'/);
+    await expect(
+      authorizeOrganization(fx.deps, fx.ids.BILLING, fx.orgId, ["organization.view", "billing.manage"]),
+    ).resolves.toMatchObject({ role: "BILLING" });
+  });
+
+  it("checks a single permission given alone, and only membership when given none", async () => {
+    await expect(authorizeOrganization(fx.deps, fx.ids.VIEWER, fx.orgId, "member.view")).rejects.toThrow(
+      /lacks permission 'member\.view'/,
+    );
+    await expect(authorizeOrganization(fx.deps, fx.ids.VIEWER, fx.orgId)).resolves.toMatchObject({ role: "VIEWER" });
+    await expect(authorizeOrganization(fx.deps, fx.outsiderId, fx.orgId)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

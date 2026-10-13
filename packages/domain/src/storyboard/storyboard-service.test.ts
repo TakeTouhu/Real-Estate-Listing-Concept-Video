@@ -667,6 +667,13 @@ describe("getStoryboard and listProjects", () => {
     expect(projects[0]!.propertyId).toBe(PROP);
   });
 
+  it("lists projects for a VIEWER and refuses a BILLING member", async () => {
+    expect(await harness({ role: "VIEWER" }).service.listProjects(ACTOR, ORG, PROP)).toHaveLength(1);
+    await expect(harness({ role: "BILLING" }).service.listProjects(ACTOR, ORG, PROP)).rejects.toThrow(
+      /lacks permission 'video\.view'/,
+    );
+  });
+
   it("reports an unknown or foreign property as NOT_FOUND rather than an empty list", async () => {
     // An empty list would confirm the property does not exist *here*, which is
     // the same disclosure the 404 exists to prevent.
