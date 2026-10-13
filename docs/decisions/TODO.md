@@ -1239,19 +1239,28 @@ them is **built**. Each item below records the settled decision and what remains
       (3) Granting `property.create` to a `VIEWER` or `BILLING` member is refused
       rather than stored as an ineffective row. (4) A repeated grant is a no-op;
       revoking an absent grant is `NOT_FOUND`.
-- [ ] **Commit each membership change together with its audit entry.** A role
-      change, a member removal and an invitation acceptance (Phase 6C,
-      ADR-0057) append their audit entry after the change, so a crash between
-      the two leaves the change unaudited. Individual grants already commit
-      both in one transaction (ADR-0058); the membership changes should do the
-      same before any member-management UI ships.
-- [ ] **Make the last-`OWNER` check race-free.** A role change and a member
-      removal (ADR-0057) count the organization's `OWNER`s, then write in a
-      separate step. Two `OWNER`s demoting or removing each other at the same
-      moment can each see the other still there, and the organization is left
-      with no `OWNER`. The count and the write need one transaction that locks
-      the organization's `OWNER` memberships (or runs serializable). No route
-      calls either change yet; this must land before any member-management UI.
+- [x] **Commit each membership change together with its audit entry.** Done
+      in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
+      each write their rows and audit entry in one transaction, in the
+      repository.
+- [x] **Make the last-`OWNER` check race-free.** Done in Phase 6E (ADR-0059):
+      demoting or removing an `OWNER` locks the organization's `OWNER`
+      memberships (`FOR UPDATE`, in `userId` order), counts them and writes in
+      one transaction. A role change or removal also applies only while the
+      member still holds the role its ceiling was checked against, and an
+      invitation leaves `PENDING` exactly once.
+- [ ] **Refuse a second pending invitation of the same email atomically.** The
+      pending-invitation check (Phase 6C) is a read, so two concurrent
+      invitations of one email to one organization can both be created. Each
+      acceptance is still checked, so this creates no access. Closing it needs a
+      partial unique index on (`organizationId`, `email`) where `PENDING`, that
+      is, a migration.
+- [ ] **Create an organization in one transaction.** Organization creation
+      (`POST /api/organizations`, reachable today) writes the organization, the
+      founding `OWNER` membership and `organization.created` in separate steps.
+      A crash between them leaves an organization no one belongs to (which no
+      one can reach) or one created unaudited. The same repository pattern as
+      ADR-0059 closes it.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.

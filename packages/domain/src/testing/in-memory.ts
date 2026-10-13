@@ -6,7 +6,10 @@ import type {
   IdentityRepositories,
   IdentityServiceDeps,
   IdGenerator,
+  InvitationAcceptance,
   InvitationRepository,
+  MembershipChangeAudit,
+  MembershipChangeOutcome,
   MembershipRepository,
   OrganizationRepository,
   PasswordHasher,
@@ -116,10 +119,15 @@ class InMemoryOrganizationRepository implements OrganizationRepository {
   }
 }
 
+/**
+ * Each change checks and writes with no `await` in between, so concurrent calls
+ * interleave only between whole changes, as the database's transactions do.
+ */
 class InMemoryMembershipRepository implements MembershipRepository {
   private readonly rows = new Map<string, Membership>();
   constructor(
     private readonly clock: Clock,
+    private readonly auditLogs: AuditLogRepository,
     /** Mirrors the grants' foreign key: removing a membership removes its grants. */
     private readonly onRemove: (organizationId: string, userId: string) => void,
   ) {}
@@ -127,9 +135,16 @@ class InMemoryMembershipRepository implements MembershipRepository {
     return `${organizationId}::${userId}`;
   }
   create(input: Omit<Membership, "createdAt">): Promise<Membership> {
+    return Promise.resolve(this.insert(input));
+  }
+  /** Synchronous insert, for an acceptance that must not yield before writing. */
+  insert(input: Omit<Membership, "createdAt">): Membership {
     const membership: Membership = { ...input, createdAt: this.clock.now() };
     this.rows.set(this.key(input.organizationId, input.userId), membership);
-    return Promise.resolve(membership);
+    return membership;
+  }
+  has(organizationId: string, userId: string): boolean {
+    return this.rows.has(this.key(organizationId, userId));
   }
   find(organizationId: string, userId: string): Promise<Membership | null> {
     return Promise.resolve(this.rows.get(this.key(organizationId, userId)) ?? null);
@@ -142,18 +157,39 @@ class InMemoryMembershipRepository implements MembershipRepository {
   listByUser(userId: string): Promise<Membership[]> {
     return Promise.resolve([...this.rows.values()].filter((m) => m.userId === userId));
   }
-  updateRole(organizationId: string, userId: string, role: Role): Promise<Membership> {
+  async changeRole(
+    organizationId: string,
+    userId: string,
+    expectedRole: Role,
+    role: Role,
+    audit: MembershipChangeAudit,
+  ): Promise<MembershipChangeOutcome> {
     const key = this.key(organizationId, userId);
     const existing = this.rows.get(key);
-    if (!existing) throw new Error("membership not found");
-    const updated: Membership = { ...existing, role };
-    this.rows.set(key, updated);
-    return Promise.resolve(updated);
+    if (existing?.role !== expectedRole) return "STALE";
+    if (this.takesLastOwner(organizationId, expectedRole, role !== expectedRole)) return "LAST_OWNER";
+    this.rows.set(key, { ...existing, role });
+    await this.auditLogs.append(audit);
+    return "APPLIED";
   }
-  remove(organizationId: string, userId: string): Promise<void> {
-    this.rows.delete(this.key(organizationId, userId));
+  async remove(
+    organizationId: string,
+    userId: string,
+    expectedRole: Role,
+    audit: MembershipChangeAudit,
+  ): Promise<MembershipChangeOutcome> {
+    const key = this.key(organizationId, userId);
+    if (this.rows.get(key)?.role !== expectedRole) return "STALE";
+    if (this.takesLastOwner(organizationId, expectedRole, true)) return "LAST_OWNER";
+    this.rows.delete(key);
     this.onRemove(organizationId, userId);
-    return Promise.resolve();
+    await this.auditLogs.append(audit);
+    return "APPLIED";
+  }
+  /** Whether a member holding `role`, losing it, is the organization's last OWNER. */
+  private takesLastOwner(organizationId: string, role: Role, loses: boolean): boolean {
+    if (role !== "OWNER" || !loses) return false;
+    return [...this.rows.values()].filter((m) => m.organizationId === organizationId && m.role === "OWNER").length <= 1;
   }
 }
 
@@ -193,11 +229,16 @@ class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
 
 class InMemoryInvitationRepository implements InvitationRepository {
   private readonly byId = new Map<string, Invitation>();
-  constructor(private readonly clock: Clock) {}
-  create(input: Omit<Invitation, "createdAt">): Promise<Invitation> {
+  constructor(
+    private readonly clock: Clock,
+    private readonly auditLogs: AuditLogRepository,
+    private readonly memberships: InMemoryMembershipRepository,
+  ) {}
+  async create(input: Omit<Invitation, "createdAt">, audit: MembershipChangeAudit): Promise<Invitation> {
     const invitation: Invitation = { ...input, createdAt: this.clock.now() };
     this.byId.set(invitation.id, invitation);
-    return Promise.resolve(invitation);
+    await this.auditLogs.append(audit);
+    return invitation;
   }
   findByTokenHash(tokenHash: string): Promise<Invitation | null> {
     return Promise.resolve(
@@ -211,9 +252,24 @@ class InMemoryInvitationRepository implements InvitationRepository {
       ) ?? null,
     );
   }
-  update(invitation: Invitation): Promise<Invitation> {
-    this.byId.set(invitation.id, invitation);
-    return Promise.resolve(invitation);
+  expire(invitationId: string): Promise<void> {
+    const current = this.byId.get(invitationId);
+    if (current?.status === "PENDING") this.byId.set(invitationId, { ...current, status: "EXPIRED" });
+    return Promise.resolve();
+  }
+  async accept(
+    invitation: Invitation,
+    userId: string,
+    acceptedAt: Date,
+    audit: MembershipChangeAudit,
+  ): Promise<InvitationAcceptance> {
+    const current = this.byId.get(invitation.id);
+    if (current?.status !== "PENDING") return { outcome: "STALE" };
+    if (this.memberships.has(invitation.organizationId, userId)) return { outcome: "ALREADY_MEMBER" };
+    this.byId.set(invitation.id, { ...current, status: "ACCEPTED", acceptedAt });
+    const membership = this.memberships.insert({ organizationId: invitation.organizationId, userId, role: invitation.role });
+    await this.auditLogs.append(audit);
+    return { outcome: "ACCEPTED", membership };
   }
   listByOrganization(organizationId: string): Promise<Invitation[]> {
     return Promise.resolve(
@@ -264,15 +320,16 @@ export interface TestRepositories extends IdentityRepositories {
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
   const auditLogs = new InMemoryAuditLogRepository(clock);
   const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
+  const memberships = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) =>
+    permissionGrants.removeAllForMember(organizationId, userId),
+  );
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
     organizations: new InMemoryOrganizationRepository(clock),
-    memberships: new InMemoryMembershipRepository(clock, (organizationId, userId) =>
-      permissionGrants.removeAllForMember(organizationId, userId),
-    ),
+    memberships,
     permissionGrants,
-    invitations: new InMemoryInvitationRepository(clock),
+    invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
     sessions: new InMemorySessionRepository(clock),
     auditLogs,
   };

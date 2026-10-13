@@ -1027,3 +1027,10 @@ Additive only. No existing table, column or row is read, updated or deleted.
 
 Forward-only. Reverting the application leaves the table unused, and every
 member's permissions fall back to the role template; nothing older reads it.
+
+## Phase 6E — membership changes made atomic
+
+**Not applicable: no migration.** No table, column, constraint or index changed
+(ADR-0059). The new transactions and the `FOR UPDATE` lock on `memberships` are
+application code. Reverting the application restores the earlier, non-atomic
+writes against the same schema.

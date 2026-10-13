@@ -504,6 +504,11 @@ its role template, one row per (organization, user, permission), cascading from
 the membership. A CHECK admits the 26 grantable permissions. Groups and the
 Property responsible-user and group assignments are still later packages.
 
+## Phase 6E — membership changes made atomic
+
+No entity, column or constraint changed. The membership and invitation writes
+now commit with their `audit_logs` row in one transaction (ADR-0059).
+
 ## Not implemented yet (later phases)
 
 `ConsentRecord` (Phase 6–7). These appear in

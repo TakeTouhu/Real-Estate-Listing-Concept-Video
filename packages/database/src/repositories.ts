@@ -56,6 +56,28 @@ function auditLogData(input: Omit<AuditLog, "id" | "createdAt">): Prisma.AuditLo
   };
 }
 
+/**
+ * Lock the organization's OWNER memberships, always in `userId` order so two
+ * callers cannot deadlock, and say whether `userId` losing OWNER is refused:
+ * `STALE` if it is no longer one of them, `LAST_OWNER` if no other remains. A
+ * row a concurrent transaction demoted or removed while this one waited drops
+ * out of the set once that transaction commits, so the count is never higher
+ * than what is true when this transaction writes.
+ */
+async function ownerLossRefusal(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  userId: string,
+): Promise<"STALE" | "LAST_OWNER" | null> {
+  const owners = await tx.$queryRaw<{ userId: string }[]>`
+    SELECT "userId" FROM "memberships"
+    WHERE "organizationId" = ${organizationId} AND "role" = 'OWNER'
+    ORDER BY "userId"
+    FOR UPDATE`;
+  if (!owners.some((owner) => owner.userId === userId)) return "STALE";
+  return owners.length > 1 ? null : "LAST_OWNER";
+}
+
 function toPermissionGrant(r: DbPermissionGrant): PermissionGrant {
   // The table's CHECK admits only the grantable vocabulary.
   if (!isPermission(r.permission)) throw new Error(`Unknown permission in grant: ${r.permission}`);
@@ -206,17 +228,33 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async listByUser(userId) {
       return (await prisma.membership.findMany({ where: { userId } })).map(toMembership);
     },
-    async updateRole(organizationId, userId, role: Role) {
-      return toMembership(
-        await prisma.membership.update({
-          where: { organizationId_userId: { organizationId, userId } },
+    async changeRole(organizationId, userId, expectedRole: Role, role: Role, audit) {
+      return prisma.$transaction(async (tx) => {
+        if (expectedRole === "OWNER" && role !== "OWNER") {
+          const refusal = await ownerLossRefusal(tx, organizationId, userId);
+          if (refusal) return refusal;
+        }
+        // Applies only while the member still holds the role it was checked against.
+        const { count } = await tx.membership.updateMany({
+          where: { organizationId, userId, role: expectedRole },
           data: { role },
-        }),
-      );
+        });
+        if (count === 0) return "STALE";
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return "APPLIED";
+      });
     },
-    async remove(organizationId, userId) {
-      await prisma.membership.delete({
-        where: { organizationId_userId: { organizationId, userId } },
+    async remove(organizationId, userId, expectedRole: Role, audit) {
+      return prisma.$transaction(async (tx) => {
+        if (expectedRole === "OWNER") {
+          const refusal = await ownerLossRefusal(tx, organizationId, userId);
+          if (refusal) return refusal;
+        }
+        // The member's grants go with it (foreign-key cascade).
+        const { count } = await tx.membership.deleteMany({ where: { organizationId, userId, role: expectedRole } });
+        if (count === 0) return "STALE";
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return "APPLIED";
       });
     },
   };
@@ -260,9 +298,9 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const invitations: InvitationRepository = {
-    async create(input) {
-      return toInvitation(
-        await prisma.invitation.create({
+    async create(input, audit) {
+      return prisma.$transaction(async (tx) => {
+        const row = await tx.invitation.create({
           data: {
             id: input.id,
             organizationId: input.organizationId,
@@ -274,8 +312,10 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
             expiresAt: input.expiresAt,
             acceptedAt: input.acceptedAt,
           },
-        }),
-      );
+        });
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return toInvitation(row);
+      });
     },
     async findByTokenHash(tokenHash) {
       const r = await prisma.invitation.findUnique({ where: { tokenHash } });
@@ -287,13 +327,33 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
       });
       return r ? toInvitation(r) : null;
     },
-    async update(invitation) {
-      return toInvitation(
-        await prisma.invitation.update({
-          where: { id: invitation.id },
-          data: { status: invitation.status, acceptedAt: invitation.acceptedAt },
-        }),
-      );
+    async expire(invitationId) {
+      await prisma.invitation.updateMany({ where: { id: invitationId, status: "PENDING" }, data: { status: "EXPIRED" } });
+    },
+    async accept(invitation, userId, acceptedAt, audit) {
+      const { organizationId, role } = invitation;
+      try {
+        return await prisma.$transaction(async (tx) => {
+          // Moves from PENDING exactly once: a concurrent acceptance waits on
+          // this row, then finds it no longer pending and writes nothing.
+          const { count } = await tx.invitation.updateMany({
+            where: { id: invitation.id, status: "PENDING" },
+            data: { status: "ACCEPTED", acceptedAt },
+          });
+          if (count === 0) return { outcome: "STALE" } as const;
+          const row = await tx.membership.create({ data: { organizationId, userId, role } });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "ACCEPTED", membership: toMembership(row) } as const;
+        });
+      } catch (error) {
+        // The membership key refused the row: the user became a member
+        // meanwhile, and the whole acceptance rolled back. Classified from the
+        // error itself, not by reading the membership again, which a
+        // concurrent removal could already have deleted.
+        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown } };
+        if (code !== "P2002" || meta?.modelName !== "Membership") throw error;
+        return { outcome: "ALREADY_MEMBER" };
+      }
     },
     async listByOrganization(organizationId) {
       return (await prisma.invitation.findMany({ where: { organizationId } })).map(toInvitation);

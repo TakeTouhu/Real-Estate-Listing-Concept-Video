@@ -167,6 +167,13 @@ revocations go through the grant ceiling (`permission.manage`, the target's role
 `OWNER`-only `permission.manage` / `billing.manage` / `disclosure.none`, delegate
 only what you hold), each refusal audited. Dormant: no route or page grants.
 
+**Phase 6E — membership changes made atomic and race-free** (ADR-0059, no
+migration): invitation, acceptance, role change and removal each commit with
+their audit entry in one transaction; a role change or removal applies only to
+the role its ceiling saw; demoting or removing an `OWNER` counts the `OWNER`s
+under a lock, so the last one can never be taken away; an invitation is accepted
+once. Built before groups, which reuse the pattern.
+
 **Authorization still to build, before the commercial mutations that depend on
 it:** groups and group permissions, and Property-rooted row Scope. MFA for
 `permission.manage` and `billing.manage` holders before any member-management UI.

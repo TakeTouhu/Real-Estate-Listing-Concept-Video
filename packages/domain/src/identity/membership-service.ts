@@ -1,7 +1,7 @@
 import { AppError } from "@app/shared";
 import { AuditAction, recordAudit } from "./audit";
 import { authorizeOrganization, effectivePermissionsOf, type AuthContext } from "./authorization";
-import type { IdentityServiceDeps } from "./ports";
+import type { IdentityServiceDeps, MembershipChangeOutcome } from "./ports";
 import { mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
 import type { Invitation, Membership } from "./types";
 import { normalizeEmail } from "./util";
@@ -38,6 +38,10 @@ interface RefusedChange {
  * can reach a role it could not assign directly. A member refused on any of
  * these paths is audited: a refused escalation attempt is an event, not a silent
  * no-op.
+ *
+ * Each change commits in one transaction with its audit entry, and only against
+ * the state its checks read (ADR-0059): a member whose role changed meanwhile is
+ * not changed again on the strength of the old role.
  */
 export class MembershipService {
   constructor(
@@ -60,25 +64,28 @@ export class MembershipService {
     }
     const token = this.deps.tokens.generate();
     const now = this.deps.clock.now();
-    const invitation = await this.deps.repos.invitations.create({
-      id: this.deps.ids.generate("inv"),
-      organizationId: input.organizationId,
-      email,
-      role: input.role,
-      tokenHash: this.deps.tokens.hash(token),
-      status: "PENDING",
-      invitedByUserId: actorUserId,
-      expiresAt: new Date(now.getTime() + this.options.invitationTtlSeconds * 1000),
-      acceptedAt: null,
-    });
-    await recordAudit(this.deps, {
-      organizationId: input.organizationId,
-      actorUserId,
-      action: AuditAction.InvitationCreated,
-      resourceType: "invitation",
-      resourceId: invitation.id,
-      metadata: { email, role: input.role },
-    });
+    const id = this.deps.ids.generate("inv");
+    const invitation = await this.deps.repos.invitations.create(
+      {
+        id,
+        organizationId: input.organizationId,
+        email,
+        role: input.role,
+        tokenHash: this.deps.tokens.hash(token),
+        status: "PENDING",
+        invitedByUserId: actorUserId,
+        expiresAt: new Date(now.getTime() + this.options.invitationTtlSeconds * 1000),
+        acceptedAt: null,
+      },
+      {
+        organizationId: input.organizationId,
+        actorUserId,
+        action: AuditAction.InvitationCreated,
+        resourceType: "invitation",
+        resourceId: id,
+        metadata: { email, role: input.role },
+      },
+    );
     return { invitation, token };
   }
 
@@ -88,7 +95,7 @@ export class MembershipService {
       throw new AppError("NOT_FOUND", "Invitation is invalid or already used");
     }
     if (invitation.expiresAt.getTime() <= this.deps.clock.now().getTime()) {
-      await this.deps.repos.invitations.update({ ...invitation, status: "EXPIRED" });
+      await this.deps.repos.invitations.expire(invitation.id);
       throw new AppError("VALIDATION_FAILED", "Invitation has expired");
     }
     const existing = await this.deps.repos.memberships.find(invitation.organizationId, userId);
@@ -120,17 +127,10 @@ export class MembershipService {
       });
       throw new AppError("FORBIDDEN", "This invitation can no longer be accepted");
     }
-    const membership = await this.deps.repos.memberships.create({
-      organizationId: invitation.organizationId,
-      userId,
-      role: invitation.role,
-    });
-    await this.deps.repos.invitations.update({
-      ...invitation,
-      status: "ACCEPTED",
-      acceptedAt: this.deps.clock.now(),
-    });
-    await recordAudit(this.deps, {
+    // The checks above read; the acceptance writes only if the invitation is
+    // still pending and the user still no member, so a concurrent acceptance
+    // cannot make a second membership.
+    const accepted = await this.deps.repos.invitations.accept(invitation, userId, this.deps.clock.now(), {
       organizationId: invitation.organizationId,
       actorUserId: userId,
       action: AuditAction.InvitationAccepted,
@@ -138,7 +138,11 @@ export class MembershipService {
       resourceId: `${invitation.organizationId}:${userId}`,
       metadata: { role: invitation.role, scope: scopeForRole(invitation.role) },
     });
-    return membership;
+    if (accepted.outcome === "STALE") throw new AppError("NOT_FOUND", "Invitation is invalid or already used");
+    if (accepted.outcome === "ALREADY_MEMBER") {
+      throw new AppError("VALIDATION_FAILED", "User is already a member of this organization");
+    }
+    return accepted.membership;
   }
 
   async listMembers(actorUserId: string, organizationId: string): Promise<Membership[]> {
@@ -164,19 +168,19 @@ export class MembershipService {
     if (!mayAssignRole(actor.role, target.role) || !mayAssignRole(actor.role, role)) {
       await this.refuse(actor, refused(target.role));
     }
-    if (target.role === "OWNER" && role !== "OWNER") {
-      await this.assertNotLastOwner(organizationId, targetUserId);
-    }
-    const updated = await this.deps.repos.memberships.updateRole(organizationId, targetUserId, role);
-    await recordAudit(this.deps, {
-      organizationId,
-      actorUserId,
-      action: AuditAction.MemberRoleChanged,
-      resourceType: "membership",
-      resourceId: `${organizationId}:${targetUserId}`,
-      metadata: { targetUserId, role, previousRole: target.role, scope: scopeForRole(role) },
-    });
-    return updated;
+    // The ceiling was asked of the role just read: the change applies only while
+    // the member still holds it, and never takes the last OWNER away.
+    assertApplied(
+      await this.deps.repos.memberships.changeRole(organizationId, targetUserId, target.role, role, {
+        organizationId,
+        actorUserId,
+        action: AuditAction.MemberRoleChanged,
+        resourceType: "membership",
+        resourceId: `${organizationId}:${targetUserId}`,
+        metadata: { targetUserId, role, previousRole: target.role, scope: scopeForRole(role) },
+      }),
+    );
+    return { ...target, role };
   }
 
   async removeMember(
@@ -195,17 +199,16 @@ export class MembershipService {
     if (!target) throw new AppError("NOT_FOUND", "Membership not found");
     // Removing a member takes its role away, so the ceiling is asked of it.
     if (!mayAssignRole(actor.role, target.role)) await this.refuse(actor, refused(target.role));
-    if (target.role === "OWNER") {
-      await this.assertNotLastOwner(organizationId, targetUserId);
-    }
-    await this.deps.repos.memberships.remove(organizationId, targetUserId);
-    await recordAudit(this.deps, {
-      organizationId,
-      actorUserId,
-      action: AuditAction.MemberRemoved,
-      resourceType: "membership",
-      resourceId: `${organizationId}:${targetUserId}`,
-    });
+    assertApplied(
+      await this.deps.repos.memberships.remove(organizationId, targetUserId, target.role, {
+        organizationId,
+        actorUserId,
+        action: AuditAction.MemberRemoved,
+        resourceType: "membership",
+        resourceId: `${organizationId}:${targetUserId}`,
+        metadata: {},
+      }),
+    );
   }
 
   /**
@@ -235,12 +238,10 @@ export class MembershipService {
     });
     throw new AppError("FORBIDDEN", `Role ${actor.role} may not make this role change`);
   }
+}
 
-  private async assertNotLastOwner(organizationId: string, targetUserId: string): Promise<void> {
-    const members = await this.deps.repos.memberships.listByOrganization(organizationId);
-    const owners = members.filter((m) => m.role === "OWNER");
-    if (owners.length <= 1 && owners.some((m) => m.userId === targetUserId)) {
-      throw new AppError("VALIDATION_FAILED", "Cannot remove or demote the last owner");
-    }
-  }
+/** A role change or removal that wrote nothing is refused, saying why. */
+function assertApplied(outcome: MembershipChangeOutcome): void {
+  if (outcome === "LAST_OWNER") throw new AppError("VALIDATION_FAILED", "Cannot remove or demote the last owner");
+  if (outcome === "STALE") throw new AppError("VALIDATION_FAILED", "This member changed meanwhile; reload and try again");
 }
