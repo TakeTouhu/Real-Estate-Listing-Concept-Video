@@ -50,8 +50,11 @@ reuse a pattern that is already tested.
   pending-invitation check is a read). Closing it needs a partial unique index,
   that is, a migration; it creates no access, because each acceptance is still
   checked.
-- Organization creation writes the organization, the founding membership and
-  their audit entries in separate steps.
+- Organization creation (`POST /api/organizations`, reachable today) writes the
+  organization, the founding `OWNER` membership and `organization.created` in
+  separate steps. A crash between them leaves an organization no one belongs
+  to, which no one can reach, or one created unaudited. It is outside the
+  membership paths this package was approved for.
 
 ## Milestone
 
