@@ -365,13 +365,17 @@ describe("startScene — authorization", () => {
     async function viewerGranted(...permissions: Permission[]) {
       const h = harness({ role: "VIEWER" });
       for (const permission of permissions) {
-        await h.deps.repos.permissionGrants.insertIfAbsent({
-          organizationId: ORG,
-          userId: ACTOR,
-          permission,
-          grantedByUserId: "usr_owner",
-          grantedAt: h.deps.clock.now(),
-        });
+        await h.deps.repos.permissionGrants.insertIfAbsent(
+          { organizationId: ORG, userId: ACTOR, permission, grantedByUserId: "usr_owner", grantedAt: h.deps.clock.now() },
+          {
+            organizationId: ORG,
+            actorUserId: "usr_owner",
+            action: "permission.granted",
+            resourceType: "membership",
+            resourceId: `${ORG}:${ACTOR}`,
+            metadata: {},
+          },
+        );
       }
       return h;
     }

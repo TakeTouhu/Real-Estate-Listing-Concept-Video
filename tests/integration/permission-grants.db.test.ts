@@ -7,8 +7,8 @@ import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/tes
 /**
  * Individual permission grants against PostgreSQL (Phase 6D, ADR-0058): the
  * table's CHECK and cascade, grants reaching authorization through the real
- * repositories, durable audit rows, and concurrent grants and revocations each
- * audited exactly once.
+ * repositories, each grant change committed together with its audit row, and
+ * concurrent grants and revocations each audited exactly once.
  */
 
 const ORG_A = "org_itest_grants_a";
@@ -104,7 +104,7 @@ describe.skipIf(!HAS_DB)("the member_permission_grants table", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("insertIfAbsent", () => {
+describe.skipIf(!HAS_DB)("the grant repository", () => {
   const input = (userId = CREATOR) => ({
     organizationId: ORG_A,
     userId,
@@ -112,20 +112,52 @@ describe.skipIf(!HAS_DB)("insertIfAbsent", () => {
     grantedByUserId: ADMIN,
     grantedAt: new Date("2026-10-13T00:00:00.000Z"),
   });
+  // An audit entry naming an organization that does not exist breaks its
+  // foreign key, so it cannot be written.
+  const audit = (organizationId = ORG_A) => ({
+    organizationId,
+    actorUserId: ADMIN,
+    action: "permission.granted",
+    resourceType: "membership",
+    resourceId: `${ORG_A}:${CREATOR}`,
+    metadata: { permission: "audit.view" },
+  });
+  const UNWRITABLE = "org_itest_grants_missing";
 
-  it("answers a grant that already exists as not created, returning the stored one", async () => {
+  it("answers a grant that already exists as not created, returning the stored one and writing nothing", async () => {
     await rawGrant("audit.view");
-    const { grant, created } = await deps.repos.permissionGrants.insertIfAbsent(input());
+    const { grant, created } = await deps.repos.permissionGrants.insertIfAbsent(input(), audit());
     expect(created).toBe(false);
     expect(grant.grantedByUserId).toBe(OWNER);
     expect(await prisma.permissionGrant.count({ where: { organizationId: ORG_A } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG_A } })).toBe(0);
   });
 
   it("surfaces any other failure instead of answering it as a replay", async () => {
     await prisma.membership.delete({ where: { organizationId_userId: { organizationId: ORG_A, userId: CREATOR } } });
-    await expect(deps.repos.permissionGrants.insertIfAbsent(input())).rejects.toBeInstanceOf(
+    await expect(deps.repos.permissionGrants.insertIfAbsent(input(), audit())).rejects.toBeInstanceOf(
       Prisma.PrismaClientKnownRequestError,
     );
+  });
+
+  it("commits no grant whose audit entry cannot be written", async () => {
+    await expect(deps.repos.permissionGrants.insertIfAbsent(input(), audit(UNWRITABLE))).rejects.toBeInstanceOf(
+      Prisma.PrismaClientKnownRequestError,
+    );
+    expect(await prisma.permissionGrant.count({ where: { organizationId: ORG_A } })).toBe(0);
+  });
+
+  it("keeps a grant whose revocation's audit entry cannot be written", async () => {
+    await rawGrant("audit.view");
+    await expect(
+      deps.repos.permissionGrants.remove(ORG_A, CREATOR, "audit.view", audit(UNWRITABLE)),
+    ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(await prisma.permissionGrant.count({ where: { organizationId: ORG_A } })).toBe(1);
+  });
+
+  it("writes nothing when there is no grant to remove", async () => {
+    expect(await deps.repos.permissionGrants.remove(ORG_A, CREATOR, "audit.view", audit())).toBe(false);
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG_A } })).toBe(0);
   });
 });
 

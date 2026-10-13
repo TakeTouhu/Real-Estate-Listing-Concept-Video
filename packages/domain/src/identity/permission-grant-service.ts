@@ -1,7 +1,7 @@
 import { AppError } from "@app/shared";
 import { AuditAction, recordAudit } from "./audit";
 import { authorizeOrganization, type AuthContext } from "./authorization";
-import type { IdentityServiceDeps } from "./ports";
+import type { GrantChangeAudit, IdentityServiceDeps } from "./ports";
 import { grantRefusal, type GrantRefusal, type Permission, type Role } from "./roles";
 import type { Membership, PermissionGrant } from "./types";
 
@@ -12,7 +12,9 @@ import type { Membership, PermissionGrant } from "./types";
  * `grantRefusal`: the target's role must be one the actor may manage,
  * `permission.manage` / `billing.manage` / `disclosure.none` are `OWNER`-only,
  * and anyone else delegates only what it holds. Every refusal of a member is
- * audited; a refused escalation is an event, not a silent no-op.
+ * audited; a refused escalation is an event, not a silent no-op. A grant or
+ * revocation commits together with its own audit entry, so authority never
+ * changes unrecorded.
  *
  * A grant answers *what* a member may do, never *which* rows it reaches: Scope
  * stays fixed by role.
@@ -28,23 +30,16 @@ export class PermissionGrantService {
     permission: Permission,
   ): Promise<PermissionGrant> {
     const { target } = await this.authorizeChange("grant", actorUserId, organizationId, targetUserId, permission);
-    const { grant, created } = await this.deps.repos.permissionGrants.insertIfAbsent({
-      organizationId,
-      userId: targetUserId,
-      permission,
-      grantedByUserId: actorUserId,
-      grantedAt: this.deps.clock.now(),
-    });
-    if (created) {
-      await recordAudit(this.deps, {
+    const { grant } = await this.deps.repos.permissionGrants.insertIfAbsent(
+      {
         organizationId,
-        actorUserId,
-        action: AuditAction.PermissionGranted,
-        resourceType: "membership",
-        resourceId: `${organizationId}:${targetUserId}`,
-        metadata: { targetUserId, targetRole: target.role, permission },
-      });
-    }
+        userId: targetUserId,
+        permission,
+        grantedByUserId: actorUserId,
+        grantedAt: this.deps.clock.now(),
+      },
+      changeAudit(AuditAction.PermissionGranted, actorUserId, target, permission),
+    );
     return grant;
   }
 
@@ -56,17 +51,10 @@ export class PermissionGrantService {
     permission: Permission,
   ): Promise<void> {
     const { target } = await this.authorizeChange("revoke", actorUserId, organizationId, targetUserId, permission);
-    if (!(await this.deps.repos.permissionGrants.remove(organizationId, targetUserId, permission))) {
+    const audit = changeAudit(AuditAction.PermissionRevoked, actorUserId, target, permission);
+    if (!(await this.deps.repos.permissionGrants.remove(organizationId, targetUserId, permission, audit))) {
       throw new AppError("NOT_FOUND", "The member holds no such individual grant");
     }
-    await recordAudit(this.deps, {
-      organizationId,
-      actorUserId,
-      action: AuditAction.PermissionRevoked,
-      resourceType: "membership",
-      resourceId: `${organizationId}:${targetUserId}`,
-      metadata: { targetUserId, targetRole: target.role, permission },
-    });
   }
 
   /** A member's individual grants (not its template's permissions). */
@@ -119,4 +107,21 @@ export class PermissionGrantService {
     });
     throw new AppError("FORBIDDEN", `Role ${actor.role} may not ${operation} '${permission}' here`);
   }
+}
+
+/** The audit entry a grant change commits with it. */
+function changeAudit(
+  action: typeof AuditAction.PermissionGranted | typeof AuditAction.PermissionRevoked,
+  actorUserId: string,
+  target: Membership,
+  permission: Permission,
+): GrantChangeAudit {
+  return {
+    organizationId: target.organizationId,
+    actorUserId,
+    action,
+    resourceType: "membership",
+    resourceId: `${target.organizationId}:${target.userId}`,
+    metadata: { targetUserId: target.userId, targetRole: target.role, permission },
+  };
 }

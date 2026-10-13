@@ -2,6 +2,7 @@ import type {
   AuditLogRepository,
   Clock,
   CredentialRepository,
+  GrantChangeAudit,
   IdentityRepositories,
   IdentityServiceDeps,
   IdGenerator,
@@ -158,6 +159,7 @@ class InMemoryMembershipRepository implements MembershipRepository {
 
 class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
   private readonly rows = new Map<string, PermissionGrant>();
+  constructor(private readonly auditLogs: AuditLogRepository) {}
   private key(organizationId: string, userId: string, permission: Permission): string {
     return `${organizationId}::${userId}::${permission}`;
   }
@@ -166,15 +168,21 @@ class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
       [...this.rows.values()].filter((g) => g.organizationId === organizationId && g.userId === userId),
     );
   }
-  insertIfAbsent(grant: PermissionGrant): Promise<{ grant: PermissionGrant; created: boolean }> {
+  async insertIfAbsent(
+    grant: PermissionGrant,
+    audit: GrantChangeAudit,
+  ): Promise<{ grant: PermissionGrant; created: boolean }> {
     const key = this.key(grant.organizationId, grant.userId, grant.permission);
     const existing = this.rows.get(key);
-    if (existing) return Promise.resolve({ grant: existing, created: false });
+    if (existing) return { grant: existing, created: false };
     this.rows.set(key, grant);
-    return Promise.resolve({ grant, created: true });
+    await this.auditLogs.append(audit);
+    return { grant, created: true };
   }
-  remove(organizationId: string, userId: string, permission: Permission): Promise<boolean> {
-    return Promise.resolve(this.rows.delete(this.key(organizationId, userId, permission)));
+  async remove(organizationId: string, userId: string, permission: Permission, audit: GrantChangeAudit): Promise<boolean> {
+    if (!this.rows.delete(this.key(organizationId, userId, permission))) return false;
+    await this.auditLogs.append(audit);
+    return true;
   }
   removeAllForMember(organizationId: string, userId: string): void {
     for (const [key, grant] of this.rows) {
@@ -254,7 +262,8 @@ export interface TestRepositories extends IdentityRepositories {
 }
 
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
-  const permissionGrants = new InMemoryPermissionGrantRepository();
+  const auditLogs = new InMemoryAuditLogRepository(clock);
+  const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
@@ -265,7 +274,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     permissionGrants,
     invitations: new InMemoryInvitationRepository(clock),
     sessions: new InMemorySessionRepository(clock),
-    auditLogs: new InMemoryAuditLogRepository(clock),
+    auditLogs,
   };
 }
 
