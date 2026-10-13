@@ -373,8 +373,16 @@ describe("no new durable shape", () => {
     // one of these.
     // Advanced again by Phase 6A, which is authorized to add migration 17 for
     // the Unit entitlement ledger.
-    expect(dirs.at(-1)).toBe("00000000000017_phase6a_unit_entitlement_ledger");
-    expect(dirs.filter((dir) => dir.includes("6b") || dir.includes("recovery"))).toEqual([]);
+    // And by Phase 6B, which is authorized to add migration 18 for the
+    // organization subscription.
+    expect(dirs.at(-1)).toBe("00000000000018_phase6b_organization_subscriptions");
+    // "6b" here means Phase 4C-3B-2H-3B-6B. The top-level Phase 6B's subscription
+    // migration shares the substring and is the one authorized exception.
+    expect(
+      dirs.filter(
+        (dir) => (dir.includes("6b") && dir !== "00000000000018_phase6b_organization_subscriptions") || dir.includes("recovery"),
+      ),
+    ).toEqual([]);
   });
 
   it("adds no recovery bookkeeping column to the schema", () => {
