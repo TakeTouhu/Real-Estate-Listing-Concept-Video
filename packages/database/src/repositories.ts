@@ -346,9 +346,12 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
           return { outcome: "ACCEPTED", membership: toMembership(row) } as const;
         });
       } catch (error) {
-        // The user became a member meanwhile; the whole acceptance rolled back.
-        if ((error as { code?: unknown }).code !== "P2002") throw error;
-        if (!(await memberships.find(organizationId, userId))) throw error;
+        // The membership key refused the row: the user became a member
+        // meanwhile, and the whole acceptance rolled back. Classified from the
+        // error itself, not by reading the membership again, which a
+        // concurrent removal could already have deleted.
+        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown } };
+        if (code !== "P2002" || meta?.modelName !== "Membership") throw error;
         return { outcome: "ALREADY_MEMBER" };
       }
     },
