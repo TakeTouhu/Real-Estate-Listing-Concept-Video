@@ -271,8 +271,9 @@ describe("no persistence, pricing or resolution surface changed", () => {
     // the Unit entitlement ledger.
     // And by Phase 6B, which is authorized to add migration 18 for the
     // organization subscription, and by Phase 6C, which is authorized to add
-    // migration 19 for the role templates.
-    expect(dirs.at(-1)).toBe("00000000000019_phase6c_role_templates");
+    // migration 19 for the role templates. And by Phase 6D, which is authorized
+    // to add migration 20 for individual permission grants.
+    expect(dirs.at(-1)).toBe("00000000000020_phase6d_permission_grants");
     expect(dirs.filter((d) => d.toLowerCase().includes("queue"))).toEqual([]);
   });
 

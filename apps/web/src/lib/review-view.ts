@@ -2,11 +2,10 @@ import {
   effectiveRoomType,
   isCorrected,
   hasBlockingFlag,
-  hasPermission,
   isLowConfidence,
   type AssetAnalysis,
   type MediaAsset,
-  type Role,
+  type Permission,
   type RoomType,
   type SafetyFlag,
 } from "@app/domain";
@@ -167,9 +166,10 @@ function correctionOf(
 export function buildReviewBoard(
   assets: readonly MediaAsset[],
   analyses: readonly AssetAnalysis[],
-  role: Role,
+  /** The viewer's effective permissions in the organization. */
+  permissions: readonly Permission[],
 ): ReviewBoard {
-  const canReview = hasPermission(role, "analysis.review");
+  const canReview = permissions.includes("analysis.review");
   const byAsset = new Map(analyses.map((a) => [a.assetId, a]));
 
   // Group sizes first: a member's own actions depend on the whole group.

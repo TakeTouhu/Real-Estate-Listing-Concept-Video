@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { MIN_STORYBOARD_SCENES, hasPermission } from "@app/domain";
+import { MIN_STORYBOARD_SCENES } from "@app/domain";
 import { getAnalysisService } from "@/lib/analysis";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
@@ -38,7 +38,7 @@ export default async function StoryboardPage({
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
 
-  for (const { organization, role } of organizations) {
+  for (const { organization, role, permissions } of organizations) {
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
@@ -102,7 +102,7 @@ export default async function StoryboardPage({
           fresh={view.fresh}
           approvedCount={approvedCount}
           minimumScenes={MIN_STORYBOARD_SCENES}
-          canCompose={hasPermission(role, "video.generate")}
+          canCompose={permissions.includes("video.generate")}
         />
       </section>
     );

@@ -1,8 +1,8 @@
 import { AppError } from "@app/shared";
 import { AuditAction, recordAudit } from "./audit";
-import { authorizeOrganization, type AuthContext } from "./authorization";
+import { authorizeOrganization, effectivePermissionsOf, type AuthContext } from "./authorization";
 import type { IdentityServiceDeps } from "./ports";
-import { hasPermission, mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
+import { mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
 import type { Invitation, Membership } from "./types";
 import { normalizeEmail } from "./util";
 
@@ -99,9 +99,10 @@ export class MembershipService {
     // again of the inviter as it is now: an invitation outlives nothing its
     // inviter has since lost.
     const inviter = await this.deps.repos.memberships.find(invitation.organizationId, invitation.invitedByUserId);
+    const inviterPermissions = inviter === null ? [] : await effectivePermissionsOf(this.deps, inviter);
     if (
       inviter === null ||
-      !hasPermission(inviter.role, "member.manage") ||
+      !inviterPermissions.includes("member.manage") ||
       !mayAssignRole(inviter.role, invitation.role)
     ) {
       await recordAudit(this.deps, {
@@ -219,7 +220,7 @@ export class MembershipService {
     refused: RefusedChange,
   ): Promise<AuthContext> {
     const actor = await authorizeOrganization(this.deps, actorUserId, organizationId);
-    if (!hasPermission(actor.role, permission)) await this.refuse(actor, refused);
+    if (!actor.permissions.includes(permission)) await this.refuse(actor, refused);
     return actor;
   }
 

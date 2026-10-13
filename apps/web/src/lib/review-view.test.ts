@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { AssetAnalysis, MediaAsset, SafetyFlag } from "@app/domain";
+import { effectivePermissions, type AssetAnalysis, type MediaAsset, type Role, type SafetyFlag } from "@app/domain";
 import { buildReviewBoard, humanizeRoomType } from "./review-view";
 
 const NOW = new Date("2026-07-31T10:00:00.000Z");
+
+/** A member of `role` with no individual grants. */
+function templateOf(role: Role) {
+  return effectivePermissions(role, []);
+}
 const ORG = "org_1";
 
 function asset(id: string, overrides: Partial<MediaAsset> = {}): MediaAsset {
@@ -75,7 +80,7 @@ const warning: SafetyFlag = {
 
 describe("bucketing", () => {
   it("puts a succeeded, unreviewed analysis in the awaiting bucket", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "OWNER");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], templateOf("OWNER"));
     expect(board.awaiting.map((i) => i.assetId)).toEqual(["a"]);
     expect(board.decided).toEqual([]);
     expect(board.notReviewable).toEqual([]);
@@ -89,7 +94,7 @@ describe("bucketing", () => {
       reviewedAt: NOW,
       analysisRevision: 2,
     });
-    const board = buildReviewBoard([asset("a")], [reviewed], "OWNER");
+    const board = buildReviewBoard([asset("a")], [reviewed], templateOf("OWNER"));
     const item = board.decided[0]!;
     expect(item.decision).toEqual({
       status: "APPROVED",
@@ -114,7 +119,7 @@ describe("bucketing", () => {
         analysis("a", { status: "PENDING" }),
         analysis("b", { status: "FAILED", failureReason: "Provider timed out" }),
       ],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.notReviewable.map((i) => i.notReviewableReason)).toEqual([
       "Analysis in progress.",
@@ -132,7 +137,7 @@ describe("safety flags", () => {
     const board = buildReviewBoard(
       [asset("a")],
       [analysis("a", { safetyFlags: [blocking, warning] })],
-      "OWNER",
+      templateOf("OWNER"),
     );
     const item = board.awaiting[0]!;
     expect(item.blockingFlags).toEqual([blocking]);
@@ -144,7 +149,7 @@ describe("safety flags", () => {
   });
 
   it("treats low confidence as a caution, not a block", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a", { confidence: 0.4 })], "OWNER");
+    const board = buildReviewBoard([asset("a")], [analysis("a", { confidence: 0.4 })], templateOf("OWNER"));
     expect(board.awaiting[0]!.lowConfidence).toBe(true);
     expect(board.awaiting[0]!.actions.canApprove).toBe(true);
   });
@@ -159,7 +164,7 @@ describe("duplicate clusters", () => {
         analysis("b", { duplicateGroup: "dup_1" }),
         analysis("c"),
       ],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.clusters).toHaveLength(1);
     expect(board.clusters[0]!.items.map((i) => i.assetId)).toEqual(["a", "b"]);
@@ -171,7 +176,7 @@ describe("duplicate clusters", () => {
     const board = buildReviewBoard(
       [asset("a")],
       [analysis("a", { duplicateGroup: "dup_1" })],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.clusters).toEqual([]);
     expect(board.awaiting.map((i) => i.assetId)).toEqual(["a"]);
@@ -189,7 +194,7 @@ describe("duplicate clusters", () => {
         }),
         analysis("b", { duplicateGroup: "dup_1" }),
       ],
-      "OWNER",
+      templateOf("OWNER"),
     );
     const cluster = board.clusters[0]!;
     expect(cluster.approvedAssetId).toBe("a");
@@ -206,7 +211,7 @@ describe("duplicate clusters", () => {
         analysis("a", { duplicateGroup: "dup_1" }),
         analysis("b", { duplicateGroup: "dup_1", status: "FAILED", failureReason: "boom" }),
       ],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.clusters).toEqual([]);
     expect(board.awaiting.map((i) => i.assetId)).toEqual(["a"]);
@@ -216,7 +221,7 @@ describe("duplicate clusters", () => {
 
 describe("presentation-level authorization", () => {
   it("offers no decision to a role without analysis.review", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "VIEWER");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], templateOf("VIEWER"));
     expect(board.canReview).toBe(false);
     const item = board.awaiting[0]!;
     expect(item.actions.canApprove).toBe(false);
@@ -224,9 +229,15 @@ describe("presentation-level authorization", () => {
     expect(item.actions.unavailableReason).toContain("cannot approve or reject");
   });
 
+  it("follows effective permissions, so a VIEWER granted analysis.review is offered decisions", () => {
+    const board = buildReviewBoard([asset("a")], [analysis("a")], effectivePermissions("VIEWER", ["analysis.review"]));
+    expect(board.canReview).toBe(true);
+    expect(board.awaiting[0]!.actions.canApprove).toBe(true);
+  });
+
   it("offers both decisions to every role that holds analysis.review", () => {
     for (const role of ["OWNER", "ADMIN", "MANAGER", "CREATOR"] as const) {
-      const board = buildReviewBoard([asset("a")], [analysis("a")], role);
+      const board = buildReviewBoard([asset("a")], [analysis("a")], templateOf(role));
       expect(board.canReview).toBe(true);
       expect(board.awaiting[0]!.actions).toEqual({
         canApprove: true,
@@ -242,7 +253,7 @@ describe("labels", () => {
     const board = buildReviewBoard(
       [asset("a"), asset("b")],
       [analysis("a", { analysisRevision: 3 })],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.awaiting[0]!.analysisRevision).toBe(3);
     expect(board.notReviewable[0]!.analysisRevision).toBeNull();
@@ -260,7 +271,7 @@ describe("correction state", () => {
     const board = buildReviewBoard(
       [asset("a")],
       [analysis("a", { roomType: "BATHROOM", roomTypeOverride: "LIVING_ROOM" })],
-      "OWNER",
+      templateOf("OWNER"),
     );
     const correction = board.awaiting[0]!.correction!;
 
@@ -272,7 +283,7 @@ describe("correction state", () => {
   });
 
   it("falls back to the analyzer's room when nothing was corrected", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a", { roomType: "KITCHEN" })], "OWNER");
+    const board = buildReviewBoard([asset("a")], [analysis("a", { roomType: "KITCHEN" })], templateOf("OWNER"));
     const correction = board.awaiting[0]!.correction!;
 
     expect(correction.analyzerRoomType).toBe("Kitchen");
@@ -282,21 +293,21 @@ describe("correction state", () => {
   });
 
   it("carries the stored order priority through, including when absent", () => {
-    const withPriority = buildReviewBoard([asset("a")], [analysis("a", { orderOverride: 4 })], "OWNER");
-    const without = buildReviewBoard([asset("b")], [analysis("b")], "OWNER");
+    const withPriority = buildReviewBoard([asset("a")], [analysis("a", { orderOverride: 4 })], templateOf("OWNER"));
+    const without = buildReviewBoard([asset("b")], [analysis("b")], templateOf("OWNER"));
 
     expect(withPriority.awaiting[0]!.correction!.orderOverride).toBe(4);
     expect(without.awaiting[0]!.correction!.orderOverride).toBeNull();
   });
 
   it("allows correcting an awaiting analysis for a member who may review", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "CREATOR");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], templateOf("CREATOR"));
     expect(board.awaiting[0]!.correction!.canCorrect).toBe(true);
   });
 
   it("refuses correction for a member without analysis.review", () => {
     // Presentation only — the API enforces the same rule independently.
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "VIEWER");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], templateOf("VIEWER"));
     expect(board.awaiting[0]!.correction!.canCorrect).toBe(false);
   });
 
@@ -308,7 +319,7 @@ describe("correction state", () => {
       reviewedBy: "usr_reviewer",
       reviewedAt: NOW,
     });
-    const board = buildReviewBoard([asset("a")], [decided], "OWNER");
+    const board = buildReviewBoard([asset("a")], [decided], templateOf("OWNER"));
     const correction = board.decided[0]!.correction!;
 
     // Read-only: visible, not editable. Refresh is the way to a new revision.
@@ -322,13 +333,13 @@ describe("correction state", () => {
     const board = buildReviewBoard(
       [asset("a")],
       [analysis("a", { status: "PENDING", reviewStatus: "UNREVIEWED" })],
-      "OWNER",
+      templateOf("OWNER"),
     );
     expect(board.notReviewable[0]!.correction!.canCorrect).toBe(false);
   });
 
   it("reports no correction state for an asset with no analysis at all", () => {
-    const board = buildReviewBoard([asset("a")], [], "OWNER");
+    const board = buildReviewBoard([asset("a")], [], templateOf("OWNER"));
     expect(board.notReviewable[0]!.correction).toBeNull();
   });
 });

@@ -134,16 +134,33 @@ model Credential {
 }
 
 model Membership {
-  organizationId String
-  userId         String
-  role           Role
-  createdAt      DateTime     @default(now())
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId   String
+  userId           String
+  role             Role
+  createdAt        DateTime          @default(now())
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissionGrants PermissionGrant[]
 
   @@id([organizationId, userId])
   @@index([userId])
   @@map("memberships")
+}
+
+/// One individual permission granted to one member (ADR-0052 Decision 10, ADR-0058).
+/// A CHECK in migration 20 limits `permission` to the grantable vocabulary
+/// (never `video.share`). Removing the membership removes its grants; the audit
+/// log keeps the history.
+model PermissionGrant {
+  organizationId  String
+  userId          String
+  permission      String
+  grantedByUserId String
+  grantedAt       DateTime
+  membership      Membership @relation(fields: [organizationId, userId], references: [organizationId, userId], onDelete: Cascade)
+
+  @@id([organizationId, userId, permission])
+  @@map("member_permission_grants")
 }
 
 model Invitation {

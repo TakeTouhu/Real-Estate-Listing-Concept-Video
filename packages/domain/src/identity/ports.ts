@@ -4,10 +4,11 @@ import type {
   Invitation,
   Membership,
   Organization,
+  PermissionGrant,
   Session,
   User,
 } from "./types";
-import type { Role } from "./roles";
+import type { Permission, Role } from "./roles";
 
 /** Injectable clock so services are deterministic under test. */
 export interface Clock {
@@ -67,6 +68,19 @@ export interface InvitationRepository {
   listByOrganization(organizationId: string): Promise<Invitation[]>;
 }
 
+export interface PermissionGrantRepository {
+  /** A member's grants, in no particular order. */
+  listForMember(organizationId: string, userId: string): Promise<PermissionGrant[]>;
+  /**
+   * Record a grant unless the member already holds it. `created` is false when
+   * it already existed — including when a concurrent grant won the race — and the
+   * existing grant is returned unchanged.
+   */
+  insertIfAbsent(grant: PermissionGrant): Promise<{ readonly grant: PermissionGrant; readonly created: boolean }>;
+  /** Remove a grant; false when there was none to remove. */
+  remove(organizationId: string, userId: string, permission: Permission): Promise<boolean>;
+}
+
 export interface SessionRepository {
   create(input: Omit<Session, "createdAt">): Promise<Session>;
   findByTokenHash(tokenHash: string): Promise<Session | null>;
@@ -84,6 +98,8 @@ export interface IdentityRepositories {
   readonly credentials: CredentialRepository;
   readonly organizations: OrganizationRepository;
   readonly memberships: MembershipRepository;
+  /** Removing a membership removes its grants with it. */
+  readonly permissionGrants: PermissionGrantRepository;
   readonly invitations: InvitationRepository;
   readonly sessions: SessionRepository;
   readonly auditLogs: AuditLogRepository;
