@@ -87,6 +87,18 @@ audit entry, including when concurrent grants race. Revoking a grant that does
 not exist is `NOT_FOUND`, and of concurrent revocations exactly one succeeds and
 is audited.
 
+**A concurrent change between the ceiling and the write.** The ceiling is judged
+on the memberships and grants as read. The grant and its audit entry are written
+in a separate transaction. Suppose a role change, a demotion of the actor or a
+revocation of the actor's own grant commits in between. It does not undo the
+grant: the result is the same as if the grant had committed just before that
+change. The ceiling allowed the grant at that point, and a grant survives a later
+role change (Decision 4). The audit entry records the target's role as it was
+read. Locking both memberships inside the write transaction would only reorder
+such a race, not change what it can end in, so it is not done. A target removed
+in between cannot receive the grant, because the membership foreign key refuses
+the row.
+
 ## Decision 4 — Choices ADR-0052 does not make
 
 Recorded in `docs/decisions/TODO.md` for confirmation:

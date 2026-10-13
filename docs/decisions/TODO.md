@@ -1245,6 +1245,13 @@ them is **built**. Each item below records the settled decision and what remains
       the two leaves the change unaudited. Individual grants already commit
       both in one transaction (ADR-0058); the membership changes should do the
       same before any member-management UI ships.
+- [ ] **Make the last-`OWNER` check race-free.** A role change and a member
+      removal (ADR-0057) count the organization's `OWNER`s, then write in a
+      separate step. Two `OWNER`s demoting or removing each other at the same
+      moment can each see the other still there, and the organization is left
+      with no `OWNER`. The count and the write need one transaction that locks
+      the organization's `OWNER` memberships (or runs serializable). No route
+      calls either change yet; this must land before any member-management UI.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.

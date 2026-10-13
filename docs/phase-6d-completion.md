@@ -17,7 +17,8 @@ Commits, oldest first:
 | `45cae0d` | two database tests: cross-organization reads and single-permission revocation |
 | `065e8f3` | ADR-0058, the phase documentation and this record |
 | `6f024fe` | each grant change committed together with its audit entry (review of PR #77), with database tests that make the audit write fail |
-| *(this commit)* | this record, ADR-0058 and `TODO.md` updated for `6f024fe`, and the re-run mutation pass |
+| `2a59412` | this record, ADR-0058 and `TODO.md` updated for `6f024fe`, and the re-run mutation pass |
+| *(this commit)* | ADR-0058 states what a concurrent membership change between the ceiling and the write can end in (second review of PR #77); `TODO.md` records the Phase 6C last-`OWNER` race |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -120,7 +121,7 @@ compared before and after the pass.
 
 **Authoritative: 48 run, 48 killed, 0 survivors, 0 anchor-missing**, in one
 uninterrupted pass against the tree `e6fa9b9` (commit `6f024fe`), the reviewed
-runtime tree. The only later commit is this one, which changes documentation
+runtime tree. The later commits, `2a59412` and this one, change documentation
 only. All 735 files were byte-identical after the pass.
 
 It supersedes the first pass (40 of 40 killed against `d1ff987`, commit
@@ -233,7 +234,9 @@ production scheduler activation and live Stripe charges all remain **BLOCKED**.
   `docs/decisions/TODO.md` for confirmation.
 - The Phase 6C membership changes (role change, removal, invitation
   acceptance) still append their audit entry after the change, not in its
-  transaction. Recorded in `docs/decisions/TODO.md`.
+  transaction. Their last-`OWNER` check is not race-free either: two `OWNER`s
+  demoting each other at once could leave none. Both are recorded in
+  `docs/decisions/TODO.md`; no route calls these changes yet.
 - **Open decision gates** from earlier packages:
   - what a customer regeneration costs in Units;
   - what happens to a self-service renewal whose payment fails.
