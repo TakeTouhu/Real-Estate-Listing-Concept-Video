@@ -152,6 +152,18 @@ sales-assisted only), monthly periods derived from the anchor, and renewal that
 opens the period containing an instant on demand and idempotently — no
 scheduler. Implemented and dormant.
 
+**Phase 6C — the role templates and the role-assignment ceiling** (ADR-0057,
+migration 19): the six ADR-0052 templates and the 27-permission matrix replace
+`OWNER`/`ADMIN`/`CREATOR`/`REVIEWER`; every membership path asks the
+role-assignment ceiling of every role it touches and audits each refusal;
+`REVIEWER` became `VIEWER`; every existing check moved to its specific
+permission, reads included. Built first because every commercial mutation
+requires `billing.manage`, which did not exist.
+
+**Authorization still to build, before the commercial mutations that depend on
+it:** individual permission grants with their `OWNER`-only protected authority,
+groups and group permissions, and Property-rooted row Scope.
+
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal

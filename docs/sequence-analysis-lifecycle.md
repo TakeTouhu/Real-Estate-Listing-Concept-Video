@@ -28,7 +28,7 @@ sequenceDiagram
   U->>R: POST /analysis or /analysis/refresh
   Note over R: Authenticate (session), validate the shape of<br/>organizationId, delegate. No business decision<br/>is taken in the web layer.
   R->>AS: analyzeAsset(org, assetId, {refresh?})
-  AS->>AZ: require membership + property:write
+  AS->>AZ: require membership + asset.upload
   AZ-->>AS: AuthContext (else FORBIDDEN)
   AS->>AR: findById(org, assetId)
   Note over AS,AR: Only READY assets are eligible;<br/>anything else → VALIDATION_FAILED,<br/>missing/DELETED → NOT_FOUND
@@ -101,7 +101,7 @@ sequenceDiagram
   R->>RT: POST /analysis/approve or /analysis/reject
   Note over RT: Authenticate, validate body shape, delegate.<br/>Whether a reason is required, whether<br/>primaryAssetId is needed or matches, and whether<br/>the revision was reviewed are NOT decided here.
   RT->>AS: approve(org, assetId, {primaryAssetId?, reason?})<br/>or reject(org, assetId, {reason})
-  AS->>AZ: require membership + video:review
+  AS->>AZ: require membership + analysis.review
   Note over AS,AZ: CREATOR is denied: whoever runs an analysis<br/>is not whoever approves it.
   AS->>NR: findByAssetId(org, assetId)
   Note over AS,NR: Must be SUCCEEDED and UNREVIEWED —<br/>decisions are immutable per revision.
@@ -153,7 +153,7 @@ sequenceDiagram
   RT->>GA: is this asset really under this property?
   Note over GA: A same-org asset filed elsewhere is<br/>indistinguishable from one that does not exist.
   RT->>AS: correct(org, assetId, {roomType?, order?})
-  AS->>AZ: require membership + video:review
+  AS->>AZ: require membership + analysis.review
   Note over AS,AZ: CREATOR is denied, exactly as for a decision.
   AS->>NR: findByAssetId(org, assetId)
   Note over AS,NR: Must be SUCCEEDED and UNREVIEWED.<br/>A decided revision is corrected only by refreshing<br/>it into a new revision.

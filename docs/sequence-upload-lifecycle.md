@@ -20,7 +20,7 @@ sequenceDiagram
 
   U->>W: POST /api/properties/{id}/assets/upload-url<br/>{organizationId, filename, sizeBytes}
   W->>AS: requestUpload(actor, input)
-  AS->>AZ: require membership + property:write
+  AS->>AZ: require membership + asset.upload
   AZ-->>AS: AuthContext (else FORBIDDEN)
   AS->>R: property in org? active?
   AS->>AS: check declared size + per-property count limit
@@ -39,7 +39,7 @@ sequenceDiagram
 
   U->>W: POST /api/assets/{assetId}/complete {organizationId}
   W->>AS: completeUpload(actor, org, assetId)
-  AS->>AZ: require membership + property:write
+  AS->>AZ: require membership + asset.upload
   AS->>S: getObject(key)
   AS->>R: status = UPLOADED, sizeBytes = actual
   AS->>AS: re-check real size vs limit

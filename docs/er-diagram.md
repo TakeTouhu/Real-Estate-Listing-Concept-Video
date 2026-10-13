@@ -51,7 +51,7 @@ erDiagram
   MEMBERSHIPS {
     string organizationId PK_FK
     string userId PK_FK
-    enum   role "OWNER|ADMIN|CREATOR|REVIEWER"
+    enum   role "OWNER|ADMIN|MANAGER|CREATOR|VIEWER|BILLING"
     datetime createdAt
   }
 
@@ -480,6 +480,13 @@ reference. Its periods are opened on demand in the ledger with a deterministic i
 `uep_<subscription>_<n>` and commercial reference `subscription:<subscription>:<n>`;
 the link is that derivation, not a foreign key, because a period may also be
 opened by hand for a contract the subscription does not describe.
+
+## Phase 6C — the role templates
+
+No new entity. `memberships.role` and `invitations.role` carry the six ADR-0052
+templates; `REVIEWER` is gone (migration 19 mapped it to `VIEWER`). Groups,
+individual permission grants and the Property responsible-user and group
+assignments that row Scope needs are later packages, so none appears here yet.
 
 ## Not implemented yet (later phases)
 

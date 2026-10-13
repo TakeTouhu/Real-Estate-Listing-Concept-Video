@@ -114,7 +114,7 @@ id**, timestamp, and the revision it was made against — with the statement tha
 only refreshing the analysis reopens review.
 
 Authorization is presentational as well as enforced: a role without
-`video:review` sees a read-only banner and no decision affordance. The API
+`analysis.review` sees a read-only banner and no decision affordance. The API
 enforces the same rule independently.
 
 #### Implemented — decision controls (Phase 3B-3b)
@@ -127,7 +127,7 @@ the primary and approval acts on the selected member, so the request's target
 and its `primaryAssetId` cannot disagree.
 
 Controls are absent — not merely disabled — for a decided revision, for a viewer
-without `video:review`, and for approval of a photo carrying a blocking finding.
+without `analysis.review`, and for approval of a photo carrying a blocking finding.
 
 Each row carries its own pending and error state: `Recording…` while the request
 is in flight, an inline message on failure, and the row stays usable for a
@@ -169,7 +169,7 @@ Saving refreshes the page from the server rather than merging the response in
 the browser, so the effective room, the corrected marker, and the decision
 controls all come from authoritative state.
 
-A role without `video:review` receives **no correction controls at all** — not
+A role without `analysis.review` receives **no correction controls at all** — not
 disabled ones — and a decided photo shows its correction **read-only**: what the
 analyzer read, what was used instead, and the order priority if set. Changing a
 correction after a decision means refreshing the analysis into a new revision;
@@ -223,7 +223,7 @@ string, not a claim about what any provider accepts. No lifecycle field is sent:
 a project always starts as a draft with no storyboard.
 
 Authorization is presentational as well as enforced: a role without
-`property:write` reads the list and receives **no create markup at all** — not a
+`video.generate` reads the list and receives **no create markup at all** — not a
 disabled control — plus a one-line explanation. The API enforces the same rule
 independently.
 
@@ -266,7 +266,7 @@ with a short-lived signed thumbnail where the photo has one, under a statement
 that a storyboard is a plan and not a measured floor plan.
 
 Authorization is presentational as well as enforced: a role without
-`property:write` reads the settings, banner, and scenes, and receives **no
+`video.generate` reads the settings, banner, and scenes, and receives **no
 compose markup at all**.
 
 Failures follow the same scheme as the rest of the product: a status decides the
