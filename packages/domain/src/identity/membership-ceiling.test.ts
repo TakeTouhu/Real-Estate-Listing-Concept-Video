@@ -203,7 +203,12 @@ describe("removeMember", () => {
       code: "FORBIDDEN",
     });
     expect(await roleOf(fx.ids.VIEWER)).toBe("VIEWER");
-    expect(refusals()[0]!.metadata).toMatchObject({ operation: "remove_member", actorRole: "BILLING" });
+    // Refused on the permission, before the target's role is read.
+    expect(refusals()[0]!.metadata).toMatchObject({
+      operation: "remove_member",
+      actorRole: "BILLING",
+      currentRole: null,
+    });
   });
 });
 
@@ -246,6 +251,17 @@ describe("acceptInvitation", () => {
         inviterRole: "VIEWER",
       },
     });
+  });
+
+  it("refuses an ADMIN invitation whose inviter is now an ADMIN, which still manages members", async () => {
+    const { token } = await inviteAs(fx.ownerId, "ADMIN");
+    // The inviter keeps member.manage but may no longer assign ADMIN.
+    await fx.members.changeRole(fx.ids.OWNER, fx.orgId, fx.ownerId, "ADMIN");
+    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+
+    await expect(fx.members.acceptInvitation(invitee.id, token)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await roleOf(invitee.id)).toBeUndefined();
+    expect(refusals()[0]!.metadata).toMatchObject({ requestedRole: "ADMIN", inviterRole: "ADMIN" });
   });
 
   it("refuses an invitation whose inviter is no longer a member", async () => {
