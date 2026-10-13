@@ -51,20 +51,65 @@ export interface OrganizationRepository {
   findBySlug(slug: string): Promise<Organization | null>;
 }
 
+/** The audit entry a membership change commits together with the change itself. */
+export type MembershipChangeAudit = Omit<AuditLog, "id" | "createdAt">;
+
+/**
+ * How a role change or removal ended. Only `APPLIED` wrote anything. `STALE`:
+ * the member no longer holds the role the change was checked against, or is
+ * gone. `LAST_OWNER`: the change would leave the organization without an OWNER.
+ */
+export type MembershipChangeOutcome = "APPLIED" | "STALE" | "LAST_OWNER";
+
 export interface MembershipRepository {
   create(input: Omit<Membership, "createdAt">): Promise<Membership>;
   find(organizationId: string, userId: string): Promise<Membership | null>;
   listByOrganization(organizationId: string): Promise<Membership[]>;
   listByUser(userId: string): Promise<Membership[]>;
-  updateRole(organizationId: string, userId: string, role: Role): Promise<Membership>;
-  remove(organizationId: string, userId: string): Promise<void>;
+  /**
+   * Change a member's role from `expectedRole` to `role` and record `audit`,
+   * atomically. Taking an OWNER away counts the organization's OWNERs under a
+   * lock on them, so two concurrent changes can never each leave the other as
+   * the last OWNER.
+   */
+  changeRole(
+    organizationId: string,
+    userId: string,
+    expectedRole: Role,
+    role: Role,
+    audit: MembershipChangeAudit,
+  ): Promise<MembershipChangeOutcome>;
+  /** Remove a member holding `expectedRole`, with its grants, and record `audit`, atomically; as `changeRole`. */
+  remove(
+    organizationId: string,
+    userId: string,
+    expectedRole: Role,
+    audit: MembershipChangeAudit,
+  ): Promise<MembershipChangeOutcome>;
 }
 
+/**
+ * How an acceptance ended. Only `ACCEPTED` wrote anything. `STALE`: the
+ * invitation is no longer pending (a concurrent acceptance won).
+ * `ALREADY_MEMBER`: the user is already a member of the organization.
+ */
+export type InvitationAcceptance =
+  | { readonly outcome: "ACCEPTED"; readonly membership: Membership }
+  | { readonly outcome: "STALE" }
+  | { readonly outcome: "ALREADY_MEMBER" };
+
 export interface InvitationRepository {
-  create(input: Omit<Invitation, "createdAt">): Promise<Invitation>;
+  /** Record an invitation and its audit entry atomically. */
+  create(input: Omit<Invitation, "createdAt">, audit: MembershipChangeAudit): Promise<Invitation>;
   findByTokenHash(tokenHash: string): Promise<Invitation | null>;
   findPending(organizationId: string, email: string): Promise<Invitation | null>;
-  update(invitation: Invitation): Promise<Invitation>;
+  /** Mark an invitation EXPIRED if it is still pending; otherwise leave it as it is. */
+  expire(invitationId: string): Promise<void>;
+  /**
+   * Accept a pending invitation atomically: the user's membership with the
+   * invitation's role, the invitation ACCEPTED at `acceptedAt`, and `audit`.
+   */
+  accept(invitation: Invitation, userId: string, acceptedAt: Date, audit: MembershipChangeAudit): Promise<InvitationAcceptance>;
   listByOrganization(organizationId: string): Promise<Invitation[]>;
 }
 
