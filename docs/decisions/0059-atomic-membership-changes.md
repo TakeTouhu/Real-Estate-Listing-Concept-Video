@@ -61,7 +61,9 @@ An acceptance moves its invitation from `PENDING` exactly once
 nothing and answers `NOT_FOUND` as for a used invitation. If the user became a
 member meanwhile, the unique membership key refuses the row, the whole
 acceptance rolls back, the invitation stays pending, and the service answers
-`VALIDATION_FAILED` as before. Expiry marks an invitation `EXPIRED` only while it
+`VALIDATION_FAILED` as before. That conflict is recognized from the error itself
+(`P2002` on `Membership`), not by reading the membership again, which a
+concurrent removal could already have deleted. Expiry marks an invitation `EXPIRED` only while it
 is still pending.
 
 These are the same-row races: the two writers touch one row, and the later one

@@ -16,7 +16,9 @@ Commits, oldest first:
 | `d8e988c` | the repository ports, their Prisma and in-memory implementations, and `MembershipService` on top of them |
 | `19a5a1d` | the unit and database suites |
 | `bb3f497` | the lifecycle database test asserts each audit row's resource, not their order |
-| *(this commit)* | ADR-0059, the phase documentation and this record |
+| `944e133` | ADR-0059, the phase documentation and this record |
+| `a8d4fba` | an acceptance's membership conflict is classified from the error itself, not by reading the membership again (review of PR #78) |
+| *(this commit)* | this record updated for `a8d4fba`, with the re-run checks and mutation pass |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -89,7 +91,7 @@ conflict rolls everything back as `ALREADY_MEMBER`) and writes
 
 ## Verification
 
-Measured on the committed tree `32a2117` (commit `bb3f497`), against a local
+Measured on the committed tree `506b73b` (commit `a8d4fba`), against a local
 PostgreSQL 16 configured like CI.
 
 | Check | Result |
@@ -115,16 +117,20 @@ against the suite or suites listed for it; every mutated file is restored and
 re-hashed, and a SHA-256 manifest of all 738 files in the working tree is
 compared before and after the pass.
 
-**Authoritative: 40 run, 40 killed, 0 survivors, 0 broken, 0 anchor-missing**,
-in one uninterrupted pass against the tree `32a2117` (commit `bb3f497`), the
+**Authoritative: 41 run, 41 killed, 0 survivors, 0 broken, 0 anchor-missing**,
+in one uninterrupted pass against the tree `506b73b` (commit `a8d4fba`), the
 reviewed runtime tree. The only later commit is this one, which changes
-documentation only. All 738 files were byte-identical after the pass.
+documentation only. All 740 files were byte-identical after the pass.
 
-It supersedes a first pass on the same tree, which also reported 40 of 40
-killed. In that pass, S01 and S02 were "killed" by mutants that did not parse
-(`void (…,)`), not by a failing test. They were redefined to a no-op call
-(`Array.of(…)`), and the harness now counts a kill only when tests ran and
-failed; anything else is reported as broken.
+It supersedes two earlier passes:
+- On the tree `32a2117` (commit `bb3f497`), a first pass reported 40 of 40
+  killed, but S01 and S02 were "killed" by mutants that did not parse
+  (`void (…,)`), not by a failing test. They were redefined to a no-op call
+  (`Array.of(…)`), and the harness now counts a kill only when tests ran and
+  failed; anything else is reported as broken.
+- The second pass on that tree killed all 40 with none broken.
+- `a8d4fba` then replaced the acceptance's second read with a check of the
+  conflict's model, so P08 was added for that check.
 
 | ID | Category | Mutation | File | Killed by |
 | --- | --- | --- | --- | --- |
@@ -153,6 +159,7 @@ failed; anything else is reported as broken.
 | P05 | acceptance | an acceptance by an existing member fails instead of answering `ALREADY_MEMBER` | `repositories.ts` | db: 1 failing |
 | P06 | expiry | expiry overwrites an accepted invitation | `repositories.ts` | db: 1 failing |
 | P07 | expiry | expiry leaves a pending invitation pending | `repositories.ts` | db: 1 failing |
+| P08 | acceptance | a membership conflict is not recognized by its model | `repositories.ts` | db: 1 failing |
 | S01 | service | a role change that wrote nothing is answered as done | `membership-service.ts` | identity: 4 failing |
 | S02 | service | a removal that wrote nothing is answered as done | `membership-service.ts` | identity: 3 failing |
 | S03 | service | `LAST_OWNER` is not refused | `membership-service.ts` | identity: 4 failing |
@@ -179,9 +186,10 @@ Not defined, because they are equivalent or not observable by a test:
   two lockers that scan the `OWNER` rows in different orders. One scan of a
   handful of rows returns them in one physical order, so no test can make two
   scans disagree.
-- **The "row not found after the conflict" half of the acceptance's
-  `ALREADY_MEMBER` guard.** Inside the acceptance only the membership insert can
-  raise `P2002`, so the re-read always finds the row.
+- **Dropping the model check from the acceptance's `ALREADY_MEMBER` guard**,
+  leaving `P2002` alone. Inside the acceptance only the membership insert can
+  raise `P2002`: the invitation update changes no unique column, and audit ids
+  are generated. P08, which names the wrong model, is killed.
 
 ## Required phase documentation
 
