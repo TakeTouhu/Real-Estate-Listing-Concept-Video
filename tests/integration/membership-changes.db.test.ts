@@ -201,21 +201,31 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
   });
 
   it("records invite, acceptance, role change and removal, each with its own audit row", async () => {
-    const { token } = await members.invite(OWNER, { organizationId: ORG, email: "invitee@example.com", role: "VIEWER" });
+    const { invitation, token } = await members.invite(OWNER, {
+      organizationId: ORG,
+      email: "invitee@example.com",
+      role: "VIEWER",
+    });
     await members.acceptInvitation(NEWCOMER, token);
     await members.changeRole(OWNER, ORG, NEWCOMER, "MANAGER");
     await members.changeRole(OWNER, ORG, CO_OWNER, "ADMIN");
     await members.removeMember(OWNER, ORG, NEWCOMER);
     expect(await roleOf(NEWCOMER)).toBeUndefined();
     expect(await roleOf(CO_OWNER)).toBe("ADMIN");
-    const rows = await prisma.auditLog.findMany({ where: { organizationId: ORG }, orderBy: { createdAt: "asc" } });
-    expect(rows.map((r) => [r.action, r.actorUserId, r.metadata])).toEqual([
-      ["invitation.created", OWNER, { email: "invitee@example.com", role: "VIEWER" }],
-      ["invitation.accepted", NEWCOMER, { role: "VIEWER", scope: "OWN" }],
-      ["member.role_changed", OWNER, { targetUserId: NEWCOMER, role: "MANAGER", previousRole: "VIEWER", scope: "GROUP" }],
-      ["member.role_changed", OWNER, { targetUserId: CO_OWNER, role: "ADMIN", previousRole: "OWNER", scope: "ORGANIZATION" }],
-      ["member.removed", OWNER, {}],
-    ]);
+    // Rows written within one millisecond tie on createdAt, so order is not asserted.
+    const rows = await prisma.auditLog.findMany({ where: { organizationId: ORG } });
+    const newcomer = `${ORG}:${NEWCOMER}`;
+    const coOwner = `${ORG}:${CO_OWNER}`;
+    expect(rows).toHaveLength(5);
+    expect(rows.map((r) => [r.action, r.actorUserId, r.resourceId, r.metadata])).toEqual(
+      expect.arrayContaining([
+        ["invitation.created", OWNER, invitation.id, { email: "invitee@example.com", role: "VIEWER" }],
+        ["invitation.accepted", NEWCOMER, newcomer, { role: "VIEWER", scope: "OWN" }],
+        ["member.role_changed", OWNER, newcomer, { targetUserId: NEWCOMER, role: "MANAGER", previousRole: "VIEWER", scope: "GROUP" }],
+        ["member.role_changed", OWNER, coOwner, { targetUserId: CO_OWNER, role: "ADMIN", previousRole: "OWNER", scope: "ORGANIZATION" }],
+        ["member.removed", OWNER, newcomer, {}],
+      ]),
+    );
   });
 });
 
