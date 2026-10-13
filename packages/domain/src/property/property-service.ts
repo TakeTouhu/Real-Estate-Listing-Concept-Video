@@ -45,7 +45,7 @@ export class PropertyService {
       this.deps.identity,
       actorUserId,
       input.organizationId,
-      "property:write",
+      "property.create",
     );
     if (!input.rightsConfirmed) {
       throw new AppError(
@@ -82,13 +82,13 @@ export class PropertyService {
   }
 
   async list(actorUserId: string, organizationId: string): Promise<Property[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     return this.deps.properties.listByOrganization(organizationId);
   }
 
   /** Read a single property, enforcing organization scope. */
   async get(actorUserId: string, organizationId: string, propertyId: string): Promise<Property> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     const property = await this.deps.properties.findById(organizationId, propertyId);
     if (!property || property.status === "DELETED") {
       throw new AppError("NOT_FOUND", "Property not found");
@@ -102,7 +102,7 @@ export class PropertyService {
     propertyId: string,
     input: UpdatePropertyInput,
   ): Promise<Property> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.edit");
     const existing = await this.deps.properties.findById(organizationId, propertyId);
     if (!existing || existing.status === "DELETED") {
       throw new AppError("NOT_FOUND", "Property not found");
@@ -137,7 +137,7 @@ export class PropertyService {
    * window (retention foundation; automation lands in Phase 7).
    */
   async remove(actorUserId: string, organizationId: string, propertyId: string): Promise<void> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.delete");
     const existing = await this.deps.properties.findById(organizationId, propertyId);
     if (!existing || existing.status === "DELETED") {
       throw new AppError("NOT_FOUND", "Property not found");

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import { OrganizationService } from "../identity/organization-service";
 import { AuthService } from "../identity/auth-service";
+import type { Role } from "../identity/roles";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { InMemoryMediaAssetRepository } from "../testing/in-memory-property";
 import { InMemoryAssetAnalysisRepository } from "../testing/in-memory-analysis";
@@ -481,21 +482,21 @@ describe("authorization and tenant isolation", () => {
     expect(fx.analyses.all()).toHaveLength(0);
   });
 
-  it("denies a REVIEWER, who may approve but not write assets", async () => {
+  it("denies a VIEWER, who may neither start nor review an analysis", async () => {
     const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
-    const reviewer = await auth.register({
-      email: "reviewer@example.com",
+    const viewer = await auth.register({
+      email: "viewer@example.com",
       password: PASSWORD,
-      name: "Reviewer",
+      name: "Viewer",
     });
     await fx.deps.repos.memberships.create({
       organizationId: fx.orgId,
-      userId: reviewer.id,
-      role: "REVIEWER",
+      userId: viewer.id,
+      role: "VIEWER",
     });
 
     await expect(
-      fx.service.analyzeAsset(reviewer.id, fx.orgId, fx.assetId),
+      fx.service.analyzeAsset(viewer.id, fx.orgId, fx.assetId),
     ).rejects.toThrow(/lacks permission/i);
   });
 
@@ -773,27 +774,39 @@ describe("reads", () => {
     ).rejects.toThrow(/not found/i);
   });
 
-  it("lets a REVIEWER read, though they may not start an analysis", async () => {
+  it("lets a VIEWER read, though they may not start an analysis", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
-    const reviewer = await auth.register({
+    const viewer = await auth.register({
       email: "reader@example.com",
       password: PASSWORD,
       name: "Reader",
     });
     await fx.deps.repos.memberships.create({
       organizationId: fx.orgId,
-      userId: reviewer.id,
-      role: "REVIEWER",
+      userId: viewer.id,
+      role: "VIEWER",
     });
 
-    expect((await fx.service.getForAsset(reviewer.id, fx.orgId, fx.assetId)).assetId).toBe(
+    expect((await fx.service.getForAsset(viewer.id, fx.orgId, fx.assetId)).assetId).toBe(
       fx.assetId,
     );
-    expect(await fx.service.listForProperty(reviewer.id, fx.orgId, "prp_1")).toHaveLength(1);
+    expect(await fx.service.listForProperty(viewer.id, fx.orgId, "prp_1")).toHaveLength(1);
     await expect(
-      fx.service.analyzeAsset(reviewer.id, fx.orgId, fx.assetId, { refresh: true }),
+      fx.service.analyzeAsset(viewer.id, fx.orgId, fx.assetId, { refresh: true }),
     ).rejects.toThrow(/lacks permission/i);
+  });
+
+  it("refuses both reads to a BILLING member, who holds no Property-content permission", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const billing = await memberWithRole("billing-read@example.com", "BILLING");
+
+    await expect(fx.service.getForAsset(billing, fx.orgId, fx.assetId)).rejects.toThrow(
+      /lacks permission 'property.view'/,
+    );
+    await expect(fx.service.listForProperty(billing, fx.orgId, "prp_1")).rejects.toThrow(
+      /lacks permission 'property.view'/,
+    );
   });
 
   it("denies a non-member both reads", async () => {
@@ -843,7 +856,7 @@ async function analyzedAsset(
 
 async function memberWithRole(
   email: string,
-  role: "OWNER" | "ADMIN" | "CREATOR" | "REVIEWER",
+  role: Role,
 ): Promise<string> {
   const auth = new AuthService(fx.deps, { sessionTtlSeconds: 3600 });
   const user = await auth.register({ email, password: PASSWORD, name: email });
@@ -1114,21 +1127,21 @@ describe("duplicate groups", () => {
 });
 
 describe("review authorization and tenant isolation", () => {
-  it("denies a CREATOR, who may run analyses but not review them", async () => {
+  it.each(["VIEWER", "BILLING"] as const)("denies a %s, who does not hold analysis.review", async (role) => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    const creator = await memberWithRole("creator@example.com", "CREATOR");
+    const member = await memberWithRole(`${role.toLowerCase()}@example.com`, role);
 
     await expect(
-      fx.service.approve(creator, fx.orgId, fx.assetId),
-    ).rejects.toThrow(/lacks permission/i);
+      fx.service.approve(member, fx.orgId, fx.assetId),
+    ).rejects.toThrow(/lacks permission 'analysis.review'/);
     await expect(
-      fx.service.reject(creator, fx.orgId, fx.assetId, { reason: "no" }),
-    ).rejects.toThrow(/lacks permission/i);
+      fx.service.reject(member, fx.orgId, fx.assetId, { reason: "no" }),
+    ).rejects.toThrow(/lacks permission 'analysis.review'/);
   });
 
-  it("allows a REVIEWER to approve and reject", async () => {
+  it("allows a CREATOR to approve and reject", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    const reviewer = await memberWithRole("reviewer2@example.com", "REVIEWER");
+    const reviewer = await memberWithRole("creator2@example.com", "CREATOR");
     await expect(fx.service.approve(reviewer, fx.orgId, fx.assetId)).resolves.toBeDefined();
 
     const other = await analyzedAsset("ast_other", { perceptualHash: "0000000000000000" });
@@ -1459,7 +1472,7 @@ describe("correct — lifecycle", () => {
 });
 
 describe("correct — authorization and tenancy", () => {
-  it.each(["OWNER", "ADMIN", "REVIEWER"] as const)("allows a %s", async (role) => {
+  it.each(["OWNER", "ADMIN", "MANAGER", "CREATOR"] as const)("allows a %s", async (role) => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     const member = await memberWithRole(`${role.toLowerCase()}-corr@example.com`, role);
 
@@ -1470,13 +1483,13 @@ describe("correct — authorization and tenancy", () => {
     expect(after.correctedBy).toBe(member);
   });
 
-  it("denies a CREATOR, who may run analyses but not review them", async () => {
+  it("denies a VIEWER, who may read analyses but not review them", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    const creator = await memberWithRole("creator-corr@example.com", "CREATOR");
+    const viewer = await memberWithRole("viewer-corr@example.com", "VIEWER");
 
     await expect(
-      fx.service.correct(creator, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } }),
-    ).rejects.toThrow(/lacks permission/i);
+      fx.service.correct(viewer, fx.orgId, fx.assetId, { roomType: { set: "STUDY" } }),
+    ).rejects.toThrow(/lacks permission 'analysis.review'/);
     expect(actions(fx)).not.toContain("analysis.corrected");
   });
 

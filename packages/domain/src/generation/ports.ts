@@ -15,9 +15,9 @@ import type { SceneGeneration, SceneGenerationState } from "./types";
  * the generation side re-derives a fingerprint or re-implements what "fresh"
  * means; it calls {@link assertFresh} and reads {@link StoryboardView.fresh}.
  *
- * Both methods authorize internally (membership for the read; `assertFresh`
+ * Both methods authorize internally (`video.view` for the read; `assertFresh`
  * likewise), so the port is not a way around authorization — the service still
- * performs its own `property:write` check first.
+ * performs its own `video.generate` and `unit.consume` check first.
  */
 export interface StoryboardReader {
   /**

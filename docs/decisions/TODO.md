@@ -1183,27 +1183,47 @@ them is **built**. Each item below records the settled decision and what remains
       `ObjectStorage` port, without the domain depending on Google Cloud SDK
       types, and establish GCS's absence-versus-permission semantics as the S3
       equivalent was established in Phase 5B.
-- [ ] **Remove `REVIEWER` from the role vocabulary** where it survives in code
+- [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
-      Source-photo review becomes `analysis.review`.
+      Source-photo review becomes `analysis.review`. *Done in Phase 6C
+      (ADR-0057): migration 19 recreated `Role` and mapped `REVIEWER` to
+      `VIEWER`; source-photo review checks `analysis.review`; a shape test keeps
+      `REVIEWER` out of every production source file.*
 - [ ] **Build the approved role-template grant matrix.** ADR-0052 Decision 10 now
       fixes every template's grants and its role-fixed Scope. Decide whether defaults are
       stored as rows or derived from the matrix, and make a stored copy
       reproducible from it. `disclosure.none` and `video.share` must be
       unreachable by role assignment alone, and MFA enforcement must stay
       capability-based so `BILLING` is covered through `billing.manage`.
+      *Built in Phase 6C (ADR-0057): the matrix is derived from code, not stored
+      as rows, and pinned cell for cell against the ADR table; no template grants
+      `disclosure.none` or `video.share`. **Still unbuilt:** MFA enforcement for
+      `billing.manage` holders.*
 - [ ] **Enforce the role grant ceilings and protected authority.** ADR-0052
       Decision 10. Every authorization mutation must answer "may *this actor*
       grant *this*?", not merely "does the actor hold `permission.manage`?":
       `OWNER` assigns any role, `ADMIN` only `MANAGER`/`CREATOR`/`VIEWER`, and
       `permission.manage` / `billing.manage` / the `OWNER`,`ADMIN`,`BILLING` role
       assignments / ownership-equivalent changes / anything touching the last
-      `OWNER` are `OWNER`-only.
+      `OWNER` are `OWNER`-only. *Role-assignment ceiling built in Phase 6C
+      (ADR-0057) on invitation, acceptance, role change and removal. **Still
+      unbuilt:** the `OWNER`-only grant of `permission.manage` and
+      `billing.manage`, which needs individual grants.*
 - [ ] **Prevent self-escalation across every grant path.** Direct role change,
       individual grant, group membership, group permission and Scope
       manipulation must each be ceiling-checked — the additive group model is the
       obvious loophole and must not be one. A refused escalation attempt is an
-      audited event, not a silent no-op.
+      audited event, not a silent no-op. *Direct role change, invitation and its
+      acceptance built in Phase 6C (ADR-0057), each refusal audited as
+      `member.role_change_refused`. **Still unbuilt:** the individual-grant,
+      group and group-permission paths.*
+- [ ] **Confirm the Phase 6C choices ADR-0052 did not make** (ADR-0057). None
+      changes any member's access today; each matters once individual grants
+      exist. (1) Existing `REVIEWER` members and invitations became `VIEWER`, the
+      least-privileged template. (2) Creating a video project and composing its
+      storyboard check `video.generate`; starting or refreshing a source-photo
+      analysis checks `asset.upload` — the ADR names no permission for these.
+      (3) Starting a scene checks `video.generate` **and** `unit.consume`.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact.
@@ -1602,6 +1622,7 @@ be reconciled in a runtime work package.
 - [ ] **`REVIEWER` survives in code or schema** where the role vocabulary is
       represented, and the Phase 3B near-duplicate UX still contradicts ADR-0052
       Decision 14. Both are listed in the implementation section above.
+      *`REVIEWER` removed in Phase 6C (ADR-0057); the near-duplicate UX remains.*
 
 ### Live-evidence gates — cannot be closed by documentation
 

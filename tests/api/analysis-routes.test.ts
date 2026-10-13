@@ -99,7 +99,8 @@ class MapStorage implements ObjectStorage {
 
 interface Ctx {
   ownerId: string;
-  reviewerId: string;
+  viewerId: string;
+  billingId: string;
   outsiderId: string;
   orgId: string;
   otherOrgId: string;
@@ -156,14 +157,20 @@ beforeEach(async () => {
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const orgs = new OrganizationService(deps);
   const owner = await auth.register({ email: "o@e.com", password: PASSWORD, name: "Owner" });
-  const reviewer = await auth.register({ email: "r@e.com", password: PASSWORD, name: "Rev" });
+  const viewer = await auth.register({ email: "v@e.com", password: PASSWORD, name: "Viewer" });
+  const billing = await auth.register({ email: "b@e.com", password: PASSWORD, name: "Billing" });
   const outsider = await auth.register({ email: "x@e.com", password: PASSWORD, name: "Out" });
   const { organization: org } = await orgs.createOrganization(owner.id, { name: "Acme" });
   const { organization: other } = await orgs.createOrganization(owner.id, { name: "Other" });
   await deps.repos.memberships.create({
     organizationId: org.id,
-    userId: reviewer.id,
-    role: "REVIEWER",
+    userId: viewer.id,
+    role: "VIEWER",
+  });
+  await deps.repos.memberships.create({
+    organizationId: org.id,
+    userId: billing.id,
+    role: "BILLING",
   });
 
   const assets = new InMemoryMediaAssetRepository(deps.clock);
@@ -202,7 +209,8 @@ beforeEach(async () => {
   currentUser.value = { user: { id: owner.id } };
   ctx = {
     ownerId: owner.id,
-    reviewerId: reviewer.id,
+    viewerId: viewer.id,
+    billingId: billing.id,
     outsiderId: outsider.id,
     orgId: org.id,
     otherOrgId: other.id,
@@ -257,8 +265,8 @@ describe("POST /analysis/refresh", () => {
     expect(ctx.provider.calls).toBe(2);
   });
 
-  it("denies a REVIEWER", async () => {
-    currentUser.value = { user: { id: ctx.reviewerId } };
+  it("denies a VIEWER", async () => {
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await refreshAnalysis(postReq(ctx.orgId), params())).status).toBe(403);
   });
 });
@@ -280,11 +288,18 @@ describe("GET routes", () => {
     expect((await getAnalysis(getReq(ctx.orgId), params())).status).toBe(404);
   });
 
-  it("lets a REVIEWER read", async () => {
+  it("lets a VIEWER read", async () => {
     await startAnalysis(postReq(ctx.orgId), params());
-    currentUser.value = { user: { id: ctx.reviewerId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await getAnalysis(getReq(ctx.orgId), params())).status).toBe(200);
     expect((await listAnalyses(getReq(ctx.orgId), params())).status).toBe(200);
+  });
+
+  it("refuses a BILLING member, who holds no Property-content permission", async () => {
+    await startAnalysis(postReq(ctx.orgId), params());
+    currentUser.value = { user: { id: ctx.billingId } };
+    expect((await getAnalysis(getReq(ctx.orgId), params())).status).toBe(403);
+    expect((await listAnalyses(getReq(ctx.orgId), params())).status).toBe(403);
   });
 });
 

@@ -18,7 +18,7 @@ interface Props {
   readonly organizationId: string;
   readonly propertyId: string;
   readonly projects: readonly VideoProjectDto[];
-  /** Whether this member's role carries `property:write`. Decided by the server. */
+  /** Whether this member's role carries `video.generate`. Decided by the server. */
   readonly canCreate: boolean;
   /** Approved camera motions, resolved server-side and passed as plain data. */
   readonly cameraMotionOptions: readonly CameraMotionOption[];

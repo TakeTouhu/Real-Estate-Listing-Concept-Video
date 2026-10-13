@@ -966,3 +966,37 @@ deleted.
 Forward-only. Reverting the application leaves the table unused; nothing older
 reads it.
 
+
+## Phase 6C — the role templates
+
+**Migration `00000000000019_phase6c_role_templates`.** One enum recreated, no
+table created. ADR-0057.
+
+### Changed enum
+
+`Role`: `OWNER`, `ADMIN`, `MANAGER`, `CREATOR`, `VIEWER`, `BILLING` (was `OWNER`,
+`ADMIN`, `CREATOR`, `REVIEWER`). PostgreSQL cannot drop an enum value, so the
+migration creates `Role_new`, converts `memberships.role` and `invitations.role`
+to it, drops the old type and renames the new one, in one transaction.
+
+### Data rewritten
+
+| Table | Rule |
+| --- | --- |
+| `memberships` | `REVIEWER` → `VIEWER`; every other value keeps its name |
+| `invitations` | `REVIEWER` → `VIEWER`; every other value keeps its name |
+
+`VIEWER` is the least-privileged template (ADR-0057 Decision 3). A value the
+mapping does not know fails the cast and aborts the migration rather than being
+guessed. No other table, column or row is touched.
+
+**Rehearsed** on a scratch database migrated through migration 18 and seeded with
+one membership of each old role and a `REVIEWER` and a `CREATOR` invitation:
+after migration 19 the `REVIEWER` membership and invitation read `VIEWER`, every
+other row kept its role, and the type's values were the six templates in order.
+
+### Rollback
+
+Forward-only. Reverting the application after this migration leaves `MANAGER`,
+`VIEWER` and `BILLING` values that the old code does not know, and `REVIEWER` is
+gone; a rollback would need its own migration mapping them back.

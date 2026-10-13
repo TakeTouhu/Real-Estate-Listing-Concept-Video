@@ -85,7 +85,7 @@ export class AnalysisService {
     assetId: string,
     options: AnalyzeOptions = {},
   ): Promise<AssetAnalysis> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property:write");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
     const asset = await this.requireEligibleAsset(organizationId, assetId);
 
     const refresh = options.refresh === true;
@@ -266,15 +266,15 @@ export class AnalysisService {
   }
 
   /**
-   * Analyses for a property's assets. Read-level authorization: any member of
-   * the organization may read, including REVIEWER, who cannot start an analysis.
+   * Analyses for a property's assets. Read-level authorization: `property.view`,
+   * held by `VIEWER`, who can neither start nor review an analysis.
    */
   async listForProperty(
     actorUserId: string,
     organizationId: string,
     propertyId: string,
   ): Promise<AssetAnalysis[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     const assets = await this.deps.assets.listByProperty(organizationId, propertyId);
     return this.deps.analyses.listByAssetIds(
       organizationId,
@@ -288,7 +288,7 @@ export class AnalysisService {
     organizationId: string,
     assetId: string,
   ): Promise<AssetAnalysis> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
     return analysis;
@@ -531,7 +531,7 @@ export class AnalysisService {
     organizationId: string,
     assetId: string,
   ): Promise<{ analysis: AssetAnalysis; asset: MediaAsset }> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video:review");
+    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "analysis.review");
     const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
     if (analysis.status !== "SUCCEEDED") {

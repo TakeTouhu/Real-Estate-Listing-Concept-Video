@@ -78,7 +78,7 @@ export default async function VideoProjectsPage({
           organizationId={organization.id}
           propertyId={property.id}
           projects={projects.map(toVideoProjectDto)}
-          canCreate={hasPermission(role, "property:write")}
+          canCreate={hasPermission(role, "video.generate")}
           cameraMotionOptions={CAMERA_MOTION_OPTIONS}
           targetOutputResolutionOptions={TARGET_OUTPUT_RESOLUTIONS}
         />

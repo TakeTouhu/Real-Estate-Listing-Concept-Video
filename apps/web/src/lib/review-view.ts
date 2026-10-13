@@ -169,7 +169,7 @@ export function buildReviewBoard(
   analyses: readonly AssetAnalysis[],
   role: Role,
 ): ReviewBoard {
-  const canReview = hasPermission(role, "video:review");
+  const canReview = hasPermission(role, "analysis.review");
   const byAsset = new Map(analyses.map((a) => [a.assetId, a]));
 
   // Group sizes first: a member's own actions depend on the whole group.

@@ -215,8 +215,8 @@ describe("duplicate clusters", () => {
 });
 
 describe("presentation-level authorization", () => {
-  it("offers no decision to a role without video:review", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "CREATOR");
+  it("offers no decision to a role without analysis.review", () => {
+    const board = buildReviewBoard([asset("a")], [analysis("a")], "VIEWER");
     expect(board.canReview).toBe(false);
     const item = board.awaiting[0]!;
     expect(item.actions.canApprove).toBe(false);
@@ -224,8 +224,8 @@ describe("presentation-level authorization", () => {
     expect(item.actions.unavailableReason).toContain("cannot approve or reject");
   });
 
-  it("offers both decisions to every role that holds video:review", () => {
-    for (const role of ["OWNER", "ADMIN", "REVIEWER"] as const) {
+  it("offers both decisions to every role that holds analysis.review", () => {
+    for (const role of ["OWNER", "ADMIN", "MANAGER", "CREATOR"] as const) {
       const board = buildReviewBoard([asset("a")], [analysis("a")], role);
       expect(board.canReview).toBe(true);
       expect(board.awaiting[0]!.actions).toEqual({
@@ -290,13 +290,13 @@ describe("correction state", () => {
   });
 
   it("allows correcting an awaiting analysis for a member who may review", () => {
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "REVIEWER");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], "CREATOR");
     expect(board.awaiting[0]!.correction!.canCorrect).toBe(true);
   });
 
-  it("refuses correction for a member without video:review", () => {
+  it("refuses correction for a member without analysis.review", () => {
     // Presentation only — the API enforces the same rule independently.
-    const board = buildReviewBoard([asset("a")], [analysis("a")], "CREATOR");
+    const board = buildReviewBoard([asset("a")], [analysis("a")], "VIEWER");
     expect(board.awaiting[0]!.correction!.canCorrect).toBe(false);
   });
 

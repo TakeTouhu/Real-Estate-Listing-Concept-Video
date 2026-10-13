@@ -7,7 +7,7 @@ import { requireOrganizationIdFromQuery } from "@/lib/request";
 
 export const dynamic = "force-dynamic";
 
-/** List the analyses for a property's assets. Any organization member may read. */
+/** List the analyses for a property's assets. A member holding `property.view` may read. */
 export async function GET(
   request: Request,
   context: { params: Promise<{ propertyId: string }> },

@@ -47,7 +47,7 @@ interface Context {
   readonly orgId: string;
   readonly propertyId: string;
   readonly ownerId: string;
-  readonly reviewerId: string;
+  readonly viewerId: string;
   readonly outsiderId: string;
   readonly otherOrgId: string;
   readonly otherPropertyId: string;
@@ -74,12 +74,12 @@ async function setup(): Promise<Context> {
   const outsider = await auth.register({ email: "outsider@example.com", password: PASSWORD, name: "Out" });
   const { organization: other } = await organizations.createOrganization(outsider.id, { name: "Rival" });
 
-  // A reviewer in the owning organization: a member who cannot write.
-  const reviewer = await auth.register({ email: "reviewer@example.com", password: PASSWORD, name: "Rev" });
+  // A viewer in the owning organization: a member who can read but not write.
+  const viewer = await auth.register({ email: "viewer@example.com", password: PASSWORD, name: "Viewer" });
   await deps.repos.memberships.create({
     organizationId: org.id,
-    userId: reviewer.id,
-    role: "REVIEWER" as Role,
+    userId: viewer.id,
+    role: "VIEWER" as Role,
   });
 
   const property = await properties.create({
@@ -209,7 +209,7 @@ async function setup(): Promise<Context> {
     orgId: org.id,
     propertyId: property.id,
     ownerId: owner.id,
-    reviewerId: reviewer.id,
+    viewerId: viewer.id,
     outsiderId: outsider.id,
     otherOrgId: other.id,
     otherPropertyId: otherProperty.id,
@@ -253,8 +253,8 @@ describe("authentication and authorization", () => {
     expect((await createProject(req(validBody()), params())).status).toBe(401);
   });
 
-  it("returns 403 for a REVIEWER, who cannot write properties", async () => {
-    currentUser.value = { user: { id: ctx.reviewerId } };
+  it("returns 403 for a VIEWER, who cannot generate video", async () => {
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await createProject(req(validBody()), params())).status).toBe(403);
   });
 
@@ -444,13 +444,13 @@ describe("compose endpoint", () => {
     expect((await composeStoryboard(jsonReq(bounds()), projectParams(id))).status).toBe(401);
   });
 
-  it("denies a REVIEWER and permits a writer", async () => {
+  it("denies a VIEWER and permits a writer", async () => {
     const id = await newProject();
     await ctx.approve("ast_a");
     await ctx.approve("ast_b");
     await ctx.approve("ast_c");
 
-    currentUser.value = { user: { id: ctx.reviewerId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
     expect((await composeStoryboard(jsonReq(bounds()), projectParams(id))).status).toBe(403);
 
     currentUser.value = { user: { id: ctx.ownerId } };
@@ -555,9 +555,9 @@ describe("storyboard read endpoint", () => {
     ).toBe(401);
   });
 
-  it("lets any member read, including a REVIEWER", async () => {
+  it("lets a VIEWER read", async () => {
     const id = await newProject();
-    currentUser.value = { user: { id: ctx.reviewerId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
     const res = await readStoryboard(
       getReq(`/api/video-projects/${id}/storyboard`, ctx.orgId),
       projectParams(id),
@@ -637,7 +637,7 @@ describe("project list endpoint", () => {
   it("lets any member list a property's projects", async () => {
     const first = await newProject();
     const second = await newProject();
-    currentUser.value = { user: { id: ctx.reviewerId } };
+    currentUser.value = { user: { id: ctx.viewerId } };
 
     const res = await listProjects(
       getReq("/api/properties/prp_1/video-projects", ctx.orgId),

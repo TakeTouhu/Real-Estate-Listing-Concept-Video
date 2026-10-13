@@ -550,7 +550,7 @@ describe("tenant isolation for properties and assets", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("denies asset writes to a REVIEWER (insufficient role)", async () => {
+  it("denies asset writes to a VIEWER (insufficient role)", async () => {
     const ctx = await setup();
     const auth = new AuthService(ctx.deps, { sessionTtlSeconds: 3600 });
     const members = new MembershipService(ctx.deps, { invitationTtlSeconds: 3600 });
@@ -563,21 +563,86 @@ describe("tenant isolation for properties and assets", () => {
     const { token } = await members.invite(ctx.ownerId, {
       organizationId: ctx.orgId,
       email: "r@example.com",
-      role: "REVIEWER",
+      role: "VIEWER",
     });
-    const reviewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
-    await members.acceptInvitation(reviewer.id, token);
+    const viewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
+    await members.acceptInvitation(viewer.id, token);
 
-    // A reviewer may read but not write.
-    expect((await ctx.properties.list(reviewer.id, ctx.orgId)).length).toBe(1);
+    // A viewer may read but not write.
+    expect((await ctx.properties.list(viewer.id, ctx.orgId)).length).toBe(1);
     await expect(
-      ctx.assets.requestUpload(reviewer.id, {
+      ctx.assets.requestUpload(viewer.id, {
         organizationId: ctx.orgId,
         propertyId: property.id,
         originalFilename: "x.jpg",
         declaredSizeBytes: 10,
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+/**
+ * Each property and asset action checks its own ADR-0052 permission (Phase 6C):
+ * a VIEWER reads but changes nothing, and a BILLING member, which holds no
+ * Property-content permission, does not even read.
+ */
+describe("the permission each property and asset action checks", () => {
+  async function withMembers() {
+    const ctx = await setup();
+    const auth = new AuthService(ctx.deps, { sessionTtlSeconds: 3600 });
+    const viewer = await auth.register({ email: "viewer@example.com", name: "V", password: PASSWORD });
+    const billing = await auth.register({ email: "billing@example.com", name: "B", password: PASSWORD });
+    await ctx.deps.repos.memberships.create({ organizationId: ctx.orgId, userId: viewer.id, role: "VIEWER" });
+    await ctx.deps.repos.memberships.create({ organizationId: ctx.orgId, userId: billing.id, role: "BILLING" });
+    const property = await ctx.properties.create(ctx.ownerId, {
+      organizationId: ctx.orgId,
+      name: "Listing",
+      propertyType: "HOUSE",
+      rightsConfirmed: true,
+    });
+    const { asset } = await ctx.assets.requestUpload(ctx.ownerId, {
+      organizationId: ctx.orgId,
+      propertyId: property.id,
+      originalFilename: "x.jpg",
+      declaredSizeBytes: 2048,
+    });
+    return { ...ctx, viewerId: viewer.id, billingId: billing.id, propertyId: property.id, assetId: asset.id };
+  }
+
+  it("refuses every write to a VIEWER, naming the permission it lacks", async () => {
+    const c = await withMembers();
+    const refused = (permission: string) => new RegExp(`lacks permission '${permission.replace(".", "\\.")}'`);
+    await expect(
+      c.properties.create(c.viewerId, {
+        organizationId: c.orgId,
+        name: "Another",
+        propertyType: "HOUSE",
+        rightsConfirmed: true,
+      }),
+    ).rejects.toThrow(refused("property.create"));
+    await expect(c.properties.update(c.viewerId, c.orgId, c.propertyId, { name: "Renamed" })).rejects.toThrow(
+      refused("property.edit"),
+    );
+    await expect(c.properties.remove(c.viewerId, c.orgId, c.propertyId)).rejects.toThrow(refused("property.delete"));
+    await expect(c.assets.completeUpload(c.viewerId, c.orgId, c.assetId)).rejects.toThrow(refused("asset.upload"));
+    await expect(c.assets.retryUpload(c.viewerId, c.orgId, c.assetId)).rejects.toThrow(refused("asset.upload"));
+    await expect(c.assets.requestDeletion(c.viewerId, c.orgId, c.assetId)).rejects.toThrow(refused("asset.delete"));
+  });
+
+  it("lets a VIEWER read properties and assets", async () => {
+    const c = await withMembers();
+    expect(await c.properties.list(c.viewerId, c.orgId)).toHaveLength(1);
+    expect((await c.properties.get(c.viewerId, c.orgId, c.propertyId)).id).toBe(c.propertyId);
+    expect(await c.assets.list(c.viewerId, c.orgId, c.propertyId)).toHaveLength(1);
+  });
+
+  it("refuses every read to a BILLING member", async () => {
+    const c = await withMembers();
+    const refused = /lacks permission 'property\.view'/;
+    await expect(c.properties.list(c.billingId, c.orgId)).rejects.toThrow(refused);
+    await expect(c.properties.get(c.billingId, c.orgId, c.propertyId)).rejects.toThrow(refused);
+    await expect(c.assets.list(c.billingId, c.orgId, c.propertyId)).rejects.toThrow(refused);
+    await expect(c.assets.createDownloadUrl(c.billingId, c.orgId, c.assetId)).rejects.toThrow(refused);
   });
 });
 

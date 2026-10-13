@@ -102,7 +102,7 @@ export default async function StoryboardPage({
           fresh={view.fresh}
           approvedCount={approvedCount}
           minimumScenes={MIN_STORYBOARD_SCENES}
-          canCompose={hasPermission(role, "property:write")}
+          canCompose={hasPermission(role, "video.generate")}
         />
       </section>
     );

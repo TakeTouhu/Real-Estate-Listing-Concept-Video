@@ -349,14 +349,14 @@ async function rejectionOf(promise: Promise<unknown>): Promise<AppError> {
 // ---------------------------------------------------------------------------
 
 describe("startScene — authorization", () => {
-  it.each(["OWNER", "ADMIN", "CREATOR"] as const)("permits %s", async (role) => {
+  it.each(["OWNER", "ADMIN", "MANAGER", "CREATOR"] as const)("permits %s", async (role) => {
     const h = harness({ role });
     const result = await h.service.startScene(ACTOR, ORG, PROJECT, SCENE);
     expect(result.state).toBe("QUEUED");
   });
 
-  it("denies REVIEWER with FORBIDDEN", async () => {
-    const h = harness({ role: "REVIEWER" });
+  it.each(["VIEWER", "BILLING"] as const)("denies %s with FORBIDDEN", async (role) => {
+    const h = harness({ role });
     const error = await rejectionOf(h.service.startScene(ACTOR, ORG, PROJECT, SCENE));
     expect(error.code).toBe("FORBIDDEN");
   });

@@ -281,7 +281,9 @@ describe("durable shape and the cost lock", () => {
     // exactly one position, and nothing was added to it afterwards. The newest
     // migration is pinned by whichever phase added it.
     expect(dirs[13]).toBe("00000000000013_phase4c3b2h3b6c_media_failure_resolution");
-    expect(dirs.filter((dir) => dir.includes("6c"))).toEqual([
+    // "6c" here means Phase 4C-3B-2H-3B-6C. The top-level Phase 6C's role
+    // template migration shares the substring and is the one authorized exception.
+    expect(dirs.filter((dir) => dir.includes("6c") && dir !== "00000000000019_phase6c_role_templates")).toEqual([
       "00000000000013_phase4c3b2h3b6c_media_failure_resolution",
     ]);
   });
