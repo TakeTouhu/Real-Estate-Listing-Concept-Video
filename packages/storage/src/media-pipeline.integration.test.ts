@@ -122,7 +122,7 @@ describe("end-to-end secure upload flow (storage + domain + real images)", () =>
     const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
     const orgs = new OrganizationService(deps);
     const storage = new LocalObjectStorage({ secret: SECRET });
-    const propertyRepo = new InMemoryPropertyRepository(deps.clock);
+    const propertyRepo = new InMemoryPropertyRepository(deps.clock, deps.repos);
     const assetRepo = new InMemoryMediaAssetRepository(deps.clock);
 
     const owner = await auth.register({ email: "o@example.com", name: "O", password: PASSWORD });

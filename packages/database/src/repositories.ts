@@ -35,6 +35,7 @@ import type {
 import { isPermission } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
 import { createPrismaGroupRepository } from "./group-repository";
+import { releaseProperties } from "./property-release";
 
 function toOrganization(r: DbOrganization): Organization {
   return {
@@ -241,10 +242,19 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
           const refusal = await ownerLossRefusal(tx, organizationId, userId);
           if (refusal) return refusal;
         }
-        // The member's grants go with it (foreign-key cascade).
-        const { count } = await tx.membership.deleteMany({ where: { organizationId, userId, role: expectedRole } });
-        if (count === 0) return "STALE";
-        await tx.auditLog.create({ data: auditLogData(audit) });
+        // Locks the member before its Properties are released: an assignment
+        // naming it commits first, and is released and counted, or waits and
+        // finds it gone.
+        const [member] = await tx.$queryRaw<{ role: Role }[]>`
+          SELECT "role" FROM "memberships"
+          WHERE "organizationId" = ${organizationId} AND "userId" = ${userId}
+          FOR UPDATE`;
+        // Applies only while the member still holds the role it was checked against.
+        if (member?.role !== expectedRole) return "STALE";
+        const unassigned = await releaseProperties(tx, organizationId, "responsibleUserId", userId);
+        // The member's grants and group memberships go with it (foreign-key cascade).
+        await tx.membership.delete({ where: { organizationId_userId: { organizationId, userId } } });
+        await tx.auditLog.create({ data: auditLogData(audit(unassigned)) });
         return "APPLIED";
       });
     },

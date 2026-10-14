@@ -205,7 +205,7 @@ describe("deleting a group", () => {
         actorUserId: fx.ids[role],
         resourceType: "group",
         resourceId: group.id,
-        metadata: { name: "Sales", actorRole: role, removedMemberCount: 2 },
+        metadata: { name: "Sales", actorRole: role, removedMemberCount: 2, ungroupedPropertyCount: 0 },
       }),
     ]);
   });

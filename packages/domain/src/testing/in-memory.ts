@@ -142,8 +142,12 @@ class InMemoryMembershipRepository implements MembershipRepository {
   constructor(
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
-    /** Mirrors the foreign keys: removing a membership removes its grants and group memberships. */
-    private readonly onRemove: (organizationId: string, userId: string) => void,
+    /**
+     * Mirrors the foreign keys: removing a membership removes its grants and
+     * group memberships, and releases the Properties it was the responsible
+     * user of. Answers how many it released.
+     */
+    private readonly onRemove: (organizationId: string, userId: string) => number,
   ) {}
   private key(organizationId: string, userId: string): string {
     return `${organizationId}::${userId}`;
@@ -193,14 +197,14 @@ class InMemoryMembershipRepository implements MembershipRepository {
     organizationId: string,
     userId: string,
     expectedRole: Role,
-    audit: MembershipChangeAudit,
+    audit: (unassignedPropertyCount: number) => MembershipChangeAudit,
   ): Promise<MembershipChangeOutcome> {
     const key = this.key(organizationId, userId);
     if (this.rows.get(key)?.role !== expectedRole) return "STALE";
     if (this.takesLastOwner(organizationId, expectedRole, true)) return "LAST_OWNER";
     this.rows.delete(key);
-    this.onRemove(organizationId, userId);
-    await this.auditLogs.append(audit);
+    const unassigned = this.onRemove(organizationId, userId);
+    await this.auditLogs.append(audit(unassigned));
     return "APPLIED";
   }
   /** Whether a member holding `role`, losing it, is the organization's last OWNER. */
@@ -261,7 +265,13 @@ class InMemoryGroupRepository implements GroupRepository {
      * only a member of the organization joins its groups.
      */
     private readonly roleOf: (organizationId: string, userId: string) => Role | undefined,
+    /** Mirrors the Property foreign key: deleting a group ungroups its Properties. */
+    private readonly properties: PropertyAssignmentLinks,
   ) {}
+  /** Whether the organization has the group, as a foreign key sees it. */
+  has(organizationId: string, groupId: string): boolean {
+    return this.group(organizationId, groupId) !== undefined;
+  }
   private memberKey(groupId: string, userId: string): string {
     return `${groupId}::${userId}`;
   }
@@ -333,6 +343,7 @@ class InMemoryGroupRepository implements GroupRepository {
     for (const [key, permission] of this.permissions) {
       if (permission.groupId === groupId) this.permissions.delete(key);
     }
+    const ungroupedPropertyCount = this.properties.ungroup(organizationId, groupId);
     let removedMemberCount = 0;
     for (const [key, member] of this.members) {
       if (member.groupId === groupId) {
@@ -341,7 +352,7 @@ class InMemoryGroupRepository implements GroupRepository {
       }
     }
     this.groups.delete(groupId);
-    await this.auditLogs.append(audit({ name: group.name, removedMemberCount }));
+    await this.auditLogs.append(audit({ name: group.name, removedMemberCount, ungroupedPropertyCount }));
     return { outcome: "DELETED", removedMemberCount };
   }
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]> {
@@ -349,6 +360,14 @@ class InMemoryGroupRepository implements GroupRepository {
       [...this.members.values()]
         .filter((m) => m.groupId === groupId && m.organizationId === organizationId)
         .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
+    );
+  }
+  listGroupIdsForMember(organizationId: string, userId: string): Promise<string[]> {
+    return Promise.resolve(
+      [...this.members.values()]
+        .filter((m) => m.organizationId === organizationId && m.userId === userId)
+        .map((m) => m.groupId)
+        .sort(),
     );
   }
   async addMember(
@@ -524,19 +543,58 @@ class InMemoryAuditLogRepository implements AuditLogRepository {
   }
 }
 
+/**
+ * What a Property's two foreign keys see (ADR-0062), shared by the identity
+ * doubles and an in-memory Property repository built on them: whether a
+ * member or group exists, and, when one goes, the Properties it releases.
+ */
+export class PropertyAssignmentLinks {
+  private readonly releasers: PropertyAssignmentReleaser[] = [];
+  constructor(
+    readonly isMember: (organizationId: string, userId: string) => boolean,
+    readonly isGroup: (organizationId: string, groupId: string) => boolean,
+  ) {}
+  /** Called by a Property repository that keeps assignments. */
+  register(releaser: PropertyAssignmentReleaser): void {
+    this.releasers.push(releaser);
+  }
+  /** Unassign the member's Properties; how many. */
+  unassign(organizationId: string, userId: string): number {
+    return this.releasers.reduce((count, r) => count + r.unassign(organizationId, userId), 0);
+  }
+  /** Ungroup the group's Properties; how many. */
+  ungroup(organizationId: string, groupId: string): number {
+    return this.releasers.reduce((count, r) => count + r.ungroup(organizationId, groupId), 0);
+  }
+}
+
+export interface PropertyAssignmentReleaser {
+  unassign(organizationId: string, userId: string): number;
+  ungroup(organizationId: string, groupId: string): number;
+}
+
 export interface TestRepositories extends IdentityRepositories {
   readonly auditLogs: InMemoryAuditLogRepository;
+  readonly propertyLinks: PropertyAssignmentLinks;
 }
 
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
   const auditLogs = new InMemoryAuditLogRepository(clock);
   const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
-  const groups = new InMemoryGroupRepository(clock, auditLogs, (organizationId, userId) =>
-    memberships.roleOf(organizationId, userId),
+  const propertyLinks: PropertyAssignmentLinks = new PropertyAssignmentLinks(
+    (organizationId, userId) => memberships.has(organizationId, userId),
+    (organizationId, groupId) => groups.has(organizationId, groupId),
   );
-  const memberships = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) => {
+  const groups = new InMemoryGroupRepository(
+    clock,
+    auditLogs,
+    (organizationId, userId) => memberships.roleOf(organizationId, userId),
+    propertyLinks,
+  );
+  const memberships: InMemoryMembershipRepository = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) => {
     permissionGrants.removeAllForMember(organizationId, userId);
     groups.removeAllForMember(organizationId, userId);
+    return propertyLinks.unassign(organizationId, userId);
   });
   return {
     users: new InMemoryUserRepository(clock),
@@ -548,6 +606,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
     sessions: new InMemorySessionRepository(clock),
     auditLogs,
+    propertyLinks,
   };
 }
 

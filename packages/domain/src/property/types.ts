@@ -17,7 +17,12 @@ export interface Property {
   readonly addressMasked: string | null;
   readonly description: string | null;
   readonly status: PropertyStatus;
+  /** Authorship history; never authorizes anything (ADR-0052 Decision 10). */
   readonly createdBy: string;
+  /** The member whose `OWN` scope reaches this Property; null when unassigned (ADR-0062). */
+  readonly responsibleUserId: string | null;
+  /** The group whose members' `GROUP` scope reaches this Property; null when ungrouped. */
+  readonly groupId: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

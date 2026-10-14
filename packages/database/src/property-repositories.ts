@@ -9,6 +9,7 @@ import type {
   Property,
   PropertyRepository,
 } from "@app/domain";
+import { auditLogData } from "./audit-log-data";
 
 /**
  * Whether a thrown value is Prisma's "no record matched the filter".
@@ -33,6 +34,16 @@ const ACTIVE_STATUSES = [
   "READY",
 ] as const;
 
+/**
+ * A `properties` foreign key refusing the row: its responsible user is not a
+ * member of the organization, or its group is gone. (An audit row's own
+ * foreign key is the audit log's, and stays an error.)
+ */
+function isMissingAssignee(error: unknown): boolean {
+  const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown } };
+  return code === "P2003" && meta?.modelName === "Property";
+}
+
 function toProperty(r: DbProperty): Property {
   return {
     id: r.id,
@@ -43,6 +54,8 @@ function toProperty(r: DbProperty): Property {
     description: r.description,
     status: r.status,
     createdBy: r.createdBy,
+    responsibleUserId: r.responsibleUserId,
+    groupId: r.groupId,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
@@ -82,21 +95,33 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
   assets: MediaAssetRepository;
 } {
   const properties: PropertyRepository = {
-    async create(input) {
-      return toProperty(
-        await prisma.property.create({
-          data: {
-            id: input.id,
-            organizationId: input.organizationId,
-            name: input.name,
-            propertyType: input.propertyType,
-            addressMasked: input.addressMasked,
-            description: input.description,
-            status: input.status,
-            createdBy: input.createdBy,
-          },
-        }),
-      );
+    async create(input, audit) {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          // The foreign keys share-lock the responsible user's membership and
+          // the group: a removal or deletion commits first and refuses this
+          // row, or waits for it and then releases it.
+          const row = await tx.property.create({
+            data: {
+              id: input.id,
+              organizationId: input.organizationId,
+              name: input.name,
+              propertyType: input.propertyType,
+              addressMasked: input.addressMasked,
+              description: input.description,
+              status: input.status,
+              createdBy: input.createdBy,
+              responsibleUserId: input.responsibleUserId,
+              groupId: input.groupId,
+            },
+          });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "CREATED", property: toProperty(row) } as const;
+        });
+      } catch (error) {
+        if (isMissingAssignee(error)) return { outcome: "STALE" };
+        throw error;
+      }
     },
     async findById(organizationId, id) {
       const row = await prisma.property.findFirst({ where: { id, organizationId } });
@@ -123,6 +148,32 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
           },
         }),
       );
+    },
+    async assign(organizationId, propertyId, expected, next, audit) {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          // Applies only while the Property still has the assignments it was
+          // checked against. Changing either one share-locks the new member's
+          // membership or the new group through its foreign key, as `create`.
+          const { count } = await tx.property.updateMany({
+            where: {
+              id: propertyId,
+              organizationId,
+              status: { not: "DELETED" },
+              responsibleUserId: expected.responsibleUserId,
+              groupId: expected.groupId,
+            },
+            data: { responsibleUserId: next.responsibleUserId, groupId: next.groupId },
+          });
+          if (count === 0) return { outcome: "STALE" } as const;
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          const row = await tx.property.findUniqueOrThrow({ where: { id: propertyId } });
+          return { outcome: "ASSIGNED", property: toProperty(row) } as const;
+        });
+      } catch (error) {
+        if (isMissingAssignee(error)) return { outcome: "STALE" };
+        throw error;
+      }
     },
   };
 

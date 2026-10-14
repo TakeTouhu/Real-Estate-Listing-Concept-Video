@@ -1,6 +1,14 @@
 import type { Clock } from "../identity/ports";
-import type { MediaAssetRepository, PropertyRepository } from "../property/ports";
+import type {
+  MediaAssetRepository,
+  PropertyAssignment,
+  PropertyChangeAudit,
+  PropertyCreation,
+  PropertyReassignment,
+  PropertyRepository,
+} from "../property/ports";
 import type { MediaAsset, MediaAssetStatus, Property } from "../property/types";
+import type { TestRepositories } from "./in-memory";
 
 const ACTIVE_STATUSES: readonly MediaAsset["status"][] = [
   "PENDING_UPLOAD",
@@ -10,15 +18,33 @@ const ACTIVE_STATUSES: readonly MediaAsset["status"][] = [
   "READY",
 ];
 
+/**
+ * Properties, with the identity doubles standing in for the database: each
+ * change writes its audit entry to their audit log, an assignment must name a
+ * member and a group they hold, and a member's removal or a group's deletion
+ * there releases what refers to it here. Each change checks and writes with no
+ * `await` in between, as a transaction would.
+ */
 export class InMemoryPropertyRepository implements PropertyRepository {
   private readonly byId = new Map<string, Property>();
-  constructor(private readonly clock: Clock) {}
+  constructor(
+    private readonly clock: Clock,
+    private readonly repos: Pick<TestRepositories, "auditLogs" | "propertyLinks">,
+  ) {
+    repos.propertyLinks.register({
+      unassign: (organizationId, userId) =>
+        this.release(organizationId, (p) => p.responsibleUserId === userId, { responsibleUserId: null }),
+      ungroup: (organizationId, groupId) => this.release(organizationId, (p) => p.groupId === groupId, { groupId: null }),
+    });
+  }
 
-  create(input: Omit<Property, "createdAt" | "updatedAt">): Promise<Property> {
+  async create(input: Omit<Property, "createdAt" | "updatedAt">, audit: PropertyChangeAudit): Promise<PropertyCreation> {
+    if (!this.assignable(input.organizationId, input)) return { outcome: "STALE" };
     const now = this.clock.now();
     const property: Property = { ...input, createdAt: now, updatedAt: now };
     this.byId.set(property.id, property);
-    return Promise.resolve(property);
+    await this.repos.auditLogs.append(audit);
+    return { outcome: "CREATED", property };
   }
 
   /** Organization-scoped: a row from another tenant is invisible (null). */
@@ -36,9 +62,54 @@ export class InMemoryPropertyRepository implements PropertyRepository {
   }
 
   update(property: Property): Promise<Property> {
-    if (!this.byId.has(property.id)) throw new Error("property not found");
-    this.byId.set(property.id, property);
-    return Promise.resolve(property);
+    const stored = this.byId.get(property.id);
+    if (!stored) throw new Error("property not found");
+    // Never the assignments, as the database's update never writes them.
+    const updated: Property = { ...property, responsibleUserId: stored.responsibleUserId, groupId: stored.groupId };
+    this.byId.set(property.id, updated);
+    return Promise.resolve(updated);
+  }
+
+  async assign(
+    organizationId: string,
+    propertyId: string,
+    expected: PropertyAssignment,
+    next: PropertyAssignment,
+    audit: PropertyChangeAudit,
+  ): Promise<PropertyReassignment> {
+    const stored = this.byId.get(propertyId);
+    if (
+      stored?.organizationId !== organizationId ||
+      stored.status === "DELETED" ||
+      stored.responsibleUserId !== expected.responsibleUserId ||
+      stored.groupId !== expected.groupId ||
+      !this.assignable(organizationId, next)
+    ) {
+      return { outcome: "STALE" };
+    }
+    const property: Property = { ...stored, ...next, updatedAt: this.clock.now() };
+    this.byId.set(propertyId, property);
+    await this.repos.auditLogs.append(audit);
+    return { outcome: "ASSIGNED", property };
+  }
+
+  /** Mirrors the foreign keys: a member of the organization, and a group of it. */
+  private assignable(organizationId: string, assignment: PropertyAssignment): boolean {
+    const links = this.repos.propertyLinks;
+    return (
+      (assignment.responsibleUserId === null || links.isMember(organizationId, assignment.responsibleUserId)) &&
+      (assignment.groupId === null || links.isGroup(organizationId, assignment.groupId))
+    );
+  }
+
+  private release(organizationId: string, matches: (p: Property) => boolean, released: Partial<PropertyAssignment>): number {
+    let count = 0;
+    for (const [id, property] of this.byId) {
+      if (property.organizationId !== organizationId || !matches(property)) continue;
+      this.byId.set(id, { ...property, ...released, updatedAt: this.clock.now() });
+      count += 1;
+    }
+    return count;
   }
 }
 

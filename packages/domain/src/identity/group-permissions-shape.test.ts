@@ -31,14 +31,16 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is this phase's", () => {
+  it("adds exactly one migration, and it is this phase's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the newest: Phase 6H added migration 23 after it. Phase 6G still
+    // contributed exactly one migration, in place.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(22);
     expect(dirs.filter((dir) => dir.includes("phase6g"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(23);
+    expect(dirs).toHaveLength(24);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

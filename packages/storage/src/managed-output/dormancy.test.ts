@@ -400,9 +400,10 @@ describe("nothing about the existing adapters changed shape", () => {
     // organization subscription, and by Phase 6C, which is authorized to add
     // migration 19 for the role templates. And by Phase 6D, which is authorized
     // to add migration 20 for individual permission grants, by Phase 6F, which
-    // is authorized to add migration 21 for groups, and by Phase 6G, which is
-    // authorized to add migration 22 for group permissions.
-    expect(dirs.at(-1)).toBe("00000000000022_phase6g_group_permissions");
+    // is authorized to add migration 21 for groups, by Phase 6G, which is
+    // authorized to add migration 22 for group permissions, and by Phase 6H,
+    // which is authorized to add migration 23 for Property assignment.
+    expect(dirs.at(-1)).toBe("00000000000023_phase6h_property_assignment");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

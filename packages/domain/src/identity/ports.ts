@@ -82,12 +82,19 @@ export interface MembershipRepository {
     role: Role,
     audit: MembershipChangeAudit,
   ): Promise<MembershipChangeOutcome>;
-  /** Remove a member holding `expectedRole`, with its grants, and record `audit`, atomically; as `changeRole`. */
+  /**
+   * Remove a member holding `expectedRole`, with its grants and group
+   * memberships, and record the audit entry `audit` builds from the number of
+   * Properties it was the responsible user of, atomically; as `changeRole`.
+   * Those Properties become unassigned (ADR-0062). The membership row is locked
+   * first, so an assignment naming the member commits before (and is released
+   * and counted) or finds the member gone.
+   */
   remove(
     organizationId: string,
     userId: string,
     expectedRole: Role,
-    audit: MembershipChangeAudit,
+    audit: (unassignedPropertyCount: number) => MembershipChangeAudit,
   ): Promise<MembershipChangeOutcome>;
 }
 
@@ -187,10 +194,11 @@ export interface GroupChangeRefused {
   readonly refusal: GroupCeilingRefusal;
 }
 
-/** What a deletion removed: the group's name as locked, and how many members. */
+/** What a deletion removed: the group's name as locked, how many members, and how many Properties it ungrouped. */
 export interface DeletedGroup {
   readonly name: string;
   readonly removedMemberCount: number;
+  readonly ungroupedPropertyCount: number;
 }
 
 /** How a deletion ended; `STALE` (the group is already gone) wrote nothing. */
@@ -232,11 +240,12 @@ export interface GroupRepository {
   ): Promise<GroupRename>;
   /**
    * Delete a group with its member and permission rows, if `check` admits it,
-   * with the audit entry `audit` builds from the group as locked and the number
-   * of members the deletion removed, atomically. The group row is locked
-   * (`FOR UPDATE`) before `check` reads it, so every change to the group's
-   * members, permissions or name either commits before (and is judged,
-   * counted and named) or finds the group gone.
+   * ungrouping its Properties (ADR-0052 Decision 11), with the audit entry
+   * `audit` builds from the group as locked and what the deletion removed and
+   * ungrouped, atomically. The group row is locked (`FOR UPDATE`) before
+   * `check` reads it, so every change to the group's members, permissions or
+   * name, and every Property assigned to it, either commits before (and is
+   * judged, counted and named) or finds the group gone.
    */
   delete(
     organizationId: string,
@@ -246,6 +255,8 @@ export interface GroupRepository {
   ): Promise<GroupDeletion>;
   /** A group's members, by user id. */
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]>;
+  /** The ids of the groups a member belongs to, in id order. */
+  listGroupIdsForMember(organizationId: string, userId: string): Promise<string[]>;
   /**
    * Add a member, if `check` admits it, and record its audit entry atomically,
    * unless it is already in the group. The group row is share-locked before

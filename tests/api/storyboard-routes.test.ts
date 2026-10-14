@@ -63,7 +63,7 @@ async function setup(): Promise<Context> {
   const deps = createTestDeps();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const organizations = new OrganizationService(deps);
-  const properties = new InMemoryPropertyRepository(deps.clock);
+  const properties = new InMemoryPropertyRepository(deps.clock, deps.repos);
   const projects = new Map<string, VideoProject>();
   const scenes = new Map<string, StoryboardScene[]>();
   const assets = new InMemoryMediaAssetRepository(deps.clock);
@@ -82,26 +82,27 @@ async function setup(): Promise<Context> {
     role: "VIEWER" as Role,
   });
 
-  const property = await properties.create({
-    id: "prp_1",
-    organizationId: org.id,
-    name: "Sunny flat",
-    propertyType: "APARTMENT",
-    addressMasked: null,
-    description: null,
-    status: "ACTIVE",
-    createdBy: owner.id,
-  });
-  const otherProperty = await properties.create({
-    id: "prp_other",
-    organizationId: other.id,
-    name: "Rival flat",
-    propertyType: "APARTMENT",
-    addressMasked: null,
-    description: null,
-    status: "ACTIVE",
-    createdBy: outsider.id,
-  });
+  const seedProperty = async (id: string, organizationId: string, name: string, createdBy: string) => {
+    const created = await properties.create(
+      {
+        id,
+        organizationId,
+        name,
+        propertyType: "APARTMENT",
+        addressMasked: null,
+        description: null,
+        status: "ACTIVE",
+        createdBy,
+        responsibleUserId: null,
+        groupId: null,
+      },
+      { organizationId, actorUserId: createdBy, action: "property.created", resourceType: "property", resourceId: id, metadata: {} },
+    );
+    if (created.outcome !== "CREATED") throw new Error("seed property not created");
+    return created.property;
+  };
+  const property = await seedProperty("prp_1", org.id, "Sunny flat", owner.id);
+  const otherProperty = await seedProperty("prp_other", other.id, "Rival flat", outsider.id);
 
   storyboardService.value = new StoryboardService({
     identity: deps,
