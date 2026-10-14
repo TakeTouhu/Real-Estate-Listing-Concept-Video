@@ -16,6 +16,9 @@ erDiagram
   USERS ||--o| CREDENTIALS : "authenticates with"
   USERS ||--o{ MEMBERSHIPS : joins
   MEMBERSHIPS ||--o{ MEMBER_PERMISSION_GRANTS : "is granted (CASCADE)"
+  ORGANIZATIONS ||--o{ GROUPS : "has (CASCADE)"
+  GROUPS ||--o{ GROUP_MEMBERS : "contains (CASCADE)"
+  MEMBERSHIPS ||--o{ GROUP_MEMBERS : "belongs to (CASCADE)"
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
@@ -62,6 +65,23 @@ erDiagram
     string permission PK "CHECK: grantable vocabulary, never video.share"
     string grantedByUserId
     datetime grantedAt
+  }
+
+  GROUPS {
+    string id PK "UK (id, organizationId)"
+    string organizationId FK
+    string name "UK (organizationId, name); CHECK: trimmed, 1-100"
+    string createdByUserId
+    datetime createdAt
+    datetime updatedAt
+  }
+
+  GROUP_MEMBERS {
+    string groupId PK_FK "FK (groupId, organizationId) to GROUPS"
+    string organizationId FK "FK (organizationId, userId) to MEMBERSHIPS"
+    string userId PK_FK
+    string addedByUserId
+    datetime addedAt
   }
 
   INVITATIONS {
@@ -508,6 +528,15 @@ Property responsible-user and group assignments are still later packages.
 
 No entity, column or constraint changed. The membership and invitation writes
 now commit with their `audit_logs` row in one transaction (ADR-0059).
+
+## Phase 6F — groups and group membership
+
+`groups` holds an organization's groups, with names unique within it.
+`group_members` holds who belongs to each: one row per (group, user), with both
+foreign keys carrying the organization, so a row can never link a group of one
+organization to a member of another. Deleting the group, or removing the member
+from the organization, removes the row (ADR-0060). Group permissions and the
+Property responsible-user and group assignments are still later packages.
 
 ## Not implemented yet (later phases)
 

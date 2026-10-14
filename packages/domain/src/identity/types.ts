@@ -45,6 +45,26 @@ export interface PermissionGrant {
   readonly grantedAt: Date;
 }
 
+/** A named set of an organization's members (ADR-0052 Decision 10, ADR-0060). */
+export interface Group {
+  readonly id: string;
+  readonly organizationId: string;
+  /** Trimmed, 1 to 100 characters, unique within the organization. */
+  readonly name: string;
+  readonly createdByUserId: string;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/** One member of one group; the member belongs to the group's organization. */
+export interface GroupMember {
+  readonly groupId: string;
+  readonly organizationId: string;
+  readonly userId: string;
+  readonly addedByUserId: string;
+  readonly addedAt: Date;
+}
+
 export interface Invitation {
   readonly id: string;
   readonly organizationId: string;

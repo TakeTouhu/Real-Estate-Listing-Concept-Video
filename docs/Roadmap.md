@@ -174,8 +174,16 @@ the role its ceiling saw; demoting or removing an `OWNER` counts the `OWNER`s
 under a lock, so the last one can never be taken away; an invitation is accepted
 once. Built before groups, which reuse the pattern.
 
+**Phase 6F — groups and group membership** (ADR-0060, migration 21): an
+organization's groups (unique, trimmed names) and their members, with both of a
+member row's foreign keys carrying the organization; `group.manage` to change,
+`group.view` to list; deletion `OWNER`/`ADMIN`-only even where another role holds
+`group.manage`; adding or removing a member under the role-assignment ceiling;
+each change committed with its audit entry, each refusal audited. Dormant: a
+group confers no permission and no row access yet.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** groups and group permissions, and Property-rooted row Scope. MFA for
+it:** group permissions (6G) and Property-rooted row Scope (6H). MFA for
 `permission.manage` and `billing.manage` holders before any member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block

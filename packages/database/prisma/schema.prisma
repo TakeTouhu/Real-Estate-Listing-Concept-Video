@@ -105,6 +105,7 @@ model Organization {
   invitations  Invitation[]
   auditLogs    AuditLog[]
   subscription OrganizationSubscription?
+  groups       Group[]
 
   @@map("organizations")
 }
@@ -141,6 +142,7 @@ model Membership {
   organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   permissionGrants PermissionGrant[]
+  groupMemberships GroupMember[]
 
   @@id([organizationId, userId])
   @@index([userId])
@@ -161,6 +163,41 @@ model PermissionGrant {
 
   @@id([organizationId, userId, permission])
   @@map("member_permission_grants")
+}
+
+/// A named set of an organization's members (ADR-0052 Decision 10, ADR-0060).
+/// Phase 6F: membership only. A group confers no permission and no row access
+/// yet. Names are unique within the organization.
+model Group {
+  id              String        @id
+  organizationId  String
+  name            String
+  createdByUserId String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members         GroupMember[]
+
+  @@unique([organizationId, name])
+  @@unique([id, organizationId])
+  @@map("groups")
+}
+
+/// One member of one group. Both foreign keys carry the organization, so a row
+/// can never link a group of one organization to a member of another. Deleting
+/// the group, or removing the member from the organization, removes the row.
+model GroupMember {
+  groupId        String
+  organizationId String
+  userId         String
+  addedByUserId  String
+  addedAt        DateTime   @default(now())
+  group          Group      @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  membership     Membership @relation(fields: [organizationId, userId], references: [organizationId, userId], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([organizationId, userId])
+  @@map("group_members")
 }
 
 model Invitation {

@@ -2,7 +2,14 @@ import type {
   AuditLogRepository,
   Clock,
   CredentialRepository,
+  DeletedGroup,
   GrantChangeAudit,
+  GroupChangeAudit,
+  GroupCreation,
+  GroupDeletion,
+  GroupMemberAddition,
+  GroupRename,
+  GroupRepository,
   IdentityRepositories,
   IdentityServiceDeps,
   IdGenerator,
@@ -21,6 +28,8 @@ import type {
 import type {
   AuditLog,
   Credential,
+  Group,
+  GroupMember,
   Invitation,
   Membership,
   Organization,
@@ -128,7 +137,7 @@ class InMemoryMembershipRepository implements MembershipRepository {
   constructor(
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
-    /** Mirrors the grants' foreign key: removing a membership removes its grants. */
+    /** Mirrors the foreign keys: removing a membership removes its grants and group memberships. */
     private readonly onRemove: (organizationId: string, userId: string) => void,
   ) {}
   private key(organizationId: string, userId: string): string {
@@ -227,6 +236,108 @@ class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
   }
 }
 
+/** Each change checks and writes with no `await` in between, as the membership repository does. */
+class InMemoryGroupRepository implements GroupRepository {
+  private readonly groups = new Map<string, Group>();
+  private readonly members = new Map<string, GroupMember>();
+  constructor(
+    private readonly clock: Clock,
+    private readonly auditLogs: AuditLogRepository,
+    /** Mirrors the membership foreign key: only a member of the organization joins its groups. */
+    private readonly isMember: (organizationId: string, userId: string) => boolean,
+  ) {}
+  private memberKey(groupId: string, userId: string): string {
+    return `${groupId}::${userId}`;
+  }
+  private group(organizationId: string, groupId: string): Group | undefined {
+    const group = this.groups.get(groupId);
+    return group?.organizationId === organizationId ? group : undefined;
+  }
+  private nameTaken(organizationId: string, name: string): boolean {
+    return [...this.groups.values()].some((g) => g.organizationId === organizationId && g.name === name);
+  }
+  async create(input: Omit<Group, "createdAt" | "updatedAt">, audit: GroupChangeAudit): Promise<GroupCreation> {
+    if (this.nameTaken(input.organizationId, input.name)) return { outcome: "NAME_TAKEN" };
+    const now = this.clock.now();
+    const group: Group = { ...input, createdAt: now, updatedAt: now };
+    this.groups.set(group.id, group);
+    await this.auditLogs.append(audit);
+    return { outcome: "CREATED", group };
+  }
+  find(organizationId: string, groupId: string): Promise<Group | null> {
+    return Promise.resolve(this.group(organizationId, groupId) ?? null);
+  }
+  listByOrganization(organizationId: string): Promise<Group[]> {
+    return Promise.resolve(
+      [...this.groups.values()]
+        .filter((g) => g.organizationId === organizationId)
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+    );
+  }
+  async rename(
+    organizationId: string,
+    groupId: string,
+    expectedName: string,
+    name: string,
+    audit: GroupChangeAudit,
+  ): Promise<GroupRename> {
+    const current = this.group(organizationId, groupId);
+    if (current?.name !== expectedName) return { outcome: "STALE" };
+    if (this.nameTaken(organizationId, name)) return { outcome: "NAME_TAKEN" };
+    const group: Group = { ...current, name, updatedAt: this.clock.now() };
+    this.groups.set(groupId, group);
+    await this.auditLogs.append(audit);
+    return { outcome: "RENAMED", group };
+  }
+  async delete(
+    organizationId: string,
+    groupId: string,
+    audit: (deleted: DeletedGroup) => GroupChangeAudit,
+  ): Promise<GroupDeletion> {
+    const group = this.group(organizationId, groupId);
+    if (!group) return { outcome: "STALE" };
+    let removedMemberCount = 0;
+    for (const [key, member] of this.members) {
+      if (member.groupId === groupId) {
+        this.members.delete(key);
+        removedMemberCount += 1;
+      }
+    }
+    this.groups.delete(groupId);
+    await this.auditLogs.append(audit({ name: group.name, removedMemberCount }));
+    return { outcome: "DELETED", removedMemberCount };
+  }
+  listMembers(organizationId: string, groupId: string): Promise<GroupMember[]> {
+    return Promise.resolve(
+      [...this.members.values()]
+        .filter((m) => m.groupId === groupId && m.organizationId === organizationId)
+        .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
+    );
+  }
+  async addMember(member: Omit<GroupMember, "addedAt">, audit: GroupChangeAudit): Promise<GroupMemberAddition> {
+    const key = this.memberKey(member.groupId, member.userId);
+    if (this.members.has(key)) return "ALREADY_IN_GROUP";
+    if (!this.group(member.organizationId, member.groupId) || !this.isMember(member.organizationId, member.userId)) {
+      return "STALE";
+    }
+    this.members.set(key, { ...member, addedAt: this.clock.now() });
+    await this.auditLogs.append(audit);
+    return "ADDED";
+  }
+  async removeMember(organizationId: string, groupId: string, userId: string, audit: GroupChangeAudit): Promise<boolean> {
+    const key = this.memberKey(groupId, userId);
+    if (this.members.get(key)?.organizationId !== organizationId) return false;
+    this.members.delete(key);
+    await this.auditLogs.append(audit);
+    return true;
+  }
+  removeAllForMember(organizationId: string, userId: string): void {
+    for (const [key, member] of this.members) {
+      if (member.organizationId === organizationId && member.userId === userId) this.members.delete(key);
+    }
+  }
+}
+
 class InMemoryInvitationRepository implements InvitationRepository {
   private readonly byId = new Map<string, Invitation>();
   constructor(
@@ -320,15 +431,20 @@ export interface TestRepositories extends IdentityRepositories {
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
   const auditLogs = new InMemoryAuditLogRepository(clock);
   const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
-  const memberships = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) =>
-    permissionGrants.removeAllForMember(organizationId, userId),
+  const groups = new InMemoryGroupRepository(clock, auditLogs, (organizationId, userId) =>
+    memberships.has(organizationId, userId),
   );
+  const memberships = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) => {
+    permissionGrants.removeAllForMember(organizationId, userId);
+    groups.removeAllForMember(organizationId, userId);
+  });
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
     organizations: new InMemoryOrganizationRepository(clock),
     memberships,
     permissionGrants,
+    groups,
     invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
     sessions: new InMemorySessionRepository(clock),
     auditLogs,

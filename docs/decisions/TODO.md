@@ -1059,6 +1059,23 @@ text, the three modes and Mode A's geometry, so this is implementation work
 against a settled specification — not a decision still to be made. The earlier
 cross-reference to *Business rules to confirm* is stale; that item is closed.
 
+## Found in Phase 6F — a provider-output race test asserts too much
+
+- [ ] **Make "gives two PROCESSING runners one history and at most one
+      transfer" deterministic** (`tests/integration/provider-output-orchestration.db.test.ts`).
+      It races two runners with `Promise.all` and asserts the loser answers
+      `INGESTION_ALREADY_CLAIMED` or `ALREADY_VERIFIED`, and that exactly one
+      transfer ran. A legal interleaving breaks both: when the second runner
+      loads the attempt after the first one's ingestion claim has committed, it
+      sees `OUTPUT_INGESTING` and takes the resume path, which transfers
+      directly by design (there is no I/O lease). It then finalizes as
+      `OUTPUT_VERIFICATION_REPLAYED`. The product behavior is correct: one
+      history, one verified output, and a second copy to the same deterministic
+      key. Only the test is wrong. Seen once in a full local run during Phase
+      6F, which does not touch this code; the re-run passed. The fix is a
+      test-only change: hold both runners until each has loaded the attempt, or
+      add this interleaving as its own deterministic case.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
@@ -1122,6 +1139,8 @@ them is **built**. Each item below records the settled decision and what remains
       Scope and Property assignment authority. What remains is implementation, itemized below — the grant
       matrix, ceiling enforcement on every grant path, self-escalation
       prevention, authorization-change audit, and the `disclosure.none` items.
+      *Groups and group membership built in Phase 6F (ADR-0060). **Still
+      unbuilt:** group permissions and Scope.*
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
@@ -1133,6 +1152,12 @@ them is **built**. Each item below records the settled decision and what remains
       Properties become ungrouped and content returns to organization root with
       no content or child resource deleted; record organization, group, acting
       user and role, affected Property count or identifiers, and timestamp.
+      *Group deletion built in Phase 6F (ADR-0060): `OWNER`/`ADMIN`-only even
+      with a granted `group.manage`; members stay in the organization; the
+      deletion is audited with the actor's role and the number of members
+      removed. **Still unbuilt:** user deletion; ungrouping Properties and
+      recording how many (no Property has a group until Scope); losing
+      group-granted permissions (no group carries one until group permissions).*
 - [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
       videos, with the in-trash restrictions (no generate/regenerate, no
       disclosure change, no upload, no edit; preview/download still allowed when
@@ -1224,7 +1249,10 @@ them is **built**. Each item below records the settled decision and what remains
       `member.role_change_refused`. **Still unbuilt:** the individual-grant,
       group and group-permission paths.* *Individual-grant path built in Phase
       6D (ADR-0058), each refusal audited as `permission.grant_refused`. **Still
-      unbuilt:** the group and group-permission paths.*
+      unbuilt:** the group and group-permission paths.* *Group-membership path
+      built in Phase 6F (ADR-0060): adding or removing a member asks the
+      role-assignment ceiling of the member's role, each refusal audited as
+      `group.change_refused`. **Still unbuilt:** the group-permission path.*
 - [ ] **Confirm the Phase 6C choices ADR-0052 did not make** (ADR-0057). None
       changes any member's access today; each matters once individual grants
       exist. (1) Existing `REVIEWER` members and invitations became `VIEWER`, the
@@ -1239,6 +1267,17 @@ them is **built**. Each item below records the settled decision and what remains
       (3) Granting `property.create` to a `VIEWER` or `BILLING` member is refused
       rather than stored as an ineffective row. (4) A repeated grant is a no-op;
       revoking an absent grant is `NOT_FOUND`.
+- [ ] **Confirm the Phase 6F choices ADR-0052 did not make** (ADR-0060).
+      (1) Adding or removing a group member follows the role-assignment
+      ceiling: an `ADMIN` changes only `MANAGER`, `CREATOR` and `VIEWER`
+      members, never itself, and no role below `ADMIN` changes anyone, even
+      with `group.manage`. (2) A group name is required, trimmed, at most 100
+      characters and unique within its organization by exact match; renaming
+      to the current name changes nothing. (3) Group memberships survive a
+      role change. (4) A repeated addition changes nothing; removing a member
+      who is not in the group is `NOT_FOUND`. (5) Leaving the organization ends
+      a member's group memberships with no `group.*` audit entry; its
+      `member.removed` entry records the removal.
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the
@@ -1263,7 +1302,10 @@ them is **built**. Each item below records the settled decision and what remains
       ADR-0059 closes it.
 - [ ] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
-      detectable after the fact.
+      detectable after the fact. *Role, individual-permission and group changes
+      audited (Phases 6C, 6D, 6F), each committed with its change (ADR-0058,
+      ADR-0059, ADR-0060). **Still unbuilt:** group-permission and
+      Property-assignment changes.*
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
       Decision 19. A failed initial generation, paid regeneration or
       disclosure/logo recomposition must terminally settle and **RELEASE** the
@@ -1322,7 +1364,8 @@ them is **built**. Each item below records the settled decision and what remains
       validation must never turn a free recomposition into a charge.
 - [ ] **Build Property-rooted Scope enforcement** (ADR-0052 Decision 10):
       durable Property → responsible user and Property → zero-or-one group
-      relationships and user → group memberships; the `GROUP` union predicate
+      relationships and user → group memberships (*user → group memberships
+      built in Phase 6F, ADR-0060*); the `GROUP` union predicate
       and the `OWN` assignment predicate; child-resource reachability inherited
       from the Property; reassignment and membership-change effects; no
       authorship-based row authorization; no implicit scope widening through
