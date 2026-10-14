@@ -36,12 +36,12 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: Phase 6C added migration 19 after it and Phase 6D
-    // migration 20. Phase 6B still
+    // No longer the newest: Phase 6C added migration 19 after it, Phase 6D
+    // migration 20 and Phase 6F migration 21. Phase 6B still
     // contributed exactly one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(18);
     expect(dirs.filter((dir) => dir.includes("phase6b"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(21);
+    expect(dirs).toHaveLength(22);
   });
 
   it("creates one table, rewrites nothing, and holds the channel rule in the schema", () => {

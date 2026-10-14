@@ -313,12 +313,12 @@ describe("durable shape", () => {
       .map((entry) => entry.name)
       .sort();
     // No longer the *last* migration: Phase 6A added migration 17 after it,
-    // Phase 6B migration 18, Phase 6C migration 19 and Phase 6D migration 20. The claim this tripwire makes is still exact —
+    // Phase 6B migration 18, Phase 6C migration 19, Phase 6D migration 20 and Phase 6F migration 21. The claim this tripwire makes is still exact —
     // Phase 5C contributed exactly one migration, it is still present and in
     // place, and nothing renamed or split it or the fifteen before it.
     expect(dirs.filter((dir) => dir.includes("phase5c"))).toEqual([MIGRATION_DIR]);
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(16);
-    expect(dirs).toHaveLength(21);
+    expect(dirs).toHaveLength(22);
   });
 
   it("creates one table and rewrites no existing row", () => {

@@ -17,6 +17,13 @@ export const AuditAction = {
   PermissionRevoked: "permission.revoked",
   /** A member's attempt to grant or revoke a permission past its ceiling. */
   PermissionGrantRefused: "permission.grant_refused",
+  GroupCreated: "group.created",
+  GroupRenamed: "group.renamed",
+  GroupDeleted: "group.deleted",
+  GroupMemberAdded: "group.member_added",
+  GroupMemberRemoved: "group.member_removed",
+  /** A member's refused attempt to change a group or who belongs to it. */
+  GroupChangeRefused: "group.change_refused",
 } as const;
 
 export type AuditActionValue = (typeof AuditAction)[keyof typeof AuditAction];

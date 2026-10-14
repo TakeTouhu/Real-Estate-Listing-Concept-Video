@@ -33,6 +33,8 @@ import type {
   User,
 } from "@app/domain";
 import { isPermission } from "@app/domain";
+import { auditLogData } from "./audit-log-data";
+import { createPrismaGroupRepository } from "./group-repository";
 
 function toOrganization(r: DbOrganization): Organization {
   return {
@@ -42,17 +44,6 @@ function toOrganization(r: DbOrganization): Organization {
     status: r.status,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
-  };
-}
-
-function auditLogData(input: Omit<AuditLog, "id" | "createdAt">): Prisma.AuditLogUncheckedCreateInput {
-  return {
-    organizationId: input.organizationId,
-    actorUserId: input.actorUserId,
-    action: input.action,
-    resourceType: input.resourceType,
-    resourceId: input.resourceId,
-    metadata: input.metadata as Prisma.InputJsonValue,
   };
 }
 
@@ -396,5 +387,15 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     },
   };
 
-  return { users, credentials, organizations, memberships, permissionGrants, invitations, sessions, auditLogs };
+  return {
+    users,
+    credentials,
+    organizations,
+    memberships,
+    permissionGrants,
+    groups: createPrismaGroupRepository(prisma),
+    invitations,
+    sessions,
+    auditLogs,
+  };
 }

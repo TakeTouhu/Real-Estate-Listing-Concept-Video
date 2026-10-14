@@ -1,6 +1,8 @@
 import type {
   AuditLog,
   Credential,
+  Group,
+  GroupMember,
   Invitation,
   Membership,
   Organization,
@@ -136,6 +138,70 @@ export interface PermissionGrantRepository {
   remove(organizationId: string, userId: string, permission: Permission, audit: GrantChangeAudit): Promise<boolean>;
 }
 
+/** The audit entry a group change commits together with the change itself. */
+export type GroupChangeAudit = Omit<AuditLog, "id" | "createdAt">;
+
+/** How a group creation ended; `NAME_TAKEN` wrote nothing. */
+export type GroupCreation =
+  | { readonly outcome: "CREATED"; readonly group: Group }
+  | { readonly outcome: "NAME_TAKEN" };
+
+/**
+ * How a rename ended. Only `RENAMED` wrote anything. `STALE`: the group is gone,
+ * or no longer has the name the rename was checked against. `NAME_TAKEN`:
+ * another group of the organization has the new name.
+ */
+export type GroupRename =
+  | { readonly outcome: "RENAMED"; readonly group: Group }
+  | { readonly outcome: "STALE" }
+  | { readonly outcome: "NAME_TAKEN" };
+
+/** How a deletion ended; `STALE` (the group is already gone) wrote nothing. */
+export type GroupDeletion =
+  | { readonly outcome: "DELETED"; readonly removedMemberCount: number }
+  | { readonly outcome: "STALE" };
+
+/**
+ * How adding a member ended. Only `ADDED` wrote anything. `ALREADY_IN_GROUP`
+ * also answers a concurrent addition that won. `STALE`: the group, or the
+ * member's membership of the organization, is gone.
+ */
+export type GroupMemberAddition = "ADDED" | "ALREADY_IN_GROUP" | "STALE";
+
+/** Groups and their members. Every call is scoped by organization. */
+export interface GroupRepository {
+  /** Record a group and its audit entry atomically. */
+  create(input: Omit<Group, "createdAt" | "updatedAt">, audit: GroupChangeAudit): Promise<GroupCreation>;
+  find(organizationId: string, groupId: string): Promise<Group | null>;
+  /** The organization's groups, by name. */
+  listByOrganization(organizationId: string): Promise<Group[]>;
+  /** Rename a group still named `expectedName`, with its audit entry, atomically. */
+  rename(
+    organizationId: string,
+    groupId: string,
+    expectedName: string,
+    name: string,
+    audit: GroupChangeAudit,
+  ): Promise<GroupRename>;
+  /**
+   * Delete a group and its member rows, with the audit entry `audit` builds
+   * from the number of members the deletion removed, atomically. The group row
+   * is locked first, so a concurrent addition either commits before (and is
+   * counted) or finds the group gone.
+   */
+  delete(
+    organizationId: string,
+    groupId: string,
+    audit: (removedMemberCount: number) => GroupChangeAudit,
+  ): Promise<GroupDeletion>;
+  /** A group's members, by user id. */
+  listMembers(organizationId: string, groupId: string): Promise<GroupMember[]>;
+  /** Add a member and record its audit entry atomically, unless it is already in the group. */
+  addMember(member: Omit<GroupMember, "addedAt">, audit: GroupChangeAudit): Promise<GroupMemberAddition>;
+  /** Remove a member and record its audit entry atomically; false, writing nothing, when it was not in the group. */
+  removeMember(organizationId: string, groupId: string, userId: string, audit: GroupChangeAudit): Promise<boolean>;
+}
+
 export interface SessionRepository {
   create(input: Omit<Session, "createdAt">): Promise<Session>;
   findByTokenHash(tokenHash: string): Promise<Session | null>;
@@ -155,6 +221,8 @@ export interface IdentityRepositories {
   readonly memberships: MembershipRepository;
   /** Removing a membership removes its grants with it. */
   readonly permissionGrants: PermissionGrantRepository;
+  /** Removing a membership removes it from every group. */
+  readonly groups: GroupRepository;
   readonly invitations: InvitationRepository;
   readonly sessions: SessionRepository;
   readonly auditLogs: AuditLogRepository;
