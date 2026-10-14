@@ -220,11 +220,13 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
     },
 
     async listPermissionsForMember(organizationId, userId) {
-      const rows = await prisma.groupPermission.findMany({
-        where: { organizationId, group: { members: { some: { userId } } } },
-        select: { permission: true },
-        distinct: ["permission"],
-      });
+      // Read on every authorization: from the member's group rows by their
+      // (organization, user) index, then each group's permissions by key.
+      const rows = await prisma.$queryRaw<{ permission: string }[]>`
+        SELECT DISTINCT gp."permission"
+        FROM "group_members" gm
+        JOIN "group_permissions" gp ON gp."groupId" = gm."groupId" AND gp."organizationId" = gm."organizationId"
+        WHERE gm."organizationId" = ${organizationId} AND gm."userId" = ${userId}`;
       return rows.map((r) => toPermission(r.permission));
     },
 
