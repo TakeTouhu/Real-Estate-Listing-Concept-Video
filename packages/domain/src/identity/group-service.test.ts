@@ -490,6 +490,18 @@ describe("group changes made concurrently", () => {
     expect(renamed?.metadata.previousName).toBe("Sales");
   });
 
+  it("deletes a group once when two deletions race", async () => {
+    const group = await newGroup();
+    const results = await Promise.allSettled([
+      fx.groups.delete(fx.ownerId, fx.orgId, group.id),
+      fx.groups.delete(fx.ids.ADMIN, fx.orgId, group.id),
+    ]);
+    expect(results.filter((r) => r.status === "rejected")).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ code: "NOT_FOUND", message: "Group not found" }) }),
+    ]);
+    expect(audits("group.deleted")).toHaveLength(1);
+  });
+
   it("counts an addition that lands before a concurrent deletion, or refuses it", async () => {
     const group = await newGroup();
     const [deleted, added] = await Promise.allSettled([
@@ -505,5 +517,25 @@ describe("group changes made concurrently", () => {
       expect(deletion?.metadata.removedMemberCount).toBe(0);
     }
     expect(await memberIds(group.id)).toEqual([]);
+  });
+});
+
+describe("the in-memory group repository mirrors the database's constraints", () => {
+  it("adds no member to a missing group, nor one who is not a member of the organization", async () => {
+    const group = await newGroup();
+    const entry = {
+      organizationId: fx.orgId,
+      actorUserId: fx.ownerId,
+      action: "x",
+      resourceType: "group",
+      resourceId: group.id,
+      metadata: {},
+    };
+    const add = (groupId: string, userId: string) =>
+      fx.deps.repos.groups.addMember({ groupId, organizationId: fx.orgId, userId, addedByUserId: fx.ownerId }, entry);
+    expect(await add(group.id, fx.outsiderId)).toBe("STALE");
+    expect(await add("grp_missing", fx.ids.CREATOR)).toBe("STALE");
+    expect(await memberIds(group.id)).toEqual([]);
+    expect(fx.deps.repos.auditLogs.all().filter((a) => a.action === "x")).toEqual([]);
   });
 });
