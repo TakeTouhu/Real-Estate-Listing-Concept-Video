@@ -290,9 +290,10 @@ describe("no new durable shape", () => {
     // And by Phase 6B, which is authorized to add migration 18 for the
     // organization subscription, and by Phase 6C, which is authorized to add
     // migration 19 for the role templates. And by Phase 6D, which is authorized
-    // to add migration 20 for individual permission grants, and by Phase 6F,
-    // which is authorized to add migration 21 for groups.
-    expect(dirs.at(-1)).toBe("00000000000021_phase6f_groups");
+    // to add migration 20 for individual permission grants, by Phase 6F, which
+    // is authorized to add migration 21 for groups, and by Phase 6G, which is
+    // authorized to add migration 22 for group permissions.
+    expect(dirs.at(-1)).toBe("00000000000022_phase6g_group_permissions");
     // "6a" here means Phase 4C-3B-2H-3B-6A. The top-level Phase 6A's ledger
     // migration shares the substring and is the one authorized exception.
     expect(

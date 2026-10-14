@@ -22,6 +22,8 @@ export const AuditAction = {
   GroupDeleted: "group.deleted",
   GroupMemberAdded: "group.member_added",
   GroupMemberRemoved: "group.member_removed",
+  GroupPermissionGranted: "group.permission_granted",
+  GroupPermissionRevoked: "group.permission_revoked",
   /** A member's refused attempt to change a group or who belongs to it. */
   GroupChangeRefused: "group.change_refused",
 } as const;

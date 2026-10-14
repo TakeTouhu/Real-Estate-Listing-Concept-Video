@@ -1,5 +1,19 @@
-import type { Group as DbGroup, GroupMember as DbGroupMember, PrismaClient } from "@prisma/client";
-import type { Group, GroupMember, GroupRepository } from "@app/domain";
+import type {
+  Group as DbGroup,
+  GroupMember as DbGroupMember,
+  GroupPermission as DbGroupPermission,
+  Prisma,
+  PrismaClient,
+} from "@prisma/client";
+import {
+  isPermission,
+  type Group,
+  type GroupMember,
+  type GroupPermission,
+  type GroupRepository,
+  type LockedGroup,
+  type Permission,
+} from "@app/domain";
 import { auditLogData } from "./audit-log-data";
 
 function toGroup(r: DbGroup): Group {
@@ -20,6 +34,59 @@ function toGroupMember(r: DbGroupMember): GroupMember {
     userId: r.userId,
     addedByUserId: r.addedByUserId,
     addedAt: r.addedAt,
+  };
+}
+
+function toPermission(value: string): Permission {
+  if (!isPermission(value)) throw new Error(`Unknown permission on a group: ${value}`);
+  return value;
+}
+
+function toGroupPermission(r: DbGroupPermission): GroupPermission {
+  return {
+    groupId: r.groupId,
+    organizationId: r.organizationId,
+    permission: toPermission(r.permission),
+    grantedByUserId: r.grantedByUserId,
+    grantedAt: r.grantedAt,
+  };
+}
+
+/**
+ * Lock a group's row and read it as a change's ceiling check needs it: its
+ * members with their roles, and its permissions. Every change that gives or
+ * takes a permission writes only under this lock, so what is read here is what
+ * the change commits against. `UPDATE` excludes every other change to the
+ * group; `SHARE` excludes only those, so additions and removals still run
+ * alongside each other. Null when the group is gone.
+ */
+async function lockGroup(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  groupId: string,
+  mode: "UPDATE" | "SHARE",
+): Promise<(LockedGroup & { readonly name: string }) | null> {
+  const [group] =
+    mode === "UPDATE"
+      ? await tx.$queryRaw<{ name: string }[]>`
+          SELECT "name" FROM "groups"
+          WHERE "id" = ${groupId} AND "organizationId" = ${organizationId}
+          FOR UPDATE`
+      : await tx.$queryRaw<{ name: string }[]>`
+          SELECT "name" FROM "groups"
+          WHERE "id" = ${groupId} AND "organizationId" = ${organizationId}
+          FOR SHARE`;
+  if (!group) return null;
+  const members = await tx.groupMember.findMany({
+    where: { groupId, organizationId },
+    select: { userId: true, membership: { select: { role: true } } },
+    orderBy: { userId: "asc" },
+  });
+  const permissions = await tx.groupPermission.findMany({ where: { groupId, organizationId }, select: { permission: true } });
+  return {
+    name: group.name,
+    members: members.map((m) => ({ userId: m.userId, role: m.membership.role })),
+    permissions: permissions.map((p) => toPermission(p.permission)),
   };
 }
 
@@ -45,8 +112,9 @@ function isMissingGroupOrMember(error: unknown): boolean {
 }
 
 /**
- * Prisma-backed groups (ADR-0060). Every read and write is scoped by
- * organization, and each change commits with its audit entry or not at all.
+ * Prisma-backed groups and their permissions (ADR-0060, ADR-0061). Every read
+ * and write is scoped by organization, each change commits with its audit
+ * entry or not at all, and each ceiling check runs under the group's lock.
  */
 export function createPrismaGroupRepository(prisma: PrismaClient): GroupRepository {
   return {
@@ -91,19 +159,15 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
       }
     },
 
-    async delete(organizationId, groupId, audit) {
+    async delete(organizationId, groupId, check, audit) {
       return prisma.$transaction(async (tx) => {
-        // An addition's foreign-key check holds a share lock on the group row,
-        // which this lock waits for and then excludes: an addition commits
-        // before the deletion (and is counted below) or finds the group gone.
-        // A rename's update waits the same way, and the name read here is the
-        // one it committed, so the audit entry names the group as deleted.
-        const locked = await tx.$queryRaw<{ name: string }[]>`
-          SELECT "name" FROM "groups"
-          WHERE "id" = ${groupId} AND "organizationId" = ${organizationId}
-          FOR UPDATE`;
-        const [group] = locked;
+        // Waits for, then excludes, every addition, removal, permission change
+        // and rename in flight: each commits before the deletion (and is
+        // judged, counted and named below) or finds the group gone.
+        const group = await lockGroup(tx, organizationId, groupId, "UPDATE");
         if (!group) return { outcome: "STALE" } as const;
+        const refusal = check(group);
+        if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
         // Counts the rows this deletion removes, not a concurrent removal's.
         const { count } = await tx.groupMember.deleteMany({ where: { groupId, organizationId } });
         await tx.group.delete({ where: { id: groupId } });
@@ -118,28 +182,76 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
       ).map(toGroupMember);
     },
 
-    async addMember(member, audit) {
+    async addMember(member, check, audit) {
       try {
         return await prisma.$transaction(async (tx) => {
+          const group = await lockGroup(tx, member.organizationId, member.groupId, "SHARE");
+          if (!group) return { outcome: "STALE" } as const;
+          const refusal = check(group);
+          if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
           await tx.groupMember.create({ data: member });
           await tx.auditLog.create({ data: auditLogData(audit) });
-          return "ADDED" as const;
+          return { outcome: "ADDED" } as const;
         });
       } catch (error) {
         // The member is already in the group, also when a concurrent addition
         // won: nothing is written.
-        if (isUniqueConflict(error, "GroupMember", "userId")) return "ALREADY_IN_GROUP";
-        if (isMissingGroupOrMember(error)) return "STALE";
+        if (isUniqueConflict(error, "GroupMember", "userId")) return { outcome: "ALREADY_IN_GROUP" };
+        if (isMissingGroupOrMember(error)) return { outcome: "STALE" };
         throw error;
       }
     },
 
-    async removeMember(organizationId, groupId, userId, audit) {
+    async removeMember(organizationId, groupId, userId, check, audit) {
       return prisma.$transaction(async (tx) => {
+        const group = await lockGroup(tx, organizationId, groupId, "SHARE");
+        if (!group) return { outcome: "NOT_IN_GROUP" } as const;
+        const refusal = check(group);
+        if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
         const { count } = await tx.groupMember.deleteMany({ where: { groupId, organizationId, userId } });
-        if (count === 0) return false;
+        if (count === 0) return { outcome: "NOT_IN_GROUP" } as const;
         await tx.auditLog.create({ data: auditLogData(audit) });
-        return true;
+        return { outcome: "REMOVED" } as const;
+      });
+    },
+
+    async listPermissions(organizationId, groupId) {
+      return (await prisma.groupPermission.findMany({ where: { groupId, organizationId } })).map(toGroupPermission);
+    },
+
+    async listPermissionsForMember(organizationId, userId) {
+      const rows = await prisma.groupPermission.findMany({
+        where: { organizationId, group: { members: { some: { userId } } } },
+        select: { permission: true },
+        distinct: ["permission"],
+      });
+      return rows.map((r) => toPermission(r.permission));
+    },
+
+    async grantPermission(permission, check, audit) {
+      return prisma.$transaction(async (tx) => {
+        const group = await lockGroup(tx, permission.organizationId, permission.groupId, "UPDATE");
+        if (!group) return { outcome: "STALE" } as const;
+        const refusal = check(group);
+        if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
+        // Every write of a group's permissions holds this lock, so the read is current.
+        if (group.permissions.includes(permission.permission)) return { outcome: "ALREADY_GRANTED" } as const;
+        await tx.groupPermission.create({ data: permission });
+        await tx.auditLog.create({ data: auditLogData(audit(group.members.length)) });
+        return { outcome: "GRANTED" } as const;
+      });
+    },
+
+    async revokePermission(organizationId, groupId, permission, check, audit) {
+      return prisma.$transaction(async (tx) => {
+        const group = await lockGroup(tx, organizationId, groupId, "UPDATE");
+        if (!group) return { outcome: "STALE" } as const;
+        const refusal = check(group);
+        if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
+        const { count } = await tx.groupPermission.deleteMany({ where: { groupId, organizationId, permission } });
+        if (count === 0) return { outcome: "NOT_GRANTED" } as const;
+        await tx.auditLog.create({ data: auditLogData(audit(group.members.length)) });
+        return { outcome: "REVOKED" } as const;
       });
     },
   };

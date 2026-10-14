@@ -1,10 +1,11 @@
 /**
  * The standard role templates and the permission matrix (ADR-0052 Decision 10,
- * Phase 6C), and the individual-grant ceiling on top of them (Phase 6D).
+ * Phase 6C), the individual-grant ceiling on top of them (Phase 6D), and the
+ * same ceiling on what a group carries (Phase 6G).
  *
  * Each template's grant list is exhaustive: a permission a template does not
- * list, it does not grant. A member's effective permissions are its template's
- * plus its individual grants; group permissions are a later package.
+ * list, it does not grant. A member's effective permissions are its template's,
+ * its individual grants and its groups' permissions.
  */
 
 export type Role = "OWNER" | "ADMIN" | "MANAGER" | "CREATOR" | "VIEWER" | "BILLING";
@@ -159,6 +160,14 @@ export const PROTECTED_PERMISSIONS: readonly Permission[] = [
   "disclosure.none",
 ];
 
+/**
+ * What a group may carry: the grantable vocabulary less `disclosure.none`, which
+ * only an `OWNER` grants and only to an individual (ADR-0052 Decision 10).
+ */
+export const GROUP_GRANTABLE_PERMISSIONS: readonly Permission[] = GRANTABLE_PERMISSIONS.filter(
+  (permission) => permission !== "disclosure.none",
+);
+
 /** Roles for which `property.create` never becomes effective, from any grant source. */
 const CANNOT_CREATE_PROPERTY: readonly Role[] = ["VIEWER", "BILLING"];
 
@@ -167,15 +176,23 @@ export function isPermission(value: unknown): value is Permission {
 }
 
 /**
- * What a member may actually do: its template's permissions plus its individual
- * grants, in vocabulary order. Grants add up — there is no DENY — but
- * `property.create` is a ceiling on the recipient's role, so it is never
- * effective for a `VIEWER` or `BILLING` member, however it was granted.
+ * What a member may actually do: its template's permissions, its individual
+ * grants and the permissions of its groups, in vocabulary order. They add up —
+ * there is no DENY — but a group confers nothing outside what a group may
+ * carry, whatever is stored, and `property.create` is a ceiling on the
+ * recipient's role, so it is never effective for a `VIEWER` or `BILLING` member,
+ * however it was granted.
  */
-export function effectivePermissions(role: Role, granted: readonly Permission[]): readonly Permission[] {
+export function effectivePermissions(
+  role: Role,
+  granted: readonly Permission[],
+  fromGroups: readonly Permission[] = [],
+): readonly Permission[] {
   return PERMISSIONS.filter(
     (permission) =>
-      (ROLE_PERMISSIONS[role].includes(permission) || granted.includes(permission)) &&
+      (ROLE_PERMISSIONS[role].includes(permission) ||
+        granted.includes(permission) ||
+        (fromGroups.includes(permission) && GROUP_GRANTABLE_PERMISSIONS.includes(permission))) &&
       !(permission === "property.create" && CANNOT_CREATE_PROPERTY.includes(role)),
   );
 }
@@ -206,12 +223,46 @@ export function grantRefusal(
 ): GrantRefusal | null {
   if (!GRANTABLE_PERMISSIONS.includes(permission)) return "not_grantable";
   if (!mayAssignRole(actorRole, targetRole)) return "target_role";
-  if (actorRole !== "OWNER") {
-    if (PROTECTED_PERMISSIONS.includes(permission)) return "protected";
-    if (!actorPermissions.includes(permission)) return "not_held";
-  }
+  const delegation = delegationRefusal(actorRole, actorPermissions, permission);
+  if (delegation !== null) return delegation;
   if (operation === "grant" && permission === "property.create" && CANNOT_CREATE_PROPERTY.includes(targetRole)) {
     return "recipient_ceiling";
   }
   return null;
+}
+
+/** `permission.manage`, `billing.manage` and `disclosure.none` are `OWNER`-only; anyone else delegates only what it holds. */
+function delegationRefusal(
+  actorRole: Role,
+  actorPermissions: readonly Permission[],
+  permission: Permission,
+): "protected" | "not_held" | null {
+  if (actorRole === "OWNER") return null;
+  if (PROTECTED_PERMISSIONS.includes(permission)) return "protected";
+  if (!actorPermissions.includes(permission)) return "not_held";
+  return null;
+}
+
+/** Why the actor may not give a group a permission, or take it away; `null` when it may. */
+export type GroupGrantRefusal = "not_grantable" | "protected" | "not_held";
+
+/**
+ * The grant ceiling on a group's permission, as far as it concerns the actor
+ * alone: may a member holding `actorRole` and `actorPermissions` give a group
+ * `permission`, or take it away? `disclosure.none` and `video.share` are never
+ * on a group; otherwise as `grantRefusal`. The ceiling's other half, whether the
+ * actor may manage the role of each member the change reaches, is asked of the
+ * group's members as the change commits (ADR-0061).
+ *
+ * `property.create` is no refusal here: a group may carry it for its `MANAGER`
+ * and `CREATOR` members, and for its `VIEWER` and `BILLING` members it is never
+ * effective.
+ */
+export function groupGrantRefusal(
+  actorRole: Role,
+  actorPermissions: readonly Permission[],
+  permission: Permission,
+): GroupGrantRefusal | null {
+  if (!GROUP_GRANTABLE_PERMISSIONS.includes(permission)) return "not_grantable";
+  return delegationRefusal(actorRole, actorPermissions, permission);
 }

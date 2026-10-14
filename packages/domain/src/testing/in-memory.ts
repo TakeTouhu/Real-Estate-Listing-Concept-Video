@@ -4,10 +4,14 @@ import type {
   CredentialRepository,
   DeletedGroup,
   GrantChangeAudit,
+  GroupCeilingCheck,
   GroupChangeAudit,
   GroupCreation,
   GroupDeletion,
   GroupMemberAddition,
+  GroupMemberRemoval,
+  GroupPermissionGrant,
+  GroupPermissionRevocation,
   GroupRename,
   GroupRepository,
   IdentityRepositories,
@@ -30,6 +34,7 @@ import type {
   Credential,
   Group,
   GroupMember,
+  GroupPermission,
   Invitation,
   Membership,
   Organization,
@@ -37,7 +42,7 @@ import type {
   Session,
   User,
 } from "../identity/types";
-import type { Permission, Role } from "../identity/roles";
+import { GROUP_GRANTABLE_PERMISSIONS, type Permission, type Role } from "../identity/roles";
 
 /** Mutable clock for deterministic tests. */
 export class TestClock implements Clock {
@@ -155,6 +160,9 @@ class InMemoryMembershipRepository implements MembershipRepository {
   has(organizationId: string, userId: string): boolean {
     return this.rows.has(this.key(organizationId, userId));
   }
+  roleOf(organizationId: string, userId: string): Role | undefined {
+    return this.rows.get(this.key(organizationId, userId))?.role;
+  }
   find(organizationId: string, userId: string): Promise<Membership | null> {
     return Promise.resolve(this.rows.get(this.key(organizationId, userId)) ?? null);
   }
@@ -236,22 +244,45 @@ class InMemoryPermissionGrantRepository implements PermissionGrantRepository {
   }
 }
 
-/** Each change checks and writes with no `await` in between, as the membership repository does. */
+/**
+ * Each change checks and writes with no `await` in between, as the membership
+ * repository does, so a change's ceiling check always sees the group as the
+ * change commits, as the database's group lock ensures.
+ */
 class InMemoryGroupRepository implements GroupRepository {
   private readonly groups = new Map<string, Group>();
   private readonly members = new Map<string, GroupMember>();
+  private readonly permissions = new Map<string, GroupPermission>();
   constructor(
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
-    /** Mirrors the membership foreign key: only a member of the organization joins its groups. */
-    private readonly isMember: (organizationId: string, userId: string) => boolean,
+    /**
+     * A member's role in the organization. Mirrors the membership foreign key:
+     * only a member of the organization joins its groups.
+     */
+    private readonly roleOf: (organizationId: string, userId: string) => Role | undefined,
   ) {}
   private memberKey(groupId: string, userId: string): string {
     return `${groupId}::${userId}`;
   }
+  private permissionKey(groupId: string, permission: Permission): string {
+    return `${groupId}::${permission}`;
+  }
   private group(organizationId: string, groupId: string): Group | undefined {
     const group = this.groups.get(groupId);
     return group?.organizationId === organizationId ? group : undefined;
+  }
+  /** The group as a change's check sees it: members by user id, with their roles. */
+  private locked(groupId: string): { members: { userId: string; role: Role }[]; permissions: Permission[] } {
+    const members = [...this.members.values()]
+      .filter((m) => m.groupId === groupId)
+      .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0))
+      .flatMap((m) => {
+        const role = this.roleOf(m.organizationId, m.userId);
+        return role === undefined ? [] : [{ userId: m.userId, role }];
+      });
+    const permissions = [...this.permissions.values()].filter((p) => p.groupId === groupId).map((p) => p.permission);
+    return { members, permissions };
   }
   private nameTaken(organizationId: string, name: string): boolean {
     return [...this.groups.values()].some((g) => g.organizationId === organizationId && g.name === name);
@@ -292,10 +323,16 @@ class InMemoryGroupRepository implements GroupRepository {
   async delete(
     organizationId: string,
     groupId: string,
+    check: GroupCeilingCheck,
     audit: (deleted: DeletedGroup) => GroupChangeAudit,
   ): Promise<GroupDeletion> {
     const group = this.group(organizationId, groupId);
     if (!group) return { outcome: "STALE" };
+    const refusal = check(this.locked(groupId));
+    if (refusal !== null) return { outcome: "REFUSED", refusal };
+    for (const [key, permission] of this.permissions) {
+      if (permission.groupId === groupId) this.permissions.delete(key);
+    }
     let removedMemberCount = 0;
     for (const [key, member] of this.members) {
       if (member.groupId === groupId) {
@@ -314,22 +351,85 @@ class InMemoryGroupRepository implements GroupRepository {
         .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
     );
   }
-  async addMember(member: Omit<GroupMember, "addedAt">, audit: GroupChangeAudit): Promise<GroupMemberAddition> {
+  async addMember(
+    member: Omit<GroupMember, "addedAt">,
+    check: GroupCeilingCheck,
+    audit: GroupChangeAudit,
+  ): Promise<GroupMemberAddition> {
+    if (!this.group(member.organizationId, member.groupId)) return { outcome: "STALE" };
+    const refusal = check(this.locked(member.groupId));
+    if (refusal !== null) return { outcome: "REFUSED", refusal };
     const key = this.memberKey(member.groupId, member.userId);
-    if (this.members.has(key)) return "ALREADY_IN_GROUP";
-    if (!this.group(member.organizationId, member.groupId) || !this.isMember(member.organizationId, member.userId)) {
-      return "STALE";
-    }
+    if (this.members.has(key)) return { outcome: "ALREADY_IN_GROUP" };
+    if (this.roleOf(member.organizationId, member.userId) === undefined) return { outcome: "STALE" };
     this.members.set(key, { ...member, addedAt: this.clock.now() });
     await this.auditLogs.append(audit);
-    return "ADDED";
+    return { outcome: "ADDED" };
   }
-  async removeMember(organizationId: string, groupId: string, userId: string, audit: GroupChangeAudit): Promise<boolean> {
-    const key = this.memberKey(groupId, userId);
-    if (this.members.get(key)?.organizationId !== organizationId) return false;
-    this.members.delete(key);
+  async removeMember(
+    organizationId: string,
+    groupId: string,
+    userId: string,
+    check: GroupCeilingCheck,
+    audit: GroupChangeAudit,
+  ): Promise<GroupMemberRemoval> {
+    if (!this.group(organizationId, groupId)) return { outcome: "NOT_IN_GROUP" };
+    const refusal = check(this.locked(groupId));
+    if (refusal !== null) return { outcome: "REFUSED", refusal };
+    if (!this.members.delete(this.memberKey(groupId, userId))) return { outcome: "NOT_IN_GROUP" };
     await this.auditLogs.append(audit);
-    return true;
+    return { outcome: "REMOVED" };
+  }
+  listPermissions(organizationId: string, groupId: string): Promise<GroupPermission[]> {
+    return Promise.resolve(
+      [...this.permissions.values()].filter((p) => p.groupId === groupId && p.organizationId === organizationId),
+    );
+  }
+  listPermissionsForMember(organizationId: string, userId: string): Promise<Permission[]> {
+    const groupIds = new Set(
+      [...this.members.values()]
+        .filter((m) => m.organizationId === organizationId && m.userId === userId)
+        .map((m) => m.groupId),
+    );
+    return Promise.resolve([
+      ...new Set([...this.permissions.values()].filter((p) => groupIds.has(p.groupId)).map((p) => p.permission)),
+    ]);
+  }
+  async grantPermission(
+    permission: Omit<GroupPermission, "grantedAt">,
+    check: GroupCeilingCheck,
+    audit: (memberCount: number) => GroupChangeAudit,
+  ): Promise<GroupPermissionGrant> {
+    if (!this.group(permission.organizationId, permission.groupId)) return { outcome: "STALE" };
+    const locked = this.locked(permission.groupId);
+    const refusal = check(locked);
+    if (refusal !== null) return { outcome: "REFUSED", refusal };
+    if (locked.permissions.includes(permission.permission)) return { outcome: "ALREADY_GRANTED" };
+    // Mirrors the database CHECK: a group never carries `disclosure.none` or `video.share`.
+    if (!GROUP_GRANTABLE_PERMISSIONS.includes(permission.permission)) {
+      throw new Error(`group_permissions_permission_check: ${permission.permission}`);
+    }
+    this.permissions.set(this.permissionKey(permission.groupId, permission.permission), {
+      ...permission,
+      grantedAt: this.clock.now(),
+    });
+    await this.auditLogs.append(audit(locked.members.length));
+    return { outcome: "GRANTED" };
+  }
+  async revokePermission(
+    organizationId: string,
+    groupId: string,
+    permission: Permission,
+    check: GroupCeilingCheck,
+    audit: (memberCount: number) => GroupChangeAudit,
+  ): Promise<GroupPermissionRevocation> {
+    if (!this.group(organizationId, groupId)) return { outcome: "STALE" };
+    const locked = this.locked(groupId);
+    const refusal = check(locked);
+    if (refusal !== null) return { outcome: "REFUSED", refusal };
+    if (!this.permissions.delete(this.permissionKey(groupId, permission))) return { outcome: "NOT_GRANTED" };
+    await this.auditLogs.append(audit(locked.members.length));
+    return { outcome: "REVOKED" };
   }
   removeAllForMember(organizationId: string, userId: string): void {
     for (const [key, member] of this.members) {
@@ -432,7 +532,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
   const auditLogs = new InMemoryAuditLogRepository(clock);
   const permissionGrants = new InMemoryPermissionGrantRepository(auditLogs);
   const groups = new InMemoryGroupRepository(clock, auditLogs, (organizationId, userId) =>
-    memberships.has(organizationId, userId),
+    memberships.roleOf(organizationId, userId),
   );
   const memberships = new InMemoryMembershipRepository(clock, auditLogs, (organizationId, userId) => {
     permissionGrants.removeAllForMember(organizationId, userId);

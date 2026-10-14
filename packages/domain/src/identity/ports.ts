@@ -3,6 +3,7 @@ import type {
   Credential,
   Group,
   GroupMember,
+  GroupPermission,
   Invitation,
   Membership,
   Organization,
@@ -10,7 +11,7 @@ import type {
   Session,
   User,
 } from "./types";
-import type { Permission, Role } from "./roles";
+import type { GroupGrantRefusal, Permission, Role } from "./roles";
 
 /** Injectable clock so services are deterministic under test. */
 export interface Clock {
@@ -156,6 +157,36 @@ export type GroupRename =
   | { readonly outcome: "STALE" }
   | { readonly outcome: "NAME_TAKEN" };
 
+/**
+ * A group as a change sees it once the group row is locked: its members with
+ * the roles they hold, and the permissions it carries (ADR-0061).
+ */
+export interface LockedGroup {
+  readonly members: readonly { readonly userId: string; readonly role: Role }[];
+  readonly permissions: readonly Permission[];
+}
+
+/** Why the grant ceiling refused a group change, judged on the group as locked. */
+export interface GroupCeilingRefusal {
+  readonly reason: GroupGrantRefusal | "target_role";
+  readonly permission: Permission;
+  /** The first member out of the actor's reach, for `target_role`. */
+  readonly targetUserId?: string;
+  readonly targetRole?: Role;
+}
+
+/**
+ * The grant ceiling on a group change, asked of the group as locked, inside the
+ * change's transaction; `null` admits the change.
+ */
+export type GroupCeilingCheck = (locked: LockedGroup) => GroupCeilingRefusal | null;
+
+/** A change the ceiling refused under the group's lock; nothing was written. */
+export interface GroupChangeRefused {
+  readonly outcome: "REFUSED";
+  readonly refusal: GroupCeilingRefusal;
+}
+
 /** What a deletion removed: the group's name as locked, and how many members. */
 export interface DeletedGroup {
   readonly name: string;
@@ -165,14 +196,24 @@ export interface DeletedGroup {
 /** How a deletion ended; `STALE` (the group is already gone) wrote nothing. */
 export type GroupDeletion =
   | { readonly outcome: "DELETED"; readonly removedMemberCount: number }
-  | { readonly outcome: "STALE" };
+  | { readonly outcome: "STALE" }
+  | GroupChangeRefused;
 
 /**
  * How adding a member ended. Only `ADDED` wrote anything. `ALREADY_IN_GROUP`
  * also answers a concurrent addition that won. `STALE`: the group, or the
  * member's membership of the organization, is gone.
  */
-export type GroupMemberAddition = "ADDED" | "ALREADY_IN_GROUP" | "STALE";
+export type GroupMemberAddition = { readonly outcome: "ADDED" | "ALREADY_IN_GROUP" | "STALE" } | GroupChangeRefused;
+
+/** How removing a member ended. Only `REMOVED` wrote anything; `NOT_IN_GROUP` also answers a group that is gone. */
+export type GroupMemberRemoval = { readonly outcome: "REMOVED" | "NOT_IN_GROUP" } | GroupChangeRefused;
+
+/** How giving a group a permission ended. Only `GRANTED` wrote anything; `STALE`: the group is gone. */
+export type GroupPermissionGrant = { readonly outcome: "GRANTED" | "ALREADY_GRANTED" | "STALE" } | GroupChangeRefused;
+
+/** How taking a permission from a group ended. Only `REVOKED` wrote anything; `STALE`: the group is gone. */
+export type GroupPermissionRevocation = { readonly outcome: "REVOKED" | "NOT_GRANTED" | "STALE" } | GroupChangeRefused;
 
 /** Groups and their members. Every call is scoped by organization. */
 export interface GroupRepository {
@@ -190,24 +231,63 @@ export interface GroupRepository {
     audit: GroupChangeAudit,
   ): Promise<GroupRename>;
   /**
-   * Delete a group and its member rows, with the audit entry `audit` builds
-   * from the group as locked and the number of members the deletion removed,
-   * atomically. The group row is locked first, so a concurrent addition either
-   * commits before (and is counted) or finds the group gone, and a concurrent
-   * rename either commits before (and its name is the one recorded) or finds
-   * the group gone.
+   * Delete a group with its member and permission rows, if `check` admits it,
+   * with the audit entry `audit` builds from the group as locked and the number
+   * of members the deletion removed, atomically. The group row is locked
+   * (`FOR UPDATE`) before `check` reads it, so every change to the group's
+   * members, permissions or name either commits before (and is judged,
+   * counted and named) or finds the group gone.
    */
   delete(
     organizationId: string,
     groupId: string,
+    check: GroupCeilingCheck,
     audit: (deleted: DeletedGroup) => GroupChangeAudit,
   ): Promise<GroupDeletion>;
   /** A group's members, by user id. */
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]>;
-  /** Add a member and record its audit entry atomically, unless it is already in the group. */
-  addMember(member: Omit<GroupMember, "addedAt">, audit: GroupChangeAudit): Promise<GroupMemberAddition>;
-  /** Remove a member and record its audit entry atomically; false, writing nothing, when it was not in the group. */
-  removeMember(organizationId: string, groupId: string, userId: string, audit: GroupChangeAudit): Promise<boolean>;
+  /**
+   * Add a member, if `check` admits it, and record its audit entry atomically,
+   * unless it is already in the group. The group row is share-locked before
+   * `check` reads it: additions and removals run alongside one another, never
+   * alongside a change to the group's permissions.
+   */
+  addMember(
+    member: Omit<GroupMember, "addedAt">,
+    check: GroupCeilingCheck,
+    audit: GroupChangeAudit,
+  ): Promise<GroupMemberAddition>;
+  /** Remove a member, if `check` admits it, and record its audit entry atomically; locked as `addMember`. */
+  removeMember(
+    organizationId: string,
+    groupId: string,
+    userId: string,
+    check: GroupCeilingCheck,
+    audit: GroupChangeAudit,
+  ): Promise<GroupMemberRemoval>;
+  /** A group's permissions, in no particular order. */
+  listPermissions(organizationId: string, groupId: string): Promise<GroupPermission[]>;
+  /** Every permission a member holds through the groups it belongs to, each once. */
+  listPermissionsForMember(organizationId: string, userId: string): Promise<Permission[]>;
+  /**
+   * Give a group a permission, if `check` admits it, with the audit entry
+   * `audit` builds from the number of members it reaches, atomically, unless
+   * the group already carries it. The group row is locked (`FOR UPDATE`) before
+   * `check` reads it.
+   */
+  grantPermission(
+    permission: Omit<GroupPermission, "grantedAt">,
+    check: GroupCeilingCheck,
+    audit: (memberCount: number) => GroupChangeAudit,
+  ): Promise<GroupPermissionGrant>;
+  /** Take a permission from a group, if `check` admits it; locked and recorded as `grantPermission`. */
+  revokePermission(
+    organizationId: string,
+    groupId: string,
+    permission: Permission,
+    check: GroupCeilingCheck,
+    audit: (memberCount: number) => GroupChangeAudit,
+  ): Promise<GroupPermissionRevocation>;
 }
 
 export interface SessionRepository {
@@ -229,7 +309,7 @@ export interface IdentityRepositories {
   readonly memberships: MembershipRepository;
   /** Removing a membership removes its grants with it. */
   readonly permissionGrants: PermissionGrantRepository;
-  /** Removing a membership removes it from every group. */
+  /** Removing a membership removes it from every group, and so ends what its groups gave it. */
   readonly groups: GroupRepository;
   readonly invitations: InvitationRepository;
   readonly sessions: SessionRepository;
