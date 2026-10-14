@@ -1034,3 +1034,37 @@ member's permissions fall back to the role template; nothing older reads it.
 (ADR-0059). The new transactions and the `FOR UPDATE` lock on `memberships` are
 application code. Reverting the application restores the earlier, non-atomic
 writes against the same schema.
+
+## Phase 6F — groups and group membership
+
+**Migration `00000000000021_phase6f_groups`.** Two tables created. ADR-0060.
+
+### New tables
+
+`groups`: `id`, `organizationId`, `name`, `createdByUserId`, `createdAt`,
+`updatedAt`.
+
+`group_members`: `groupId`, `organizationId`, `userId`, `addedByUserId`,
+`addedAt`.
+
+| Constraint | Rule |
+| --- | --- |
+| `groups` primary key | `id` |
+| `groups_organizationId_name_key` | a name is unique within its organization |
+| `groups_id_organizationId_key` | (`id`, `organizationId`) is unique: the target of the member row's group key |
+| `groups_name_check` | the name is trimmed and 1 to 100 characters |
+| `groups` foreign key | `organizationId` → `organizations`, `ON DELETE CASCADE` |
+| `group_members` primary key | (`groupId`, `userId`): a member is in a group at most once |
+| `group_members` group key | (`groupId`, `organizationId`) → `groups`(`id`, `organizationId`), `ON DELETE CASCADE` |
+| `group_members` membership key | (`organizationId`, `userId`) → `memberships`, `ON DELETE CASCADE`: removing a member from the organization removes it from every group |
+| Index | (`organizationId`, `userId`) on `group_members` |
+
+`createdByUserId` and `addedByUserId` have no foreign key: they are attribution,
+like `member_permission_grants.grantedByUserId`.
+
+Additive only. No existing table, column or row is read, updated or deleted.
+
+### Rollback
+
+Forward-only. Reverting the application leaves both tables unused. Nothing older
+reads them, and no permission or row access depends on them.
