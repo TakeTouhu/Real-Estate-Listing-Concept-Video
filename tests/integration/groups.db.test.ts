@@ -381,6 +381,17 @@ describe.skipIf(!HAS_DB)("group changes racing each other", () => {
     expect(deleted?.metadata).toEqual({ name: "Sales", actorRole: "OWNER", removedMemberCount: 1 });
   });
 
+  it("records the name a rename committed while the deletion waited for it", async () => {
+    const results = await contend(
+      (tx) => tx.group.update({ where: { id: GROUP }, data: { name: "Field" } }),
+      [() => groups.delete(OWNER, ORG, GROUP)],
+    );
+    expect(refusals(results)).toEqual([]);
+    expect(await nameOf()).toBeUndefined();
+    const [deleted] = await auditRows("group.deleted");
+    expect(deleted?.metadata).toEqual({ name: "Field", actorRole: "OWNER", removedMemberCount: 0 });
+  });
+
   it("refuses an addition waiting on a deletion of the group", async () => {
     const results = await contend(
       async (tx) => {

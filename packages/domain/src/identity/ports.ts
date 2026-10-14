@@ -156,6 +156,12 @@ export type GroupRename =
   | { readonly outcome: "STALE" }
   | { readonly outcome: "NAME_TAKEN" };
 
+/** What a deletion removed: the group's name as locked, and how many members. */
+export interface DeletedGroup {
+  readonly name: string;
+  readonly removedMemberCount: number;
+}
+
 /** How a deletion ended; `STALE` (the group is already gone) wrote nothing. */
 export type GroupDeletion =
   | { readonly outcome: "DELETED"; readonly removedMemberCount: number }
@@ -185,14 +191,16 @@ export interface GroupRepository {
   ): Promise<GroupRename>;
   /**
    * Delete a group and its member rows, with the audit entry `audit` builds
-   * from the number of members the deletion removed, atomically. The group row
-   * is locked first, so a concurrent addition either commits before (and is
-   * counted) or finds the group gone.
+   * from the group as locked and the number of members the deletion removed,
+   * atomically. The group row is locked first, so a concurrent addition either
+   * commits before (and is counted) or finds the group gone, and a concurrent
+   * rename either commits before (and its name is the one recorded) or finds
+   * the group gone.
    */
   delete(
     organizationId: string,
     groupId: string,
-    audit: (removedMemberCount: number) => GroupChangeAudit,
+    audit: (deleted: DeletedGroup) => GroupChangeAudit,
   ): Promise<GroupDeletion>;
   /** A group's members, by user id. */
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]>;

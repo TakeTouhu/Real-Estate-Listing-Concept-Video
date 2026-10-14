@@ -96,15 +96,18 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
         // An addition's foreign-key check holds a share lock on the group row,
         // which this lock waits for and then excludes: an addition commits
         // before the deletion (and is counted below) or finds the group gone.
-        const locked = await tx.$queryRaw<{ id: string }[]>`
-          SELECT "id" FROM "groups"
+        // A rename's update waits the same way, and the name read here is the
+        // one it committed, so the audit entry names the group as deleted.
+        const locked = await tx.$queryRaw<{ name: string }[]>`
+          SELECT "name" FROM "groups"
           WHERE "id" = ${groupId} AND "organizationId" = ${organizationId}
           FOR UPDATE`;
-        if (locked.length === 0) return { outcome: "STALE" } as const;
+        const [group] = locked;
+        if (!group) return { outcome: "STALE" } as const;
         // Counts the rows this deletion removes, not a concurrent removal's.
         const { count } = await tx.groupMember.deleteMany({ where: { groupId, organizationId } });
         await tx.group.delete({ where: { id: groupId } });
-        await tx.auditLog.create({ data: auditLogData(audit(count)) });
+        await tx.auditLog.create({ data: auditLogData(audit({ name: group.name, removedMemberCount: count })) });
         return { outcome: "DELETED", removedMemberCount: count } as const;
       });
     },

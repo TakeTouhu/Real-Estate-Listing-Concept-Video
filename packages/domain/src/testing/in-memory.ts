@@ -2,6 +2,7 @@ import type {
   AuditLogRepository,
   Clock,
   CredentialRepository,
+  DeletedGroup,
   GrantChangeAudit,
   GroupChangeAudit,
   GroupCreation,
@@ -291,9 +292,10 @@ class InMemoryGroupRepository implements GroupRepository {
   async delete(
     organizationId: string,
     groupId: string,
-    audit: (removedMemberCount: number) => GroupChangeAudit,
+    audit: (deleted: DeletedGroup) => GroupChangeAudit,
   ): Promise<GroupDeletion> {
-    if (!this.group(organizationId, groupId)) return { outcome: "STALE" };
+    const group = this.group(organizationId, groupId);
+    if (!group) return { outcome: "STALE" };
     let removedMemberCount = 0;
     for (const [key, member] of this.members) {
       if (member.groupId === groupId) {
@@ -302,7 +304,7 @@ class InMemoryGroupRepository implements GroupRepository {
       }
     }
     this.groups.delete(groupId);
-    await this.auditLogs.append(audit(removedMemberCount));
+    await this.auditLogs.append(audit({ name: group.name, removedMemberCount }));
     return { outcome: "DELETED", removedMemberCount };
   }
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]> {

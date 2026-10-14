@@ -518,6 +518,18 @@ describe("group changes made concurrently", () => {
     }
     expect(await memberIds(group.id)).toEqual([]);
   });
+
+  it("names a deleted group as it was when deleted, after a concurrent rename", async () => {
+    const group = await newGroup("Sales");
+    const [renamed, deleted] = await Promise.allSettled([
+      fx.groups.rename(fx.ownerId, fx.orgId, group.id, "Field"),
+      fx.groups.delete(fx.ids.ADMIN, fx.orgId, group.id),
+    ]);
+    expect(deleted.status).toBe("fulfilled");
+    // A rename that succeeded committed before the deletion, so its name is the one deleted.
+    const [deletion] = audits("group.deleted");
+    expect(deletion?.metadata.name).toBe(renamed.status === "fulfilled" ? "Field" : "Sales");
+  });
 });
 
 describe("the in-memory group repository mirrors the database's constraints", () => {

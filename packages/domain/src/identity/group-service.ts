@@ -70,17 +70,17 @@ export class GroupService {
 
   /**
    * Delete a group. Its members stay in the organization; only their
-   * membership of this group ends.
+   * membership of this group ends. The audit entry names the group as the
+   * deletion locked it, so a rename committed meanwhile is not misreported.
    */
   async delete(actorUserId: string, organizationId: string, groupId: string): Promise<void> {
     const actor = await this.requireGroupManage(actorUserId, organizationId, "delete", { groupId });
     if (actor.role !== "OWNER" && actor.role !== "ADMIN") {
       await this.refuse(actor, "delete", "protected_delete", { groupId });
     }
-    const group = await this.requireGroup(organizationId, groupId);
-    const deleted = await this.deps.repos.groups.delete(organizationId, groupId, (removedMemberCount) =>
+    const deleted = await this.deps.repos.groups.delete(organizationId, groupId, ({ name, removedMemberCount }) =>
       changeAudit(actor, AuditAction.GroupDeleted, groupId, {
-        name: group.name,
+        name,
         actorRole: actor.role,
         removedMemberCount,
       }),
