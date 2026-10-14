@@ -346,12 +346,45 @@ describe.skipIf(!HAS_DB)("each check is judged on the group as the change commit
     expect(await auditRows("group.member_removed")).toHaveLength(1);
   });
 
-  it("refuses an ADMIN's grant waiting on the addition of a member it may not manage", async () => {
-    const results = await contend(addition(OWNER), [() => groups.grantPermission(ADMIN, ORG, GROUP, "video.generate")]);
-    expect(settledAs(results)).toEqual([expect.objectContaining({ code: "FORBIDDEN" })]);
-    expect(await carried()).toEqual([]);
-    const [refused] = await auditRows("group.change_refused");
-    expect(refused?.metadata).toMatchObject({ reason: "target_role", targetUserId: OWNER, targetRole: "OWNER" });
+  it("refuses an ADMIN's grant and revocation waiting on the addition of a member it may not manage", async () => {
+    await give("audit.view");
+    const results = await contend(addition(OWNER), [
+      () => groups.grantPermission(ADMIN, ORG, GROUP, "video.generate"),
+      () => groups.revokePermission(ADMIN, ORG, GROUP, "audit.view"),
+    ]);
+    expect(settledAs(results)).toEqual([
+      expect.objectContaining({ code: "FORBIDDEN" }),
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    ]);
+    expect(await carried()).toEqual(["audit.view"]);
+    const refused = (await auditRows("group.change_refused")).map((r) => r.metadata);
+    const target = { reason: "target_role", targetUserId: OWNER, targetRole: "OWNER" };
+    expect(refused).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: "grant_permission", ...target }),
+        expect.objectContaining({ operation: "revoke_permission", ...target }),
+      ]),
+    );
+  });
+
+  it("refuses a grant and a revocation waiting on the group's deletion", async () => {
+    await give("audit.view");
+    const results = await contend(
+      async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM "groups" WHERE "id" = ${GROUP} FOR UPDATE`;
+        await tx.group.delete({ where: { id: GROUP } });
+      },
+      [
+        () => groups.grantPermission(OWNER, ORG, GROUP, "unit.view"),
+        () => groups.revokePermission(OWNER, ORG, GROUP, "audit.view"),
+      ],
+    );
+    expect(settledAs(results)).toEqual([
+      expect.objectContaining({ code: "NOT_FOUND", message: "Group not found" }),
+      expect.objectContaining({ code: "NOT_FOUND", message: "Group not found" }),
+    ]);
+    expect(await prisma.groupPermission.count({ where: { organizationId: ORG } })).toBe(0);
+    expect(await auditRows()).toEqual([]);
   });
 
   it("refuses an ADMIN's deletion waiting on the addition of a member it may not manage", async () => {

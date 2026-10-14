@@ -247,6 +247,7 @@ describe("what a member holds through its groups", () => {
     await fx.groups.grantPermission(fx.ownerId, fx.orgId, second.id, "unit.view");
     await fx.groups.addMember(fx.ownerId, fx.orgId, second.id, fx.ids.VIEWER);
     expect(await effective("VIEWER")).toEqual(effectivePermissions("VIEWER", ["unit.view", "audit.view"]));
+    expect(await fx.deps.repos.groups.listPermissionsForMember(fx.otherOrgId, fx.ids.VIEWER)).toEqual([]);
     await fx.groups.removeMember(fx.ownerId, fx.orgId, first.id, fx.ids.VIEWER);
     expect(await effective("VIEWER")).toEqual(effectivePermissions("VIEWER", ["unit.view"]));
     await fx.groups.delete(fx.ownerId, fx.orgId, second.id);
