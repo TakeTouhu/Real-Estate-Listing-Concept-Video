@@ -104,7 +104,7 @@ The repository writes each change and its audit entry in one transaction
 | --- | --- | --- |
 | create | `group.created` | another group of the organization has the name (`NAME_TAKEN`) |
 | rename | `group.renamed`, with the previous name | the group is gone or no longer has the name the rename was checked against (`STALE`), or the new name is taken (`NAME_TAKEN`) |
-| delete | `group.deleted`, with the actor's role and the number of members removed | the group is gone (`STALE`) |
+| delete | `group.deleted`, with the name as locked, the actor's role and the number of members removed | the group is gone (`STALE`) |
 | add a member | `group.member_added`, with the member's role | the member is already in the group, or the group or the member's membership is gone (`STALE`) |
 | remove a member | `group.member_removed`, with the member's role | the member is not in the group |
 
@@ -124,6 +124,13 @@ the deletion, and is counted, or finds the group gone. The count is taken from
 the deletion's own `DELETE`, which waits on, and then skips, a member a
 concurrent removal took out first. The audited count is therefore always the
 number of rows this deletion removed.
+
+The same lock orders a rename, whose update also waits for it or is waited on.
+The deletion reads the group's name under the lock and records that name, so
+its audit entry names the group as it was when deleted. A name the service read
+before the lock could be one a rename replaced meanwhile, and the trail would
+then show a rename followed by the deletion of a group under its old name
+(review of PR #79).
 
 **A change of the member's or the actor's role in between.** The ceiling is
 judged on the roles as read. Suppose a role change of the member, or a demotion

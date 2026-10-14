@@ -16,7 +16,9 @@ Commits, oldest first:
 | `7163f70` | migration 21, the Prisma models, the `GroupRepository` port with its Prisma and in-memory implementations, `GroupService`, its unit suite and shape test, and the earlier phases' migration pins moved to migration 21 |
 | `d522bb8` | the database suite |
 | `0544035` | a racing deletion, and the in-memory repository's constraints, under test |
-| *(this commit)* | ADR-0060, the phase documentation and this record |
+| `3758c9e` | ADR-0060, the phase documentation and the first version of this record |
+| `49ad77c` | the deletion's audit entry names the group as the deletion locked it (review of PR #79) |
+| *(this commit)* | this record and ADR-0060, updated for `49ad77c` |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -41,7 +43,8 @@ file that would have to contain its own hash.
   transaction. Every refusal of a member is audited as `group.change_refused`.
 - **Concurrency.**
   - A rename applies only to the name it was checked against.
-  - A deletion locks the group row, then counts the members it removes.
+  - A deletion locks the group row, then counts the members it removes and
+    records the name it locked.
   - A repeated addition is a no-op.
   - An addition whose group or member is gone writes nothing.
 
@@ -80,39 +83,39 @@ sequenceDiagram
 
   A->>GS: delete(actor, org, group)
   GS->>GS: effective group.manage, then OWNER or ADMIN
-  GS->>R: delete(org, group, count -> group.deleted)
+  GS->>R: delete(org, group, (name, count) -> group.deleted)
   R->>DB: BEGIN
-  R->>DB: SELECT groups row FOR UPDATE
-  Note over R,DB: waits for an addition in flight, which then commits first
+  R->>DB: SELECT the group's name FOR UPDATE
+  Note over R,DB: waits for an addition or a rename in flight, which then commits first
   R->>DB: DELETE group_members (count = rows this deletion removed)
   R->>DB: DELETE groups row
-  R->>DB: INSERT group.deleted (actor role, removed member count)
+  R->>DB: INSERT group.deleted (locked name, actor role, removed member count)
   R->>DB: COMMIT
 ```
 
 ## Verification
 
-Measured on the committed tree `93216da` (commit `0544035`), against a local
+Measured on the committed tree `0af52bc` (commit `49ad77c`), against a local
 PostgreSQL 16 configured like CI.
 
 | Check | Result |
 | --- | --- |
 | `pnpm lint` | clean |
 | `pnpm typecheck` (root, all packages, `tests/integration`) | clean |
-| `pnpm test` | **4958 / 4958**, 159 files (the group service suite: 62; the shape test: 6) |
-| `pnpm test:db` | **1272 / 1272**, 43 files (the groups suite: 27) |
+| `pnpm test` | **4959 / 4959**, 159 files (the group service suite: 63; the shape test: 6) |
+| `pnpm test:db` | **1273 / 1273**, 43 files (the groups suite: 28) |
 | `pnpm build` | Next.js production build succeeded |
 | `prisma migrate diff` (migrations → schema) | no difference |
 | `prisma migrate status` | 22 migrations, schema up to date |
 
 CI on the pull request's exact head is reported with the pull request.
 
-An earlier full `pnpm test:db` run on the same tree failed one test outside this
-phase: "gives two PROCESSING runners one history and at most one transfer", in
-the provider-output suite. Its race allows an interleaving the assertion does
-not, and the product behaves correctly under it. It is recorded in
-`docs/decisions/TODO.md` (*Found in Phase 6F*). The re-run, whose numbers are
-above, passed.
+A full `pnpm test:db` run on the pull request's first tree, `93216da`, failed
+one test outside this phase: "gives two PROCESSING runners one history and at
+most one transfer", in the provider-output suite. Its race allows an
+interleaving the assertion does not, and the product behaves correctly under it.
+It is recorded in `docs/decisions/TODO.md` (*Found in Phase 6F*). The re-run on
+that tree passed, as did the run above.
 
 The database races are deterministic. A third transaction holds the contested
 lock, or runs the competing change and holds it uncommitted, until every
@@ -123,23 +126,23 @@ and none has written.
 
 One textual edit per definition, at an anchor that must occur exactly once, run
 against the suite or suites listed for it. Every mutated file is restored and
-re-hashed. A SHA-256 manifest of all 748 files in the working tree is
+re-hashed. A SHA-256 manifest of all 750 files in the working tree is
 compared before and after the pass. A kill counts only when tests ran and
 failed; a mutant that does not parse would count as broken.
 
-**Authoritative: 58 run, 58 killed, 0 survivors, 0 broken, 0
-anchor-missing**, in one uninterrupted pass against the tree `93216da` (commit
-`0544035`), the reviewed runtime tree. The only later commit is this one, which
-changes documentation only. All 748 files were byte-identical after the
+**Authoritative: 59 run, 59 killed, 0 survivors, 0 broken, 0
+anchor-missing**, in one uninterrupted pass against the tree `0af52bc` (commit
+`49ad77c`), the reviewed runtime tree. The only later commit is this one, which
+changes documentation only. All 750 files were byte-identical after the
 pass.
 
 | ID | Category | Mutation | File | Killed by |
 | --- | --- | --- | --- | --- |
 | S01 | authority | a change needs no `group.manage` | `group-service.ts` | identity: 11 failing |
 | S02 | protected delete | any holder of `group.manage` may delete a group | `group-service.ts` | identity: 2 failing |
-| S03 | protected delete | a `MANAGER`, not an `ADMIN`, may delete a group | `group-service.ts` | identity: 3 failing |
+| S03 | protected delete | a `MANAGER`, not an `ADMIN`, may delete a group | `group-service.ts` | identity: 4 failing |
 | S04 | ceiling | a membership change skips the role-assignment ceiling | `group-service.ts` | identity: 7 failing |
-| S05 | ceiling | the ceiling is asked the wrong way round | `group-service.ts` | identity: 22 failing |
+| S05 | ceiling | the ceiling is asked the wrong way round | `group-service.ts` | identity: 21 failing |
 | S06 | refusal | a refusal is audited as a deletion | `group-service.ts` | identity: 18 failing |
 | S07 | refusal | a refusal lets the change through | `group-service.ts` | identity: 20 failing |
 | S08 | refusal | a name is validated before the actor's authority | `group-service.ts` | identity: 1 failing |
@@ -151,21 +154,22 @@ pass.
 | N04 | name | a taken name is not refused at creation | `group-service.ts` | identity: 2 failing |
 | N05 | name | a taken name is not refused at rename | `group-service.ts` | identity: 1 failing |
 | N06 | rename | a rename to the current name is written and audited | `group-service.ts` | identity: 1 failing |
-| N07 | rename | a stale rename is answered as done | `group-service.ts` | identity: 1 failing |
+| N07 | rename | a stale rename is answered as done | `group-service.ts` | identity: 2 failing |
 | N08 | rename | a rename records the new name as the previous one | `group-service.ts` | identity: 2 failing |
-| O01 | deletion | a deletion of a group already gone is answered as done | `group-service.ts` | identity: 1 failing |
+| O01 | deletion | a deletion of a group already gone is answered as done | `group-service.ts` | identity: 2 failing |
 | O02 | deletion | a deletion records no member count | `group-service.ts` | identity: 2 failing |
-| O03 | addition | a stale addition is answered as done | `group-service.ts` | identity: 1 failing |
+| O07 | deletion | a deletion records the name read before the group was locked | `group-service.ts` | identity: 1 failing |
+| O03 | addition | a stale addition is answered as done | `group-service.ts` | db: 2 failing |
 | O04 | addition | a repeated addition is answered as an addition | `group-service.ts` | identity: 2 failing |
 | O05 | removal | removing a member not in the group is answered as done | `group-service.ts` | identity: 2 failing |
 | O06 | audit | a membership change records the actor's role as the target's | `group-service.ts` | identity: 9 failing |
-| L01 | lock | a deletion counts its members without locking the group | `group-repository.ts` | db: 1 failing |
+| L01 | lock | a deletion counts its members without locking the group | `group-repository.ts` | db: 2 failing |
 | L02 | lock | a deletion counts members a concurrent removal took out | `group-repository.ts` | db: 1 failing |
-| L03 | deletion | a deletion of a group that is gone still writes | `group-repository.ts` | db: 2 failing |
+| L03 | deletion | a deletion of a group that is gone still writes | `group-repository.ts` | db: 3 failing |
 | T01 | tenant | find ignores the organization | `group-repository.ts` | db: 1 failing |
 | T02 | tenant | listing groups ignores the organization | `group-repository.ts` | db: 1 failing |
 | T03 | tenant | a rename ignores the organization | `group-repository.ts` | db: 1 failing |
-| T04 | tenant | a deletion ignores the organization | `group-repository.ts` | db: 1 failing |
+| T04 | tenant | a deletion ignores the organization | `group-repository.ts` | db: 2 failing |
 | T05 | tenant | listing members ignores the organization | `group-repository.ts` | db: 1 failing |
 | T06 | tenant | a removal ignores the organization | `group-repository.ts` | db: 1 failing |
 | C01 | rename | a rename applies whatever the group is now named | `group-repository.ts` | db: 2 failing |
@@ -181,14 +185,14 @@ pass.
 | A05 | atomic audit | a removal commits outside its audit entry's transaction | `group-repository.ts` | db: 1 failing |
 | A06 | atomic audit | a creation writes no audit row | `group-repository.ts` | db: 3 failing |
 | A07 | atomic audit | a rename writes no audit row | `group-repository.ts` | db: 3 failing |
-| A08 | atomic audit | a deletion writes no audit row | `group-repository.ts` | db: 4 failing |
+| A08 | atomic audit | a deletion writes no audit row | `group-repository.ts` | db: 5 failing |
 | A09 | atomic audit | an addition writes no audit row | `group-repository.ts` | db: 3 failing |
 | A10 | atomic audit | a removal writes no audit row | `group-repository.ts` | db: 2 failing |
 | I01 | in-memory | a taken name is accepted (in-memory repository) | `in-memory.ts` | identity: 2 failing |
-| I02 | in-memory | a rename applies whatever the group is now named (in-memory repository) | `in-memory.ts` | identity: 1 failing |
+| I02 | in-memory | a rename applies whatever the group is now named (in-memory repository) | `in-memory.ts` | identity: 2 failing |
 | I03 | in-memory | a repeated addition writes again (in-memory repository) | `in-memory.ts` | identity: 2 failing |
 | I04 | in-memory | a non-member joins a group (in-memory repository) | `in-memory.ts` | identity: 1 failing |
-| I05 | in-memory | a member joins a missing group (in-memory repository) | `in-memory.ts` | identity: 2 failing |
+| I05 | in-memory | a member joins a missing group (in-memory repository) | `in-memory.ts` | identity: 1 failing |
 | I06 | in-memory | a member removed from the organization stays in its groups (in-memory repository) | `in-memory.ts` | identity: 1 failing |
 | I07 | in-memory | a deletion counts no members (in-memory repository) | `in-memory.ts` | identity: 2 failing |
 | G01 | migration text | the name `CHECK` is dropped | `migration.sql` | identity: 1 failing |
@@ -216,7 +220,7 @@ Not defined, because they are not observable by a test:
 | Architecture diagram | `docs/architecture.md` status table (Phase 6F identity row) |
 | Entity-relationship diagram | `docs/er-diagram.md`: `GROUPS` and `GROUP_MEMBERS` in the implemented schema, and *Phase 6F* |
 | Critical sequence diagram | this record, *The membership addition and deletion sequence* |
-| OpenAPI / API change summary | **Not applicable** to HTTP: no route was added, removed or changed. Internal API: `GroupService` (`create`, `rename`, `delete`, `list`, `listMembers`, `addMember`, `removeMember`); `GroupRepository` and its outcome types `GroupCreation`, `GroupRename`, `GroupDeletion`, `GroupMemberAddition`; `GroupChangeAudit`; `IdentityRepositories.groups`; the `Group` and `GroupMember` types; six `group.*` audit actions |
+| OpenAPI / API change summary | **Not applicable** to HTTP: no route was added, removed or changed. Internal API: `GroupService` (`create`, `rename`, `delete`, `list`, `listMembers`, `addMember`, `removeMember`); `GroupRepository` and its outcome types `GroupCreation`, `GroupRename`, `GroupDeletion` (with `DeletedGroup`), `GroupMemberAddition`; `GroupChangeAudit`; `IdentityRepositories.groups`; the `Group` and `GroupMember` types; six `group.*` audit actions |
 | Change log / release notes | the commit list above and the pull request description |
 | Database migration notes | `docs/migration-notes.md`, *Phase 6F* (migration 21) |
 | Phase completion report | this file |
