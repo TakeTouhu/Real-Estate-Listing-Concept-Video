@@ -19,6 +19,7 @@ erDiagram
   ORGANIZATIONS ||--o{ GROUPS : "has (CASCADE)"
   GROUPS ||--o{ GROUP_MEMBERS : "contains (CASCADE)"
   MEMBERSHIPS ||--o{ GROUP_MEMBERS : "belongs to (CASCADE)"
+  GROUPS ||--o{ GROUP_PERMISSIONS : "carries (CASCADE)"
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
@@ -82,6 +83,14 @@ erDiagram
     string userId PK_FK
     string addedByUserId
     datetime addedAt
+  }
+
+  GROUP_PERMISSIONS {
+    string groupId PK_FK "FK (groupId, organizationId) to GROUPS"
+    string organizationId FK
+    string permission PK "CHECK: grantable vocabulary, never disclosure.none or video.share"
+    string grantedByUserId
+    datetime grantedAt
   }
 
   INVITATIONS {
@@ -537,6 +546,14 @@ foreign keys carrying the organization, so a row can never link a group of one
 organization to a member of another. Deleting the group, or removing the member
 from the organization, removes the row (ADR-0060). Group permissions and the
 Property responsible-user and group assignments are still later packages.
+
+## Phase 6G — group permissions
+
+`group_permissions` holds the permissions each group carries for its members:
+one row per (group, permission), with the foreign key carrying the organization.
+A CHECK keeps `disclosure.none` and `video.share` off every group. Deleting the
+group removes its rows (ADR-0061). The Property responsible-user and group
+assignments are still a later package.
 
 ## Not implemented yet (later phases)
 

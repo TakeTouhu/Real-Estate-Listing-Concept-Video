@@ -1068,3 +1068,33 @@ Additive only. No existing table, column or row is read, updated or deleted.
 
 Forward-only. Reverting the application leaves both tables unused. Nothing older
 reads them, and no permission or row access depends on them.
+
+## Phase 6G — group permissions
+
+**Migration `00000000000022_phase6g_group_permissions`.** One table created.
+ADR-0061.
+
+### New table
+
+`group_permissions`: `groupId`, `organizationId`, `permission`,
+`grantedByUserId`, `grantedAt`.
+
+| Constraint | Rule |
+| --- | --- |
+| Primary key | (`groupId`, `permission`): a group carries a permission at most once |
+| Foreign key | (`groupId`, `organizationId`) → `groups`(`id`, `organizationId`), `ON DELETE CASCADE`: a row stays in its group's organization, and deleting the group removes it |
+| `group_permissions_permission_check` | `permission` is one of the 25 permissions a group may carry: the grantable vocabulary less `disclosure.none`; never `video.share` |
+
+`grantedByUserId` has no foreign key: it is attribution, like
+`member_permission_grants.grantedByUserId`. A revocation deletes the row; the
+audit log keeps the history. A member's group permissions are read through the
+existing `group_members` (`organizationId`, `userId`) index and this table's
+primary key, so no new index is needed.
+
+Additive only. No existing table, column or row is read, updated or deleted.
+
+### Rollback
+
+Forward-only. Reverting the application leaves the table unused, and every
+member's permissions fall back to its template and individual grants; nothing
+older reads it.

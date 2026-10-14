@@ -1100,11 +1100,15 @@ them is **built**. Each item below records the settled decision and what remains
       role — including an `ADMIN` acting on itself — as a refused, audited
       authorization change rather than a silent no-op. *Done in Phase 6D
       (ADR-0058).*
-- [ ] **Make `disclosure.none` individual-only in representation and
+- [x] **Make `disclosure.none` individual-only in representation and
       enforcement.** No group permission, group inheritance, role template or
       Scope expansion may carry it, and the model should make that impossible
       rather than merely unused, so no indirect path — group membership, group
-      edit or role change — can confer it.
+      edit or role change — can confer it. *Done in Phase 6G (ADR-0061): the
+      `group_permissions` CHECK refuses it, the service refuses it to every
+      group as `not_grantable`, and effective permissions drop it from any
+      group source; no template carries it (Phase 6C). Scope, still unbuilt, is
+      row reach and confers no permission.*
 - [x] **Audit every `disclosure.none` grant and revocation** with the
       organization, affected user, acting `OWNER`, action and timestamp. *Done
       in Phase 6D (ADR-0058): `permission.granted` / `permission.revoked`, as for
@@ -1140,7 +1144,8 @@ them is **built**. Each item below records the settled decision and what remains
       matrix, ceiling enforcement on every grant path, self-escalation
       prevention, authorization-change audit, and the `disclosure.none` items.
       *Groups and group membership built in Phase 6F (ADR-0060). **Still
-      unbuilt:** group permissions and Scope.*
+      unbuilt:** group permissions and Scope.* *Additive group permissions
+      built in Phase 6G (ADR-0061). **Still unbuilt:** Scope.*
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
@@ -1158,6 +1163,9 @@ them is **built**. Each item below records the settled decision and what remains
       removed. **Still unbuilt:** user deletion; ungrouping Properties and
       recording how many (no Property has a group until Scope); losing
       group-granted permissions (no group carries one until group permissions).*
+      *Losing group-granted permissions built in Phase 6G (ADR-0061): a deleted
+      group's permissions go with it, and an `ADMIN` may not delete a group
+      whose deletion would take away a permission it could not revoke directly.*
 - [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
       videos, with the in-trash restrictions (no generate/regenerate, no
       disclosure change, no upload, no edit; preview/download still allowed when
@@ -1253,6 +1261,12 @@ them is **built**. Each item below records the settled decision and what remains
       built in Phase 6F (ADR-0060): adding or removing a member asks the
       role-assignment ceiling of the member's role, each refusal audited as
       `group.change_refused`. **Still unbuilt:** the group-permission path.*
+      *Group-permission path built in Phase 6G (ADR-0061): giving or taking a
+      group permission, adding or removing a member of a group that carries
+      any, and deleting such a group are each checked as a direct grant or
+      revocation to every member reached, under a lock on the group row, each
+      refusal audited as `group.change_refused`. **Still unbuilt:** Scope
+      manipulation (Property assignment).*
 - [ ] **Confirm the Phase 6C choices ADR-0052 did not make** (ADR-0057). None
       changes any member's access today; each matters once individual grants
       exist. (1) Existing `REVIEWER` members and invitations became `VIEWER`, the
@@ -1278,6 +1292,19 @@ them is **built**. Each item below records the settled decision and what remains
       who is not in the group is `NOT_FOUND`. (5) Leaving the organization ends
       a member's group memberships with no `group.*` audit entry; its
       `member.removed` entry records the removal.
+- [ ] **Confirm the Phase 6G choices ADR-0052 did not make** (ADR-0061).
+      (1) `permission.manage` and `billing.manage` may be carried by a group,
+      but only an `OWNER` can give them, take them away, or change the
+      membership of a group that carries them; the narrower alternative would
+      forbid both on groups. (2) Changing a group's permissions needs
+      `permission.manage`, not `group.manage`. (3) An `ADMIN` cannot delete a
+      group whose deletion would take away a permission it could not revoke
+      directly. (4) Group permissions survive a member's role change; the
+      `property.create` ceiling keeps applying. (5) Leaving the organization
+      ends group-derived permissions with no `group.*` entry; its
+      `member.removed` entry records it. (6) A repeated grant to a group
+      changes nothing; taking away a permission the group does not carry is
+      `NOT_FOUND`.
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the
@@ -1305,6 +1332,8 @@ them is **built**. Each item below records the settled decision and what remains
       detectable after the fact. *Role, individual-permission and group changes
       audited (Phases 6C, 6D, 6F), each committed with its change (ADR-0058,
       ADR-0059, ADR-0060). **Still unbuilt:** group-permission and
+      Property-assignment changes.* *Group-permission changes audited in Phase
+      6G (ADR-0061), each committed with its change. **Still unbuilt:**
       Property-assignment changes.*
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
       Decision 19. A failed initial generation, paid regeneration or
