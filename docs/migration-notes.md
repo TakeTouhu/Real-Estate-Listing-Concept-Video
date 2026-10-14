@@ -1098,3 +1098,37 @@ Additive only. No existing table, column or row is read, updated or deleted.
 Forward-only. Reverting the application leaves the table unused, and every
 member's permissions fall back to its template and individual grants; nothing
 older reads it.
+
+## Phase 6H — Property assignment
+
+**Migration `00000000000023_phase6h_property_assignment`.** Two columns added to
+`properties`. ADR-0062.
+
+### New columns
+
+| Column | Rule |
+| --- | --- |
+| `responsibleUserId` `TEXT NULL` | foreign key (`organizationId`, `responsibleUserId`) → `memberships`(`organizationId`, `userId`), `ON DELETE NO ACTION`: the responsible user is always a member of the Property's organization |
+| `groupId` `TEXT NULL` | foreign key (`groupId`, `organizationId`) → `groups`(`id`, `organizationId`), `ON DELETE NO ACTION`: the group always belongs to the Property's organization |
+
+Two indexes, `properties_organizationId_responsibleUserId_idx` and
+`properties_groupId_idx`, serve a member's removal and a group's deletion, which
+release the Properties that refer to them.
+
+`NO ACTION` means the database refuses to delete a membership or group a
+Property still refers to. A member's removal and a group's deletion clear the
+assignments themselves, in the same transaction, and count them in their audit
+entries. Anything else that deletes memberships must do the same, including the
+cascade from deleting a user or an organization (neither is built).
+
+Additive only. No existing row is updated: every existing Property starts with
+no responsible user and no group, which ADR-0052 allows for the `OWNER`s who
+created them. No table, column or constraint of migrations 0 through 22 is
+changed.
+
+### Rollback
+
+Forward-only. Reverting the application leaves both columns `NULL` on every new
+Property and unread; a member's removal or a group's deletion by the older code
+would be refused only for a Property that still names it, which only this code
+can write.

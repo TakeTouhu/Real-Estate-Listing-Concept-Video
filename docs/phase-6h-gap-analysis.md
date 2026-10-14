@@ -32,7 +32,7 @@ writes them. Enforcing reach on the content paths follows as 6I.
 | Group deletion | removes members and permissions | also ungroups its Properties and records how many | `GroupRepository.delete` |
 | A member leaving the organization | removes grants and group memberships | also releases its responsible-user assignments and records how many | `MembershipRepository.remove` |
 | Audit | `property.created` with the type only, written after the row | `property.created` with the creator's role and both initial assignments, `property.assignment_changed` with previous and new values, refusals as `property.assignment_refused`, each committed with its change | the property repository's transactions |
-| Concurrency | — | an assignment never names a group being deleted or a member being removed | the referenced row is locked before the Property row is written |
+| Concurrency | — | an assignment never names a group being deleted or a member being removed | the foreign key's share lock on the referenced row; the removal or deletion locks that row first, then the Properties in id order |
 
 ## Choices ADR-0052 does not make (defaults taken, recorded in `TODO.md`)
 

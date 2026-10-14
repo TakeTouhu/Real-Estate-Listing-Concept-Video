@@ -1145,7 +1145,9 @@ them is **built**. Each item below records the settled decision and what remains
       prevention, authorization-change audit, and the `disclosure.none` items.
       *Groups and group membership built in Phase 6F (ADR-0060). **Still
       unbuilt:** group permissions and Scope.* *Additive group permissions
-      built in Phase 6G (ADR-0061). **Still unbuilt:** Scope.*
+      built in Phase 6G (ADR-0061). **Still unbuilt:** Scope.* *Property
+      assignment, the data Scope needs, built in Phase 6H (ADR-0062). **Still
+      unbuilt:** enforcing Scope on the content paths (6I).*
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
@@ -1166,6 +1168,10 @@ them is **built**. Each item below records the settled decision and what remains
       *Losing group-granted permissions built in Phase 6G (ADR-0061): a deleted
       group's permissions go with it, and an `ADMIN` may not delete a group
       whose deletion would take away a permission it could not revoke directly.*
+      *Ungrouping Properties built in Phase 6H (ADR-0062): a deleted group's
+      Properties become ungrouped, and `group.deleted` records how many.
+      **Still unbuilt:** user deletion, which must also release the user's
+      responsible-user assignments, as a member's removal does.*
 - [ ] **Build the 30-day trash lifecycle** for properties, projects, images and
       videos, with the in-trash restrictions (no generate/regenerate, no
       disclosure change, no upload, no edit; preview/download still allowed when
@@ -1305,6 +1311,16 @@ them is **built**. Each item below records the settled decision and what remains
       `member.removed` entry records it. (6) A repeated grant to a group
       changes nothing; taking away a permission the group does not carry is
       `NOT_FOUND`.
+- [ ] **Confirm the Phase 6H choices ADR-0052 did not make** (ADR-0062).
+      (1) When a responsible user leaves the organization, its Properties
+      become unassigned; the removal is not blocked, and `member.removed`
+      records how many. (2) Any member but `BILLING` may be chosen as a
+      responsible user; a later role change keeps an existing assignment.
+      (3) An `OWNER` or `ADMIN` who chooses nothing leaves both assignments
+      unset, with no default to the creator. (4) A `MANAGER` in no group cannot
+      create a Property; one in several groups must name one. (5) Reassignment
+      needs the `OWNER` or `ADMIN` role, not a permission. (6) An assignment
+      that changes nothing writes nothing.
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the
@@ -1327,14 +1343,16 @@ them is **built**. Each item below records the settled decision and what remains
       A crash between them leaves an organization no one belongs to (which no
       one can reach) or one created unaudited. The same repository pattern as
       ADR-0059 closes it.
-- [ ] **Audit every role, permission, group and Property-assignment change**,
+- [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes
       audited (Phases 6C, 6D, 6F), each committed with its change (ADR-0058,
       ADR-0059, ADR-0060). **Still unbuilt:** group-permission and
       Property-assignment changes.* *Group-permission changes audited in Phase
       6G (ADR-0061), each committed with its change. **Still unbuilt:**
-      Property-assignment changes.*
+      Property-assignment changes.* *Done in Phase 6H (ADR-0062): a Property's
+      creation with its initial assignments, every assignment change and every
+      refused assignment are audited, each change committed with its entry.*
 - [ ] **Build permanent technical-failure terminal settlement.** ADR-0052
       Decision 19. A failed initial generation, paid regeneration or
       disclosure/logo recomposition must terminally settle and **RELEASE** the
@@ -1398,7 +1416,10 @@ them is **built**. Each item below records the settled decision and what remains
       and the `OWN` assignment predicate; child-resource reachability inherited
       from the Property; reassignment and membership-change effects; no
       authorship-based row authorization; no implicit scope widening through
-      individual grants; tenant-safe row-level checks throughout.
+      individual grants; tenant-safe row-level checks throughout. *Property →
+      responsible user and Property → group built in Phase 6H (ADR-0062).
+      **Still unbuilt:** the predicates and their enforcement on every content
+      path (6I).*
 - [ ] **Build Property assignment and role-fixed Scope** (ADR-0052 Decision
       10): `OWNER`/`ADMIN`-only Property reassignment; creation-time assignment
       rules by creator role — `MANAGER` responsible user fixed to the creator
@@ -1409,8 +1430,12 @@ them is **built**. Each item below records the settled decision and what remains
       role change without rewriting assignments; grants never widening Scope;
       and audit evidence for every Property creation (organization, Property,
       creating user and role, initial responsible user and group, timestamp),
-      assignment change and role change.
-- [ ] **Enforce the `property.create` capability ceiling** (ADR-0052 Decision
+      assignment change and role change. *Built in Phase 6H (ADR-0062): the
+      creation-time rules, `OWNER`/`ADMIN`-only reassignment and the audit
+      evidence. Role changes already rewrite no assignment and grants never
+      touch them. **Still unbuilt:** applying the role → Scope mapping when
+      authorizing content (6I).*
+- [x] **Enforce the `property.create` capability ceiling** (ADR-0052 Decision
       10): effective-permission calculation that combines template, direct and
       group grants and then applies the role ceiling, so `property.create` is
       never effective for `VIEWER` or `BILLING` from any source; grant
@@ -1418,7 +1443,9 @@ them is **built**. Each item below records the settled decision and what remains
       roles as a supported configuration; and tests covering direct and
       group-derived grants for both roles. *Direct grants built in Phase 6D
       (ADR-0058): refused at grant time and filtered from the effective set.
-      **Still unbuilt:** group-derived grants.*
+      **Still unbuilt:** group-derived grants.* *Done in Phase 6G (ADR-0061
+      Decision 2): a group's `property.create` is never effective for a
+      `VIEWER` or `BILLING` member.*
 - [ ] **Validate storage blocks on downgrade** (ADR-0053 Decision 3B): refuse
       to schedule a downgrade while next-period blocks exceed the target cap;
       require explicit scheduled cancellation of the excess; while the downgrade
