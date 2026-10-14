@@ -40,11 +40,12 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: Phase 6D added migration 20 after it and Phase 6F
-    // migration 21. Phase 6C still contributed exactly one migration, in place.
+    // No longer the newest: Phase 6D added migration 20 after it, Phase 6F
+    // migration 21 and Phase 6G migration 22. Phase 6C still contributed exactly
+    // one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(19);
     expect(dirs.filter((dir) => dir.includes("phase6c"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(22);
+    expect(dirs).toHaveLength(23);
   });
 
   it("recreates the Role type and maps REVIEWER to VIEWER in both tables, touching nothing else", () => {

@@ -121,6 +121,7 @@ function harness(options: {
             Promise.resolve(role === null ? null : { organizationId: ORG, userId: ACTOR, role }),
         },
         permissionGrants: { listForMember: () => Promise.resolve([]) },
+        groups: { listPermissionsForMember: () => Promise.resolve([]) },
         auditLogs: {
           append: (entry: { action: string; metadata?: Record<string, unknown> }) => {
             audits.push(entry);

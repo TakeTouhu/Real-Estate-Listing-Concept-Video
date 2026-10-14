@@ -82,6 +82,9 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+/** A ceiling check that admits every change, for the repository's own behavior. */
+const admit = () => null;
+
 const audit = (action: string, organizationId = ORG) => ({
   organizationId,
   actorUserId: OWNER,
@@ -205,8 +208,12 @@ describe.skipIf(!HAS_DB)("every read and write is scoped by organization", () =>
     expect(await deps.repos.groups.rename(OTHER_ORG, GROUP, "Sales", "Taken", audit("x", OTHER_ORG))).toEqual({
       outcome: "STALE",
     });
-    expect(await deps.repos.groups.delete(OTHER_ORG, GROUP, () => audit("x", OTHER_ORG))).toEqual({ outcome: "STALE" });
-    expect(await deps.repos.groups.removeMember(OTHER_ORG, GROUP, CREATOR, audit("x", OTHER_ORG))).toBe(false);
+    expect(await deps.repos.groups.delete(OTHER_ORG, GROUP, admit, () => audit("x", OTHER_ORG))).toEqual({
+      outcome: "STALE",
+    });
+    expect(await deps.repos.groups.removeMember(OTHER_ORG, GROUP, CREATOR, admit, audit("x", OTHER_ORG))).toEqual({
+      outcome: "NOT_IN_GROUP",
+    });
     expect([await nameOf(), await memberIds()]).toEqual(["Sales", [CREATOR]]);
     expect(await prisma.auditLog.count({ where: { organizationId: { in: [ORG, OTHER_ORG] } } })).toBe(0);
   });
@@ -236,7 +243,7 @@ describe.skipIf(!HAS_DB)("each group change commits with its audit entry or not 
 
   it("commits no deletion whose audit entry cannot be written, keeping the members", async () => {
     await seat(CREATOR);
-    await expect(deps.repos.groups.delete(ORG, GROUP, () => audit("group.deleted", UNWRITABLE))).rejects.toBeInstanceOf(
+    await expect(deps.repos.groups.delete(ORG, GROUP, admit, () => audit("group.deleted", UNWRITABLE))).rejects.toBeInstanceOf(
       Prisma.PrismaClientKnownRequestError,
     );
     expect([await nameOf(), await memberIds()]).toEqual(["Sales", [CREATOR]]);
@@ -244,7 +251,7 @@ describe.skipIf(!HAS_DB)("each group change commits with its audit entry or not 
 
   it("commits no addition whose audit entry cannot be written", async () => {
     const member = { groupId: GROUP, organizationId: ORG, userId: CREATOR, addedByUserId: OWNER };
-    await expect(deps.repos.groups.addMember(member, audit("group.member_added", UNWRITABLE))).rejects.toBeInstanceOf(
+    await expect(deps.repos.groups.addMember(member, admit, audit("group.member_added", UNWRITABLE))).rejects.toBeInstanceOf(
       Prisma.PrismaClientKnownRequestError,
     );
     expect(await memberIds()).toEqual([]);
@@ -253,7 +260,7 @@ describe.skipIf(!HAS_DB)("each group change commits with its audit entry or not 
   it("commits no removal whose audit entry cannot be written", async () => {
     await seat(CREATOR);
     await expect(
-      deps.repos.groups.removeMember(ORG, GROUP, CREATOR, audit("group.member_removed", UNWRITABLE)),
+      deps.repos.groups.removeMember(ORG, GROUP, CREATOR, admit, audit("group.member_removed", UNWRITABLE)),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(await memberIds()).toEqual([CREATOR]);
   });
@@ -300,9 +307,9 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
   it("adds no member to a group that is gone, nor one who left the organization", async () => {
     await prisma.membership.delete({ where: { organizationId_userId: { organizationId: ORG, userId: CREATOR } } });
     const add = (groupId: string, userId: string) =>
-      deps.repos.groups.addMember({ groupId, organizationId: ORG, userId, addedByUserId: OWNER }, audit("x"));
-    expect(await add(GROUP, CREATOR)).toBe("STALE");
-    expect(await add("grp_itest_groups_missing", VIEWER)).toBe("STALE");
+      deps.repos.groups.addMember({ groupId, organizationId: ORG, userId, addedByUserId: OWNER }, admit, audit("x"));
+    expect(await add(GROUP, CREATOR)).toEqual({ outcome: "STALE" });
+    expect(await add("grp_itest_groups_missing", VIEWER)).toEqual({ outcome: "STALE" });
     expect(await memberIds()).toEqual([]);
     expect(await auditRows()).toEqual([]);
   });
@@ -310,12 +317,14 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
   it("answers ALREADY_IN_GROUP for a member already in the group, writing nothing", async () => {
     await seat(CREATOR);
     const member = { groupId: GROUP, organizationId: ORG, userId: CREATOR, addedByUserId: ADMIN };
-    expect(await deps.repos.groups.addMember(member, audit("x"))).toBe("ALREADY_IN_GROUP");
+    expect(await deps.repos.groups.addMember(member, admit, audit("x"))).toEqual({ outcome: "ALREADY_IN_GROUP" });
     expect(await auditRows()).toEqual([]);
   });
 
   it("deletes nothing for a group that is gone", async () => {
-    expect(await deps.repos.groups.delete(ORG, "grp_itest_groups_missing", () => audit("x"))).toEqual({ outcome: "STALE" });
+    expect(await deps.repos.groups.delete(ORG, "grp_itest_groups_missing", admit, () => audit("x"))).toEqual({
+      outcome: "STALE",
+    });
     expect(await auditRows()).toEqual([]);
   });
 });

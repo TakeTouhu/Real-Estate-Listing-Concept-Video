@@ -56,6 +56,18 @@ export interface Group {
   readonly updatedAt: Date;
 }
 
+/**
+ * One permission a group carries for every one of its members (ADR-0061).
+ * Never `disclosure.none`, which only an individual grant carries.
+ */
+export interface GroupPermission {
+  readonly groupId: string;
+  readonly organizationId: string;
+  readonly permission: Permission;
+  readonly grantedByUserId: string;
+  readonly grantedAt: Date;
+}
+
 /** One member of one group; the member belongs to the group's organization. */
 export interface GroupMember {
   readonly groupId: string;

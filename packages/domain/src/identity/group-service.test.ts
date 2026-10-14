@@ -544,9 +544,13 @@ describe("the in-memory group repository mirrors the database's constraints", ()
       metadata: {},
     };
     const add = (groupId: string, userId: string) =>
-      fx.deps.repos.groups.addMember({ groupId, organizationId: fx.orgId, userId, addedByUserId: fx.ownerId }, entry);
-    expect(await add(group.id, fx.outsiderId)).toBe("STALE");
-    expect(await add("grp_missing", fx.ids.CREATOR)).toBe("STALE");
+      fx.deps.repos.groups.addMember(
+        { groupId, organizationId: fx.orgId, userId, addedByUserId: fx.ownerId },
+        () => null,
+        entry,
+      );
+    expect(await add(group.id, fx.outsiderId)).toEqual({ outcome: "STALE" });
+    expect(await add("grp_missing", fx.ids.CREATOR)).toEqual({ outcome: "STALE" });
     expect(await memberIds(group.id)).toEqual([]);
     expect(fx.deps.repos.auditLogs.all().filter((a) => a.action === "x")).toEqual([]);
   });

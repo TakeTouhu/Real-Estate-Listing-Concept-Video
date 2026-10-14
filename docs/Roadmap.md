@@ -182,9 +182,19 @@ member row's foreign keys carrying the organization; `group.manage` to change,
 each change committed with its audit entry, each refusal audited. Dormant: a
 group confers no permission and no row access yet.
 
+**Phase 6G — group permissions** (ADR-0061, migration 22): a group carries
+permissions every member then holds, additively; a CHECK makes `disclosure.none`
+impossible on a group, and `property.create` stays ineffective for `VIEWER` and
+`BILLING`. Every group change that gives or takes a permission (a grant or
+revocation on the group, adding or removing a member of a group that carries
+any, deleting such a group) is checked as a direct grant or revocation to each
+member it reaches, on the group as locked when the change commits. Changing a
+group's permissions needs `permission.manage`. Dormant: no route or page gives a
+group a permission.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** group permissions (6G) and Property-rooted row Scope (6H). MFA for
-`permission.manage` and `billing.manage` holders before any member-management UI.
+it:** Property-rooted row Scope (6H). MFA for `permission.manage` and
+`billing.manage` holders before any member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and

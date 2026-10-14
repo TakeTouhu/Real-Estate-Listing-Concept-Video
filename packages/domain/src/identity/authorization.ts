@@ -7,19 +7,21 @@ export interface AuthContext {
   readonly userId: string;
   readonly organizationId: string;
   readonly role: Role;
-  /** The member's effective permissions: its template's plus its individual grants. */
+  /** The member's effective permissions: its template's, its individual grants and its groups'. */
   readonly permissions: readonly Permission[];
 }
 
-/** A membership's effective permissions, reading its individual grants. */
+/** A membership's effective permissions, reading its individual grants and its groups' permissions. */
 export async function effectivePermissionsOf(
   deps: Pick<IdentityServiceDeps, "repos">,
   membership: Membership,
 ): Promise<readonly Permission[]> {
   const grants = await deps.repos.permissionGrants.listForMember(membership.organizationId, membership.userId);
+  const fromGroups = await deps.repos.groups.listPermissionsForMember(membership.organizationId, membership.userId);
   return effectivePermissions(
     membership.role,
     grants.map((grant) => grant.permission),
+    fromGroups,
   );
 }
 
