@@ -68,6 +68,10 @@ new dependency, and checked against the RFC 4226 and RFC 6238 test values.
 - **Each code works once.** A code is accepted only for a step later than
   `lastUsedStep`, and the factor is updated only where `lastUsedStep` is still
   lower, so two concurrent requests with one code accept it once.
+- **A code counts only for the authenticator it was checked against.** The same
+  update, and the delete that turns MFA off, also match the sealed secret the
+  code was checked against. If another sign-in moved MFA to a new device in
+  between, the old authenticator's code is refused.
 - Set-up returns the secret in base32 and an `otpauth://` URI naming the issuer
   `VTaVision` and the user's email, for a QR code (MFA-2 draws it).
 
@@ -114,6 +118,14 @@ and changes phone could neither turn it off nor set it up again.
 A set-up started in a session that has not passed MFA can never replace a
 factor: if MFA was turned on in another session meanwhile, finishing it is
 refused (`STALE`), inside the same transaction that would write it.
+
+**The session is read again where it authorizes.** The service first checks the
+session it was given. A new set of recovery codes and turning MFA off then lock
+the stored session row and require it, inside the transaction that writes the
+change, to still exist, to be the user's and to have passed MFA. (Finishing a
+set-up that replaces the factor already requires the stored session to have
+passed it.) A sign-in that ended after the caller read it, by signing out or by
+a lock-out, changes nothing and is asked to sign in again.
 
 Wrong codes while setting up are not counted: the person setting up already
 holds the secret, so guessing gains nothing.
