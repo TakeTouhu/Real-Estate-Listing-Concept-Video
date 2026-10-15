@@ -1,5 +1,5 @@
 import { hotp } from "@app/shared";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService } from "../identity/auth-service";
 import type { Session } from "../identity/types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
@@ -195,6 +195,18 @@ describe("MfaService (ADR-0065)", () => {
       await expect(ctx.mfa.verify(await signIn(), code(secret, -2))).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     });
 
+    it("refuses an old authenticator's code checked just before the authenticator was replaced", async () => {
+      const { secret: oldSecret, session } = await enroll(await signIn());
+      const stale = await ctx.deps.repos.mfa.findFactor(session.userId);
+      const attacker = await signIn();
+      ctx.deps.clock.advanceSeconds(30);
+      const { secret } = await ctx.mfa.beginSetup(session);
+      await ctx.mfa.confirmSetup(session, code(secret));
+      vi.spyOn(ctx.deps.repos.mfa, "findFactor").mockResolvedValueOnce(stale);
+      await expect(ctx.mfa.verify(attacker, code(oldSecret, 1))).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+      expect(current(attacker)).toMatchObject({ mfaVerifiedAt: null, mfaFailedAttempts: 1 });
+    });
+
     it("refuses an earlier step once a later one was used", async () => {
       const { secret } = await enroll(await signIn());
       ctx.deps.clock.advanceSeconds(60);
@@ -289,11 +301,24 @@ describe("MfaService (ADR-0065)", () => {
     it("are not replaced from a session that has not passed MFA, or with MFA off", async () => {
       await enroll(await signIn());
       await expect(ctx.mfa.regenerateRecoveryCodes(await signIn())).rejects.toMatchObject({ code: "FORBIDDEN" });
-      const other = await signIn("b@example.com");
-      await expect(ctx.mfa.regenerateRecoveryCodes({ ...other, mfaVerifiedAt: new Date() })).rejects.toMatchObject({
+      const { secret, session } = await enroll(await signIn("b@example.com"));
+      ctx.deps.clock.advanceSeconds(30);
+      await ctx.mfa.disable(session, code(secret));
+      await expect(ctx.mfa.regenerateRecoveryCodes(current(session))).rejects.toMatchObject({
         code: "VALIDATION_FAILED",
         message: "MFA is not turned on",
       });
+    });
+
+    it("are not replaced once the sign-in has ended, though it had passed MFA", async () => {
+      const { recoveryCodes, session } = await enroll(await signIn());
+      await ctx.deps.repos.sessions.deleteByTokenHash(session.tokenHash);
+      await expect(ctx.mfa.regenerateRecoveryCodes(session)).rejects.toMatchObject({
+        code: "UNAUTHENTICATED",
+        message: "Sign in again",
+      });
+      expect(actions()).not.toContain("mfa.recovery_codes_regenerated");
+      await ctx.mfa.verify(await signIn(), recoveryCodes[0]!);
     });
   });
 
@@ -313,6 +338,28 @@ describe("MfaService (ADR-0065)", () => {
       await expect(ctx.mfa.disable(session, code(secret))).rejects.toMatchObject({ code: "FORBIDDEN" });
       expect((await ctx.mfa.status(session.userId)).enabled).toBe(true);
       expect(await ctx.mfa.status(session.userId)).toMatchObject({ required: true });
+    });
+
+    it("is refused once the sign-in has ended, though it had passed MFA", async () => {
+      const { secret, session } = await enroll(await signIn());
+      await ctx.deps.repos.sessions.deleteByTokenHash(session.tokenHash);
+      ctx.deps.clock.advanceSeconds(30);
+      await expect(ctx.mfa.disable(session, code(secret))).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+      expect((await ctx.mfa.status(session.userId)).enabled).toBe(true);
+    });
+
+    it("is refused for a code checked against an authenticator another sign-in replaced meanwhile", async () => {
+      const { secret: oldSecret, session } = await enroll(await signIn());
+      const stale = await ctx.deps.repos.mfa.findFactor(session.userId);
+      const other = await signIn();
+      ctx.deps.clock.advanceSeconds(30);
+      await ctx.mfa.verify(other, code(oldSecret));
+      const { secret } = await ctx.mfa.beginSetup(current(other));
+      await ctx.mfa.confirmSetup(other, code(secret));
+      vi.spyOn(ctx.deps.repos.mfa, "findFactor").mockResolvedValueOnce(stale);
+      await expect(ctx.mfa.disable(session, code(oldSecret, 1))).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+      expect(actions()).not.toContain("mfa.disabled");
+      expect((await ctx.mfa.status(session.userId)).enabled).toBe(true);
     });
 
     it("needs a session that passed MFA and a code not yet used; a wrong one counts", async () => {

@@ -42,6 +42,12 @@ export interface MfaCodeInput {
   readonly verifiedAt: Date;
 }
 
+/** An authenticator code matched to `step` against the factor whose sealed secret is `sealedSecret`. */
+export interface MfaTotpMatch {
+  readonly sealedSecret: string;
+  readonly step: number;
+}
+
 /**
  * MFA state: a user's factor and recovery codes, and the MFA columns of a
  * session. Every change commits together with its audit entry.
@@ -59,18 +65,37 @@ export interface MfaRepository {
    * secret, or when the user has a factor and the session has not passed it.
    */
   enable(input: MfaEnableInput): Promise<"ENABLED" | "STALE">;
-  /** Accept an authenticator code for `step`, later than the last one used, and mark the session passed. */
-  acceptTotpStep(input: MfaCodeInput & { readonly step: number; readonly audit: MfaAudit }): Promise<MfaCodeOutcome>;
+  /**
+   * Accept an authenticator code for `step`, later than the last one used, and
+   * mark the session passed. `REJECTED` when the factor was replaced since the
+   * code was checked against `sealedSecret`.
+   */
+  acceptTotpStep(input: MfaCodeInput & MfaTotpMatch & { readonly audit: MfaAudit }): Promise<MfaCodeOutcome>;
   /** Use up a recovery code and mark the session passed; the audit entry is built from the codes left. */
   acceptRecoveryCode(
     input: MfaCodeInput & { readonly codeHash: string; readonly audit: (codesLeft: number) => MfaAudit },
   ): Promise<MfaCodeOutcome>;
   /** Count a wrong code against the session; at `limit` the session is deleted and `audit` recorded. */
   recordFailedCode(sessionId: string, limit: number, audit: MfaAudit): Promise<MfaFailureOutcome>;
-  /** Replace the user's recovery codes; false, writing nothing, when MFA is off. */
-  replaceRecoveryCodes(userId: string, codeHashes: readonly string[], audit: MfaAudit): Promise<boolean>;
-  /** Delete the factor and its recovery codes for a code of `step`; false, writing nothing, when MFA is off or the step was used. */
-  disable(userId: string, step: number, audit: MfaAudit): Promise<boolean>;
+  /**
+   * Replace the user's recovery codes from a session that passed MFA. Writes
+   * nothing when MFA is off, or when the session is gone or has not passed MFA
+   * as stored (`SESSION_ENDED`).
+   */
+  replaceRecoveryCodes(input: {
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly codeHashes: readonly string[];
+    readonly audit: MfaAudit;
+  }): Promise<"REPLACED" | "NOT_ENABLED" | "SESSION_ENDED">;
+  /**
+   * Delete the factor and its recovery codes, from a session that passed MFA,
+   * for a code matched against the current factor and later than the last one
+   * used. Writes nothing otherwise: `SESSION_ENDED` as for
+   * `replaceRecoveryCodes`, `REJECTED` when MFA is off, the factor was
+   * replaced or the step was used.
+   */
+  disable(input: { readonly userId: string; readonly sessionId: string; readonly audit: MfaAudit } & MfaTotpMatch): Promise<MfaCodeOutcome>;
 }
 
 /** Seals TOTP secrets at rest (AES-256-GCM under `MFA_SECRET_KEY`). */

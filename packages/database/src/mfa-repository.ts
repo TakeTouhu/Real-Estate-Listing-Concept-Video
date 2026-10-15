@@ -58,9 +58,10 @@ export function createPrismaMfaRepository(prisma: PrismaClient): MfaRepository {
     async acceptTotpStep(input) {
       return prisma.$transaction(async (tx) => {
         if (!(await lockSession(tx, input.sessionId))) return "SESSION_ENDED";
-        // Moves only forward, so a code is accepted once even by concurrent requests.
+        // Moves only forward, so a code is accepted once even by concurrent
+        // requests; and only for the factor it was checked against.
         const { count } = await tx.userMfaFactor.updateMany({
-          where: { userId: input.userId, lastUsedStep: { lt: input.step } },
+          where: { userId: input.userId, secret: input.sealedSecret, lastUsedStep: { lt: input.step } },
           data: { lastUsedStep: input.step },
         });
         if (count === 0) return "REJECTED";
@@ -98,34 +99,47 @@ export function createPrismaMfaRepository(prisma: PrismaClient): MfaRepository {
         return { outcome: "LOCKED" } as const;
       });
     },
-    async replaceRecoveryCodes(userId, codeHashes, audit) {
+    async replaceRecoveryCodes({ userId, sessionId, codeHashes, audit }) {
       return prisma.$transaction(async (tx) => {
-        if (!(await lockFactor(tx, userId))) return false;
+        if (!passed(await lockSession(tx, sessionId), userId)) return "SESSION_ENDED";
+        if (!(await lockFactor(tx, userId))) return "NOT_ENABLED";
         await tx.userMfaRecoveryCode.deleteMany({ where: { userId } });
         await tx.userMfaRecoveryCode.createMany({ data: codeHashes.map((codeHash) => ({ userId, codeHash })) });
         await tx.auditLog.create({ data: auditLogData(audit) });
-        return true;
+        return "REPLACED";
       });
     },
-    async disable(userId, step, audit) {
+    async disable(input) {
+      const { userId } = input;
       return prisma.$transaction(async (tx) => {
+        if (!passed(await lockSession(tx, input.sessionId), userId)) return "SESSION_ENDED";
         // The recovery codes go with the factor (foreign-key cascade).
-        const { count } = await tx.userMfaFactor.deleteMany({ where: { userId, lastUsedStep: { lt: step } } });
-        if (count === 0) return false;
-        await tx.auditLog.create({ data: auditLogData(audit) });
-        return true;
+        const { count } = await tx.userMfaFactor.deleteMany({
+          where: { userId, secret: input.sealedSecret, lastUsedStep: { lt: input.step } },
+        });
+        if (count === 0) return "REJECTED";
+        await tx.auditLog.create({ data: auditLogData(input.audit) });
+        return "ACCEPTED";
       });
     },
   };
 }
 
-async function lockSession(
-  tx: Prisma.TransactionClient,
-  sessionId: string,
-): Promise<{ mfaVerifiedAt: Date | null; mfaPendingSecret: string | null } | null> {
-  const [row] = await tx.$queryRaw<{ mfaVerifiedAt: Date | null; mfaPendingSecret: string | null }[]>`
-    SELECT "mfaVerifiedAt", "mfaPendingSecret" FROM "sessions" WHERE "id" = ${sessionId} FOR UPDATE`;
+interface LockedSession {
+  readonly userId: string;
+  readonly mfaVerifiedAt: Date | null;
+  readonly mfaPendingSecret: string | null;
+}
+
+async function lockSession(tx: Prisma.TransactionClient, sessionId: string): Promise<LockedSession | null> {
+  const [row] = await tx.$queryRaw<LockedSession[]>`
+    SELECT "userId", "mfaVerifiedAt", "mfaPendingSecret" FROM "sessions" WHERE "id" = ${sessionId} FOR UPDATE`;
   return row ?? null;
+}
+
+/** The session, as stored, is the user's and passed MFA: not ended since the caller read it. */
+function passed(session: LockedSession | null, userId: string): boolean {
+  return session !== null && session.userId === userId && session.mfaVerifiedAt !== null;
 }
 
 /** Lock the user's factor; false when MFA is off. */

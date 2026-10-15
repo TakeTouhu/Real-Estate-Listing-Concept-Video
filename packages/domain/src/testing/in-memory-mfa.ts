@@ -8,6 +8,7 @@ import type {
   MfaFactor,
   MfaFailureOutcome,
   MfaRepository,
+  MfaTotpMatch,
 } from "../mfa/ports";
 
 /** What the MFA double reads and writes of the session double. */
@@ -65,11 +66,11 @@ export class InMemoryMfaRepository implements MfaRepository {
     return "ENABLED";
   }
 
-  async acceptTotpStep(input: MfaCodeInput & { readonly step: number; readonly audit: MfaAudit }): Promise<MfaCodeOutcome> {
+  async acceptTotpStep(input: MfaCodeInput & MfaTotpMatch & { readonly audit: MfaAudit }): Promise<MfaCodeOutcome> {
     const session = this.sessions.byId(input.sessionId);
     if (!session) return "SESSION_ENDED";
-    const factor = this.factors.get(input.userId);
-    if (!factor || factor.lastUsedStep >= input.step) return "REJECTED";
+    const factor = this.current(input);
+    if (!factor) return "REJECTED";
     this.factors.set(input.userId, { ...factor, lastUsedStep: input.step });
     this.pass(session, input.verifiedAt);
     await this.auditLogs.append(input.audit);
@@ -101,20 +102,39 @@ export class InMemoryMfaRepository implements MfaRepository {
     return { outcome: "LOCKED" };
   }
 
-  async replaceRecoveryCodes(userId: string, codeHashes: readonly string[], audit: MfaAudit): Promise<boolean> {
-    if (!this.factors.has(userId)) return false;
-    this.codes.set(userId, new Set(codeHashes));
-    await this.auditLogs.append(audit);
-    return true;
+  async replaceRecoveryCodes(input: {
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly codeHashes: readonly string[];
+    readonly audit: MfaAudit;
+  }): Promise<"REPLACED" | "NOT_ENABLED" | "SESSION_ENDED"> {
+    if (!this.passed(input.sessionId, input.userId)) return "SESSION_ENDED";
+    if (!this.factors.has(input.userId)) return "NOT_ENABLED";
+    this.codes.set(input.userId, new Set(input.codeHashes));
+    await this.auditLogs.append(input.audit);
+    return "REPLACED";
   }
 
-  async disable(userId: string, step: number, audit: MfaAudit): Promise<boolean> {
-    const factor = this.factors.get(userId);
-    if (!factor || factor.lastUsedStep >= step) return false;
-    this.factors.delete(userId);
-    this.codes.delete(userId);
-    await this.auditLogs.append(audit);
-    return true;
+  async disable(
+    input: { readonly userId: string; readonly sessionId: string; readonly audit: MfaAudit } & MfaTotpMatch,
+  ): Promise<MfaCodeOutcome> {
+    if (!this.passed(input.sessionId, input.userId)) return "SESSION_ENDED";
+    if (!this.current(input)) return "REJECTED";
+    this.factors.delete(input.userId);
+    this.codes.delete(input.userId);
+    await this.auditLogs.append(input.audit);
+    return "ACCEPTED";
+  }
+
+  /** The user's factor, if it is still the one `match` was checked against and `match.step` is unused. */
+  private current(match: MfaTotpMatch & { readonly userId: string }): MfaFactor | null {
+    const factor = this.factors.get(match.userId);
+    return factor && factor.sealedSecret === match.sealedSecret && factor.lastUsedStep < match.step ? factor : null;
+  }
+
+  private passed(sessionId: string, userId: string): boolean {
+    const session = this.sessions.byId(sessionId);
+    return session !== null && session.userId === userId && session.mfaVerifiedAt !== null;
   }
 
   private pass(session: Session, at: Date): void {

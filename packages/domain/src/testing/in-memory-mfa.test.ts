@@ -25,7 +25,8 @@ async function enabled() {
     audit: () => audit,
   });
   expect(outcome).toBe("ENABLED");
-  return { deps, session, audit, input: { userId: "usr_1", sessionId: session.id, verifiedAt: deps.clock.now() } };
+  const input = { userId: "usr_1", sessionId: session.id, verifiedAt: deps.clock.now(), sealedSecret: "sealed" };
+  return { deps, session, audit, input };
 }
 
 describe("InMemoryMfaRepository", () => {
@@ -37,11 +38,35 @@ describe("InMemoryMfaRepository", () => {
     expect((await deps.repos.mfa.findFactor("usr_1"))?.lastUsedStep).toBe(STEP + 1);
   });
 
+  it("refuses a code checked against an authenticator since replaced", async () => {
+    const { deps, audit, input } = await enabled();
+    expect(await deps.repos.mfa.acceptTotpStep({ ...input, sealedSecret: "replaced", step: STEP + 1, audit })).toBe("REJECTED");
+    expect(await deps.repos.mfa.disable({ ...input, sealedSecret: "replaced", step: STEP + 1, audit })).toBe("REJECTED");
+    expect(await deps.repos.mfa.findFactor("usr_1")).toMatchObject({ lastUsedStep: STEP });
+  });
+
   it("turns MFA off only for a step later than the last one used", async () => {
-    const { deps, audit } = await enabled();
-    expect(await deps.repos.mfa.disable("usr_1", STEP, audit)).toBe(false);
-    expect(await deps.repos.mfa.disable("usr_1", STEP + 1, audit)).toBe(true);
+    const { deps, audit, input } = await enabled();
+    expect(await deps.repos.mfa.disable({ ...input, step: STEP, audit })).toBe("REJECTED");
+    expect(await deps.repos.mfa.disable({ ...input, step: STEP + 1, audit })).toBe("ACCEPTED");
     expect(await deps.repos.mfa.countRecoveryCodes("usr_1")).toBe(0);
+  });
+
+  it("replaces codes or turns MFA off only from a stored session that passed MFA", async () => {
+    const { deps, session, audit, input } = await enabled();
+    const unpassed = await deps.repos.sessions.create({ id: "ses_2", userId: "usr_1", tokenHash: "h2", expiresAt: new Date(1e13) });
+    const others = await deps.repos.sessions.create({ id: "ses_3", userId: "usr_2", tokenHash: "h3", expiresAt: new Date(1e13) });
+    deps.repos.sessions.put({ ...others, mfaVerifiedAt: deps.clock.now() });
+    const change = { userId: "usr_1", codeHashes: ["b".repeat(64)], audit };
+    for (const sessionId of [unpassed.id, others.id]) {
+      expect(await deps.repos.mfa.replaceRecoveryCodes({ ...change, sessionId })).toBe("SESSION_ENDED");
+      expect(await deps.repos.mfa.disable({ ...input, sessionId, step: STEP + 1, audit })).toBe("SESSION_ENDED");
+    }
+    await deps.repos.sessions.deleteByTokenHash(session.tokenHash);
+    expect(await deps.repos.mfa.replaceRecoveryCodes({ ...change, sessionId: session.id })).toBe("SESSION_ENDED");
+    expect(await deps.repos.mfa.disable({ ...input, step: STEP + 1, audit })).toBe("SESSION_ENDED");
+    expect(await deps.repos.mfa.countRecoveryCodes("usr_1")).toBe(1);
+    expect(await deps.repos.mfa.findFactor("usr_1")).not.toBeNull();
   });
 
   it("uses a recovery code once", async () => {

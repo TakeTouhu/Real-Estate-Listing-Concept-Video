@@ -235,12 +235,51 @@ describe("what the repository refuses", () => {
   it("turns MFA off only for a step later than the last one used", async () => {
     const session = await signIn();
     await enroll(session);
+    const { sealedSecret } = (await deps.repos.mfa.findFactor(session.userId))!;
     const step = totpStep(clock.now());
     const audit = { ...unstorable, organizationId: null, actorUserId: session.userId };
-    expect(await deps.repos.mfa.disable(session.userId, step, audit)).toBe(false);
+    const input = { userId: session.userId, sessionId: session.id, sealedSecret, audit };
+    expect(await deps.repos.mfa.disable({ ...input, step })).toBe("REJECTED");
     expect(await prisma.userMfaFactor.count({ where: { userId: session.userId } })).toBe(1);
-    expect(await deps.repos.mfa.disable(session.userId, step + 1, audit)).toBe(true);
+    expect(await deps.repos.mfa.disable({ ...input, step: step + 1 })).toBe("ACCEPTED");
     expect(await prisma.userMfaFactor.count({ where: { userId: session.userId } })).toBe(0);
+  });
+
+  it("accepts a code, or turns MFA off, only for the authenticator it was checked against", async () => {
+    const session = await signIn();
+    await enroll(session);
+    const stale = (await deps.repos.mfa.findFactor(session.userId))!;
+    const attacker = await signIn();
+    clock.advanceSeconds(30);
+    await mfa.beginSetup((await deps.repos.sessions.findByTokenHash(session.tokenHash))!);
+    await mfa.confirmSetup(session, code(cipher.open((await deps.repos.mfa.findPendingSecret(session.id))!, session.userId)));
+    const replaced = (await deps.repos.mfa.findFactor(session.userId))!;
+    const audit = { ...unstorable, organizationId: null, actorUserId: session.userId };
+    const old = { userId: session.userId, sealedSecret: stale.sealedSecret, step: replaced.lastUsedStep + 1, audit };
+    expect(await deps.repos.mfa.acceptTotpStep({ ...old, sessionId: attacker.id, verifiedAt: clock.now() })).toBe("REJECTED");
+    expect(await deps.repos.mfa.disable({ ...old, sessionId: session.id })).toBe("REJECTED");
+    expect(await deps.repos.mfa.findFactor(session.userId)).toEqual(replaced);
+    expect((await stored(attacker))?.mfaVerifiedAt).toBeNull();
+  });
+
+  it("replaces recovery codes, or turns MFA off, only from a stored session that passed MFA", async () => {
+    const session = await signIn();
+    await enroll(session);
+    const { sealedSecret } = (await deps.repos.mfa.findFactor(session.userId))!;
+    const unpassed = await signIn();
+    const other = await signIn("b");
+    await prisma.session.update({ where: { id: other.id }, data: { mfaVerifiedAt: clock.now() } });
+    const audit = { ...unstorable, organizationId: null, actorUserId: session.userId };
+    const change = { userId: session.userId, codeHashes: [hashRecoveryCode("0000000000000000")], audit };
+    const off = { userId: session.userId, sealedSecret, step: totpStep(clock.now()) + 1, audit };
+    for (const sessionId of [unpassed.id, other.id]) {
+      expect(await deps.repos.mfa.replaceRecoveryCodes({ ...change, sessionId })).toBe("SESSION_ENDED");
+      expect(await deps.repos.mfa.disable({ ...off, sessionId })).toBe("SESSION_ENDED");
+    }
+    await deps.repos.sessions.deleteByTokenHash(session.tokenHash);
+    expect(await deps.repos.mfa.replaceRecoveryCodes({ ...change, sessionId: session.id })).toBe("SESSION_ENDED");
+    expect(await deps.repos.mfa.disable({ ...off, sessionId: session.id })).toBe("SESSION_ENDED");
+    expect(await mfa.status(session.userId)).toMatchObject({ enabled: true, recoveryCodesLeft: 10 });
   });
 
   it("starts counting wrong codes again once a code is accepted", async () => {
@@ -282,7 +321,8 @@ describe("each change commits with its audit row, or not at all", () => {
     const session = await signIn();
     const step = totpStep(clock.now());
     const base = { userId: session.userId, sessionId: session.id, verifiedAt: clock.now() };
-    await expect(deps.repos.mfa.acceptTotpStep({ ...base, step, audit: unstorable })).rejects.toThrow();
+    const { sealedSecret } = (await deps.repos.mfa.findFactor(session.userId))!;
+    await expect(deps.repos.mfa.acceptTotpStep({ ...base, sealedSecret, step, audit: unstorable })).rejects.toThrow();
     const codeHash = hashRecoveryCode(recoveryCodes[0]!.replace(/-/g, ""));
     await expect(deps.repos.mfa.acceptRecoveryCode({ ...base, codeHash, audit: () => unstorable })).rejects.toThrow();
     expect((await deps.repos.mfa.findFactor(session.userId))?.lastUsedStep).toBe(step - 1);

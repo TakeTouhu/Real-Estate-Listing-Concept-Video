@@ -116,6 +116,7 @@ export class MfaService {
       if (step !== null) {
         outcome = await this.deps.repos.mfa.acceptTotpStep({
           ...input,
+          sealedSecret: factor.sealedSecret,
           step,
           audit: sessionAudit(session, AuditAction.MfaChallengePassed, { method: "authenticator" }),
         });
@@ -131,9 +132,14 @@ export class MfaService {
     const audit = userAudit(session.userId, AuditAction.MfaRecoveryCodesRegenerated, {
       recoveryCodes: RECOVERY_CODE_COUNT,
     });
-    if (!(await this.deps.repos.mfa.replaceRecoveryCodes(session.userId, hashAll(recoveryCodes), audit))) {
-      throw notEnabled();
-    }
+    const outcome = await this.deps.repos.mfa.replaceRecoveryCodes({
+      userId: session.userId,
+      sessionId: session.id,
+      codeHashes: hashAll(recoveryCodes),
+      audit,
+    });
+    if (outcome === "SESSION_ENDED") throw signInAgain();
+    if (outcome === "NOT_ENABLED") throw notEnabled();
     return recoveryCodes;
   }
 
@@ -145,10 +151,17 @@ export class MfaService {
       throw new AppError("FORBIDDEN", "Your role requires MFA, so it cannot be turned off");
     }
     const step = this.match(factor, code);
-    const audit = userAudit(session.userId, AuditAction.MfaDisabled, {});
-    if (step === null || !(await this.deps.repos.mfa.disable(session.userId, step, audit))) {
-      await this.refuse(session, "REJECTED");
-    }
+    const outcome: MfaCodeOutcome =
+      step === null
+        ? "REJECTED"
+        : await this.deps.repos.mfa.disable({
+            userId: session.userId,
+            sessionId: session.id,
+            sealedSecret: factor.sealedSecret,
+            step,
+            audit: userAudit(session.userId, AuditAction.MfaDisabled, {}),
+          });
+    if (outcome !== "ACCEPTED") await this.refuse(session, outcome);
   }
 
   private async requireFactor(userId: string): Promise<MfaFactor> {
