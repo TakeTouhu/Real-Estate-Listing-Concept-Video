@@ -164,7 +164,7 @@ erDiagram
     float  qualityScore "nullable, 0..1"
     float  brightnessScore "nullable, 0..1"
     float  blurScore "nullable, 0..1"
-    string duplicateGroup "nullable, groups near-identical photos"
+    string duplicateGroup "nullable, groups near-identical photos; internal only"
     json   detectedObjects "bounded list, normalized"
     json   safetyFlags "bounded list, BLOCKING|WARNING"
     int    suggestedOrder "nullable, walkthrough rank"
@@ -287,12 +287,10 @@ erDiagram
   uniqueness or range constraint — duplicate priorities are legitimate and
   resolve deterministically during ordering, and which values are *valid* is a
   product rule owned by the correction service, not by the schema (ADR-0015).
-- **Partial unique index** `asset_analyses_org_dupgroup_approved_key` on
-  `(organizationId, duplicateGroup) WHERE duplicateGroup IS NOT NULL AND
-  reviewStatus = 'APPROVED'`. The database is authoritative for "at most one
-  approved analysis per duplicate group", so concurrent approvals of two members
-  of a group cannot both succeed. Prisma cannot express a partial index, so it
-  is hand-written in the migration — see `docs/migration-notes.md`.
+- **No uniqueness on approved duplicate-group members.** Migration 3's partial
+  unique index `asset_analyses_org_dupgroup_approved_key` allowed one approved
+  analysis per duplicate group; migration 24 dropped it (ADR-0063, ADR-0052
+  Decision 14). Any number of look-alikes may be approved.
 - **`storyboard_scenes` carries no `organizationId`.** A scene is owned by its
   project, and duplicating the column would create a second source of truth that
   application code could let drift. Reads filter through the parent
@@ -567,6 +565,12 @@ responsible user's foreign key is (`organizationId`, `responsibleUserId`) to
 neither can point outside the Property's organization. Both refuse deletion: a
 member's removal and a group's deletion clear the assignments themselves and
 count them (ADR-0062). Reach is not enforced on them yet.
+
+## Near-duplicate rule removal
+
+Migration 24 drops the partial unique index on approved members of one
+duplicate group. `asset_analyses.duplicateGroup` and its non-unique index stay,
+for internal use only (ADR-0063).
 
 ## Not implemented yet (later phases)
 

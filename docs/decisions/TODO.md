@@ -211,13 +211,20 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       intentionally the customer's responsibility. Perceptual-hash and
       `duplicateOf` data may remain for internal engineering/quality analysis
       only, and no new near-duplicate UX may be added.
-- [ ] **Remove the shipped near-duplicate UX that now contradicts ADR-0052
-      Decision 14.** Implementation work, not a documentation fix. The Phase
-      3B-3a/3b analysis-review surface clusters near-duplicates and permits only
-      one member of a group to be approved, and the request carries a
-      `primaryAssetId`. That is customer-facing near-duplicate behaviour and must
-      be removed or neutralized before Commercial Launch. The Phase 3B records
-      stay as historical evidence of what shipped.
+- [x] **Remove the shipped near-duplicate UX that now contradicts ADR-0052
+      Decision 14.** *Done by ADR-0063 (2026-10-15, migration 24):* no clusters,
+      no primary choice, no "looks similar" line, no one-approved-per-group
+      index, and storyboards admit approved look-alikes. The original item, kept
+      as evidence: the Phase 3B-3a/3b analysis-review surface clustered
+      near-duplicates and permitted only one member of a group to be approved,
+      and the request carried a `primaryAssetId`. The Phase 3B records stay as
+      historical evidence of what shipped.
+- [ ] **Confirm the near-duplicate removal's choices ADR-0052 does not make**
+      (ADR-0063):
+      1. `duplicateGroup` and `duplicateOf` leave the API responses, not only
+         the screens;
+      2. an approve request's `primaryAssetId` is ignored rather than refused;
+      3. photos rejected under the old rule are not restored automatically.
 - [ ] Consider a DCT-based pHash if aHash proves too permissive on real photos.
 - [ ] Extend the live-PostgreSQL integration suite (added in Phase 3A-2a) to the
       identity and property repositories; it currently covers the analysis
@@ -1757,10 +1764,11 @@ be reconciled in a runtime work package.
       package and **must be reconciled before commercial billing is activated.**
       No caller may treat those constants as a statement of what a Standard or
       Premium customer agreed to.
-- [ ] **`REVIEWER` survives in code or schema** where the role vocabulary is
+- [x] **`REVIEWER` survives in code or schema** where the role vocabulary is
       represented, and the Phase 3B near-duplicate UX still contradicts ADR-0052
       Decision 14. Both are listed in the implementation section above.
-      *`REVIEWER` removed in Phase 6C (ADR-0057); the near-duplicate UX remains.*
+      *`REVIEWER` removed in Phase 6C (ADR-0057); the near-duplicate UX removed
+      by ADR-0063 (2026-10-15).*
 
 ### Live-evidence gates — cannot be closed by documentation
 

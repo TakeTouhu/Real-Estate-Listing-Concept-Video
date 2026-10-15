@@ -11,10 +11,10 @@ export const dynamic = "force-dynamic";
 /**
  * Approve one analysis revision.
  *
- * Thin adapter. Whether a blocking finding bars approval, whether the revision
- * was already reviewed, whether `primaryAssetId` is required for this asset's
- * duplicate group, and whether another member already holds the approval are
- * all decided by AnalysisService and the database constraint behind it.
+ * Thin adapter. Whether a blocking finding bars approval and whether the
+ * revision was already reviewed are decided by AnalysisService. A look-alike
+ * photo never matters (ADR-0052 Decision 14), and a `primaryAssetId` an older
+ * client still sends is not read.
  */
 export async function POST(
   request: Request,
@@ -31,10 +31,7 @@ export async function POST(
       current.user.id,
       organizationId,
       assetId,
-      {
-        primaryAssetId: optionalString(body, "primaryAssetId"),
-        reason: optionalString(body, "reason"),
-      },
+      { reason: optionalString(body, "reason") },
     );
     return NextResponse.json(toAnalysisDto(analysis));
   } catch (error) {

@@ -63,8 +63,9 @@ export interface ReviewDto {
 
 /**
  * Public shape of an analysis. Deliberately omits `organizationId` (implied by
- * the authorized request) and `provider` (an internal adapter name). Storage
- * keys are never part of the entity and so cannot leak here.
+ * the authorized request), `provider` (an internal adapter name) and
+ * `duplicateGroup` (internal-only look-alike data, ADR-0052 Decision 14).
+ * Storage keys are never part of the entity and so cannot leak here.
  */
 export interface AnalysisDto {
   readonly id: string;
@@ -92,7 +93,6 @@ export interface AnalysisDto {
   readonly qualityScore: number | null;
   readonly brightnessScore: number | null;
   readonly blurScore: number | null;
-  readonly duplicateGroup: string | null;
   readonly detectedObjects: AssetAnalysis["detectedObjects"];
   readonly safetyFlags: AssetAnalysis["safetyFlags"];
   readonly suggestedOrder: number | null;
@@ -119,7 +119,6 @@ export function toAnalysisDto(analysis: AssetAnalysis): AnalysisDto {
     qualityScore: analysis.qualityScore,
     brightnessScore: analysis.brightnessScore,
     blurScore: analysis.blurScore,
-    duplicateGroup: analysis.duplicateGroup,
     detectedObjects: analysis.detectedObjects,
     safetyFlags: analysis.safetyFlags,
     suggestedOrder: analysis.suggestedOrder,

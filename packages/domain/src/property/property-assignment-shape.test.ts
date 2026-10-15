@@ -31,14 +31,16 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is this phase's", () => {
+  it("adds exactly one migration, and it is this phase's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the newest: the near-duplicate rule removal added migration 24
+    // after it. Phase 6H still contributed exactly one migration, in place.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(23);
     expect(dirs.filter((dir) => dir.includes("phase6h"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(24);
+    expect(dirs).toHaveLength(25);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

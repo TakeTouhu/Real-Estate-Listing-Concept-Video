@@ -258,38 +258,46 @@ describe("POST /analysis/approve", () => {
     expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(422);
   });
 
-  it("returns 422 when a duplicate group needs a primary and none is given", async () => {
+  it("approves each of two look-alike photos on its own", async () => {
     await analyzed("ast_twin_a", { perceptualHash: "ffffffffffffffff" });
     await analyzed("ast_twin_b", { perceptualHash: "ffffffffffffffff" });
+
+    const first = await approve(req({ organizationId: ctx.orgId }), params("ast_twin_a"));
+    const second = await approve(req({ organizationId: ctx.orgId }), params("ast_twin_b"));
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(review(await jsonOf(second)).status).toBe("APPROVED");
+  });
+
+  it("approves a photo whose look-alike in another Property is already approved", async () => {
+    await analyzed("ast_twin_a", { perceptualHash: "ffffffffffffffff" });
+    await analyzed("ast_elsewhere", { perceptualHash: "ffffffffffffffff", propertyId: "prp_2" });
+    await approve(req({ organizationId: ctx.orgId }), params("ast_elsewhere", "prp_2"));
+
     expect((await approve(req({ organizationId: ctx.orgId }), params("ast_twin_a"))).status).toBe(
-      422,
+      200,
     );
   });
 
-  it("returns 422 when primaryAssetId names another asset", async () => {
+  it("ignores a primaryAssetId an older client still sends", async () => {
     await analyzed("ast_twin_a", { perceptualHash: "ffffffffffffffff" });
     await analyzed("ast_twin_b", { perceptualHash: "ffffffffffffffff" });
     const res = await approve(
       req({ organizationId: ctx.orgId, primaryAssetId: "ast_twin_b" }),
       params("ast_twin_a"),
     );
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(200);
   });
 
-  it("returns 422 for a duplicate-group conflict, not 409", async () => {
+  it("does not return the internal duplicate group", async () => {
     await analyzed("ast_twin_a", { perceptualHash: "ffffffffffffffff" });
     await analyzed("ast_twin_b", { perceptualHash: "ffffffffffffffff" });
-    await approve(
-      req({ organizationId: ctx.orgId, primaryAssetId: "ast_twin_a" }),
-      params("ast_twin_a"),
+    // The group still exists internally; only the response leaves it out.
+    expect((await ctx.analyses.findByAssetId(ctx.orgId, "ast_twin_b"))?.duplicateGroup).toBe(
+      "dup_ast_twin_a",
     );
-
-    const res = await approve(
-      req({ organizationId: ctx.orgId, primaryAssetId: "ast_twin_b" }),
-      params("ast_twin_b"),
-    );
-    expect(res.status).toBe(422);
-    expect(res.status).not.toBe(409);
+    const body = await jsonOf(await approve(req({ organizationId: ctx.orgId }), params("ast_twin_b")));
+    expect(body.duplicateGroup).toBeUndefined();
   });
 });
 

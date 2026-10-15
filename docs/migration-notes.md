@@ -1132,3 +1132,32 @@ Forward-only. Reverting the application leaves both columns `NULL` on every new
 Property and unread; a member's removal or a group's deletion by the older code
 would be refused only for a Property that still names it, which only this code
 can write.
+
+## Near-duplicate rule removal
+
+**Migration `00000000000024_near_duplicate_rule_removal`.** One statement.
+ADR-0063, implementing ADR-0052 Decision 14.
+
+```sql
+DROP INDEX "asset_analyses_org_dupgroup_approved_key";
+```
+
+It drops migration 3's hand-written partial unique index, which allowed at most
+one `APPROVED` analysis per (`organizationId`, `duplicateGroup`). Look-alike
+photos are now approved independently.
+
+Kept: `asset_analyses.duplicateGroup` and its non-unique index
+`asset_analyses_organizationId_duplicateGroup_idx`, and the perceptual hash on
+`media_assets`, all internal only.
+
+No row is updated or deleted, and no table, column or constraint of migrations
+0 through 23 is otherwise changed. The migration 4 caveat about `prisma migrate
+dev` generating a stray `DROP INDEX` for this index no longer applies: the index
+is gone. The CI drift check is unaffected, since Prisma never saw the index.
+
+### Rollback
+
+Forward-only. Once two look-alikes are both approved, recreating the index
+fails. Reverting the application without recreating it is not supported either:
+the older storyboard selection refuses a project holding two approved
+look-alikes.

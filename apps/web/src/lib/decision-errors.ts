@@ -19,8 +19,8 @@ export const DECISION_ERRORS = {
  *
  * Transport-level outcomes are decided by status. A `422` renders the API's own
  * message, which is already written for a human — and **is not parsed**. The
- * refusals behind a `422` (duplicate conflict, already reviewed, blocking
- * finding, missing primary, blank reason) all share one code today, so telling
+ * refusals behind a `422` (already reviewed, blocking finding, blank reason)
+ * all share one code today, so telling
  * them apart would mean matching message text and turning a human-readable
  * string into an implicit API contract. If the UI ever needs to distinguish
  * them, the API must expose a machine-readable reason first

@@ -190,13 +190,6 @@ progress {
   font-weight: 600;
 }
 
-.cluster {
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
-  margin: 0.75rem 0;
-}
-
 .decision {
   border-left: 3px solid var(--border);
   padding-left: 0.75rem;
@@ -207,16 +200,6 @@ progress {
   border-top: 1px dashed var(--border);
   margin-top: 0.5rem;
   padding-top: 0.5rem;
-}
-
-.primary-choice {
-  border: none;
-  padding: 0;
-  margin: 0 0 0.5rem;
-}
-
-.primary-choice label {
-  display: block;
 }
 
 .decision-row {

@@ -35,11 +35,11 @@ describe("durable shape", () => {
       .map((entry) => entry.name)
       .sort();
     // No longer the newest: Phase 6F added migration 21 after it, Phase 6G
-    // migration 22 and Phase 6H migration 23. Phase 6D still contributed exactly
-    // one migration, in place.
+    // migration 22, Phase 6H migration 23 and the near-duplicate rule removal
+    // migration 24. Phase 6D still contributed exactly one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(20);
     expect(dirs.filter((dir) => dir.includes("phase6d"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(24);
+    expect(dirs).toHaveLength(25);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

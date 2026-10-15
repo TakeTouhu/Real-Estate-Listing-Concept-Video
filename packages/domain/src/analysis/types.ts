@@ -176,11 +176,6 @@ export function isReviewed(analysis: AssetAnalysis): boolean {
 
 /** Reviewer input for approving one analysis revision. */
 export interface ApproveInput {
-  /**
-   * Required when the asset's duplicate group has more than one member: names
-   * the single member to approve, and must equal the asset being approved.
-   */
-  readonly primaryAssetId?: string;
   /** Optional for approval; recorded as null when absent. */
   readonly reason?: string;
 }

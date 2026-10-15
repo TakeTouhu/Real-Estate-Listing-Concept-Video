@@ -55,7 +55,7 @@ describe("approve", () => {
 
     const { url, body } = lastRequest();
     expect(url).toBe(`/api/properties/${PROPERTY}/assets/ast_a/analysis/approve`);
-    expect(body).toEqual({ organizationId: ORG, primaryAssetId: "ast_a" });
+    expect(body).toEqual({ organizationId: ORG });
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -67,7 +67,7 @@ describe("approve", () => {
 
     const { body } = lastRequest();
     expect(body).not.toHaveProperty("analysisRevision");
-    expect(Object.keys(body).sort()).toEqual(["organizationId", "primaryAssetId", "reason"]);
+    expect(Object.keys(body).sort()).toEqual(["organizationId", "reason"]);
   });
 
   it("renders no approve control for a photo with a blocking finding", () => {
@@ -101,39 +101,26 @@ describe("reject", () => {
   });
 });
 
-describe("duplicate cluster", () => {
-  const members = [member(), member({ assetId: "ast_b", filename: "b.jpg" })];
-
-  it("offers a primary radio per member and approves only the selected one", async () => {
+describe("look-alike photos (ADR-0052 Decision 14)", () => {
+  it("offers no primary choice and approves each photo on its own", async () => {
     fetchMock.mockResolvedValue(respond(200));
-    panel(members);
-    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    panel([member(), member({ assetId: "ast_b", filename: "b.jpg" })]);
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
 
     const approves = screen.getAllByRole("button", { name: "Approve" });
-    expect(approves.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
-
-    await userEvent.click(screen.getAllByRole("radio")[1]!);
-    expect((approves[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(approves.every((b) => !(b as HTMLButtonElement).disabled)).toBe(true);
     await userEvent.click(approves[1]!);
 
     const { url, body } = lastRequest();
     expect(url).toContain("/assets/ast_b/analysis/approve");
-    // The domain requires primaryAssetId to be the asset being approved, so the
-    // radio drives both rather than allowing the two to disagree.
-    expect(body.primaryAssetId).toBe("ast_b");
-  });
-
-  it("renders no radios for a single photo and can approve it immediately", async () => {
-    fetchMock.mockResolvedValue(respond(200));
-    panel();
-    expect(screen.queryAllByRole("radio")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "Approve" })).toHaveProperty("disabled", false);
+    expect(body).not.toHaveProperty("primaryAssetId");
   });
 });
 
 describe("failures", () => {
   it("renders the API message for a 422 without parsing it", async () => {
-    const message = "Another photo in this duplicate group is already approved";
+    const message =
+      "This analysis revision has already been reviewed; refresh the analysis to review it again";
     fetchMock.mockResolvedValue(respond(422, { error: { code: "VALIDATION_FAILED", message } }));
     panel();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -182,7 +169,6 @@ describe("failures", () => {
     fetchMock.mockReturnValue(new Promise<Response>((resolve) => (release = resolve)));
     panel([member(), member({ assetId: "ast_b", filename: "b.jpg" })]);
 
-    await userEvent.click(screen.getAllByRole("radio")[0]!);
     await userEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]!);
 
     expect(screen.getByText("Recording…")).toBeTruthy();

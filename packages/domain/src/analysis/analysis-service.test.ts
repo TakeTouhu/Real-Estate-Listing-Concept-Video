@@ -1068,53 +1068,40 @@ describe("review immutability", () => {
   });
 });
 
-describe("duplicate groups", () => {
-  it("requires a primary choice once the group has more than one member", async () => {
+describe("look-alike photos (ADR-0052 Decision 14)", () => {
+  it("approves a photo in a multi-member group without a primary choice", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+    const twin = await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
+    expect(twin.duplicateGroup).toBe(`dup_${fx.assetId}`);
 
-    await expect(
-      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId),
-    ).rejects.toThrow(/choose the primary asset/i);
-  });
-
-  it("requires primaryAssetId to be the asset being approved", async () => {
-    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
-
-    await expect(
-      fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { primaryAssetId: "ast_twin" }),
-    ).rejects.toThrow(/must be the asset being approved/i);
-  });
-
-  it("approves the chosen primary", async () => {
-    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
-
-    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, {
-      primaryAssetId: fx.assetId,
-    });
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
     expect(approved.reviewStatus).toBe("APPROVED");
   });
 
-  it("needs no primary choice for a single-member group", async () => {
-    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
-    await expect(fx.service.approve(fx.ownerId, fx.orgId, fx.assetId)).resolves.toBeDefined();
-  });
-
-  it("maps the database uniqueness conflict to a validation failure", async () => {
+  it("approves every member of one group, each on its own", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     await analyzedAsset("ast_twin", { perceptualHash: "ffffffffffffffff" });
-    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId, { primaryAssetId: fx.assetId });
 
-    // The constraint, not a pre-check, refuses the second approval.
-    await expect(
-      fx.service.approve(fx.ownerId, fx.orgId, "ast_twin", { primaryAssetId: "ast_twin" }),
-    ).rejects.toThrow(/already approved/i);
-    expect((await fx.analyses.findByAssetId(fx.orgId, "ast_twin"))?.reviewStatus).toBe("UNREVIEWED");
+    await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+    const second = await fx.service.approve(fx.ownerId, fx.orgId, "ast_twin");
+    expect(second.reviewStatus).toBe("APPROVED");
+    expect((await fx.analyses.findByAssetId(fx.orgId, fx.assetId))?.reviewStatus).toBe("APPROVED");
   });
 
-  it("rethrows a write failure that is not a duplicate-group conflict", async () => {
+  it("approves a photo whose look-alike in another Property is already approved", async () => {
+    await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
+    const elsewhere = await analyzedAsset("ast_elsewhere", {
+      propertyId: "prp_2",
+      perceptualHash: "ffffffffffffffff",
+    });
+    expect(elsewhere.duplicateGroup).toBe(`dup_${fx.assetId}`);
+    await fx.service.approve(fx.ownerId, fx.orgId, "ast_elsewhere");
+
+    const approved = await fx.service.approve(fx.ownerId, fx.orgId, fx.assetId);
+    expect(approved.reviewStatus).toBe("APPROVED");
+  });
+
+  it("rethrows a write failure unchanged", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     const original = fx.analyses.update.bind(fx.analyses);
     fx.analyses.update = () => Promise.reject(new Error("db write failed"));

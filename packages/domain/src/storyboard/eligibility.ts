@@ -1,4 +1,3 @@
-import { AppError } from "@app/shared";
 import { effectiveRoomType } from "../analysis/effective";
 import type { AssetAnalysis, RoomType } from "../analysis/types";
 
@@ -41,20 +40,12 @@ export interface EligibleInput {
  * admitted — not even to reach a scene count — because a storyboard that
  * included one would put an unreviewed AI decision into a generated video.
  *
- * Duplicate suppression needs no logic here: the partial unique index
- * `(organizationId, duplicateGroup) WHERE reviewStatus = 'APPROVED'` already
- * guarantees at most one approved member per group. This function therefore
- * *checks* that invariant rather than re-implementing it — if two approved
- * members of one group ever reach this layer, the database guarantee has been
- * violated somewhere, and picking a winner in application code would paper over
- * a real defect. Several approved analyses with no duplicate group are ordinary
- * and always valid.
+ * A near-duplicate group plays no part (ADR-0052 Decision 14): two approved
+ * photos that look alike are both admitted, because choosing between them is
+ * the customer's call, made when they approve.
  *
  * No minimum is enforced: 0, 1, and 2 eligible analyses are all representable
  * results. The minimum-scene rule belongs to composition (Phase 3C-2b).
- *
- * @throws AppError VALIDATION_FAILED when one duplicate group holds two
- *   approved analyses.
  */
 export function selectEligibleAnalyses(
   analyses: readonly AssetAnalysis[],
@@ -62,19 +53,6 @@ export function selectEligibleAnalyses(
   const eligible = analyses.filter(
     (a) => a.status === "SUCCEEDED" && a.reviewStatus === "APPROVED",
   );
-
-  const seenGroups = new Set<string>();
-  for (const analysis of eligible) {
-    const group = analysis.duplicateGroup;
-    if (!group) continue;
-    if (seenGroups.has(group)) {
-      throw new AppError(
-        "VALIDATION_FAILED",
-        "Two approved analyses share one duplicate group; the storyboard input set is inconsistent",
-      );
-    }
-    seenGroups.add(group);
-  }
 
   // The one place a human correction enters composition. Everything downstream
   // — ordering, the fingerprint, the service — reads `EligibleInput` and never

@@ -275,8 +275,10 @@ describe("no persistence, pricing or resolution surface changed", () => {
     // to add migration 20 for individual permission grants, by Phase 6F, which
     // is authorized to add migration 21 for groups, by Phase 6G, which is
     // authorized to add migration 22 for group permissions, and by Phase 6H,
-    // which is authorized to add migration 23 for Property assignment.
-    expect(dirs.at(-1)).toBe("00000000000023_phase6h_property_assignment");
+    // which is authorized to add migration 23 for Property assignment. And by
+    // the near-duplicate rule removal (ADR-0063), which is authorized to add
+    // migration 24 to drop the duplicate-approval index.
+    expect(dirs.at(-1)).toBe("00000000000024_near_duplicate_rule_removal");
     expect(dirs.filter((d) => d.toLowerCase().includes("queue"))).toEqual([]);
   });
 
