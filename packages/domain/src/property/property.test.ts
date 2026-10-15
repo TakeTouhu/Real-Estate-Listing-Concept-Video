@@ -110,7 +110,7 @@ async function setup(): Promise<Ctx> {
   const deps = createTestDeps();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const orgs = new OrganizationService(deps);
-  const propertyRepo = new InMemoryPropertyRepository(deps.clock);
+  const propertyRepo = new InMemoryPropertyRepository(deps.clock, deps.repos);
   const assetRepo = new InMemoryMediaAssetRepository(deps.clock);
   const storage = new FakeStorage();
   const scanner = new FakeScanner();

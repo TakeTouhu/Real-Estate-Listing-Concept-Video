@@ -1,13 +1,58 @@
+import type { AuditLog } from "../identity/types";
 import type { MediaAsset, MediaAssetStatus, Property } from "./types";
 
 // --- Repositories -----------------------------------------------------------
 
+/** The audit entry a Property change commits together with the change itself. */
+export type PropertyChangeAudit = Omit<AuditLog, "id" | "createdAt">;
+
+/** A Property's two assignments (ADR-0052 Decision 10, ADR-0062); null is unset. */
+export interface PropertyAssignment {
+  readonly responsibleUserId: string | null;
+  readonly groupId: string | null;
+}
+
+/**
+ * How a creation ended. `STALE`: its responsible user is no longer a member of
+ * the organization, or its group is gone; nothing was written.
+ */
+export type PropertyCreation =
+  | { readonly outcome: "CREATED"; readonly property: Property }
+  | { readonly outcome: "STALE" };
+
+/**
+ * How a reassignment ended. `STALE`: the Property is gone or deleted, no longer
+ * has the assignments the change was checked against, or the new responsible
+ * user or group is gone; nothing was written.
+ */
+export type PropertyReassignment =
+  | { readonly outcome: "ASSIGNED"; readonly property: Property }
+  | { readonly outcome: "STALE" };
+
 export interface PropertyRepository {
-  create(input: Omit<Property, "createdAt" | "updatedAt">): Promise<Property>;
+  /**
+   * Record a Property, with its initial assignments, and its audit entry
+   * atomically. The foreign keys refuse a responsible user who is not a member
+   * of the organization and a group of another organization.
+   */
+  create(input: Omit<Property, "createdAt" | "updatedAt">, audit: PropertyChangeAudit): Promise<PropertyCreation>;
   /** Find by id WITHIN an organization scope — never across tenants. */
   findById(organizationId: string, id: string): Promise<Property | null>;
   listByOrganization(organizationId: string): Promise<Property[]>;
+  /** Write a Property's own fields. Never its assignments, which only {@link assign} changes. */
   update(property: Property): Promise<Property>;
+  /**
+   * Change a Property's assignments from `expected` to `next` and record
+   * `audit`, atomically, only while the Property is not deleted and still has
+   * `expected`.
+   */
+  assign(
+    organizationId: string,
+    propertyId: string,
+    expected: PropertyAssignment,
+    next: PropertyAssignment,
+    audit: PropertyChangeAudit,
+  ): Promise<PropertyReassignment>;
 }
 
 export interface MediaAssetRepository {

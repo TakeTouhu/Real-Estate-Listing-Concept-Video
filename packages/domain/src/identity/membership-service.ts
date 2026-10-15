@@ -200,14 +200,15 @@ export class MembershipService {
     // Removing a member takes its role away, so the ceiling is asked of it.
     if (!mayAssignRole(actor.role, target.role)) await this.refuse(actor, refused(target.role));
     assertApplied(
-      await this.deps.repos.memberships.remove(organizationId, targetUserId, target.role, {
+      // Its Properties become unassigned, and the entry counts them (ADR-0062).
+      await this.deps.repos.memberships.remove(organizationId, targetUserId, target.role, (unassignedPropertyCount) => ({
         organizationId,
         actorUserId,
         action: AuditAction.MemberRemoved,
         resourceType: "membership",
         resourceId: `${organizationId}:${targetUserId}`,
-        metadata: {},
-      }),
+        metadata: { unassignedPropertyCount },
+      })),
     );
   }
 

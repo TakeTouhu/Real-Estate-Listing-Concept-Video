@@ -91,9 +91,10 @@ export class GroupService {
 
   /**
    * Delete a group. Its members stay in the organization; only their
-   * membership of this group, and what it gave them, ends. The audit entry
-   * names the group as the deletion locked it, so a rename committed meanwhile
-   * is not misreported.
+   * membership of this group, and what it gave them, ends. Its Properties
+   * become ungrouped (ADR-0052 Decision 11). The audit entry names the group as
+   * the deletion locked it, so a rename committed meanwhile is not
+   * misreported, and counts the Properties it ungrouped.
    */
   async delete(actorUserId: string, organizationId: string, groupId: string): Promise<void> {
     const actor = await this.requireGroupManage(actorUserId, organizationId, "delete", { groupId });
@@ -105,8 +106,13 @@ export class GroupService {
       groupId,
       // Takes each of the group's permissions from each of its members.
       (locked) => permissionCeiling(actor, locked.permissions) ?? memberCeiling(actor, locked, locked.permissions),
-      ({ name, removedMemberCount }) =>
-        changeAudit(actor, AuditAction.GroupDeleted, groupId, { name, actorRole: actor.role, removedMemberCount }),
+      ({ name, removedMemberCount, ungroupedPropertyCount }) =>
+        changeAudit(actor, AuditAction.GroupDeleted, groupId, {
+          name,
+          actorRole: actor.role,
+          removedMemberCount,
+          ungroupedPropertyCount,
+        }),
     );
     if (deleted.outcome === "REFUSED") {
       const { reason, ...refused } = deleted.refusal;

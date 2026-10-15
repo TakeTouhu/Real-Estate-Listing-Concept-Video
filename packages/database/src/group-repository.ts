@@ -15,6 +15,7 @@ import {
   type Permission,
 } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
+import { releaseProperties } from "./property-release";
 
 function toGroup(r: DbGroup): Group {
   return {
@@ -168,10 +169,16 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
         if (!group) return { outcome: "STALE" } as const;
         const refusal = check(group);
         if (refusal !== null) return { outcome: "REFUSED", refusal } as const;
+        // Ungroups its Properties (ADR-0052 Decision 11) before its members
+        // go, locking Property rows before member rows as a member's removal
+        // does. The group's lock keeps any new Property from joining it.
+        const ungroupedPropertyCount = await releaseProperties(tx, organizationId, "groupId", groupId);
         // Counts the rows this deletion removes, not a concurrent removal's.
         const { count } = await tx.groupMember.deleteMany({ where: { groupId, organizationId } });
         await tx.group.delete({ where: { id: groupId } });
-        await tx.auditLog.create({ data: auditLogData(audit({ name: group.name, removedMemberCount: count })) });
+        await tx.auditLog.create({
+          data: auditLogData(audit({ name: group.name, removedMemberCount: count, ungroupedPropertyCount })),
+        });
         return { outcome: "DELETED", removedMemberCount: count } as const;
       });
     },
@@ -180,6 +187,12 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
       return (
         await prisma.groupMember.findMany({ where: { groupId, organizationId }, orderBy: { userId: "asc" } })
       ).map(toGroupMember);
+    },
+
+    async listGroupIdsForMember(organizationId, userId) {
+      return (
+        await prisma.groupMember.findMany({ where: { organizationId, userId }, select: { groupId: true }, orderBy: { groupId: "asc" } })
+      ).map((m) => m.groupId);
     },
 
     async addMember(member, check, audit) {

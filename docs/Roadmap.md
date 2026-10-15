@@ -192,9 +192,21 @@ member it reaches, on the group as locked when the change commits. Changing a
 group's permissions needs `permission.manage`. Dormant: no route or page gives a
 group a permission.
 
+**Phase 6H — Property assignment** (ADR-0062, migration 23): a Property's
+responsible user (for `OWN`) and its group (for `GROUP`), each kept inside the
+organization by a foreign key that refuses deletion. Creation sets them by the
+creator's role (an `OWNER` or `ADMIN` chooses; a `MANAGER` is its own
+responsible user in one of its own groups; a `CREATOR` is its own responsible
+user, ungrouped); only an `OWNER` or `ADMIN` changes them later. A group's
+deletion ungroups its Properties and a member's removal unassigns theirs, each
+counted in its audit entry. Creation and every assignment change commit with
+their audit entries. Dormant: no route or page assigns, and reach is not
+enforced.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** Property-rooted row Scope (6H). MFA for `permission.manage` and
-`billing.manage` holders before any member-management UI.
+it:** enforcing Property-rooted Scope on every content path (6I). MFA for
+`permission.manage` and `billing.manage` holders before any member-management
+UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and

@@ -194,7 +194,7 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
       data: { organizationId: ORG, userId: CREATOR, permission: "audit.view", grantedByUserId: OWNER, grantedAt: new Date() },
     });
     await expect(
-      deps.repos.memberships.remove(ORG, CREATOR, "CREATOR", audit("member.removed", UNWRITABLE)),
+      deps.repos.memberships.remove(ORG, CREATOR, "CREATOR", () => audit("member.removed", UNWRITABLE)),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(await roleOf(CREATOR)).toBe("CREATOR");
     expect(await prisma.permissionGrant.count({ where: { organizationId: ORG, userId: CREATOR } })).toBe(1);
@@ -223,7 +223,7 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
         ["invitation.accepted", NEWCOMER, newcomer, { role: "VIEWER", scope: "OWN" }],
         ["member.role_changed", OWNER, newcomer, { targetUserId: NEWCOMER, role: "MANAGER", previousRole: "VIEWER", scope: "GROUP" }],
         ["member.role_changed", OWNER, coOwner, { targetUserId: CO_OWNER, role: "ADMIN", previousRole: "OWNER", scope: "ORGANIZATION" }],
-        ["member.removed", OWNER, newcomer, {}],
+        ["member.removed", OWNER, newcomer, { unassignedPropertyCount: 0 }],
       ]),
     );
   });
@@ -237,7 +237,7 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
   });
 
   it("does not remove a member checked against a role it no longer holds", async () => {
-    expect(await deps.repos.memberships.remove(ORG, CREATOR, "MANAGER", audit("x"))).toBe("STALE");
+    expect(await deps.repos.memberships.remove(ORG, CREATOR, "MANAGER", () => audit("x"))).toBe("STALE");
     expect(await roleOf(CREATOR)).toBe("CREATOR");
     expect(await auditCount()).toBe(0);
   });
@@ -245,14 +245,14 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
   it("refuses to demote or remove the last OWNER", async () => {
     await prisma.membership.delete({ where: { organizationId_userId: { organizationId: ORG, userId: CO_OWNER } } });
     expect(await deps.repos.memberships.changeRole(ORG, OWNER, "OWNER", "ADMIN", audit("x"))).toBe("LAST_OWNER");
-    expect(await deps.repos.memberships.remove(ORG, OWNER, "OWNER", audit("x"))).toBe("LAST_OWNER");
+    expect(await deps.repos.memberships.remove(ORG, OWNER, "OWNER", () => audit("x"))).toBe("LAST_OWNER");
     expect(await roleOf(OWNER)).toBe("OWNER");
     expect(await auditCount()).toBe(0);
   });
 
   it("answers STALE, not LAST_OWNER, for an OWNER change to a member who is no OWNER", async () => {
     await prisma.membership.delete({ where: { organizationId_userId: { organizationId: ORG, userId: CO_OWNER } } });
-    expect(await deps.repos.memberships.remove(ORG, ADMIN, "OWNER", audit("x"))).toBe("STALE");
+    expect(await deps.repos.memberships.remove(ORG, ADMIN, "OWNER", () => audit("x"))).toBe("STALE");
     expect(await deps.repos.memberships.changeRole(ORG, ADMIN, "OWNER", "VIEWER", audit("x"))).toBe("STALE");
     expect(await roleOf(ADMIN)).toBe("ADMIN");
   });

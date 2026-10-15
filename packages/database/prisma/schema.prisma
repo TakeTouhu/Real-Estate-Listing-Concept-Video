@@ -143,6 +143,8 @@ model Membership {
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   permissionGrants PermissionGrant[]
   groupMemberships GroupMember[]
+  /// Properties this member is the responsible user of (ADR-0062).
+  responsibleFor   Property[]
 
   @@id([organizationId, userId])
   @@index([userId])
@@ -166,8 +168,9 @@ model PermissionGrant {
 }
 
 /// A named set of an organization's members (ADR-0052 Decision 10, ADR-0060).
-/// Its members hold its permissions (ADR-0061); it confers no row access yet.
-/// Names are unique within the organization.
+/// Its members hold its permissions (ADR-0061). Properties may be assigned to it
+/// (ADR-0062), though no content path enforces that reach yet. Names are unique
+/// within the organization.
 model Group {
   id              String            @id
   organizationId  String
@@ -178,6 +181,7 @@ model Group {
   organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members         GroupMember[]
   permissions     GroupPermission[]
+  properties      Property[]
 
   @@unique([organizationId, name])
   @@unique([id, organizationId])
@@ -246,21 +250,33 @@ model Session {
   @@map("sessions")
 }
 
+/// The authorization root for customer content (ADR-0052 Decision 10).
+/// `createdBy` is authorship history and never authorizes anything; the
+/// responsible user (`OWN`) and the group (`GROUP`) are assignments only an
+/// `OWNER` or `ADMIN` changes (ADR-0062). Both foreign keys carry the
+/// organization and refuse deletion: a group deletion or a member's removal
+/// releases the assignment explicitly, and counts it, in its own transaction.
 model Property {
-  id             String         @id
-  organizationId String
-  name           String
-  propertyType   PropertyType
-  addressMasked  String?
-  description    String?
-  status         PropertyStatus @default(ACTIVE)
-  createdBy      String
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  assets         MediaAsset[]
-  videoProjects  VideoProject[]
+  id                String         @id
+  organizationId    String
+  name              String
+  propertyType      PropertyType
+  addressMasked     String?
+  description       String?
+  status            PropertyStatus @default(ACTIVE)
+  createdBy         String
+  responsibleUserId String?
+  groupId           String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  responsibleMember Membership?    @relation(fields: [organizationId, responsibleUserId], references: [organizationId, userId], onDelete: NoAction)
+  group             Group?         @relation(fields: [groupId, organizationId], references: [id, organizationId], onDelete: NoAction)
+  assets            MediaAsset[]
+  videoProjects     VideoProject[]
 
   @@index([organizationId, status])
+  @@index([organizationId, responsibleUserId])
+  @@index([groupId])
   @@map("properties")
 }
 

@@ -283,7 +283,7 @@ describe.skipIf(!HAS_DB)("each group change commits with its audit entry or not 
         ["group.member_added", ADMIN, "group", group.id, { targetUserId: MANAGER, targetRole: "MANAGER" }],
         ["group.member_added", OWNER, "group", group.id, { targetUserId: VIEWER, targetRole: "VIEWER" }],
         ["group.member_removed", ADMIN, "group", group.id, { targetUserId: VIEWER, targetRole: "VIEWER" }],
-        ["group.deleted", ADMIN, "group", group.id, { name: "Field", actorRole: "ADMIN", removedMemberCount: 1 }],
+        ["group.deleted", ADMIN, "group", group.id, { name: "Field", actorRole: "ADMIN", removedMemberCount: 1, ungroupedPropertyCount: 0 }],
       ]),
     );
   });
@@ -375,7 +375,7 @@ describe.skipIf(!HAS_DB)("group changes racing each other", () => {
     expect(refusals(results)).toEqual([]);
     expect(await memberIds()).toEqual([]);
     const [deleted] = await auditRows("group.deleted");
-    expect(deleted?.metadata).toEqual({ name: "Sales", actorRole: "OWNER", removedMemberCount: 2 });
+    expect(deleted?.metadata).toEqual({ name: "Sales", actorRole: "OWNER", removedMemberCount: 2, ungroupedPropertyCount: 0 });
   });
 
   it("does not count a member a concurrent removal took out first", async () => {
@@ -387,7 +387,7 @@ describe.skipIf(!HAS_DB)("group changes racing each other", () => {
     );
     expect(refusals(results)).toEqual([]);
     const [deleted] = await auditRows("group.deleted");
-    expect(deleted?.metadata).toEqual({ name: "Sales", actorRole: "OWNER", removedMemberCount: 1 });
+    expect(deleted?.metadata).toEqual({ name: "Sales", actorRole: "OWNER", removedMemberCount: 1, ungroupedPropertyCount: 0 });
   });
 
   it("records the name a rename committed while the deletion waited for it", async () => {
@@ -398,7 +398,7 @@ describe.skipIf(!HAS_DB)("group changes racing each other", () => {
     expect(refusals(results)).toEqual([]);
     expect(await nameOf()).toBeUndefined();
     const [deleted] = await auditRows("group.deleted");
-    expect(deleted?.metadata).toEqual({ name: "Field", actorRole: "OWNER", removedMemberCount: 0 });
+    expect(deleted?.metadata).toEqual({ name: "Field", actorRole: "OWNER", removedMemberCount: 0, ungroupedPropertyCount: 0 });
   });
 
   it("refuses an addition waiting on a deletion of the group", async () => {

@@ -20,6 +20,8 @@ erDiagram
   GROUPS ||--o{ GROUP_MEMBERS : "contains (CASCADE)"
   MEMBERSHIPS ||--o{ GROUP_MEMBERS : "belongs to (CASCADE)"
   GROUPS ||--o{ GROUP_PERMISSIONS : "carries (CASCADE)"
+  MEMBERSHIPS |o--o{ PROPERTIES : "is responsible for (NO ACTION)"
+  GROUPS |o--o{ PROPERTIES : "groups (NO ACTION)"
   USERS ||--o{ SESSIONS : holds
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
@@ -122,7 +124,9 @@ erDiagram
     string addressMasked "nullable"
     string description "nullable"
     enum   status "ACTIVE|ARCHIVED|DELETED"
-    string createdBy
+    string createdBy "authorship history; authorizes nothing"
+    string responsibleUserId FK "nullable; FK (organizationId, responsibleUserId) to MEMBERSHIPS"
+    string groupId FK "nullable; FK (groupId, organizationId) to GROUPS"
     datetime createdAt
     datetime updatedAt
   }
@@ -554,6 +558,15 @@ one row per (group, permission), with the foreign key carrying the organization.
 A CHECK keeps `disclosure.none` and `video.share` off every group. Deleting the
 group removes its rows (ADR-0061). The Property responsible-user and group
 assignments are still a later package.
+
+## Phase 6H — Property assignment
+
+`properties` gains a nullable `responsibleUserId` and a nullable `groupId`. The
+responsible user's foreign key is (`organizationId`, `responsibleUserId`) to
+`memberships`, and the group's is (`groupId`, `organizationId`) to `groups`, so
+neither can point outside the Property's organization. Both refuse deletion: a
+member's removal and a group's deletion clear the assignments themselves and
+count them (ADR-0062). Reach is not enforced on them yet.
 
 ## Not implemented yet (later phases)
 
