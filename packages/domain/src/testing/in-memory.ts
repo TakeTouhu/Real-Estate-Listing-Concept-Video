@@ -43,6 +43,7 @@ import type {
   User,
 } from "../identity/types";
 import { GROUP_GRANTABLE_PERMISSIONS, type Permission, type Role } from "../identity/roles";
+import { InMemoryMfaRepository, type InMemorySessionStore } from "./in-memory-mfa";
 
 /** Mutable clock for deterministic tests. */
 export class TestClock implements Clock {
@@ -508,11 +509,11 @@ class InMemoryInvitationRepository implements InvitationRepository {
   }
 }
 
-class InMemorySessionRepository implements SessionRepository {
+export class InMemorySessionRepository implements SessionRepository, InMemorySessionStore {
   private readonly byTokenHash = new Map<string, Session>();
   constructor(private readonly clock: Clock) {}
-  create(input: Omit<Session, "createdAt">): Promise<Session> {
-    const session: Session = { ...input, createdAt: this.clock.now() };
+  create(input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">): Promise<Session> {
+    const session: Session = { ...input, mfaVerifiedAt: null, mfaFailedAttempts: 0, createdAt: this.clock.now() };
     this.byTokenHash.set(session.tokenHash, session);
     return Promise.resolve(session);
   }
@@ -522,6 +523,12 @@ class InMemorySessionRepository implements SessionRepository {
   deleteByTokenHash(tokenHash: string): Promise<void> {
     this.byTokenHash.delete(tokenHash);
     return Promise.resolve();
+  }
+  byId(sessionId: string): Session | null {
+    return [...this.byTokenHash.values()].find((s) => s.id === sessionId) ?? null;
+  }
+  put(session: Session): void {
+    this.byTokenHash.set(session.tokenHash, session);
   }
 }
 
@@ -574,6 +581,8 @@ export interface PropertyAssignmentReleaser {
 }
 
 export interface TestRepositories extends IdentityRepositories {
+  readonly sessions: InMemorySessionRepository;
+  readonly mfa: InMemoryMfaRepository;
   readonly auditLogs: InMemoryAuditLogRepository;
   readonly propertyLinks: PropertyAssignmentLinks;
 }
@@ -596,6 +605,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     groups.removeAllForMember(organizationId, userId);
     return propertyLinks.unassign(organizationId, userId);
   });
+  const sessions = new InMemorySessionRepository(clock);
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
@@ -604,7 +614,8 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     permissionGrants,
     groups,
     invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
-    sessions: new InMemorySessionRepository(clock),
+    sessions,
+    mfa: new InMemoryMfaRepository(sessions, auditLogs),
     auditLogs,
     propertyLinks,
   };

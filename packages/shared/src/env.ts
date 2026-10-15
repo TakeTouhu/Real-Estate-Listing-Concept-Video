@@ -48,6 +48,13 @@ export const serverEnvSchema = z
       .string()
       .min(16, "STORAGE_SIGNING_SECRET must be at least 16 characters"),
 
+    // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
+    // characters (ADR-0065). Optional while no route uses MFA.
+    MFA_SECRET_KEY: z
+      .string()
+      .regex(/^[0-9a-fA-F]{64}$/, "MFA_SECRET_KEY must be 32 bytes as 64 hex characters")
+      .optional(),
+
     // Image-analysis provider selection. Phase 3 ships the deterministic
     // offline adapter only; no real vision vendor is integrated (ADR-0009).
     ANALYSIS_PROVIDER: z.enum(["deterministic"]).default("deterministic"),

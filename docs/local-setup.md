@@ -27,6 +27,10 @@ openssl rand -hex 32
 openssl rand -hex 32
 ```
 
+`MFA_SECRET_KEY` (ADR-0065) seals authenticator secrets at rest. No route
+reads it yet; to set it, use another `openssl rand -hex 32`. Keep it once set:
+a different key cannot open MFA secrets sealed under the old one.
+
 Set `DATABASE_URL` to a local PostgreSQL instance (Phase 1). Keep
 `VIDEO_PROVIDER=fake` unless you are deliberately exercising the real provider.
 

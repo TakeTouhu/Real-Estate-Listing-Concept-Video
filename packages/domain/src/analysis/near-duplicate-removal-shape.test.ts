@@ -32,14 +32,16 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is this change's", () => {
+  it("adds exactly one migration, and it is this change's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    // No longer the newest: MFA-1 added migration 25 after it. This change still
+    // contributed exactly one migration, in place.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(24);
     expect(dirs.filter((dir) => dir.includes("near_duplicate"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(25);
+    expect(dirs).toHaveLength(26);
   });
 
   it("drops the duplicate-approval index and does nothing else", () => {

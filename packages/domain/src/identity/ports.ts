@@ -12,6 +12,7 @@ import type {
   User,
 } from "./types";
 import type { GroupGrantRefusal, Permission, Role } from "./roles";
+import type { MfaRepository } from "../mfa/ports";
 
 /** Injectable clock so services are deterministic under test. */
 export interface Clock {
@@ -302,7 +303,8 @@ export interface GroupRepository {
 }
 
 export interface SessionRepository {
-  create(input: Omit<Session, "createdAt">): Promise<Session>;
+  /** A new sign-in has not passed MFA. */
+  create(input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">): Promise<Session>;
   findByTokenHash(tokenHash: string): Promise<Session | null>;
   deleteByTokenHash(tokenHash: string): Promise<void>;
 }
@@ -324,6 +326,8 @@ export interface IdentityRepositories {
   readonly groups: GroupRepository;
   readonly invitations: InvitationRepository;
   readonly sessions: SessionRepository;
+  /** A user's MFA factor and recovery codes, and the MFA columns of its sessions. */
+  readonly mfa: MfaRepository;
   readonly auditLogs: AuditLogRepository;
 }
 

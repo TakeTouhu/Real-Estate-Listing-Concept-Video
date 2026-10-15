@@ -111,17 +111,48 @@ model Organization {
 }
 
 model User {
-  id          String       @id
-  email       String       @unique
+  id          String         @id
+  email       String         @unique
   name        String
-  status      UserStatus   @default(ACTIVE)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  status      UserStatus     @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
   credential  Credential?
   memberships Membership[]
   sessions    Session[]
+  mfaFactor   UserMfaFactor?
 
   @@map("users")
+}
+
+/// A user's authenticator (TOTP) factor; the row exists exactly while MFA is on
+/// (ADR-0065).
+model UserMfaFactor {
+  userId        String                @id
+  /// The TOTP secret sealed with AES-256-GCM under MFA_SECRET_KEY, prefixed by
+  /// the key's id. Never the secret itself.
+  secret        String
+  /// The 30-second step of the last code accepted; a code for it or an earlier
+  /// step is refused.
+  lastUsedStep  Int
+  enabledAt     DateTime
+  updatedAt     DateTime              @updatedAt
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes UserMfaRecoveryCode[]
+
+  @@map("user_mfa_factors")
+}
+
+/// One unused recovery code, stored only as its SHA-256 hash. Using it deletes
+/// it; turning MFA off deletes them all.
+model UserMfaRecoveryCode {
+  userId    String
+  codeHash  String
+  createdAt DateTime      @default(now())
+  factor    UserMfaFactor @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@id([userId, codeHash])
+  @@map("user_mfa_recovery_codes")
 }
 
 model Credential {
@@ -239,12 +270,18 @@ model Invitation {
 }
 
 model Session {
-  id        String   @id
-  userId    String
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String    @id
+  userId            String
+  tokenHash         String    @unique
+  expiresAt         DateTime
+  /// When this sign-in passed MFA; null until it does (ADR-0065).
+  mfaVerifiedAt     DateTime?
+  /// Wrong MFA codes entered in this sign-in; the fifth deletes the session.
+  mfaFailedAttempts Int       @default(0)
+  /// The sealed secret of an authenticator set-up started in this sign-in.
+  mfaPendingSecret  String?
+  createdAt         DateTime  @default(now())
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("sessions")
