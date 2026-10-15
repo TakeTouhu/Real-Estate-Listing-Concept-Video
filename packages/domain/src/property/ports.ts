@@ -1,4 +1,5 @@
 import type { AuditLog } from "../identity/types";
+import type { Reach } from "./reach";
 import type { MediaAsset, MediaAssetStatus, Property } from "./types";
 
 // --- Repositories -----------------------------------------------------------
@@ -38,7 +39,11 @@ export interface PropertyRepository {
   create(input: Omit<Property, "createdAt" | "updatedAt">, audit: PropertyChangeAudit): Promise<PropertyCreation>;
   /** Find by id WITHIN an organization scope — never across tenants. */
   findById(organizationId: string, id: string): Promise<Property | null>;
-  listByOrganization(organizationId: string): Promise<Property[]>;
+  /**
+   * The organization's Properties that `reach` reaches, deleted ones excluded.
+   * Filtered in the query, never after loading (Phase 6I).
+   */
+  listReachable(reach: Reach): Promise<Property[]>;
   /** Write a Property's own fields. Never its assignments, which only {@link assign} changes. */
   update(property: Property): Promise<Property>;
   /**

@@ -1,6 +1,6 @@
 import { AppError, sha256Hex } from "@app/shared";
 import { recordAudit } from "../identity/audit";
-import { authorizeOrganization } from "../identity/authorization";
+import { authorizeOrganization, type AuthContext } from "../identity/authorization";
 import type { Clock, IdentityServiceDeps, IdGenerator } from "../identity/ports";
 import { PropertyAuditAction } from "./audit";
 import {
@@ -18,6 +18,7 @@ import type {
   PropertyRepository,
   SignedUrl,
 } from "./ports";
+import { findReachableProperty } from "./reach";
 import { DEFAULT_UPLOAD_LIMITS, type MediaAsset, type UploadLimits } from "./types";
 
 export interface AssetServiceDeps {
@@ -79,13 +80,13 @@ export class AssetService {
    * single-purpose signed upload URL for a tenant-scoped storage key.
    */
   async requestUpload(actorUserId: string, input: RequestUploadInput): Promise<RequestUploadResult> {
-    await authorizeOrganization(
+    const actor = await authorizeOrganization(
       this.deps.identity,
       actorUserId,
       input.organizationId,
       "asset.upload",
     );
-    const property = await this.deps.properties.findById(input.organizationId, input.propertyId);
+    const property = await findReachableProperty(this.deps.identity, this.deps.properties, actor, input.propertyId);
     if (!property || property.status === "DELETED") {
       throw new AppError("NOT_FOUND", "Property not found");
     }
@@ -155,8 +156,8 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<CompleteUploadResult> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
-    const asset = await this.requireAsset(organizationId, assetId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
+    const asset = await this.requireReachableAsset(actor, assetId);
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", `Asset is not awaiting upload (status ${asset.status})`);
     }
@@ -319,8 +320,13 @@ export class AssetService {
     return { asset: ready, duplicateOf };
   }
 
+  /**
+   * A Property's assets. A Property out of reach lists nothing, exactly as one
+   * that does not exist.
+   */
   async list(actorUserId: string, organizationId: string, propertyId: string): Promise<MediaAsset[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    if (!(await findReachableProperty(this.deps.identity, this.deps.properties, actor, propertyId))) return [];
     return this.deps.assets.listByProperty(organizationId, propertyId);
   }
 
@@ -334,8 +340,8 @@ export class AssetService {
     assetId: string,
     variant: "normalized" | "thumbnail" = "normalized",
   ): Promise<SignedUrl> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
-    const asset = await this.requireAsset(organizationId, assetId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    const asset = await this.requireReachableAsset(actor, assetId);
     if (asset.status !== "READY") {
       throw new AppError("VALIDATION_FAILED", "Asset is not available for download");
     }
@@ -362,8 +368,8 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<RequestUploadResult> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
-    const asset = await this.requireAsset(organizationId, assetId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
+    const asset = await this.requireReachableAsset(actor, assetId);
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", "Only pending or failed uploads can be retried");
     }
@@ -406,8 +412,8 @@ export class AssetService {
     organizationId: string,
     assetId: string,
   ): Promise<MediaAsset> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.delete");
-    const asset = await this.requireAsset(organizationId, assetId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.delete");
+    const asset = await this.requireReachableAsset(actor, assetId);
     const now = this.deps.clock.now();
     const updated = await this.deps.assets.requestDeletion(organizationId, asset.id, now);
     if (updated === null) {
@@ -612,6 +618,19 @@ export class AssetService {
   private async requireAsset(organizationId: string, assetId: string): Promise<MediaAsset> {
     const asset = await this.deps.assets.findById(organizationId, assetId);
     if (!asset || asset.status === "DELETED") {
+      throw new AppError("NOT_FOUND", "Asset not found");
+    }
+    return asset;
+  }
+
+  /**
+   * An asset whose Property the member reaches (Phase 6I, ADR-0064). Checked
+   * before any check of the asset's state, so an asset out of reach is answered
+   * exactly as one that does not exist.
+   */
+  private async requireReachableAsset(actor: AuthContext, assetId: string): Promise<MediaAsset> {
+    const asset = await this.requireAsset(actor.organizationId, assetId);
+    if (!(await findReachableProperty(this.deps.identity, this.deps.properties, actor, asset.propertyId))) {
       throw new AppError("NOT_FOUND", "Asset not found");
     }
     return asset;

@@ -4,6 +4,7 @@ import { authorizeOrganization, type AuthContext } from "../identity/authorizati
 import type { Clock, IdentityServiceDeps, IdGenerator } from "../identity/ports";
 import { PropertyAuditAction } from "./audit";
 import type { MediaAssetRepository, PropertyAssignment, PropertyRepository } from "./ports";
+import { findReachableProperty, reachOf } from "./reach";
 import { PROPERTY_TYPES, type Property, type PropertyType } from "./types";
 
 export interface PropertyServiceDeps {
@@ -169,19 +170,16 @@ export class PropertyService {
     return { property: assigned.property, changed: true };
   }
 
+  /** The organization's Properties the member reaches (ADR-0052 Decision 10). */
   async list(actorUserId: string, organizationId: string): Promise<Property[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
-    return this.deps.properties.listByOrganization(organizationId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    return this.deps.properties.listReachable(await reachOf(this.deps.identity, actor));
   }
 
-  /** Read a single property, enforcing organization scope. */
+  /** Read a single property the member reaches. */
   async get(actorUserId: string, organizationId: string, propertyId: string): Promise<Property> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
-    const property = await this.deps.properties.findById(organizationId, propertyId);
-    if (!property || property.status === "DELETED") {
-      throw new AppError("NOT_FOUND", "Property not found");
-    }
-    return property;
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    return this.requireReachable(actor, propertyId);
   }
 
   async update(
@@ -190,11 +188,8 @@ export class PropertyService {
     propertyId: string,
     input: UpdatePropertyInput,
   ): Promise<Property> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.edit");
-    const existing = await this.deps.properties.findById(organizationId, propertyId);
-    if (!existing || existing.status === "DELETED") {
-      throw new AppError("NOT_FOUND", "Property not found");
-    }
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.edit");
+    const existing = await this.requireReachable(actor, propertyId);
     const name = input.name === undefined ? existing.name : input.name.trim();
     if (name.length === 0 || name.length > MAX_NAME_LENGTH) {
       throw new AppError("VALIDATION_FAILED", "Property name is required");
@@ -225,11 +220,8 @@ export class PropertyService {
    * window (retention foundation; automation lands in Phase 7).
    */
   async remove(actorUserId: string, organizationId: string, propertyId: string): Promise<void> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.delete");
-    const existing = await this.deps.properties.findById(organizationId, propertyId);
-    if (!existing || existing.status === "DELETED") {
-      throw new AppError("NOT_FOUND", "Property not found");
-    }
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.delete");
+    const existing = await this.requireReachable(actor, propertyId);
     const now = this.deps.clock.now();
     await this.deps.properties.update({ ...existing, status: "DELETED", updatedAt: now });
     for (const asset of await this.deps.assets.listByProperty(organizationId, propertyId)) {
@@ -249,6 +241,18 @@ export class PropertyService {
       resourceType: "property",
       resourceId: propertyId,
     });
+  }
+
+  /**
+   * A Property the member reaches and that is not deleted. Out of reach is
+   * answered exactly as a Property that does not exist (Phase 6I, ADR-0064).
+   */
+  private async requireReachable(actor: AuthContext, propertyId: string): Promise<Property> {
+    const property = await findReachableProperty(this.deps.identity, this.deps.properties, actor, propertyId);
+    if (!property || property.status === "DELETED") {
+      throw new AppError("NOT_FOUND", "Property not found");
+    }
+    return property;
   }
 
   /**

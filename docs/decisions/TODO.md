@@ -1154,7 +1154,10 @@ them is **built**. Each item below records the settled decision and what remains
       unbuilt:** group permissions and Scope.* *Additive group permissions
       built in Phase 6G (ADR-0061). **Still unbuilt:** Scope.* *Property
       assignment, the data Scope needs, built in Phase 6H (ADR-0062). **Still
-      unbuilt:** enforcing Scope on the content paths (6I).*
+      unbuilt:** enforcing Scope on the content paths (6I).* *Reach enforced
+      on the Property and photo paths in Phase 6I-1 (ADR-0064). **Still
+      unbuilt:** analysis, video projects, storyboards and generation
+      admission (6I-2).*
 - [ ] **Build user and group deletion.** `active`/`deleted` only — no suspension
       state, no restore. On user deletion: immediate access stop; 30 days of
       admin-only inspection of that user's videos; then physical deletion of all
@@ -1328,6 +1331,15 @@ them is **built**. Each item below records the settled decision and what remains
       create a Property; one in several groups must name one. (5) Reassignment
       needs the `OWNER` or `ADMIN` role, not a permission. (6) An assignment
       that changes nothing writes nothing.
+- [ ] **Confirm the Phase 6I choices ADR-0052 did not make** (ADR-0064).
+      (1) A Property out of reach, and anything under it, is answered exactly
+      as one that does not exist (`404`, or an empty list), never `403`.
+      (2) An out-of-reach answer is not audited, as a cross-tenant `404` is
+      not. (3) Reach is read when the member is authorized: an action already
+      authorized completes, and a signed URL already issued stays valid until
+      it expires (10 minutes for an upload, 5 for a download). (4) A `MANAGER`
+      is judged by its groups only, even for a Property it is the responsible
+      user of.
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the
@@ -1426,7 +1438,11 @@ them is **built**. Each item below records the settled decision and what remains
       individual grants; tenant-safe row-level checks throughout. *Property →
       responsible user and Property → group built in Phase 6H (ADR-0062).
       **Still unbuilt:** the predicates and their enforcement on every content
-      path (6I).*
+      path (6I).* *The `GROUP` and `OWN` predicates, reassignment and membership
+      changes taking effect on the next request, no authorship-based
+      authorization and no widening by grants, built in Phase 6I-1 (ADR-0064)
+      on the Property and photo paths. **Still unbuilt:** analysis, review,
+      video projects, storyboards and generation admission (6I-2).*
 - [ ] **Build Property assignment and role-fixed Scope** (ADR-0052 Decision
       10): `OWNER`/`ADMIN`-only Property reassignment; creation-time assignment
       rules by creator role — `MANAGER` responsible user fixed to the creator
@@ -1441,7 +1457,8 @@ them is **built**. Each item below records the settled decision and what remains
       creation-time rules, `OWNER`/`ADMIN`-only reassignment and the audit
       evidence. Role changes already rewrite no assignment and grants never
       touch them. **Still unbuilt:** applying the role → Scope mapping when
-      authorizing content (6I).*
+      authorizing content (6I).* *Applied on the Property and photo paths in
+      Phase 6I-1 (ADR-0064); the rest in 6I-2.*
 - [x] **Enforce the `property.create` capability ceiling** (ADR-0052 Decision
       10): effective-permission calculation that combines template, direct and
       group grants and then applies the role ceiling, so `property.create` is

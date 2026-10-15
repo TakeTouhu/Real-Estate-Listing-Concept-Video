@@ -106,7 +106,7 @@ function create(actorUserId: string, choice: Pick<CreatePropertyInput, "responsi
 }
 
 async function stored(): Promise<Property[]> {
-  return fx.repo.listByOrganization(fx.orgId);
+  return fx.repo.listReachable({ scope: "ORGANIZATION", organizationId: fx.orgId });
 }
 
 function assignment(property: Property | null): { responsibleUserId: string | null; groupId: string | null } {

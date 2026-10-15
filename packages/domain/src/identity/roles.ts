@@ -46,8 +46,8 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 /**
  * What a member's reach over Property-rooted content is evaluated against. Fixed
- * by role: there is no standalone Scope change, only a role change. Recorded
- * here as data; row-level enforcement is a later package.
+ * by role: there is no standalone Scope change, only a role change. Turned into
+ * a member's reach of Properties by `reachOf` (Phase 6I).
  */
 export type Scope = "ORGANIZATION" | "GROUP" | "OWN";
 

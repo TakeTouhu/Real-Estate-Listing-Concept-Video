@@ -7,6 +7,7 @@ import type {
   PropertyReassignment,
   PropertyRepository,
 } from "../property/ports";
+import { reaches, type Reach } from "../property/reach";
 import type { MediaAsset, MediaAssetStatus, Property } from "../property/types";
 import type { TestRepositories } from "./in-memory";
 
@@ -53,11 +54,9 @@ export class InMemoryPropertyRepository implements PropertyRepository {
     return Promise.resolve(row && row.organizationId === organizationId ? row : null);
   }
 
-  listByOrganization(organizationId: string): Promise<Property[]> {
+  listReachable(reach: Reach): Promise<Property[]> {
     return Promise.resolve(
-      [...this.byId.values()].filter(
-        (p) => p.organizationId === organizationId && p.status !== "DELETED",
-      ),
+      [...this.byId.values()].filter((p) => p.status !== "DELETED" && reaches(reach, p)),
     );
   }
 
