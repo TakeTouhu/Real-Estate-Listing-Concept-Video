@@ -1161,3 +1161,11 @@ Forward-only. Once two look-alikes are both approved, recreating the index
 fails. Reverting the application without recreating it is not supported either:
 the older storyboard selection refuses a project holding two approved
 look-alikes.
+
+## Phase 6I-1 — Property reach
+
+No migration. `PropertyRepository.listReachable` filters `properties` by
+`groupId IN (…)` for a `MANAGER` and by `responsibleUserId` for a `CREATOR`
+or `VIEWER`, beside the organization and not-deleted conditions. Migration
+23's indexes, (`organizationId`, `responsibleUserId`) and (`groupId`), serve
+both (ADR-0064).

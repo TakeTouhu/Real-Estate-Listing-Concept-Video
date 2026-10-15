@@ -572,6 +572,12 @@ Migration 24 drops the partial unique index on approved members of one
 duplicate group. `asset_analyses.duplicateGroup` and its non-unique index stay,
 for internal use only (ADR-0063).
 
+## Phase 6I — Property reach
+
+No schema change. The Phase 6H assignments now decide which Properties a
+member reaches: `properties.groupId` for a `MANAGER`, `properties.responsibleUserId`
+for a `CREATOR` or `VIEWER`. `properties.createdBy` authorizes nothing (ADR-0064).
+
 ## Not implemented yet (later phases)
 
 `ConsentRecord` (Phase 6–7). These appear in

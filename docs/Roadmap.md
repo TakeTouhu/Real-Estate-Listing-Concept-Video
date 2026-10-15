@@ -210,8 +210,16 @@ index is dropped; storyboards admit approved look-alikes; and no response or
 screen carries look-alike data. The perceptual hash and duplicate group stay,
 internally.
 
+**Phase 6I-1 — Property reach on Properties and photos** (ADR-0064, no
+migration): a member reaches the Properties its role's scope selects (every
+Property for `OWNER`, `ADMIN` and `BILLING`; its groups' for a `MANAGER`; those it
+is responsible for as a `CREATOR` or `VIEWER`). The Property list is filtered in
+the query, and every Property and photo path answers a Property out of reach
+exactly as one that does not exist.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** enforcing Property-rooted Scope on every content path (6I). MFA for
+it:** enforcing reach on analysis, video projects, storyboards and generation
+admission (6I-2). MFA for
 `permission.manage` and `billing.manage` holders before any member-management
 UI.
 
