@@ -26,6 +26,15 @@ export const AuditAction = {
   GroupPermissionRevoked: "group.permission_revoked",
   /** A member's refused attempt to change a group or who belongs to it. */
   GroupChangeRefused: "group.change_refused",
+  /** MFA turned on, or moved to a new authenticator (ADR-0065). */
+  MfaEnabled: "mfa.enabled",
+  MfaReplaced: "mfa.replaced",
+  /** A sign-in passed MFA, saying whether by authenticator or recovery code. */
+  MfaChallengePassed: "mfa.challenge_passed",
+  /** A sign-in ended by too many wrong codes. */
+  MfaChallengeLocked: "mfa.challenge_locked",
+  MfaRecoveryCodesRegenerated: "mfa.recovery_codes_regenerated",
+  MfaDisabled: "mfa.disabled",
 } as const;
 
 export type AuditActionValue = (typeof AuditAction)[keyof typeof AuditAction];

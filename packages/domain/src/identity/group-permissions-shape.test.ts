@@ -36,12 +36,12 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: Phase 6H added migration 23 after it and the
-    // near-duplicate rule removal migration 24. Phase 6G still contributed
-    // exactly one migration, in place.
+    // No longer the newest: Phase 6H added migration 23 after it, the
+    // near-duplicate rule removal migration 24 and MFA-1 migration 25. Phase 6G
+    // still contributed exactly one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(22);
     expect(dirs.filter((dir) => dir.includes("phase6g"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(25);
+    expect(dirs).toHaveLength(26);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

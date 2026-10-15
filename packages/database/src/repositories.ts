@@ -35,6 +35,7 @@ import type {
 import { isPermission } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
 import { createPrismaGroupRepository } from "./group-repository";
+import { createPrismaMfaRepository } from "./mfa-repository";
 import { releaseProperties } from "./property-release";
 
 function toOrganization(r: DbOrganization): Organization {
@@ -127,6 +128,8 @@ function toSession(r: DbSession): Session {
     userId: r.userId,
     tokenHash: r.tokenHash,
     expiresAt: r.expiresAt,
+    mfaVerifiedAt: r.mfaVerifiedAt,
+    mfaFailedAttempts: r.mfaFailedAttempts,
     createdAt: r.createdAt,
   };
 }
@@ -406,6 +409,7 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     groups: createPrismaGroupRepository(prisma),
     invitations,
     sessions,
+    mfa: createPrismaMfaRepository(prisma),
     auditLogs,
   };
 }

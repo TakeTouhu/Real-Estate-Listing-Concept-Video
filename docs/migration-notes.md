@@ -1175,3 +1175,36 @@ both (ADR-0064).
 No migration. Reach on an analysis or a video project reads the Property it
 belongs to by its id and organization, one lookup per check, plus the member's
 groups for a `MANAGER`. No query or index changes.
+
+## MFA-1 — authenticator-app MFA and recovery codes
+
+**Migration `00000000000025_mfa_foundation`.** Two tables and three `sessions`
+columns. ADR-0065, implementing ADR-0052 Decision 18.
+
+### New tables
+
+| Table | Rule |
+| --- | --- |
+| `user_mfa_factors` | primary key `userId`, foreign key → `users` `ON DELETE CASCADE`. `secret` is the sealed TOTP secret (`<key id>.<AES-256-GCM payload>`), `lastUsedStep` the step of the last code accepted |
+| `user_mfa_recovery_codes` | primary key (`userId`, `codeHash`), foreign key `userId` → `user_mfa_factors` `ON DELETE CASCADE`; `CHECK ("codeHash" ~ '^[0-9a-f]{64}$')` |
+
+### New `sessions` columns
+
+| Column | Rule |
+| --- | --- |
+| `mfaVerifiedAt` `TIMESTAMP(3) NULL` | when the sign-in passed MFA |
+| `mfaFailedAttempts` `INTEGER NOT NULL DEFAULT 0` | `CHECK (>= 0)`; incremented by one `UPDATE … RETURNING` |
+| `mfaPendingSecret` `TEXT NULL` | the sealed secret of a set-up started in the sign-in |
+
+Additive only: existing sessions read as not having passed MFA, which nothing
+reads before MFA-2. No row is updated or deleted.
+
+Queries: every MFA read is by primary key (`userId`, or the session `id`), and
+recovery codes are counted and deleted by their primary key's leading column.
+No index is added.
+
+Rollback: drop the two tables and the three columns. No data elsewhere refers
+to them.
+
+New server secret: `MFA_SECRET_KEY`, 64 hex characters, optional until MFA-2.
+Keep it once set: a different key cannot open secrets sealed under the old one.

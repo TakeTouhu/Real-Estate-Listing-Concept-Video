@@ -37,10 +37,11 @@ describe("durable shape", () => {
       .map((entry) => entry.name)
       .sort();
     // No longer the newest: the near-duplicate rule removal added migration 24
-    // after it. Phase 6H still contributed exactly one migration, in place.
+    // after it, and MFA-1 migration 25. Phase 6H still contributed exactly one
+    // migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(23);
     expect(dirs.filter((dir) => dir.includes("phase6h"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(25);
+    expect(dirs).toHaveLength(26);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

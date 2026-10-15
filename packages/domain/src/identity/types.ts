@@ -95,6 +95,10 @@ export interface Session {
   readonly userId: string;
   readonly tokenHash: string;
   readonly expiresAt: Date;
+  /** When this sign-in passed MFA; null until it does (ADR-0065). */
+  readonly mfaVerifiedAt: Date | null;
+  /** Wrong MFA codes entered in this sign-in. */
+  readonly mfaFailedAttempts: number;
   readonly createdAt: Date;
 }
 

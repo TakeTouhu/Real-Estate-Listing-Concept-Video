@@ -32,6 +32,14 @@ describe("serverEnvSchema", () => {
     expect(serverEnvSchema.safeParse({ ...base, SESSION_SECRET: "short" }).success).toBe(false);
   });
 
+  it("accepts MFA_SECRET_KEY only as 32 bytes of hex, and does not require it yet", () => {
+    expect(serverEnvSchema.parse(base).MFA_SECRET_KEY).toBeUndefined();
+    expect(serverEnvSchema.safeParse({ ...base, MFA_SECRET_KEY: "ab".repeat(32) }).success).toBe(true);
+    for (const bad of ["", "ab".repeat(31), "ab".repeat(33), "zz".repeat(32)]) {
+      expect(serverEnvSchema.safeParse({ ...base, MFA_SECRET_KEY: bad }).success).toBe(false);
+    }
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
