@@ -70,6 +70,7 @@ const service = new AnalysisService({
     passwords: fakePasswordHasher,
     tokens: fakeTokenService(),
   },
+  properties: propertyRepos.properties,
   assets: propertyRepos.assets,
   analyses,
   storage: new LocalObjectStorage({ secret: "itest-secret-0000000000000000" }),
@@ -160,6 +161,8 @@ beforeEach(async () => {
         name: "Fixture",
         propertyType: "APARTMENT",
         createdBy: REVIEWER,
+        // The CREATOR reviewing reaches only what it is responsible for (ADR-0064).
+        responsibleUserId: REVIEWER,
       },
     });
   }

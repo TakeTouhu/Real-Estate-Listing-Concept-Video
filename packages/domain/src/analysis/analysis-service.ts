@@ -1,8 +1,9 @@
 import { AppError } from "@app/shared";
 import { recordAudit } from "../identity/audit";
-import { authorizeOrganization } from "../identity/authorization";
+import { authorizeOrganization, type AuthContext } from "../identity/authorization";
 import type { Clock, IdentityServiceDeps, IdGenerator } from "../identity/ports";
-import type { MediaAssetRepository, ObjectStorage } from "../property/ports";
+import type { MediaAssetRepository, ObjectStorage, PropertyRepository } from "../property/ports";
+import { findReachableProperty } from "../property/reach";
 import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
 import { effectiveRoomType } from "./effective";
@@ -29,6 +30,8 @@ export interface AnalyzeOptions {
 export interface AnalysisServiceDeps {
   /** Supplies membership lookup (authorization) and the audit sink. */
   readonly identity: IdentityServiceDeps;
+  /** The Property a photo belongs to, for the member's reach (ADR-0064). */
+  readonly properties: Pick<PropertyRepository, "findById">;
   readonly assets: MediaAssetRepository;
   readonly analyses: AssetAnalysisRepository;
   readonly storage: ObjectStorage;
@@ -80,8 +83,8 @@ export class AnalysisService {
     assetId: string,
     options: AnalyzeOptions = {},
   ): Promise<AssetAnalysis> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
-    const asset = await this.requireEligibleAsset(organizationId, assetId);
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "asset.upload");
+    const asset = await this.requireEligibleAsset(actor, assetId);
 
     const refresh = options.refresh === true;
     const reserved = await this.reserve(organizationId, assetId, refresh);
@@ -262,14 +265,16 @@ export class AnalysisService {
 
   /**
    * Analyses for a property's assets. Read-level authorization: `property.view`,
-   * held by `VIEWER`, who can neither start nor review an analysis.
+   * held by `VIEWER`, who can neither start nor review an analysis. A Property
+   * out of reach lists nothing, exactly as one that does not exist.
    */
   async listForProperty(
     actorUserId: string,
     organizationId: string,
     propertyId: string,
   ): Promise<AssetAnalysis[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    if (!(await findReachableProperty(this.deps.identity, this.deps.properties, actor, propertyId))) return [];
     const assets = await this.deps.assets.listByProperty(organizationId, propertyId);
     return this.deps.analyses.listByAssetIds(
       organizationId,
@@ -277,15 +282,21 @@ export class AnalysisService {
     );
   }
 
-  /** One asset's analysis, organization-scoped. Read-level authorization. */
+  /**
+   * One asset's analysis. Read-level authorization. A photo out of reach is
+   * answered exactly as one that has no analysis.
+   */
   async getForAsset(
     actorUserId: string,
     organizationId: string,
     assetId: string,
   ): Promise<AssetAnalysis> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
-    if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    const asset = analysis ? await this.deps.assets.findById(organizationId, assetId) : null;
+    if (!analysis || !asset || !(await this.reaches(actor, asset))) {
+      throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    }
     return analysis;
   }
 
@@ -516,15 +527,24 @@ export class AnalysisService {
     return updated;
   }
 
-  /** Authorize the reviewer and load an analysis that is eligible for a decision. */
+  /**
+   * Authorize the reviewer and load an analysis that is eligible for a decision.
+   * Reach is judged before the analysis's state, so a state message never
+   * reveals a photo out of reach: it is answered as one with no analysis.
+   */
   private async requireReviewable(
     actorUserId: string,
     organizationId: string,
     assetId: string,
   ): Promise<{ analysis: AssetAnalysis; asset: MediaAsset }> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "analysis.review");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "analysis.review");
     const analysis = await this.deps.analyses.findByAssetId(organizationId, assetId);
     if (!analysis) throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    const asset = await this.deps.assets.findById(organizationId, assetId);
+    if (!asset) throw new AppError("NOT_FOUND", "Asset not found");
+    if (!(await this.reaches(actor, asset))) {
+      throw new AppError("NOT_FOUND", "Analysis not found for this asset");
+    }
     if (analysis.status !== "SUCCEEDED") {
       throw new AppError(
         "VALIDATION_FAILED",
@@ -537,8 +557,6 @@ export class AnalysisService {
         "This analysis revision has already been reviewed; refresh the analysis to review it again",
       );
     }
-    const asset = await this.deps.assets.findById(organizationId, assetId);
-    if (!asset) throw new AppError("NOT_FOUND", "Asset not found");
     return { analysis, asset };
   }
 
@@ -585,13 +603,13 @@ export class AnalysisService {
     });
   }
 
-  /** Only READY assets are eligible; anything else is rejected explicitly. */
-  private async requireEligibleAsset(
-    organizationId: string,
-    assetId: string,
-  ): Promise<MediaAsset> {
-    const asset = await this.deps.assets.findById(organizationId, assetId);
-    if (!asset || asset.status === "DELETED") {
+  /**
+   * Only READY assets are eligible; anything else is rejected explicitly. A
+   * photo out of reach is answered as one that does not exist, before its state.
+   */
+  private async requireEligibleAsset(actor: AuthContext, assetId: string): Promise<MediaAsset> {
+    const asset = await this.deps.assets.findById(actor.organizationId, assetId);
+    if (!asset || asset.status === "DELETED" || !(await this.reaches(actor, asset))) {
       throw new AppError("NOT_FOUND", "Asset not found");
     }
     if (asset.status !== "READY") {
@@ -601,6 +619,11 @@ export class AnalysisService {
       );
     }
     return asset;
+  }
+
+  /** Whether the member reaches the Property the photo belongs to (ADR-0064). */
+  private async reaches(actor: AuthContext, asset: MediaAsset): Promise<boolean> {
+    return (await findReachableProperty(this.deps.identity, this.deps.properties, actor, asset.propertyId)) !== null;
   }
 
   /**

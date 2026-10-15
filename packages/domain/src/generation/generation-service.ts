@@ -97,7 +97,8 @@ export class GenerationService {
    *
    * @throws AppError FORBIDDEN when the actor lacks `video.generate` or `unit.consume`.
    * @throws AppError NOT_FOUND when the project, or the scene within it, is not
-   *   this organization's — the two are indistinguishable.
+   *   this organization's, or the project's Property is out of the member's
+   *   reach (ADR-0064) — all indistinguishable.
    * @throws AppError VALIDATION_FAILED when the storyboard is stale/absent, the
    *   scene has no compiled prompt, the model key is unknown or unverified, the
    *   model does not serve the project's output target, or the request exceeds

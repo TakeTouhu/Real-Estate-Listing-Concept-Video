@@ -219,3 +219,37 @@ export class InMemoryMediaAssetRepository implements MediaAssetRepository {
     );
   }
 }
+
+/**
+ * Properties for suites whose subject is not reach (ADR-0064). Every id asked
+ * is a live Property of the organization asked, so photos and projects may name
+ * a Property no test created. It is unassigned until a test assigns it: an
+ * `OWNER` or `ADMIN` reaches it either way, a `MANAGER` through the group it is
+ * given, a `CREATOR` or `VIEWER` once made its responsible user.
+ */
+export class StandInProperties implements Pick<PropertyRepository, "findById"> {
+  private readonly assignments = new Map<string, PropertyAssignment>();
+
+  assign(propertyId: string, assignment: Partial<PropertyAssignment>): void {
+    this.assignments.set(propertyId, { responsibleUserId: null, groupId: null, ...assignment });
+  }
+
+  findById(organizationId: string, id: string): Promise<Property | null> {
+    const at = new Date(0);
+    return Promise.resolve({
+      id,
+      organizationId,
+      name: id,
+      propertyType: "OTHER",
+      addressMasked: null,
+      description: null,
+      status: "ACTIVE",
+      createdBy: "usr_stand_in",
+      responsibleUserId: null,
+      groupId: null,
+      ...this.assignments.get(id),
+      createdAt: at,
+      updatedAt: at,
+    });
+  }
+}

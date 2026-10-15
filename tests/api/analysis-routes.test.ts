@@ -15,6 +15,7 @@ import {
   InMemoryAssetAnalysisRepository,
   InMemoryMediaAssetRepository,
   InMemoryReviewTransaction,
+  StandInProperties,
 } from "@app/domain/testing";
 
 /**
@@ -196,8 +197,12 @@ beforeEach(async () => {
       },
     },
   };
+  // The VIEWER reaches the fixture's Property as its responsible user (ADR-0064).
+  const properties = new StandInProperties();
+  properties.assign("prp_1", { responsibleUserId: viewer.id });
   analysisService.value = new AnalysisService({
     identity: deps,
+    properties,
     assets,
     analyses,
     storage,

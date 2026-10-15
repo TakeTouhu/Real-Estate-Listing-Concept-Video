@@ -131,11 +131,13 @@ function harness(options: {
       },
     } as unknown as StoryboardServiceDeps["identity"],
     properties: {
+      // The actor is the Property's responsible user, so every role this
+      // harness acts as reaches it (ADR-0064); reach has its own suite.
       findById: (org: string, id: string) =>
         Promise.resolve(
           options.propertyExists === false || org !== ORG || id !== PROP
             ? null
-            : ({ id: PROP, organizationId: ORG } as unknown as Property),
+            : ({ id: PROP, organizationId: ORG, status: "ACTIVE", responsibleUserId: ACTOR, groupId: null } as unknown as Property),
         ),
     } as unknown as StoryboardServiceDeps["properties"],
     assets: {

@@ -1,9 +1,10 @@
 import { AppError } from "@app/shared";
 import { recordAudit } from "../identity/audit";
-import { authorizeOrganization } from "../identity/authorization";
+import { authorizeOrganization, type AuthContext } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
 import type { AssetAnalysisRepository } from "../analysis/ports";
 import type { MediaAssetRepository, PropertyRepository } from "../property/ports";
+import { findReachableProperty } from "../property/reach";
 import {
   isTargetOutputResolution,
   TARGET_OUTPUT_RESOLUTIONS,
@@ -94,7 +95,8 @@ export class StoryboardService {
    * The project always starts `DRAFT` with no fingerprint and no scenes,
    * because {@link CreateProjectInput} cannot say otherwise.
    *
-   * @throws AppError NOT_FOUND when the property is unknown or another tenant's.
+   * @throws AppError NOT_FOUND when the property is unknown, another tenant's,
+   *   deleted, or out of the member's reach (ADR-0064).
    */
   async createProject(
     actorUserId: string,
@@ -102,10 +104,8 @@ export class StoryboardService {
     propertyId: string,
     input: CreateProjectInput,
   ): Promise<VideoProject> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
-
-    const property = await this.deps.properties.findById(organizationId, propertyId);
-    if (!property) throw new AppError("NOT_FOUND", "Property not found");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
+    await this.requireLiveProperty(actor, propertyId);
 
     const name = input.name.trim();
     if (name.length === 0) throw new AppError("VALIDATION_FAILED", "A project name is required");
@@ -173,10 +173,8 @@ export class StoryboardService {
     videoProjectId: string,
     bounds: DurationBounds,
   ): Promise<ComposedStoryboard> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
-
-    const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
-    if (!project) throw new AppError("NOT_FOUND", "Video project not found");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.generate");
+    const project = await this.requireReachableProject(actor, videoProjectId);
 
     const eligible = await this.eligibleInputs(organizationId, project.propertyId);
     requireMinimumScenes(eligible.length);
@@ -256,9 +254,9 @@ export class StoryboardService {
    *
    * `false` for exactly two reasons — nothing has been composed, or the inputs
    * have moved. **Every other failure propagates**: an authorization refusal, an
-   * unknown project, a repository error, or the duplicate-approved-input
-   * invariant must not be flattened into "not fresh", which would present a
-   * broken system as a merely outdated storyboard.
+   * unknown project or one out of reach, or a repository error must not be
+   * flattened into "not fresh", which would present a broken system as a merely
+   * outdated storyboard.
    */
   async isFresh(
     actorUserId: string,
@@ -280,10 +278,8 @@ export class StoryboardService {
     organizationId: string,
     videoProjectId: string,
   ): Promise<{ project: VideoProject; freshness: FreshnessState }> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
-
-    const project = await this.deps.storyboards.projects.findById(organizationId, videoProjectId);
-    if (!project) throw new AppError("NOT_FOUND", "Video project not found");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
+    const project = await this.requireReachableProject(actor, videoProjectId);
     if (!project.compositionFingerprint) return { project, freshness: "NEVER_COMPOSED" };
 
     const eligible = await this.eligibleInputs(organizationId, project.propertyId);
@@ -315,16 +311,42 @@ export class StoryboardService {
     return { project, scenes, fresh: freshness === "FRESH" };
   }
 
-  /** A property's projects, organization-scoped. Discovery for the UI. */
+  /**
+   * A property's projects. Discovery for the UI. A Property that is deleted or
+   * out of reach is answered as one that does not exist.
+   */
   async listProjects(
     actorUserId: string,
     organizationId: string,
     propertyId: string,
   ): Promise<readonly VideoProject[]> {
-    await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
-    const property = await this.deps.properties.findById(organizationId, propertyId);
-    if (!property) throw new AppError("NOT_FOUND", "Property not found");
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
+    await this.requireLiveProperty(actor, propertyId);
     return this.deps.storyboards.projects.listByProperty(organizationId, propertyId);
+  }
+
+  /**
+   * A Property the member reaches and that is not deleted. Anything else is
+   * answered as a Property that does not exist (ADR-0064).
+   */
+  private async requireLiveProperty(actor: AuthContext, propertyId: string): Promise<void> {
+    const property = await findReachableProperty(this.deps.identity, this.deps.properties, actor, propertyId);
+    if (!property || property.status === "DELETED") throw new AppError("NOT_FOUND", "Property not found");
+  }
+
+  /**
+   * A project whose Property the member reaches. One out of reach is answered as
+   * a project that does not exist, before anything about its state is read.
+   */
+  private async requireReachableProject(actor: AuthContext, videoProjectId: string): Promise<VideoProject> {
+    const project = await this.deps.storyboards.projects.findById(actor.organizationId, videoProjectId);
+    if (
+      !project ||
+      !(await findReachableProperty(this.deps.identity, this.deps.properties, actor, project.propertyId))
+    ) {
+      throw new AppError("NOT_FOUND", "Video project not found");
+    }
+    return project;
   }
 
   /** Approved analyses for a property, organization-scoped throughout. */

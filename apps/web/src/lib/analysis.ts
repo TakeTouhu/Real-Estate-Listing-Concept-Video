@@ -34,6 +34,7 @@ export function getAnalysisService(): AnalysisService {
 
   service = new AnalysisService({
     identity: identity.deps,
+    properties: repos.properties,
     assets: repos.assets,
     analyses: createPrismaAnalysisRepository(getPrismaClient()),
     storage: getPropertyServices().storage,

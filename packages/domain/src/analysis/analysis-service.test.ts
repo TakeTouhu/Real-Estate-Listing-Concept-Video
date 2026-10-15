@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import { OrganizationService } from "../identity/organization-service";
 import { AuthService } from "../identity/auth-service";
+import { GroupService } from "../identity/group-service";
 import type { Role } from "../identity/roles";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
-import { InMemoryMediaAssetRepository } from "../testing/in-memory-property";
+import { InMemoryMediaAssetRepository, StandInProperties } from "../testing/in-memory-property";
 import { InMemoryAssetAnalysisRepository } from "../testing/in-memory-analysis";
 import { InMemoryReviewTransaction } from "../testing/in-memory-review-transaction";
 import type { MediaAsset, MediaAssetStatus } from "../property/types";
@@ -114,6 +115,7 @@ interface Fixture {
   deps: TestDeps;
   analyses: InMemoryAssetAnalysisRepository;
   assets: InMemoryMediaAssetRepository;
+  properties: StandInProperties;
   storage: MapStorage;
   provider: StubProvider;
   service: AnalysisService;
@@ -167,6 +169,7 @@ async function build(): Promise<Fixture> {
   const assets = new InMemoryMediaAssetRepository(deps.clock);
   const storage = new MapStorage();
   const provider = new StubProvider(RESULT);
+  const properties = new StandInProperties();
   const asset = await seedAsset(assets, org.id, owner.id);
   await storage.putObject(asset.storageKey, new Uint8Array([1, 2, 3, 4]));
 
@@ -176,8 +179,10 @@ async function build(): Promise<Fixture> {
     assets,
     storage,
     provider,
+    properties,
     service: new AnalysisService({
       identity: deps,
+      properties,
       assets,
       analyses,
       storage,
@@ -195,6 +200,7 @@ async function build(): Promise<Fixture> {
 function serviceWith(f: Fixture, analyses: AssetAnalysisRepository): AnalysisService {
   return new AnalysisService({
     identity: f.deps,
+    properties: f.properties,
     assets: f.assets,
     analyses,
     storage: f.storage,
@@ -787,6 +793,7 @@ describe("reads", () => {
       userId: viewer.id,
       role: "VIEWER",
     });
+    await reachFixtureProperty(viewer.id, "VIEWER");
 
     expect((await fx.service.getForAsset(viewer.id, fx.orgId, fx.assetId)).assetId).toBe(
       fx.assetId,
@@ -866,6 +873,21 @@ async function memberWithRole(
     role,
   });
   return user.id;
+}
+
+/**
+ * Let a member reach the fixture's Property `prp_1`: through a group for a
+ * `MANAGER`, as its responsible user for a `CREATOR` or `VIEWER` (ADR-0064).
+ */
+async function reachFixtureProperty(userId: string, role: Role): Promise<void> {
+  if (role === "MANAGER") {
+    const groups = new GroupService(fx.deps);
+    const group = await groups.create(fx.ownerId, fx.orgId, `Team of ${userId}`);
+    await groups.addMember(fx.ownerId, fx.orgId, group.id, userId);
+    fx.properties.assign("prp_1", { groupId: group.id });
+  } else if (role === "CREATOR" || role === "VIEWER") {
+    fx.properties.assign("prp_1", { responsibleUserId: userId });
+  }
 }
 
 function auditFor(action: string): Record<string, unknown> | undefined {
@@ -1129,6 +1151,7 @@ describe("review authorization and tenant isolation", () => {
   it("allows a CREATOR to approve and reject", async () => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     const reviewer = await memberWithRole("creator2@example.com", "CREATOR");
+    await reachFixtureProperty(reviewer, "CREATOR");
     await expect(fx.service.approve(reviewer, fx.orgId, fx.assetId)).resolves.toBeDefined();
 
     const other = await analyzedAsset("ast_other", { perceptualHash: "0000000000000000" });
@@ -1462,6 +1485,7 @@ describe("correct — authorization and tenancy", () => {
   it.each(["OWNER", "ADMIN", "MANAGER", "CREATOR"] as const)("allows a %s", async (role) => {
     await fx.service.analyzeAsset(fx.ownerId, fx.orgId, fx.assetId);
     const member = await memberWithRole(`${role.toLowerCase()}-corr@example.com`, role);
+    await reachFixtureProperty(member, role);
 
     const after = await fx.service.correct(member, fx.orgId, fx.assetId, {
       roomType: { set: "STUDY" },

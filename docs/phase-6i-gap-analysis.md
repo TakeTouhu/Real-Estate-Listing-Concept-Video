@@ -1,7 +1,7 @@
 # Phase 6I gap analysis — Property reach
 
-Status: 6I-1 implemented on branch `claude/project-thread-az06z2`; 6I-2 not
-started.
+Status: 6I-1 merged (PR #83, `main @ 16b52c5`); 6I-2 implemented on branch
+`claude/project-thread-az06z2`.
 Base: `main @ 5c6a74d` (PR #82, near-duplicate rule removal, merged
 2026-10-15; migration 24 is the latest).
 
@@ -80,10 +80,13 @@ authorization itself.
 ## Found while mapping
 
 - `StoryboardService.createProject` and `listProjects` check that the Property
-  exists but not that it was deleted (6I-2 refuses it).
+  exists but not that it was deleted (6I-2 refuses it, ADR-0064 Decision 9).
 - Two comments still describe the duplicate-approved invariant ADR-0063 removed
   (`StoryboardService.isFresh`, `apps/web/src/lib/storyboard-route.ts`); 6I-2
   corrects them.
+- Found during 6I-2, not changed: an existing video project of a deleted
+  Property can still be read and composed through the storyboard paths. Recorded
+  in `TODO.md` (ADR-0064 Decision 5).
 
 ## Milestones
 

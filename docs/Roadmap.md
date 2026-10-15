@@ -217,11 +217,15 @@ is responsible for as a `CREATOR` or `VIEWER`). The Property list is filtered in
 the query, and every Property and photo path answers a Property out of reach
 exactly as one that does not exist.
 
+**Phase 6I-2 — Property reach on analyses, video projects and storyboards**
+(ADR-0064, no migration): analyses and their review, video projects,
+storyboards and generation admission are reached exactly when their Property
+is, and out of reach they are answered as rows that do not exist. A deleted
+Property takes no new video project and lists none.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** enforcing reach on analysis, video projects, storyboards and generation
-admission (6I-2). MFA for
-`permission.manage` and `billing.manage` holders before any member-management
-UI.
+it:** MFA for `permission.manage` and `billing.manage` holders before any
+member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and

@@ -6,9 +6,9 @@ ADR: `docs/decisions/0064-property-reach.md`
 Gap analysis: `docs/phase-6i-gap-analysis.md`
 
 This is the completion record of the seventh authorization package of Phase 6,
-not of Phase 6. The package ships as two pull requests. This record covers
-**6I-1**; 6I-2 (analysis, video projects, storyboards and generation admission)
-extends it.
+not of Phase 6. The package ships as two pull requests: **6I-1** (Properties
+and photos, PR #83, merged as `16b52c5`) and **6I-2** (analyses, video
+projects, storyboards and generation admission), each recorded below.
 
 ## 6I-1 — Properties and photos
 
@@ -193,3 +193,189 @@ Carried forward from earlier packages, unchanged: MFA before any member, grant,
 group or assignment screen; user and organization deletion releasing
 assignments; the earlier packages' choices recorded in `TODO.md`; the
 provider-output race test that asserts too much (Phase 6F).
+
+## 6I-2 — Analyses, video projects and storyboards
+
+Base: `16b52c5` (PR #83 merge commit on `main`).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `90e1f55` | reach on the seven `AnalysisService` paths (start, refresh, list, read, approve, reject, correct) and the `StoryboardService` paths (create and list projects, compose, read a storyboard, freshness), which generation admission runs first; `AnalysisService` taking the Property repository; a deleted Property taking no new video project and listing none; the per-path, route and database suites; existing suites whose acting member is not organization-wide now making it reach its Property; two comments that described the removed duplicate-approved invariant |
+| `d576409` | ADR-0064 extended, the gap analysis, the documentation updates and this section |
+| *(this commit)* | ADR-0064 Decision 7 states what happens when a request authorizes more than once (generation admission, the nested analysis routes, the pages), in answer to a review finding on PR #84 |
+
+### What this milestone changes
+
+- **Analyses and their review.** Starting or refreshing an analysis, listing a
+  Property's analyses, reading one, and approving, rejecting or correcting one
+  judge the photo's own Property. Out of reach, a read or a review is answered
+  as a photo with no analysis ("Analysis not found for this asset"), starting
+  one as a missing photo ("Asset not found"), and the list as empty.
+- **Video projects and storyboards.** Creating and listing projects judge the
+  Property ("Property not found"); composing, reading a storyboard and the
+  freshness check judge the project's Property ("Video project not found").
+- **Generation admission.** `GenerationService.startScene` runs the freshness
+  check and reads the storyboard as the acting member first, so a project out
+  of reach is refused as a missing project before any model is chosen or any
+  row written.
+- **Order.** The permission is checked first and the row's state last: an
+  analysis not yet succeeded or already reviewed, a photo not ready, too few
+  approved photos to compose, a storyboard never composed or out of date.
+- **A deleted Property** takes no new video project and lists none, for every
+  role, as one that does not exist (ADR-0064 Decision 9).
+- No migration, no route added or removed, no response shape changed.
+
+Behaviour a member can notice: only the deleted-Property refusal. Creating or
+listing video projects of a deleted Property through the API is now answered
+`404` "Property not found", for an `OWNER` too; the pages already showed a
+deleted Property as not found. Every other change concerns members who are not
+organization-wide, and no live organization has one.
+
+### A CREATOR composing a storyboard under a Property it does not reach
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as CREATOR
+  participant API as storyboard route
+  participant SS as StoryboardService
+  participant DB as PostgreSQL
+
+  C->>API: POST /api/video-projects/{project}/storyboard
+  API->>SS: compose(creator, org, project, bounds)
+  SS->>DB: membership and effective permissions
+  Note over SS: video.generate held
+  SS->>DB: SELECT video_projects WHERE id = project AND organizationId = org
+  SS->>DB: SELECT properties WHERE id = project's Property AND organizationId = org
+  Note over SS: OWN scope; the Property's responsible user is someone else
+  SS-->>API: NOT_FOUND "Video project not found" (no photo read, no moderation, no scene written)
+  API-->>C: 404, the same body as for a project id that does not exist
+```
+
+Generation admission takes the same path: `startScene` calls `assertFresh`,
+which stops at the same reach check.
+
+### Verification
+
+Measured on the committed tree `cc1001ec892044c8eb6481ce79a5f22c57d9383e` (commit `90e1f55e4c71b88b9646cc85c75b72d5f849b3b3`),
+against a local PostgreSQL 16 configured like CI.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` | clean |
+| `pnpm typecheck` (root, all packages, `tests/`) | clean |
+| `pnpm test` | **5132 / 5132, 169 files (every content path by role: 21; the routes: 11)** |
+| `pnpm test:db` | **1328 / 1328, 47 files (the content reach suite: 4)** |
+| `pnpm build` | Next.js production build succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 25 migrations, schema up to date |
+
+CI on the pull request's exact head is reported with the pull request.
+
+New tests:
+- **Every content path by role** (`content-reach.test.ts`): the six Properties
+  of the Property suite, each with a photo, an analysis and a video project,
+  against every role, through the real `PropertyService`, `AnalysisService`,
+  `StoryboardService` and `GenerationService`. Each role lists the analyses and
+  projects of exactly the Properties it reaches. Every read and each of the six
+  writes out of reach (start, refresh, approve, reject, correct, create a
+  project) is answered exactly as a missing id and changes nothing; composing
+  and generation admission out of reach write nothing and ask for no model. A
+  `MANAGER` reviews in its groups' Properties, not in one it is only the
+  responsible user of. The permission is checked before reach, and reach before
+  a photo's, an analysis's or a storyboard's state. A deleted Property takes no
+  new project and lists none. A reassignment and a group membership change
+  take effect on the next request.
+- **Routes** (`tests/api/content-reach-routes.test.ts`): `GET
+  /api/properties/{id}/analyses`, `GET` and `POST
+  /api/properties/{id}/video-projects`, and `GET` and `POST
+  /api/video-projects/{id}/storyboard`, against the real services. Out of
+  reach, each answers the same status and body (without the per-request id) as
+  a missing id and creates no project. On the member's own Property each goes
+  on to the path's own checks: the reads and the project creation succeed, and
+  composing a single unapproved photo is refused for the minimum (`422`).
+- **PostgreSQL** (`content-reach.db.test.ts`): a `CREATOR` reading and
+  reviewing only under the Property it is responsible for, with no review
+  written elsewhere; a `MANAGER` through its group; a deleted Property refusing
+  a new project and its list, with no project row written; a reassignment on
+  the next request.
+
+### Mutation ledger
+
+Each mutant removes or weakens one piece of reach, at an anchor that must occur
+exactly once, and runs against the suites listed for it, stopping at the first
+that fails. Every mutated file is restored and re-hashed. A SHA-256 manifest of
+all 781 files in the working tree is compared before and after the pass. A kill
+counts only when tests ran and failed; a mutant that does not parse would count
+as broken.
+
+**Authoritative: 18 run, 18 killed, 0 survivors, 0 broken, 0 anchor-missing**, in one uninterrupted pass against the tree
+`cc1001ec892044c8eb6481ce79a5f22c57d9383e` (commit `90e1f55e4c71b88b9646cc85c75b72d5f849b3b3`), the reviewed runtime tree. Every
+later commit changes documentation only. All 781 files were byte-identical after
+the pass.
+
+| # | Area | Mutation | File | Suites | Killed by |
+| --- | --- | --- | --- | --- | --- |
+| N01 | analysis | starting or refreshing an analysis skips reach | `analysis-service.ts` | unit | unit: 3 of 1174 failed |
+| N02 | order | starting an analysis checks the photo's state before reach | `analysis-service.ts` | unit | unit: 1 of 1174 failed |
+| N03 | analysis | listing a Property's analyses skips reach | `analysis-service.ts` | unit + database | unit: 4 of 1174 failed |
+| N04 | analysis | reading one analysis skips reach | `analysis-service.ts` | unit + database | unit: 2 of 1174 failed |
+| N05 | analysis | approve, reject and correct skip reach | `analysis-service.ts` | unit + database | unit: 5 of 1174 failed |
+| N06 | order | review checks the analysis's state before reach | `analysis-service.ts` | unit | unit: 5 of 1174 failed |
+| N07 | answer | review answers a photo out of reach with `403` | `analysis-service.ts` | unit + database | unit: 5 of 1174 failed |
+| N08 | order | review checks its permission after reach | `analysis-service.ts` | unit | unit: 7 of 1174 failed |
+| N09 | helper | a photo is judged by its organization only | `analysis-service.ts` | unit + database | unit: 9 of 1174 failed |
+| S01 | project | creating a project skips reach | `storyboard-service.ts` | unit | unit: 2 of 1174 failed |
+| S02 | deleted | creating a project accepts a deleted Property | `storyboard-service.ts` | unit + database | unit: 1 of 1174 failed |
+| S03 | project | listing projects skips reach | `storyboard-service.ts` | unit + database | unit: 2 of 1174 failed |
+| S04 | deleted | listing projects accepts a deleted Property | `storyboard-service.ts` | unit + database | unit: 1 of 1174 failed |
+| S05 | storyboard | composing skips reach | `storyboard-service.ts` | unit | unit: 3 of 1174 failed |
+| S06 | order | composing checks the minimum before reach | `storyboard-service.ts` | unit | unit: 3 of 1174 failed |
+| S07 | storyboard | reading a storyboard, freshness and generation admission skip reach | `storyboard-service.ts` | unit + database | unit: 5 of 1174 failed |
+| S08 | order | freshness reads "never composed" before reach | `storyboard-service.ts` | unit | unit: 5 of 1174 failed |
+| S09 | order | creating a project checks its permission after reach | `storyboard-service.ts` | unit | unit: 1 of 1174 failed |
+
+"unit" is the property, analysis, storyboard and generation domain suites, the
+content reach, analysis, review and storyboard route suites and the web library
+suites. "database" is `content-reach.db.test.ts` and
+`review-look-alike-approval.db.test.ts`. The unit suites killed every mutant
+first, so the database suites did not run for any.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table (a Phase 6I-2 row; the Phase 6I-1 row no longer says the rest is organization-wide) |
+| Entity-relationship diagram | Not applicable: no table, column or constraint changes. `docs/er-diagram.md` notes that analyses and video projects now inherit their Property's reach |
+| Critical sequence diagram | this section, *A CREATOR composing a storyboard under a Property it does not reach* |
+| OpenAPI / API change summary | HTTP: `GET /api/properties/{id}/analyses` answers `{ "analyses": [] }` for a Property out of reach. `GET` and `POST /api/properties/{id}/video-projects` and `GET` and `POST /api/video-projects/{id}/storyboard` answer `404` out of reach, with the body they give for a missing id; the two video-project routes also answer `404` for a deleted Property. No route added or removed; no response shape changed. Internal API: `AnalysisServiceDeps.properties` |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | Not applicable: no migration. `docs/migration-notes.md` records that no query or index changes |
+| Phase completion report | this file |
+
+Also updated: ADR-0064 (status, Decisions 3 to 6, Decision 9, consequences),
+`docs/phase-6i-gap-analysis.md` (status, what 6I-2 found), `docs/Roadmap.md`
+and `docs/decisions/TODO.md` (the Scope items closed, and one new open item).
+
+### Activation status
+
+No timer, cron or loop is introduced. Paid Provider Activation, production
+Provider credentials, production paid AI calls, production scheduler activation
+and live Stripe charges all remain **BLOCKED**.
+
+### Found during 6I-2, not changed
+
+A video project created before its Property was deleted can still be read and
+composed through the storyboard paths, and generation admission accepts its
+storyboard if it is fresh. This was so before 6I and ADR-0052 does not settle
+it, so it is recorded in `docs/decisions/TODO.md` for a decision rather than
+changed here.
+
+### Carried forward
+
+MFA before any member, grant, group or assignment screen; user and organization
+deletion releasing assignments; the deleted-Property question above; the
+choices recorded in `TODO.md` for confirmation; the provider-output race test
+that asserts too much (Phase 6F).

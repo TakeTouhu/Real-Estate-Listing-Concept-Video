@@ -13,15 +13,15 @@ import { AppError } from "@app/shared";
  * cross-tenant leak, but wrong, and the page must not show it.
  *
  * Returns `null` for the two cases that mean "this route does not resolve" —
- * the project does not exist (for this caller), or it belongs to another
+ * the project does not exist for this caller (missing, another tenant's, or
+ * under a Property out of its reach, ADR-0064), or it belongs to another
  * property. The caller turns both into its ordinary not-found behaviour, so a
  * mismatch is indistinguishable from a missing project and never reveals that
  * the project exists under some other property.
  *
- * **Everything else propagates.** An authorization refusal, a repository
- * failure, or the duplicate-approved-input invariant must not be flattened into
- * "not found": that would present a broken system as a missing page, the same
- * mistake `isFresh` is written to avoid.
+ * **Everything else propagates.** An authorization refusal or a repository
+ * failure must not be flattened into "not found": that would present a broken
+ * system as a missing page, the same mistake `isFresh` is written to avoid.
  *
  * Takes the load as a thunk so the rule is testable without standing up the
  * service graph.
