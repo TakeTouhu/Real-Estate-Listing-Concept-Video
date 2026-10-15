@@ -96,7 +96,7 @@ ADR-0010's cross-tenant rule applied inside the organization.
 
 ## Decision 4 — The order of the checks
 
-On every path:
+On every service path (Decision 5):
 1. Organization membership and the permission (`authorizeOrganization`). A
    member without the permission is refused `403` before anything is looked up,
    as before, whether the Property exists or not.
@@ -108,6 +108,18 @@ On every path:
 
 Checking state before reach would let a state message reveal a row the member
 cannot reach.
+
+The nested analysis routes (`/api/properties/{id}/assets/{photo}/analysis…`)
+keep the check they already had in front of the analysis service:
+`requireAssetInProperty` confirms, with `property.view`, that the photo belongs
+to the Property the URL names, and answers `404` otherwise. It lists through
+`AssetService.list`, so it now also answers `404` for a photo out of reach. A
+member that holds `property.view` but not the action's own permission
+(`analysis.review` or `asset.upload`) is therefore refused `403` only for a
+photo it reaches. For a photo out of reach it gets the `404` that a missing
+photo, a photo under another Property and another organization's photo already
+got before this ADR (Decision 3). That tells the member nothing its own
+Property list does not.
 
 ## Decision 5 — The paths 6I-1 covers
 

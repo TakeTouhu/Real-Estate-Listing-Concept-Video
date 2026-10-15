@@ -65,7 +65,7 @@ authorization itself.
 | The Property list | every Property of the organization | the Properties the member reaches, filtered in the query | `PropertyRepository.listReachable` |
 | Single rows | found by organization and id | also reached, else answered as not found | `findReachableProperty`, then each path |
 | Children | found by organization and id | judged by their own Property | `AssetService.requireReachableAsset` (6I-1); analysis and storyboard (6I-2) |
-| Order | permission, then the row and its state | permission, the row, reach, then its state | every path |
+| Order | permission, then the row and its state | permission, the row, reach, then its state | every service path (the nested analysis routes check the photo's Property first, as before; ADR-0064 Decision 4) |
 | Video projects of a deleted Property | created and listed | refused, as the Property and upload paths already do | `StoryboardService` (6I-2) |
 
 ## Choices ADR-0052 does not make (defaults taken, recorded in `TODO.md`)
