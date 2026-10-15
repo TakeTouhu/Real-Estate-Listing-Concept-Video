@@ -16,6 +16,7 @@ import {
   InMemoryAssetAnalysisRepository,
   InMemoryMediaAssetRepository,
   InMemoryReviewTransaction,
+  StandInProperties,
 } from "@app/domain/testing";
 
 /**
@@ -178,8 +179,12 @@ beforeEach(async () => {
   const assets = new InMemoryMediaAssetRepository(deps.clock);
   const storage = new MapStorage();
   const provider = new StubProvider();
+  // The CREATOR reaches the fixture's Property as its responsible user (ADR-0064).
+  const properties = new StandInProperties();
+  properties.assign("prp_1", { responsibleUserId: creator.id });
   const service = new AnalysisService({
     identity: deps,
+    properties,
     assets,
     analyses,
     storage,

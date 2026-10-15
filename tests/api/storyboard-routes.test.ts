@@ -82,7 +82,13 @@ async function setup(): Promise<Context> {
     role: "VIEWER" as Role,
   });
 
-  const seedProperty = async (id: string, organizationId: string, name: string, createdBy: string) => {
+  const seedProperty = async (
+    id: string,
+    organizationId: string,
+    name: string,
+    createdBy: string,
+    responsibleUserId: string | null = null,
+  ) => {
     const created = await properties.create(
       {
         id,
@@ -93,7 +99,7 @@ async function setup(): Promise<Context> {
         description: null,
         status: "ACTIVE",
         createdBy,
-        responsibleUserId: null,
+        responsibleUserId,
         groupId: null,
       },
       { organizationId, actorUserId: createdBy, action: "property.created", resourceType: "property", resourceId: id, metadata: {} },
@@ -101,7 +107,8 @@ async function setup(): Promise<Context> {
     if (created.outcome !== "CREATED") throw new Error("seed property not created");
     return created.property;
   };
-  const property = await seedProperty("prp_1", org.id, "Sunny flat", owner.id);
+  // The VIEWER reaches it as its responsible user (ADR-0064).
+  const property = await seedProperty("prp_1", org.id, "Sunny flat", owner.id, viewer.id);
   const otherProperty = await seedProperty("prp_other", other.id, "Rival flat", outsider.id);
 
   storyboardService.value = new StoryboardService({
