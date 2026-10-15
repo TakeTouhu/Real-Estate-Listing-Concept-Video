@@ -101,3 +101,13 @@ partial description and treating the migrations directory as authoritative.
 - `docs/phase-3b1a-completion.md` — the empirical drift-check verification
 - `tests/integration/review-transaction.db.test.ts` — the five cases proving the
   index behaves as intended
+
+## Superseded in part — 2026-10-15 (ADR-0063)
+
+The index this record was written for is gone. ADR-0052 Decision 14 makes
+look-alike photos the customer's responsibility, so "at most one approved
+analysis per duplicate group" is no longer a rule, and migration 24 drops
+`asset_analyses_org_dupgroup_approved_key`. The decision above, permitting raw
+SQL for an invariant Prisma cannot express under the six conditions, stands for
+every later such constraint. `tests/integration/review-transaction.db.test.ts`
+now asserts that two members of one group can both be approved.

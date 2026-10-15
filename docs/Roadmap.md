@@ -203,6 +203,13 @@ counted in its audit entry. Creation and every assignment change commit with
 their audit entries. Dormant: no route or page assigns, and reach is not
 enforced.
 
+**Near-duplicate rule removal** (ADR-0063, migration 24, before 6I): look-alike
+photos are the customer's responsibility (ADR-0052 Decision 14). Each photo is
+approved on its own, with no cluster or primary choice; the one-approved-per-group
+index is dropped; storyboards admit approved look-alikes; and no response or
+screen carries look-alike data. The perceptual hash and duplicate group stay,
+internally.
+
 **Authorization still to build, before the commercial mutations that depend on
 it:** enforcing Property-rooted Scope on every content path (6I). MFA for
 `permission.manage` and `billing.manage` holders before any member-management

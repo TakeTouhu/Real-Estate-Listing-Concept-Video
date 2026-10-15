@@ -118,3 +118,10 @@ Two consequences, both accepted:
   outputs; the digest still describes inputs.
 
 See ADR-0015 for the current correction contract.
+
+## Superseded in part — 2026-10-15 (ADR-0063)
+
+*Duplicate suppression is not re-implemented* no longer holds as written. The
+index from ADR-0011 is dropped and selection no longer checks duplicate groups:
+two approved look-alikes are two eligible inputs (ADR-0052 Decision 14). The
+fingerprint definition is unchanged.

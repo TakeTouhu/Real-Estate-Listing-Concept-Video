@@ -76,7 +76,8 @@ no create action.
 
 **No near-duplicate warning.** Visual similarity between photographs is
 intentionally the customer's concern: it produces no warning, no block and no
-Unit consequence (ADR-0052 Decision 14).
+Unit consequence (ADR-0052 Decision 14). Since ADR-0063 the upload panel no
+longer says a photo "looks similar" to existing ones.
 
 ### AI analysis review
 
@@ -87,13 +88,11 @@ Low-confidence classification cannot silently proceed.
 This surface is **retained** under the `analysis.review` permission. It concerns
 source photographs, not the finished video.
 
-> **Known contradiction with the approved contract, recorded rather than
-> rewritten.** The shipped surface described below clusters near-duplicates and
-> allows only one member of a group to be approved. ADR-0052 Decision 14 removes
-> customer-facing near-duplicate warnings and blocks, so that behaviour must be
-> removed or neutralized as implementation work — tracked in
-> `docs/decisions/TODO.md`. The records below are left as written because they
-> are accurate history of what shipped.
+> **Near-duplicate behaviour removed (ADR-0063, 2026-10-15).** Phase 3B shipped
+> this surface with near-duplicates clustered and only one member of a group
+> approvable. ADR-0052 Decision 14 removed customer-facing near-duplicate
+> warnings and blocks, and ADR-0063 removed that behaviour. The sections below
+> describe the surface as it is now; the Phase 3B records keep what shipped.
 
 #### Implemented — `/properties/{propertyId}/review` (Phase 3B-3a, read-only)
 
@@ -104,10 +103,8 @@ message). Each row shows a short-lived signed thumbnail, filename, room label,
 analysis revision, blocking findings in the error style, warnings and
 low-confidence as cautions.
 
-Near-duplicates sharing a group render as one cluster stating that only one may
-be approved; a group of one is an ordinary row. When a member already holds the
-group's approval, the others state so rather than offering an action that would
-fail.
+Every photo is its own row. Photos that look alike are neither grouped nor
+flagged, and approving one never affects another (ADR-0052 Decision 14).
 
 A decision is presented as an immutable record — decision, note, reviewer **user
 id**, timestamp, and the revision it was made against — with the statement that
@@ -122,9 +119,8 @@ enforces the same rule independently.
 Where a decision is available the page mounts approve and reject controls —
 never a single toggle. Approve takes an optional note; reject requires a reason
 and its control stays unusable while the field is blank, mirroring the domain
-rule rather than replacing it. Inside a duplicate cluster a radio group names
-the primary and approval acts on the selected member, so the request's target
-and its `primaryAssetId` cannot disagree.
+rule rather than replacing it. Approval names no primary photo; an approve
+request that still carries `primaryAssetId` is accepted and the field ignored.
 
 Controls are absent — not merely disabled — for a decided revision, for a viewer
 without `analysis.review`, and for approval of a photo carrying a blocking finding.
