@@ -567,6 +567,8 @@ describe("tenant isolation for properties and assets", () => {
     });
     const viewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
     await members.acceptInvitation(viewer.id, token);
+    // A VIEWER reaches only the Properties it is responsible for (Phase 6I).
+    await ctx.properties.assign(ctx.ownerId, ctx.orgId, property.id, { responsibleUserId: viewer.id });
 
     // A viewer may read but not write.
     expect((await ctx.properties.list(viewer.id, ctx.orgId)).length).toBe(1);
@@ -594,11 +596,13 @@ describe("the permission each property and asset action checks", () => {
     const billing = await auth.register({ email: "billing@example.com", name: "B", password: PASSWORD });
     await ctx.deps.repos.memberships.create({ organizationId: ctx.orgId, userId: viewer.id, role: "VIEWER" });
     await ctx.deps.repos.memberships.create({ organizationId: ctx.orgId, userId: billing.id, role: "BILLING" });
+    // The VIEWER is its responsible user, so it reaches the Property (Phase 6I).
     const property = await ctx.properties.create(ctx.ownerId, {
       organizationId: ctx.orgId,
       name: "Listing",
       propertyType: "HOUSE",
       rightsConfirmed: true,
+      responsibleUserId: viewer.id,
     });
     const { asset } = await ctx.assets.requestUpload(ctx.ownerId, {
       organizationId: ctx.orgId,

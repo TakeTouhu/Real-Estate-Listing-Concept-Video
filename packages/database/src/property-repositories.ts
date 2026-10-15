@@ -1,5 +1,6 @@
 import type {
   MediaAsset as DbMediaAsset,
+  Prisma,
   PrismaClient,
   Property as DbProperty,
 } from "@prisma/client";
@@ -8,8 +9,24 @@ import type {
   MediaAssetRepository,
   Property,
   PropertyRepository,
+  Reach,
 } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
+
+/**
+ * The assignment condition a reach adds to the organization's Properties. An
+ * empty group list matches nothing, as `GROUP` reaches no ungrouped Property.
+ */
+function reachFilter(reach: Reach): Prisma.PropertyWhereInput {
+  switch (reach.scope) {
+    case "ORGANIZATION":
+      return {};
+    case "GROUP":
+      return { groupId: { in: [...reach.groupIds] } };
+    case "OWN":
+      return { responsibleUserId: reach.userId };
+  }
+}
 
 /**
  * Whether a thrown value is Prisma's "no record matched the filter".
@@ -127,10 +144,10 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
       const row = await prisma.property.findFirst({ where: { id, organizationId } });
       return row ? toProperty(row) : null;
     },
-    async listByOrganization(organizationId) {
+    async listReachable(reach) {
       return (
         await prisma.property.findMany({
-          where: { organizationId, status: { not: "DELETED" } },
+          where: { organizationId: reach.organizationId, status: { not: "DELETED" }, ...reachFilter(reach) },
           orderBy: { createdAt: "desc" },
         })
       ).map(toProperty);
