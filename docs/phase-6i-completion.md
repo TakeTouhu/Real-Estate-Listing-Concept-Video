@@ -203,7 +203,8 @@ Commits, oldest first:
 | Commit | What it carries |
 | --- | --- |
 | `90e1f55` | reach on the seven `AnalysisService` paths (start, refresh, list, read, approve, reject, correct) and the `StoryboardService` paths (create and list projects, compose, read a storyboard, freshness), which generation admission runs first; `AnalysisService` taking the Property repository; a deleted Property taking no new video project and listing none; the per-path, route and database suites; existing suites whose acting member is not organization-wide now making it reach its Property; two comments that described the removed duplicate-approved invariant |
-| *(this commit)* | ADR-0064 extended, the gap analysis, the documentation updates and this section |
+| `d576409` | ADR-0064 extended, the gap analysis, the documentation updates and this section |
+| *(this commit)* | ADR-0064 Decision 7 states what happens when a request authorizes more than once (generation admission, the nested analysis routes, the pages), in answer to a review finding on PR #84 |
 
 ### What this milestone changes
 
@@ -311,9 +312,9 @@ counts only when tests ran and failed; a mutant that does not parse would count
 as broken.
 
 **Authoritative: 18 run, 18 killed, 0 survivors, 0 broken, 0 anchor-missing**, in one uninterrupted pass against the tree
-`cc1001ec892044c8eb6481ce79a5f22c57d9383e` (commit `90e1f55e4c71b88b9646cc85c75b72d5f849b3b3`), the reviewed runtime tree. The only
-later commit is this one, which changes documentation only. All 781 files were
-byte-identical after the pass.
+`cc1001ec892044c8eb6481ce79a5f22c57d9383e` (commit `90e1f55e4c71b88b9646cc85c75b72d5f849b3b3`), the reviewed runtime tree. Every
+later commit changes documentation only. All 781 files were byte-identical after
+the pass.
 
 | # | Area | Mutation | File | Suites | Killed by |
 | --- | --- | --- | --- | --- | --- |

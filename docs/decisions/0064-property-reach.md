@@ -193,11 +193,21 @@ Every route and page calls these services, so none needs a rule of its own:
 
 ## Decision 7 — Concurrency
 
-Reach is read when the member is authorized, once per request.
+Reach is read each time a service authorizes the member, together with the
+membership and permissions it reads then.
 - An action already authorized completes. A reassignment, group membership
   change or role change that commits during it gives the same result as if the
   action had finished just before. ADR-0058, ADR-0060 and ADR-0062 apply the
   same reasoning to role, group and assignment changes.
+- A few requests authorize more than once before they act: the nested analysis
+  routes check the photo's Property and then call the analysis service;
+  generation admission runs the freshness check and then reads the storyboard
+  (6I-2); a page reads the Property and then what is under it. Nothing is
+  written before the last of those checks, so a change that commits between two
+  of them refuses the request (`404`), as if it had arrived just after the
+  change. No reach snapshot is carried from one check to the next. A permission
+  revoked between the same checks has refused such a request (`403`) since
+  those paths were built.
 - A signed URL issued before reach was lost stays valid until it expires: 10
   minutes for an upload, 5 for a download. The same is true today when a
   permission is revoked.
