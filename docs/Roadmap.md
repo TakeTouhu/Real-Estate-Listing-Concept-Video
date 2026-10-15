@@ -223,8 +223,14 @@ storyboards and generation admission are reached exactly when their Property
 is, and out of reach they are answered as rows that do not exist. A deleted
 Property takes no new video project and lists none.
 
+**MFA-1 — authenticator-app MFA, foundation** (ADR-0065, migration 25):
+TOTP and recovery codes, the sealed secret, who must use MFA, and `MfaService`,
+each change audited. Dormant: no route calls it yet.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** MFA for `permission.manage` and `billing.manage` holders before any
+it:** the MFA screens and two-step sign-in (MFA-2), mandatory MFA for `OWNER`,
+`ADMIN`, `permission.manage` and `billing.manage` holders (MFA-3), and an
+organization's requirement for all members (MFA-4), before any
 member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block

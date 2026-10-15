@@ -23,6 +23,8 @@ erDiagram
   MEMBERSHIPS |o--o{ PROPERTIES : "is responsible for (NO ACTION)"
   GROUPS |o--o{ PROPERTIES : "groups (NO ACTION)"
   USERS ||--o{ SESSIONS : holds
+  USERS ||--o| USER_MFA_FACTORS : "protects with (CASCADE)"
+  USER_MFA_FACTORS ||--o{ USER_MFA_RECOVERY_CODES : "falls back to (CASCADE)"
   PROPERTIES ||--o{ MEDIA_ASSETS : contains
   MEDIA_ASSETS ||--o| ASSET_ANALYSES : "is analyzed by"
   PROPERTIES ||--o{ VIDEO_PROJECTS : "is filmed by"
@@ -113,6 +115,23 @@ erDiagram
     string userId FK
     string tokenHash UK "SHA-256 only"
     datetime expiresAt
+    datetime mfaVerifiedAt "nullable; when this sign-in passed MFA"
+    int    mfaFailedAttempts "default 0; the fifth wrong code deletes the row"
+    string mfaPendingSecret "nullable; sealed set-up secret"
+    datetime createdAt
+  }
+
+  USER_MFA_FACTORS {
+    string userId PK "FK users, CASCADE"
+    string secret "AES-256-GCM sealed, key id prefix"
+    int    lastUsedStep "a code for it or earlier is refused"
+    datetime enabledAt
+    datetime updatedAt
+  }
+
+  USER_MFA_RECOVERY_CODES {
+    string userId PK "FK user_mfa_factors, CASCADE"
+    string codeHash PK "SHA-256 hex only (CHECK)"
     datetime createdAt
   }
 
@@ -581,6 +600,15 @@ From Phase 6I-2 the same holds for the rows under a Property: `asset_analyses`
 through their photo's `media_assets.propertyId`, and `video_projects` and their
 storyboard scenes through `video_projects.propertyId`, which generation
 admission also checks.
+
+## MFA-1 — authenticator-app MFA
+
+Migration 25. `user_mfa_factors` has a row exactly while a user has MFA on;
+its secret is sealed, never stored in clear. `user_mfa_recovery_codes` keeps
+unused codes as SHA-256 hashes, which a `CHECK` enforces; using a code deletes
+its row, and the foreign key to the factor deletes them all when MFA is turned
+off. `sessions` gains the MFA state of the sign-in. MFA belongs to the person,
+so none of these carries an organization (ADR-0065).
 
 ## Not implemented yet (later phases)
 
