@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 /**
  * Step 2 of the upload flow: validate and process the uploaded bytes
  * (content MIME, limits, malware scan, EXIF strip, thumbnail, perceptual hash).
+ *
+ * Look-alike photos are internal data only (ADR-0052 Decision 14), so the
+ * response never says which existing photos this one resembles.
  */
 export async function POST(
   request: Request,
@@ -29,7 +32,7 @@ export async function POST(
   }
 
   try {
-    const { asset, duplicateOf } = await getPropertyServices().assets.completeUpload(
+    const { asset } = await getPropertyServices().assets.completeUpload(
       current.user.id,
       organizationId,
       assetId,
@@ -40,7 +43,6 @@ export async function POST(
       failureReason: asset.failureReason,
       width: asset.width,
       height: asset.height,
-      duplicateOf,
     });
   } catch (error) {
     return appErrorToResponse(error);

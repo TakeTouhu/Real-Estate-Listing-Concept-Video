@@ -27,7 +27,7 @@ const BLOCKED_BY_UNSAVED =
   "Save or discard your correction changes before approving or rejecting.";
 
 /**
- * Coordinate the two review operations for one photo — or one duplicate cluster.
+ * Coordinate the two review operations for one photo.
  *
  * They remain **separate writes**: correcting and deciding are different HTTP
  * calls, different audit events, and different buttons. Approve never submits a
@@ -41,9 +41,8 @@ const BLOCKED_BY_UNSAVED =
  * A **failed** save keeps the edits dirty, so it does not unlock them either.
  *
  * It holds presentation state and nothing else: no domain rule, no knowledge of
- * how corrections are stored, no context provider, no store. A cluster's photos
- * share one decision panel, so any dirty member blocks that panel — which is
- * correct, since approving the cluster acts on the member being edited.
+ * how corrections are stored, no context provider, no store. Any dirty
+ * correction blocks the decision panel mounted beside it.
  */
 export function ReviewItemControls({
   organizationId,

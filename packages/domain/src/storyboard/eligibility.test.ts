@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { AppError } from "@app/shared";
 import type { AssetAnalysis } from "../analysis/types";
 import { selectEligibleAnalyses } from "./eligibility";
 
@@ -84,18 +83,14 @@ describe("no minimum is enforced here", () => {
   });
 });
 
-describe("duplicate-group invariant", () => {
-  it("rejects two approved analyses sharing one duplicate group", () => {
-    // The partial unique index makes this state impossible in the database, so
-    // reaching it means a guarantee has been violated. Picking a winner here
-    // would hide that.
-    const call = () =>
-      selectEligibleAnalyses([
-        analysis("a", { duplicateGroup: "dup_1" }),
-        analysis("b", { duplicateGroup: "dup_1" }),
-      ]);
-    expect(call).toThrow(AppError);
-    expect(call).toThrow(/duplicate group/i);
+describe("look-alike photos (ADR-0052 Decision 14)", () => {
+  it("admits two approved analyses sharing one duplicate group", () => {
+    // Which look-alike to use is the customer's call, made when they approve.
+    const eligible = selectEligibleAnalyses([
+      analysis("a", { duplicateGroup: "dup_1" }),
+      analysis("b", { duplicateGroup: "dup_1" }),
+    ]);
+    expect(eligible.map((i) => i.assetId)).toEqual(["a", "b"]);
   });
 
   it("accepts one approved member per group across several groups", () => {

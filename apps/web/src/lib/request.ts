@@ -36,9 +36,8 @@ export function requireOrganizationIdFromQuery(request: Request): string {
  * Read a JSON body once, returning `organizationId` alongside the raw object so
  * a route can forward its remaining fields without re-reading the stream.
  *
- * Only shape is checked. Whether a field is *required* — a rejection reason, a
- * primary asset for a duplicate group — is a domain rule, decided by
- * AnalysisService, never here.
+ * Only shape is checked. Whether a field is *required*, such as a rejection
+ * reason, is a domain rule, decided by AnalysisService, never here.
  */
 export async function readJsonBody(
   request: Request,

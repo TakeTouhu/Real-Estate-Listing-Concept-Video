@@ -384,9 +384,10 @@ describe("durable shape", () => {
     // renamed or split it.
     expect(dirs.filter((dir) => dir.includes("phase5b"))).toEqual([MIGRATION_DIR]);
     // Phase 6A's migration 17, Phase 6B's migration 18, Phase 6C's migration 19,
-    // Phase 6D's migration 20, Phase 6F's migration 21, Phase 6G's migration 22
-    // and Phase 6H's migration 23 follow Phase 5C's, so it is now ninth from last.
-    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 9);
+    // Phase 6D's migration 20, Phase 6F's migration 21, Phase 6G's migration 22,
+    // Phase 6H's migration 23 and the near-duplicate rule removal's migration 24
+    // follow Phase 5C's, so it is now tenth from last.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 10);
   });
 
   it("creates one table and rewrites no existing row", () => {

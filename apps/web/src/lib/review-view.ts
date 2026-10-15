@@ -15,8 +15,8 @@ import {
  * every rule below is unit-testable without a DOM.
  *
  * It decides only what to *show*. Whether a decision is permitted is settled by
- * AnalysisService and the database constraint behind it; the flags here exist so
- * a reviewer is not offered an action that is certain to fail.
+ * AnalysisService; the flags here exist so a reviewer is not offered an action
+ * that is certain to fail.
  */
 
 /** Where an asset sits in the review workflow. */
@@ -79,17 +79,8 @@ export interface ReviewItem {
   readonly correction: CorrectionState | null;
 }
 
-/** Analyses sharing a perceptual-duplicate group, shown as one choice. */
-export interface DuplicateCluster {
-  readonly duplicateGroup: string;
-  readonly items: readonly ReviewItem[];
-  /** The member already holding the group's single approval, if any. */
-  readonly approvedAssetId: string | null;
-}
-
 export interface ReviewBoard {
   readonly awaiting: readonly ReviewItem[];
-  readonly clusters: readonly DuplicateCluster[];
   readonly decided: readonly ReviewItem[];
   readonly notReviewable: readonly ReviewItem[];
   /** Presentation-level authorization; the API enforces it independently. */
@@ -98,7 +89,6 @@ export interface ReviewBoard {
 
 const NO_PERMISSION = "Your role cannot approve or reject photos.";
 const BLOCKED = "This photo has a blocking safety finding and cannot be approved; reject it instead.";
-const GROUP_TAKEN = "Another photo in this duplicate set is already approved.";
 
 export function humanizeRoomType(roomType: AssetAnalysis["roomType"]): string {
   if (!roomType) return "Unclassified";
@@ -120,13 +110,11 @@ function actionsOf(
   analysis: AssetAnalysis | undefined,
   bucket: ReviewBucket,
   canReview: boolean,
-  groupTaken: boolean,
 ): ReviewActions {
   if (bucket !== "AWAITING" || !analysis) {
     return { canApprove: false, canReject: false, unavailableReason: null };
   }
   if (!canReview) return { canApprove: false, canReject: false, unavailableReason: NO_PERMISSION };
-  if (groupTaken) return { canApprove: false, canReject: false, unavailableReason: GROUP_TAKEN };
   const blocked = hasBlockingFlag(analysis);
   return { canApprove: !blocked, canReject: true, unavailableReason: blocked ? BLOCKED : null };
 }
@@ -158,10 +146,8 @@ function correctionOf(
 /**
  * Join assets to their analyses and bucket them.
  *
- * Duplicate groups with more than one member become clusters shown as a single
- * choice, and their members are not repeated in the flat buckets. A group of one
- * is not a duplicate and stays an ordinary row — matching the domain, which only
- * requires a primary choice once a group has two members.
+ * Every photo is its own row. Look-alike photos are not grouped or flagged
+ * (ADR-0052 Decision 14): which of them to use is the customer's call.
  */
 export function buildReviewBoard(
   assets: readonly MediaAsset[],
@@ -172,23 +158,11 @@ export function buildReviewBoard(
   const canReview = permissions.includes("analysis.review");
   const byAsset = new Map(analyses.map((a) => [a.assetId, a]));
 
-  // Group sizes first: a member's own actions depend on the whole group.
-  const sizes = new Map<string, number>();
-  const approvedIn = new Map<string, string>();
-  for (const a of analyses) {
-    if (a.status !== "SUCCEEDED" || !a.duplicateGroup) continue;
-    sizes.set(a.duplicateGroup, (sizes.get(a.duplicateGroup) ?? 0) + 1);
-    if (a.reviewStatus === "APPROVED") approvedIn.set(a.duplicateGroup, a.assetId);
-  }
-
-  const entries = assets.map((asset) => {
+  const items = assets.map((asset): ReviewItem => {
     const analysis = byAsset.get(asset.id);
     const bucket = bucketOf(analysis);
-    const grouped = analysis?.status === "SUCCEEDED" ? analysis.duplicateGroup : null;
-    const group = grouped && (sizes.get(grouped) ?? 0) > 1 ? grouped : null;
-    const approved = group ? (approvedIn.get(group) ?? null) : null;
     const flags = analysis?.safetyFlags ?? [];
-    const item: ReviewItem = {
+    return {
       assetId: asset.id,
       filename: asset.originalFilename,
       bucket,
@@ -208,26 +182,15 @@ export function buildReviewBoard(
               analysisRevision: analysis.analysisRevision,
             }
           : null,
-      actions: actionsOf(analysis, bucket, canReview, approved !== null && approved !== asset.id),
+      actions: actionsOf(analysis, bucket, canReview),
       correction: correctionOf(analysis, bucket, canReview),
     };
-    return { item, group };
   });
 
-  const clusters = [...sizes.entries()]
-    .filter(([, size]) => size > 1)
-    .map(([duplicateGroup]) => ({
-      duplicateGroup,
-      items: entries.filter((e) => e.group === duplicateGroup).map((e) => e.item),
-      approvedAssetId: approvedIn.get(duplicateGroup) ?? null,
-    }));
-
-  const loose = entries.filter((e) => e.group === null).map((e) => e.item);
   return {
-    awaiting: loose.filter((i) => i.bucket === "AWAITING"),
-    clusters,
-    decided: loose.filter((i) => i.bucket === "DECIDED"),
-    notReviewable: loose.filter((i) => i.bucket === "NOT_REVIEWABLE"),
+    awaiting: items.filter((i) => i.bucket === "AWAITING"),
+    decided: items.filter((i) => i.bucket === "DECIDED"),
+    notReviewable: items.filter((i) => i.bucket === "NOT_REVIEWABLE"),
     canReview,
   };
 }

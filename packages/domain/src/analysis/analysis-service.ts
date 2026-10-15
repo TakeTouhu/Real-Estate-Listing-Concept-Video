@@ -7,12 +7,7 @@ import type { MediaAsset } from "../property/types";
 import { AnalysisAuditAction } from "./audit";
 import { effectiveRoomType } from "./effective";
 import { deriveQualityFlags } from "./normalization";
-import {
-  DuplicateApprovalConflictError,
-  type AssetAnalysisRepository,
-  type ImageAnalysisProvider,
-  type ReviewTransaction,
-} from "./ports";
+import type { AssetAnalysisRepository, ImageAnalysisProvider, ReviewTransaction } from "./ports";
 import { resolveDuplicateGroup, roomOrderRank, type DuplicateCandidate } from "./rules";
 import {
   hasBlockingFlag,
@@ -326,12 +321,9 @@ export class AnalysisService {
    * already carries a decision is refused, and only a refresh (which clears the
    * review state and starts a new revision) makes the asset reviewable again.
    *
-   * Duplicate groups are a soft block. When the asset's group has more than one
-   * member the caller must name `primaryAssetId`, and it must be this asset —
-   * the reviewer chooses the primary rather than approving by accident. Whether
-   * another member is *already* approved is decided by the PostgreSQL partial
-   * unique index on `(organizationId, duplicateGroup) WHERE reviewStatus =
-   * 'APPROVED'`, not by a read here: a pre-check would be a check-then-act race.
+   * A near-duplicate group never affects the decision (ADR-0052 Decision 14):
+   * look-alike photos are the customer's responsibility, so each photo is
+   * approved on its own, whatever its group's other members are or hold.
    */
   async approve(
     actorUserId: string,
@@ -350,7 +342,6 @@ export class AnalysisService {
         "An analysis with a blocking safety finding cannot be approved; reject it instead",
       );
     }
-    await this.requirePrimaryChoice(organizationId, analysis, assetId, input.primaryAssetId);
 
     const reason = optionalReason(input.reason);
     const approved = await this.writeDecision(analysis, "APPROVED", reason, actorUserId);
@@ -551,57 +542,7 @@ export class AnalysisService {
     return { analysis, asset };
   }
 
-  /**
-   * A multi-member duplicate group requires the reviewer to name the primary,
-   * and it must be the asset being approved. Only the group's membership is
-   * read here; whether a member is already approved is the database's call.
-   */
-  private async requirePrimaryChoice(
-    organizationId: string,
-    analysis: AssetAnalysis,
-    assetId: string,
-    primaryAssetId: string | undefined,
-  ): Promise<void> {
-    if (!analysis.duplicateGroup) return;
-    const members = await this.duplicateGroupMembers(organizationId, analysis.duplicateGroup);
-    if (members.length < 2) return;
-
-    if (!primaryAssetId) {
-      throw new AppError(
-        "VALIDATION_FAILED",
-        "This photo has near-duplicates; choose the primary asset before approving",
-      );
-    }
-    if (primaryAssetId !== assetId) {
-      throw new AppError(
-        "VALIDATION_FAILED",
-        "primaryAssetId must be the asset being approved",
-      );
-    }
-  }
-
-  /** Analyses sharing a duplicate group, organization-scoped. */
-  private async duplicateGroupMembers(
-    organizationId: string,
-    duplicateGroup: string,
-  ): Promise<AssetAnalysis[]> {
-    const hashed = await this.deps.assets.listWithPerceptualHash(organizationId);
-    const analyses = await this.deps.analyses.listByAssetIds(
-      organizationId,
-      hashed.map((a) => a.id),
-    );
-    return analyses.filter((a) => a.duplicateGroup === duplicateGroup);
-  }
-
-  /**
-   * Persist a decision, turning the repository's neutral duplicate-group
-   * conflict into a validation failure. Recognizing the underlying constraint
-   * violation is the adapter's job, so no database vocabulary reaches here.
-   *
-   * The conflict is never retried or reconciled: unlike the insert race in
-   * `reserve`, losing this one means another member is already the approved
-   * primary, which is a decision for the reviewer, not the system.
-   */
+  /** Persist a decision against the revision it was made for. */
   private async writeDecision(
     analysis: AssetAnalysis,
     reviewStatus: "APPROVED" | "REJECTED",
@@ -609,24 +550,14 @@ export class AnalysisService {
     actorUserId: string,
   ): Promise<AssetAnalysis> {
     const now = this.deps.clock.now();
-    try {
-      return await this.deps.analyses.update({
-        ...analysis,
-        reviewStatus,
-        reviewNote: reason,
-        reviewedBy: actorUserId,
-        reviewedAt: now,
-        updatedAt: now,
-      });
-    } catch (error) {
-      if (error instanceof DuplicateApprovalConflictError) {
-        throw new AppError(
-          "VALIDATION_FAILED",
-          "Another photo in this duplicate group is already approved",
-        );
-      }
-      throw error;
-    }
+    return this.deps.analyses.update({
+      ...analysis,
+      reviewStatus,
+      reviewNote: reason,
+      reviewedBy: actorUserId,
+      reviewedAt: now,
+      updatedAt: now,
+    });
   }
 
   private recordDecision(

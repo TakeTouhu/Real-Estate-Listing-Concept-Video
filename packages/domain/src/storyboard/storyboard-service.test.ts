@@ -370,15 +370,16 @@ describe("delegation to the existing primitives", () => {
     expect(stored.scenes.map((s) => s.assetId).sort()).toEqual(["ast_a", "ast_b", "ast_c"]);
   });
 
-  it("propagates the eligibility duplicate invariant", async () => {
+  it("composes two approved look-alikes as two scenes (ADR-0052 Decision 14)", async () => {
     const analyses = [
       analysis("ast_a", { duplicateGroup: "dup_1" }),
       analysis("ast_b", { duplicateGroup: "dup_1" }),
       analysis("ast_c"),
     ];
     const { service, stored } = harness({ analyses });
-    await expect(service.compose(ACTOR, ORG, PROJECT, BOUNDS)).rejects.toThrow(/duplicate group/i);
-    expect(stored.scenes).toEqual([]);
+    await service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+    expect(stored.scenes.map((s) => s.assetId).sort()).toEqual(["ast_a", "ast_b", "ast_c"]);
+    await expect(service.assertFresh(ACTOR, ORG, PROJECT)).resolves.toBeUndefined();
   });
 
   it("fails below the minimum scene count", async () => {
@@ -610,15 +611,6 @@ describe("isFresh shares one comparison with assertFresh", () => {
     await expect(
       against(analyses, { failAnalysisRead: true }).isFresh(ACTOR, ORG, PROJECT),
     ).rejects.toThrow(/analysis read failed/i);
-
-    const conflicted = [
-      analysis("ast_a", { duplicateGroup: "dup_1" }),
-      analysis("ast_b", { duplicateGroup: "dup_1" }),
-      analysis("ast_c"),
-    ];
-    await expect(against(conflicted).isFresh(ACTOR, ORG, PROJECT)).rejects.toThrow(
-      /duplicate group/i,
-    );
   });
 
   it("agrees with assertFresh on every outcome", async () => {

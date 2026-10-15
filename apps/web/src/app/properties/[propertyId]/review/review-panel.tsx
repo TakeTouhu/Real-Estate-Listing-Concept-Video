@@ -15,7 +15,7 @@ export interface DecisionMember {
 interface Props {
   readonly organizationId: string;
   readonly propertyId: string;
-  /** One member for an ordinary photo; two or more for a duplicate cluster. */
+  /** The photos this panel decides, each on its own. */
   readonly members: readonly DecisionMember[];
   /**
    * Presentation-only: why decisions are temporarily unavailable, or null when
@@ -37,12 +37,6 @@ interface Props {
  * control for a photo carrying a blocking finding. Those are decisions the
  * server already made — this component renders them, it does not re-derive them.
  *
- * For a duplicate cluster the reviewer names the primary with a radio, and
- * approval acts on that member: the domain requires `primaryAssetId` to be the
- * asset being approved, so one selection drives both. Whether another member
- * already holds the group's approval is still the database's call, and its
- * refusal surfaces here like any other.
- *
  * No request carries `analysisRevision`. The API accepts no revision token, so
  * sending one would invent an optimistic-concurrency contract that does not
  * exist; a stale view is caught by the domain's "already reviewed" refusal.
@@ -54,8 +48,6 @@ export function ReviewDecisionPanel({
   disabledReason = null,
 }: Props) {
   const router = useRouter();
-  const isCluster = members.length > 1;
-  const [primary, setPrimary] = useState<string | null>(isCluster ? null : (members[0]?.assetId ?? null));
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -66,7 +58,7 @@ export function ReviewDecisionPanel({
     const reason = (reasons[assetId] ?? "").trim();
     const body =
       decision === "approve"
-        ? { organizationId, primaryAssetId: assetId, ...(reason ? { reason } : {}) }
+        ? { organizationId, ...(reason ? { reason } : {}) }
         : { organizationId, reason };
     try {
       const response = await fetch(
@@ -93,32 +85,11 @@ export function ReviewDecisionPanel({
     }
   }
 
-  const selected = members.find((m) => m.assetId === primary) ?? null;
-
   return (
     <div className="decision-panel">
       {disabledReason ? <p className="status-bad">{disabledReason}</p> : null}
-      {isCluster ? (
-        <fieldset className="primary-choice">
-          <legend>Which photo is the primary?</legend>
-          {members.map((member) => (
-            <label key={member.assetId}>
-              <input
-                type="radio"
-                name={`primary-${members[0]!.assetId}`}
-                value={member.assetId}
-                checked={primary === member.assetId}
-                onChange={() => setPrimary(member.assetId)}
-              />{" "}
-              {member.filename}
-            </label>
-          ))}
-        </fieldset>
-      ) : null}
-
       {members.map((member) => (
         <div key={member.assetId} className="decision-row">
-          {isCluster ? <p className="muted">{member.filename}</p> : null}
           <label className="field">
             <span className="muted">Reason (required to reject)</span>
             <input
@@ -134,11 +105,7 @@ export function ReviewDecisionPanel({
             {member.canApprove ? (
               <button
                 type="button"
-                disabled={
-                  disabledReason !== null ||
-                  pending !== null ||
-                  (isCluster && selected?.assetId !== member.assetId)
-                }
+                disabled={disabledReason !== null || pending !== null}
                 onClick={() => void decide("approve", member.assetId)}
               >
                 Approve

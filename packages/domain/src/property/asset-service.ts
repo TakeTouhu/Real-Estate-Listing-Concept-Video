@@ -46,7 +46,11 @@ export interface RequestUploadResult {
 
 export interface CompleteUploadResult {
   readonly asset: MediaAsset;
-  /** Assets whose perceptual hash is within the near-duplicate threshold. */
+  /**
+   * Assets whose perceptual hash is within the near-duplicate threshold.
+   * Internal only (ADR-0052 Decision 14): the upload audit entry records the
+   * count, and no customer-facing response carries it.
+   */
   readonly duplicateOf: readonly string[];
 }
 

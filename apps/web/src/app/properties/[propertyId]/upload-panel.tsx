@@ -12,7 +12,6 @@ interface UploadItem {
   assetId?: string;
   status?: string;
   message?: string;
-  duplicateOf?: string[];
 }
 
 interface Props {
@@ -85,7 +84,6 @@ export function UploadPanel({ organizationId, propertyId, remainingSlots }: Prop
           state: status === "READY" ? "done" : "error",
           status,
           message: completeJson.failureReason ?? undefined,
-          duplicateOf: completeJson.duplicateOf ?? [],
         });
       } catch (error) {
         patch(item.localId, {
@@ -197,9 +195,6 @@ export function UploadPanel({ organizationId, propertyId, remainingSlots }: Prop
               </div>
               <progress max={100} value={item.state === "done" ? 100 : item.progress} />
               {item.message ? <p className="status-bad">{item.message}</p> : null}
-              {item.duplicateOf && item.duplicateOf.length > 0 ? (
-                <p className="muted">Looks similar to {item.duplicateOf.length} existing photo(s).</p>
-              ) : null}
               {item.state === "error" && item.assetId ? (
                 <button type="button" onClick={() => void retry(item)}>
                   Retry upload

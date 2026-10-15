@@ -155,8 +155,8 @@ describe("safety flags", () => {
   });
 });
 
-describe("duplicate clusters", () => {
-  it("groups members of a multi-member duplicate group and keeps them out of the flat buckets", () => {
+describe("look-alike photos (ADR-0052 Decision 14)", () => {
+  it("shows every member of a duplicate group as its own awaiting row", () => {
     const board = buildReviewBoard(
       [asset("a"), asset("b"), asset("c")],
       [
@@ -166,23 +166,11 @@ describe("duplicate clusters", () => {
       ],
       templateOf("OWNER"),
     );
-    expect(board.clusters).toHaveLength(1);
-    expect(board.clusters[0]!.items.map((i) => i.assetId)).toEqual(["a", "b"]);
-    expect(board.clusters[0]!.approvedAssetId).toBeNull();
-    expect(board.awaiting.map((i) => i.assetId)).toEqual(["c"]);
+    expect(board.awaiting.map((i) => i.assetId)).toEqual(["a", "b", "c"]);
+    expect(Object.keys(board).sort()).toEqual(["awaiting", "canReview", "decided", "notReviewable"]);
   });
 
-  it("does not cluster a group of one, matching the domain's primary-choice rule", () => {
-    const board = buildReviewBoard(
-      [asset("a")],
-      [analysis("a", { duplicateGroup: "dup_1" })],
-      templateOf("OWNER"),
-    );
-    expect(board.clusters).toEqual([]);
-    expect(board.awaiting.map((i) => i.assetId)).toEqual(["a"]);
-  });
-
-  it("marks the approved member and stops the others being offered approval", () => {
+  it("keeps offering approval after a look-alike is approved", () => {
     const board = buildReviewBoard(
       [asset("a"), asset("b")],
       [
@@ -196,26 +184,10 @@ describe("duplicate clusters", () => {
       ],
       templateOf("OWNER"),
     );
-    const cluster = board.clusters[0]!;
-    expect(cluster.approvedAssetId).toBe("a");
-    const other = cluster.items.find((i) => i.assetId === "b")!;
-    expect(other.actions.canApprove).toBe(false);
-    expect(other.actions.canReject).toBe(false);
-    expect(other.actions.unavailableReason).toContain("already approved");
-  });
-
-  it("ignores duplicate groups on analyses that are not succeeded", () => {
-    const board = buildReviewBoard(
-      [asset("a"), asset("b")],
-      [
-        analysis("a", { duplicateGroup: "dup_1" }),
-        analysis("b", { duplicateGroup: "dup_1", status: "FAILED", failureReason: "boom" }),
-      ],
-      templateOf("OWNER"),
-    );
-    expect(board.clusters).toEqual([]);
-    expect(board.awaiting.map((i) => i.assetId)).toEqual(["a"]);
-    expect(board.notReviewable.map((i) => i.assetId)).toEqual(["b"]);
+    expect(board.decided.map((i) => i.assetId)).toEqual(["a"]);
+    const other = board.awaiting[0]!;
+    expect(other.assetId).toBe("b");
+    expect(other.actions).toEqual({ canApprove: true, canReject: true, unavailableReason: null });
   });
 });
 

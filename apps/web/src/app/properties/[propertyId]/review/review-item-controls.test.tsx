@@ -389,7 +389,7 @@ describe("unsaved corrections block the review decision", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("blocks a cluster's decision when any member's correction is dirty", async () => {
+  it("blocks the decision when any correction mounted with it is dirty", async () => {
     controls({
       corrections: [
         target({ assetId: "ast_a", filename: "a.jpg" }),
@@ -433,7 +433,7 @@ describe("the two operations stay separate", () => {
 
     const { url, body } = lastRequest();
     expect(url).toBe(`/api/properties/${PROPERTY}/assets/${ASSET}/analysis/approve`);
-    expect(body).toEqual({ organizationId: ORG, primaryAssetId: ASSET });
+    expect(body).toEqual({ organizationId: ORG });
     for (const field of ["roomType", "order", "roomTypeOverride", "orderOverride"]) {
       expect(body).not.toHaveProperty(field);
     }

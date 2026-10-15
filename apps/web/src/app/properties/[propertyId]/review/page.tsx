@@ -5,13 +5,7 @@ import { getAnalysisService } from "@/lib/analysis";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { thumbnailUrls } from "@/lib/thumbnails";
-import {
-  buildReviewBoard,
-  humanizeRoomType,
-  type DuplicateCluster,
-  type ReviewBoard,
-  type ReviewItem,
-} from "@/lib/review-view";
+import { buildReviewBoard, humanizeRoomType, type ReviewItem } from "@/lib/review-view";
 import { ReviewItemControls, type CorrectionTarget } from "./review-item-controls";
 import type { RoomOption } from "./correction-panel";
 
@@ -79,16 +73,7 @@ export default async function ReviewPage({
           </p>
         )}
 
-        <Section title="Awaiting decision" count={board.awaiting.length + clusterCount(board)}>
-          {board.clusters.map((cluster) => (
-            <Cluster
-              key={cluster.duplicateGroup}
-              cluster={cluster}
-              thumbnails={thumbnails}
-              organizationId={organization.id}
-              propertyId={property.id}
-            />
-          ))}
+        <Section title="Awaiting decision" count={board.awaiting.length}>
           {board.awaiting.map((item) => (
             <div key={item.assetId}>
               <Item item={item} thumbnails={thumbnails} />
@@ -119,11 +104,6 @@ export default async function ReviewPage({
   redirect("/?error=Property%20not%20found");
 }
 
-/** Awaiting photos inside clusters, so the header counts photos and not cards. */
-function clusterCount(board: ReviewBoard): number {
-  return board.clusters.flatMap((c) => c.items).filter((i) => i.bucket === "AWAITING").length;
-}
-
 function Section({
   title,
   count,
@@ -139,35 +119,6 @@ function Section({
         {title} <span className="muted">({count})</span>
       </h2>
       {count === 0 ? <p className="muted">Nothing here.</p> : children}
-    </div>
-  );
-}
-
-function Cluster({
-  cluster,
-  thumbnails,
-  organizationId,
-  propertyId,
-}: {
-  cluster: DuplicateCluster;
-  thumbnails: Map<string, string>;
-  organizationId: string;
-  propertyId: string;
-}) {
-  return (
-    <div className="cluster">
-      <p className="muted">
-        {cluster.items.length} near-duplicate photos. Only one may be approved; approving requires
-        choosing which is the primary.
-      </p>
-      {cluster.items.map((item) => (
-        <Item key={item.assetId} item={item} thumbnails={thumbnails} />
-      ))}
-      <Controls
-        organizationId={organizationId}
-        propertyId={propertyId}
-        items={cluster.items}
-      />
     </div>
   );
 }

@@ -3,10 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createPrismaAnalysisRepository, createPrismaReviewTransaction } from "@app/database";
 
 /**
- * Live-PostgreSQL tests for the review infrastructure: the partial unique index
- * that makes the database authoritative for "one APPROVED analysis per
- * duplicate group", and the transaction boundary that stops a rejection from
- * partially committing.
+ * Live-PostgreSQL tests for the review infrastructure: approvals in one
+ * duplicate group are independent (the partial unique index that once allowed
+ * only one was dropped by migration 24, ADR-0063), and the transaction boundary
+ * stops a rejection from partially committing.
  */
 const ORG_A = "org_itest_review_a";
 const ORG_B = "org_itest_review_b";
@@ -113,17 +113,16 @@ describe("review columns", () => {
   });
 });
 
-describe("partial unique index on approved duplicate-group members", () => {
-  it("rejects a second APPROVED analysis in the same duplicate group", async () => {
+describe("approvals in one duplicate group are independent", () => {
+  it("stores a second APPROVED analysis in the same duplicate group", async () => {
     const first = await repo.create(row("ana_rv_1", "ast_rv_1"));
     await repo.update({ ...first, reviewStatus: "APPROVED" });
 
     const second = await repo.create(row("ana_rv_2", "ast_rv_2"));
-    // The database is authoritative: the loser of the race is refused.
-    await expect(repo.update({ ...second, reviewStatus: "APPROVED" })).rejects.toThrow();
+    await repo.update({ ...second, reviewStatus: "APPROVED" });
 
-    const reread = await repo.findById(ORG_A, "ana_rv_2");
-    expect(reread?.reviewStatus).toBe("UNREVIEWED");
+    expect((await repo.findById(ORG_A, "ana_rv_1"))?.reviewStatus).toBe("APPROVED");
+    expect((await repo.findById(ORG_A, "ana_rv_2"))?.reviewStatus).toBe("APPROVED");
   });
 
   it("permits many UNREVIEWED and REJECTED members in one group", async () => {
@@ -133,36 +132,6 @@ describe("partial unique index on approved duplicate-group members", () => {
     await repo.update({ ...second, reviewStatus: "REJECTED", reviewNote: "dup" });
 
     expect((await repo.findById(ORG_A, "ana_rv_2"))?.reviewStatus).toBe("REJECTED");
-  });
-
-  it("permits an approval in a different duplicate group", async () => {
-    const first = await repo.create(row("ana_rv_1", "ast_rv_1"));
-    await repo.update({ ...first, reviewStatus: "APPROVED" });
-
-    const other = await repo.create(row("ana_rv_2", "ast_rv_2", ORG_A, "dup_other"));
-    await expect(repo.update({ ...other, reviewStatus: "APPROVED" })).resolves.toBeDefined();
-  });
-
-  it("does not constrain rows with no duplicate group", async () => {
-    const a = await repo.create(row("ana_rv_1", "ast_rv_1", ORG_A, null as unknown as string));
-    const b = await repo.create(row("ana_rv_2", "ast_rv_2", ORG_A, null as unknown as string));
-    await repo.update({ ...a, reviewStatus: "APPROVED" });
-    await expect(repo.update({ ...b, reviewStatus: "APPROVED" })).resolves.toBeDefined();
-  });
-
-  it("frees the group again once the approved member is reset by a refresh", async () => {
-    const first = await repo.create(row("ana_rv_1", "ast_rv_1"));
-    await repo.update({ ...first, reviewStatus: "APPROVED" });
-    // A refresh clears review state and starts a new revision.
-    await repo.update({
-      ...first,
-      analysisRevision: 2,
-      reviewStatus: "UNREVIEWED",
-      reviewNote: null,
-    });
-
-    const second = await repo.create(row("ana_rv_2", "ast_rv_2"));
-    await expect(repo.update({ ...second, reviewStatus: "APPROVED" })).resolves.toBeDefined();
   });
 });
 

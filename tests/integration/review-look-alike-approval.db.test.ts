@@ -1,7 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { AnalysisService } from "@app/domain";
-import { AppError } from "@app/shared";
 import type { AnalysisRequest, AnalysisResult, ImageAnalysisProvider } from "@app/domain";
 import {
   createPrismaAnalysisRepository,
@@ -13,18 +12,22 @@ import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/tes
 import { LocalObjectStorage } from "@app/storage";
 
 /**
- * Proves the duplicate-approval conflict is translated correctly by the real
- * runtime path: AnalysisService -> Prisma repositories -> PostgreSQL partial
- * unique index -> adapter translation -> AppError("VALIDATION_FAILED").
+ * Proves look-alike photos are approved independently on the real runtime path:
+ * AnalysisService -> Prisma repositories -> PostgreSQL (ADR-0052 Decision 14,
+ * ADR-0063).
  *
- * A direct constraint test or an in-memory simulation cannot show this: the
- * first would skip the service and the adapter, the second would skip the
- * database that actually refuses the write.
+ * Until migration 24 a partial unique index allowed one approved photo per
+ * duplicate group per organization, so approving a look-alike in another
+ * Property failed with nothing on the page to explain why. An in-memory double
+ * cannot show the index is gone; only the database that used to refuse the
+ * write can.
  */
 const ORG = "org_itest_dupconf";
 const PROPERTY = "prp_itest_dupconf";
+const OTHER_PROPERTY = "prp_itest_dupconf_other";
 const ASSET_A = "ast_itest_dupconf_a";
 const ASSET_B = "ast_itest_dupconf_b";
+const ASSET_ELSEWHERE = "ast_itest_dupconf_elsewhere";
 const REVIEWER = "usr_itest_dupconf";
 const GROUP = "dup_itest_dupconf";
 
@@ -86,12 +89,16 @@ async function cleanup(): Promise<void> {
 }
 
 /** Seed an asset plus a SUCCEEDED analysis already sharing the duplicate group. */
-async function seedAnalyzed(assetId: string, analysisId: string): Promise<void> {
+async function seedAnalyzed(
+  assetId: string,
+  analysisId: string,
+  propertyId = PROPERTY,
+): Promise<void> {
   await prisma.mediaAsset.create({
     data: {
       id: assetId,
       organizationId: ORG,
-      propertyId: PROPERTY,
+      propertyId,
       storageKey: `org/${ORG}/p/${assetId}.jpg`,
       originalFilename: "seed.jpg",
       mimeType: "image/jpeg",
@@ -145,17 +152,20 @@ beforeEach(async () => {
   await prisma.membership.create({
     data: { organizationId: ORG, userId: REVIEWER, role: "CREATOR" },
   });
-  await prisma.property.create({
-    data: {
-      id: PROPERTY,
-      organizationId: ORG,
-      name: "Fixture",
-      propertyType: "APARTMENT",
-      createdBy: REVIEWER,
-    },
-  });
+  for (const id of [PROPERTY, OTHER_PROPERTY]) {
+    await prisma.property.create({
+      data: {
+        id,
+        organizationId: ORG,
+        name: "Fixture",
+        propertyType: "APARTMENT",
+        createdBy: REVIEWER,
+      },
+    });
+  }
   await seedAnalyzed(ASSET_A, "ana_itest_dupconf_a");
   await seedAnalyzed(ASSET_B, "ana_itest_dupconf_b");
+  await seedAnalyzed(ASSET_ELSEWHERE, "ana_itest_dupconf_elsewhere", OTHER_PROPERTY);
 });
 
 afterAll(async () => {
@@ -164,41 +174,32 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe.skipIf(!HAS_DB)("duplicate-approval conflict through the real runtime path", () => {
-  it("refuses the second approval with VALIDATION_FAILED and leaves both rows correct", async () => {
-    const first = await service.approve(REVIEWER, ORG, ASSET_A, { primaryAssetId: ASSET_A });
-    expect(first.reviewStatus).toBe("APPROVED");
+describe.skipIf(!HAS_DB)("look-alike approval through the real runtime path", () => {
+  it("approves two look-alikes in one Property, each on its own", async () => {
+    const first = await service.approve(REVIEWER, ORG, ASSET_A);
+    const second = await service.approve(REVIEWER, ORG, ASSET_B);
 
-    // Second approval in the same (organizationId, duplicateGroup): PostgreSQL
-    // raises the partial-index violation, the Prisma adapter translates it, and
-    // the service surfaces it as a validation failure.
-    const error = await service
-      .approve(REVIEWER, ORG, ASSET_B, { primaryAssetId: ASSET_B })
-      .then(
-        () => null,
-        (e: unknown) => e,
-      );
-
-    expect(error).toBeInstanceOf(AppError);
-    expect((error as AppError).code).toBe("VALIDATION_FAILED");
-    expect((error as AppError).message).toMatch(/already approved/i);
-
+    expect(first.duplicateGroup).toBe(GROUP);
+    expect(second.duplicateGroup).toBe(GROUP);
     expect((await analyses.findByAssetId(ORG, ASSET_A))?.reviewStatus).toBe("APPROVED");
-    expect((await analyses.findByAssetId(ORG, ASSET_B))?.reviewStatus).toBe("UNREVIEWED");
+    expect((await analyses.findByAssetId(ORG, ASSET_B))?.reviewStatus).toBe("APPROVED");
   });
 
-  it("does not surface a raw Prisma error or the constraint name to the caller", async () => {
-    await service.approve(REVIEWER, ORG, ASSET_A, { primaryAssetId: ASSET_A });
-    const error = await service
-      .approve(REVIEWER, ORG, ASSET_B, { primaryAssetId: ASSET_B })
-      .then(
-        () => null,
-        (e: unknown) => e,
-      );
+  it("approves a photo whose look-alike is already approved in another Property", async () => {
+    await service.approve(REVIEWER, ORG, ASSET_ELSEWHERE);
+    const approved = await service.approve(REVIEWER, ORG, ASSET_A);
 
-    const text = `${(error as Error).name} ${(error as Error).message}`;
-    expect(text).not.toContain("asset_analyses_org_dupgroup_approved_key");
-    expect(text).not.toContain("P2002");
-    expect(text).not.toContain("Invalid `prisma");
+    expect(approved.reviewStatus).toBe("APPROVED");
+    expect((await analyses.findByAssetId(ORG, ASSET_ELSEWHERE))?.reviewStatus).toBe("APPROVED");
+  });
+
+  it("leaves the non-unique duplicate-group index and drops the unique one", async () => {
+    const rows = await prisma.$queryRaw<{ indexname: string }[]>`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = current_schema() AND tablename = 'asset_analyses'`;
+    const names = rows.map((r) => r.indexname);
+
+    expect(names).not.toContain("asset_analyses_org_dupgroup_approved_key");
+    expect(names).toContain("asset_analyses_organizationId_duplicateGroup_idx");
   });
 });

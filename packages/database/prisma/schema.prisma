@@ -350,9 +350,6 @@ model AssetAnalysis {
   @@index([organizationId, status])
   @@index([organizationId, duplicateGroup])
   @@index([organizationId, reviewStatus])
-  // A partial unique index enforcing at most one APPROVED analysis per
-  // duplicate group is added by raw SQL in the migration: Prisma cannot express
-  // `WHERE` on an index. See docs/migration-notes.md.
   @@map("asset_analyses")
 }
 
