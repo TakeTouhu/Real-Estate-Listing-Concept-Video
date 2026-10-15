@@ -1,7 +1,8 @@
 # ADR-0064 — Property reach: who reaches which Property, and what everyone else sees
 
-Status: Accepted (Phase 6I-1). Phase 6I-2 extends it to analysis, video
-projects and generation.
+Status: Accepted (Phase 6I-1: Properties and photos). Extended in Phase 6I-2 to
+analyses and their review, video projects, storyboards and generation
+admission.
 Implements: ADR-0052 Decision 10:
 - *`authorized = tenant boundary AND permission AND Property-derived scope
   predicate`*;
@@ -31,9 +32,10 @@ can do today changes. Reach has to exist before the first member-management
 screen; without it, the first invited `CREATOR` would see every Property.
 
 The work is split in two pull requests of reviewable size:
-- **6I-1 (this ADR):** the predicate; the Property paths; the photo paths.
+- **6I-1:** the predicate; the Property paths; the photo paths.
 - **6I-2:** the analysis and review paths, video projects and storyboards, and
-  generation admission.
+  generation admission; refusing a new video project under a deleted Property
+  (Decision 9).
 
 ---
 
@@ -86,10 +88,16 @@ The in-memory double filters with `reaches` itself.
 
 Every path answers a Property out of reach, and anything under it, with the
 same status and message it gives for an id that does not exist:
-- `404` with "Property not found" or "Asset not found" where a single row is
-  named;
+- `404` with the message that path gives for a missing row where a single row
+  is named: "Property not found", "Asset not found", "Analysis not found for
+  this asset" or "Video project not found";
 - an empty list where a list for an unknown Property is already empty
-  (`AssetService.list`).
+  (`AssetService.list`, `AnalysisService.listForProperty`).
+
+A photo out of reach is answered as a photo with no analysis when its analysis
+is read or reviewed, and as a missing photo when an analysis is started or
+refreshed, because those are the answers each path gives for an id that does not
+exist.
 
 It is never `403`, so a member cannot tell which Properties exist. This is
 ADR-0010's cross-tenant rule applied inside the organization.
@@ -104,7 +112,10 @@ On every service path (Decision 5):
    the one a URL names.
 3. Reach.
 4. Only then any check of the row's state: "not ready", "not awaiting upload",
-   "only pending or failed uploads can be retried".
+   "only pending or failed uploads can be retried" (6I-1); "only READY assets
+   can be analyzed", an analysis not yet succeeded or already reviewed, too few
+   approved photos to compose, a storyboard never composed or out of date
+   (6I-2).
 
 Checking state before reach would let a state message reveal a row the member
 cannot reach.
@@ -121,17 +132,30 @@ photo, a photo under another Property and another organization's photo already
 got before this ADR (Decision 3). That tells the member nothing its own
 Property list does not.
 
-## Decision 5 — The paths 6I-1 covers
+## Decision 5 — The paths covered
 
-| Service | Path | How the Property is found |
-| --- | --- | --- |
-| `PropertyService` | `list` | `listReachable` |
-| | `get`, `update`, `remove` | the Property id |
-| `AssetService` | `requestUpload` | the Property id |
-| | `list` | the Property id |
-| | `completeUpload`, `createDownloadUrl`, `retryUpload`, `requestDeletion` | the photo's Property |
+| Service | Path | How the Property is found | Package |
+| --- | --- | --- | --- |
+| `PropertyService` | `list` | `listReachable` | 6I-1 |
+| | `get`, `update`, `remove` | the Property id | 6I-1 |
+| `AssetService` | `requestUpload` | the Property id | 6I-1 |
+| | `list` | the Property id | 6I-1 |
+| | `completeUpload`, `createDownloadUrl`, `retryUpload`, `requestDeletion` | the photo's Property | 6I-1 |
+| `AnalysisService` | `analyzeAsset` (start, refresh) | the photo's Property | 6I-2 |
+| | `listForProperty` | the Property id | 6I-2 |
+| | `getForAsset` | the photo's Property | 6I-2 |
+| | `approve`, `reject`, `correct` (`requireReviewable`) | the photo's Property | 6I-2 |
+| `StoryboardService` | `createProject`, `listProjects` | the Property id | 6I-2 |
+| | `compose` | the project's Property | 6I-2 |
+| | `getStoryboard`, `isFresh`, `assertFresh` (`freshnessOf`) | the project's Property | 6I-2 |
 
 A signed upload or download URL is issued only after the reach check.
+
+`AnalysisService` now takes the Property repository (`findById` only) to judge
+a photo's Property. `GenerationService.startScene` has no Property lookup of its
+own: it runs `assertFresh` and `getStoryboard` for the acting member first, so a
+project out of reach is refused there, as a missing project, before any model
+is chosen or any row written.
 
 Not changed, and why:
 - **`PropertyService.create`.** Creation sets the assignments by role
@@ -144,6 +168,10 @@ Not changed, and why:
   They stay limited to the organization.
 - **The storage upload and download routes.** They serve a signed token, now
   issued only after the reach check.
+- **An existing video project of a deleted Property.** It can still be read and
+  composed through the storyboard paths, as before 6I. Decision 9 covers only
+  creating and listing. The pages under `/properties/{id}` already show a
+  deleted Property as not found.
 
 ## Decision 6 — What reaches the web layer
 
@@ -157,15 +185,11 @@ Every route and page calls these services, so none needs a rule of its own:
 - The nested analysis routes check the photo through `AssetService.list`
   (`requireAssetInProperty`), so they answer `404` for a photo out of reach
   already.
-
-Until 6I-2, `AnalysisService` and `StoryboardService` are still
-organization-wide when called directly. The API routes that reach them without
-one of the checks above are:
-- `GET /api/properties/{id}/analyses`;
-- `GET` and `POST /api/properties/{id}/video-projects`;
-- `GET` and `POST /api/video-projects/{id}/storyboard`.
-
-No live organization has a member they would expose.
+- From 6I-2, `GET /api/properties/{id}/analyses` answers a Property out of reach
+  with `{ "analyses": [] }`, as for one that does not exist.
+- From 6I-2, `GET` and `POST /api/properties/{id}/video-projects` and `GET` and
+  `POST /api/video-projects/{id}/storyboard` answer `404` out of reach, with the
+  body they give for a missing id, and create nothing.
 
 ## Decision 7 — Concurrency
 
@@ -190,27 +214,43 @@ Recorded in `docs/decisions/TODO.md` for confirmation:
 4. **A `MANAGER` is judged by its groups only**, even for a Property it is the
    responsible user of (Decision 1).
 
+## Decision 9 — A deleted Property takes no new video project
+
+`StoryboardService.createProject` and `listProjects` checked that the Property
+existed but not that it was deleted. From 6I-2 they answer a deleted Property
+with `404` "Property not found", for every role, as the Property and photo paths
+already do. Nothing else about a deleted Property's existing projects changes
+(Decision 5).
+
 ## Consequences
 
 - **HTTP.**
   - `GET /api/properties` lists only the Properties the member reaches.
   - The upload, completion, download-URL and retry routes answer `404` for a
     Property or photo out of reach.
+  - From 6I-2, `GET /api/properties/{id}/analyses` lists nothing for a
+    Property out of reach, and the video-project and storyboard routes answer
+    `404` out of reach, and for a deleted Property's project list or new
+    project.
   - No route is added or removed, and no response shape changes.
 - **Ports.**
   - `PropertyRepository.listByOrganization` is replaced by
     `listReachable(reach)`.
   - `Reach`, `reachOf`, `reaches` and `findReachableProperty` are new exports
     of `@app/domain`.
+  - `AnalysisServiceDeps` gains `properties` (6I-2).
 - **Tests.** Two existing tests read a Property as a `VIEWER` the `OWNER`
   created. They now make the `VIEWER` its responsible user, as ADR-0052
-  requires.
+  requires. In 6I-2, the existing analysis, review and storyboard suites whose
+  acting member is a `MANAGER`, `CREATOR` or `VIEWER` make it reach its
+  Property the same way.
 - **MFA is still not built.** It must exist before any member, permission,
   group or assignment screen ships.
 
 ## Not decided here
 
-- Analysis, review, video projects, storyboards and generation admission
-  (6I-2). 6I-2 also refuses a video project under a deleted Property.
+- Whether a deleted Property's existing video projects can still be read,
+  composed and admitted for generation (Decision 5). Recorded in
+  `docs/decisions/TODO.md`.
 - Any route or page for choosing or changing an assignment.
 - User and organization deletion releasing assignments.

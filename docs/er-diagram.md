@@ -577,6 +577,10 @@ for internal use only (ADR-0063).
 No schema change. The Phase 6H assignments now decide which Properties a
 member reaches: `properties.groupId` for a `MANAGER`, `properties.responsibleUserId`
 for a `CREATOR` or `VIEWER`. `properties.createdBy` authorizes nothing (ADR-0064).
+From Phase 6I-2 the same holds for the rows under a Property: `asset_analyses`
+through their photo's `media_assets.propertyId`, and `video_projects` and their
+storyboard scenes through `video_projects.propertyId`, which generation
+admission also checks.
 
 ## Not implemented yet (later phases)
 
