@@ -1212,10 +1212,12 @@ them is **built**. Each item below records the settled decision and what remains
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period
-      binding frozen on the reservation. **Still unbuilt:** the customer-approved
-      purchase flow that grants a block, renewal scheduling that opens periods, no
-      automatic overage at the purchase boundary, and no cancellation after a paid
-      Provider submission.
+      binding frozen on the reservation. *UP-1 (ADR-0066) shows what is left on
+      the Units page.* **Still unbuilt:** the customer-approved purchase flow
+      that grants a block (UP-2 the record and the one-transaction grant, UP-3
+      the screen, UP-4 the invoicing list; approved 2026-10-16), renewal
+      scheduling that opens periods, no automatic overage at the purchase
+      boundary, and no cancellation after a paid Provider submission.
 - [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
       (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
       composite foreign key; an HQ block on a plan that sells none is refused.*
@@ -1447,7 +1449,13 @@ them is **built**. Each item below records the settled decision and what remains
       organization (plan, channel, anchor, commercial reference; Enterprise
       sales-assisted only), monthly periods derived from the anchor, and
       on-demand idempotent renewal through the Phase 6A ledger with no scheduler.*
-      Dormant: no application code provisions or renews yet.
+      *Since UP-1 (ADR-0066) an operator command provisions a sales-assisted
+      subscription and the Units page reads it.* No application code renews a
+      period yet.
+- [ ] **Replace the plan-provisioning command with an operator console** that
+      has its own sign-in. The command of ADR-0066 records the operator's name as
+      declared, not authenticated: anyone with the database credentials can
+      write any name. ADR-0054 Decision 6.
 - [ ] **Build subscription billing, cancellation and plan changes.** ADR-0053
       Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
       renewal; cancellation effective at period end with no proration; the refund
@@ -1586,7 +1594,7 @@ guessed.** Every other gate is closed and recorded below.
 
 ### Decision gates — CLOSED
 
-Thirty decisions: the two gates from the first PR review, eight recorded
+Thirty-one decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1595,8 +1603,9 @@ charged-recomposition quality, logo-only recomposition, repeatable storage
 blocks, storage blocks on downgrade, Scope semantics, Property assignment
 authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
-protected group deletion — and, from the Phase 6A gap analysis, multi-Unit
-reservation funding. **Each is settled as policy**; the implementation work each
+protected group deletion — from the Phase 6A gap analysis, multi-Unit
+reservation funding, and, from the Unit purchase proposal, when an
+invoice-paid organization can use purchased Units. **Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
 
 - [x] **Multi-Unit reservation funding — CLOSED (Option A).** A reservation may
@@ -1609,6 +1618,14 @@ one creates is listed in the section above.
       without reselecting, renewal and later purchases never rebind it, and
       reservation is all-or-nothing. Standard HQ jobs needing 2–3 Units cannot be
       admitted, with no Normal fallback. Phase 6A.
+- [x] **When an invoice-paid organization can use purchased Units — CLOSED.**
+      As soon as its `billing.manage` holder approves the purchase; the purchase
+      is invoiced afterwards under the contract. Product owner, 2026-10-16, with
+      the proposal's defaults: one package per approval, Enterprise packages
+      through sales, HQ never offered on Standard, no cut-off near the end of a
+      period (the expiry is shown before approval instead), and a plan from the
+      operator command until self-service sign-up exists. ADR-0066 Decision 4;
+      built in UP-2 to UP-4.
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A

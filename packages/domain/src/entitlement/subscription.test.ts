@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { OpenEntitlementPeriodInput, OpenEntitlementPeriodOutcome, UnitEntitlementPeriod } from "./ports";
 import {
   addUtcMonthsClamped,
+  provisionFromSalesContract,
   provisionRefusal,
   renewalPeriodAt,
   renewalPeriodBounds,
   renewalPeriodIdentity,
   renewEntitlementPeriod,
+  salesContractSubscriptionId,
   type OrganizationSubscription,
   type ProvisionSubscriptionInput,
 } from "./subscription";
@@ -130,6 +132,48 @@ describe("provisioning validation", () => {
     expect(provisionRefusal({ ...valid, id: "" })).toBe("INVALID_SUBSCRIPTION");
     expect(provisionRefusal({ ...valid, organizationId: "" })).toBe("INVALID_SUBSCRIPTION");
     expect(provisionRefusal({ ...valid, anchorAt: new Date(Number.NaN) })).toBe("INVALID_SUBSCRIPTION");
+  });
+
+  it("refuses an operator with no name or no reason, and accepts one with both", () => {
+    expect(provisionRefusal({ ...valid, operator: { name: "Aoi", reason: "Order 12" } })).toBeNull();
+    expect(provisionRefusal({ ...valid, operator: null })).toBeNull();
+    expect(provisionRefusal({ ...valid, operator: { name: " ", reason: "Order 12" } })).toBe("INVALID_SUBSCRIPTION");
+    expect(provisionRefusal({ ...valid, operator: { name: "Aoi", reason: "" } })).toBe("INVALID_SUBSCRIPTION");
+  });
+});
+
+describe("provisioning from a sales contract (ADR-0066 Decision 1)", () => {
+  it("provisions a sales-assisted subscription named after its organization, with the operator", async () => {
+    const inputs: ProvisionSubscriptionInput[] = [];
+    const outcome = await provisionFromSalesContract(
+      {
+        provision: async (input) => {
+          inputs.push(input);
+          return { kind: "ORGANIZATION_NOT_FOUND" };
+        },
+      },
+      {
+        organizationId: "org_9",
+        planKey: "enterprise",
+        startsAt: iso("2026-11-01T00:00:00.000+09:00"),
+        contractReference: "VT-2026-001",
+        operator: { name: "Aoi", reason: "Signed order 12" },
+      },
+    );
+    expect(outcome).toEqual({ kind: "ORGANIZATION_NOT_FOUND" });
+    expect(inputs).toEqual([
+      {
+        id: "sub_org_9",
+        organizationId: "org_9",
+        planKey: "enterprise",
+        channel: "SALES_ASSISTED",
+        anchorAt: iso("2026-10-31T15:00:00.000Z"),
+        commercialReference: "VT-2026-001",
+        actorUserId: null,
+        operator: { name: "Aoi", reason: "Signed order 12" },
+      },
+    ]);
+    expect(salesContractSubscriptionId("org_9")).toBe("sub_org_9");
   });
 });
 

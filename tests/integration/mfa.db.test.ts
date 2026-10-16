@@ -171,7 +171,11 @@ describe("the MFA cycle through PostgreSQL", () => {
       "mfa.disabled",
     ]);
     const passed = await prisma.auditLog.findMany({ where: { actorUserId: first.userId, action: "mfa.challenge_passed" } });
-    expect(passed.map((r) => r.metadata)).toEqual([{ method: "authenticator" }, { method: "recovery_code", recoveryCodesLeft: 9 }]);
+    // Both passes happen at the same instant, so their rows have no order of their own.
+    const byMethod = passed
+      .map((r) => r.metadata as { method: string })
+      .sort((a, b) => a.method.localeCompare(b.method));
+    expect(byMethod).toEqual([{ method: "authenticator" }, { method: "recovery_code", recoveryCodesLeft: 9 }]);
     expect(passed.every((r) => r.organizationId === null)).toBe(true);
   });
 

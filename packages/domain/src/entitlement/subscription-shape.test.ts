@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
  *
  * 1. **One additive migration**, this phase's, creating one table and touching
  *    no existing row.
- * 2. **Dormant.** No application code provisions a subscription or renews a
- *    period yet, so nothing here changes what any customer is charged.
+ * 2. **Dormant.** No application code renews a period yet, so nothing here
+ *    changes what any customer is charged. Since UP-1 (ADR-0066) the operator
+ *    command provisions a subscription and the Units page reads one.
  * 3. **No scheduler and no payment integration.** Renewal runs on demand; it
  *    sets no timer and calls no payment processor.
  */
@@ -60,11 +61,25 @@ describe("durable shape", () => {
 });
 
 describe("dormancy", () => {
-  it("has no caller in either application", () => {
-    const callers = ["apps/web", "apps/worker"]
+  const appSources = () =>
+    ["apps/web", "apps/worker", "apps/ops"]
       .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
-      .filter((file) => /renewEntitlementPeriod|createSubscriptionRepository/.test(code(readFileSync(file, "utf8"))));
-    expect(callers).toEqual([]);
+      .filter((file) => !/\.test\.tsx?$/.test(file));
+  const callersOf = (pattern: RegExp) =>
+    appSources()
+      .filter((file) => pattern.test(code(readFileSync(file, "utf8"))))
+      .map((file) => file.slice(REPO_ROOT.length + 1))
+      .sort();
+
+  it("renews no period from any application", () => {
+    expect(callersOf(/renewEntitlementPeriod/)).toEqual([]);
+  });
+
+  it("is wired only where UP-1 reads or provisions a subscription (ADR-0066)", () => {
+    expect(callersOf(/createSubscriptionRepository/)).toEqual([
+      "apps/ops/src/bin/provision-subscription.ts",
+      "apps/web/src/lib/units.ts",
+    ]);
   });
 
   it("sets no timer and calls no payment processor", () => {
