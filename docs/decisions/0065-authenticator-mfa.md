@@ -1,8 +1,9 @@
 # ADR-0065 — Authenticator-app MFA and recovery codes
 
-Status: Accepted (MFA-1: the foundation, with no route or screen). MFA-2 adds
-the screens and the two-step sign-in, MFA-3 makes MFA mandatory, MFA-4 adds the
-organization-wide requirement; each extends this ADR.
+Status: Accepted. MFA-1 built the foundation (Decisions 1 to 11). MFA-2 adds
+the screens and the two-step sign-in (Decisions 12 to 14, superseding
+Decision 10). MFA-3 makes MFA mandatory and MFA-4 adds the organization-wide
+requirement; each extends this ADR.
 Implements: ADR-0052 Decision 18:
 - *authenticator-app (TOTP) MFA, recovery codes*;
 - *MFA is mandatory for `OWNER`, `ADMIN`, any user with `permission.manage`, and
@@ -84,7 +85,8 @@ and a secret sealed under another key says so instead of failing as tampering.
 The key id is the first 12 hex characters of the key's SHA-256.
 
 `MFA_SECRET_KEY` is optional in the environment schema while no route uses it;
-MFA-2 makes it required. Rotating the key (re-sealing every secret) is not
+MFA-2 makes it required. *MFA-2: it stays optional in the schema, and the web
+app fails closed without it (Decision 14).* Rotating the key (re-sealing every secret) is not
 built; a changed key makes existing set-ups unusable.
 
 ## Decision 5 — Recovery codes
@@ -176,7 +178,7 @@ Each transaction locks the session row before the factor row, so no two MFA
 changes wait on each other in opposite orders. Using a recovery code locks the
 factor, so concurrent uses report exactly how many codes are left.
 
-## Decision 10 — Nothing calls it yet
+## Decision 10 — Nothing calls it yet (MFA-1; superseded by Decision 12)
 
 No route, page or worker calls `MfaService` or reads `MFA_SECRET_KEY`, and
 `AuthService` does not consult MFA. A shape test keeps it so until MFA-2.
@@ -202,6 +204,66 @@ And two this ADR adds:
    code. Someone who lost their device signs in with a recovery code and sets
    up the new device instead.
 
+## Decision 12 — Signing in takes a code once MFA is on (MFA-2)
+
+`mfaSignInStep` says how far a sign-in has got: `SIGNED_IN` when the session
+passed MFA or the user has no factor, otherwise `CODE_REQUIRED`.
+
+- **One gate.** `getCurrentUser()`, through which every route and page gets its
+  user, returns one only for `SIGNED_IN`. A sign-in that owes a code is not
+  signed in anywhere. Only the sign-in page, the code page and the code route
+  read it, through `getSignIn()`.
+- **Signing in.** After the password, a user with MFA on is sent to
+  `/login/mfa`. Opening `/login` with such a sign-in goes there too.
+- **The code step** (`POST /api/auth/mfa`) takes an authenticator code or a
+  recovery code (`MfaService.verify`).
+  - A wrong code goes back to the code page with the attempts left.
+  - When the sign-in ends (the fifth wrong code, or it is gone), its cookie is
+    cleared and the person goes back to the password.
+- **Other sessions.** Once MFA is on, the user's other sign-ins that have not
+  passed it are asked for a code at their next request. A sign-in that has
+  passed MFA stays signed in when MFA is moved or turned off elsewhere.
+- **`AuthService` is unchanged.** The step is applied in the web app's session
+  gate. A shape test pins that only `lib/auth.ts` resolves a session and which
+  files call `getSignIn()`.
+
+## Decision 13 — The security page and its routes (MFA-2)
+
+`/security`, linked from the dashboard, shows whether MFA is on and how many
+recovery codes are left, and offers:
+- setting it up: a QR code and the key, then a first code, then the recovery
+  codes, shown once;
+- new recovery codes;
+- moving to a new device, through the same set-up;
+- turning it off with a current code, offered only to someone who need not use
+  MFA.
+
+| Route | Body | Success |
+| --- | --- | --- |
+| `POST /api/mfa/setup` | none | `200 { secret, qrCode }` |
+| `POST /api/mfa/setup/confirm` | `{ code }` | `200 { recoveryCodes }` |
+| `POST /api/mfa/recovery-codes` | none | `200 { recoveryCodes }` |
+| `POST /api/mfa/disable` | `{ code }` | `204` |
+
+Each route acts for the signed-in user only, so a sign-in that owes a code gets
+`401`. Every response carries `Cache-Control: no-store`. Errors use the usual
+envelope, and a wrong code's carries `details.attemptsLeft`.
+
+The QR code is an SVG drawn on the server with `qrcode` 1.5.4 and sent as a data
+URL, so the browser runs no QR library. The `otpauth://` URI is not sent
+separately.
+
+## Decision 14 — Without `MFA_SECRET_KEY`, MFA fails closed (MFA-2)
+
+Decision 4 planned to make the key required in MFA-2. The environment schema is
+shared with the worker, which never needs the key, so it stays optional there.
+The web app refuses without it instead:
+- `getMfaService()` throws `CONFIGURATION_ERROR`;
+- the security page says MFA is not available, and the MFA routes answer `500`;
+- no code is checked, so someone with MFA on cannot finish signing in.
+
+Nothing falls back to the password alone. Users without MFA sign in as before.
+
 ## Consequences
 
 - **Schema.** Migration 25: two tables, three `sessions` columns, two `CHECK`s.
@@ -215,7 +277,14 @@ And two this ADR adds:
   - New exports of `@app/shared`: `hotp`, `base32Encode`, `sealAesGcm`,
     `openAesGcm`, `keyFingerprint`, `secureRandomBytes`.
 - **Environment.** `MFA_SECRET_KEY`, optional, validated as 64 hex characters.
-- **Nothing visible changes.**
+- **Nothing visible changes** in MFA-1.
+- **MFA-2.**
+  - No migration.
+  - New: the `/login/mfa` and `/security` pages, `POST /api/auth/mfa`, the
+    four `/api/mfa` routes, and `mfaSignInStep` in `@app/domain`.
+  - `getCurrentUser()` returns a user only once the sign-in has passed MFA.
+  - New dependency of the web app: `qrcode` 1.5.4 (and `@types/qrcode` 1.5.6
+    for development).
 
 ## Not decided here
 
@@ -226,4 +295,5 @@ And two this ADR adds:
   their recovery codes.
 - Re-sealing secrets under a new `MFA_SECRET_KEY`.
 - Whether turning MFA on, moving it or turning it off should end the user's
-  other sessions.
+  other sessions. Since MFA-2, turning it on asks the other sign-ins for a code
+  (Decision 12); moving it or turning it off leaves them as they were.

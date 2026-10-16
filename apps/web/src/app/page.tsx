@@ -115,6 +115,10 @@ export default async function DashboardPage({
         </p>
       </form>
 
+      <p>
+        <a href="/security">Sign-in security</a>
+      </p>
+
       <form method="post" action="/api/auth/logout">
         <button type="submit">Sign out</button>
       </form>

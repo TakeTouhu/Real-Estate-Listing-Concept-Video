@@ -227,8 +227,13 @@ Property takes no new video project and lists none.
 TOTP and recovery codes, the sealed secret, who must use MFA, and `MfaService`,
 each change audited. Dormant: no route calls it yet.
 
+**MFA-2 — the security page and two-step sign-in** (ADR-0065, no migration):
+anyone may turn on authenticator-app MFA at `/security`, keep recovery codes,
+move to a new device and turn it off when their role allows. Once it is on,
+signing in asks for a code after the password.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** the MFA screens and two-step sign-in (MFA-2), mandatory MFA for `OWNER`,
+it:** mandatory MFA for `OWNER`,
 `ADMIN`, `permission.manage` and `billing.manage` holders (MFA-3), and an
 organization's requirement for all members (MFA-4), before any
 member-management UI.
