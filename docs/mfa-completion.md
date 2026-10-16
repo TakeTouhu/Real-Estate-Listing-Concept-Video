@@ -664,3 +664,212 @@ scheduler and live Stripe charges remain BLOCKED.
 ### Remaining work
 
 MFA-4, asking before merge.
+
+## MFA-4 — an organization's requirement for all members
+
+Base: `7cf7ca5` (PR #87 merge commit on `main`; post-merge CI run 560 green).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `5b8165d` | migration 26; the requirement in `isMfaRequired`; `setMfaRequirement` and its repository write; the route and the dashboard control; the wording; the tests; ADR-0065 Decisions 18 and 19, the API change summary and the documentation updates |
+| `129f3b3` | this record, with the verification and the mutation ledger on `5b8165d` |
+| `09d137a` | the review fix below, with its tests; ADR-0065 and the migration notes describe it |
+| *(this commit)* | this record: the review, and the verification and mutation ledger on the reviewed code |
+
+The exact head SHA is reported with the pull request.
+
+### Review
+
+The automated review of `129f3b3` raised one finding. It was real, and it is
+fixed in `09d137a`:
+
+- **A role change between `OWNER` and `ADMIN` went unseen.** The write
+  re-read the actor's role under the lock but accepted any `OWNER` or `ADMIN`.
+  An `ADMIN` promoted to `OWNER`, or an `OWNER` demoted to `ADMIN`, after the
+  role check and before the transaction still applied the change, and its
+  audit entry recorded the role no longer held. The request now carries the
+  role it was authorized under, and the locked role must equal it exactly;
+  otherwise nothing is written and the actor is asked to reload. Tests
+  reproduce it in the domain and against PostgreSQL in both directions.
+
+### What MFA-4 does
+
+- **The setting.** `organizations.mfaRequired` (migration 26), `false` for
+  every existing and new organization.
+- **Who must use MFA** (`isMfaRequired`) now also includes every member of an
+  organization that requires it. It applies as in MFA-3, from each member's next
+  request: a member without MFA reaches only set-up and sign-out, and cannot
+  turn MFA off while it holds. Turning it off removes only that reason.
+- **Who may change it**: an `OWNER` or `ADMIN`, by role. A `MANAGER` granted
+  `organization.manage` may not. A non-member is refused as on every
+  organization route; any other member is refused and the refusal audited.
+- **How it is written**: one transaction with its audit entry, a
+  compare-and-set on the value read, under a `FOR SHARE` lock on the actor's
+  membership. If the value or the actor's role moved meanwhile, even between
+  `OWNER` and `ADMIN`, nothing is written and the actor is asked to reload. A
+  request that changes nothing writes nothing.
+- **Where**: `POST /api/organizations/{organizationId}/mfa-requirement`, and
+  the dashboard, which tells every member whether it is on and gives an `OWNER`
+  or `ADMIN` the button.
+
+Behaviour anyone can notice: the dashboard says under each organization whether
+every member must use MFA, and an `OWNER` or `ADMIN` can switch it. Nothing else
+changes until one does.
+
+### Requiring MFA of every member
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Admin's browser
+  participant M as Member's browser
+  participant W as Web app
+  participant DB as PostgreSQL
+
+  A->>W: POST /api/organizations/{id}/mfa-requirement (required=true)
+  W->>DB: membership of the actor: ADMIN
+  W->>DB: organization: mfaRequired false
+  W->>DB: BEGIN; actor's membership FOR SHARE: still ADMIN
+  W->>DB: UPDATE organizations SET mfaRequired = true WHERE mfaRequired = false
+  W->>DB: audit organization.mfa_requirement_changed; COMMIT
+  W-->>A: 303 /
+  M->>W: any page or route (member without MFA)
+  W->>DB: memberships: an organization requires MFA; no factor
+  W->>W: SETUP_REQUIRED, so no user
+  W-->>M: pages 303 /login (forwards to /security); routes 401
+```
+
+### Verification
+
+Measured on `09d137a` (local PostgreSQL 16, configured like CI); the commit
+after it changes this record only. The first measurement, on `5b8165d` before
+the review, gave 5282 unit and 1364 database tests, all passing.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5283 / 5283**, 181 files |
+| `pnpm test:db` | **1366 / 1367**, 49 files: the one failure is the known race below |
+| `pnpm build` | succeeded; the new route is listed |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 27 migrations, up to date |
+
+Each of the three full database runs on `09d137a` failed one test, *gives two
+PROCESSING runners one history and at most one transfer*. That is the known race
+recorded in `TODO.md` since Phase 6F: the losing runner answers in a way the test
+does not expect. MFA-4 does not touch that code, and its tests do not cause it:
+
+- run alone, the test file passed 6 runs of 6;
+- run after this pull request's database file, it failed 2 of 6;
+- run after MFA-1's database file, already on `main`, it also failed 2 of 6;
+- a full run without this pull request's database file passed 1350 of 1350.
+
+The test-only fix is recorded in `TODO.md` and needs its own pull request.
+
+New tests:
+- the service (16): who may change it and who is refused, the audits, a change
+  that changes nothing, a value or role that moved meanwhile (a demotion, and a
+  promotion to `OWNER`), two changes at once, and its effect on every member;
+- who must use MFA (2), the sign-in step (1) and turning MFA off (1);
+- the route (12), with the session gate and the domain running for real;
+- the dashboard (4);
+- the database (17): the column and its default, the change and its audit
+  written together or not at all, every `STALE` case (a role changed even
+  between `OWNER` and `ADMIN` included), two changes at once, and a demotion
+  in flight that the change waits for and then sees;
+- the shape test (2): migration 26's SQL, and that only the route calls
+  `setMfaRequirement` and only the service calls the repository write.
+
+### Mutation ledger
+
+**34 run, 34 killed, 0 survivors, 0 broken**, in one pass on the code of
+`09d137a`. Each mutant weakens one guarantee at an anchor that occurs exactly
+once. Mutants in the domain, route, dashboard and migration run the identity
+and MFA domain tests, the web app's page and component tests and the MFA route
+tests (566 tests); mutants in the database repository run the MFA and
+organization-requirement database tests (39 tests). Every mutated file was
+restored and re-hashed, and all 824 files were byte-identical afterwards. An
+earlier pass of 32 mutants on `5b8165d`, before the review, also killed all 32.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| Q01 | who must | an organization's requirement is ignored | `requirement.ts` | 5 of 566 (web) |
+| Q02 | who must | an organization's requirement is inverted | `requirement.ts` | 10 of 566 (web) |
+| G01 | who may | a MANAGER may change it | `requirement.ts` | 4 of 566 (web) |
+| G02 | who may | an ADMIN may not change it | `requirement.ts` | 9 of 566 (web) |
+| V01 | service | the role check is skipped | `organization-service.ts` | 6 of 566 (web) |
+| V02 | service | a refusal is audited but not refused | `organization-service.ts` | 6 of 566 (web) |
+| V03 | service | a refusal is audited as a change | `organization-service.ts` | 5 of 566 (web) |
+| V04 | service | a change that changes nothing is written and audited | `organization-service.ts` | 1 of 566 (web) |
+| V05 | service | a STALE write is reported as applied | `organization-service.ts` | 4 of 566 (web) |
+| V06 | service | the change's audit loses the actor's role | `organization-service.ts` | 2 of 566 (web) |
+| V07 | service | the returned organization keeps the old value | `organization-service.ts` | 2 of 566 (web) |
+| V08 | service | a non-member is treated as a VIEWER, not refused access | `organization-service.ts` | 3 of 566 (web) |
+| V09 | service | the write is told a fixed role, not the one authorized | `organization-service.ts` | 6 of 566 (web) |
+| A01 | audit | the change is audited under another action | `audit.ts` | 5 of 566 (web) |
+| T01 | wording | turning off is refused with the MFA-3 wording | `mfa-service.ts` | 1 of 566 (web) |
+| D01 | database | the actor's membership is not locked | `repositories.ts` | 1 of 39 (db) |
+| D02 | database | the role is not compared with the one authorized | `repositories.ts` | 3 of 39 (db) |
+| D03 | database | any role handed in may change it | `repositories.ts` | 1 of 39 (db) |
+| D08 | database | an ADMIN's change is STALE | `repositories.ts` | 1 of 39 (db) |
+| D04 | database | no compare-and-set on the value | `repositories.ts` | 2 of 39 (db) |
+| D05 | database | a write that matched nothing is APPLIED | `repositories.ts` | 2 of 39 (db) |
+| D06 | database | the change is not audited | `repositories.ts` | 4 of 39 (db) |
+| D07 | database | the value is not read back | `repositories.ts` | 1 of 39 (db) |
+| M01 | migration | the column defaults to true | migration 26 | 1 of 566 (web) |
+| W01 | route | no sign-in check | `mfa-requirement/route.ts` | 1 of 566 (web) |
+| W02 | route | any non-empty value is accepted, as false | `mfa-requirement/route.ts` | 2 of 566 (web) |
+| W03 | route | the value is inverted | `mfa-requirement/route.ts` | 4 of 566 (web) |
+| W04 | route | an unexpected error's message is shown | `mfa-requirement/route.ts` | 1 of 566 (web) |
+| W05 | route | success goes elsewhere | `mfa-requirement/route.ts` | 2 of 566 (web) |
+| U01 | dashboard | every member gets the control | `src/app/page.tsx` | 2 of 566 (web) |
+| U02 | dashboard | the control posts the current value | `src/app/page.tsx` | 2 of 566 (web) |
+| U03 | dashboard | the status line is inverted | `src/app/page.tsx` | 4 of 566 (web) |
+| U04 | dashboard | the control posts to another route | `src/app/page.tsx` | 2 of 566 (web) |
+| U05 | dashboard | the button says the opposite | `src/app/page.tsx` | 2 of 566 (web) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: an MFA-4 row |
+| Entity-relationship diagram | `docs/er-diagram.md`: `organizations.mfaRequired` and an MFA-4 section |
+| Critical sequence diagram | this section, *Requiring MFA of every member* |
+| OpenAPI / API change summary | `docs/api-changes-mfa-4.md`. Internal API: `Organization.mfaRequired`, `OrganizationRepository.setMfaRequired`, `OrganizationService.setMfaRequirement` and `mayChangeMfaRequirement` (`@app/domain`) |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *MFA-4*: migration 26, additive, nothing changes at deploy |
+| Completion report | this file |
+
+Also updated: ADR-0065 (Decisions 18 and 19), `docs/Roadmap.md` and
+`docs/decisions/TODO.md`.
+
+### Activation status
+
+Nothing paid or scheduled is activated. MFA-4 adds one column, one route and a
+dashboard control, and no dependency, worker, scheduler, credential or
+environment variable. Paid Provider Activation, production credentials, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No way back for a lost device and lost recovery codes.** Operator-assisted
+  recovery is not built. Since MFA-4 this can also lock out a member of an
+  organization that requires MFA, whatever their role.
+- The five-wrong-codes guard is per sign-in. Until rate limiting exists
+  (ADR-0054 Decision 5), someone with the password can sign in again and try
+  more codes. Rate limiting should ship before MFA is relied on in production.
+- Members learn of the requirement only at their next request; nothing tells
+  them sooner, since there is no email-sending service.
+- The web app still starts without `MFA_SECRET_KEY`; only the readiness probe
+  reports it.
+- The control is a single button on the dashboard. There is no organization
+  settings page yet.
+
+### Remaining work
+
+With this pull request all four MFA pull requests are built; it waits for the
+product owner's yes before merge. The choices and open questions in
+`TODO.md` (ADR-0065 Decision 11 and *Not decided here*) stay for the product
+owner. Next: Unit purchase.

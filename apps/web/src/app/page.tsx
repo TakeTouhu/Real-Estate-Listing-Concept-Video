@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { PROPERTY_TYPES } from "@app/domain";
+import { PROPERTY_TYPES, mayChangeMfaRequirement } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
@@ -47,6 +47,19 @@ export default async function DashboardPage({
             <h2>
               {organization.name} <span className="muted">({role})</span>
             </h2>
+            <p className="muted">
+              {organization.mfaRequired
+                ? "Every member must use two-step sign-in (MFA)."
+                : "Two-step sign-in (MFA) is not required of every member."}
+            </p>
+            {mayChangeMfaRequirement(role) ? (
+              <form method="post" action={`/api/organizations/${organization.id}/mfa-requirement`}>
+                <input type="hidden" name="required" value={organization.mfaRequired ? "false" : "true"} />
+                <button type="submit">
+                  {organization.mfaRequired ? "Stop requiring MFA of every member" : "Require MFA of every member"}
+                </button>
+              </form>
+            ) : null}
 
             {properties.length === 0 ? (
               <p className="muted">No properties yet.</p>

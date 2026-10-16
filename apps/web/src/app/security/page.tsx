@@ -22,7 +22,7 @@ export default async function SecurityPage() {
     <section>
       <h1>Sign-in security</h1>
       {mustSetUp ? (
-        <p>Your role requires two-step sign-in (MFA). Set it up to continue.</p>
+        <p>Your role or organization requires two-step sign-in (MFA). Set it up to continue.</p>
       ) : (
         <p>
           <a href="/">Back to organizations</a>

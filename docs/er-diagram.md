@@ -37,6 +37,7 @@ erDiagram
     string name
     string slug UK
     enum   status "ACTIVE|SUSPENDED"
+    boolean mfaRequired "every member must use MFA (MFA-4)"
     datetime createdAt
     datetime updatedAt
   }
@@ -609,6 +610,13 @@ unused codes as SHA-256 hashes, which a `CHECK` enforces; using a code deletes
 its row, and the foreign key to the factor deletes them all when MFA is turned
 off. `sessions` gains the MFA state of the sign-in. MFA belongs to the person,
 so none of these carries an organization (ADR-0065).
+
+## MFA-4 — an organization's MFA requirement
+
+Migration 26. `organizations.mfaRequired`, `false` by default, makes MFA
+mandatory for every member of the organization. Only an `OWNER` or `ADMIN`
+changes it, each change committed with its audit row (ADR-0065 Decisions 18 and
+19). No table or relationship is added.
 
 ## Not implemented yet (later phases)
 

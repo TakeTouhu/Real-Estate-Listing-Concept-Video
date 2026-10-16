@@ -340,6 +340,27 @@ describe("MfaService (ADR-0065)", () => {
       expect(await ctx.mfa.status(session.userId)).toMatchObject({ required: true });
     });
 
+    it("is refused to a member of an organization that requires it of all its members", async () => {
+      const { secret, session } = await enroll(await signIn());
+      await ctx.deps.repos.organizations.create({ id: "org_1", name: "Org", slug: "org", status: "ACTIVE" });
+      await ctx.deps.repos.memberships.create({ organizationId: "org_1", userId: "usr_owner", role: "OWNER" });
+      await ctx.deps.repos.memberships.create({ organizationId: "org_1", userId: session.userId, role: "VIEWER" });
+      await ctx.deps.repos.organizations.setMfaRequired({
+        organizationId: "org_1",
+        actorUserId: "usr_owner",
+        actorRole: "OWNER",
+        expected: false,
+        required: true,
+        audit: { organizationId: "org_1", actorUserId: "usr_owner", action: "test", resourceType: "test", resourceId: "x", metadata: {} },
+      });
+      ctx.deps.clock.advanceSeconds(30);
+      await expect(ctx.mfa.disable(session, code(secret))).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: "Your role or organization requires MFA, so it cannot be turned off",
+      });
+      expect(await ctx.mfa.status(session.userId)).toMatchObject({ enabled: true, required: true });
+    });
+
     it("is refused once the sign-in has ended, though it had passed MFA", async () => {
       const { secret, session } = await enroll(await signIn());
       await ctx.deps.repos.sessions.deleteByTokenHash(session.tokenHash);

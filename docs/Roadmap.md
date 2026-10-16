@@ -238,9 +238,10 @@ signing in asks for a code after the password.
 before reaching anything else. There is no grace period. The readiness probe
 reports a missing `MFA_SECRET_KEY`.
 
-**Authorization still to build, before the commercial mutations that depend on
-it:** an organization's requirement for all members (MFA-4), before any
-member-management UI.
+**MFA-4 — an organization's requirement for all members** (ADR-0065 Decisions
+18 and 19, migration 26): an `OWNER` or `ADMIN` may require MFA of every member
+from the dashboard. Members without MFA set it up at their next request. Off
+for every organization until turned on.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
 grant, Stripe and sales-assisted billing, subscription cancellation, seats and

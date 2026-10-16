@@ -5,7 +5,7 @@ import { useState } from "react";
 
 interface Props {
   readonly enabled: boolean;
-  /** The user's roles or permissions make MFA mandatory, so it cannot be turned off. */
+  /** The user's roles or permissions, or an organization, make MFA mandatory, so it cannot be turned off. */
   readonly required: boolean;
   readonly recoveryCodesLeft: number;
   /** This sign-in must set MFA up before anything else; once it has, it goes on in. */
@@ -148,7 +148,7 @@ export function MfaPanel({ enabled, required, recoveryCodesLeft, mustSetUp = fal
     return (
       <div className="card">
         <h2>Two-step sign-in (MFA)</h2>
-        <p>MFA is off.{required ? " Your role requires it." : ""}</p>
+        <p>MFA is off.{required ? " Your role or organization requires it." : ""}</p>
         <p className="muted">
           With MFA on, signing in also asks for a code from an authenticator app on your phone.
         </p>
@@ -172,7 +172,7 @@ export function MfaPanel({ enabled, required, recoveryCodesLeft, mustSetUp = fal
         Move to a new device
       </button>
       {required ? (
-        <p className="muted">Your role requires MFA, so it cannot be turned off.</p>
+        <p className="muted">Your role or organization requires MFA, so it cannot be turned off.</p>
       ) : (
         <>
           <h3>Turn off MFA</h3>

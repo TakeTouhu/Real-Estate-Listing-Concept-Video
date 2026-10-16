@@ -1234,3 +1234,25 @@ memberships on every request (ADR-0065 Decision 15).
 MFA-3. Without it no one who must use MFA can sign in, every `OWNER` included,
 and the readiness probe (`GET /api/health/ready`) reports `degraded` with its
 `mfa` check failing (Decision 17).
+
+## MFA-4 — an organization's requirement for all members
+
+Migration 26, `00000000000026_organization_mfa_requirement`:
+
+| Change | Meaning |
+| --- | --- |
+| `organizations.mfaRequired` `BOOLEAN NOT NULL DEFAULT false` | every member must use MFA, whatever their role (ADR-0065 Decision 18) |
+
+Additive only. Every existing organization reads as not requiring it, which
+changes nothing for anyone. No row is updated or deleted, no index is added,
+and migrations 0 through 25 are not touched.
+
+Queries: the requirement is read with the organization, by primary key, for
+each of a user's memberships when working out whether they must use MFA. A
+change is one transaction: a `FOR SHARE` lock on the actor's membership row
+(its role compared with the one the request was authorized under), a
+compare-and-set `UPDATE` of the one organization row, and its audit row.
+
+**What changes at deploy.** Nothing, until an `OWNER` or `ADMIN` turns the
+requirement on. From then on every member of that organization without MFA sets
+it up at their next request. No new environment variable.

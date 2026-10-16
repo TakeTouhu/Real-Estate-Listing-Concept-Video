@@ -3,7 +3,7 @@
 Status: Accepted. MFA-1 built the foundation (Decisions 1 to 11). MFA-2 adds
 the screens and the two-step sign-in (Decisions 12 to 14, superseding
 Decision 10). MFA-3 makes MFA mandatory (Decisions 15 to 17). MFA-4 adds the
-organization-wide requirement and extends this ADR.
+organization-wide requirement (Decisions 18 and 19).
 Implements: ADR-0052 Decision 18:
 - *authenticator-app (TOTP) MFA, recovery codes*;
 - *MFA is mandatory for `OWNER`, `ADMIN`, any user with `permission.manage`, and
@@ -142,6 +142,8 @@ rewritten.
 
 In MFA-1 it decides only whether MFA may be turned off. MFA-3 uses it to refuse
 every other route to a session that must pass MFA and has not (Decision 15).
+MFA-4 adds a third reason: membership of an organization that requires MFA of
+all its members (Decision 18).
 
 The `OWNER` and `ADMIN` clause repeats what both templates grant today
 (`permission.manage`). It is kept so the rule still names the roles ADR-0052
@@ -293,8 +295,9 @@ Decision 12, by whether this sign-in has passed MFA.
 
 ## Decision 16 — What a sign-in that must set MFA up can reach (MFA-3)
 
-- `/security`, in a set-up-first form: it says the role requires MFA and offers
-  set-up and sign-out, with no link back to the dashboard.
+- `/security`, in a set-up-first form: it says the role (since MFA-4, the role
+  or an organization) requires MFA and offers set-up and sign-out, with no link
+  back to the dashboard.
 - `POST /api/mfa/setup` and `POST /api/mfa/setup/confirm`. `mfaRoute` serves
   `SETUP_REQUIRED` only when a route passes `{ duringSetup: true }`, and only
   these two do.
@@ -312,6 +315,58 @@ Since MFA-3, without `MFA_SECRET_KEY` no one who must use MFA can sign in, every
 (`GET /api/health/ready`) gains an `mfa` check. It passes when the key is set;
 without the key the probe reports `degraded` and answers `503`. It reports
 only whether the key is set, never anything derived from it.
+
+## Decision 18 — An organization may require MFA of all its members (MFA-4)
+
+`organizations.mfaRequired` (migration 26) says whether every member must use
+MFA, whatever their role. It is `false` for every existing organization and for
+every new one, so nothing changes for anyone until an organization turns it on.
+
+`isMfaRequired` (Decision 7) is also true for a member of an organization that
+requires it. That is the only change to the rule, so the requirement applies
+exactly as every other reason does:
+
+- from each member's next request, existing sessions included, with no grace
+  period (Decision 15): a member without MFA is `SETUP_REQUIRED` and reaches
+  only set-up and sign-out;
+- MFA cannot be turned off while it holds;
+- one organization requiring it means MFA for every sign-in of its members,
+  whatever other organizations they belong to (Decision 11, choice 4).
+
+Turning it off removes only that reason. No one's set-up is removed, and a
+member it no longer applies to may turn MFA off as before. The messages that
+explained a requirement by role now say "Your role or organization requires".
+
+## Decision 19 — Who changes it, and how (MFA-4)
+
+`OrganizationService.setMfaRequirement(actor, organization, required)`:
+
+- **By role, `OWNER` or `ADMIN`** (Decision 11, choice 6), through
+  `mayChangeMfaRequirement(role)`. A grant of `organization.manage` does not
+  confer it: the setting governs every member's sign-in, and both roles that may
+  change it must themselves use MFA, so it is never changed from a sign-in that
+  has not passed MFA.
+- **A non-member** is refused as on every organization route
+  (`authorizeOrganization`), with nothing recorded about the requirement.
+- **Any other member** is refused (`FORBIDDEN`), and the refusal is audited as
+  `organization.mfa_requirement_refused`, as Phase 6H audits refused
+  reassignments.
+- **A request that changes nothing** writes nothing and reports
+  `changed: false`.
+- **A change** is written in one transaction with its audit entry,
+  `organization.mfa_requirement_changed`. Both entries record the actor's role
+  and the value asked for. The transaction share-locks the actor's membership
+  (`FOR SHARE`) and reads the role again under it. That role must be exactly
+  the one the request was authorized under: any change, even between `OWNER`
+  and `ADMIN`, counts, so the audit entry always records the role actually
+  held. The update is a compare-and-set on the value read. If the value or the
+  actor's role changed meanwhile, nothing is written and the actor is asked to
+  reload (`VALIDATION_FAILED`). A role change in flight therefore either waits
+  for the change or commits first and is seen.
+
+The web app adds `POST /api/organizations/{organizationId}/mfa-requirement`, a
+form route that redirects back to the dashboard, which shows every member
+whether the requirement is on and gives an `OWNER` or `ADMIN` the button.
 
 ## Consequences
 
@@ -342,6 +397,17 @@ only whether the key is set, never anything derived from it.
   - Everyone who must use MFA and has not set it up does so at their next
     request, before reaching anything else.
   - `MFA_SECRET_KEY` must be set for any `OWNER` to sign in.
+- **MFA-4.**
+  - Migration 26: `organizations.mfaRequired`, `BOOLEAN NOT NULL DEFAULT
+    false`. Additive; no row rewritten.
+  - `Organization` gains `mfaRequired`, which `OrganizationRepository.create`
+    does not take; the repository gains `setMfaRequired`.
+  - `OrganizationService` gains `setMfaRequirement`; `@app/domain` exports
+    `mayChangeMfaRequirement`. Two audit actions.
+  - One new route and the dashboard control. No new dependency or
+    environment variable.
+  - Nothing changes at deploy: no organization requires it until an `OWNER` or
+    `ADMIN` turns it on.
 
 ## Not decided here
 
@@ -355,3 +421,5 @@ only whether the key is set, never anything derived from it.
 - Whether turning MFA on, moving it or turning it off should end the user's
   other sessions. Since MFA-2, turning it on asks the other sign-ins for a code
   (Decision 12); moving it or turning it off leaves them as they were.
+- Whether members should be told, other than at their next request, when an
+  organization turns the requirement on. There is no email-sending service.
