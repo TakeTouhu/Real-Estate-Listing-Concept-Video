@@ -232,10 +232,14 @@ anyone may turn on authenticator-app MFA at `/security`, keep recovery codes,
 move to a new device and turn it off when their role allows. Once it is on,
 signing in asks for a code after the password.
 
+**MFA-3 — mandatory MFA** (ADR-0065 Decisions 15 to 17, no migration): an
+`OWNER`, `ADMIN`, `BILLING` or other holder of `permission.manage` or
+`billing.manage` who has not set up MFA sets it up at their next request,
+before reaching anything else. There is no grace period. The readiness probe
+reports a missing `MFA_SECRET_KEY`.
+
 **Authorization still to build, before the commercial mutations that depend on
-it:** mandatory MFA for `OWNER`,
-`ADMIN`, `permission.manage` and `billing.manage` holders (MFA-3), and an
-organization's requirement for all members (MFA-4), before any
+it:** an organization's requirement for all members (MFA-4), before any
 member-management UI.
 
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block

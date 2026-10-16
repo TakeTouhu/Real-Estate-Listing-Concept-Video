@@ -65,11 +65,23 @@ export async function getSignIn(): Promise<SignIn | null> {
   return { ...current, step: await mfaSignInStep(deps, current.session) };
 }
 
+/** Where a sign-in goes next: its MFA code, MFA set-up, or in (ADR-0065 Decisions 12 and 15). */
+export function nextPageFor(step: MfaSignInStep): string {
+  switch (step) {
+    case "CODE_REQUIRED":
+      return "/login/mfa";
+    case "SETUP_REQUIRED":
+      return "/security";
+    case "SIGNED_IN":
+      return "/";
+  }
+}
+
 /**
  * The signed-in user from the session cookie, or null. A sign-in that still
- * owes an MFA code is not signed in: every route and page that needs a user
- * comes through here, so none is reachable before the code (ADR-0065
- * Decision 12).
+ * owes an MFA code, or must set MFA up first, is not signed in: every route and
+ * page that needs a user comes through here, so none is reachable before that
+ * step (ADR-0065 Decisions 12 and 15).
  */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const signIn = await getSignIn();

@@ -28,8 +28,10 @@ openssl rand -hex 32
 ```
 
 `MFA_SECRET_KEY` (ADR-0065) seals authenticator secrets at rest. Set it with
-another `openssl rand -hex 32` to try MFA at `/security`; without it the page
-says MFA is not available. Keep it once set: a different key cannot open MFA
+another `openssl rand -hex 32`. MFA is mandatory for an organization's `OWNER`
+(MFA-3), so without the key you cannot sign in once you have created an
+organization: the set-up page says MFA is not available, and the readiness
+probe reports `degraded`. Keep it once set: a different key cannot open MFA
 secrets sealed under the old one.
 
 Set `DATABASE_URL` to a local PostgreSQL instance (Phase 1). Keep

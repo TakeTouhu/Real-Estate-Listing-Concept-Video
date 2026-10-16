@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSignIn } from "@/lib/auth";
+import { getSignIn, nextPageFor } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +8,9 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  // A sign-in that owes an MFA code finishes there rather than starting again.
-  if ((await getSignIn())?.step === "CODE_REQUIRED") redirect("/login/mfa");
+  // A sign-in that owes an MFA code, or must set MFA up, finishes that rather than starting again.
+  const signIn = await getSignIn();
+  if (signIn && signIn.step !== "SIGNED_IN") redirect(nextPageFor(signIn.step));
   const params = await searchParams;
   return (
     <section>

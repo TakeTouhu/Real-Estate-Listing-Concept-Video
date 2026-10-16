@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
-import { SESSION_COOKIE, getSignIn } from "@/lib/auth";
+import { SESSION_COOKIE, getSignIn, nextPageFor } from "@/lib/auth";
 import { formString, redirectWithError } from "@/lib/http";
 import { getMfaService } from "@/lib/mfa";
 
@@ -14,7 +14,9 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request): Promise<NextResponse> {
   const signIn = await getSignIn();
   if (!signIn) return backToPassword(request, "Sign in again");
-  if (signIn.step === "SIGNED_IN") return NextResponse.redirect(new URL("/", request.url), { status: 303 });
+  if (signIn.step !== "CODE_REQUIRED") {
+    return NextResponse.redirect(new URL(nextPageFor(signIn.step), request.url), { status: 303 });
+  }
   const form = await request.formData();
   try {
     await getMfaService().verify(signIn.session, formString(form, "code"));

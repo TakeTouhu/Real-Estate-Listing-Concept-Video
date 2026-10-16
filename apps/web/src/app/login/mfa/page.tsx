@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSignIn } from "@/lib/auth";
+import { getSignIn, nextPageFor } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export default async function MfaCodePage({
 }) {
   const signIn = await getSignIn();
   if (!signIn) redirect("/login");
-  if (signIn.step === "SIGNED_IN") redirect("/");
+  if (signIn.step !== "CODE_REQUIRED") redirect(nextPageFor(signIn.step));
   const params = await searchParams;
   return (
     <section>

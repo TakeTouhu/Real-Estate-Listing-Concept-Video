@@ -11,6 +11,9 @@ import { describe, expect, it } from "vitest";
  *    service or reads `MFA_SECRET_KEY`, the worker has no MFA at all, and only
  *    `lib/auth.ts` resolves a session, so no route or page can skip the code
  *    step. `AuthService` still knows nothing of MFA.
+ * 3. **Set-up first** (MFA-3). A sign-in that must set MFA up reaches only the
+ *    security page and the two set-up routes; the readiness probe says only
+ *    whether the key is set.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -80,8 +83,16 @@ describe("boundary", () => {
       .map((file) => file.slice(REPO_ROOT.length + 1));
 
   it("builds the MFA service and reads its key in one web module, and nowhere in the worker", () => {
-    expect(matching("apps/web", /new MfaService|createMfaSecretCipher|MFA_SECRET_KEY/)).toEqual(["apps/web/src/lib/mfa.ts"]);
+    expect(matching("apps/web", /new MfaService|createMfaSecretCipher/)).toEqual(["apps/web/src/lib/mfa.ts"]);
+    expect(matching("apps/web", /MFA_SECRET_KEY/).sort()).toEqual(["apps/web/src/lib/health.ts", "apps/web/src/lib/mfa.ts"]);
     expect(matching("apps/worker", /Mfa|mfa|MFA_SECRET_KEY/)).toEqual([]);
+  });
+
+  it("lets the readiness probe report only whether the key is set", () => {
+    const health = code(readFileSync(join(REPO_ROOT, "apps/web/src/lib/health.ts"), "utf8"));
+    expect(health.match(/env\.MFA_SECRET_KEY !== undefined/g)).toHaveLength(1);
+    const rest = health.replace("env.MFA_SECRET_KEY !== undefined", "").replace('"MFA_SECRET_KEY not set"', "");
+    expect(rest).not.toMatch(/MFA_SECRET_KEY/);
   });
 
   it("resolves a session only in lib/auth.ts, where the code step is applied", () => {
@@ -91,12 +102,21 @@ describe("boundary", () => {
     );
   });
 
-  it("lets only the sign-in pages and the code step read a sign-in that has not passed MFA", () => {
+  it("lets only the sign-in pages, the code step and MFA set-up read a sign-in that has not passed MFA", () => {
     expect(matching("apps/web", /getSignIn\(/).sort()).toEqual([
       "apps/web/src/app/api/auth/mfa/route.ts",
       "apps/web/src/app/login/mfa/page.tsx",
       "apps/web/src/app/login/page.tsx",
+      "apps/web/src/app/security/page.tsx",
       "apps/web/src/lib/auth.ts",
+      "apps/web/src/lib/mfa.ts",
+    ]);
+  });
+
+  it("opens only MFA set-up to a sign-in that must set MFA up first (ADR-0065 Decision 16)", () => {
+    expect(matching("apps/web", /duringSetup: true/).sort()).toEqual([
+      "apps/web/src/app/api/mfa/setup/confirm/route.ts",
+      "apps/web/src/app/api/mfa/setup/route.ts",
     ]);
   });
 

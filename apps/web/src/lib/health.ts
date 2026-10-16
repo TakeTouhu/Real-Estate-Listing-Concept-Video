@@ -37,7 +37,8 @@ export function buildLiveness(now: () => Date = () => new Date()): Liveness {
 
 /**
  * Pure readiness computation. Runs an offline provider self-check (a cost
- * estimate — no network) to confirm the adapter boundary is wired correctly.
+ * estimate — no network) to confirm the adapter boundary is wired correctly,
+ * and checks that MFA is configured.
  */
 export async function computeReadiness(
   env: ServerEnv,
@@ -67,6 +68,11 @@ export async function computeReadiness(
   } catch {
     checks.push({ name: "video-provider-adapter", ok: false, detail: `adapter=${provider.name}` });
   }
+
+  // Without the key no one who must use MFA can sign in (ADR-0065 Decision 17).
+  // Only whether it is set is reported.
+  const mfaKeySet = env.MFA_SECRET_KEY !== undefined;
+  checks.push({ name: "mfa", ok: mfaKeySet, detail: mfaKeySet ? "key set" : "MFA_SECRET_KEY not set" });
 
   const ok = checks.every((c) => c.ok);
   return {

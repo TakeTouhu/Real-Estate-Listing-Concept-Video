@@ -162,9 +162,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       and audit behaviour are currently proven with in-memory adapters.
 - [ ] Add OAuth (Entra ID / Google) and optional MFA for privileged roles.
       *ADR-0052 Decision 18 superseded the MFA half: authenticator-app MFA is
-      mandatory for privileged users. MFA-1 built its foundation and MFA-2
-      its screens and two-step sign-in (ADR-0065). Entra ID and Google SSO
-      stay post-release.*
+      mandatory for privileged users. MFA-1 built its foundation, MFA-2
+      its screens and two-step sign-in, and MFA-3 made it mandatory
+      (ADR-0065). Entra ID and Google SSO stay post-release.*
 
 ## Phase 2 follow-ups
 
@@ -1255,7 +1255,7 @@ them is **built**. Each item below records the settled decision and what remains
       as rows, and pinned cell for cell against the ADR table; no template grants
       `disclosure.none` or `video.share`. **Still unbuilt:** MFA enforcement for
       `billing.manage` holders.* *MFA-1 (ADR-0065) works out who must use MFA,
-      `billing.manage` included; enforcing it is MFA-3.*
+      `billing.manage` included, and MFA-3 enforces it (Decision 15).*
 - [ ] **Enforce the role grant ceilings and protected authority.** ADR-0052
       Decision 10. Every authorization mutation must answer "may *this actor*
       grant *this*?", not merely "does the actor hold `permission.manage`?":
@@ -1359,8 +1359,10 @@ them is **built**. Each item below records the settled decision and what remains
       foundation: migration 25, TOTP, the sealed secret, recovery codes, who
       must use MFA, and `MfaService` with audit. MFA-2 added the security page
       (set up, move to a new device, new recovery codes, turn off when
-      optional) and the code step at sign-in.* **Still unbuilt:** enforcement
-      (MFA-3), an organization's requirement for all members (MFA-4).
+      optional) and the code step at sign-in. MFA-3 made it mandatory: someone
+      who must use MFA and has not set it up reaches only set-up and sign-out
+      (Decisions 15 to 17).* **Still unbuilt:** an organization's requirement
+      for all members (MFA-4).
 - [ ] **Confirm the MFA choices ADR-0052 did not make** (ADR-0065 Decision 11).
       (1) MFA is checked once per sign-in. (2) No grace period once it is
       mandatory. (3) A grant to someone without MFA is allowed; MFA is required
@@ -1373,7 +1375,7 @@ them is **built**. Each item below records the settled decision and what remains
       approved with the plan on 2026-10-15; 7 and 8 were added in MFA-1.
 - [ ] **Decide what MFA leaves open** (ADR-0065). (1) Operator-assisted
       recovery for someone who has lost both their device and their recovery
-      codes. (2) Re-sealing every secret under a new `MFA_SECRET_KEY`; today a
+      codes; since MFA-3 this can lock any `OWNER` out of their organization. (2) Re-sealing every secret under a new `MFA_SECRET_KEY`; today a
       changed key makes existing set-ups unusable. (3) Whether turning MFA on,
       moving it or turning it off should end the user's other sessions. Since
       MFA-2, turning it on asks the other sign-ins for a code; moving it or
@@ -1385,8 +1387,10 @@ them is **built**. Each item below records the settled decision and what remains
       the password again (ADR-0052 Decision 10 adds no step-up), so someone
       holding another person's session, on an account without MFA, could turn
       it on and lock them out. (6) Without `MFA_SECRET_KEY`
-      someone with MFA on cannot finish signing in, and the readiness probe
-      does not report the missing key (MFA-2, ADR-0065 Decision 14).
+      someone with MFA on cannot finish signing in, and since MFA-3 no one who
+      must use MFA can sign in (ADR-0065 Decision 14). The readiness probe
+      reports the missing key since MFA-3 (Decision 17); what remains is
+      deciding whether the web app should refuse to start without it.
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the

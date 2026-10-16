@@ -1,6 +1,7 @@
 import { hotp } from "@app/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "../identity/auth-service";
+import { OrganizationService } from "../identity/organization-service";
 import type { Session } from "../identity/types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { createMfaSecretCipher, systemMfaRandom } from "./adapters";
@@ -18,7 +19,7 @@ function decodeBase32(text: string): Buffer {
   return Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)));
 }
 
-describe("mfaSignInStep (ADR-0065 Decision 12)", () => {
+describe("mfaSignInStep (ADR-0065 Decisions 12 and 15)", () => {
   let deps: TestDeps;
   let auth: AuthService;
   let mfa: MfaService;
@@ -67,5 +68,29 @@ describe("mfaSignInStep (ADR-0065 Decision 12)", () => {
     const other = await signIn();
     await mfa.disable(session, code(secret, 1));
     expect(await mfaSignInStep(deps, stored(other))).toBe("SIGNED_IN");
+  });
+
+  const becomeOwner = async () =>
+    new OrganizationService(deps).createOrganization((await deps.repos.users.findByEmail(EMAIL))!.id, { name: "Studio" });
+
+  it("asks someone who must use MFA to set it up first, then for a code at every later sign-in", async () => {
+    await becomeOwner();
+    const session = await signIn();
+    expect(await mfaSignInStep(deps, session)).toBe("SETUP_REQUIRED");
+
+    const { secret } = await mfa.beginSetup(session);
+    await mfa.confirmSetup(session, code(secret));
+    expect(await mfaSignInStep(deps, stored(session))).toBe("SIGNED_IN");
+    expect(await mfaSignInStep(deps, await signIn())).toBe("CODE_REQUIRED");
+  });
+
+  it("applies a new requirement from the next request, even to a sign-in that passed MFA before it was turned off", async () => {
+    const { secret, session } = await enroll();
+    await mfa.disable(session, code(secret, 1));
+    expect(await mfaSignInStep(deps, stored(session))).toBe("SIGNED_IN");
+
+    await becomeOwner();
+    expect(stored(session).mfaVerifiedAt).not.toBeNull();
+    expect(await mfaSignInStep(deps, stored(session))).toBe("SETUP_REQUIRED");
   });
 });

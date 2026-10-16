@@ -1218,3 +1218,19 @@ MFA; a user who has no factor is signed in by them exactly as before.
 **Environment.** Set `MFA_SECRET_KEY` on the web app before anyone turns on
 MFA. It stays optional in the schema, which the worker shares; without it the
 web app fails closed (ADR-0065 Decision 14). The worker needs no key.
+
+## MFA-3 — mandatory MFA
+
+**No migration.** MFA-3 reads the tables of migration 25 and the existing
+membership, grant and group tables, and changes none of them.
+
+**What changes at deploy.** Every `OWNER`, `ADMIN`, `BILLING` and other holder
+of `permission.manage` or `billing.manage` who has not set up MFA is asked to set
+it up at their next request, including in sessions that were already signed in.
+There is no grace period and no data migration: the rule is read from current
+memberships on every request (ADR-0065 Decision 15).
+
+**Environment.** `MFA_SECRET_KEY` must be set on the web app before deploying
+MFA-3. Without it no one who must use MFA can sign in, every `OWNER` included,
+and the readiness probe (`GET /api/health/ready`) reports `degraded` with its
+`mfa` check failing (Decision 17).
