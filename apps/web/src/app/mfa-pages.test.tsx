@@ -152,8 +152,8 @@ describe("/security", () => {
     await becomeOwner();
     await signIn();
     render(await SecurityPage());
-    expect(screen.getByText("Your role requires two-step sign-in (MFA). Set it up to continue.")).toBeTruthy();
-    expect(screen.getByText("MFA is off. Your role requires it.")).toBeTruthy();
+    expect(screen.getByText("Your role or organization requires two-step sign-in (MFA). Set it up to continue.")).toBeTruthy();
+    expect(screen.getByText("MFA is off. Your role or organization requires it.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set up MFA" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Back to organizations" })).toBeNull();
@@ -203,6 +203,6 @@ describe("/security", () => {
     await turnOnMfa(await signIn());
     render(await SecurityPage());
     expect(screen.getByText("MFA is on.")).toBeTruthy();
-    expect(screen.getByText("Your role requires MFA, so it cannot be turned off.")).toBeTruthy();
+    expect(screen.getByText("Your role or organization requires MFA, so it cannot be turned off.")).toBeTruthy();
   });
 });

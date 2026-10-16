@@ -44,6 +44,7 @@ function toOrganization(r: DbOrganization): Organization {
     name: r.name,
     slug: r.slug,
     status: r.status,
+    mfaRequired: r.mfaRequired,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
@@ -200,6 +201,24 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async findBySlug(slug) {
       const r = await prisma.organization.findUnique({ where: { slug } });
       return r ? toOrganization(r) : null;
+    },
+    async setMfaRequired(input) {
+      return prisma.$transaction(async (tx) => {
+        // Share-locks the actor's membership, so a role change waits for this
+        // transaction or commits first and is seen here (ADR-0065 Decision 18).
+        const [actor] = await tx.$queryRaw<{ role: Role }[]>`
+          SELECT "role" FROM "memberships"
+          WHERE "organizationId" = ${input.organizationId} AND "userId" = ${input.actorUserId}
+          FOR SHARE`;
+        if (actor?.role !== "OWNER" && actor?.role !== "ADMIN") return "STALE";
+        const { count } = await tx.organization.updateMany({
+          where: { id: input.organizationId, mfaRequired: input.expected },
+          data: { mfaRequired: input.required },
+        });
+        if (count === 0) return "STALE";
+        await tx.auditLog.create({ data: auditLogData(input.audit) });
+        return "APPLIED";
+      });
     },
   };
 

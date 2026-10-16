@@ -163,8 +163,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
 - [ ] Add OAuth (Entra ID / Google) and optional MFA for privileged roles.
       *ADR-0052 Decision 18 superseded the MFA half: authenticator-app MFA is
       mandatory for privileged users. MFA-1 built its foundation, MFA-2
-      its screens and two-step sign-in, and MFA-3 made it mandatory
-      (ADR-0065). Entra ID and Google SSO stay post-release.*
+      its screens and two-step sign-in, MFA-3 made it mandatory, and MFA-4
+      added an organization's requirement for all members (ADR-0065). Entra ID
+      and Google SSO stay post-release.*
 
 ## Phase 2 follow-ups
 
@@ -1354,15 +1355,15 @@ them is **built**. Each item below records the settled decision and what remains
       unrecoverable sources (`execution-source.ts`). The pages under
       `/properties/{id}` show a deleted Property as not found. ADR-0052 does not say whether those projects should be
       refused too, or stay reachable until retention removes them.
-- [ ] **Build authenticator-app MFA and recovery codes** (ADR-0052 Decision 18,
+- [x] **Build authenticator-app MFA and recovery codes** (ADR-0052 Decision 18,
       ADR-0065), in four pull requests approved on 2026-10-15. *MFA-1 built the
       foundation: migration 25, TOTP, the sealed secret, recovery codes, who
       must use MFA, and `MfaService` with audit. MFA-2 added the security page
       (set up, move to a new device, new recovery codes, turn off when
       optional) and the code step at sign-in. MFA-3 made it mandatory: someone
       who must use MFA and has not set it up reaches only set-up and sign-out
-      (Decisions 15 to 17).* **Still unbuilt:** an organization's requirement
-      for all members (MFA-4).
+      (Decisions 15 to 17). MFA-4 added an organization's requirement for all
+      members, changed by an `OWNER` or `ADMIN` (Decisions 18 and 19).*
 - [ ] **Confirm the MFA choices ADR-0052 did not make** (ADR-0065 Decision 11).
       (1) MFA is checked once per sign-in. (2) No grace period once it is
       mandatory. (3) A grant to someone without MFA is allowed; MFA is required
@@ -1390,7 +1391,10 @@ them is **built**. Each item below records the settled decision and what remains
       someone with MFA on cannot finish signing in, and since MFA-3 no one who
       must use MFA can sign in (ADR-0065 Decision 14). The readiness probe
       reports the missing key since MFA-3 (Decision 17); what remains is
-      deciding whether the web app should refuse to start without it.
+      deciding whether the web app should refuse to start without it. (7)
+      Whether members should be told, other than at their next request, when an
+      organization turns on its MFA requirement; there is no email-sending
+      service (MFA-4).
 - [x] **Commit each membership change together with its audit entry.** Done
       in Phase 6E (ADR-0059): invitation, acceptance, role change and removal
       each write their rows and audit entry in one transaction, in the

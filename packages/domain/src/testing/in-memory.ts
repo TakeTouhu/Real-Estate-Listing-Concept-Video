@@ -26,6 +26,7 @@ import type {
   PasswordHasher,
   PermissionGrantRepository,
   SessionRepository,
+  SetMfaRequiredInput,
   TokenService,
   UserRepository,
 } from "../identity/ports";
@@ -119,12 +120,25 @@ class InMemoryCredentialRepository implements CredentialRepository {
 
 class InMemoryOrganizationRepository implements OrganizationRepository {
   private readonly byId = new Map<string, Organization>();
-  constructor(private readonly clock: Clock) {}
-  create(input: Omit<Organization, "createdAt" | "updatedAt">): Promise<Organization> {
+  constructor(
+    private readonly clock: Clock,
+    private readonly auditLogs: AuditLogRepository,
+    private readonly roleOf: (organizationId: string, userId: string) => Role | undefined,
+  ) {}
+  create(input: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">): Promise<Organization> {
     const now = this.clock.now();
-    const org: Organization = { ...input, createdAt: now, updatedAt: now };
+    const org: Organization = { ...input, mfaRequired: false, createdAt: now, updatedAt: now };
     this.byId.set(org.id, org);
     return Promise.resolve(org);
+  }
+  /** Checks and writes with no `await` in between, as the database's transaction does. */
+  async setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE"> {
+    const org = this.byId.get(input.organizationId);
+    const role = this.roleOf(input.organizationId, input.actorUserId);
+    if (!org || org.mfaRequired !== input.expected || (role !== "OWNER" && role !== "ADMIN")) return "STALE";
+    this.byId.set(org.id, { ...org, mfaRequired: input.required, updatedAt: this.clock.now() });
+    await this.auditLogs.append(input.audit);
+    return "APPLIED";
   }
   findById(id: string): Promise<Organization | null> {
     return Promise.resolve(this.byId.get(id) ?? null);
@@ -609,7 +623,9 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
-    organizations: new InMemoryOrganizationRepository(clock),
+    organizations: new InMemoryOrganizationRepository(clock, auditLogs, (organizationId, userId) =>
+      memberships.roleOf(organizationId, userId),
+    ),
     memberships,
     permissionGrants,
     groups,

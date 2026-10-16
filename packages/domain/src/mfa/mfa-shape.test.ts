@@ -14,11 +14,14 @@ import { describe, expect, it } from "vitest";
  * 3. **Set-up first** (MFA-3). A sign-in that must set MFA up reaches only the
  *    security page and the two set-up routes; the readiness probe says only
  *    whether the key is set.
+ * 4. **One more migration** (MFA-4): one `organizations` column, off for every
+ *    existing organization, changed through one web route.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const MIGRATIONS = join(REPO_ROOT, "packages", "database", "prisma", "migrations");
 const MIGRATION_DIR = "00000000000025_mfa_foundation";
+const REQUIREMENT_DIR = "00000000000026_organization_mfa_requirement";
 
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -34,14 +37,23 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest, and it is MFA-1's", () => {
+  it("adds two migrations, the newest: MFA-1's and MFA-4's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs.filter((dir) => dir.includes("mfa"))).toEqual([MIGRATION_DIR]);
-    expect(dirs).toHaveLength(26);
+    expect(dirs.slice(-2)).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
+    expect(dirs.filter((dir) => dir.includes("mfa"))).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
+    expect(dirs).toHaveLength(27);
+  });
+
+  it("MFA-4 adds one organizations column, off for every existing organization, and rewrites no row", () => {
+    const requirement = readFileSync(join(MIGRATIONS, REQUIREMENT_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");
+    expect(requirement.match(/ALTER TABLE "(\w+)"/g)).toEqual([`ALTER TABLE "organizations"`]);
+    expect(requirement.match(/ADD COLUMN\s+"(\w+)"[^;]*/g)).toEqual([`ADD COLUMN     "mfaRequired" BOOLEAN NOT NULL DEFAULT false`]);
+    for (const banned of [/CREATE TABLE/, /CREATE TYPE/, /\bUPDATE\b/, /\bDELETE\b/, /\bDROP\b/, /\bINSERT INTO\b/, /\bTRUNCATE\b/]) {
+      expect(requirement).not.toMatch(banned);
+    }
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");
@@ -117,6 +129,15 @@ describe("boundary", () => {
     expect(matching("apps/web", /duringSetup: true/).sort()).toEqual([
       "apps/web/src/app/api/mfa/setup/confirm/route.ts",
       "apps/web/src/app/api/mfa/setup/route.ts",
+    ]);
+  });
+
+  it("changes the organization's MFA requirement through one route and one service method (ADR-0065 Decision 18)", () => {
+    expect(matching("apps/web", /setMfaRequirement\(/)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/mfa-requirement/route.ts",
+    ]);
+    expect(matching("packages/domain/src", /organizations\.setMfaRequired\(/)).toEqual([
+      "packages/domain/src/identity/organization-service.ts",
     ]);
   });
 

@@ -295,9 +295,11 @@ describe("no new durable shape", () => {
     // authorized to add migration 22 for group permissions, and by Phase 6H,
     // which is authorized to add migration 23 for Property assignment. And by
     // the near-duplicate rule removal (ADR-0063), which is authorized to add
-    // migration 24 to drop the duplicate-approval index, and by MFA-1
-    // (ADR-0065), which is authorized to add migration 25 for MFA.
-    expect(dirs.at(-1)).toBe("00000000000025_mfa_foundation");
+    // migration 24 to drop the duplicate-approval index, by MFA-1
+    // (ADR-0065), which is authorized to add migration 25 for MFA, and by
+    // MFA-4, which is authorized to add migration 26 for the organization's
+    // MFA requirement.
+    expect(dirs.at(-1)).toBe("00000000000026_organization_mfa_requirement");
     // "6a" here means Phase 4C-3B-2H-3B-6A. The top-level Phase 6A's ledger
     // migration shares the substring and is the one authorized exception.
     expect(

@@ -53,7 +53,8 @@ describe("durable shape", () => {
     // one migration, in place.
     expect(dirs.filter((dir) => dir.includes("phase6a"))).toEqual([MIGRATION_DIR]);
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(17);
-    expect(dirs).toHaveLength(26);
+    // MFA-4 added migration 26 after them all.
+    expect(dirs).toHaveLength(27);
   });
 
   it("creates the three ledger tables and rewrites no existing row", () => {

@@ -85,9 +85,9 @@ describe("MFA off", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("says when the role requires MFA", () => {
+  it("says when the role or an organization requires MFA", () => {
     render(<MfaPanel enabled={false} required recoveryCodesLeft={0} />);
-    expect(screen.getByText("MFA is off. Your role requires it.")).toBeTruthy();
+    expect(screen.getByText("MFA is off. Your role or organization requires it.")).toBeTruthy();
   });
 
   it("sends an ended sign-in back to the password", async () => {
@@ -128,10 +128,10 @@ describe("MFA on", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it("offers no way to turn off MFA the role requires", () => {
+  it("offers no way to turn off MFA that is required", () => {
     render(<MfaPanel enabled required recoveryCodesLeft={10} />);
     expect(screen.queryByRole("button", { name: "Turn off MFA" })).toBeNull();
-    expect(screen.getByText("Your role requires MFA, so it cannot be turned off.")).toBeTruthy();
+    expect(screen.getByText("Your role or organization requires MFA, so it cannot be turned off.")).toBeTruthy();
   });
 
   it("shows a failure it cannot read as a generic error", async () => {

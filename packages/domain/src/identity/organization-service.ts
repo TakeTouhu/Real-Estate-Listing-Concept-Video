@@ -1,6 +1,7 @@
 import { AppError, slugify } from "@app/shared";
+import { mayChangeMfaRequirement } from "../mfa/requirement";
 import { AuditAction, recordAudit } from "./audit";
-import { effectivePermissionsOf } from "./authorization";
+import { authorizeOrganization, effectivePermissionsOf } from "./authorization";
 import type { IdentityServiceDeps } from "./ports";
 import type { Permission, Role } from "./roles";
 import type { Membership, Organization } from "./types";
@@ -54,6 +55,52 @@ export class OrganizationService {
       metadata: { slug },
     });
     return { organization, membership };
+  }
+
+  /**
+   * Require MFA of every member of the organization, or stop requiring it
+   * (ADR-0065 Decision 18). Only an `OWNER` or `ADMIN` may; anyone else is
+   * refused and audited. A change that changes nothing writes nothing
+   * (`changed: false`). It applies to each member from their next request.
+   */
+  async setMfaRequirement(
+    actorUserId: string,
+    organizationId: string,
+    required: boolean,
+  ): Promise<{ readonly organization: Organization; readonly changed: boolean }> {
+    const actor = await authorizeOrganization(this.deps, actorUserId, organizationId);
+    if (!mayChangeMfaRequirement(actor.role)) {
+      await recordAudit(this.deps, {
+        organizationId,
+        actorUserId,
+        action: AuditAction.OrganizationMfaRequirementRefused,
+        resourceType: "organization",
+        resourceId: organizationId,
+        metadata: { actorRole: actor.role, required },
+      });
+      throw new AppError("FORBIDDEN", `Role ${actor.role} may not change whether MFA is required`);
+    }
+    const organization = await this.deps.repos.organizations.findById(organizationId);
+    if (!organization) throw new AppError("NOT_FOUND", "Organization not found");
+    if (organization.mfaRequired === required) return { organization, changed: false };
+    const outcome = await this.deps.repos.organizations.setMfaRequired({
+      organizationId,
+      actorUserId,
+      expected: organization.mfaRequired,
+      required,
+      audit: {
+        organizationId,
+        actorUserId,
+        action: AuditAction.OrganizationMfaRequirementChanged,
+        resourceType: "organization",
+        resourceId: organizationId,
+        metadata: { actorRole: actor.role, required },
+      },
+    });
+    if (outcome === "STALE") {
+      throw new AppError("VALIDATION_FAILED", "The MFA requirement or your role changed meanwhile; reload and try again");
+    }
+    return { organization: { ...organization, mfaRequired: required }, changed: true };
   }
 
   /** List the organizations a user belongs to, with their role and effective permissions in each. */

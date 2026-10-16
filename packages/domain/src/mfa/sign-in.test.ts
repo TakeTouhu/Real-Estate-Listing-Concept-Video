@@ -19,7 +19,7 @@ function decodeBase32(text: string): Buffer {
   return Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)));
 }
 
-describe("mfaSignInStep (ADR-0065 Decisions 12 and 15)", () => {
+describe("mfaSignInStep (ADR-0065 Decisions 12, 15 and 18)", () => {
   let deps: TestDeps;
   let auth: AuthService;
   let mfa: MfaService;
@@ -92,5 +92,20 @@ describe("mfaSignInStep (ADR-0065 Decisions 12 and 15)", () => {
     await becomeOwner();
     expect(stored(session).mfaVerifiedAt).not.toBeNull();
     expect(await mfaSignInStep(deps, stored(session))).toBe("SETUP_REQUIRED");
+  });
+
+  it("asks a member of an organization that requires MFA of everyone to set it up first", async () => {
+    const owner = (await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD })).id;
+    const organizations = new OrganizationService(deps);
+    const { organization } = await organizations.createOrganization(owner, { name: "Agency" });
+    const userId = (await deps.repos.users.findByEmail(EMAIL))!.id;
+    await deps.repos.memberships.create({ organizationId: organization.id, userId, role: "VIEWER" });
+    const session = await signIn();
+    expect(await mfaSignInStep(deps, session)).toBe("SIGNED_IN");
+
+    await organizations.setMfaRequirement(owner, organization.id, true);
+    expect(await mfaSignInStep(deps, stored(session))).toBe("SETUP_REQUIRED");
+    await organizations.setMfaRequirement(owner, organization.id, false);
+    expect(await mfaSignInStep(deps, stored(session))).toBe("SIGNED_IN");
   });
 });

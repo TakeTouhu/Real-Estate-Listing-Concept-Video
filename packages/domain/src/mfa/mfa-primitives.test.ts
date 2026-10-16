@@ -170,6 +170,39 @@ describe("who must use MFA (ADR-0052 Decision 18)", () => {
     expect(await isMfaRequired(deps, USER)).toBe(true);
   });
 
+  it("is every member of an organization that requires it of all its members (ADR-0065 Decision 18)", async () => {
+    for (const role of ["MANAGER", "CREATOR", "VIEWER"] as const) {
+      const deps = createTestDeps();
+      await deps.repos.organizations.create({ id: ORG, name: "Org", slug: "org", status: "ACTIVE" });
+      await deps.repos.memberships.create({ organizationId: ORG, userId: "usr_owner", role: "OWNER" });
+      await member(deps, role);
+      expect(await isMfaRequired(deps, USER)).toBe(false);
+      await deps.repos.organizations.setMfaRequired({
+        organizationId: ORG,
+        actorUserId: "usr_owner",
+        expected: false,
+        required: true,
+        audit,
+      });
+      expect(await isMfaRequired(deps, USER)).toBe(true);
+    }
+  });
+
+  it("is not made mandatory by another organization's requirement", async () => {
+    const deps = createTestDeps();
+    await deps.repos.organizations.create({ id: OTHER, name: "Other", slug: "other", status: "ACTIVE" });
+    await deps.repos.memberships.create({ organizationId: OTHER, userId: "usr_owner", role: "OWNER" });
+    await deps.repos.organizations.setMfaRequired({
+      organizationId: OTHER,
+      actorUserId: "usr_owner",
+      expected: false,
+      required: true,
+      audit,
+    });
+    await member(deps, "CREATOR");
+    expect(await isMfaRequired(deps, USER)).toBe(false);
+  });
+
   it("is read again on every call", async () => {
     const deps = createTestDeps();
     await member(deps, "CREATOR");

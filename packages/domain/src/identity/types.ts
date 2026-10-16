@@ -9,6 +9,8 @@ export interface Organization {
   readonly name: string;
   readonly slug: string;
   readonly status: OrganizationStatus;
+  /** Every member must use MFA, whatever their role (ADR-0065 Decision 18). */
+  readonly mfaRequired: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

@@ -24,7 +24,7 @@ export interface MfaServiceDeps extends Pick<IdentityServiceDeps, "repos" | "clo
 
 export interface MfaStatus {
   readonly enabled: boolean;
-  /** The user's roles or permissions make MFA mandatory (ADR-0052 Decision 18). */
+  /** The user's roles or permissions, or an organization, make MFA mandatory (ADR-0065 Decisions 7 and 18). */
   readonly required: boolean;
   readonly recoveryCodesLeft: number;
 }
@@ -148,7 +148,7 @@ export class MfaService {
     if (session.mfaVerifiedAt === null) throw codeFirst();
     const factor = await this.requireFactor(session.userId);
     if (await isMfaRequired(this.deps, session.userId)) {
-      throw new AppError("FORBIDDEN", "Your role requires MFA, so it cannot be turned off");
+      throw new AppError("FORBIDDEN", "Your role or organization requires MFA, so it cannot be turned off");
     }
     const step = this.match(factor, code);
     const outcome: MfaCodeOutcome =

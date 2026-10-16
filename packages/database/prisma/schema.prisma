@@ -99,6 +99,9 @@ model Organization {
   name         String
   slug         String                    @unique
   status       OrganizationStatus        @default(ACTIVE)
+  /// Every member must use MFA, whatever their role (ADR-0065 Decision 18).
+  /// Changed only by an OWNER or ADMIN.
+  mfaRequired  Boolean                   @default(false)
   createdAt    DateTime                  @default(now())
   updatedAt    DateTime                  @updatedAt
   memberships  Membership[]

@@ -35,6 +35,10 @@ export const AuditAction = {
   MfaChallengeLocked: "mfa.challenge_locked",
   MfaRecoveryCodesRegenerated: "mfa.recovery_codes_regenerated",
   MfaDisabled: "mfa.disabled",
+  /** An organization began or stopped requiring MFA of all its members (ADR-0065 Decision 18). */
+  OrganizationMfaRequirementChanged: "organization.mfa_requirement_changed",
+  /** A member's refused attempt to change it. */
+  OrganizationMfaRequirementRefused: "organization.mfa_requirement_refused",
 } as const;
 
 export type AuditActionValue = (typeof AuditAction)[keyof typeof AuditAction];

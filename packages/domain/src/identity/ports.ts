@@ -50,9 +50,25 @@ export interface CredentialRepository {
 }
 
 export interface OrganizationRepository {
-  create(input: Omit<Organization, "createdAt" | "updatedAt">): Promise<Organization>;
+  /** A new organization requires no MFA of its members. */
+  create(input: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">): Promise<Organization>;
   findById(id: string): Promise<Organization | null>;
   findBySlug(slug: string): Promise<Organization | null>;
+  /**
+   * Set whether every member must use MFA, committing `audit` with it
+   * (ADR-0065 Decision 18). Applies only while the organization still has
+   * `expected` and `actorUserId` is still one of its `OWNER`s or `ADMIN`s;
+   * otherwise writes nothing and answers `STALE`.
+   */
+  setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE">;
+}
+
+export interface SetMfaRequiredInput {
+  readonly organizationId: string;
+  readonly actorUserId: string;
+  readonly expected: boolean;
+  readonly required: boolean;
+  readonly audit: Omit<AuditLog, "id" | "createdAt">;
 }
 
 /** The audit entry a membership change commits together with the change itself. */
