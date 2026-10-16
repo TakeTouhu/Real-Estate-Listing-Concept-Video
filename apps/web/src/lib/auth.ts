@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { timingSafeEqualString } from "@app/shared";
-import type { Session, User } from "@app/domain";
+import { mfaSignInStep, type MfaSignInStep, type Session, type User } from "@app/domain";
 import { getServerEnv } from "./env";
 import { getIdentityServices } from "./identity";
 
@@ -50,10 +50,28 @@ export interface CurrentUser {
   readonly session: Session;
 }
 
-/** Resolve the authenticated user from the session cookie, or null. */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+export interface SignIn extends CurrentUser {
+  readonly step: MfaSignInStep;
+}
+
+/** The session cookie's sign-in, whether or not it has passed MFA, or null. */
+export async function getSignIn(): Promise<SignIn | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  return getIdentityServices().auth.resolveSession(token);
+  const { auth, deps } = getIdentityServices();
+  const current = await auth.resolveSession(token);
+  if (!current) return null;
+  return { ...current, step: await mfaSignInStep(deps, current.session) };
+}
+
+/**
+ * The signed-in user from the session cookie, or null. A sign-in that still
+ * owes an MFA code is not signed in: every route and page that needs a user
+ * comes through here, so none is reachable before the code (ADR-0065
+ * Decision 12).
+ */
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  const signIn = await getSignIn();
+  return signIn?.step === "SIGNED_IN" ? { user: signIn.user, session: signIn.session } : null;
 }

@@ -5,8 +5,8 @@ ADR: `docs/decisions/0065-authenticator-mfa.md`
 Gap analysis: `docs/mfa-gap-analysis.md`
 
 MFA is built in four pull requests, approved by the product owner on
-2026-10-15 with no grace period: MFA-1 (the foundation, this section), MFA-2
-(the screens and two-step sign-in), MFA-3 (mandatory MFA) and MFA-4 (an
+2026-10-15 with no grace period: MFA-1 (the foundation), MFA-2 (the screens
+and two-step sign-in), MFA-3 (mandatory MFA) and MFA-4 (an
 organization's requirement for all members). Each extends this record. MFA is
 not a Roadmap phase, so it receives no `phase-N-complete` tag.
 
@@ -23,7 +23,7 @@ Commits, oldest first:
 | `7d5216f` | ADR-0065, the gap analysis, this record and the documentation updates |
 | `ea18438` | the two review fixes below, with their tests |
 | `a011435` | ADR-0065 records them |
-| *(this commit)* | this record: the review, the verification and mutation ledger on the reviewed code |
+| `7b3d26d` | this record: the review, the verification and mutation ledger on the reviewed code |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -295,3 +295,188 @@ scheduler and live Stripe charges remain BLOCKED.
 
 MFA-2, MFA-3 and MFA-4, each asking before merge. Then email verification and
 password reset, which need an email-sending service, and rate limiting.
+
+## MFA-2 — the security page and two-step sign-in
+
+Base: `e246b00` (PR #85 merge commit on `main`).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `e31d456` | `mfaSignInStep`; the session gate in `lib/auth.ts`; `lib/mfa.ts`; the code page and route; the security page, its panel and the four `/api/mfa` routes; the `qrcode` dependency; the tests; ADR-0065 Decisions 12 to 14, the API change summary, this record and the documentation updates |
+| *(this commit)* | this record: the verification and the mutation ledger |
+
+The exact head SHA is reported with the pull request.
+
+### What MFA-2 does
+
+- **A code after the password.** `mfaSignInStep` says whether a sign-in has
+  passed MFA or owes a code. `getCurrentUser()`, through which every route and
+  page gets its user, returns one only once it has passed.
+  - A sign-in that owes a code gets `401` from every route, and every page
+    sends it to `/login`, which forwards it to `/login/mfa`.
+  - Signing in with the password sends a user with MFA on straight to
+    `/login/mfa`.
+- **The code step** (`/login/mfa`, `POST /api/auth/mfa`) takes an authenticator
+  code or a recovery code.
+  - A wrong code comes back with the attempts left.
+  - The fifth ends the sign-in, clears its cookie and goes back to the password.
+- **The security page** (`/security`, linked from the dashboard) offers:
+  - turning MFA on: a QR code drawn on the server, the key, a first code, then
+    the recovery codes shown once;
+  - new recovery codes;
+  - moving to a new device;
+  - turning it off with a current code, offered only to someone who need not
+    use MFA.
+- **Four JSON routes** under `/api/mfa`. Each is for the signed-in user only,
+  and every response is `Cache-Control: no-store`.
+- **Without `MFA_SECRET_KEY`, MFA fails closed.** The page says MFA is not
+  available, the routes answer `500`, and no code is checked. It stays optional
+  in the environment schema, which the worker shares.
+
+Behaviour anyone can notice: a *Sign-in security* link on the dashboard. Anyone
+may turn MFA on, and once it is on, signing in asks for a code. Nobody is
+required to yet; that is MFA-3.
+
+### Signing in with MFA on
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant W as Web app
+  participant S as MfaService
+  participant DB as PostgreSQL
+
+  B->>W: POST /api/auth/login (email, password)
+  W->>DB: create session X (mfaVerifiedAt null)
+  W->>DB: find the user's factor: found
+  W-->>B: 303 /login/mfa, cookie X
+  B->>W: any page or route
+  W->>W: getCurrentUser(): X owes a code, so no user
+  W-->>B: pages 303 /login (forwards to /login/mfa); routes 401
+  B->>W: POST /api/auth/mfa (code)
+  W->>S: verify(X, code)
+  alt the code is accepted
+    S->>DB: X passed MFA; mfa.challenge_passed; COMMIT
+    W-->>B: 303 /
+  else a wrong code, attempts left
+    S->>DB: X: mfaFailedAttempts + 1
+    W-->>B: 303 /login/mfa (That code is not valid. Attempts left: N)
+  else the fifth wrong code
+    S->>DB: delete X; mfa.challenge_locked; COMMIT
+    W-->>B: 303 /login, cookie cleared
+  end
+```
+
+### Verification
+
+Measured on `e31d456` (local PostgreSQL 16, configured like CI); the commit
+after it changes this record only.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5231 / 5231**, 178 files |
+| `pnpm test:db` | **1350 / 1350**, 48 files (no database code changed) |
+| `pnpm build` | succeeded; `/login/mfa` and `/security` are dynamic pages |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 26 migrations, up to date |
+
+New tests: the sign-in step over the in-memory repositories (4); the routes,
+with the session gate, `lib/mfa.ts` and the domain running for real (11); the
+three pages (5); the security panel (8); and the boundary checks in the shape
+test (4, replacing MFA-1's 2 dormancy checks).
+
+### Mutation ledger
+
+**33 run, 33 killed, 0 survivors, 0 broken**, in one pass on the code of
+`e31d456`. Each mutant weakens one guarantee at an anchor that occurs exactly
+once, and runs the MFA domain tests, the web app's component and page tests and
+the MFA route tests (209 tests in 13 files). Every mutated file was restored and
+re-hashed, and all 816 files were byte-identical afterwards.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| G01 | gate | a sign-in that passed MFA is asked again | `sign-in.ts` | 7 of 209 |
+| G02 | gate | a user with MFA on needs no code | `sign-in.ts` | 10 of 209 |
+| G03 | gate | the passed check is inverted | `sign-in.ts` | 13 of 209 |
+| A01 | gate | getCurrentUser returns a sign-in that owes a code | `auth.ts` | 5 of 209 |
+| A02 | gate | the step is never computed | `auth.ts` | 7 of 209 |
+| L01 | sign-in | a user with MFA on goes home after the password | `auth/login/route.ts` | 1 of 209 |
+| R01 | code step | a signed-in sign-in is asked for a code | `auth/mfa/route.ts` | 1 of 209 |
+| R02 | code step | no sign-in is sent home | `auth/mfa/route.ts` | 2 of 209 |
+| R03 | code step | an ended sign-in keeps its cookie | `auth/mfa/route.ts` | 1 of 209 |
+| R04 | code step | a lockout stays on the code page | `auth/mfa/route.ts` | 1 of 209 |
+| R05 | code step | the attempts left are not shown | `auth/mfa/route.ts` | 2 of 209 |
+| R06 | code step | a wrong code goes home | `auth/mfa/route.ts` | 2 of 209 |
+| F01 | key | no fail-closed check for a missing key | `mfa.ts` | 3 of 209 |
+| F02 | routes | an anonymous request reaches the handler | `mfa.ts` | 2 of 209 |
+| F03 | routes | no Cache-Control: no-store | `mfa.ts` | 4 of 209 |
+| F04 | routes | an error response may be cached | `mfa.ts` | 2 of 209 |
+| F05 | routes | the MFA routes accept a sign-in that owes a code | `mfa.ts` | 1 of 209 |
+| F06 | routes | the code is read from another field | `mfa.ts` | 8 of 209 |
+| Q01 | qr | the QR code holds the bare secret | `mfa/setup/route.ts` | 1 of 209 |
+| Q02 | routes | the otpauth URI is sent as well | `mfa/setup/route.ts` | 1 of 209 |
+| D01 | routes | turning off answers 200 with a body | `mfa/disable/route.ts` | 1 of 209 |
+| P01 | pages | the sign-in page does not forward a sign-in owing a code | `app/login/page.tsx` | 2 of 209 |
+| P02 | pages | the code page shows to a signed-in user | `login/mfa/page.tsx` | 1 of 209 |
+| P03 | pages | the code page shows without a sign-in | `login/mfa/page.tsx` | 1 of 209 |
+| P04 | pages | the security page shows without a signed-in user | `app/security/page.tsx` | 1 of 209 |
+| P05 | pages | a missing key breaks the security page | `app/security/page.tsx` | 1 of 209 |
+| U01 | panel | turning off is offered to someone who must use MFA | `mfa-panel.tsx` | 2 of 209 |
+| U02 | panel | an ended sign-in is not sent to sign in | `mfa-panel.tsx` | 1 of 209 |
+| U03 | panel | the recovery codes are not shown after set-up | `mfa-panel.tsx` | 1 of 209 |
+| U04 | panel | the code is sent untrimmed | `mfa-panel.tsx` | 1 of 209 |
+| U05 | panel | the attempts left are not shown | `mfa-panel.tsx` | 1 of 209 |
+| U06 | panel | the set-up stays open behind the recovery codes | `mfa-panel.tsx` | 1 of 209 |
+| S01 | boundary | another page reads a sign-in owing a code | `src/app/page.tsx` | 1 of 209 |
+
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: an MFA-2 row; the MFA-1 row no longer says dormant |
+| Entity-relationship diagram | Not applicable: MFA-2 changes no table or column |
+| Critical sequence diagram | this section, *Signing in with MFA on* |
+| OpenAPI / API change summary | `docs/api-changes-mfa-2.md`. Internal API: `mfaSignInStep` and `MfaSignInStep` in `@app/domain`; `getSignIn()` in `apps/web/src/lib/auth.ts` |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *MFA-2*: no migration, and where `MFA_SECRET_KEY` must be set |
+| Completion report | this file |
+
+Also updated: ADR-0065 (Decisions 12 to 14; Decision 10 superseded),
+`docs/Roadmap.md`, `docs/decisions/TODO.md`, `.env.example`,
+`docs/local-setup.md` and the comment on `MFA_SECRET_KEY` in the environment
+schema.
+
+### Activation status
+
+Nothing paid or scheduled is activated. MFA-2 adds pages and routes to the web
+app and one dependency, `qrcode` 1.5.4, which draws the set-up QR code on the
+server. It adds no worker, scheduler or credential. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges remain
+BLOCKED.
+
+### Known limitations
+
+- MFA is optional for everyone until MFA-3 makes it mandatory for `OWNER`,
+  `ADMIN` and holders of `permission.manage` or `billing.manage`.
+- The five-wrong-codes guard is per sign-in, so until rate limiting exists
+  (ADR-0054 Decision 5) a person with the password can sign in again and try
+  more codes. Rate limiting should ship before MFA is relied on in production.
+- Turning MFA on asks the user's other sign-ins for a code. Moving it or
+  turning it off leaves a sign-in that already passed it signed in.
+- Turning MFA on asks for the signed-in session only, not the password again
+  (ADR-0052 Decision 10 adds no step-up mechanism). Someone holding another
+  person's session, on an account without MFA, could turn it on and lock them
+  out until operator-assisted recovery exists.
+- Without `MFA_SECRET_KEY`, someone with MFA on cannot finish signing in. The
+  readiness probe does not report the missing key.
+- Re-sealing under a new key and operator-assisted recovery are still not
+  built.
+
+### Remaining work
+
+MFA-3 and MFA-4, each asking before merge.

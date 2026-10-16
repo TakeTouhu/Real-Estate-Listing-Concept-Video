@@ -3,12 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * What MFA-1 may and may not have changed (ADR-0065).
+ * What MFA may and may not change (ADR-0065).
  *
  * 1. **One migration**, the newest: two MFA tables and three session columns,
  *    rewriting no existing row.
- * 2. **Dormant.** No route, page or worker calls the MFA service or reads
- *    `MFA_SECRET_KEY`, and signing in does not consult MFA yet (MFA-2 and MFA-3).
+ * 2. **One way in** (MFA-2). Only the web app's `lib/mfa.ts` builds the MFA
+ *    service or reads `MFA_SECRET_KEY`, the worker has no MFA at all, and only
+ *    `lib/auth.ts` resolves a session, so no route or page can skip the code
+ *    step. `AuthService` still knows nothing of MFA.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -70,17 +72,35 @@ describe("durable shape", () => {
   });
 });
 
-describe("dormancy", () => {
-  const appFiles = ["apps/web", "apps/worker"].flatMap((app) => sourceFiles(join(REPO_ROOT, app)));
+describe("boundary", () => {
+  const files = (app: string) => sourceFiles(join(REPO_ROOT, app)).filter((file) => !/\.test\.tsx?$/.test(file));
+  const matching = (app: string, pattern: RegExp) =>
+    files(app)
+      .filter((file) => pattern.test(code(readFileSync(file, "utf8"))))
+      .map((file) => file.slice(REPO_ROOT.length + 1));
 
-  it("adds no MFA caller to either application", () => {
-    const callers = appFiles.filter((file) =>
-      /MfaService|createMfaSecretCipher|\.mfa\.\w+\(|MFA_SECRET_KEY/.test(code(readFileSync(file, "utf8"))),
-    );
-    expect(callers).toEqual([]);
+  it("builds the MFA service and reads its key in one web module, and nowhere in the worker", () => {
+    expect(matching("apps/web", /new MfaService|createMfaSecretCipher|MFA_SECRET_KEY/)).toEqual(["apps/web/src/lib/mfa.ts"]);
+    expect(matching("apps/worker", /Mfa|mfa|MFA_SECRET_KEY/)).toEqual([]);
   });
 
-  it("leaves signing in and resolving a session as they were", () => {
+  it("resolves a session only in lib/auth.ts, where the code step is applied", () => {
+    expect(matching("apps/web", /resolveSession/)).toEqual(["apps/web/src/lib/auth.ts"]);
+    expect(code(readFileSync(join(REPO_ROOT, "apps/web/src/lib/auth.ts"), "utf8"))).toMatch(
+      /signIn\?\.step === "SIGNED_IN"/,
+    );
+  });
+
+  it("lets only the sign-in pages and the code step read a sign-in that has not passed MFA", () => {
+    expect(matching("apps/web", /getSignIn\(/).sort()).toEqual([
+      "apps/web/src/app/api/auth/mfa/route.ts",
+      "apps/web/src/app/login/mfa/page.tsx",
+      "apps/web/src/app/login/page.tsx",
+      "apps/web/src/lib/auth.ts",
+    ]);
+  });
+
+  it("leaves signing in and resolving a session in AuthService as they were", () => {
     const auth = code(readFileSync(join(REPO_ROOT, "packages/domain/src/identity/auth-service.ts"), "utf8"));
     expect(auth).not.toMatch(/mfa/i);
   });

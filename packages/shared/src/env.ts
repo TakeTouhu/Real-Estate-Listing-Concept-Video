@@ -49,7 +49,8 @@ export const serverEnvSchema = z
       .min(16, "STORAGE_SIGNING_SECRET must be at least 16 characters"),
 
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
-    // characters (ADR-0065). Optional while no route uses MFA.
+    // characters (ADR-0065). Optional because the worker shares this schema
+    // and never needs it; the web app fails closed without it (Decision 14).
     MFA_SECRET_KEY: z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "MFA_SECRET_KEY must be 32 bytes as 64 hex characters")

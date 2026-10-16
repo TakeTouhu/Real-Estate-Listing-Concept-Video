@@ -32,7 +32,7 @@ describe("serverEnvSchema", () => {
     expect(serverEnvSchema.safeParse({ ...base, SESSION_SECRET: "short" }).success).toBe(false);
   });
 
-  it("accepts MFA_SECRET_KEY only as 32 bytes of hex, and does not require it yet", () => {
+  it("accepts MFA_SECRET_KEY only as 32 bytes of hex, and does not require it", () => {
     expect(serverEnvSchema.parse(base).MFA_SECRET_KEY).toBeUndefined();
     expect(serverEnvSchema.safeParse({ ...base, MFA_SECRET_KEY: "ab".repeat(32) }).success).toBe(true);
     for (const bad of ["", "ab".repeat(31), "ab".repeat(33), "zz".repeat(32)]) {

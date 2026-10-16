@@ -1208,3 +1208,13 @@ to them.
 
 New server secret: `MFA_SECRET_KEY`, 64 hex characters, optional until MFA-2.
 Keep it once set: a different key cannot open secrets sealed under the old one.
+
+## MFA-2 — the security page and two-step sign-in
+
+**No migration.** MFA-2 reads and writes the tables and columns of migration 25
+and changes none of them. Sessions created before it read as not having passed
+MFA; a user who has no factor is signed in by them exactly as before.
+
+**Environment.** Set `MFA_SECRET_KEY` on the web app before anyone turns on
+MFA. It stays optional in the schema, which the worker shares; without it the
+web app fails closed (ADR-0065 Decision 14). The worker needs no key.
