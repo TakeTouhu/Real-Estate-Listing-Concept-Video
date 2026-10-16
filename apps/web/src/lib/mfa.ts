@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import QRCode from "qrcode";
 import { MfaService, createMfaSecretCipher, systemMfaRandom } from "@app/domain";
 import { AppError } from "@app/shared";
-import { getCurrentUser, type CurrentUser } from "./auth";
+import { getSignIn, type CurrentUser } from "./auth";
 import { getServerEnv } from "./env";
 import { appErrorToResponse } from "./http";
 import { getIdentityServices } from "./identity";
@@ -42,18 +42,26 @@ export async function readCode(request: Request): Promise<string> {
   return requiredString((body ?? {}) as Record<string, unknown>, "code");
 }
 
+export interface MfaRouteOptions {
+  /** Also serve a sign-in that must set MFA up before anything else (ADR-0065 Decision 15). */
+  readonly duringSetup?: boolean;
+}
+
 /**
  * Run an MFA JSON route for the signed-in user. Its responses carry secrets or
  * recovery codes, so none may be cached.
  */
 export async function mfaRoute(
   handler: (current: CurrentUser, mfa: MfaService) => Promise<NextResponse>,
+  options: MfaRouteOptions = {},
 ): Promise<NextResponse> {
   let response: NextResponse;
   try {
-    const current = await getCurrentUser();
-    if (!current) throw new AppError("UNAUTHENTICATED", "Sign in again");
-    response = await handler(current, getMfaService());
+    const signIn = await getSignIn();
+    const allowed =
+      signIn?.step === "SIGNED_IN" || (options.duringSetup === true && signIn?.step === "SETUP_REQUIRED");
+    if (!signIn || !allowed) throw new AppError("UNAUTHENTICATED", "Sign in again");
+    response = await handler({ user: signIn.user, session: signIn.session }, getMfaService());
   } catch (error) {
     response = appErrorToResponse(error);
   }

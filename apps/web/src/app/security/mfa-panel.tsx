@@ -8,6 +8,8 @@ interface Props {
   /** The user's roles or permissions make MFA mandatory, so it cannot be turned off. */
   readonly required: boolean;
   readonly recoveryCodesLeft: number;
+  /** This sign-in must set MFA up before anything else; once it has, it goes on in. */
+  readonly mustSetUp?: boolean;
 }
 
 interface Setup {
@@ -21,7 +23,7 @@ interface Setup {
  * and recovery codes live only in component state, and recovery codes are
  * shown once.
  */
-export function MfaPanel({ enabled, required, recoveryCodesLeft }: Props) {
+export function MfaPanel({ enabled, required, recoveryCodesLeft, mustSetUp = false }: Props) {
   const router = useRouter();
   const [setup, setSetup] = useState<Setup | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<readonly string[] | null>(null);
@@ -111,7 +113,8 @@ export function MfaPanel({ enabled, required, recoveryCodesLeft }: Props) {
           type="button"
           onClick={() => {
             setRecoveryCodes(null);
-            router.refresh();
+            if (mustSetUp) router.push("/");
+            else router.refresh();
           }}
         >
           I have saved them

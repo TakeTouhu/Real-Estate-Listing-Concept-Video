@@ -2,8 +2,8 @@
 
 Status: Accepted. MFA-1 built the foundation (Decisions 1 to 11). MFA-2 adds
 the screens and the two-step sign-in (Decisions 12 to 14, superseding
-Decision 10). MFA-3 makes MFA mandatory and MFA-4 adds the organization-wide
-requirement; each extends this ADR.
+Decision 10). MFA-3 makes MFA mandatory (Decisions 15 to 17). MFA-4 adds the
+organization-wide requirement and extends this ADR.
 Implements: ADR-0052 Decision 18:
 - *authenticator-app (TOTP) MFA, recovery codes*;
 - *MFA is mandatory for `OWNER`, `ADMIN`, any user with `permission.manage`, and
@@ -141,7 +141,7 @@ grant or group. A grant made today applies on the next call; no session is
 rewritten.
 
 In MFA-1 it decides only whether MFA may be turned off. MFA-3 uses it to refuse
-every other route to a session that must pass MFA and has not.
+every other route to a session that must pass MFA and has not (Decision 15).
 
 The `OWNER` and `ADMIN` clause repeats what both templates grant today
 (`permission.manage`). It is kept so the rule still names the roles ADR-0052
@@ -212,7 +212,7 @@ passed MFA or the user has no factor, otherwise `CODE_REQUIRED`.
 - **One gate.** `getCurrentUser()`, through which every route and page gets its
   user, returns one only for `SIGNED_IN`. A sign-in that owes a code is not
   signed in anywhere. Only the sign-in page, the code page and the code route
-  read it, through `getSignIn()`.
+  read it, through `getSignIn()` (MFA-3 adds MFA set-up, Decision 16).
 - **Signing in.** After the password, a user with MFA on is sent to
   `/login/mfa`. Opening `/login` with such a sign-in goes there too.
 - **The code step** (`POST /api/auth/mfa`) takes an authenticator code or a
@@ -264,6 +264,55 @@ The web app refuses without it instead:
 
 Nothing falls back to the password alone. Users without MFA sign in as before.
 
+## Decision 15 — Someone who must use MFA sets it up first (MFA-3)
+
+`mfaSignInStep` gains a third step, `SETUP_REQUIRED`: the user has no factor
+and `isMfaRequired` (Decision 7) is true. A user with a factor is decided as in
+Decision 12, by whether this sign-in has passed MFA.
+
+- **Read on every request.** The step is worked out from current memberships,
+  so a grant applies from the user's next request and no session is rewritten
+  (Decision 11, choice 3). There is no grace period (choice 2): every existing
+  `OWNER`, `ADMIN`, `BILLING` and holder of `permission.manage` or
+  `billing.manage` without MFA sets it up at their next request.
+- **A sign-in that passed MFA before** and has since turned it off is asked to
+  set it up again once a grant makes it mandatory. Passing MFA counts only
+  while there is a factor.
+- **Not signed in.** `getCurrentUser()` returns no user for `SETUP_REQUIRED`, as
+  for `CODE_REQUIRED`. Every route answers `401`, and every page sends the
+  person to `/login`, which forwards them to `/security`.
+- **After the password**, such a user goes straight to `/security`.
+  `nextPageFor(step)` in `lib/auth.ts` names the page for each step
+  (`/login/mfa`, `/security` or `/`). The login route, `/login`, `/login/mfa`
+  and the code route all use it.
+- **Once set-up is confirmed**, the sign-in that did it has passed MFA
+  (Decision 6) and is signed in. The page goes on to `/` once the recovery
+  codes are saved.
+- **Creating an organization** makes its creator an `OWNER`, so the next page
+  after creating one is MFA set-up.
+
+## Decision 16 — What a sign-in that must set MFA up can reach (MFA-3)
+
+- `/security`, in a set-up-first form: it says the role requires MFA and offers
+  set-up and sign-out, with no link back to the dashboard.
+- `POST /api/mfa/setup` and `POST /api/mfa/setup/confirm`. `mfaRoute` serves
+  `SETUP_REQUIRED` only when a route passes `{ duringSetup: true }`, and only
+  these two do.
+- `POST /api/auth/logout`.
+
+`POST /api/mfa/recovery-codes` and `/disable` stay for signed-in users only.
+The code route sends such a sign-in to `/security` without checking a code, and
+`/login/mfa` does the same. A shape test pins which files read a sign-in that has
+not passed MFA, and which routes pass `duringSetup`.
+
+## Decision 17 — The readiness probe reports the MFA key (MFA-3)
+
+Since MFA-3, without `MFA_SECRET_KEY` no one who must use MFA can sign in, every
+`OWNER` included (Decision 14). The authenticated readiness probe
+(`GET /api/health/ready`) gains an `mfa` check. It passes when the key is set;
+without the key the probe reports `degraded` and answers `503`. It reports
+only whether the key is set, never anything derived from it.
+
 ## Consequences
 
 - **Schema.** Migration 25: two tables, three `sessions` columns, two `CHECK`s.
@@ -285,6 +334,14 @@ Nothing falls back to the password alone. Users without MFA sign in as before.
   - `getCurrentUser()` returns a user only once the sign-in has passed MFA.
   - New dependency of the web app: `qrcode` 1.5.4 (and `@types/qrcode` 1.5.6
     for development).
+- **MFA-3.**
+  - No migration, no new route and no new dependency.
+  - `MfaSignInStep` gains `SETUP_REQUIRED`. `lib/auth.ts` gains `nextPageFor`,
+    and `mfaRoute` gains its `duringSetup` option.
+  - The readiness probe gains its `mfa` check.
+  - Everyone who must use MFA and has not set it up does so at their next
+    request, before reaching anything else.
+  - `MFA_SECRET_KEY` must be set for any `OWNER` to sign in.
 
 ## Not decided here
 
@@ -292,7 +349,8 @@ Nothing falls back to the password alone. Users without MFA sign in as before.
   email-sending service.
 - Rate limiting across login, MFA recovery and the rest (ADR-0054 Decision 5).
 - Operator-assisted recovery for someone who has lost both their device and
-  their recovery codes.
+  their recovery codes. Since MFA-3 this can lock any `OWNER` out of their
+  organization.
 - Re-sealing secrets under a new `MFA_SECRET_KEY`.
 - Whether turning MFA on, moving it or turning it off should end the user's
   other sessions. Since MFA-2, turning it on asks the other sign-ins for a code

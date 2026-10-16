@@ -4,7 +4,8 @@ import { createTestDeps, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
 
 /**
- * Route tests for the two-step sign-in and the MFA routes (ADR-0065, MFA-2).
+ * Route tests for the two-step sign-in, MFA set-up when it is required, and the
+ * MFA routes (ADR-0065, MFA-2 and MFA-3).
  * Only the cookie store, the environment and the identity wiring are stubbed:
  * the session gate in `lib/auth.ts`, `lib/mfa.ts` and the domain services all
  * run for real over in-memory repositories.
@@ -106,6 +107,54 @@ describe("signing in with the password", () => {
       expect(response.status).toBe(401);
     }
     expect(await deps.repos.mfa.findFactor((await deps.repos.users.findByEmail("member@example.com"))!.id)).not.toBeNull();
+  });
+});
+
+describe("set-up when MFA is required (ADR-0065 Decisions 15 and 16)", () => {
+  it("sends someone who must use MFA, and has not set it up, from the password to set-up", async () => {
+    const response = await login(form({ email: "owner@example.com", password: PASSWORD }));
+    expect(location(response)).toEqual({ path: "/security", error: null });
+    expect(response.headers.get("set-cookie")).toMatch(/^rev_session=/);
+    cookie.value = /^rev_session=([^;]+)/.exec(response.headers.get("set-cookie")!)![1];
+    expect(await getCurrentUser()).toBeNull();
+
+    const { secret } = (await (await setup()).json()) as { secret: string };
+    const confirmed = await confirm(json({ code: codeFor(secret) }));
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.headers.get("cache-control")).toBe("no-store");
+    expect((await getCurrentUser())?.user.email).toBe("owner@example.com");
+
+    expect(location(await login(form({ email: "owner@example.com", password: PASSWORD }))).path).toBe("/login/mfa");
+  });
+
+  it("keeps a sign-in that must set MFA up out of every route but set-up", async () => {
+    await signIn("owner@example.com");
+    for (const response of [await newRecoveryCodes(), await disable(json({ code: "000000" }))]) {
+      expect(response.status).toBe(401);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
+    expect(location(await enterCode(form({ code: "000000" })))).toEqual({ path: "/security", error: null });
+    expect((await setup()).status).toBe(200);
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("applies a new requirement from the next request", async () => {
+    await signIn();
+    expect(await getCurrentUser()).not.toBeNull();
+    const member = (await deps.repos.users.findByEmail("member@example.com"))!;
+    await new OrganizationService(deps).createOrganization(member.id, { name: "Own studio" });
+    expect(await getCurrentUser()).toBeNull();
+    expect((await setup()).status).toBe(200);
+  });
+
+  it("lets no one who must use MFA in without the MFA key", async () => {
+    env.value = { ...env.value, MFA_SECRET_KEY: undefined };
+    expect(location(await login(form({ email: "owner@example.com", password: PASSWORD }))).path).toBe("/security");
+    await signIn("owner@example.com");
+    const unconfigured = await setup();
+    expect(unconfigured.status).toBe(500);
+    expect(((await unconfigured.json()) as { error: { code: string } }).error.code).toBe("CONFIGURATION_ERROR");
+    expect(await getCurrentUser()).toBeNull();
   });
 });
 

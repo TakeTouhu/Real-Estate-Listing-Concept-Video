@@ -70,6 +70,19 @@ describe("MFA off", () => {
     expect(screen.queryByText(CODES[0]!)).toBeNull();
     expect(screen.queryByAltText("QR code for your authenticator app")).toBeNull();
     expect(refresh).toHaveBeenCalledOnce();
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("goes on in once a sign-in that had to set MFA up has saved its recovery codes", async () => {
+    render(<MfaPanel enabled={false} required recoveryCodesLeft={0} mustSetUp />);
+    fetchMock.mockResolvedValueOnce(respond(200, { secret: "JBSWY3DPEHPK3PXP", qrCode: "data:image/svg+xml;base64,PHN2Zz4=" }));
+    await userEvent.click(button("Set up MFA"));
+    fetchMock.mockResolvedValueOnce(respond(200, { recoveryCodes: CODES }));
+    await userEvent.type(screen.getByLabelText("Code from your authenticator app"), "123456");
+    await userEvent.click(button("Turn on MFA"));
+    await userEvent.click(button("I have saved them"));
+    expect(push).toHaveBeenCalledExactlyOnceWith("/");
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("says when the role requires MFA", () => {

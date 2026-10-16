@@ -7,6 +7,7 @@ const env = serverEnvSchema.parse({
   SESSION_SECRET: "session-secret-abcdef123456",
   HEALTHCHECK_API_TOKEN: "healthcheck-token-abcdef123456",
   STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
+  MFA_SECRET_KEY: "11".repeat(32),
 });
 
 describe("buildLiveness", () => {
@@ -31,5 +32,19 @@ describe("computeReadiness", () => {
     const readiness = await computeReadiness(env, failing);
     expect(readiness.status).toBe("degraded");
     expect(readiness.checks[0]?.ok).toBe(false);
+  });
+
+  it("reports whether the MFA key is set, and degraded without it (ADR-0065 Decision 17)", async () => {
+    const ready = await computeReadiness(env, new FakeVideoProvider());
+    expect(ready.checks.find((check) => check.name === "mfa")).toEqual({ name: "mfa", ok: true, detail: "key set" });
+    expect(JSON.stringify(ready)).not.toContain("11".repeat(32));
+
+    const withoutKey = await computeReadiness({ ...env, MFA_SECRET_KEY: undefined }, new FakeVideoProvider());
+    expect(withoutKey.status).toBe("degraded");
+    expect(withoutKey.checks.find((check) => check.name === "mfa")).toEqual({
+      name: "mfa",
+      ok: false,
+      detail: "MFA_SECRET_KEY not set",
+    });
   });
 });
