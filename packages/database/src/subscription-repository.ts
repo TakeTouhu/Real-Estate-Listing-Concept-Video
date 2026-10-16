@@ -102,6 +102,9 @@ export function createSubscriptionRepository(prisma: PrismaClient): Subscription
             channel: row.channel,
             anchorAt: row.anchorAt.toISOString(),
             commercialReference: row.commercialReference,
+            ...(input.operator != null
+              ? { operator: input.operator.name.trim(), reason: input.operator.reason.trim() }
+              : {}),
           },
         },
       });

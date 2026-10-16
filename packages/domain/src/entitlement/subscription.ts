@@ -30,6 +30,16 @@ export interface OrganizationSubscription {
   readonly createdAt: Date;
 }
 
+/**
+ * A VTaVision operator acting outside the web app, named and with a reason
+ * (ADR-0054 Decision 6, ADR-0066). An operator is not a user of any
+ * organization, so it is recorded in the audit entry, never as its actor.
+ */
+export interface OperatorAttribution {
+  readonly name: string;
+  readonly reason: string;
+}
+
 export interface ProvisionSubscriptionInput {
   readonly id: string;
   readonly organizationId: string;
@@ -39,6 +49,8 @@ export interface ProvisionSubscriptionInput {
   readonly commercialReference: string;
   /** The operator or billing integration that provisioned it, when a person did. */
   readonly actorUserId: string | null;
+  /** The operator who provisioned it by hand, when one did. Audited, not compared on replay. */
+  readonly operator?: OperatorAttribution | null;
 }
 
 export type ProvisionSubscriptionOutcome =
@@ -70,12 +82,57 @@ export function provisionRefusal(
     input.id.length === 0 ||
     input.organizationId.length === 0 ||
     input.commercialReference.length === 0 ||
-    !isValidInstant(input.anchorAt)
+    !isValidInstant(input.anchorAt) ||
+    (input.operator != null && (input.operator.name.trim() === "" || input.operator.reason.trim() === ""))
   ) {
     return "INVALID_SUBSCRIPTION";
   }
   if (input.planKey === "enterprise" && input.channel === "SELF_SERVICE") return "CHANNEL_NOT_OFFERED";
   return null;
+}
+
+// --- Provisioning from a sales contract ------------------------------------
+
+/**
+ * The one subscription an organization can have, named after it, so running
+ * the operator command again with the same contract is a replay rather than a
+ * second subscription (ADR-0066 Decision 1).
+ */
+export function salesContractSubscriptionId(organizationId: string): string {
+  return `sub_${organizationId}`;
+}
+
+export interface SalesContractProvisioning {
+  readonly organizationId: string;
+  readonly planKey: CustomerPlanKey;
+  /** The contract's start: the start of renewal period 0. */
+  readonly startsAt: Date;
+  /** The executed contract's number. */
+  readonly contractReference: string;
+  readonly operator: OperatorAttribution;
+}
+
+/**
+ * Give an organization the plan its sales contract names (ADR-0066 Decision 1).
+ *
+ * Always `SALES_ASSISTED`: a self-service subscription comes from its payment
+ * processor, never from an operator. No organization user is its actor; the
+ * operator and the reason are written to the audit entry instead.
+ */
+export function provisionFromSalesContract(
+  subscriptions: Pick<SubscriptionRepository, "provision">,
+  input: SalesContractProvisioning,
+): Promise<ProvisionSubscriptionOutcome> {
+  return subscriptions.provision({
+    id: salesContractSubscriptionId(input.organizationId),
+    organizationId: input.organizationId,
+    planKey: input.planKey,
+    channel: "SALES_ASSISTED",
+    anchorAt: input.startsAt,
+    commercialReference: input.contractReference,
+    actorUserId: null,
+    operator: input.operator,
+  });
 }
 
 // --- Monthly periods -------------------------------------------------------
