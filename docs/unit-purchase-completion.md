@@ -25,7 +25,8 @@ Commits, oldest first:
 | Commit | What it carries |
 | --- | --- |
 | `1863464` | the operator command (`apps/ops`), operator attribution in the provisioning audit, `UnitsOverviewService` and its in-memory reader, the Units page and the dashboard link, their unit, shape and database tests, ADR-0066 and the documentation updates |
-| this record's commit | this record |
+| `2cb625f` | this record |
+| this commit | an MFA database test made independent of row order (below), and this record |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -129,8 +130,20 @@ and needs its own pull request. One earlier full run on this code stopped
 with a test-runner IPC error (`ERR_IPC_CHANNEL_CLOSED`) while the build ran
 alongside it; run alone, it gave the result above.
 
-CI run 567 on `1863464` passed both jobs, the database job included. CI on the
-pull request's exact head is reported with the pull request.
+CI run 567 on `1863464` passed both jobs, the database job included.
+
+**CI run 569 on `2cb625f` failed one database test that UP-1 did not write:**
+`mfa.db.test.ts`, "sets up, passes by authenticator and by recovery code,
+replaces codes and turns off, auditing each". It read the two
+`mfa.challenge_passed` audit rows with no order and expected the authenticator
+pass first. Both rows carry the same instant, so PostgreSQL may return them
+either way. This time it returned the recovery-code row first. The values were
+right. UP-1 adds rows to the same table and deletes them again, which can change
+where PostgreSQL places new rows and so the order in which an unordered read
+returns them. The test now sorts the two rows by method before comparing. A
+local run with the rows deliberately reversed passes. No product code changes.
+
+CI on the pull request's exact head is reported with the pull request.
 
 New tests:
 - **the overview** (`units-overview.test.ts`, 27): who may see it, by role and
