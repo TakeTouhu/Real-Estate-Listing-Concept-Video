@@ -23,7 +23,7 @@ Commits, oldest first:
 | `7d5216f` | ADR-0065, the gap analysis, this record and the documentation updates |
 | `ea18438` | the two review fixes below, with their tests |
 | `a011435` | ADR-0065 records them |
-| *(this commit)* | this record: the review, the verification and mutation ledger on the reviewed code |
+| `7b3d26d` | this record: the review, the verification and mutation ledger on the reviewed code |
 
 The exact head SHA is reported with the pull request rather than written into a
 file that would have to contain its own hash.
@@ -304,7 +304,8 @@ Commits, oldest first:
 
 | Commit | What it carries |
 | --- | --- |
-| *(this commit)* | `mfaSignInStep`; the session gate in `lib/auth.ts`; `lib/mfa.ts`; the code page and route; the security page, its panel and the four `/api/mfa` routes; the `qrcode` dependency; the tests; ADR-0065 Decisions 12 to 14, the API change summary, this record and the documentation updates |
+| `e31d456` | `mfaSignInStep`; the session gate in `lib/auth.ts`; `lib/mfa.ts`; the code page and route; the security page, its panel and the four `/api/mfa` routes; the `qrcode` dependency; the tests; ADR-0065 Decisions 12 to 14, the API change summary, this record and the documentation updates |
+| *(this commit)* | this record: the verification and the mutation ledger |
 
 The exact head SHA is reported with the pull request.
 
@@ -371,12 +372,27 @@ sequenceDiagram
 
 ### Verification
 
-VERIFICATION_TABLE
+Measured on `e31d456` (local PostgreSQL 16, configured like CI); the commit
+after it changes this record only.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5231 / 5231**, 178 files |
+| `pnpm test:db` | **1350 / 1350**, 48 files (no database code changed) |
+| `pnpm build` | succeeded; `/login/mfa` and `/security` are dynamic pages |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 26 migrations, up to date |
+
+New tests: the sign-in step over the in-memory repositories (4); the routes,
+with the session gate, `lib/mfa.ts` and the domain running for real (11); the
+three pages (5); the security panel (8); and the boundary checks in the shape
+test (4, replacing MFA-1's 2 dormancy checks).
 
 ### Mutation ledger
 
 **33 run, 33 killed, 0 survivors, 0 broken**, in one pass on the code of
-COMMIT1. Each mutant weakens one guarantee at an anchor that occurs exactly
+`e31d456`. Each mutant weakens one guarantee at an anchor that occurs exactly
 once, and runs the MFA domain tests, the web app's component and page tests and
 the MFA route tests (209 tests in 13 files). Every mutated file was restored and
 re-hashed, and all 816 files were byte-identical afterwards.
