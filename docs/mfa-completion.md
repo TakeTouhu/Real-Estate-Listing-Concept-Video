@@ -480,3 +480,187 @@ BLOCKED.
 ### Remaining work
 
 MFA-3 and MFA-4, each asking before merge.
+
+## MFA-3 — mandatory MFA
+
+Base: `d72e374` (PR #86 merge commit on `main`; post-merge CI run 557 green).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `7ca92a4` | the `SETUP_REQUIRED` step; `nextPageFor`; `mfaRoute`'s `duringSetup`; the set-up-first security page; the readiness `mfa` check; the tests; ADR-0065 Decisions 15 to 17, the API change summary and the documentation updates |
+| *(this commit)* | this record, with the verification and the mutation ledger |
+
+The exact head SHA is reported with the pull request.
+
+### What MFA-3 does
+
+- **Set-up first.** `mfaSignInStep` gains `SETUP_REQUIRED`: the user must use
+  MFA (`isMfaRequired`: `OWNER`, `ADMIN`, or `permission.manage` or
+  `billing.manage` from any source) and has not set it up. Such a sign-in is
+  signed in nowhere, as one that owes a code is not.
+  - Every route answers `401`. Every page sends it to `/login`, which forwards
+    it to `/security`.
+  - Signing in with the password sends it straight to `/security`.
+  - `nextPageFor(step)` names the page for each step, and the login route, the
+    two sign-in pages and the code route all use it.
+- **What it can reach**: the security page in a set-up-first form (the reason,
+  set-up and sign-out, no link back), `POST /api/mfa/setup` and
+  `/setup/confirm`, and sign-out. Once set-up is confirmed it is signed in, and
+  the page goes on to `/` when the recovery codes are saved.
+- **Read on every request**, from current memberships. A grant applies from the
+  next request, existing sessions included, and there is no grace period.
+- **The readiness probe** reports whether `MFA_SECRET_KEY` is set, and is
+  `degraded` without it, since without the key no `OWNER` can sign in.
+
+Behaviour anyone can notice: at their next request, every `OWNER`, `ADMIN`,
+`BILLING` and other holder of `permission.manage` or `billing.manage` without
+MFA is asked to set it up before anything else. Creating an organization leads
+straight to set-up, because its creator is its `OWNER`. Everyone else is
+unaffected.
+
+### Signing in when MFA is required and not set up
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant W as Web app
+  participant S as MfaService
+  participant DB as PostgreSQL
+
+  B->>W: POST /api/auth/login (email, password)
+  W->>DB: create session X (mfaVerifiedAt null)
+  W->>DB: find the user's factor: none
+  W->>DB: memberships, grants and groups: MFA required
+  W-->>B: 303 /security, cookie X
+  B->>W: any other page or route
+  W->>W: getCurrentUser(): X must set MFA up, so no user
+  W-->>B: pages 303 /login (forwards to /security); routes 401
+  B->>W: POST /api/mfa/setup (duringSetup)
+  W->>S: beginSetup(X)
+  W-->>B: 200 secret and QR code
+  B->>W: POST /api/mfa/setup/confirm (code, duringSetup)
+  W->>S: confirmSetup(X, code)
+  S->>DB: factor, recovery codes, X passed MFA; mfa.enabled; COMMIT
+  W-->>B: 200 recovery codes
+  B->>W: GET / (after "I have saved them")
+  W->>W: getCurrentUser(): X signed in
+```
+
+### Verification
+
+Measured on `7ca92a4` (local PostgreSQL 16, configured like CI); the commit
+after it adds this record only.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5245 / 5245**, 178 files |
+| `pnpm test:db` | **1350 / 1350**, 48 files (no database code changed); see below |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 26 migrations, up to date |
+
+The first database run on `7ca92a4` failed one test, *gives two PROCESSING
+runners one history and at most one transfer*, with
+`OUTPUT_VERIFICATION_REPLAYED`. That is the known race recorded in `TODO.md`
+(found in Phase 6F), in code MFA-3 does not touch. The next run passed in full.
+A run during development, before the commit, also failed one test that was not
+captured; the two runs after it passed.
+
+New tests: the sign-in step (2); the routes, with the session gate,
+`lib/mfa.ts` and the domain running for real (4); the pages (4, one rewritten);
+the security panel (1); the readiness probe (1); and the boundary checks in the
+shape test (2).
+
+### Mutation ledger
+
+**36 run, 36 killed, 0 survivors, 0 broken**, in one pass on the code of
+`7ca92a4`. Each mutant weakens one guarantee at an anchor that occurs exactly
+once, and runs the MFA domain tests, the web app's component, page and library
+tests and the MFA route tests (287 tests in 22 files). Every mutated file was
+restored and re-hashed, and all 817 files were byte-identical afterwards.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| N01 | gate | no sign-in is ever asked to set MFA up | `sign-in.ts` | 10 of 287 |
+| N02 | gate | the requirement is inverted | `sign-in.ts` | 17 of 287 |
+| N03 | gate | a sign-in that passed MFA once counts without a factor | `sign-in.ts` | 1 of 287 |
+| N04 | gate | a user with MFA on is asked to set it up instead of for a code | `sign-in.ts` | 12 of 287 |
+| N05 | gate | a sign-in that passed MFA is asked again | `sign-in.ts` | 9 of 287 |
+| A01 | gate | getCurrentUser returns a sign-in that must set MFA up | `auth.ts` | 5 of 287 |
+| X01 | next page | set-up required goes home | `auth.ts` | 5 of 287 |
+| X02 | next page | a code owed goes to set-up | `auth.ts` | 4 of 287 |
+| X03 | next page | signed in goes back to sign in | `auth.ts` | 3 of 287 |
+| F01 | routes | set-up is closed to a sign-in that must set MFA up | `mfa.ts` | 5 of 287 |
+| F02 | routes | set-up is open to a sign-in that owes a code | `mfa.ts` | 1 of 287 |
+| F03 | routes | every MFA route is open during set-up | `mfa.ts` | 1 of 287 |
+| F04 | routes | the step is not checked at all | `mfa.ts` | 2 of 287 |
+| F05 | routes | no Cache-Control: no-store | `mfa.ts` | 6 of 287 |
+| S01 | routes | set-up does not pass duringSetup | `mfa/setup/route.ts` | 6 of 287 |
+| S02 | routes | confirming does not pass duringSetup | `setup/confirm/route.ts` | 3 of 287 |
+| S03 | routes | new recovery codes are open during set-up | `mfa/recovery-codes/route.ts` | 2 of 287 |
+| S04 | routes | turning off is open during set-up | `mfa/disable/route.ts` | 2 of 287 |
+| L01 | sign-in | set-up required goes home after the password (the MFA-2 rule) | `auth/login/route.ts` | 2 of 287 |
+| R01 | code step | a sign-in that must set MFA up is asked for a code | `auth/mfa/route.ts` | 1 of 287 |
+| R02 | code step | a sign-in that owes no code goes home whatever its step | `auth/mfa/route.ts` | 1 of 287 |
+| P01 | pages | the sign-in page forwards only a sign-in that owes a code | `app/login/page.tsx` | 1 of 287 |
+| P02 | pages | the code page sends set-up required home | `login/mfa/page.tsx` | 1 of 287 |
+| P03 | pages | the security page shows to a sign-in that owes a code | `app/security/page.tsx` | 1 of 287 |
+| P04 | pages | the security page never shows its set-up-first form | `app/security/page.tsx` | 2 of 287 |
+| P05 | pages | the panel is not told to go on in after set-up | `app/security/page.tsx` | 1 of 287 |
+| P06 | pages | no sign-out on the set-up-first form | `app/security/page.tsx` | 1 of 287 |
+| P07 | pages | the set-up-first form links back to the dashboard | `app/security/page.tsx` | 1 of 287 |
+| P08 | pages | the security page shows without a sign-in | `app/security/page.tsx` | 1 of 287 |
+| U01 | panel | set-up required stays on the security page after saving the codes | `mfa-panel.tsx` | 2 of 287 |
+| U02 | panel | every set-up goes home after saving the codes | `mfa-panel.tsx` | 1 of 287 |
+| H01 | readiness | the MFA check always passes | `health.ts` | 1 of 287 |
+| H02 | readiness | no MFA check | `health.ts` | 1 of 287 |
+| H03 | readiness | the probe shows the key | `health.ts` | 2 of 287 |
+| H04 | readiness | the key's presence is misread | `health.ts` | 2 of 287 |
+| B01 | boundary | another page reads a sign-in that has not passed MFA | `src/app/page.tsx` | 1 of 287 |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: an MFA-3 row |
+| Entity-relationship diagram | Not applicable: MFA-3 changes no table or column |
+| Critical sequence diagram | this section, *Signing in when MFA is required and not set up* |
+| OpenAPI / API change summary | `docs/api-changes-mfa-3.md`. Internal API: `SETUP_REQUIRED` in `MfaSignInStep` (`@app/domain`); `nextPageFor` in `apps/web/src/lib/auth.ts`; the `duringSetup` option of `mfaRoute` in `apps/web/src/lib/mfa.ts` |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *MFA-3*: no migration, what changes at deploy, and that `MFA_SECRET_KEY` must be set first |
+| Completion report | this file |
+
+Also updated: ADR-0065 (Decisions 15 to 17), `docs/Roadmap.md`,
+`docs/decisions/TODO.md`, `.env.example` and `docs/local-setup.md`.
+
+### Activation status
+
+Nothing paid or scheduled is activated. MFA-3 changes who counts as signed in
+and adds one readiness check. It adds no route, dependency, worker, scheduler or
+credential. Paid Provider Activation, production credentials, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **`MFA_SECRET_KEY` must be set before deploying MFA-3.** Without it no one
+  who must use MFA can sign in, every `OWNER` included. The readiness probe
+  now reports it, but the web app still starts without it.
+- **No way back for a lost device and lost recovery codes.** Operator-assisted
+  recovery is not built, and since MFA-3 this can lock any `OWNER` out of their
+  organization.
+- The five-wrong-codes guard is per sign-in, so until rate limiting exists
+  (ADR-0054 Decision 5) a person with the password can sign in again and try
+  more codes. Rate limiting should ship before MFA is relied on in production.
+- A grant applies from the next request. A page already open keeps working
+  until it next asks the server; JSON actions on it then get `401`.
+- Turning MFA on asks for the signed-in session only, not the password again
+  (ADR-0052 Decision 10 adds no step-up mechanism).
+- An organization's requirement for all members is MFA-4.
+
+### Remaining work
+
+MFA-4, asking before merge.
