@@ -348,6 +348,7 @@ describe("MfaService (ADR-0065)", () => {
       await ctx.deps.repos.organizations.setMfaRequired({
         organizationId: "org_1",
         actorUserId: "usr_owner",
+        actorRole: "OWNER",
         expected: false,
         required: true,
         audit: { organizationId: "org_1", actorUserId: "usr_owner", action: "test", resourceType: "test", resourceId: "x", metadata: {} },

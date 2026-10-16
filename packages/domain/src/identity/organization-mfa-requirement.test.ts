@@ -153,6 +153,24 @@ describe("an organization's MFA requirement", () => {
     expect(audited(CHANGED)).toHaveLength(0);
   });
 
+  it("refuses a change when its maker's role changed after the role check, even to OWNER", async () => {
+    const findById = deps.repos.organizations.findById.bind(deps.repos.organizations);
+    vi.spyOn(deps.repos.organizations, "findById").mockImplementationOnce(async (id) => {
+      await deps.repos.memberships.changeRole(orgId, ids.ADMIN, "ADMIN", "OWNER", {
+        organizationId: orgId,
+        actorUserId: ids.OWNER,
+        action: "member.role_changed",
+        resourceType: "membership",
+        resourceId: ids.ADMIN,
+        metadata: {},
+      });
+      return findById(id);
+    });
+    await expect(organizations.setMfaRequirement(ids.ADMIN, orgId, true)).rejects.toMatchObject({ message: STALE });
+    expect(await required()).toBe(false);
+    expect(audited(CHANGED)).toHaveLength(0);
+  });
+
   it("lets only one of two opposite changes made at once apply", async () => {
     await organizations.setMfaRequirement(ids.OWNER, orgId, true);
     const results = await Promise.allSettled([

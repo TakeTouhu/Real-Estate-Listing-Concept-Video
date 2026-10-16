@@ -1249,7 +1249,8 @@ and migrations 0 through 25 are not touched.
 
 Queries: the requirement is read with the organization, by primary key, for
 each of a user's memberships when working out whether they must use MFA. A
-change is one transaction: a `FOR SHARE` lock on the actor's membership row, a
+change is one transaction: a `FOR SHARE` lock on the actor's membership row
+(its role compared with the one the request was authorized under), a
 compare-and-set `UPDATE` of the one organization row, and its audit row.
 
 **What changes at deploy.** Nothing, until an `OWNER` or `ADMIN` turns the

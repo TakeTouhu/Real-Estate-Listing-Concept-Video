@@ -56,9 +56,9 @@ export interface OrganizationRepository {
   findBySlug(slug: string): Promise<Organization | null>;
   /**
    * Set whether every member must use MFA, committing `audit` with it
-   * (ADR-0065 Decision 18). Applies only while the organization still has
-   * `expected` and `actorUserId` is still one of its `OWNER`s or `ADMIN`s;
-   * otherwise writes nothing and answers `STALE`.
+   * (ADR-0065 Decision 19). Applies only while the organization still has
+   * `expected` and `actorUserId` still holds `actorRole`, an `OWNER` or
+   * `ADMIN`; otherwise writes nothing and answers `STALE`.
    */
   setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE">;
 }
@@ -66,6 +66,8 @@ export interface OrganizationRepository {
 export interface SetMfaRequiredInput {
   readonly organizationId: string;
   readonly actorUserId: string;
+  /** The role the change was authorized under; the audit entry records it. */
+  readonly actorRole: Role;
   readonly expected: boolean;
   readonly required: boolean;
   readonly audit: Omit<AuditLog, "id" | "createdAt">;

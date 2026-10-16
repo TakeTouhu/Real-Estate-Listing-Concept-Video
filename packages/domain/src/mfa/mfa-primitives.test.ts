@@ -180,6 +180,7 @@ describe("who must use MFA (ADR-0052 Decision 18)", () => {
       await deps.repos.organizations.setMfaRequired({
         organizationId: ORG,
         actorUserId: "usr_owner",
+        actorRole: "OWNER",
         expected: false,
         required: true,
         audit,
@@ -195,6 +196,7 @@ describe("who must use MFA (ADR-0052 Decision 18)", () => {
     await deps.repos.organizations.setMfaRequired({
       organizationId: OTHER,
       actorUserId: "usr_owner",
+      actorRole: "OWNER",
       expected: false,
       required: true,
       audit,

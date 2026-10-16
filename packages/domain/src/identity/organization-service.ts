@@ -86,6 +86,7 @@ export class OrganizationService {
     const outcome = await this.deps.repos.organizations.setMfaRequired({
       organizationId,
       actorUserId,
+      actorRole: actor.role,
       expected: organization.mfaRequired,
       required,
       audit: {

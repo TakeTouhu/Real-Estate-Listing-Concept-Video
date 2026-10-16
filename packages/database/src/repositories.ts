@@ -205,12 +205,15 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async setMfaRequired(input) {
       return prisma.$transaction(async (tx) => {
         // Share-locks the actor's membership, so a role change waits for this
-        // transaction or commits first and is seen here (ADR-0065 Decision 18).
+        // transaction or commits first and is seen here (ADR-0065 Decision 19).
+        // Any change of role since the request was authorized is STALE, even
+        // between OWNER and ADMIN, so the audit entry records the role held.
         const [actor] = await tx.$queryRaw<{ role: Role }[]>`
           SELECT "role" FROM "memberships"
           WHERE "organizationId" = ${input.organizationId} AND "userId" = ${input.actorUserId}
           FOR SHARE`;
-        if (actor?.role !== "OWNER" && actor?.role !== "ADMIN") return "STALE";
+        if (actor?.role !== input.actorRole) return "STALE";
+        if (actor.role !== "OWNER" && actor.role !== "ADMIN") return "STALE";
         const { count } = await tx.organization.updateMany({
           where: { id: input.organizationId, mfaRequired: input.expected },
           data: { mfaRequired: input.required },

@@ -94,6 +94,7 @@ describe("setMfaRequired", () => {
     const outcome = await deps.repos.organizations.setMfaRequired({
       organizationId: ORG,
       actorUserId: owner,
+      actorRole: "OWNER",
       expected: false,
       required: true,
       audit: audit(owner),
@@ -110,6 +111,7 @@ describe("setMfaRequired", () => {
       deps.repos.organizations.setMfaRequired({
         organizationId: ORG,
         actorUserId: owner,
+        actorRole: "OWNER",
         expected: false,
         required: true,
         audit: audit(owner, "org_itest_org_mfa_missing"),
@@ -125,6 +127,7 @@ describe("setMfaRequired", () => {
     const outcome = await deps.repos.organizations.setMfaRequired({
       organizationId: ORG,
       actorUserId: owner,
+      actorRole: "OWNER",
       expected: true,
       required: false,
       audit: audit(owner),
@@ -135,7 +138,7 @@ describe("setMfaRequired", () => {
   });
 
   it.each(["MANAGER", "CREATOR", "VIEWER", "BILLING"] as const)(
-    "is STALE, writing nothing, when the actor is now a %s",
+    "is STALE, writing nothing, when the actor checked as ADMIN is now a %s",
     async (role) => {
       const owner = await user("owner");
       const actor = await user("actor");
@@ -143,6 +146,7 @@ describe("setMfaRequired", () => {
       const outcome = await deps.repos.organizations.setMfaRequired({
         organizationId: ORG,
         actorUserId: actor,
+        actorRole: "ADMIN",
         expected: false,
         required: true,
         audit: audit(actor),
@@ -153,6 +157,42 @@ describe("setMfaRequired", () => {
     },
   );
 
+  it.each([
+    ["ADMIN", "OWNER"],
+    ["OWNER", "ADMIN"],
+  ] as const)("is STALE when the actor checked as %s is now %s, though both may change it", async (checked, now) => {
+    const owner = await user("owner");
+    const actor = await user("actor");
+    await organizationWith({ OWNER: owner, [now]: actor });
+    const outcome = await deps.repos.organizations.setMfaRequired({
+      organizationId: ORG,
+      actorUserId: actor,
+      actorRole: checked,
+      expected: false,
+      required: true,
+      audit: audit(actor),
+    });
+    expect(outcome).toBe("STALE");
+    expect(await required()).toBe(false);
+    expect(await changedRows()).toHaveLength(0);
+  });
+
+  it("is STALE for a role that may not change it, even when it is the role checked", async () => {
+    const owner = await user("owner");
+    const manager = await user("manager");
+    await organizationWith({ OWNER: owner, MANAGER: manager });
+    const outcome = await deps.repos.organizations.setMfaRequired({
+      organizationId: ORG,
+      actorUserId: manager,
+      actorRole: "MANAGER",
+      expected: false,
+      required: true,
+      audit: audit(manager),
+    });
+    expect(outcome).toBe("STALE");
+    expect(await required()).toBe(false);
+  });
+
   it("is STALE for an actor who is no longer a member", async () => {
     const owner = await user("owner");
     const outsider = await user("outsider");
@@ -160,6 +200,7 @@ describe("setMfaRequired", () => {
     const outcome = await deps.repos.organizations.setMfaRequired({
       organizationId: ORG,
       actorUserId: outsider,
+      actorRole: "ADMIN",
       expected: false,
       required: true,
       audit: audit(outsider),
@@ -174,10 +215,11 @@ describe("setMfaRequired", () => {
     await organizationWith({ OWNER: owner, ADMIN: admin });
     for (const value of [true, false]) {
       const outcomes = await Promise.all(
-        [owner, admin].map((actorUserId) =>
+        ([[owner, "OWNER"], [admin, "ADMIN"]] as const).map(([actorUserId, actorRole]) =>
           deps.repos.organizations.setMfaRequired({
             organizationId: ORG,
             actorUserId,
+            actorRole,
             expected: !value,
             required: value,
             audit: audit(actorUserId),
@@ -198,7 +240,14 @@ describe("setMfaRequired", () => {
     const outcome = await prisma.$transaction(async (tx) => {
       await tx.membership.updateMany({ where: { organizationId: ORG, userId: admin }, data: { role: "MANAGER" } });
       const pending = deps.repos.organizations
-        .setMfaRequired({ organizationId: ORG, actorUserId: admin, expected: false, required: true, audit: audit(admin) })
+        .setMfaRequired({
+          organizationId: ORG,
+          actorUserId: admin,
+          actorRole: "ADMIN",
+          expected: false,
+          required: true,
+          audit: audit(admin),
+        })
         .finally(() => (settled = true));
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(settled).toBe(false);

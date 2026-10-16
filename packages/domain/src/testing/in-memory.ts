@@ -135,7 +135,8 @@ class InMemoryOrganizationRepository implements OrganizationRepository {
   async setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE"> {
     const org = this.byId.get(input.organizationId);
     const role = this.roleOf(input.organizationId, input.actorUserId);
-    if (!org || org.mfaRequired !== input.expected || (role !== "OWNER" && role !== "ADMIN")) return "STALE";
+    if (!org || org.mfaRequired !== input.expected || role !== input.actorRole) return "STALE";
+    if (role !== "OWNER" && role !== "ADMIN") return "STALE";
     this.byId.set(org.id, { ...org, mfaRequired: input.required, updatedAt: this.clock.now() });
     await this.auditLogs.append(input.audit);
     return "APPLIED";

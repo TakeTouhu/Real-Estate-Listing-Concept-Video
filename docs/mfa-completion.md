@@ -691,9 +691,9 @@ The exact head SHA is reported with the pull request.
   organization route; any other member is refused and the refusal audited.
 - **How it is written**: one transaction with its audit entry, a
   compare-and-set on the value read, under a `FOR SHARE` lock on the actor's
-  membership. If the value or the actor's role moved meanwhile, nothing is
-  written and the actor is asked to reload. A request that changes nothing
-  writes nothing.
+  membership. If the value or the actor's role moved meanwhile, even between
+  `OWNER` and `ADMIN`, nothing is written and the actor is asked to reload. A
+  request that changes nothing writes nothing.
 - **Where**: `POST /api/organizations/{organizationId}/mfa-requirement`, and
   the dashboard, which tells every member whether it is on and gives an `OWNER`
   or `ADMIN` the button.

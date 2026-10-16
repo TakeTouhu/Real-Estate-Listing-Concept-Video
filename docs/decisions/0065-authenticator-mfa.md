@@ -356,11 +356,13 @@ explained a requirement by role now say "Your role or organization requires".
 - **A change** is written in one transaction with its audit entry,
   `organization.mfa_requirement_changed`. Both entries record the actor's role
   and the value asked for. The transaction share-locks the actor's membership
-  (`FOR SHARE`) and reads the role again under it, and the update is a
-  compare-and-set on the value read. If the value or the actor's role changed
-  meanwhile, nothing is written and the actor is asked to reload
-  (`VALIDATION_FAILED`). A demotion in flight therefore either waits for the
-  change or commits first and is seen.
+  (`FOR SHARE`) and reads the role again under it. That role must be exactly
+  the one the request was authorized under: any change, even between `OWNER`
+  and `ADMIN`, counts, so the audit entry always records the role actually
+  held. The update is a compare-and-set on the value read. If the value or the
+  actor's role changed meanwhile, nothing is written and the actor is asked to
+  reload (`VALIDATION_FAILED`). A role change in flight therefore either waits
+  for the change or commits first and is seen.
 
 The web app adds `POST /api/organizations/{organizationId}/mfa-requirement`, a
 form route that redirects back to the dashboard, which shows every member
