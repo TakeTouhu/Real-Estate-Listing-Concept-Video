@@ -60,6 +60,9 @@ export default async function DashboardPage({
                 </button>
               </form>
             ) : null}
+            <p>
+              <a href={`/organizations/${organization.id}/units`}>Units and plan</a>
+            </p>
 
             {properties.length === 0 ? (
               <p className="muted">No properties yet.</p>

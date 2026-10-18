@@ -85,6 +85,24 @@ pnpm --filter @app/worker start
 The Phase 0 worker validates configuration, constructs the configured provider,
 runs an offline self-check, logs readiness, and exits.
 
+## 4b. Give an organization its contract's plan (optional)
+
+An organization has no plan, and its Units page says so, until an operator gives
+it the plan of its executed contract (ADR-0066). With `DATABASE_URL` set:
+
+```bash
+pnpm --filter @app/ops provision-subscription \
+  --organization <organization id> --plan premium \
+  --starts 2026-04-01T00:00:00+09:00 --contract VT-2026-001 \
+  --operator "Your name" --reason "Signed order 12"
+```
+
+Pass the options straight after the script name, without a `--` separator:
+the command takes no positional arguments. Every option is required. The plan is always invoice-paid (`SALES_ASSISTED`).
+Running it again with the same plan, start and contract writes nothing; anything
+else is refused. Exit code 0 means the organization has this plan, 1 refused, 2
+unusable arguments.
+
 ## 5. Run the checks
 
 ```bash

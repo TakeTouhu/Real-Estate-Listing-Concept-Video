@@ -243,8 +243,16 @@ reports a missing `MFA_SECRET_KEY`.
 from the dashboard. Members without MFA set it up at their next request. Off
 for every organization until turned on.
 
+**UP-1 — plan provisioning and the Units page** (ADR-0066, no migration): the
+first of four Unit purchase pull requests. An operator command gives an
+organization the sales-assisted plan its contract names, naming the operator and
+the reason in the audit entry. Every member with `unit.view` can see the plan,
+the period and the Units left on a new Units page; `billing.view` adds how the
+plan is paid. The page writes nothing.
+
 **Not yet built in Phase 6:** purchase checkout and the customer-approved block
-grant, Stripe and sales-assisted billing, subscription cancellation, seats and
+grant (UP-2 to UP-4: invoice-paid organizations first, with Units usable on
+approval), Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
 controls. Two decision gates are open: what a customer regeneration costs in

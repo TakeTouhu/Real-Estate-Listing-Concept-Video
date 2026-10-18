@@ -1256,3 +1256,18 @@ compare-and-set `UPDATE` of the one organization row, and its audit row.
 **What changes at deploy.** Nothing, until an `OWNER` or `ADMIN` turns the
 requirement on. From then on every member of that organization without MFA sets
 it up at their next request. No new environment variable.
+
+## UP-1 — plan provisioning and the Units page
+
+**No migration.** UP-1 writes `organization_subscriptions` (migration 18) and
+its audit entry, and reads the Unit ledger (migration 17). It changes no table,
+column or index.
+
+**What changes at deploy.** Nothing for any organization: none has a plan until
+an operator runs `provision-subscription` for it. Every member then sees a
+"Units and plan" link on the dashboard; the page says there is no plan yet
+until one is provisioned.
+
+**Operating it.** The operator command needs `DATABASE_URL` and nothing else, no
+new environment variable. It writes one row and one audit entry per
+organization, and running it again with the same contract writes nothing.
