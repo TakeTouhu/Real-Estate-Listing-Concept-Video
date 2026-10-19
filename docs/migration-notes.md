@@ -1314,3 +1314,19 @@ No new environment variable.
 first `X-Forwarded-Host`, else `Host`. A proxy in front of the web app must pass
 the host the browser addressed in one of them, or every purchase is refused
 `403`.
+
+## UP-4 — this period's purchases and the invoicing export
+
+**No migration.** UP-4 reads `unit_purchases` with its block, period and
+organization, and writes only `audit_logs` (`unit_purchase.exported`, one per
+organization an export lists). It changes no table, column or index.
+
+**What changes at deploy.** A holder of `billing.view` sees the period's
+purchases on the Units page. The operator command `export-unit-purchases` is
+available wherever `apps/ops` runs with `DATABASE_URL`; nothing runs it on a
+schedule. No new environment variable.
+
+**The export's read.** It selects purchases across organizations by approval
+time. The existing index on `unit_purchases` leads with the organization, so the
+read scans the table; an index on `approvedAt` can be added when purchases are
+many (ADR-0069 Decision 6).

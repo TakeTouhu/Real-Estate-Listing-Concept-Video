@@ -3,17 +3,20 @@ import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import { PermissionGrantService } from "../identity/permission-grant-service";
 import type { Role } from "../identity/roles";
+import type { GenerationQualityTier } from "../orchestration/types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { InMemoryUnitsReader } from "../testing/in-memory-units";
 import type { UnitEntitlementPeriod } from "./ports";
 import type { OrganizationSubscription } from "./subscription";
+import type { UnitPurchase } from "./unit-purchase";
 import { UnitsOverviewService } from "./units-overview";
 
 /**
  * What an organization sees of its plan and Units (UP-1, ADR-0066 Decision 3):
- * `unit.view` to see the Units, `billing.view` as well for how the plan is paid,
- * the ledger's period when there is one and the subscription's otherwise, and
- * nothing written either way. Every instant is written out literally.
+ * `unit.view` to see the Units, `billing.view` as well for how the plan is paid
+ * and the period's purchases (UP-4, ADR-0069), the ledger's period when there is
+ * one and the subscription's otherwise, and nothing written either way. Every
+ * instant is written out literally.
  */
 
 const iso = (value: string) => new Date(value);
@@ -27,7 +30,7 @@ let ids: Record<Role | "outsider", string>;
 beforeEach(async () => {
   deps = createTestDeps();
   reader = new InMemoryUnitsReader();
-  service = new UnitsOverviewService({ identity: deps, subscriptions: reader, ledger: reader });
+  service = new UnitsOverviewService({ identity: deps, subscriptions: reader, ledger: reader, purchases: reader });
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const register = async (name: string) =>
     (await auth.register({ email: `${name}@example.com`, name, password: "password-123456" })).id;
@@ -76,6 +79,27 @@ function premiumPeriod(): UnitEntitlementPeriod {
   };
   reader.periods.push(period);
   return period;
+}
+
+function bought(overrides: Partial<UnitPurchase> & Pick<UnitPurchase, "id" | "approvedAt">): void {
+  reader.purchases.push({
+    organizationId: orgId,
+    entitlementPeriodId: "uep_premium",
+    addOnBlockId: `uab_${overrides.id}`,
+    quality: "NORMAL",
+    units: 10,
+    priceYenExTax: 35_900,
+    channel: "SALES_ASSISTED",
+    contractReference: "C-1",
+    expiresAt: iso("2026-05-15T00:00:00.000Z"),
+    idempotencyKey: `key_${overrides.id}`,
+    approvedByUserId: ids.BILLING,
+    ...overrides,
+  });
+}
+
+function listed(quality: GenerationQualityTier, units: number, price: number, at: string, by: string | null) {
+  return { quality, units, priceYenExTax: price, approvedAt: iso(at), approvedBy: by };
 }
 
 describe("who may see it", () => {
@@ -176,6 +200,7 @@ describe("without a period in the ledger", () => {
       normalAddOnRemaining: 0,
       highQualityAddOnRemaining: 0,
       billing: null,
+      purchases: null,
       mayBuyUnits: false,
     });
   });
@@ -227,6 +252,7 @@ describe("with a period in the ledger", () => {
       normalAddOnRemaining: 14,
       highQualityAddOnRemaining: 2,
       billing: { channel: "SALES_ASSISTED", monthlyPriceYenExTax: 119_800 },
+      purchases: [],
       mayBuyUnits: true,
     });
   });
@@ -296,6 +322,75 @@ describe("with a period in the ledger", () => {
     deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
     await service.overview(ids.OWNER, orgId);
     expect(balance).toHaveBeenCalledWith(orgId, "uep_premium");
+  });
+});
+
+describe("the period's purchases", () => {
+  beforeEach(() => {
+    subscribe({ planKey: "premium" });
+    premiumPeriod();
+    deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
+  });
+
+  it.each([
+    ["OWNER", true],
+    ["ADMIN", true],
+    ["BILLING", true],
+    ["MANAGER", false],
+    ["CREATOR", false],
+  ] as const)("shows a %s the period's purchases: %s", async (role, shown) => {
+    bought({ id: "p1", approvedAt: iso("2026-04-16T01:00:00.000Z") });
+    const expected = [listed("NORMAL", 10, 35_900, "2026-04-16T01:00:00.000Z", "billing")];
+    const overview = await service.overview(ids[role], orgId);
+    expect(overview).toMatchObject({ kind: "ACTIVE", purchases: shown ? expected : null });
+  });
+
+  it("shows them to a MANAGER granted billing.view", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "billing.view");
+    bought({ id: "p1", approvedAt: iso("2026-04-16T01:00:00.000Z") });
+    expect(await service.overview(ids.MANAGER, orgId)).toMatchObject({ purchases: [{ approvedBy: "billing" }] });
+  });
+
+  it("does not read them for a viewer without billing.view", async () => {
+    const list = vi.spyOn(reader, "listForPeriod");
+    await service.overview(ids.MANAGER, orgId);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("lists this period's, oldest first, each approver named and a former member not", async () => {
+    bought({ id: "p3", approvedAt: iso("2026-04-19T00:00:00.000Z"), approvedByUserId: ids.OWNER });
+    const hq = { quality: "HIGH_QUALITY", units: 2, priceYenExTax: 9_000 } as const;
+    bought({ id: "p1", approvedAt: iso("2026-04-16T00:00:00.000Z"), ...hq });
+    // Not a member now, as one who has left.
+    bought({ id: "p2", approvedAt: iso("2026-04-18T00:00:00.000Z"), approvedByUserId: ids.outsider });
+    bought({ id: "p4", approvedAt: iso("2026-04-17T00:00:00.000Z") });
+    bought({ id: "old", approvedAt: iso("2026-03-20T00:00:00.000Z"), entitlementPeriodId: "uep_earlier" });
+    bought({ id: "other", approvedAt: iso("2026-04-16T00:00:00.000Z"), organizationId: "org_other" });
+    const findUser = vi.spyOn(deps.repos.users, "findById");
+    const overview = await service.overview(ids.OWNER, orgId);
+    if (overview.kind !== "ACTIVE") throw new Error("expected an active plan");
+    expect(overview.purchases).toEqual([
+      listed("HIGH_QUALITY", 2, 9_000, "2026-04-16T00:00:00.000Z", "billing"),
+      listed("NORMAL", 10, 35_900, "2026-04-17T00:00:00.000Z", "billing"),
+      listed("NORMAL", 10, 35_900, "2026-04-18T00:00:00.000Z", null),
+      listed("NORMAL", 10, 35_900, "2026-04-19T00:00:00.000Z", "owner"),
+    ]);
+    // Once per approver still a member; never for one who has left.
+    expect(findUser.mock.calls.map(([id]) => id).sort()).toEqual([ids.BILLING, ids.OWNER].sort());
+  });
+
+  it("asks for this organization's current period only", async () => {
+    const list = vi.spyOn(reader, "listForPeriod");
+    await service.overview(ids.OWNER, orgId);
+    expect(list).toHaveBeenCalledWith(orgId, "uep_premium");
+  });
+
+  it("lists none for a period nobody has opened, to a holder of billing.view only", async () => {
+    reader.periods.length = 0;
+    const list = vi.spyOn(reader, "listForPeriod");
+    expect(await service.overview(ids.OWNER, orgId)).toMatchObject({ kind: "ACTIVE", purchases: [] });
+    expect(await service.overview(ids.MANAGER, orgId)).toMatchObject({ kind: "ACTIVE", purchases: null });
+    expect(list).not.toHaveBeenCalled();
   });
 });
 

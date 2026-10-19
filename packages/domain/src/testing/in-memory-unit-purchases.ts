@@ -19,8 +19,8 @@ import type { IdentityServiceDeps } from "../identity/ports";
 import type { InMemoryUnitsReader } from "./in-memory-units";
 
 /**
- * Unit purchases and the period opening they need, in memory, over the periods
- * and subscriptions of an {@link InMemoryUnitsReader} (ADR-0067). The approver's
+ * Unit purchases and the period opening they need, in memory, over the periods,
+ * subscriptions and purchases of an {@link InMemoryUnitsReader} (ADR-0067). The approver's
  * permissions are read from the identity repositories when a purchase is
  * written, as the database reads them inside its transaction. Audit entries of a
  * written purchase are the database's; its tests cover them.
@@ -28,13 +28,21 @@ import type { InMemoryUnitsReader } from "./in-memory-units";
 export class InMemoryUnitPurchases
   implements UnitPurchaseRepository, Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt">
 {
-  readonly purchases: UnitPurchase[] = [];
   readonly blocks: UnitAddOnBlock[] = [];
 
   constructor(
     private readonly reader: InMemoryUnitsReader,
     private readonly identity: Pick<IdentityServiceDeps, "repos">,
   ) {}
+
+  /** The reader's, so the overview lists what was bought here. */
+  get purchases(): UnitPurchase[] {
+    return this.reader.purchases;
+  }
+
+  listForPeriod(organizationId: string, entitlementPeriodId: string): Promise<readonly UnitPurchase[]> {
+    return this.reader.listForPeriod(organizationId, entitlementPeriodId);
+  }
 
   async openPeriod(input: OpenEntitlementPeriodInput): Promise<OpenEntitlementPeriodOutcome> {
     const periods = this.reader.periods.filter((period) => period.organizationId === input.organizationId);

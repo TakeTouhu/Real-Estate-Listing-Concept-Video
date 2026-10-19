@@ -106,6 +106,29 @@ Two facts shape the order:
   one. Only a refusal, a refused permission or an unreadable form says nothing
   was bought; anything else sends the customer to the Units page to look.
 
+## Found while building UP-4
+
+- **Who sees a purchase.** A purchase is billing information, as the plan's
+  price is, so the Units page lists the period's purchases to `billing.view`
+  holders only; the blocks and what is left of them stay visible to every
+  `unit.view` holder (ADR-0069 Decision 1).
+- **An approver who has left.** The page names the approver while they are a
+  member and says "a former member" afterwards, rather than showing a removed
+  user's current name.
+- **The export must not invoice a card-paid purchase**, which its payment
+  processor will charge: it lists `SALES_ASSISTED` purchases only (Decision 3).
+- **A window that has not ended would lose purchases.** One approved after the
+  export but before `--to` would be in neither that file nor the next, so a
+  `--to` in the future is refused (Decision 2).
+- **`pnpm` writes to standard output**, so the CSV goes to a new file instead,
+  never overwriting an earlier export.
+- **An organization's name is untrusted text in a spreadsheet.** A name
+  starting with `=`, `+`, `-` or `@` would run as a formula on the operator's
+  machine; such a cell gets a leading `'` (Decision 4).
+- **Correcting a purchase made in error is still open.** The export lists a
+  credited purchase again if its window is exported again; the decision is
+  with the product owner (Decision 6, `TODO.md`).
+
 ## Not in this plan
 
 Stripe card payment; additional seats, storage blocks, plan changes and

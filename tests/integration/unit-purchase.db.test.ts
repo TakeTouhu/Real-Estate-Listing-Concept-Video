@@ -207,7 +207,7 @@ describe("one transaction", () => {
       audits: ["entitlement.add_on_block_granted", "unit_purchase.approved"],
     });
 
-    const units = new UnitsOverviewService({ identity: deps, subscriptions, ledger });
+    const units = new UnitsOverviewService({ identity: deps, subscriptions, ledger, purchases });
     const overview = await units.overview(ids.CREATOR, ORG);
     expect(overview).toMatchObject({ kind: "ACTIVE", normalAddOnRemaining: 10, highQualityAddOnRemaining: 0 });
   });

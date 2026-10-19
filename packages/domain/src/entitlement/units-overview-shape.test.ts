@@ -94,9 +94,16 @@ describe("UP-1 shape", () => {
     expect(matching("apps/worker", /apps\/ops|@app\/ops|createSubscriptionRepository/)).toEqual([]);
   });
 
-  it("gives the operator command no timer, network call or payment processor", () => {
+  it("gives the operator commands no timer, network call or payment processor", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps", "ops", "src")).map(relative).sort();
-    expect(files).toEqual(["apps/ops/src/bin/provision-subscription.ts", "apps/ops/src/provision-subscription.ts"]);
+    // UP-4 added the invoicing export and moved the instant parser to its own module (ADR-0069).
+    expect(files).toEqual([
+      "apps/ops/src/bin/export-unit-purchases.ts",
+      "apps/ops/src/bin/provision-subscription.ts",
+      "apps/ops/src/export-unit-purchases.ts",
+      "apps/ops/src/instant.ts",
+      "apps/ops/src/provision-subscription.ts",
+    ]);
     for (const path of files) {
       const source = read(path);
       for (const banned of [/setInterval/, /setTimeout/, /\bcron\b/i, /stripe/i, /fetch\(/, /SELF_SERVICE/]) {

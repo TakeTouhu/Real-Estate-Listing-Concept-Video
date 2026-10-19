@@ -103,6 +103,24 @@ Running it again with the same plan, start and contract writes nothing; anything
 else is refused. Exit code 0 means the organization has this plan, 1 refused, 2
 unusable arguments.
 
+## 4c. List invoice-paid Unit purchases for invoicing (optional)
+
+An operator lists the purchases approved in a window, so VTaVision can invoice
+them (ADR-0069). With `DATABASE_URL` set:
+
+```bash
+pnpm --filter @app/ops export-unit-purchases \
+  --from 2026-10-01T00:00:00+09:00 --to 2026-11-01T00:00:00+09:00 \
+  --out unit-purchases-2026-10.csv \
+  --operator "Your name" --reason "October invoices"
+```
+
+`--from` is included and `--to` excluded, so consecutive months neither overlap
+nor leave a gap; `--to` must not be in the future. `--out` must be a new file:
+the command never overwrites one. Each organization listed is audited with the
+operator and the reason. Exit code 0 means the file was written, 1 refused, 2
+unusable arguments.
+
 ## 5. Run the checks
 
 ```bash
