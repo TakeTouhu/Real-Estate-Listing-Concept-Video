@@ -11,12 +11,20 @@ export const dynamic = "force-dynamic";
 /**
  * An organization's plan and what it has left to generate with this period
  * (ADR-0066 Decision 3). A holder of `unit.view` sees the Units; how the plan is
- * paid and its price need `billing.view` too. Viewing writes nothing.
+ * paid and its price need `billing.view` too, and buying more `billing.manage`
+ * (ADR-0068). Viewing writes nothing.
  */
-export default async function UnitsPage({ params }: { params: Promise<{ organizationId: string }> }) {
+export default async function UnitsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ organizationId: string }>;
+  searchParams?: Promise<{ purchased?: string }>;
+}) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { organizationId } = await params;
+  const purchased = (await searchParams)?.purchased === "1";
 
   let overview: UnitsOverview;
   try {
@@ -43,7 +51,12 @@ export default async function UnitsPage({ params }: { params: Promise<{ organiza
     <section>
       <h1>Units and plan</h1>
       {name ? <p className="muted">{name}</p> : null}
-      <Overview overview={overview} />
+      {purchased ? (
+        <p className="status-ok" role="status">
+          Your purchase is approved. Its Units are ready to use, and VTaVision will invoice it.
+        </p>
+      ) : null}
+      <Overview overview={overview} organizationId={organizationId} />
       <p>
         <a href="/">Back to organizations</a>
       </p>
@@ -60,7 +73,7 @@ function Billing({ overview }: { overview: Exclude<UnitsOverview, { kind: "NO_PL
   );
 }
 
-function Overview({ overview }: { overview: UnitsOverview }) {
+function Overview({ overview, organizationId }: { overview: UnitsOverview; organizationId: string }) {
   if (overview.kind === "NO_PLAN") {
     return (
       <div className="card">
@@ -129,6 +142,11 @@ function Overview({ overview }: { overview: UnitsOverview }) {
         {overview.highQualityAddOnAvailable ? null : (
           <p className="muted">The {plan} plan does not sell HQ additional Units.</p>
         )}
+        {overview.mayBuyUnits ? (
+          <p>
+            <a href={`/organizations/${encodeURIComponent(organizationId)}/units/buy`}>Buy additional Units</a>
+          </p>
+        ) : null}
       </div>
     </>
   );

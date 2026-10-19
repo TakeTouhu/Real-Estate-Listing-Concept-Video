@@ -115,6 +115,25 @@ describe("who may see it", () => {
     expect(overview.billing).toEqual(shown ? { channel: "SALES_ASSISTED", monthlyPriceYenExTax: 49_800 } : null);
   });
 
+  it.each([
+    ["OWNER", true],
+    ["BILLING", true],
+    ["ADMIN", false],
+    ["MANAGER", false],
+    ["CREATOR", false],
+  ] as const)("tells a %s whether it may buy Units: %s", async (role, may) => {
+    subscribe();
+    deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
+    expect(await service.overview(ids[role], orgId)).toMatchObject({ kind: "ACTIVE", mayBuyUnits: may });
+  });
+
+  it("lets an ADMIN buy Units once an OWNER grants it billing.manage", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.ADMIN, "billing.manage");
+    subscribe();
+    deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
+    expect(await service.overview(ids.ADMIN, orgId)).toMatchObject({ kind: "ACTIVE", mayBuyUnits: true });
+  });
+
   it("shows how the plan is paid to a MANAGER granted billing.view", async () => {
     await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "billing.view");
     subscribe({ planKey: "premium" });
@@ -157,6 +176,7 @@ describe("without a period in the ledger", () => {
       normalAddOnRemaining: 0,
       highQualityAddOnRemaining: 0,
       billing: null,
+      mayBuyUnits: false,
     });
   });
 
@@ -207,7 +227,20 @@ describe("with a period in the ledger", () => {
       normalAddOnRemaining: 14,
       highQualityAddOnRemaining: 2,
       billing: { channel: "SALES_ASSISTED", monthlyPriceYenExTax: 119_800 },
+      mayBuyUnits: true,
     });
+  });
+
+  it.each([
+    ["OWNER", true],
+    ["BILLING", true],
+    ["ADMIN", false],
+    ["MANAGER", false],
+  ] as const)("tells a %s on an open period whether it may buy Units: %s", async (role, may) => {
+    subscribe({ planKey: "premium" });
+    premiumPeriod();
+    deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
+    expect(await service.overview(ids[role], orgId)).toMatchObject({ kind: "ACTIVE", mayBuyUnits: may });
   });
 
   it.each([

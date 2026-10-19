@@ -2,7 +2,8 @@
 
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0066-plan-provisioning-and-units-overview.md` (UP-1),
-`docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2)
+`docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2),
+`docs/decisions/0068-unit-purchase-screen-and-route.md` (UP-3)
 Gap analysis: `docs/unit-purchase-gap-analysis.md`
 
 Unit purchase is built in four pull requests, approved by the product owner on
@@ -574,3 +575,298 @@ BLOCKED.
 
 UP-2 waits for the product owner's yes before merge. Next: UP-3, the purchase
 screen, its confirmation step and the route.
+
+## UP-3 — the purchase screen, its confirmation step and its route
+
+Base: `2c0f653` (PR #90 merge commit on `main`).
+ADR: `docs/decisions/0068-unit-purchase-screen-and-route.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `f126966` | `UnitPurchaseService.offers`, `mayBuyUnits` on the Units overview, the purchase screen and its confirmation step, the purchase route and its origin check, the form reader and its messages, the Units page link and purchase notice, their unit, page, route, shape and database tests, ADR-0068 and the documentation updates |
+| `b0bab9f` | the provisioning database test expecting the buy flag (below) |
+| `c422c29` | this record, first written |
+| `b866105` | the review fix: no offer over a period the plan's renewal did not open (`isRenewalPeriod`), its tests, ADR-0068 Decisions 2 and 5, the API change summary and the gap analysis |
+| this commit | this record, brought up to date with the review fix |
+
+The exact head SHA is reported with the pull request.
+
+### What UP-3 does
+
+- **A `billing.manage` holder can buy Units in the product.** The Units page
+  links an `OWNER`, a `BILLING` user, or an `ADMIN` an `OWNER` granted
+  `billing.manage`, to `/organizations/{id}/units/buy`. Anyone else is told they
+  cannot buy Units for the organization (ADR-0068 Decision 1).
+- **The screen offers what approving accepts.** `UnitPurchaseService.offers`
+  decides it with the check a purchase is written under, from the open period's
+  frozen plan when there is one, and opens nothing (Decision 2):
+  - an invoice-paid Standard plan sells a Normal package, Premium a Normal and an
+    HQ package, each with its price excluding tax and the date it expires;
+  - Enterprise packages are listed as bought through the VTaVision
+    representative, with no review link;
+  - a card-paid plan is told card payment is not available yet; no plan, or a
+    plan not started, is said so;
+  - while the ledger holds a period at now that the plan's renewal did not
+    open, nothing is offered and the screen points to the representative,
+    because approving would refuse to buy around it (found in review, below).
+- **The confirmation step** states the Units and their quality lock, the price
+  excluding tax with tax added on the invoice, the expiry in Japan time with no
+  carry-over and no refund of unused Units, that the Units are ready at once and
+  that VTaVision invoices the purchase under the named contract. One button,
+  naming the price, approves it. Each showing carries a new idempotency key
+  (Decision 3).
+- **The route** (`POST /api/organizations/{id}/unit-purchases`) refuses a post
+  whose `Origin` is not this host before reading anything, sends a signed-out
+  visitor to sign in, checks the form's shape, and approves through the UP-2
+  service. An approval, or its replay, lands on the Units page with a notice; a
+  refusal returns to the screen saying why and that nothing was bought; any
+  other application error says to check the Units page before trying again
+  (Decision 4).
+
+Nothing calls a payment processor or a network service. An invoice-paid
+organization is invoiced under its contract; the list for that is UP-4.
+
+### Buying a package
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (billing.manage holder)
+  participant P as Purchase screen
+  participant R as Purchase route
+  participant S as UnitPurchaseService
+  participant DB as PostgreSQL
+
+  B->>P: GET /organizations/{id}/units/buy
+  P->>S: offers(user, organization)
+  S->>DB: membership and effective permissions
+  alt not a member, or no billing.manage
+    S-->>P: FORBIDDEN (unaudited)
+    P-->>B: "You cannot buy Units for this organization."
+  end
+  S->>DB: subscription, and the period containing now (opens nothing)
+  S->>S: that period, if any, must be the plan's renewal period (else PERIOD_CONFLICT)
+  S->>S: the purchase check on each package the plan sells
+  S-->>P: NO_PLAN, NOT_STARTED, PERIOD_CONFLICT, THROUGH_SALES, CARD_PAYMENT_NOT_AVAILABLE or AVAILABLE
+  B->>P: GET ...?package=NORMAL
+  P-->>B: the confirmation step: Units, quality lock, price, expiry, contract, a new key
+  B->>R: POST quality, units, price, period end, key (Origin)
+  alt Origin missing or another host
+    R-->>B: 403, nothing read
+  else not signed in
+    R-->>B: 303 to /login
+  else form unusable
+    R-->>B: 303 to the screen: nothing was bought
+  end
+  R->>S: approve(user, the form)
+  Note over S,DB: UP-2: re-checked and written in one transaction (ADR-0067)
+  alt APPROVED or ALREADY_APPROVED
+    R-->>B: 303 to /organizations/{id}/units?purchased=1
+  else REFUSED
+    R-->>B: 303 to the screen: why, and nothing was bought
+  else another application error
+    R-->>B: 303 to the screen: check the Units page before trying again
+  end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `b866105`, the review
+fix; the commit after it changes this record only. Before the fix, the same
+checks passed on `b0bab9f` (5548 unit, 1403 database tests).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5556 / 5556**, 192 files (was 5446, 188 files, on `2c0f653`) |
+| `pnpm test:db` | **1404 / 1404**, 51 files (was 1401) |
+| `pnpm build` | succeeded; the build lists `/organizations/[organizationId]/units/buy` and `/api/organizations/[organizationId]/unit-purchases` |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 28 migrations, up to date |
+
+`f126966` was pushed before the full database run finished. That run found one
+existing test, *shows no plan until the command has run* in
+`units-provisioning.db.test.ts`, whose exact expectation of the overview did not
+yet name `mayBuyUnits`; `b0bab9f` adds it (the `OWNER` may buy).
+
+CI on the pull request's exact head is reported with the pull request.
+
+New tests (110 unit, 3 database):
+- **the offers** (`unit-purchase.test.ts`, 20 new, 66 in all): a non-member and
+  every role without `billing.manage` refused unaudited, an `ADMIN` granted it
+  offered packages; Premium and Standard packages and their expiry, nothing
+  opened or audited; Enterprise through sales; a card-paid plan; no plan and a
+  plan not started; a period the renewal did not open offering nothing while
+  approving buys none, and each of the six facts that tells the renewal's
+  period from another; the same offer once a purchase has opened the period;
+  offers to approval round trip;
+- **the buy flag** (`units-overview.test.ts`, 10 new): `mayBuyUnits` by role,
+  by grant, on a derived and on an open period;
+- **the origin check** (`same-origin.test.ts`, 8): the addressed host
+  accepted; another port, another site, another origin of the same site, an
+  opaque or malformed origin, or none, refused; only the first forwarded host
+  trusted;
+- **the form** (`unit-purchase-form.test.ts`, 31): every field's shape, the
+  period end exactly as written, the key's length, and the message for every
+  refusal and failure;
+- **the screen and the route** (`buy-page.test.tsx`, 29): every offer state,
+  the confirmation step's words and hidden fields, a new key each showing, a
+  package not sold, a returned error; the route approving, replaying,
+  refusing, refusing another origin or none, sending a signed-out visitor to
+  sign in, refusing a member without `billing.manage` (audited), an unusable
+  form, an application error and an unexpected one;
+- **the Units page** (`units-page.test.tsx`, 7 new): the link for `OWNER` and
+  `BILLING` only, and the purchase notice;
+- **shape** (`unit-purchase-screen-shape.test.ts`, 5): still 28 migrations; the
+  service built and called only by the route, the screen and the wiring; the
+  route's order; one form; `offers` writing nothing; no payment processor,
+  network call or timer;
+- **live PostgreSQL** (`unit-purchase.db.test.ts`, 3 new): offers on a derived
+  period open nothing and the purchase it offers is approved, after which the
+  same offer stands over the period the database opened; a period opened by
+  hand offers nothing and approving writes nothing; an `ADMIN` is refused
+  unaudited.
+
+**Found in review.** Codex found the screen offering packages while the ledger
+held a period at now that the renewal did not open; approving renews through
+`renewEntitlementPeriod`, which refuses to buy around such a period, so the
+customer would have approved and then been told the purchase could not be
+confirmed. `b866105` makes `offers` derive the period as approving does and
+return `PERIOD_CONFLICT` unless the open period is the renewal's
+(`isRenewalPeriod`, the facts the ledger compares). The test that had pinned
+the old behaviour, pricing from a hand-opened period's plan, is replaced.
+
+Two existing shape tests now name the web app's purchase wiring as the one
+place the purchase service and the subscription repository are built for it.
+
+### Mutation ledger
+
+**47 mutants, all killed, 0 broken, 0 anchor-missing**, in two passes. Each
+mutant weakens one guarantee at an anchor that occurs exactly once.
+
+- **Pass 1**, on the code committed as `f126966` (it ran before one comment in
+  `unit-purchase-form.ts` was reworded): 41 run, 40 killed; U02 survived and was
+  killed on re-run (below).
+- **Pass 2**, on the code of `b866105`: every mutant of the offers read
+  (O01–O14) and the screen's new state (P11), 15 run, 15 killed. O02 and O03
+  were rewritten for the new code and O10–O14 and P11 are new; the other
+  mutants' code is unchanged since pass 1, and tests were only added since.
+
+The suites:
+
+- **domain**: the entitlement tests, including the purchase, overview and shape
+  tests (197 in pass 1, 201 after the test added below, 208 in pass 2);
+- **web**: the Units page and purchase screen tests, and the origin and form
+  tests (85 in pass 1, 86 in pass 2).
+
+Each mutant runs against the suites listed for it until one fails. Every mutated
+file was restored and re-hashed, and every file (861 in pass 1, 863 in pass 2)
+was byte-identical after each pass.
+
+**U02 survived the first pass.** No test read `mayBuyUnits` on a period already
+in the ledger, only on one derived from the subscription, so an open period
+could have offered buying to anyone. A test now checks `OWNER`, `BILLING`,
+`ADMIN` and `MANAGER` on an open period; U02 and U03 were re-run against it and
+both were killed.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| O01 | who | any member sees the offers | `unit-purchase.ts` | 4 of 208 (domain) |
+| O02 | period | a period the plan did not open is offered | `unit-purchase.ts` | 7 of 208 (domain) |
+| O03 | period | the open period's plan not compared with the renewal's | `subscription.ts` | 1 of 208 (domain) |
+| O04 | offer | HQ never offered | `unit-purchase.ts` | 2 of 208 (domain) |
+| O05 | plan | Enterprise offered for purchase in the app | `unit-purchase.ts` | 1 of 208 (domain) |
+| O06 | plan | a card-paid plan offered for purchase by invoice | `unit-purchase.ts` | 1 of 208 (domain) |
+| O07 | record | the contract shown is the subscription's id | `unit-purchase.ts` | 1 of 208 (domain) |
+| O08 | period | the expiry shown is the period's start | `unit-purchase.ts` | 2 of 208 (domain) |
+| O09 | plan | no plan read as a plan not started | `unit-purchase.ts` | 1 of 208 (domain) |
+| O10 | period | the open period's id not compared | `subscription.ts` | 1 of 208 (domain) |
+| O11 | period | the open period's billing key not compared | `subscription.ts` | 1 of 208 (domain) |
+| O12 | period | the open period's start not compared | `subscription.ts` | 1 of 208 (domain) |
+| O13 | period | the open period's end not compared | `subscription.ts` | 1 of 208 (domain) |
+| O14 | period | the open period's contract reference not compared | `subscription.ts` | 1 of 208 (domain) |
+| U01 | who | billing.view, not billing.manage, offers buying | `units-overview.ts` | 1 of 197 (domain) |
+| U02 | who | an open period always offers buying | `units-overview.ts` | 2 of 201 (domain) (re-run) |
+| U03 | who | the derived period always offers buying | `units-overview.ts` | 4 of 201 (domain) |
+| U04 | page | the buy link shown to everyone | `units/page.tsx` | 3 of 85 (web) |
+| U05 | page | the purchase notice shown without a purchase | `units/page.tsx` | 2 of 85 (web) |
+| P01 | page | a package not sold is confirmed as the first one sold | `units/buy/page.tsx` | 2 of 85 (web) |
+| P02 | replay | every confirmation carries the same key | `units/buy/page.tsx` | 2 of 85 (web) |
+| P03 | period | the confirmation carries now, not the period's end | `units/buy/page.tsx` | 3 of 85 (web) |
+| P04 | plan | Enterprise packages get a review link | `units/buy/page.tsx` | 1 of 85 (web) |
+| P05 | page | any failure shown as a refusal | `units/buy/page.tsx` | 1 of 85 (web) |
+| P06 | words | the confirmation drops that unused Units are not refunded | `units/buy/page.tsx` | 1 of 85 (web) |
+| P07 | words | the quality lock named the wrong way round | `units/buy/page.tsx` | 2 of 85 (web) |
+| P08 | words | the confirmation drops the contract | `units/buy/page.tsx` | 1 of 85 (web) |
+| P09 | page | the screen shows no refusal it was sent back with | `units/buy/page.tsx` | 1 of 85 (web) |
+| P10 | record | the confirmation carries the price as the Units | `units/buy/page.tsx` | 3 of 85 (web) |
+| P11 | page | a period the plan did not open shown as nothing at all | `units/buy/page.tsx` | 1 of 86 (web) |
+| F01 | form | zero or zero-led amounts read | `unit-purchase-form.ts` | 3 of 85 (web) |
+| F02 | form | a period end written otherwise read | `unit-purchase-form.ts` | 2 of 85 (web) |
+| F03 | form | an over-long key read | `unit-purchase-form.ts` | 1 of 85 (web) |
+| F04 | form | the Units and the price swapped | `unit-purchase-form.ts` | 3 of 85 (web) |
+| F05 | words | a refused permission called a possible failure | `unit-purchase-form.ts` | 2 of 85 (web) |
+| F06 | words | a failure after the write said to have bought nothing | `unit-purchase-form.ts` | 2 of 85 (web) |
+| F07 | words | a changed offer not said to have bought nothing | `unit-purchase-form.ts` | 2 of 85 (web) |
+| F08 | form | a quality outside the two read | `unit-purchase-form.ts` | 3 of 85 (web) |
+| S01 | origin | every origin accepted | `same-origin.ts` | 8 of 85 (web) |
+| S02 | origin | the forwarded host ignored | `same-origin.ts` | 1 of 85 (web) |
+| S03 | origin | the port ignored | `same-origin.ts` | 1 of 85 (web) |
+| S04 | origin | the last forwarded host trusted | `same-origin.ts` | 1 of 85 (web) |
+| R01 | origin | the route skips the origin check | `unit-purchases/route.ts` | 3 of 85 (web) |
+| R02 | route | a refusal lands as a purchase | `unit-purchases/route.ts` | 1 of 85 (web) |
+| R03 | route | an unexpected failure turned into a message | `unit-purchases/route.ts` | 1 of 85 (web) |
+| R04 | route | the purchase notice not asked for | `unit-purchases/route.ts` | 1 of 85 (web) |
+| R05 | route | an unreadable form sent to the service | `unit-purchases/route.ts` | 1 of 85 (web) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the Unit purchase row no longer dormant, a purchase screen and route row, and the Billing row naming UP-4 |
+| Entity-relationship diagram | Not applicable: UP-3 adds no table, column or relation |
+| Critical sequence diagram | this section, *Buying a package* |
+| OpenAPI / API change summary | `docs/api-changes-up-3.md`: the purchase screen, `POST /api/organizations/{id}/unit-purchases`, the Units page's link and notice, `UnitPurchaseService.offers`, `mayBuyUnits` |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *UP-3*: no migration; what changes at deploy; the proxy must pass the addressed host |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/decisions/TODO.md` (the Unit accounting
+item, the rate-limiting item, and a new open item on extending the origin check)
+and `docs/unit-purchase-gap-analysis.md` (what building UP-3 found).
+`docs/UXFlow.md` already says what the screen does (the quality lock legible
+before purchase, purchases shown only to `billing.manage` holders) and is
+unchanged.
+
+### Activation status
+
+Nothing paid or scheduled is activated. UP-3 adds a page and a form route that
+write through the UP-2 service: no worker, scheduler, credential, environment
+variable, dependency or payment integration. A purchase grants Units for an
+invoice-paid organization, as the product owner approved on 2026-10-16; no card
+is charged. Paid Provider Activation, production credentials, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No rate limit** on the purchase route; rate limiting is one cross-cutting
+  milestone still to build (`TODO.md`).
+- **The origin check covers this route only.** The other cookie-based mutation
+  routes rely on `SameSite=Lax` (`TODO.md`).
+- **A purchase cannot be corrected in the product.** How a purchase made in
+  error is credited is an open decision before UP-4's list is used to invoice
+  (`TODO.md`).
+- **The purchases of the period are not listed yet.** The Units page shows each
+  block's Units left; the purchase list and the invoicing export are UP-4.
+- Card payment and Enterprise in-app purchase are refused, not built.
+- **A hand-opened period that overlaps the current one without containing now
+  is not seen by the screen.** Approving then buys nothing and says to check the
+  Units page. Only ledger rows written by hand can make it; no product path
+  opens a period other than the renewal (ADR-0068 Decision 5).
+
+### Remaining work
+
+UP-3 waits for the product owner's yes before merge. Next: UP-4, this period's
+purchases on the Units page and the operator CSV for invoicing.

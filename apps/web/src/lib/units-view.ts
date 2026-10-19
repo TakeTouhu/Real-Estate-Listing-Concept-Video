@@ -40,3 +40,8 @@ const JST = new Intl.DateTimeFormat("en-GB", {
 export function formatJst(instant: Date): string {
   return `${JST.format(instant)} JST`;
 }
+
+/** A package as a customer sees it: "+10 Normal Units". */
+export function packageName(offer: { readonly quality: GenerationQualityTier; readonly units: number }): string {
+  return `+${offer.units} ${QUALITY_NAMES[offer.quality]} Units`;
+}

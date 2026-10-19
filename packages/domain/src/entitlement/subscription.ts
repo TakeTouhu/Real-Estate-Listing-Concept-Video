@@ -274,6 +274,27 @@ export async function renewEntitlementPeriod(
   }
 }
 
+/**
+ * Whether `period` is the one {@link renewEntitlementPeriod} opens for `bounds`,
+ * with the facts the ledger compares to answer `ALREADY_OPEN`. Any other period
+ * there is a `PERIOD_CONFLICT`.
+ */
+export function isRenewalPeriod(
+  period: UnitEntitlementPeriod,
+  subscription: Pick<OrganizationSubscription, "id" | "planKey">,
+  bounds: RenewalPeriodBounds,
+): boolean {
+  const identity = renewalPeriodIdentity(subscription, bounds);
+  return (
+    period.id === identity.id &&
+    period.billingCycleKey === identity.billingCycleKey &&
+    period.planKey === subscription.planKey &&
+    period.startsAt.getTime() === bounds.startsAt.getTime() &&
+    period.endsAt.getTime() === bounds.endsAt.getTime() &&
+    period.commercialReference === identity.commercialReference
+  );
+}
+
 function isValidInstant(value: Date): boolean {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }

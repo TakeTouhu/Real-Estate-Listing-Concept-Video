@@ -3,6 +3,7 @@ import type {
   OpenEntitlementPeriodInput,
   OpenEntitlementPeriodOutcome,
   UnitAddOnBlock,
+  UnitEntitlementPeriod,
   UnitEntitlementRepository,
 } from "../entitlement/ports";
 import type {
@@ -24,7 +25,9 @@ import type { InMemoryUnitsReader } from "./in-memory-units";
  * written, as the database reads them inside its transaction. Audit entries of a
  * written purchase are the database's; its tests cover them.
  */
-export class InMemoryUnitPurchases implements UnitPurchaseRepository, Pick<UnitEntitlementRepository, "openPeriod"> {
+export class InMemoryUnitPurchases
+  implements UnitPurchaseRepository, Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt">
+{
   readonly purchases: UnitPurchase[] = [];
   readonly blocks: UnitAddOnBlock[] = [];
 
@@ -60,6 +63,10 @@ export class InMemoryUnitPurchases implements UnitPurchaseRepository, Pick<UnitE
     };
     this.reader.periods.push(period);
     return { kind: "OPENED", period };
+  }
+
+  findPeriodAt(organizationId: string, at: Date): Promise<UnitEntitlementPeriod | null> {
+    return this.reader.findPeriodAt(organizationId, at);
   }
 
   async findByIdempotencyKey(organizationId: string, idempotencyKey: string): Promise<UnitPurchase | null> {
