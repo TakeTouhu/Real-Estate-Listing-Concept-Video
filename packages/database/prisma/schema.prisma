@@ -95,20 +95,21 @@ enum RoomType {
 }
 
 model Organization {
-  id           String                    @id
-  name         String
-  slug         String                    @unique
-  status       OrganizationStatus        @default(ACTIVE)
+  id            String                    @id
+  name          String
+  slug          String                    @unique
+  status        OrganizationStatus        @default(ACTIVE)
   /// Every member must use MFA, whatever their role (ADR-0065 Decision 18).
   /// Changed only by an OWNER or ADMIN.
-  mfaRequired  Boolean                   @default(false)
-  createdAt    DateTime                  @default(now())
-  updatedAt    DateTime                  @updatedAt
-  memberships  Membership[]
-  invitations  Invitation[]
-  auditLogs    AuditLog[]
-  subscription OrganizationSubscription?
-  groups       Group[]
+  mfaRequired   Boolean                   @default(false)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+  memberships   Membership[]
+  invitations   Invitation[]
+  auditLogs     AuditLog[]
+  subscription  OrganizationSubscription?
+  groups        Group[]
+  unitPurchases UnitPurchase[]
 
   @@map("organizations")
 }
@@ -1638,6 +1639,7 @@ model UnitEntitlementPeriod {
   addOnBlocks               UnitAddOnBlock[]
   reservations              GenerationReservation[]
   allocations               GenerationReservationAllocation[]
+  purchases                 UnitPurchase[]
 
   @@unique([organizationId, billingCycleKey])
   @@unique([id, organizationId])
@@ -1662,6 +1664,9 @@ model UnitAddOnBlock {
   /// The composite key keeps a block inside its period's organization.
   entitlementPeriod   UnitEntitlementPeriod             @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
   allocations         GenerationReservationAllocation[]
+  /// The purchase that bought it, when a customer did. At most one: the
+  /// purchase's block id is unique.
+  purchases           UnitPurchase[]
 
   @@unique([organizationId, commercialReference])
   /// The composite key allocations point through, so an allocation can only
@@ -1723,4 +1728,40 @@ model OrganizationSubscription {
   organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
   @@map("organization_subscriptions")
+}
+
+/// One customer-approved purchase of an additional Unit package (UP-2,
+/// ADR-0067). Written with the block it bought and its audit entry in one
+/// transaction, or not at all. A CHECK in migration 27 holds its shape.
+model UnitPurchase {
+  id                  String                @id
+  organizationId      String
+  /// The renewal period its Units belong to and expire with.
+  entitlementPeriodId String
+  /// The block it bought: of the same period and the same quality, by the
+  /// composite key. Its Units are the block's quantity.
+  addOnBlockId        String                @unique
+  quality             GenerationQualityTier
+  /// The price it was approved at, excluding tax (ADR-0053 Decision 1).
+  priceYenExTax       Int
+  /// How it is paid, as the subscription said when it was approved.
+  channel             SubscriptionChannel
+  /// The contract it is invoiced under, as the subscription said when it was approved.
+  contractReference   String
+  /// Carried by the confirmation step, so a replayed approval buys once.
+  idempotencyKey      String
+  /// The `billing.manage` holder who approved it. Not a foreign key: billing
+  /// evidence outlives the user, as the audit log's actor does.
+  approvedByUserId    String
+  approvedAt          DateTime
+  createdAt           DateTime              @default(now())
+  /// RESTRICT: billing evidence outlives casual deletion (ADR-0053 Decision 7).
+  organization        Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  entitlementPeriod   UnitEntitlementPeriod @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  addOnBlock          UnitAddOnBlock        @relation(fields: [addOnBlockId, entitlementPeriodId, quality], references: [id, entitlementPeriodId, quality], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, approvedAt])
+  @@index([entitlementPeriodId])
+  @@map("unit_purchases")
 }

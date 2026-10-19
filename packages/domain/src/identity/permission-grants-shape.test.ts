@@ -40,8 +40,8 @@ describe("durable shape", () => {
     // one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(20);
     expect(dirs.filter((dir) => dir.includes("phase6d"))).toEqual([MIGRATION_DIR]);
-    // MFA-4 added migration 26 after them all.
-    expect(dirs).toHaveLength(27);
+    // MFA-4 added migration 26 after them all, and UP-2 migration 27.
+    expect(dirs).toHaveLength(28);
   });
 
   const sql = readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");

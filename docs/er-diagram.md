@@ -630,3 +630,21 @@ attempt is `scene_generations`, above.
 final deliverable object's receipt lives on `GenerationDeliverableComposition`
 (Phase 5B) and the verdict about its bytes on `GenerationDeliverableValidation`
 (Phase 5C), each bound to the deliverable version that names them.
+
+## UP-2 — the Unit purchase record
+
+```mermaid
+erDiagram
+    Organization ||--o{ UnitPurchase : "buys (RESTRICT)"
+    UnitEntitlementPeriod ||--o{ UnitPurchase : "holds (same organization, RESTRICT)"
+    UnitAddOnBlock ||--o| UnitPurchase : "is bought by (same period, same quality, RESTRICT)"
+```
+
+Migration 27. `unit_purchases` holds one row per customer-approved purchase of an
+additional Unit package: its price excluding tax, how it is paid, the contract it
+is invoiced under, its approver and its idempotency key (ADR-0067). The block it
+bought holds the Units: `(addOnBlockId, entitlementPeriodId, quality)` names a
+block of the purchase's own period and quality, and the block id is unique, so a
+block is bought at most once. `(entitlementPeriodId, organizationId)` keeps the
+purchase in its period's organization. A block granted without a purchase has
+no row here. `approvedByUserId` is not a foreign key, as no actor column is.

@@ -1,7 +1,8 @@
 # Completion — additional Unit packages (Unit purchase)
 
 Branch: `claude/project-thread-az06z2`
-ADR: `docs/decisions/0066-plan-provisioning-and-units-overview.md`
+ADRs: `docs/decisions/0066-plan-provisioning-and-units-overview.md` (UP-1),
+`docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2)
 Gap analysis: `docs/unit-purchase-gap-analysis.md`
 
 Unit purchase is built in four pull requests, approved by the product owner on
@@ -291,3 +292,285 @@ credentials, the production scheduler and live Stripe charges remain BLOCKED.
 
 UP-1 waits for the product owner's yes before merge. Next: UP-2, the purchase
 record (migration 27) and its one-transaction grant.
+
+## UP-2 — the purchase record, approved in one transaction
+
+Base: `2f8b79d` (PR #89 merge commit on `main`).
+ADR: `docs/decisions/0067-unit-purchase-record-and-approval.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `b6d912a` | the approved package prices in the catalog, migration 27 (`unit_purchases`), `UnitPurchaseService` and its in-memory repository, `createUnitPurchaseRepository`, the shared block insert and group-permission read, their unit, shape and database tests, the migration-count tripwires, ADR-0067 and the documentation updates |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What UP-2 does
+
+- **The approved prices are in the catalog.** Each plan carries the price of
+  its Normal package and, where it sells one, its HQ package, excluding tax:
+  Standard ¥19,900 (none), Premium ¥35,900 and ¥9,000, Enterprise ¥89,400 and
+  ¥22,400. A test pins each to the package price formula (ADR-0067
+  Decision 1).
+- **A purchase is a record.** `unit_purchases` (migration 27) holds, for each
+  approved purchase, the block it bought, its period and quality, the price, how
+  it is paid and under which contract, the idempotency key, who approved it and
+  when. One block is bought once; a purchase can only belong to a block of its
+  own period, quality and organization; the evidence is `RESTRICT`ed and the
+  approver is not a foreign key (Decision 2).
+- **`UnitPurchaseService.approve`** buys one package for a holder of
+  `billing.manage` (Decision 3):
+  - it refuses, and audits, what it must: no plan, not started, Enterprise
+    (through sales), a card-paid plan (card payment is not built), HQ on
+    Standard, Units or a price that are not the catalog's, and a period whose end
+    is not the one shown;
+  - a replay of the same approval returns the purchase and writes nothing; a key
+    reused for anything else is refused;
+  - it opens the current period if nothing has yet, because the block must join
+    it.
+- **One transaction** (Decision 4): under the period's cost-admission lock it
+  looks up the key, reads the approver's membership `FOR SHARE` with its grants
+  and its groups' permissions, reads the subscription, runs the same domain
+  check on what it read, then writes the block, its
+  `entitlement.add_on_block_granted` entry, the purchase and its
+  `unit_purchase.approved` entry. Any failure writes none of them.
+
+Nothing calls it yet: no route, page or command (Decision 5). The purchase
+screen is UP-3. Nothing is charged.
+
+### Approving a purchase
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as Caller (UP-3's route)
+  participant S as UnitPurchaseService
+  participant L as Unit ledger
+  participant DB as PostgreSQL
+
+  R->>S: approve(user, {quality, expected units, price, period end, key})
+  S->>S: validate the request (else VALIDATION_FAILED)
+  S->>DB: membership and effective permissions
+  alt not a member
+    S-->>R: FORBIDDEN (unaudited)
+  else no billing.manage
+    S->>DB: audit unit_purchase.refused LACKS_BILLING_MANAGE
+    S-->>R: FORBIDDEN
+  end
+  S->>DB: the purchase holding the key, if any
+  alt found
+    S-->>R: ALREADY_APPROVED, or REFUSED IDEMPOTENCY_KEY_REUSED (audited)
+  end
+  S->>DB: the subscription
+  S->>S: check the plan and the offer (refusals audited, nothing opened)
+  S->>L: renewEntitlementPeriod (opens the current period if none)
+  S->>DB: BEGIN
+  S->>DB: the period, by id and organization
+  S->>DB: cost-admission advisory lock (the period's)
+  S->>DB: the key again: a winner is returned, nothing written
+  S->>DB: the approver's membership FOR SHARE, grants, group permissions
+  S->>DB: the subscription
+  S->>S: the same check on what was read here
+  alt refused
+    S->>DB: COMMIT, nothing written
+    S->>DB: audit unit_purchase.refused
+    S-->>R: REFUSED (or FORBIDDEN when the permission went)
+  else allowed
+    S->>DB: INSERT block + audit entitlement.add_on_block_granted
+    S->>DB: INSERT purchase + audit unit_purchase.approved
+    S->>DB: COMMIT
+    S-->>R: APPROVED: the purchase, its Units and its expiry
+  end
+  Note over S,DB: two periods, one key: the unique index decides, the loser re-reads the winner
+```
+
+### Verification
+
+Measured on `b6d912a` (local PostgreSQL 16, configured like CI); the commit
+after it changes this record only.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5446 / 5446**, 188 files (was 5385 on `2f8b79d`) |
+| `pnpm test:db` | **1401 / 1401**, 51 files (was 1376, 50 files) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 28 migrations, up to date |
+
+The known race in *gives two PROCESSING runners one history and at most one
+transfer* (`TODO.md`, since Phase 6F) did not occur in this run.
+
+CI on the pull request's exact head is reported with the pull request.
+
+New tests:
+- **the catalog** (`customer-pricing.test.ts`, 4): each plan's approved package
+  prices, and their agreement with the package price formula;
+- **the purchase** (`unit-purchase.test.ts`, 46): the offers; who may buy, by
+  role and by grant, a member's refusal audited and an outsider's not; what a
+  purchase writes; every plan, offer and period refusal; replay, including after the
+  period has ended, and a key reused for something else; the re-check inside
+  the write (a removed approver, another approval taking the key first, the
+  facts read there, a lost period, a period that cannot be opened);
+  validation; the pure check (priced from the period's plan, the anchor
+  inclusive);
+- **shape** (`unit-purchase-shape.test.ts`, 11): migration 27 the newest and
+  additive only, with its keys and checks; dormant; one transaction, the lock
+  first, the check before every write, the membership share lock; one
+  block-insert path; no payment processor, network call or timer;
+- **live PostgreSQL** (`unit-purchase.db.test.ts`, 25): the purchase, its block
+  and both audit entries in one transaction, and nothing at all when the
+  database refuses the purchase row; a double submit and a same-key race into
+  two periods buying once; the HQ package; keys per organization; the
+  approver's permission by role, by grant and by group, read inside the
+  transaction; the check seeing the period's plan and the contract; another
+  organization's period not found; the composite keys refusing another
+  quality or organization, a block bought twice, a zero price, an empty
+  contract and an empty or over-long key; a deleted user leaving the purchase; `RESTRICT` on the block
+  and the organization.
+
+Sixteen existing test files that count migrations, or name the newest, now
+expect migration 27.
+
+### Mutation ledger
+
+**69 run, 69 killed, 0 survivors, 0 broken, 0 anchor-missing**, in one pass on
+the code of `b6d912a`. Each mutant weakens one guarantee at an anchor that
+occurs exactly once. The suites:
+
+- **domain**: the entitlement and pricing tests, including the purchase and
+  shape tests (348 tests);
+- **db**: the purchase database tests (25);
+- **ledger-db**: the Unit ledger database tests (33), for the shared block
+  insert;
+- **groups-db**: the group permission database tests, listed for G01 after
+  **db**, which killed it first.
+
+Each mutant runs against the suites listed for it until one fails. Every mutated
+file was restored and re-hashed, and all 852 files were byte-identical
+afterwards.
+
+**D01 (no cost-admission lock) and D07 (no share lock on the approver's
+membership) are killed by the shape test only.** The races they open need two
+transactions interleaved at one exact point, which a test cannot force
+reliably, so the lock order is pinned structurally instead, as for the ledger's
+grants and reservations. The same-key race into two periods, which does not
+depend on that timing, is exercised against PostgreSQL and killed D17.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| C01 | price | Standard Normal package priced ¥20,000 | `customer-plan-catalog.ts` | 5 of 348 (domain) |
+| C02 | price | Premium HQ package priced at the unrounded ¥8,985 | `customer-plan-catalog.ts` | 5 of 348 (domain) |
+| C03 | price | Enterprise HQ package rounded down to ¥22,300 | `customer-plan-catalog.ts` | 3 of 348 (domain) |
+| C04 | price | Standard given an HQ package price | `customer-plan-catalog.ts` | 2 of 348 (domain) |
+| F01 | offer | a Normal package charged the monthly price | `unit-purchase.ts` | 22 of 348 (domain) |
+| F02 | offer | an HQ package sells the Normal package's Units | `unit-purchase.ts` | 4 of 348 (domain) |
+| F03 | offer | a plan with no HQ package offers one | `unit-purchase.ts` | 3 of 348 (domain) |
+| R01 | who | the check ignores billing.manage | `unit-purchase.ts` | 2 of 348 (domain) |
+| R02 | who | an approver no longer a member passes the check | `unit-purchase.ts` | 2 of 348 (domain) |
+| R03 | plan | the plan starts only after its anchor | `unit-purchase.ts` | 1 of 348 (domain) |
+| R04 | plan | the package priced from the subscription, not the period's frozen plan | `unit-purchase.ts` | 1 of 348 (domain) |
+| R05 | plan | Enterprise bought in the app | `unit-purchase.ts` | 2 of 348 (domain) |
+| R06 | plan | a card-paid plan bought by invoice | `unit-purchase.ts` | 1 of 348 (domain) |
+| R07 | offer | the Units shown are not compared | `unit-purchase.ts` | 1 of 348 (domain) |
+| R08 | offer | the price shown is not compared | `unit-purchase.ts` | 1 of 348 (domain) |
+| R09 | period | the period shown is not compared | `unit-purchase.ts` | 2 of 348 (domain) |
+| R10 | offer | a package the plan does not sell passes | `unit-purchase.ts` | 2 of 348 (domain) |
+| P01 | replay | another approver's purchase counts as a replay | `unit-purchase.ts` | 2 of 348 (domain) |
+| P02 | replay | another quality counts as a replay | `unit-purchase.ts` | 3 of 348 (domain) |
+| P03 | replay | other Units count as a replay | `unit-purchase.ts` | 1 of 348 (domain) |
+| P04 | replay | another price counts as a replay | `unit-purchase.ts` | 2 of 348 (domain) |
+| P05 | replay | another expiry counts as a replay | `unit-purchase.ts` | 1 of 348 (domain) |
+| P06 | replay | the replay compares the purchase's own approver | `unit-purchase.ts` | 1 of 348 (domain) |
+| V01 | validation | an empty key accepted | `unit-purchase.ts` | 1 of 348 (domain) |
+| V02 | validation | an over-long key accepted | `unit-purchase.ts` | 1 of 348 (domain) |
+| V03 | validation | a 200-character key refused | `unit-purchase.ts` | 1 of 348 (domain) |
+| V04 | validation | fractional Units accepted | `unit-purchase.ts` | 1 of 348 (domain) |
+| V05 | validation | a fractional price accepted | `unit-purchase.ts` | 1 of 348 (domain) |
+| V06 | validation | an invalid expiry accepted | `unit-purchase.ts` | 1 of 348 (domain) |
+| V07 | validation | the key limit raised to 201 | `unit-purchase.ts` | 1 of 348 (domain) |
+| A01 | who | no billing.manage check before reading | `unit-purchase.ts` | 4 of 348 (domain) |
+| A02 | replay | no replay lookup before the plan checks | `unit-purchase.ts` | 3 of 348 (domain) |
+| A03 | plan | a refused plan still opens the period | `unit-purchase.ts` | 4 of 348 (domain) |
+| A04 | period | a period the ledger could not open is bought into | `unit-purchase.ts` | 1 of 348 (domain) |
+| A05 | re-check | the write is not re-checked | `unit-purchase.ts` | 3 of 348 (domain) |
+| A06 | record | the price recorded is not the one approved | `unit-purchase.ts` | 4 of 348 (domain) |
+| A07 | record | the channel recorded is not the subscription's | `unit-purchase.ts` | 1 of 348 (domain) |
+| A08 | record | the contract recorded is not the subscription's | `unit-purchase.ts` | 1 of 348 (domain) |
+| A09 | record | the approval instant is not now | `unit-purchase.ts` | 1 of 348 (domain) |
+| A10 | replay | a key written first by another approval answered as approved | `unit-purchase.ts` | 1 of 348 (domain) |
+| A11 | audit | a refusal under the lock neither audited nor forbidden | `unit-purchase.ts` | 2 of 348 (domain) |
+| A12 | period | a lost period answered as a refusal | `unit-purchase.ts` | 1 of 348 (domain) |
+| A13 | who | a member without billing.manage is refused but not forbidden | `unit-purchase.ts` | 5 of 348 (domain) |
+| A14 | audit | the refusal's reason not recorded | `unit-purchase.ts` | 15 of 348 (domain) |
+| A15 | audit | the refusal's expiry not recorded | `unit-purchase.ts` | 5 of 348 (domain) |
+| D01 | lock | no cost-admission lock | `unit-purchase-repository.ts` | 1 of 348 (domain) |
+| D02 | replay | no key lookup under the lock | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D03 | who | the approver read as an OWNER | `unit-purchase-repository.ts` | 2 of 25 (db) |
+| D04 | who | individual grants ignored | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D05 | who | group permissions ignored | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D06 | who | a removed approver read as holding billing.manage | `unit-purchase-repository.ts` | 2 of 25 (db) |
+| D07 | lock | the approver's membership not share-locked | `unit-purchase-repository.ts` | 1 of 348 (domain) |
+| D08 | re-check | the check sees no subscription | `unit-purchase-repository.ts` | 9 of 25 (db) |
+| D09 | re-check | a refused purchase is written anyway | `unit-purchase-repository.ts` | 4 of 25 (db) |
+| D10 | write | the block holds one Unit | `unit-purchase-repository.ts` | 4 of 25 (db) |
+| D11 | write | the block names the key, not the purchase | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D12 | write | the block's FIFO instant is not the approval's | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D13 | audit | the approval audit omits the approver's role | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D14 | audit | the approval audit omits the expiry | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D15 | audit | the approval audit records no price | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D16 | audit | the approval audit has no actor | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D17 | race | a lost same-key insert surfaces as an error | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D18 | race | a collision that is not the key's answered as a replay | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D19 | tenant | a period of another organization is found | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D20 | read | a purchase's Units are not its block's | `unit-purchase-repository.ts` | 1 of 25 (db) |
+| D21 | read | a purchase's expiry is not its period's end | `unit-purchase-repository.ts` | 3 of 25 (db) |
+| L01 | audit | a block is inserted without its grant audit entry | `unit-entitlement-repository.ts` | 1 of 25 (db) |
+| L02 | write | a block's FIFO instant is not the one given | `unit-entitlement-repository.ts` | 32 of 33 (ledger-db) |
+| G01 | who | the group read finds no permission | `group-repository.ts` | 1 of 25 (db) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the Unit purchase row, and the Billing row now naming UP-3 and UP-4 |
+| Entity-relationship diagram | `docs/er-diagram.md`, *UP-2*: `unit_purchases` and its three keys |
+| Critical sequence diagram | this section, *Approving a purchase* |
+| OpenAPI / API change summary | `docs/api-changes-up-2.md`: no HTTP API; internal `UnitPurchaseService`, `addOnPackageOffer`, the catalog prices (`@app/domain`), `createUnitPurchaseRepository` (`@app/database`) |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *UP-2*: migration 27, additive |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/decisions/TODO.md` (the Unit accounting
+item, a new open item on the price floor) and `docs/unit-purchase-gap-analysis.md`
+(what building UP-2 found).
+
+### Activation status
+
+Nothing paid or scheduled is activated. UP-2 adds one table and a service that
+nothing calls: no route, page, worker, scheduler, credential, environment
+variable, dependency or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges remain
+BLOCKED.
+
+### Known limitations
+
+- **The approved prices are not checked against a provider cost floor.** No
+  provider route is verified, so there is no cost to check against; the table
+  is the price authority until one is (`TODO.md`).
+- **Card payment is refused, not built.** A self-service plan's purchase is
+  refused as `CARD_PAYMENT_NOT_AVAILABLE`.
+- **The block's FIFO instant is the approval instant**, so two blocks bought in
+  one millisecond are ordered by id, as any two blocks are.
+- **Nothing corrects a purchase made in error.** A refund for VTaVision's own
+  billing error must stay possible (ADR-0053 Decision 3A); the invoice can be
+  corrected outside the product, but the purchase and its Units stay. How an
+  operator marks one as credited is open in `TODO.md`, to settle before UP-4's
+  list is used to invoice.
+
+### Remaining work
+
+UP-2 waits for the product owner's yes before merge. Next: UP-3, the purchase
+screen, its confirmation step and the route.

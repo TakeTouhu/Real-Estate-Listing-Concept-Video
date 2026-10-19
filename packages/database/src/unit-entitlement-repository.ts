@@ -212,6 +212,47 @@ function isValidInstant(value: Date): boolean {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
+/**
+ * Insert one block and its grant audit entry, in a transaction that holds the
+ * period's cost-admission lock. A direct grant and a purchase (UP-2) both
+ * insert through here, so every block the ledger holds has the same audit entry.
+ */
+export async function insertAddOnBlockWithin(
+  tx: Tx,
+  period: Pick<PeriodRow, "billingCycleKey">,
+  input: GrantAddOnBlockInput,
+): Promise<UnitAddOnBlock> {
+  const row = await tx.unitAddOnBlock.create({
+    data: {
+      id: input.id,
+      organizationId: input.organizationId,
+      entitlementPeriodId: input.entitlementPeriodId,
+      quality: input.quality,
+      quantity: input.quantity,
+      commercialReference: input.commercialReference,
+      purchasedAt: input.purchasedAt,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      action: ENTITLEMENT_AUDIT_ACTION.AddOnBlockGranted,
+      resourceType: "unit_add_on_block",
+      resourceId: row.id,
+      metadata: {
+        entitlementPeriodId: row.entitlementPeriodId,
+        billingCycleKey: period.billingCycleKey,
+        quality: row.quality,
+        quantity: row.quantity,
+        commercialReference: row.commercialReference,
+        purchasedAt: row.purchasedAt.toISOString(),
+      },
+    },
+  });
+  return toBlock(row);
+}
+
 export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntitlementRepository {
   /** The grant itself, under the period's cost-admission lock. */
   function grantWithin(input: GrantAddOnBlockInput): Promise<GrantAddOnBlockOutcome> {
@@ -239,35 +280,7 @@ export function createUnitEntitlementRepository(prisma: PrismaClient): UnitEntit
         return { kind: "HIGH_QUALITY_ADD_ON_NOT_AVAILABLE" };
       }
 
-      const row = await tx.unitAddOnBlock.create({
-        data: {
-          id: input.id,
-          organizationId: input.organizationId,
-          entitlementPeriodId: input.entitlementPeriodId,
-          quality: input.quality,
-          quantity: input.quantity,
-          commercialReference: input.commercialReference,
-          purchasedAt: input.purchasedAt,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          organizationId: input.organizationId,
-          actorUserId: input.actorUserId,
-          action: ENTITLEMENT_AUDIT_ACTION.AddOnBlockGranted,
-          resourceType: "unit_add_on_block",
-          resourceId: row.id,
-          metadata: {
-            entitlementPeriodId: row.entitlementPeriodId,
-            billingCycleKey: periodRow.billingCycleKey,
-            quality: row.quality,
-            quantity: row.quantity,
-            commercialReference: row.commercialReference,
-            purchasedAt: row.purchasedAt.toISOString(),
-          },
-        },
-      });
-      return { kind: "GRANTED", block: toBlock(row) };
+      return { kind: "GRANTED", block: await insertAddOnBlockWithin(tx, periodRow, input) };
     });
   }
 

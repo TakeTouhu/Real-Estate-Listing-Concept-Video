@@ -384,8 +384,9 @@ describe("no new durable shape", () => {
     // migration 24 to drop the duplicate-approval index, by MFA-1
     // (ADR-0065), which is authorized to add migration 25 for MFA, and by
     // MFA-4, which is authorized to add migration 26 for the organization's
-    // MFA requirement.
-    expect(dirs.at(-1)).toBe("00000000000026_organization_mfa_requirement");
+    // MFA requirement, and by UP-2 (ADR-0067), which is authorized to add
+    // migration 27 for Unit purchases.
+    expect(dirs.at(-1)).toBe("00000000000027_unit_purchases");
     // "6b" here means Phase 4C-3B-2H-3B-6B. The top-level Phase 6B's subscription
     // migration shares the substring and is the one authorized exception.
     expect(

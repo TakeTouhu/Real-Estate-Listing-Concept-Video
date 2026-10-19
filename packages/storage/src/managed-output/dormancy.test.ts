@@ -407,8 +407,9 @@ describe("nothing about the existing adapters changed shape", () => {
     // migration 24 to drop the duplicate-approval index, by MFA-1
     // (ADR-0065), which is authorized to add migration 25 for MFA, and by
     // MFA-4, which is authorized to add migration 26 for the organization's
-    // MFA requirement.
-    expect(dirs.at(-1)).toBe("00000000000026_organization_mfa_requirement");
+    // MFA requirement, and by UP-2 (ADR-0067), which is authorized to add
+    // migration 27 for Unit purchases.
+    expect(dirs.at(-1)).toBe("00000000000027_unit_purchases");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

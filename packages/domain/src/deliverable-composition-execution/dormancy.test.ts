@@ -386,9 +386,9 @@ describe("durable shape", () => {
     // Phase 6A's migration 17, Phase 6B's migration 18, Phase 6C's migration 19,
     // Phase 6D's migration 20, Phase 6F's migration 21, Phase 6G's migration 22,
     // Phase 6H's migration 23, the near-duplicate rule removal's migration 24,
-    // MFA-1's migration 25 and MFA-4's migration 26 follow Phase 5C's, so it is
-    // now twelfth from last.
-    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 12);
+    // MFA-1's migration 25, MFA-4's migration 26 and UP-2's migration 27 follow
+    // Phase 5C's, so it is now thirteenth from last.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 13);
   });
 
   it("creates one table and rewrites no existing row", () => {
