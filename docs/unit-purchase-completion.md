@@ -4,7 +4,8 @@ Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0066-plan-provisioning-and-units-overview.md` (UP-1),
 `docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2),
 `docs/decisions/0068-unit-purchase-screen-and-route.md` (UP-3),
-`docs/decisions/0069-unit-purchase-list-and-invoicing-export.md` (UP-4)
+`docs/decisions/0069-unit-purchase-list-and-invoicing-export.md` (UP-4),
+`docs/decisions/0070-unit-purchase-cancellation.md` (UP-5)
 Gap analysis: `docs/unit-purchase-gap-analysis.md`
 
 Unit purchase is built in four pull requests, approved by the product owner on
@@ -15,6 +16,11 @@ invoiced afterwards:
 2. **UP-2**: the purchase record and its one-transaction grant.
 3. **UP-3**: the purchase screen.
 4. **UP-4**: the purchase list and the invoicing export.
+
+The product owner then decided on 2026-10-19 how a mistaken purchase is
+corrected, built as a fifth:
+
+5. **UP-5**: an operator cancels a mistaken purchase.
 
 Each extends this record. Unit purchase is not a Roadmap phase, so it receives
 no `phase-N-complete` tag.
@@ -1124,3 +1130,347 @@ UP-4 waits for the product owner's yes before merge. It completes the approved
 Unit purchase plan. Open: the decision on correcting a purchase made in error,
 and Stripe card payment, which needs the payment-failure gate settled and the
 product owner's go-ahead for live charges.
+
+## UP-5 — cancelling a mistaken purchase
+
+Base: `47e5614` (PR #92 merge commit on `main`).
+ADR: `docs/decisions/0070-unit-purchase-cancellation.md`
+
+The product owner decided on 2026-10-19 how a purchase made by mistake is
+corrected, and revised it the same day: only VTaVision's own mistake is free.
+Such a purchase is cancelled whenever it is found, its unused Units are
+withdrawn, its used Units stay used, and it is not invoiced. A purchase the
+customer made by mistake is charged, unless it is cancelled within 10 hours of
+its approval with none of its Units used. UP-5 builds that, as one pull
+request after the approved four.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `f6d2a8c` | migration 28 and the cancellation repository, the withdrawn-block rule in the ledger, the `cancel-unit-purchase` command, the export's two columns and its total, the Units page's cancelled and withdrawn lines, their unit, page, shape and database tests |
+| `73ab5a4` | the lock test releases its held lock however its check goes (found by the mutation pass, below) |
+| `c3ddac6` | ADR-0070 and the documentation, for the first decision |
+| `b539ee5` | the revised rule: `--fault`, the fault on the cancellation and its audit entry, the customer's refund window and usage checked under the lock; the database test's cleanup also clears export audit entries (below) |
+| `32856be` | ADR-0070 and the documentation for the revised rule, and this record |
+| this commit | a confirmation sent again after its purchase was cancelled no longer lands on "Your purchase is approved" (found by the review, below), and this record |
+
+The exact head SHA is reported with the pull request.
+
+### What UP-5 does
+
+- **An operator cancels a purchase.** `pnpm --filter @app/ops
+  cancel-unit-purchase --purchase --fault --operator --reason` shows the
+  purchase and how its Units stand, and writes nothing; with `--confirm` it
+  cancels it (ADR-0070 Decision 1). A card-paid purchase is refused.
+- **The cancellation** is one row per purchase in
+  `unit_purchase_cancellations`, inside the purchase's organization, naming
+  whose mistake it was and stamped with the database's clock; the purchase and
+  its block are never changed (Decision 2).
+- **Whose mistake it was decides what is allowed** (Decision 3).
+  `--fault vtavision` cancels whenever, however much is used.
+  `--fault customer` cancels only within 10 hours of the approval, by the
+  database's clock, with no Unit delivered or still generating, and is
+  otherwise refused: the purchase stays invoiced and its Units usable.
+- **Its unused Units are withdrawn.** A block whose purchase is cancelled has 0
+  remaining, so no new reservation draws on it; generations it already funded
+  settle as they would have, and a release frees nothing (Decision 4).
+- **One transaction under the period's cost-admission lock**, so each
+  reservation is admitted wholly before or after it, and the customer's window
+  and usage are checked on what that transaction read (Decision 5). One
+  `unit_purchase.cancelled` audit entry names whose mistake it was, the
+  operator, the reason and the Units delivered, still generating and withdrawn
+  (Decision 6).
+- **Not invoiced.** The export lists a cancelled purchase with `cancelled_at`
+  and 0 in `to_invoice_yen_ex_tax`, and its total leaves it out (Decision 7).
+- **The Units page** marks the block "withdrawn, purchase cancelled" and, for a
+  `billing.view` holder, the purchase "cancelled by VTaVision on" its date, "not
+  invoiced" (Decision 8).
+
+### Cancelling a purchase
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant O as Operator
+  participant C as cancel-unit-purchase
+  participant DB as PostgreSQL
+  participant R as A reservation
+
+  O->>C: --purchase, --fault, --operator, --reason
+  C->>DB: the purchase, its block's allocations, any cancellation, now()
+  C-->>O: the purchase, delivered / generating / unused, and what cancelling does or why it is refused
+  O->>C: the same with --confirm
+  C->>DB: BEGIN; locate the purchase's period
+  C->>DB: cost-admission lock (organization, period)
+  R--xDB: a reservation into the period waits for the lock
+  C->>DB: the purchase, its block's allocations and now()
+  alt already cancelled, card-paid, or the customer's mistake past 10 hours or used
+    C->>DB: COMMIT, nothing written
+    C-->>O: exit 0 already cancelled, or exit 1 refused
+  end
+  C->>DB: insert the cancellation with its fault; audit unit_purchase.cancelled
+  C->>DB: COMMIT
+  R->>DB: the balance reads the cancellation: the block has 0 left
+  C-->>O: exit 0, withdrawn / kept / left to finish, not invoiced
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `b539ee5`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5684 / 5684**, 197 files (was 5619, 194 files, on `47e5614`) |
+| `pnpm test:db` | **1439 / 1439**, 53 files (was 1415, 52) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 29 migrations, up to date |
+
+One `pnpm test:db` run on `b539ee5` stopped after three files when vitest
+lost its worker process (`ERR_IPC_CHANNEL_CLOSED`), with no test failing; run
+again, all 53 files passed.
+
+CI on `32856be` passed (runs 598 and 599). CI on the pull request's exact
+head is reported with the pull request.
+
+**After the review fix**, measured again on its code: `pnpm lint` and
+`pnpm typecheck` clean, `pnpm test` **5685 / 5685**, `pnpm test:db` **1439 / 1439**,
+`pnpm build` succeeded, and `prisma migrate diff` found no difference.
+
+**Run by hand.** Against local PostgreSQL, with an organization named
+`ESC[2J=株式会社 "神田"` (its first character the escape character):
+
+- *First decision, on `73ab5a4`*: two purchases of 10 Normal Units in a
+  September period. Without `--confirm` the command showed the name as
+  `"\u001b[2J=株式会社 \"神田\""` and wrote nothing; with `--confirm` it wrote
+  one cancellation, the operator's name trimmed and stamped with the
+  database's clock, and one audit entry with 0 consumed, 0 in flight and 10
+  withdrawn; a second run wrote nothing; an unknown purchase was refused,
+  exit 1; `--confirm=yes` exited 2. The export of the window listed both, the
+  cancelled one with its `cancelled_at` and 0 to invoice, totalled ¥19,900
+  "not counting 1 cancelled purchase", and audited `cancelled: 1` and
+  `toInvoiceYenExTax: 19900`.
+- *Revised rule, on `b539ee5`*: two purchases in the current period, approved
+  2 and 11 hours earlier. With `--fault customer`, the first showed its
+  refund deadline 10 hours after its approval and was cancelled with
+  `--confirm`, recording `CUSTOMER` on the cancellation and in the audit
+  entry; the second was refused as approved more than 10 hours ago, exit 1,
+  writing nothing, and the same purchase with `--fault vtavision` was offered
+  for cancelling. Running the first again said it had been cancelled as the
+  customer's mistake. `--fault ours` exited 2 with the usage.
+
+The data was removed afterwards.
+
+**A database test that failed once.** One full `pnpm test:db` run failed the
+test that exports a cancelled purchase, and every later run passed. The test
+deleted the export's audit entry only at its end, so a mutated run that failed
+before then left one behind, and the next run read it instead of its own. The
+other suites' cleanup removed it eventually, which is why it did not repeat.
+`b539ee5` deletes such entries in the file's own cleanup; with a stale entry
+planted, the file passes.
+
+New tests (65 unit, 24 database):
+- **the ledger** (`allocation.test.ts`, 5 new): a withdrawn block has 0
+  left even when none of it was used, and says it is withdrawn; it is passed
+  over for the next eligible block, oldest first, and counts nothing towards an
+  all-or-nothing plan; it keeps what it already funded and gets nothing back
+  from a release; an allocation naming a block the period does not hold is
+  still refused;
+- **usage, invoicing and whose mistake it was**
+  (`unit-purchase-cancellation.test.ts`, 14): what is delivered, still
+  generating and unused for each reservation state; nothing to invoice once
+  cancelled; the customer's 10 hours, refunded at exactly 10 hours and refused
+  a millisecond later, refused once one Unit is delivered or still generating,
+  late before used; VTaVision's own mistake never refused;
+- **the command** (`cancel-unit-purchase.test.ts`, 35): every option but
+  `--confirm` required, trimmed and length-limited, every problem at once;
+  `--fault` only `vtavision` or `customer`; nothing written without
+  `--confirm`; the preview's lines for each fault, the refund deadline in Japan
+  time; control characters escaped; no such purchase, already cancelled and
+  card-paid; the customer's mistake refused as late or used, with and without
+  `--confirm`; what a cancellation says for each fault;
+- **the export** (`export-unit-purchases.test.ts`, 2 new) and **the Units
+  page** (`units-page.test.tsx`, 1 new; `units-overview.test.ts`, 1 new): the
+  two columns, the total and what it left out; the withdrawn block and the
+  cancelled purchase's line;
+- **shape** (`unit-purchase-cancellation-shape.test.ts`, 7): migration 28 the
+  newest of 29, one table, one type and one index, no rewrite of an existing
+  row; the keys, the foreign key and the CHECK; the fault column and no
+  stored count; one transaction writing only the cancellation and its audit
+  entry, after the lock, in the order read, refusal, cancellation, audit; the
+  database's clock its only raw statement, read with the purchase and stamped
+  on the cancellation; the balance's read of the cancellation; built only by
+  the operator command. Every earlier shape and dormancy test that pins the
+  newest migration now names migration 28;
+- **live PostgreSQL** (`unit-purchase-cancellation.db.test.ts`, 24): a
+  cancelled block funds no new reservation, which falls to the next block or
+  is refused; a reservation admitted before keeps its funding, and releasing
+  it afterwards returns nothing; one released before cancelling counts as
+  unused; other blocks and Base Units untouched; the record and the audit
+  entry exactly, the purchase and its block unchanged; one cancellation per
+  purchase, also when two run at once; a cancellation waits for a transaction
+  holding the period's lock; no such purchase; card-paid refused; the purchase
+  as the command shows it, before and after; the customer's mistake refunded
+  at 9.9 hours by the database's clock and refused at 10.01 hours or with a
+  generation running, writing nothing and leaving the Units usable;
+  VTaVision's own mistake cancelled after 48 hours with a generation running;
+  the foreign key, each CHECK and the delete restriction; the export and the
+  Units overview's purchases reading the cancellation.
+
+### Mutation ledger
+
+**54 mutants, all killed, 0 broken, 0 anchor-missing**, in one pass on
+the code of `b539ee5`. Each mutant weakens one guarantee at an anchor that
+occurs exactly once, and runs against the suites listed for it until one fails:
+
+- **domain**: the entitlement tests (251);
+- **web**: the organization pages' tests (52);
+- **ops**: the operator commands' tests (132);
+- **db**: the cancellation and invoicing database tests (35).
+
+Every mutated file was restored and re-hashed, and all 884 files were
+byte-identical after the pass.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| A01 | ledger | a withdrawn block keeps its unused Units | `allocation.ts` | 4 of 251 (domain) |
+| A02 | ledger | the balance forgets which block is withdrawn | `allocation.ts` | 1 of 251 (domain) |
+| A03 | loader | a cancellation never withdraws the block | `unit-entitlement-repository.ts` | 5 of 35 (db) |
+| A04 | loader | one cancellation is not enough to withdraw | `unit-entitlement-repository.ts` | 5 of 35 (db) |
+| U01 | usage | released Units counted as delivered | `unit-purchase-cancellation.ts` | 2 of 251 (domain) |
+| U02 | usage | released Units counted as still running | `unit-purchase-cancellation.ts` | 2 of 251 (domain) |
+| U03 | usage | running generations counted as unused | `unit-purchase-cancellation.ts` | 4 of 251 (domain) |
+| R01 | lock | the cancellation takes no cost-admission lock | `unit-purchase-cancellation-repository.ts` | 2 of 35 (db) |
+| R02 | once | a cancelled purchase cancelled again | `unit-purchase-cancellation-repository.ts` | 2 of 35 (db) |
+| R03 | card | a card-paid purchase cancelled here | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R04 | record | the operator's name stored untrimmed | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R05 | record | the reason stored untrimmed | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R06 | audit | the cancellation audited as something else | `unit-purchase-cancellation-repository.ts` | 5 of 35 (db) |
+| R07 | audit | the audit says every Unit was withdrawn | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R08 | card | every purchase read as invoice-paid | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R09 | usage | every allocation read as still running | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| R10 | record | the purchase's period end shown as its approval | `unit-purchase-cancellation-repository.ts` | 2 of 35 (db) |
+| X01 | export | the export never sees a cancellation | `unit-purchase-invoicing-repository.ts` | 1 of 35 (db) |
+| X02 | audit | the export audit counts no cancellation | `unit-purchase-invoicing-repository.ts` | 1 of 35 (db) |
+| X03 | audit | the export audit invoices cancelled purchases | `unit-purchase-invoicing-repository.ts` | 1 of 35 (db) |
+| X04 | invoice | a cancelled purchase still invoiced | `unit-purchase-invoicing.ts` | 1 of 251 (domain) |
+| X05 | csv | the CSV invoices the price whatever happened | `export-unit-purchases.ts` | 1 of 132 (ops) |
+| X06 | csv | the CSV never says when it was cancelled | `export-unit-purchases.ts` | 1 of 132 (ops) |
+| X07 | csv | the command's total includes cancelled purchases | `export-unit-purchases.ts` | 1 of 132 (ops) |
+| X08 | csv | the command never says what it left out | `export-unit-purchases.ts` | 1 of 132 (ops) |
+| P01 | list | the period's purchases never show a cancellation | `unit-purchase-repository.ts` | 1 of 35 (db) |
+| O01 | overview | the overview drops the cancellation | `units-overview.ts` | 1 of 251 (domain) |
+| O02 | overview | the overview drops the withdrawal | `units-overview.ts` | 1 of 251 (domain) |
+| W01 | page | the page never says a purchase was cancelled | `units/page.tsx` | 1 of 52 (web) |
+| W02 | page | the page shows a withdrawn block as 0 left | `units/page.tsx` | 1 of 52 (web) |
+| K01 | confirm | cancelled without --confirm | `cancel-unit-purchase.ts` | 10 of 132 (ops) |
+| K02 | confirm | --confirm assumed | `cancel-unit-purchase.ts` | 2 of 132 (ops) |
+| K03 | preview | a cancelled purchase offered for cancelling again | `cancel-unit-purchase.ts` | 2 of 132 (ops) |
+| K04 | preview | a card-paid purchase offered for cancelling | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+| K05 | terminal | a name its members typed printed raw | `cancel-unit-purchase.ts` | 9 of 132 (ops) |
+| K06 | limits | the command accepts what the table refuses | `unit-purchase-cancellation.ts` | 1 of 132 (ops) |
+| K07 | message | the preview says nothing of what is kept | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+| F01 | window | a purchase read exactly 10 hours after approval refused | `unit-purchase-cancellation.ts` | 1 of 251 (domain) |
+| F02 | window | the customer's mistake refunded however late | `unit-purchase-cancellation.ts` | 2 of 251 (domain) |
+| F03 | used | a generation running on it does not count as used | `unit-purchase-cancellation.ts` | 1 of 251 (domain) |
+| F04 | used | a delivered Unit does not count as used | `unit-purchase-cancellation.ts` | 1 of 251 (domain) |
+| F05 | fault | VTaVision's own mistake held to the customer's rule | `unit-purchase-cancellation.ts` | 1 of 251 (domain) |
+| F06 | window | the customer gets 24 hours | `unit-purchase-cancellation.ts` | 1 of 251 (domain) |
+| F07 | repo | the transaction ignores the customer's rule | `unit-purchase-cancellation-repository.ts` | 2 of 35 (db) |
+| F08 | repo | every cancellation stored as VTaVision's mistake | `unit-purchase-cancellation-repository.ts` | 1 of 35 (db) |
+| F09 | audit | the audit drops whose mistake it was | `unit-purchase-cancellation-repository.ts` | 2 of 35 (db) |
+| F10 | clock | the cancellation stamped with the machine's clock | `unit-purchase-cancellation-repository.ts` | 1 of 251 (domain) |
+| F11 | clock | the refund window checked against the machine's clock | `unit-purchase-cancellation-repository.ts` | 1 of 251 (domain) |
+| K08 | preview | the preview offers a refusal for cancelling | `cancel-unit-purchase.ts` | 3 of 132 (ops) |
+| K09 | fault | --fault customer read as VTaVision's mistake | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+| K10 | message | a used purchase refused as too late | `cancel-unit-purchase.ts` | 2 of 132 (ops) |
+| K11 | message | the preview's deadline is the approval itself | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+| K12 | message | a cancellation always called VTaVision's mistake | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+| K13 | message | an earlier cancellation's fault not read back | `cancel-unit-purchase.ts` | 1 of 132 (ops) |
+
+Two earlier passes ran on the first decision. The first stopped at R01: with
+the lock removed, the lock test's check failed before it released the
+transaction holding the lock, and every later test waited on it. `73ab5a4`
+releases it however the check goes, and the second pass killed all 37 of its
+mutants. This pass adds F01 to F11 and K08 to K13 for the revised rule, and
+runs every mutant again. The test that runs two cancellations at once passes
+without the lock too, since the purchase's key alone keeps a second
+cancellation out; the lock test is the one that shows a cancellation waits for
+a reservation.
+
+### Review
+
+The automated code review did not run on the pull request: it had reached its
+usage limit. An independent review of the whole diff (`47e5614..32856be`)
+traced the lock key, the ledger, the 10-hour rule, the refusals, tenant
+isolation, the audit, the export, the Units page and migration 28 from their
+callers, and found one defect. A confirmation sent again after its purchase was
+cancelled, from a page the browser kept, is answered as a replay of it, and
+the customer landed on the Units page's "Your purchase is approved. Its Units
+are ready to use, and VTaVision will invoice it." The fix sends it back to the
+purchase screen saying VTaVision cancelled the purchase, which is not
+invoiced; nothing is bought either way (ADR-0070 Decision 8). Its test, in
+`buy-page.test.tsx`, fails with the check disabled by hand and passes with it.
+
+The review also noted two things ADR-0070 means to do: the 10 hours are
+checked against the start of the cancelling transaction, before it waits for
+the lock, which Prisma's transaction timeout bounds to seconds; and an export
+can list the customer's purchase before it is refunded, which Decision 7 leaves
+to a refund or offset by hand.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: a new row for the cancellation, and the Units overview row names withdrawn blocks and cancelled purchases |
+| Entity-relationship diagram | `docs/decisions/0070-unit-purchase-cancellation.md`, Decision 2; the one new table and its one relation |
+| Critical sequence diagram | this section, *Cancelling a purchase* |
+| OpenAPI / API change summary | `docs/api-changes-up-5.md`: the table and its type, the Units page's lines, the command's options and exit codes, the export's columns, the internal API |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *UP-5*: migration 28, what changes at deploy, rolling back |
+| Completion report | this file |
+
+Also updated: `docs/local-setup.md` (how to cancel), `docs/Roadmap.md`,
+`docs/decisions/TODO.md` (the item on correcting a purchase made in error,
+closed, and the Unit accounting item) and `docs/unit-purchase-gap-analysis.md`
+(what building UP-5 found). ADR-0053, the approved commercial contract, is
+unchanged: ADR-0070 says how a cancellation stands beside its Decision 3A.
+
+### Activation status
+
+Nothing paid or scheduled is activated. UP-5 adds a table, a read in the
+ledger's balance and an operator command that someone runs by hand: no worker,
+scheduler, credential, environment variable, dependency or payment
+integration. Paid Provider Activation, production credentials, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The customer's 10 hours are counted to the moment the operator cancels**,
+  not to when the customer asked. A request that arrives inside the window and
+  is handled after it is refused by the command.
+- **A purchase the customer partly used is not refunded at all**, not even its
+  unused part.
+- **A purchase already invoiced is refunded or offset by hand.** The product
+  has no payment integration; the command says so when it cancels.
+- **A cancellation cannot be undone.** A purchase cancelled by mistake is
+  bought again.
+- **After its period has ended**, VTaVision's own mistake can still be
+  cancelled so that it is not invoiced; its unused Units had already expired,
+  and the command still calls them withdrawn.
+- **The command's entry point is not unit-tested.** `src/bin/cancel-unit-purchase.ts`
+  only wires the database to the tested module, as the other commands' do; it
+  was run by hand (above).
+- **Reloading the Units page at the address a purchase landed on**
+  (`?purchased=1`) still shows its approved banner after a cancellation; the
+  cards below it say withdrawn and cancelled.
+- **The customer is not notified by the product**, and the purchase screen
+  does not mention the 10-hour window: whoever handled the request tells them.
+
+### Remaining work
+
+UP-5 waits for the product owner's yes before merge. Open after it: Stripe
+card payment, which needs the payment-failure gate settled and the product
+owner's go-ahead for live charges.

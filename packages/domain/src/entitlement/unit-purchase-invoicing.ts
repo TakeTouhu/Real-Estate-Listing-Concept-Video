@@ -37,6 +37,16 @@ export interface InvoiceableUnitPurchase {
   readonly approvedAt: Date;
   /** Its period's end, when its Units expire unused. */
   readonly expiresAt: Date;
+  /**
+   * When an operator cancelled it (UP-5, ADR-0070), or `null`. A cancelled
+   * purchase is listed so a past export can be reconciled, and is not invoiced.
+   */
+  readonly cancelledAt: Date | null;
+}
+
+/** What to invoice for `purchase`, excluding tax: nothing once it is cancelled. */
+export function yenToInvoiceExTax(purchase: Pick<InvoiceableUnitPurchase, "priceYenExTax" | "cancelledAt">): number {
+  return purchase.cancelledAt === null ? purchase.priceYenExTax : 0;
 }
 
 export interface UnitPurchaseExportRequest {

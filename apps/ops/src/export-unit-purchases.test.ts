@@ -142,6 +142,7 @@ describe("writing the CSV", () => {
     priceYenExTax: 35_900,
     approvedAt: new Date("2026-10-19T01:56:07.000Z"),
     expiresAt: new Date("2026-10-31T15:00:00.000Z"),
+    cancelledAt: null,
     ...overrides,
   });
 
@@ -155,6 +156,8 @@ describe("writing the CSV", () => {
     "units",
     "price_yen_ex_tax",
     "expires_at",
+    "cancelled_at",
+    "to_invoice_yen_ex_tax",
   ].join(",");
 
   it("writes a byte order mark, a header and one CRLF-ended row per purchase, in the order given", () => {
@@ -164,9 +167,17 @@ describe("writing the CSV", () => {
       "\uFEFF" +
         `${HEADER}\r\n` +
         '"org_1","株式会社神田","VT-2026-001","upur_1","2026-10-19T10:56:07+09:00","Normal",10,35900,' +
-        '"2026-11-01T00:00:00+09:00"\r\n' +
+        '"2026-11-01T00:00:00+09:00","",35900\r\n' +
         '"org_1","\'=cmd","VT-2026-001","upur_2","2026-10-19T10:56:07+09:00","HQ",2,35900,' +
-        '"2026-11-01T00:00:00+09:00"\r\n',
+        '"2026-11-01T00:00:00+09:00","",35900\r\n',
+    );
+  });
+
+  it("writes when a cancelled purchase was cancelled, and nothing to invoice for it", () => {
+    const cancelled = purchase({ cancelledAt: new Date("2026-10-20T03:04:05.678Z") });
+    expect(unitPurchasesCsv([cancelled]).split("\r\n")[1]).toBe(
+      '"org_1","株式会社神田","VT-2026-001","upur_1","2026-10-19T10:56:07+09:00","Normal",10,35900,' +
+        '"2026-11-01T00:00:00+09:00","2026-10-20T12:04:05+09:00",0',
     );
   });
 
@@ -213,6 +224,7 @@ const listed = (purchaseId: string, organizationId: string, priceYenExTax: numbe
   priceYenExTax,
   approvedAt: new Date("2026-10-19T01:56:07.000Z"),
   expiresAt: new Date("2026-10-31T15:00:00.000Z"),
+  cancelledAt: null,
 });
 
 describe("running it", () => {
@@ -231,6 +243,21 @@ describe("running it", () => {
     });
     expect(requests).toEqual([REQUEST]);
     expect([...written]).toEqual([["october.csv", unitPurchasesCsv(purchases)]]);
+  });
+
+  it("leaves cancelled purchases out of the total, and says how many", async () => {
+    const cancelled = (purchaseId: string) => ({
+      ...listed(purchaseId, "org_2", 9_000),
+      cancelledAt: new Date("2026-10-20T00:00:00.000Z"),
+    });
+    const one = harness([listed("upur_1", "org_1", 35_900), cancelled("upur_2")]);
+    expect((await runExportUnitPurchases(one.repository, one.files, ARGUMENTS)).message).toContain(
+      "to october.csv: ¥35,900 excluding tax in total, not counting 1 cancelled purchase. Each organization",
+    );
+    const two = harness([cancelled("upur_2"), cancelled("upur_3")]);
+    expect((await runExportUnitPurchases(two.repository, two.files, ARGUMENTS)).message).toContain(
+      "¥0 excluding tax in total, not counting 2 cancelled purchases.",
+    );
   });
 
   it("counts one purchase for one organization in the singular", async () => {

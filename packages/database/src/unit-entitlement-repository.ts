@@ -149,6 +149,8 @@ export async function loadPeriodBalance(
 ): Promise<PeriodEntitlementBalance> {
   const blocks = await tx.unitAddOnBlock.findMany({
     where: { entitlementPeriodId: period.id, organizationId: period.organizationId },
+    // A block is withdrawn once the purchase that bought it is cancelled (ADR-0070).
+    include: { purchases: { select: { cancellations: { select: { purchaseId: true } } } } },
   });
   const allocations = await tx.generationReservationAllocation.findMany({
     where: { entitlementPeriodId: period.id, organizationId: period.organizationId },
@@ -170,6 +172,7 @@ export async function loadPeriodBalance(
       quality: block.quality,
       quantity: block.quantity,
       purchasedAtEpochMs: block.purchasedAt.getTime(),
+      withdrawn: block.purchases.some((purchase) => purchase.cancellations.length > 0),
     })),
     allocations: allocations.map((allocation) => ({
       sourceType: allocation.sourceType,

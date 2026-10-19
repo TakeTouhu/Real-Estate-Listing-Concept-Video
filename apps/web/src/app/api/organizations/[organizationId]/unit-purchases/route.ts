@@ -4,7 +4,13 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, redirectWithError } from "@/lib/http";
 import { isSameOriginPost } from "@/lib/same-origin";
-import { NOT_USABLE, failureMessage, readUnitPurchaseForm, refusalMessage } from "@/lib/unit-purchase-form";
+import {
+  CANCELLED_SINCE,
+  NOT_USABLE,
+  failureMessage,
+  readUnitPurchaseForm,
+  refusalMessage,
+} from "@/lib/unit-purchase-form";
 import { getUnitPurchaseService } from "@/lib/unit-purchases";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +45,9 @@ export async function POST(
     return redirectWithError(request.url, buyPage, failureMessage(error));
   }
   if (outcome.kind === "REFUSED") return redirectWithError(request.url, buyPage, refusalMessage(outcome.reason));
+  if (outcome.kind === "ALREADY_APPROVED" && outcome.purchase.cancelledAt !== null) {
+    return redirectWithError(request.url, buyPage, CANCELLED_SINCE);
+  }
 
   // A replay of the same approval lands where the approval did: it bought once.
   const done = new URL(unitsPage, request.url);

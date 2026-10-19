@@ -86,10 +86,16 @@ function Purchases({ purchases }: { purchases: readonly UnitsOverviewPurchase[] 
               <li key={index}>
                 {packageName(purchase)} · {formatYenExTax(purchase.priceYenExTax)} · approved{" "}
                 {formatJst(purchase.approvedAt)} by {purchase.approvedBy ?? "a former member"}
+                {purchase.cancelledAt === null ? null : (
+                  <> · cancelled by VTaVision on {formatJst(purchase.cancelledAt)}: not invoiced</>
+                )}
               </li>
             ))}
           </ul>
-          <p className="muted">VTaVision invoices each purchase under your contract, with consumption tax added.</p>
+          <p className="muted">
+            VTaVision invoices each purchase under your contract, with consumption tax added. A cancelled purchase is
+            not invoiced, and its unused Units are withdrawn.
+          </p>
         </>
       )}
     </div>
@@ -152,7 +158,9 @@ function Overview({ overview, organizationId }: { overview: UnitsOverview; organ
             <ul>
               {overview.addOnBlocks.map((block, index) => (
                 <li key={index}>
-                  {QUALITY_NAMES[block.quality]}: {block.remainingUnits} left · bought {formatJst(block.purchasedAt)}
+                  {QUALITY_NAMES[block.quality]}:{" "}
+                  {block.withdrawn ? "withdrawn, purchase cancelled" : `${block.remainingUnits} left`} · bought{" "}
+                  {formatJst(block.purchasedAt)}
                 </li>
               ))}
             </ul>

@@ -129,7 +129,46 @@ Two facts shape the order:
   machine; such a cell gets a leading `'` (Decision 4).
 - **Correcting a purchase made in error is still open.** The export lists a
   credited purchase again if its window is exported again; the decision is
-  with the product owner (Decision 6, `TODO.md`).
+  with the product owner (Decision 6, `TODO.md`). *Decided on 2026-10-19 and
+  built in UP-5, below.*
+
+## Found while building UP-5
+
+Not one of the four approved pull requests: the product owner decided on
+2026-10-19 how a mistaken purchase is corrected, and revised it the same day
+(`/mnt/project-files/cto/unit-purchase-correction-proposal.md`); UP-5 builds
+it (ADR-0070).
+
+- **Whose mistake it was changes what is allowed.** VTaVision's own is free
+  whenever it is found; the customer's only within 10 hours of its approval
+  with no Unit used. The operator judges which, so the command requires
+  `--fault` and the cancellation records it (Decision 3).
+- **When the 10 hours end.** The command cannot know when the customer asked,
+  so the window runs to the moment of cancelling, by the database's clock, the
+  same reading the cancellation is stamped with.
+- **"Unused" is checked under the lock.** A generation admitted a moment
+  before would make the purchase used; reading the usage under the period's
+  lock orders the two (Decision 5).
+
+- **Withdrawing without rewriting.** The purchase and its block are billing
+  evidence (ADR-0067 Decision 2), so the cancellation is a row of its own and
+  the ledger reads it: a withdrawn block has 0 remaining (ADR-0070 Decision 4).
+- **A generation running when VTaVision's own mistake is cancelled.** Its
+  funding is frozen, so it finishes; if it fails, its Units are not returned to
+  the block, because they were unused and so are withdrawn.
+- **Ordering against reservations.** The cancellation takes the period's
+  cost-admission lock, so a reservation is admitted wholly before it or wholly
+  after it (Decision 5).
+- **A card-paid purchase** would be charged by its payment processor, so not
+  invoicing it refunds nothing: it is refused, and none exists yet.
+- **The organization's name in a terminal.** The command prints it as a quoted
+  string with control characters escaped, so a name cannot move the cursor or
+  rewrite what the operator reads before confirming.
+- **Prisma fills `@default(now())` on the machine running the command**, not in
+  the database, so the cancellation is stamped explicitly with the database's
+  clock.
+- **The export still lists a cancelled purchase**, so a window exported again
+  reconciles with an earlier file, with nothing to invoice for it (Decision 7).
 
 ## Not in this plan
 

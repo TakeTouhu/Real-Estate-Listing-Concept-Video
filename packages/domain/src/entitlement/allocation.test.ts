@@ -30,8 +30,9 @@ function block(
   quality: GenerationQualityTier,
   quantity: number,
   purchasedAtEpochMs: number,
+  withdrawn = false,
 ): AddOnBlockGrant {
-  return { id, quality, quantity, purchasedAtEpochMs };
+  return { id, quality, quantity, purchasedAtEpochMs, withdrawn };
 }
 
 function used(
@@ -349,6 +350,55 @@ describe("settlement is read from the reservation, exactly once", () => {
   it("keeps a consumed reservation's Units spent", () => {
     const consumed = balanceOf("standard", [], [used(3, { state: "CONSUMED" })]);
     expect(consumed.baseRemainingUnits).toBe(12);
+  });
+});
+
+describe("a withdrawn block funds nothing new (UP-5, ADR-0070)", () => {
+  it("has nothing left even when none of it was used, and says it is withdrawn", () => {
+    const balance = balanceOf("premium", [
+      block("blk_old", "NORMAL", 10, day(1), true),
+      block("blk_new", "NORMAL", 10, day(2)),
+    ]);
+    expect(balance.blocks).toEqual([
+      { id: "blk_old", quality: "NORMAL", remainingUnits: 0, purchasedAtEpochMs: day(1), withdrawn: true },
+      { id: "blk_new", quality: "NORMAL", remainingUnits: 10, purchasedAtEpochMs: day(2), withdrawn: false },
+    ]);
+    expect([balance.baseRemainingUnits, balance.includedHighQualityRemainingUnits]).toEqual([40, 5]);
+  });
+
+  it("is passed over for the next eligible block, oldest first", () => {
+    const balance = balanceOf(
+      "standard",
+      [block("blk_old", "NORMAL", 10, day(1), true), block("blk_new", "NORMAL", 10, day(2))],
+      [used(15)],
+    );
+    expect(planUnitAllocation({ quality: "NORMAL", units: 3, balance })).toEqual({
+      ok: true,
+      allocations: [{ sourceType: "ADD_ON_BLOCK", addOnBlockId: "blk_new", quality: "NORMAL", quantity: 3 }],
+    });
+  });
+
+  it("does not count towards what an all-or-nothing plan could cover", () => {
+    const balance = balanceOf("standard", [block("blk_old", "NORMAL", 10, day(1), true)], [used(14)]);
+    expect(planUnitAllocation({ quality: "NORMAL", units: 2, balance })).toEqual({
+      ok: false,
+      reason: "INSUFFICIENT_ENTITLEMENT",
+      eligibleUnits: 1,
+    });
+  });
+
+  it("keeps what it already funded, and returns nothing a release frees", () => {
+    const blocks = [block("blk_hq", "HIGH_QUALITY", 2, day(1), true)];
+    for (const state of ["RESERVED", "CONSUMED", "RELEASED"] as const) {
+      const balance = balanceOf("premium", blocks, [used(1, { quality: "HIGH_QUALITY", block: "blk_hq", state })]);
+      expect(balance.blocks[0]?.remainingUnits).toBe(0);
+    }
+  });
+
+  it("still refuses an allocation naming a block the period does not hold", () => {
+    expect(() =>
+      balanceOf("premium", [block("blk_hq", "HIGH_QUALITY", 2, day(1), true)], [used(1, { block: "blk_other" })]),
+    ).toThrow(/ALLOCATION_NAMES_UNKNOWN_BLOCK/);
   });
 });
 

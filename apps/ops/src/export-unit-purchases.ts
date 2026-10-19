@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   UNIT_PURCHASE_EXPORT_SETTLE_MS,
+  yenToInvoiceExTax,
   type GenerationQualityTier,
   type InvoiceableUnitPurchase,
   type UnitPurchaseExportRequest,
@@ -13,10 +14,12 @@ import { parseInstant } from "./instant";
  * (UP-4, ADR-0069 Decisions 2 to 4).
  *
  * It writes the purchases approved in a window to a new CSV file, one row each,
- * by organization, contract and approval. Like provisioning, it runs with the
- * database credentials of whoever runs it, which is the privilege; every
- * organization listed is audited with the operator's name and reason. The file
- * is new each time, so an earlier export is never overwritten.
+ * by organization, contract and approval. A purchase an operator cancelled
+ * (ADR-0070) is listed with when, and nothing to invoice for it, so a window
+ * exported again reconciles with an earlier export. Like provisioning, it runs
+ * with the database credentials of whoever runs it, which is the privilege;
+ * every organization listed is audited with the operator's name and reason. The
+ * file is new each time, so an earlier export is never overwritten.
  */
 
 export const USAGE = [
@@ -88,7 +91,7 @@ export function parseExportArguments(argv: readonly string[]): ParsedExportArgum
   return { ok: true, value: { request: { from, to, operator: { name, reason } }, out } };
 }
 
-const QUALITY_NAMES: Record<GenerationQualityTier, string> = { NORMAL: "Normal", HIGH_QUALITY: "HQ" };
+export const QUALITY_NAMES: Record<GenerationQualityTier, string> = { NORMAL: "Normal", HIGH_QUALITY: "HQ" };
 
 const HEADER = [
   "organization_id",
@@ -100,6 +103,8 @@ const HEADER = [
   "units",
   "price_yen_ex_tax",
   "expires_at",
+  "cancelled_at",
+  "to_invoice_yen_ex_tax",
 ];
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -135,6 +140,8 @@ export function unitPurchasesCsv(purchases: readonly InvoiceableUnitPurchase[]):
       String(purchase.units),
       String(purchase.priceYenExTax),
       textCell(jstInstant(purchase.expiresAt)),
+      textCell(purchase.cancelledAt === null ? "" : jstInstant(purchase.cancelledAt)),
+      String(yenToInvoiceExTax(purchase)),
     ].join(","),
   );
   return `\uFEFF${[HEADER.join(","), ...rows].map((row) => `${row}\r\n`).join("")}`;
@@ -180,14 +187,16 @@ export async function runExportUnitPurchases(
     return { exitCode: 0, message: `No invoice-paid purchases were approved ${window}. Wrote ${out} with no rows.` };
   }
   const organizations = new Set(purchases.map((purchase) => purchase.organizationId)).size;
-  const total = purchases.reduce((sum, purchase) => sum + purchase.priceYenExTax, 0);
+  const total = purchases.reduce((sum, purchase) => sum + yenToInvoiceExTax(purchase), 0);
+  const cancelled = purchases.filter((purchase) => purchase.cancelledAt !== null).length;
   const counted = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
   return {
     exitCode: 0,
     message:
       `Wrote ${counted(purchases.length, "purchase")} for ${counted(organizations, "organization")} ` +
       `approved ${window} to ${out}: ` +
-      `¥${YEN.format(total)} excluding tax in total. ` +
-      `Each organization is audited with operator ${request.operator.name}.`,
+      `¥${YEN.format(total)} excluding tax in total` +
+      (cancelled === 0 ? "" : `, not counting ${counted(cancelled, "cancelled purchase")}`) +
+      `. Each organization is audited with operator ${request.operator.name}.`,
   };
 }

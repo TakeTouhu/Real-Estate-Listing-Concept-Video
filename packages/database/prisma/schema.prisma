@@ -1734,13 +1734,13 @@ model OrganizationSubscription {
 /// ADR-0067). Written with the block it bought and its audit entry in one
 /// transaction, or not at all. A CHECK in migration 27 holds its shape.
 model UnitPurchase {
-  id                  String                @id
+  id                  String                     @id
   organizationId      String
   /// The renewal period its Units belong to and expire with.
   entitlementPeriodId String
   /// The block it bought: of the same period and the same quality, by the
   /// composite key. Its Units are the block's quantity.
-  addOnBlockId        String                @unique
+  addOnBlockId        String                     @unique
   quality             GenerationQualityTier
   /// The price it was approved at, excluding tax (ADR-0053 Decision 1).
   priceYenExTax       Int
@@ -1754,14 +1754,51 @@ model UnitPurchase {
   /// evidence outlives the user, as the audit log's actor does.
   approvedByUserId    String
   approvedAt          DateTime
-  createdAt           DateTime              @default(now())
+  createdAt           DateTime                   @default(now())
   /// RESTRICT: billing evidence outlives casual deletion (ADR-0053 Decision 7).
-  organization        Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  entitlementPeriod   UnitEntitlementPeriod @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  addOnBlock          UnitAddOnBlock        @relation(fields: [addOnBlockId, entitlementPeriodId, quality], references: [id, entitlementPeriodId, quality], onDelete: Restrict)
+  organization        Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  entitlementPeriod   UnitEntitlementPeriod      @relation(fields: [entitlementPeriodId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  addOnBlock          UnitAddOnBlock             @relation(fields: [addOnBlockId, entitlementPeriodId, quality], references: [id, entitlementPeriodId, quality], onDelete: Restrict)
+  /// Its cancellation, when an operator cancelled it (UP-5). At most one: the
+  /// cancellation's key is the purchase's id.
+  cancellations       UnitPurchaseCancellation[]
 
   @@unique([organizationId, idempotencyKey])
+  /// The composite key a cancellation points through, so it can only name a
+  /// purchase of its own organization.
+  @@unique([id, organizationId])
   @@index([organizationId, approvedAt])
   @@index([entitlementPeriodId])
   @@map("unit_purchases")
+}
+
+/// An operator's cancellation of a mistaken Unit purchase (UP-5, ADR-0070).
+/// Written with its audit entry under the period's cost-admission lock, once
+/// per purchase, never updated or deleted. From then on no new reservation may
+/// draw on the purchase's block, and the purchase is not invoiced. The purchase
+/// itself is never rewritten. A CHECK in migration 28 holds its shape.
+/// Whose mistake a cancelled Unit purchase was, as the operator judged it
+/// (ADR-0070 Decision 3). Only VTaVision's own mistake is free whenever it is
+/// found; the customer's is refunded only within 10 hours of approval with no
+/// Unit used.
+enum UnitPurchaseCancellationFault {
+  VTAVISION
+  CUSTOMER
+}
+
+model UnitPurchaseCancellation {
+  purchaseId     String                        @id
+  organizationId String
+  fault          UnitPurchaseCancellationFault
+  /// The operator who cancelled it, as the command was given.
+  operatorName   String
+  /// Why, as the command was given.
+  reason         String
+  /// The database's clock when the cancelling transaction started, as the
+  /// repository supplies it.
+  cancelledAt    DateTime     @default(now())
+  /// RESTRICT: billing evidence outlives casual deletion (ADR-0053 Decision 7).
+  purchase       UnitPurchase @relation(fields: [purchaseId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@map("unit_purchase_cancellations")
 }

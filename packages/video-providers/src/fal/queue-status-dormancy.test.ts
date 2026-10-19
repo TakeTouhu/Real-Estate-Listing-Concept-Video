@@ -280,9 +280,10 @@ describe("no persistence, pricing or resolution surface changed", () => {
     // migration 24 to drop the duplicate-approval index, by MFA-1
     // (ADR-0065), which is authorized to add migration 25 for MFA, and by
     // MFA-4, which is authorized to add migration 26 for the organization's
-    // MFA requirement, and by UP-2 (ADR-0067), which is authorized to add
-    // migration 27 for Unit purchases.
-    expect(dirs.at(-1)).toBe("00000000000027_unit_purchases");
+    // MFA requirement, by UP-2 (ADR-0067), which is authorized to add
+    // migration 27 for Unit purchases, and by UP-5 (ADR-0070), which is
+    // authorized to add migration 28 for cancelling one.
+    expect(dirs.at(-1)).toBe("00000000000028_unit_purchase_cancellations");
     expect(dirs.filter((d) => d.toLowerCase().includes("queue"))).toEqual([]);
   });
 

@@ -49,6 +49,10 @@ export function readUnitPurchaseForm(organizationId: string, form: FormData): Ap
 
 export const NOT_USABLE = "The purchase request could not be read. Nothing was bought. Review the purchase again.";
 
+/** A confirmation sent again after VTaVision cancelled the purchase it approved (ADR-0070 Decision 8). */
+export const CANCELLED_SINCE =
+  "This confirmation was for a purchase VTaVision has since cancelled, which is not invoiced. Nothing new was bought. Review the purchase again.";
+
 const REFUSALS: Record<Exclude<UnitPurchaseRefusal, "LACKS_BILLING_MANAGE">, string> = {
   NO_PLAN: "This organization has no plan yet. Nothing was bought.",
   NOT_STARTED: "Your plan has not started yet. Nothing was bought.",

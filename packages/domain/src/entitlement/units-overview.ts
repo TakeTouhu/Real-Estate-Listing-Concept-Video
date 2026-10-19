@@ -41,13 +41,18 @@ export interface UnitsOverviewPurchase {
   readonly approvedAt: Date;
   /** The approver's name while it is still a member; `null` once it has left. */
   readonly approvedBy: string | null;
+  /** When VTaVision cancelled it, so it is not invoiced (UP-5, ADR-0070); `null` otherwise. */
+  readonly cancelledAt: Date | null;
 }
 
 export interface UnitsOverviewAddOnBlock {
   /** Quality-locked for life: Normal funds only Normal, HQ only HQ. */
   readonly quality: GenerationQualityTier;
+  /** 0 once withdrawn. */
   readonly remainingUnits: number;
   readonly purchasedAt: Date;
+  /** Whether its purchase was cancelled, so it funds nothing new (UP-5, ADR-0070). */
+  readonly withdrawn: boolean;
 }
 
 export type UnitsOverview =
@@ -114,6 +119,7 @@ function fromLedger(
       quality: block.quality,
       remainingUnits: block.remainingUnits,
       purchasedAt: new Date(block.purchasedAtEpochMs),
+      withdrawn: block.withdrawn,
     }));
   const remainingOf = (quality: GenerationQualityTier) =>
     blocks.filter((block) => block.quality === quality).reduce((sum, block) => sum + block.remainingUnits, 0);
@@ -156,6 +162,7 @@ export class UnitsOverviewService {
       priceYenExTax: purchase.priceYenExTax,
       approvedAt: purchase.approvedAt,
       approvedBy: names.get(purchase.approvedByUserId) ?? null,
+      cancelledAt: purchase.cancelledAt,
     }));
   }
 
