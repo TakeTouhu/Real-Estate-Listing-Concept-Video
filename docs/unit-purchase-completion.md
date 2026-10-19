@@ -949,18 +949,24 @@ sequenceDiagram
 
 ### Verification
 
-Measured locally (PostgreSQL 16, configured like CI) on `1a1b174`. `ce154c4`
-changes one database test, one message and adds one unit test; on it the unit
-suite and the changed files were re-run.
+Measured locally (PostgreSQL 16, configured like CI) on `c8a09c5`, the review
+fix (Decision 6), and before it on `1a1b174`.
 
 | Check | Result |
 | --- | --- |
 | `pnpm lint` / `pnpm typecheck` | clean |
-| `pnpm test` | **5617 / 5617**, 194 files on `1a1b174` (was 5556, 192 files, on `0f77141`); **5618 / 5618** on `ce154c4` |
-| `pnpm test:db` | **1412 / 1412**, 52 files (was 1404, 51); the changed export test re-run on `ce154c4`, 8 / 8 |
+| `pnpm test` | **5619 / 5619**, 194 files on `c8a09c5` (5617 on `1a1b174`; was 5556, 192 files, on `0f77141`) |
+| `pnpm test:db` | **1415 / 1415**, 52 files on `c8a09c5` (1412 on `1a1b174`; was 1404, 51) |
 | `pnpm build` | succeeded |
 | `prisma migrate diff` (migrations → schema) | no difference |
 | `prisma migrate status` | 28 migrations, up to date |
+
+**The review fix.** The first review found that an export could miss a
+purchase approved just before `--to` but committed just after the read, and the
+next window would miss it too. `c8a09c5` makes the export refuse a window that
+ended less than ten minutes ago by the database's clock, and read under a
+`SHARE` lock on `unit_purchases` (Decision 6). The command no longer compares
+`--to` with its own machine's clock.
 
 CI on the pull request's exact head is reported with the pull request.
 
@@ -977,9 +983,11 @@ minutes after it in Japan time:
   exited 2 with every problem listed.
 
 The summary said "1 purchases for 1 organizations"; `ce154c4` counts in the
-singular. The data was removed afterwards.
+singular. The data was removed afterwards. On `c8a09c5`, a window ending at the
+moment of running was refused with "the window can be exported from" ten
+minutes later in Japan time, exit 1, no file and no audit entry.
 
-New tests (62 unit, 8 database):
+New tests (63 unit, 11 database):
 - **the period's purchases** (`units-overview.test.ts`, 10 new): who sees them
   by role and by a `billing.view` grant; no read without it; this period's
   only, oldest first, each approver looked up once and a former member not
@@ -990,71 +998,82 @@ New tests (62 unit, 8 database):
   trimmed and length-limited; the window's offsets and order; an unknown option
   or stray argument; Japan time; every text cell rule including each formula
   character; the file's exact bytes; the summary, the singular, an empty
-  window; a window not ended, a file that exists, and a file that appears while
-  listing;
-- **shape** (`unit-purchase-invoicing-shape.test.ts`, 4): still 28 migrations;
-  the export one transaction writing only audit entries after its read; invoice
-  paid only; built and called only by the operator command. An existing shape
+  window; a window not settled, a file that exists, and a file that appears
+  while listing; the usage naming the settle time;
+- **shape** (`unit-purchase-invoicing-shape.test.ts`, 5): still 28 migrations;
+  the export one transaction writing only audit entries after its read, its
+  only raw statements the clock and the lock, in the order clock, lock, read;
+  invoice paid only; built and called only by the operator command. An existing shape
   test is split in two (1 new) to name the Units overview's wiring as building
   the purchase repository, and another lists the operator commands' new files;
-- **live PostgreSQL** (`unit-purchase-invoicing.db.test.ts`, 8): the window's
+- **live PostgreSQL** (`unit-purchase-invoicing.db.test.ts`, 11): the window's
   bounds, order and fields; no card-paid purchase; an audit entry per
   organization listed with its own count and total; nothing for an empty
-  window; nothing changed by exporting; the Units overview's purchases with
-  their approvers, a former member, and one period of one organization.
+  window; nothing changed by exporting; a window that ended nine minutes ago
+  refused with nothing audited and one that ended eleven minutes ago exported;
+  a write held open in another transaction waited for and then listed; the
+  Units overview's purchases with their approvers, a former member, and one
+  period of one organization.
 
 ### Mutation ledger
 
-**33 mutants, all killed, 0 broken, 0 anchor-missing**, in one pass on the code
-of `ce154c4`. Each mutant weakens one guarantee at an anchor that occurs exactly
+**38 mutants, all killed, 0 broken, 0 anchor-missing**, in one pass on the code
+of `c8a09c5`. Each mutant weakens one guarantee at an anchor that occurs exactly
 once, and runs against the suites listed for it until one fails:
 
-- **domain**: the entitlement tests (223);
+- **domain**: the entitlement tests (224);
 - **web**: the Units page and purchase screen tests (51);
 - **ops**: the operator commands' tests (95);
-- **db**: the export, purchase and provisioning database tests (45).
+- **db**: the export, purchase and provisioning database tests (48).
 
 Every mutated file was restored and re-hashed, and all 873 files were
 byte-identical after the pass.
 
 | Mutant | Area | What it breaks | File | Tests failing |
 | --- | --- | --- | --- | --- |
-| L01 | who | purchases read and shown without `billing.view` | `units-overview.ts` | 3 of 223 (domain) |
-| L02 | who | an unopened period's empty list shown to everyone | `units-overview.ts` | 2 of 223 (domain) |
-| L03 | approver | an approver who has left still named | `units-overview.ts` | 1 of 223 (domain) |
-| L04 | approver | each purchase looks its approver up again | `units-overview.ts` | 1 of 223 (domain) |
-| L05 | period | another period's purchases listed | `units-overview.ts` | 6 of 223 (domain) |
-| L06 | record | the price shown is the Units | `units-overview.ts` | 4 of 223 (domain) |
-| L07 | order | the period's purchases newest first | `unit-purchase-repository.ts` | 1 of 45 (db) |
-| L08 | scope | a period read without its organization | `unit-purchase-repository.ts` | 1 of 45 (db) |
+| L01 | who | purchases read and shown without `billing.view` | `units-overview.ts` | 3 of 224 (domain) |
+| L02 | who | an unopened period's empty list shown to everyone | `units-overview.ts` | 2 of 224 (domain) |
+| L03 | approver | an approver who has left still named | `units-overview.ts` | 1 of 224 (domain) |
+| L04 | approver | each purchase looks its approver up again | `units-overview.ts` | 1 of 224 (domain) |
+| L05 | period | another period's purchases listed | `units-overview.ts` | 6 of 224 (domain) |
+| L06 | record | the price shown is the Units | `units-overview.ts` | 4 of 224 (domain) |
+| L07 | order | the period's purchases newest first | `unit-purchase-repository.ts` | 1 of 48 (db) |
+| L08 | scope | a period read without its organization | `unit-purchase-repository.ts` | 1 of 48 (db) |
 | L09 | page | the purchases card shown to everyone | `units/page.tsx` | 2 of 51 (web) |
 | L10 | words | an approver who has left shown as nobody at all | `units/page.tsx` | 1 of 51 (web) |
 | L11 | words | the card drops that purchases are invoiced with tax | `units/page.tsx` | 1 of 51 (web) |
 | L12 | page | the price shown is the Units | `units/page.tsx` | 1 of 51 (web) |
-| E01 | channel | card-paid purchases listed for invoicing | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E02 | window | the window's end included | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E03 | window | the window's start excluded | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E04 | order | contract and approval order dropped | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E05 | audit | no organization audited | `unit-purchase-invoicing-repository.ts` | 2 of 45 (db) |
-| E06 | audit | each audit counts every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E07 | audit | the operator's name not trimmed | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E08 | audit | each audit totals every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E09 | record | the organization's name listed as its id | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E10 | record | the Units listed as the price | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| E11 | record | the expiry listed as the approval time | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
-| C01 | window | a window that has not ended exported | `export-unit-purchases.ts` | 1 of 95 (ops) |
-| C02 | window | a window ending exactly now refused | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| E01 | channel | card-paid purchases listed for invoicing | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E02 | window | the window's end included | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E03 | window | the window's start excluded | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E04 | order | contract and approval order dropped | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E05 | audit | no organization audited | `unit-purchase-invoicing-repository.ts` | 2 of 48 (db) |
+| E06 | audit | each audit counts every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E07 | audit | the operator's name not trimmed | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E08 | audit | each audit totals every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E09 | record | the organization's name listed as its id | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E10 | record | the Units listed as the price | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| E11 | record | the expiry listed as the approval time | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| S01 | settle | a window not yet settled exported | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| S02 | settle | a window settles as soon as it ends | `unit-purchase-invoicing-repository.ts` | 1 of 48 (db) |
+| S03 | lock | the read not locked against writes in flight | `unit-purchase-invoicing-repository.ts` | 2 of 224 (domain) |
+| S04 | lock | a lock that waits for no write (`ACCESS SHARE`) | `unit-purchase-invoicing-repository.ts` | 1 of 224 (domain) |
+| S05 | settle | a window settles a minute after it ends | `unit-purchase-invoicing.ts` | 1 of 95 (ops) |
+| C01 | window | a window that has not settled written to the file | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| C02 | window | the refusal says the window can run from its end | `export-unit-purchases.ts` | 1 of 95 (ops) |
 | C03 | file | an existing file not refused before reading | `export-unit-purchases.ts` | 1 of 95 (ops) |
 | C04 | format | only `=` and `+` neutralised | `export-unit-purchases.ts` | 4 of 95 (ops) |
 | C05 | format | quotes in text not doubled | `export-unit-purchases.ts` | 2 of 95 (ops) |
 | C06 | format | no byte order mark | `export-unit-purchases.ts` | 2 of 95 (ops) |
 | C07 | format | LF line ends | `export-unit-purchases.ts` | 2 of 95 (ops) |
-| C08 | format | times written in UTC, labelled Japan time | `export-unit-purchases.ts` | 6 of 95 (ops) |
+| C08 | format | times written in UTC, labelled Japan time | `export-unit-purchases.ts` | 7 of 95 (ops) |
 | C09 | window | an empty window accepted | `export-unit-purchases.ts` | 1 of 95 (ops) |
 | C10 | format | the Units and the price swapped | `export-unit-purchases.ts` | 1 of 95 (ops) |
 
 E06 and E08 would have survived the first version of the audit test, which
-listed one organization only; `ce154c4` lists two before the pass ran.
+listed one organization only; `ce154c4` lists two before the pass ran. The shape
+test stops S03 and S04 first; run against the database test alone, each also
+fails the test that holds a write open while the export runs (1 of 11).
 
 ### Required documentation
 
