@@ -376,10 +376,14 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       const cancelling = cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR }).finally(() => {
         finished = true;
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(finished).toBe(false);
-      release();
-      await holder;
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(finished).toBe(false);
+      } finally {
+        // Released however the check went, so a failure cannot hold the lock for later tests.
+        release();
+        await holder;
+      }
       expect((await cancelling).kind).toBe("CANCELLED");
     });
 
