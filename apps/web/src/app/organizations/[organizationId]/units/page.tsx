@@ -1,18 +1,18 @@
 import { redirect } from "next/navigation";
-import type { UnitsOverview } from "@app/domain";
+import type { UnitsOverview, UnitsOverviewPurchase } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { getUnitsOverviewService } from "@/lib/units";
-import { CHANNEL_NAMES, PLAN_NAMES, QUALITY_NAMES, formatJst, formatYenExTax } from "@/lib/units-view";
+import { CHANNEL_NAMES, PLAN_NAMES, QUALITY_NAMES, formatJst, formatYenExTax, packageName } from "@/lib/units-view";
 
 export const dynamic = "force-dynamic";
 
 /**
  * An organization's plan and what it has left to generate with this period
  * (ADR-0066 Decision 3). A holder of `unit.view` sees the Units; how the plan is
- * paid and its price need `billing.view` too, and buying more `billing.manage`
- * (ADR-0068). Viewing writes nothing.
+ * paid, its price and the period's purchases need `billing.view` too (ADR-0069),
+ * and buying more `billing.manage` (ADR-0068). Viewing writes nothing.
  */
 export default async function UnitsPage({
   params,
@@ -70,6 +70,29 @@ function Billing({ overview }: { overview: Exclude<UnitsOverview, { kind: "NO_PL
     <p>
       {CHANNEL_NAMES[overview.billing.channel]} · {formatYenExTax(overview.billing.monthlyPriceYenExTax)} per month
     </p>
+  );
+}
+
+function Purchases({ purchases }: { purchases: readonly UnitsOverviewPurchase[] }) {
+  return (
+    <div className="card">
+      <h2>Purchases this period</h2>
+      {purchases.length === 0 ? (
+        <p className="muted">No purchases this period.</p>
+      ) : (
+        <>
+          <ul>
+            {purchases.map((purchase, index) => (
+              <li key={index}>
+                {packageName(purchase)} · {formatYenExTax(purchase.priceYenExTax)} · approved{" "}
+                {formatJst(purchase.approvedAt)} by {purchase.approvedBy ?? "a former member"}
+              </li>
+            ))}
+          </ul>
+          <p className="muted">VTaVision invoices each purchase under your contract, with consumption tax added.</p>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -148,6 +171,8 @@ function Overview({ overview, organizationId }: { overview: UnitsOverview; organ
           </p>
         ) : null}
       </div>
+
+      {overview.purchases === null ? null : <Purchases purchases={overview.purchases} />}
     </>
   );
 }

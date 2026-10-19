@@ -181,6 +181,15 @@ export function createUnitPurchaseRepository(prisma: PrismaClient): UnitPurchase
       return findByKey(prisma, organizationId, idempotencyKey);
     },
 
+    async listForPeriod(organizationId, entitlementPeriodId) {
+      const rows = await prisma.unitPurchase.findMany({
+        where: { organizationId, entitlementPeriodId },
+        include: WITH_UNITS_AND_EXPIRY,
+        orderBy: [{ approvedAt: "asc" }, { id: "asc" }],
+      });
+      return rows.map(toPurchase);
+    },
+
     /**
      * Two approvals with one key into one period are ordered by the lock, and
      * the second finds the first. Into two periods they are not, and collide on

@@ -189,6 +189,8 @@ export type ApproveUnitPurchaseRecordOutcome =
 
 export interface UnitPurchaseRepository {
   findByIdempotencyKey(organizationId: string, idempotencyKey: string): Promise<UnitPurchase | null>;
+  /** The purchases into one period of this organization, oldest approval first (UP-4). */
+  listForPeriod(organizationId: string, entitlementPeriodId: string): Promise<readonly UnitPurchase[]>;
   /**
    * Write the purchase, its block and their audit entries in one transaction,
    * under the period's cost-admission lock, if `check` passes on the facts read

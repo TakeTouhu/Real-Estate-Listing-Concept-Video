@@ -80,9 +80,15 @@ describe("durable shape", () => {
 });
 
 describe("dormant until UP-3", () => {
-  it("builds the purchase service and its repository only in the web app's purchase wiring", () => {
-    expect(matching("apps", /\bUnitPurchaseService\b|\bcreateUnitPurchaseRepository\b/)).toEqual([
+  it("builds the purchase service only in the web app's purchase wiring", () => {
+    expect(matching("apps", /\bUnitPurchaseService\b/)).toEqual(["apps/web/src/lib/unit-purchases.ts"]);
+  });
+
+  it("builds its repository there and, to list the period's purchases, in the Units overview's wiring", () => {
+    // UP-4 lists them on the Units page (ADR-0069).
+    expect(matching("apps", /\bcreateUnitPurchaseRepository\b/)).toEqual([
       "apps/web/src/lib/unit-purchases.ts",
+      "apps/web/src/lib/units.ts",
     ]);
   });
 

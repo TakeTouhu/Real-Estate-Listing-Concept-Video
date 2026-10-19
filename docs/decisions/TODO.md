@@ -1227,10 +1227,11 @@ them is **built**. Each item below records the settled decision and what remains
       binding frozen on the reservation. *UP-1 (ADR-0066) shows what is left on
       the Units page. UP-2 (ADR-0067) records a customer-approved purchase and
       grants its block in one transaction. UP-3 (ADR-0068) lets a `billing.manage`
-      holder buy a package from the purchase screen.* **Still unbuilt:** the
-      purchase list and invoicing export (UP-4; approved 2026-10-16), renewal
-      scheduling that opens periods, no automatic overage at the purchase
-      boundary, and no cancellation after a paid Provider submission.
+      holder buy a package from the purchase screen. UP-4 (ADR-0069) lists the
+      period's purchases on the Units page and exports invoice-paid purchases
+      for invoicing.* **Still unbuilt:** renewal scheduling that opens periods,
+      no automatic overage at the purchase boundary, and no cancellation after a
+      paid Provider submission.
 - [ ] **Check the approved package prices against the provider cost floor**
       once a provider route is verified (ADR-0067 Decision 1). The package
       price formula takes a profitability floor derived from provider cost;
@@ -1245,7 +1246,12 @@ them is **built**. Each item below records the settled decision and what remains
       purchase or withdraws its Units, so the invoice can be corrected outside
       the product but the purchase still appears on the list. Whether an
       operator marks a purchase as credited, and whether its unused Units are
-      withdrawn, is the product owner's decision.
+      withdrawn, is the product owner's decision. *UP-4 (ADR-0069 Decision 7)
+      lists every invoice-paid purchase in its window, a credited one included,
+      so exporting the same window again would list it again. Put to the
+      product owner on 2026-10-19, recommending an operator command that
+      records an audited credit, shown in the export, with the Units left in
+      place.*
 - [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
       (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
       composite foreign key; an HQ block on a plan that sells none is refused.*
@@ -1654,7 +1660,8 @@ one creates is listed in the section above.
       period (the expiry is shown before approval instead), and a plan from the
       operator command until self-service sign-up exists. ADR-0066 Decision 4;
       the purchase record and grant built in UP-2 (ADR-0067), the screen in
-      UP-3 (ADR-0068), the invoicing list in UP-4.
+      UP-3 (ADR-0068), the purchase list and invoicing export in UP-4
+      (ADR-0069).
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A

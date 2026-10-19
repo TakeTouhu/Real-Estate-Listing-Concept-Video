@@ -264,8 +264,14 @@ button approves it and the Units are usable at once. Enterprise packages are
 listed as bought through sales. The purchase route refuses a post from another
 origin.
 
-**Not yet built in Phase 6:** the purchase list and the invoicing export
-(UP-4), Stripe and sales-assisted billing, subscription cancellation, seats and
+**UP-4 — this period's purchases and the invoicing export** (ADR-0069, no
+migration): a holder of `billing.view` sees each package bought this period on
+the Units page, with its price excluding tax, when it was approved and by whom.
+An operator command writes the invoice-paid purchases approved in a window to a
+new CSV file, per organization and contract, for invoicing; each organization
+listed is audited.
+
+**Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
 controls. Two decision gates are open: what a customer regeneration costs in

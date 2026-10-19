@@ -17,8 +17,9 @@ import { AppError, hotp } from "@app/shared";
 
 /**
  * The Units page (UP-1, ADR-0066 Decision 3): a member with `unit.view` sees the
- * plan, the period and what is left; `billing.view` adds how it is paid; anyone
- * else is refused alike. The dashboard links each organization to it.
+ * plan, the period and what is left; `billing.view` adds how it is paid and the
+ * period's purchases (UP-4, ADR-0069); anyone else is refused alike. The
+ * dashboard links each organization to it.
  */
 const PASSWORD = "password-123456";
 const KEY = "44".repeat(32);
@@ -59,7 +60,7 @@ beforeEach(async () => {
   const organizations = new OrganizationService(deps);
   identity.value = { deps, auth, organizations };
   reader = new InMemoryUnitsReader();
-  units.value = new UnitsOverviewService({ identity: deps, subscriptions: reader, ledger: reader });
+  units.value = new UnitsOverviewService({ identity: deps, subscriptions: reader, ledger: reader, purchases: reader });
   env.value = { NODE_ENV: "test", MFA_SECRET_KEY: KEY };
   ownerId = (await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD })).id;
   ({ organization: { id: orgId } } = await organizations.createOrganization(ownerId, { name: "Studio Kanda" }));
@@ -238,6 +239,74 @@ describe("buying additional Units (UP-3)", () => {
     subscribe("premium");
     await renderUnits("BILLING");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("this period's purchases (UP-4)", () => {
+  function openPeriod(): void {
+    reader.periods.push({
+      id: "uep_1",
+      organizationId: orgId,
+      billingCycleKey: "2026-04-15T00:00:00.000Z",
+      planKey: "premium",
+      baseUnits: 40,
+      includedHighQualityUnits: 5,
+      highQualityAddOnAvailable: true,
+      startsAt: iso("2026-04-15T00:00:00.000Z"),
+      endsAt: iso("2026-05-15T00:00:00.000Z"),
+      commercialReference: "subscription:x:1",
+      createdAt: iso("2026-04-15T00:00:00.000Z"),
+    });
+  }
+
+  function bought(id: string, quality: "NORMAL" | "HIGH_QUALITY", approvedAt: string, approvedByUserId: string): void {
+    const [units, priceYenExTax] = quality === "NORMAL" ? [10, 35_900] : [2, 9_000];
+    reader.purchases.push({
+      id,
+      organizationId: orgId,
+      entitlementPeriodId: "uep_1",
+      addOnBlockId: `uab_${id}`,
+      quality,
+      units,
+      priceYenExTax,
+      channel: "SALES_ASSISTED",
+      contractReference: "VT-1",
+      expiresAt: iso("2026-05-15T00:00:00.000Z"),
+      idempotencyKey: `key_${id}`,
+      approvedByUserId,
+      approvedAt: iso(approvedAt),
+    });
+  }
+
+  it("lists each package bought, its price, when and by whom, and that it is invoiced", async () => {
+    subscribe("premium");
+    openPeriod();
+    bought("p2", "NORMAL", "2026-04-18T03:00:00.000Z", "usr_gone");
+    bought("p1", "HIGH_QUALITY", "2026-04-16T00:30:00.000Z", ownerId);
+    const text = await renderUnits("BILLING");
+    const card = screen.getByRole("heading", { name: "Purchases this period" }).parentElement;
+    expect([...(card?.querySelectorAll("li") ?? [])].map((item) => item.textContent?.replace(/\s+/g, " "))).toEqual([
+      "+2 HQ Units · ¥9,000 excluding tax · approved 16 Apr 2026, 09:30 JST by Owner",
+      "+10 Normal Units · ¥35,900 excluding tax · approved 18 Apr 2026, 12:00 JST by a former member",
+    ]);
+    expect(text).toContain("VTaVision invoices each purchase under your contract, with consumption tax added.");
+  });
+
+  it("says when nothing was bought this period", async () => {
+    subscribe("premium");
+    const text = await renderUnits("OWNER");
+    expect(screen.getByRole("heading", { name: "Purchases this period" })).toBeTruthy();
+    expect(text).toContain("No purchases this period.");
+    expect(text).not.toContain("VTaVision invoices each purchase");
+  });
+
+  it.each(["MANAGER", "CREATOR"] as const)("shows a %s no purchases", async (role) => {
+    subscribe("premium");
+    openPeriod();
+    bought("p1", "NORMAL", "2026-04-16T00:30:00.000Z", ownerId);
+    const text = await renderUnits(role);
+    expect(screen.queryByRole("heading", { name: "Purchases this period" })).toBeNull();
+    expect(text).not.toContain("¥");
   });
 });
 

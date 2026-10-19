@@ -11,6 +11,7 @@ import {
   createPrismaIdentityRepositories,
   createSubscriptionRepository,
   createUnitEntitlementRepository,
+  createUnitPurchaseRepository,
   SUBSCRIPTION_AUDIT_ACTION,
 } from "@app/database";
 import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
@@ -40,7 +41,8 @@ const deps = {
 const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
 const subscriptions = createSubscriptionRepository(prisma);
 const ledger = createUnitEntitlementRepository(prisma);
-const overview = new UnitsOverviewService({ identity: deps, subscriptions, ledger });
+const purchases = createUnitPurchaseRepository(prisma);
+const overview = new UnitsOverviewService({ identity: deps, subscriptions, ledger, purchases });
 
 async function cleanup(): Promise<void> {
   const users = await prisma.user.findMany({ where: { email: { endsWith: `@${DOMAIN}` } }, select: { id: true } });
@@ -193,6 +195,7 @@ describe("the Units overview", () => {
       normalAddOnRemaining: 0,
       highQualityAddOnRemaining: 0,
       billing: { channel: "SALES_ASSISTED", monthlyPriceYenExTax: 119_800 },
+      purchases: [],
       mayBuyUnits: true,
     });
     expect(await prisma.unitEntitlementPeriod.count({ where: { organizationId: ORG } })).toBe(0);
