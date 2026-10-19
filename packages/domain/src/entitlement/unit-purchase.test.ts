@@ -405,6 +405,123 @@ describe("re-checked when written", () => {
   });
 });
 
+describe("what the purchase screen offers (UP-3)", () => {
+  /** A period opened by hand, so its frozen plan and its end are the ledger's, not the subscription's. */
+  function openByHand(planKey: "standard" | "premium", endsAt: Date): void {
+    reader.periods.push({
+      id: "uep_by_hand",
+      organizationId: orgId,
+      billingCycleKey: "by-hand",
+      planKey,
+      baseUnits: 15,
+      includedHighQualityUnits: 1,
+      highQualityAddOnAvailable: planKey !== "standard",
+      startsAt: iso("2026-04-10T00:00:00.000Z"),
+      endsAt,
+      commercialReference: "by hand",
+      createdAt: iso("2026-04-10T00:00:00.000Z"),
+    });
+  }
+
+  it("refuses a non-member before reading anything", async () => {
+    subscribe();
+    await expect(service.offers(ids.outsider, orgId)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it.each(["ADMIN", "MANAGER", "CREATOR", "VIEWER"] as const)("refuses %s, unaudited", async (role) => {
+    subscribe();
+    await expect(service.offers(ids[role], orgId)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(refusals()).toEqual([]);
+  });
+
+  it("offers an ADMIN the packages once an OWNER grants it billing.manage", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.ADMIN, "billing.manage");
+    subscribe();
+    expect((await service.offers(ids.ADMIN, orgId)).kind).toBe("AVAILABLE");
+  });
+
+  it("offers Premium both packages, expiring with the current period, opening nothing", async () => {
+    subscribe();
+    const audited = deps.repos.auditLogs.all().length;
+    expect(await service.offers(ids.BILLING, orgId)).toEqual({
+      kind: "AVAILABLE",
+      planKey: "premium",
+      packages: [
+        { quality: "NORMAL", units: 10, priceYenExTax: 35_900 },
+        { quality: "HIGH_QUALITY", units: 2, priceYenExTax: 9_000 },
+      ],
+      periodEndsAt: PERIOD_END,
+      contractReference: "VT-2026-001",
+    });
+    expect(reader.periods).toEqual([]);
+    expect(deps.repos.auditLogs.all()).toHaveLength(audited);
+  });
+
+  it("offers Standard its Normal package only", async () => {
+    subscribe({ planKey: "standard" });
+    expect(await service.offers(ids.OWNER, orgId)).toMatchObject({
+      kind: "AVAILABLE",
+      packages: [{ quality: "NORMAL", units: 5, priceYenExTax: 19_900 }],
+    });
+  });
+
+  it("lists Enterprise packages as bought through sales", async () => {
+    subscribe({ planKey: "enterprise" });
+    expect(await service.offers(ids.BILLING, orgId)).toEqual({
+      kind: "THROUGH_SALES",
+      planKey: "enterprise",
+      packages: [
+        { quality: "NORMAL", units: 25, priceYenExTax: 89_400 },
+        { quality: "HIGH_QUALITY", units: 5, priceYenExTax: 22_400 },
+      ],
+    });
+  });
+
+  it("offers a card-paid plan nothing, since card payment is not built", async () => {
+    subscribe({ channel: "SELF_SERVICE" });
+    expect(await service.offers(ids.BILLING, orgId)).toEqual({
+      kind: "CARD_PAYMENT_NOT_AVAILABLE",
+      planKey: "premium",
+    });
+  });
+
+  it("says when there is no plan, or when it starts", async () => {
+    expect(await service.offers(ids.OWNER, orgId)).toEqual({ kind: "NO_PLAN" });
+    subscribe({ anchorAt: iso("2026-05-01T00:00:00.000Z") });
+    expect(await service.offers(ids.OWNER, orgId)).toEqual({
+      kind: "NOT_STARTED",
+      planKey: "premium",
+      startsAt: iso("2026-05-01T00:00:00.000Z"),
+    });
+  });
+
+  it("prices from the open period's frozen plan and ends with it", async () => {
+    subscribe();
+    openByHand("standard", iso("2026-05-10T00:00:00.000Z"));
+    expect(await service.offers(ids.BILLING, orgId)).toMatchObject({
+      kind: "AVAILABLE",
+      planKey: "standard",
+      packages: [{ quality: "NORMAL", units: 5, priceYenExTax: 19_900 }],
+      periodEndsAt: iso("2026-05-10T00:00:00.000Z"),
+    });
+  });
+
+  it("offers only what a purchase then accepts as shown", async () => {
+    subscribe();
+    const offers = await service.offers(ids.BILLING, orgId);
+    if (offers.kind !== "AVAILABLE") throw new Error("expected packages on offer");
+    for (const [index, offer] of offers.packages.entries()) {
+      const outcome = await service.approve(ids.BILLING, {
+        organizationId: orgId,
+        quality: offer.quality,
+        expected: { units: offer.units, priceYenExTax: offer.priceYenExTax, periodEndsAt: offers.periodEndsAt },
+        idempotencyKey: `offered-${index}`,
+      });
+      expect([offer.quality, outcome.kind]).toEqual([offer.quality, "APPROVED"]);
+    }
+  });
+});
+
 describe("an unusable request", () => {
   beforeEach(() => subscribe());
 

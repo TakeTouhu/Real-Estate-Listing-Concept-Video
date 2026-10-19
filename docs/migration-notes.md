@@ -1296,3 +1296,21 @@ lets a customer buy.
 
 **What changes at deploy.** Nothing: no application writes the table yet. No new
 environment variable.
+
+## UP-3 — the Unit purchase screen
+
+**No migration.** UP-3 writes `unit_purchases` (migration 27), its block in
+`unit_add_on_blocks` and their audit entries through the UP-2 service, and opens
+the current period in `unit_entitlement_periods` when a purchase needs it. It
+changes no table, column or index.
+
+**What changes at deploy.** A holder of `billing.manage` in an organization
+with an invoice-paid Standard or Premium plan can buy additional Units; the
+first purchase writes the first rows of `unit_purchases`. Rolling UP-3 back
+leaves those rows and their Units in place, as the invoicing evidence they are.
+No new environment variable.
+
+**Behind a proxy.** The purchase route compares the `Origin` header with the
+first `X-Forwarded-Host`, else `Host`. A proxy in front of the web app must pass
+the host the browser addressed in one of them, or every purchase is refused
+`403`.

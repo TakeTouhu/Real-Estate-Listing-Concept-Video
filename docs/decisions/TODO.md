@@ -261,6 +261,18 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       per IP, with a store that survives multiple instances) applied to
       `/api/auth/*`, the upload routes, the analysis `POST` routes, and
       generation when it lands in Phase 4.
+      Since UP-3 (ADR-0068 Decision 5) the Unit purchase route
+      (`POST /api/organizations/{id}/unit-purchases`) is the first billing
+      route, and it is not limited either.
+- [ ] **Extend the same-origin check to every cookie-based mutation route.**
+      `SecurityCompliance.md` asks for CSRF protection where cookie-based
+      mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
+      which keeps it off a form posted from another site but not from another
+      origin of the same site. UP-3 checks `Origin` on the Unit purchase route
+      only (`isSameOriginPost`, ADR-0068 Decisions 4 and 5); every other form
+      and JSON mutation route relies on `SameSite=Lax` alone. Applying the check
+      across them is one cross-cutting milestone, like rate limiting, and needs
+      the deployment's proxy to pass the addressed host.
 - [ ] **Decide whether analysis should run in the request or on the queue.**
       Phase 3A-3 runs it synchronously, which is fine for the offline
       deterministic adapter but not for a real vision vendor. Settle this before
@@ -1214,11 +1226,11 @@ them is **built**. Each item below records the settled decision and what remains
       eligibility-first order (see the two items below) and renewal-period
       binding frozen on the reservation. *UP-1 (ADR-0066) shows what is left on
       the Units page. UP-2 (ADR-0067) records a customer-approved purchase and
-      grants its block in one transaction, dormant.* **Still unbuilt:** the
-      purchase screen (UP-3) and the invoicing list (UP-4; approved
-      2026-10-16), renewal scheduling that opens periods, no automatic overage
-      at the purchase boundary, and no cancellation after a paid Provider
-      submission.
+      grants its block in one transaction. UP-3 (ADR-0068) lets a `billing.manage`
+      holder buy a package from the purchase screen.* **Still unbuilt:** the
+      purchase list and invoicing export (UP-4; approved 2026-10-16), renewal
+      scheduling that opens periods, no automatic overage at the purchase
+      boundary, and no cancellation after a paid Provider submission.
 - [ ] **Check the approved package prices against the provider cost floor**
       once a provider route is verified (ADR-0067 Decision 1). The package
       price formula takes a profitability floor derived from provider cost;
@@ -1641,8 +1653,8 @@ one creates is listed in the section above.
       through sales, HQ never offered on Standard, no cut-off near the end of a
       period (the expiry is shown before approval instead), and a plan from the
       operator command until self-service sign-up exists. ADR-0066 Decision 4;
-      the purchase record and grant built in UP-2 (ADR-0067), the screen and
-      the invoicing list in UP-3 and UP-4.
+      the purchase record and grant built in UP-2 (ADR-0067), the screen in
+      UP-3 (ADR-0068), the invoicing list in UP-4.
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A

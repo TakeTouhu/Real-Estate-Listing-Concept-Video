@@ -8,6 +8,7 @@ import { createCustomerPlanCatalog, type CustomerPlanKey } from "../pricing/cust
 import type { Yen } from "../pricing/units";
 import type { UnitEntitlementPeriod, UnitEntitlementRepository } from "./ports";
 import {
+  renewalPeriodAt,
   renewEntitlementPeriod,
   type OrganizationSubscription,
   type SubscriptionChannel,
@@ -33,6 +34,8 @@ export const UNIT_PURCHASE_AUDIT_ACTION = {
   /** A member's refused purchase. A non-member is refused unaudited, as any organization access is. */
   Refused: "unit_purchase.refused",
 } as const;
+
+const QUALITIES: readonly GenerationQualityTier[] = ["NORMAL", "HIGH_QUALITY"];
 
 /** The longest idempotency key the purchase record stores. */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
@@ -203,16 +206,98 @@ export type UnitPurchaseOutcome =
   /** Nothing was bought; the customer reloads and sees why. */
   | { readonly kind: "REFUSED"; readonly reason: Exclude<UnitPurchaseRefusal, "LACKS_BILLING_MANAGE"> };
 
+/**
+ * What the purchase screen offers a holder of `billing.manage` (UP-3,
+ * ADR-0068), decided by the check a purchase is written under.
+ */
+export type UnitPurchaseOffers =
+  | { readonly kind: "NO_PLAN" }
+  /** The subscription's first period has not started. */
+  | { readonly kind: "NOT_STARTED"; readonly planKey: CustomerPlanKey; readonly startsAt: Date }
+  /** Enterprise: its packages are listed and bought through sales (ADR-0053 Decision 5A). */
+  | {
+      readonly kind: "THROUGH_SALES";
+      readonly planKey: CustomerPlanKey;
+      readonly packages: readonly AddOnPackageOffer[];
+    }
+  /** A card-paid plan: card payment is not built. */
+  | { readonly kind: "CARD_PAYMENT_NOT_AVAILABLE"; readonly planKey: CustomerPlanKey }
+  | {
+      readonly kind: "AVAILABLE";
+      readonly planKey: CustomerPlanKey;
+      /** Normal first; HQ only where the plan sells it. */
+      readonly packages: readonly AddOnPackageOffer[];
+      /** The current period's end, when every package bought now expires. */
+      readonly periodEndsAt: Date;
+      /** The contract a purchase is invoiced under. */
+      readonly contractReference: string;
+    };
+
 export interface UnitPurchaseDeps {
   /** Membership lookup for authorization, the clock, ids and the audit log. */
   readonly identity: IdentityServiceDeps;
   readonly subscriptions: Pick<SubscriptionRepository, "findByOrganization">;
-  readonly ledger: Pick<UnitEntitlementRepository, "openPeriod">;
+  readonly ledger: Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt">;
   readonly purchases: UnitPurchaseRepository;
 }
 
 export class UnitPurchaseService {
   constructor(private readonly deps: UnitPurchaseDeps) {}
+
+  /**
+   * The packages a holder of `billing.manage` may buy now, and when they would
+   * expire. Each is offered only if the check a purchase is written under passes
+   * for it, so the screen offers exactly what {@link approve} accepts.
+   *
+   * Reads only. A period nobody has opened yet is shown as it would open, as on
+   * the Units page (ADR-0066 Decision 3).
+   *
+   * @throws AppError FORBIDDEN for a non-member, or a member without `billing.manage` (unaudited).
+   */
+  async offers(actorUserId: string, organizationId: string): Promise<UnitPurchaseOffers> {
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "billing.manage");
+    const now = this.deps.identity.clock.now();
+    const subscription = await this.deps.subscriptions.findByOrganization(organizationId);
+    if (subscription === null) return { kind: "NO_PLAN" };
+    const opened = await this.deps.ledger.findPeriodAt(organizationId, now);
+    const bounds = opened ?? renewalPeriodAt(subscription.anchorAt, now);
+    if (bounds === null) return { kind: "NOT_STARTED", planKey: subscription.planKey, startsAt: subscription.anchorAt };
+
+    // The period's frozen plan prices the package once it is open, as when a purchase is written.
+    const planKey = opened?.planKey ?? subscription.planKey;
+    const packages = QUALITIES.flatMap((quality) => addOnPackageOffer(planKey, quality) ?? []);
+    const facts = { subscription, period: { planKey, endsAt: bounds.endsAt }, approverPermissions: actor.permissions };
+    const refused = packages
+      .map((offer) =>
+        unitPurchaseRefusal(
+          {
+            quality: offer.quality,
+            expected: { units: offer.units, priceYenExTax: offer.priceYenExTax, periodEndsAt: bounds.endsAt },
+          },
+          facts,
+          now,
+        ),
+      )
+      .find((reason) => reason !== null);
+    switch (refused) {
+      case undefined:
+        return {
+          kind: "AVAILABLE",
+          planKey,
+          packages,
+          periodEndsAt: bounds.endsAt,
+          contractReference: subscription.commercialReference,
+        };
+      case "THROUGH_SALES":
+        return { kind: "THROUGH_SALES", planKey, packages };
+      case "CARD_PAYMENT_NOT_AVAILABLE":
+        return { kind: "CARD_PAYMENT_NOT_AVAILABLE", planKey };
+      default:
+        throw new AppError("INTERNAL_ERROR", "The packages on offer could not be decided", {
+          details: { organizationId, reason: refused },
+        });
+    }
+  }
 
   /**
    * Approve one package, for a holder of `billing.manage`.

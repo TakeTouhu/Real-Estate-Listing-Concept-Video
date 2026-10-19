@@ -405,6 +405,40 @@ describe("re-checked inside the transaction", () => {
   });
 });
 
+describe("what the purchase screen offers (UP-3)", () => {
+  it("shows the period as it would open, opening nothing, and offers what a purchase then accepts", async () => {
+    const before = await service.offers(ids.BILLING, ORG);
+    expect(before).toEqual({
+      kind: "AVAILABLE",
+      planKey: "premium",
+      packages: [
+        { quality: "NORMAL", units: 10, priceYenExTax: 35_900 },
+        { quality: "HIGH_QUALITY", units: 2, priceYenExTax: 9_000 },
+      ],
+      periodEndsAt: PERIOD_END,
+      contractReference: `VT-${ORG}`,
+    });
+    expect(await prisma.unitEntitlementPeriod.count({ where: { organizationId: ORG } })).toBe(0);
+    if (before.kind !== "AVAILABLE") throw new Error("expected packages on offer");
+
+    const [normal] = before.packages;
+    if (normal === undefined) throw new Error("expected a Normal package");
+    const outcome = await service.approve(ids.BILLING, {
+      organizationId: ORG,
+      quality: normal.quality,
+      expected: { units: normal.units, priceYenExTax: normal.priceYenExTax, periodEndsAt: before.periodEndsAt },
+      idempotencyKey: "itest-offered",
+    });
+    expect(outcome.kind).toBe("APPROVED");
+    expect(await service.offers(ids.BILLING, ORG)).toEqual(before);
+  });
+
+  it("refuses a member without billing.manage, writing nothing", async () => {
+    await expect(service.offers(ids.ADMIN, ORG)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG, action: "unit_purchase.refused" } })).toBe(0);
+  });
+});
+
 describe("the schema", () => {
   async function insert(overrides: Partial<Prisma.UnitPurchaseUncheckedCreateInput>) {
     return prisma.unitPurchase.create({

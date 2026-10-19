@@ -205,6 +205,42 @@ describe("the Units page", () => {
   });
 });
 
+describe("buying additional Units (UP-3)", () => {
+  it.each(["OWNER", "BILLING"] as const)("links a %s to the purchase screen", async (role) => {
+    subscribe("premium");
+    await renderUnits(role);
+    expect(screen.getByRole("link", { name: "Buy additional Units" }).getAttribute("href")).toBe(
+      `/organizations/${orgId}/units/buy`,
+    );
+  });
+
+  it.each(["ADMIN", "MANAGER", "CREATOR"] as const)("offers a %s no way to buy", async (role) => {
+    subscribe("premium");
+    await renderUnits(role);
+    expect(screen.queryByRole("link", { name: "Buy additional Units" })).toBeNull();
+  });
+
+  it("says a purchase was approved when the route sends the customer back", async () => {
+    subscribe("premium");
+    await signInAs("BILLING");
+    render(
+      (await UnitsPage({
+        params: Promise.resolve({ organizationId: orgId }),
+        searchParams: Promise.resolve({ purchased: "1" }),
+      })) as ReactElement,
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Your purchase is approved. Its Units are ready to use, and VTaVision will invoice it.",
+    );
+  });
+
+  it("says nothing of a purchase otherwise", async () => {
+    subscribe("premium");
+    await renderUnits("BILLING");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 describe("the dashboard", () => {
   it("links each organization to its Units page", async () => {
     await signInAs("MANAGER");

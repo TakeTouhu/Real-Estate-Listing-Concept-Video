@@ -75,9 +75,10 @@ describe("dormancy", () => {
     expect(callersOf(/renewEntitlementPeriod/)).toEqual([]);
   });
 
-  it("is wired only where UP-1 reads or provisions a subscription (ADR-0066)", () => {
+  it("is wired only where UP-1 reads or provisions a subscription (ADR-0066) and UP-3 buys Units (ADR-0068)", () => {
     expect(callersOf(/createSubscriptionRepository/)).toEqual([
       "apps/ops/src/bin/provision-subscription.ts",
+      "apps/web/src/lib/unit-purchases.ts",
       "apps/web/src/lib/units.ts",
     ]);
   });

@@ -84,6 +84,24 @@ Two facts shape the order:
   or removal is ordered against the purchase; a revoked individual grant is
   seen if it committed before the read.
 
+## Found while building UP-3
+
+- **What the screen offers must be what approving accepts.** The screen decides
+  its packages with the check a purchase is written under, priced by the open
+  period's frozen plan when there is one, so a package it shows is never
+  refused for the plan or the offer (ADR-0068 Decision 2).
+- **Showing the period opens nothing.** The confirmation step states the
+  period's end as it would open; the approval opens it, and refuses if the
+  period it opened ends elsewhere.
+- **The first route that changes a charge had no CSRF check beyond
+  `SameSite=Lax`.** SecurityCompliance asks for one on cookie-based mutations.
+  The purchase route now refuses a post whose `Origin` is not this host; the
+  other mutation routes still rely on the cookie alone (`TODO.md`).
+- **A failure is not always "nothing was bought".** An error after the
+  transaction committed would read as a failed purchase and invite a second
+  one. Only a refusal, a refused permission or an unreadable form says nothing
+  was bought; anything else sends the customer to the Units page to look.
+
 ## Not in this plan
 
 Stripe card payment; additional seats, storage blocks, plan changes and

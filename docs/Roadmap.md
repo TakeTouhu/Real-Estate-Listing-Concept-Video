@@ -253,12 +253,19 @@ plan is paid. The page writes nothing.
 **UP-2 — the Unit purchase record** (ADR-0067, migration 27): the approved
 package prices in the catalog, and a purchase approved by a `billing.manage`
 holder written with its block and both audit entries in one transaction,
-bought once per idempotency key, re-checked under the period's lock. Dormant:
-no route calls it yet.
+bought once per idempotency key, re-checked under the period's lock.
 
-**Not yet built in Phase 6:** the purchase screen and the invoicing list
-(UP-3 and UP-4: invoice-paid organizations first, with Units usable on
-approval), Stripe and sales-assisted billing, subscription cancellation, seats and
+**UP-3 — the Unit purchase screen** (ADR-0068, no migration): a holder of
+`billing.manage` in an invoice-paid Standard or Premium organization can buy one
+additional Unit package at a time from the Units page. The confirmation step
+states the Units and their quality lock, the price excluding tax, the date they
+expire with no carry-over or refund, and that the purchase is invoiced; one
+button approves it and the Units are usable at once. Enterprise packages are
+listed as bought through sales. The purchase route refuses a post from another
+origin.
+
+**Not yet built in Phase 6:** the purchase list and the invoicing export
+(UP-4), Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
 controls. Two decision gates are open: what a customer regeneration costs in

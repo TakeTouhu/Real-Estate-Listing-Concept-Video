@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
  * What UP-2 may and may not have changed (ADR-0067).
  *
  * 1. **One migration, this change's**: the purchase table, additive only.
- * 2. **Dormant.** Nothing in any application builds the purchase service or its
- *    repository; the purchase screen and route are UP-3.
+ * 2. **Dormant until UP-3.** No application built the purchase service or its
+ *    repository; UP-3 wires them for the purchase screen and route (ADR-0068).
  * 3. **One transaction, in the established lock order.** The cost-admission lock
  *    first, then the re-check, then the block, the purchase and the audit entry.
  * 4. **No payment integration.** Nothing here calls a payment processor.
@@ -79,9 +79,11 @@ describe("durable shape", () => {
   });
 });
 
-describe("dormant", () => {
-  it("builds the purchase service and its repository in no application", () => {
-    expect(matching("apps", /UnitPurchaseService|createUnitPurchaseRepository/)).toEqual([]);
+describe("dormant until UP-3", () => {
+  it("builds the purchase service and its repository only in the web app's purchase wiring", () => {
+    expect(matching("apps", /\bUnitPurchaseService\b|\bcreateUnitPurchaseRepository\b/)).toEqual([
+      "apps/web/src/lib/unit-purchases.ts",
+    ]);
   });
 
   it("has no caller of the purchase but its own service", () => {

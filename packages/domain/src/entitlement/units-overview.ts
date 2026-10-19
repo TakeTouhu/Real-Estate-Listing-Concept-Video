@@ -68,6 +68,8 @@ export type UnitsOverview =
       readonly normalAddOnRemaining: number;
       readonly highQualityAddOnRemaining: number;
       readonly billing: UnitsOverviewBilling | null;
+      /** Whether the viewer holds `billing.manage`, and so may buy additional Units (UP-3). */
+      readonly mayBuyUnits: boolean;
     };
 
 export interface UnitsOverviewDeps {
@@ -87,6 +89,7 @@ function fromLedger(
   period: UnitEntitlementPeriod,
   balance: PeriodEntitlementBalance,
   billing: UnitsOverviewBilling | null,
+  mayBuyUnits: boolean,
 ): UnitsOverview {
   const blocks = [...balance.blocks]
     .sort((a, b) => a.purchasedAtEpochMs - b.purchasedAtEpochMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -112,6 +115,7 @@ function fromLedger(
     normalAddOnRemaining: remainingOf("NORMAL"),
     highQualityAddOnRemaining: remainingOf("HIGH_QUALITY"),
     billing,
+    mayBuyUnits,
   };
 }
 
@@ -132,6 +136,7 @@ export class UnitsOverviewService {
     const now = this.deps.identity.clock.now();
     const subscription = await this.deps.subscriptions.findByOrganization(organizationId);
     const billing = subscription !== null && auth.permissions.includes("billing.view") ? billingOf(subscription) : null;
+    const mayBuyUnits = auth.permissions.includes("billing.manage");
 
     const period = await this.deps.ledger.findPeriodAt(organizationId, now);
     if (period !== null) {
@@ -139,7 +144,7 @@ export class UnitsOverviewService {
       if (balance === null) {
         throw new AppError("INTERNAL_ERROR", "The current Unit period could not be read");
       }
-      return fromLedger(period, balance, billing);
+      return fromLedger(period, balance, billing, mayBuyUnits);
     }
 
     if (subscription === null) return { kind: "NO_PLAN" };
@@ -163,6 +168,7 @@ export class UnitsOverviewService {
       normalAddOnRemaining: 0,
       highQualityAddOnRemaining: 0,
       billing,
+      mayBuyUnits,
     };
   }
 }
