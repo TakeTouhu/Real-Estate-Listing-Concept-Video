@@ -62,6 +62,33 @@ describe("the customer plan catalog carries the frozen commercial contract", () 
     expect(entry.highQualityAddOnAvailable).toBe(hq !== null);
   });
 
+  it.each([
+    ["standard", 19_900, null],
+    ["premium", 35_900, 9_000],
+    ["enterprise", 89_400, 22_400],
+  ] as const)("%s: Normal package ¥%i, HQ package %s, excluding tax", (key, normal, hq) => {
+    // ADR-0053 Decision 2's approved table: what a purchase is charged.
+    const entry = plan(key);
+    expect(entry.normalAddOnPackagePriceYenExTax).toBe(normal);
+    expect(entry.highQualityAddOnPackagePriceYenExTax).toBe(hq);
+  });
+
+  it("agrees with the package price formula for every package a plan sells", () => {
+    for (const entry of catalog.all()) {
+      const normal = addOnPackagePrice(entry, "NORMAL", entry.normalAddOnPackageUnits, NO_FLOOR);
+      if (!normal.ok) throw new Error(`expected a Normal price for ${entry.key}`);
+      expect([entry.key, normal.value.finalYenExTax]).toEqual([entry.key, entry.normalAddOnPackagePriceYenExTax]);
+
+      if (entry.highQualityAddOnPackageUnits === null) {
+        expect(entry.highQualityAddOnPackagePriceYenExTax).toBeNull();
+        continue;
+      }
+      const hq = addOnPackagePrice(entry, "HIGH_QUALITY", entry.highQualityAddOnPackageUnits, NO_FLOOR);
+      if (!hq.ok) throw new Error(`expected an HQ price for ${entry.key}`);
+      expect([entry.key, hq.value.finalYenExTax]).toEqual([entry.key, entry.highQualityAddOnPackagePriceYenExTax]);
+    }
+  });
+
   it("keeps high-quality units inside the total entitlement, not beside it", () => {
     // Premium is 40 units of which at most 5 may be high quality — never 45.
     const premium = plan("premium");

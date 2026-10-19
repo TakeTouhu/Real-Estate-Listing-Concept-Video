@@ -31,6 +31,14 @@ export interface CustomerPlan {
   readonly normalAddOnPackageUnits: number;
   /** Units in one HQ add-on package, or `null` where the plan sells none. */
   readonly highQualityAddOnPackageUnits: number | null;
+  /**
+   * The approved price of one Normal package (ADR-0053 Decision 2). The price
+   * authority: a purchase is charged this, and records it. A test pins it to the
+   * package price formula.
+   */
+  readonly normalAddOnPackagePriceYenExTax: Yen;
+  /** The approved price of one HQ package, or `null` where the plan sells none. */
+  readonly highQualityAddOnPackagePriceYenExTax: Yen | null;
 }
 
 /*
@@ -62,6 +70,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnAvailable: false,
     normalAddOnPackageUnits: 5,
     highQualityAddOnPackageUnits: null,
+    normalAddOnPackagePriceYenExTax: yen(19_900),
+    highQualityAddOnPackagePriceYenExTax: null,
   },
   {
     key: "premium",
@@ -72,6 +82,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnAvailable: true,
     normalAddOnPackageUnits: 10,
     highQualityAddOnPackageUnits: 2,
+    normalAddOnPackagePriceYenExTax: yen(35_900),
+    highQualityAddOnPackagePriceYenExTax: yen(9_000),
   },
   {
     key: "enterprise",
@@ -82,6 +94,8 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnAvailable: true,
     normalAddOnPackageUnits: 25,
     highQualityAddOnPackageUnits: 5,
+    normalAddOnPackagePriceYenExTax: yen(89_400),
+    highQualityAddOnPackagePriceYenExTax: yen(22_400),
   },
 ] as const);
 

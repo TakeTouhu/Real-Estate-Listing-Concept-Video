@@ -37,14 +37,15 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("durable shape", () => {
-  it("adds two migrations, the newest: MFA-1's and MFA-4's", () => {
+  it("adds two migrations: MFA-1's and MFA-4's", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.slice(-2)).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
+    // No longer the newest: UP-2 added migration 27 after them.
+    expect(dirs.slice(25, 27)).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
     expect(dirs.filter((dir) => dir.includes("mfa"))).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
-    expect(dirs).toHaveLength(27);
+    expect(dirs).toHaveLength(28);
   });
 
   it("MFA-4 adds one organizations column, off for every existing organization, and rewrites no row", () => {

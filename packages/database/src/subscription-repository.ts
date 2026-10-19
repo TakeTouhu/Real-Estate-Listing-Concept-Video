@@ -35,7 +35,7 @@ export const SUBSCRIPTION_AUDIT_ACTION = {
   Provisioned: "subscription.provisioned",
 } as const;
 
-function toSubscription(row: SubscriptionRow): OrganizationSubscription {
+export function toSubscription(row: SubscriptionRow): OrganizationSubscription {
   return {
     id: row.id,
     organizationId: row.organizationId,

@@ -66,6 +66,24 @@ Two facts shape the order:
 - **The operator's name is declared, not authenticated.** Recorded as an
   accepted cost and an open item for an operator console (ADR-0066 Decision 2).
 
+## Found while building UP-2
+
+- **A grant is not a purchase.** `grantAddOnBlock` commits in its own
+  transaction and records no price, approver or contract. UP-2 inserts the
+  block through the same helper inside the purchase's transaction, so every
+  block keeps one audit entry and a purchase commits with its block or not at
+  all (ADR-0067 Decision 4).
+- **The price formula needs a cost floor nobody has yet.** The approved prices
+  go into the catalog as the price authority, pinned to the formula; checking
+  them against a provider cost floor waits for a verified route (`TODO.md`).
+- **The period's plan prices the package.** The block joins the period, whose
+  plan is frozen at opening, so the check inside the transaction prices from
+  that plan, as the ledger refuses an HQ block for a period that sells none.
+- **Whose permission, when.** The approver's effective permissions are read
+  inside the transaction under a share lock on its membership, so a role change
+  or removal is ordered against the purchase; a revoked individual grant is
+  seen if it committed before the read.
+
 ## Not in this plan
 
 Stripe card payment; additional seats, storage blocks, plan changes and

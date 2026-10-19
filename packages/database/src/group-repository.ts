@@ -91,6 +91,25 @@ async function lockGroup(
   };
 }
 
+/**
+ * The permissions a member holds through its groups. Read on every
+ * authorization, and inside a purchase's transaction (UP-2): from the member's
+ * group rows by their (organization, user) index, then each group's permissions
+ * by key.
+ */
+export async function groupPermissionsForMember(
+  db: Prisma.TransactionClient | PrismaClient,
+  organizationId: string,
+  userId: string,
+): Promise<Permission[]> {
+  const rows = await db.$queryRaw<{ permission: string }[]>`
+    SELECT DISTINCT gp."permission"
+    FROM "group_members" gm
+    JOIN "group_permissions" gp ON gp."groupId" = gm."groupId" AND gp."organizationId" = gm."organizationId"
+    WHERE gm."organizationId" = ${organizationId} AND gm."userId" = ${userId}`;
+  return rows.map((r) => toPermission(r.permission));
+}
+
 interface KnownError {
   readonly code?: unknown;
   readonly meta?: { readonly modelName?: unknown; readonly target?: unknown };
@@ -233,14 +252,7 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
     },
 
     async listPermissionsForMember(organizationId, userId) {
-      // Read on every authorization: from the member's group rows by their
-      // (organization, user) index, then each group's permissions by key.
-      const rows = await prisma.$queryRaw<{ permission: string }[]>`
-        SELECT DISTINCT gp."permission"
-        FROM "group_members" gm
-        JOIN "group_permissions" gp ON gp."groupId" = gm."groupId" AND gp."organizationId" = gm."organizationId"
-        WHERE gm."organizationId" = ${organizationId} AND gm."userId" = ${userId}`;
-      return rows.map((r) => toPermission(r.permission));
+      return groupPermissionsForMember(prisma, organizationId, userId);
     },
 
     async grantPermission(permission, check, audit) {

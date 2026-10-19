@@ -43,9 +43,10 @@ const UNITS_PAGE = "apps/web/src/app/organizations/[organizationId]/units/page.t
 const READERS = ["packages/domain/src/entitlement/units-overview.ts", "apps/web/src/lib/units.ts", UNITS_PAGE];
 
 describe("UP-1 shape", () => {
-  it("adds no migration", () => {
+  it("adds no migration of its own", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    expect(dirs).toHaveLength(27);
+    // UP-2 added migration 27 after it.
+    expect(dirs).toHaveLength(28);
   });
 
   it("builds the overview only in the web app's wiring, and shows it only on the Units page", () => {

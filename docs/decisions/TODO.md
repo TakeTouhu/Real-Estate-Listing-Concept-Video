@@ -1213,11 +1213,27 @@ them is **built**. Each item below records the settled decision and what remains
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period
       binding frozen on the reservation. *UP-1 (ADR-0066) shows what is left on
-      the Units page.* **Still unbuilt:** the customer-approved purchase flow
-      that grants a block (UP-2 the record and the one-transaction grant, UP-3
-      the screen, UP-4 the invoicing list; approved 2026-10-16), renewal
-      scheduling that opens periods, no automatic overage at the purchase
-      boundary, and no cancellation after a paid Provider submission.
+      the Units page. UP-2 (ADR-0067) records a customer-approved purchase and
+      grants its block in one transaction, dormant.* **Still unbuilt:** the
+      purchase screen (UP-3) and the invoicing list (UP-4; approved
+      2026-10-16), renewal scheduling that opens periods, no automatic overage
+      at the purchase boundary, and no cancellation after a paid Provider
+      submission.
+- [ ] **Check the approved package prices against the provider cost floor**
+      once a provider route is verified (ADR-0067 Decision 1). The package
+      price formula takes a profitability floor derived from provider cost;
+      the catalog carries the approved ADR-0053 Decision 2 prices with no floor
+      applied, because no route is verified and paid activation is BLOCKED. If a
+      verified route's cost puts any approved price below its floor, the price
+      goes back to the product owner rather than being raised in code.
+- [ ] **Decide how a purchase made in error is corrected** before UP-4's list is
+      used to invoice. ADR-0053 Decision 3A keeps a refund possible for
+      duplicate or incorrect billing caused by VTaVision. A purchase and its
+      block are permanent evidence (ADR-0067 Decision 2): nothing voids a
+      purchase or withdraws its Units, so the invoice can be corrected outside
+      the product but the purchase still appears on the list. Whether an
+      operator marks a purchase as credited, and whether its unused Units are
+      withdrawn, is the product owner's decision.
 - [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
       (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
       composite foreign key; an HQ block on a plan that sells none is refused.*
@@ -1625,7 +1641,8 @@ one creates is listed in the section above.
       through sales, HQ never offered on Standard, no cut-off near the end of a
       period (the expiry is shown before approval instead), and a plan from the
       operator command until self-service sign-up exists. ADR-0066 Decision 4;
-      built in UP-2 to UP-4.
+      the purchase record and grant built in UP-2 (ADR-0067), the screen and
+      the invoicing list in UP-3 and UP-4.
 
 - [x] **`property.create` capability ceiling — CLOSED.** Effective Property
       creation is limited to `OWNER`, `ADMIN`, `MANAGER` and `CREATOR`. A

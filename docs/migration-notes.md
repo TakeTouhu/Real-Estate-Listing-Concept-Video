@@ -1271,3 +1271,28 @@ until one is provisioned.
 **Operating it.** The operator command needs `DATABASE_URL` and nothing else, no
 new environment variable. It writes one row and one audit entry per
 organization, and running it again with the same contract writes nothing.
+
+## UP-2 — the Unit purchase record (migration 27)
+
+**Migration 27 (`00000000000027_unit_purchases`)** creates `unit_purchases`:
+one row per approved purchase of an additional Unit package (ADR-0067).
+
+| Constraint | Holds |
+| --- | --- |
+| `unit_purchases_addOnBlockId_key` | one block is bought once |
+| `unit_purchases_organizationId_idempotencyKey_key` | one key buys once per organization |
+| FK `(addOnBlockId, entitlementPeriodId, quality)` → `unit_add_on_blocks` | the block is of the purchase's own period and quality |
+| FK `(entitlementPeriodId, organizationId)` → `unit_entitlement_periods` | the period is the purchase's organization's |
+| FK `organizationId` → `organizations` | the organization exists |
+| `unit_purchases_shape_check` | `priceYenExTax > 0`, a non-empty contract reference, a key of 1 to 200 characters |
+
+Every foreign key is `RESTRICT`: billing evidence outlives casual deletion.
+`approvedByUserId` has no foreign key, as no actor column does. The CHECK is in
+the migration only; Prisma cannot express it.
+
+**Additive only.** No existing table, column or row is read, updated or deleted.
+Rolling back means dropping the empty table, which holds nothing until UP-3
+lets a customer buy.
+
+**What changes at deploy.** Nothing: no application writes the table yet. No new
+environment variable.
