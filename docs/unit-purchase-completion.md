@@ -1152,7 +1152,8 @@ Commits, oldest first:
 | `73ab5a4` | the lock test releases its held lock however its check goes (found by the mutation pass, below) |
 | `c3ddac6` | ADR-0070 and the documentation, for the first decision |
 | `b539ee5` | the revised rule: `--fault`, the fault on the cancellation and its audit entry, the customer's refund window and usage checked under the lock; the database test's cleanup also clears export audit entries (below) |
-| this commit | ADR-0070 and the documentation for the revised rule, and this record |
+| `32856be` | ADR-0070 and the documentation for the revised rule, and this record |
+| this commit | a confirmation sent again after its purchase was cancelled no longer lands on "Your purchase is approved" (found by the review, below), and this record |
 
 The exact head SHA is reported with the pull request.
 
@@ -1231,7 +1232,12 @@ One `pnpm test:db` run on `b539ee5` stopped after three files when vitest
 lost its worker process (`ERR_IPC_CHANNEL_CLOSED`), with no test failing; run
 again, all 53 files passed.
 
-CI on the pull request's exact head is reported with the pull request.
+CI on `32856be` passed (runs 598 and 599). CI on the pull request's exact
+head is reported with the pull request.
+
+**After the review fix**, measured again on its code: `pnpm lint` and
+`pnpm typecheck` clean, `pnpm test` **5685 / 5685**, `pnpm test:db` **1439 / 1439**,
+`pnpm build` succeeded, and `prisma migrate diff` found no difference.
 
 **Run by hand.** Against local PostgreSQL, with an organization named
 `ESC[2J=株式会社 "神田"` (its first character the escape character):
@@ -1394,6 +1400,26 @@ without the lock too, since the purchase's key alone keeps a second
 cancellation out; the lock test is the one that shows a cancellation waits for
 a reservation.
 
+### Review
+
+The automated code review did not run on the pull request: it had reached its
+usage limit. An independent review of the whole diff (`47e5614..32856be`)
+traced the lock key, the ledger, the 10-hour rule, the refusals, tenant
+isolation, the audit, the export, the Units page and migration 28 from their
+callers, and found one defect. A confirmation sent again after its purchase was
+cancelled, from a page the browser kept, is answered as a replay of it, and
+the customer landed on the Units page's "Your purchase is approved. Its Units
+are ready to use, and VTaVision will invoice it." The fix sends it back to the
+purchase screen saying VTaVision cancelled the purchase, which is not
+invoiced; nothing is bought either way (ADR-0070 Decision 8). Its test, in
+`buy-page.test.tsx`, fails with the check disabled by hand and passes with it.
+
+The review also noted two things ADR-0070 means to do: the 10 hours are
+checked against the start of the cancelling transaction, before it waits for
+the lock, which Prisma's transaction timeout bounds to seconds; and an export
+can list the customer's purchase before it is refunded, which Decision 7 leaves
+to a refund or offset by hand.
+
 ### Required documentation
 
 | Item | Where |
@@ -1437,6 +1463,9 @@ scheduler and live Stripe charges remain BLOCKED.
 - **The command's entry point is not unit-tested.** `src/bin/cancel-unit-purchase.ts`
   only wires the database to the tested module, as the other commands' do; it
   was run by hand (above).
+- **Reloading the Units page at the address a purchase landed on**
+  (`?purchased=1`) still shows its approved banner after a cancellation; the
+  cards below it say withdrawn and cancelled.
 - **The customer is not notified by the product**, and the purchase screen
   does not mention the 10-hour window: whoever handled the request tells them.
 

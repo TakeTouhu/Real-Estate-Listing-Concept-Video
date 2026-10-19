@@ -351,6 +351,25 @@ describe("approving the purchase", () => {
     expect(store.purchases).toHaveLength(1);
   });
 
+  it("does not call a purchase cancelled since approved when its confirmation is sent again", async () => {
+    subscribe();
+    await signInAs("OWNER");
+    await renderBuy({ package: "NORMAL" });
+    const fields = confirmationFields();
+    await approve(fields);
+    const [bought] = store.purchases;
+    if (bought === undefined) throw new Error("expected the purchase");
+    store.purchases[0] = { ...bought, cancelledAt: iso("2026-04-20T13:00:00.000Z") };
+
+    expect(landing(await approve(fields))).toEqual({
+      path: `/organizations/${orgId}/units/buy`,
+      error:
+        "This confirmation was for a purchase VTaVision has since cancelled, which is not invoiced. Nothing new was bought. Review the purchase again.",
+      purchased: null,
+    });
+    expect(store.purchases).toHaveLength(1);
+  });
+
   it.each([
     ["no origin", {}],
     ["another site", { origin: "https://evil.example.net" }],

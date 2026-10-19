@@ -227,6 +227,11 @@ On the Units page:
   adds "cancelled by VTaVision on" its date, and "not invoiced". The card says
   a cancelled purchase is not invoiced and its unused Units are withdrawn.
 
+A confirmation sent again after its purchase was cancelled, from a page the
+browser kept, buys nothing, as any replay of it does (ADR-0068). It lands back
+on the purchase screen saying that VTaVision cancelled the purchase, which is
+not invoiced, rather than on the Units page's "Your purchase is approved".
+
 The customer is told of the cancellation, or of its refusal, by whoever
 handled the request; the product sends no message. The purchase screen does
 not mention the 10-hour window; how customers learn of it is the product

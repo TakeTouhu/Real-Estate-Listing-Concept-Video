@@ -36,6 +36,13 @@ column or row changes.
   by VTaVision on" its date and "not invoiced", and the card says a cancelled
   purchase is not invoiced and its unused Units are withdrawn.
 
+### Changed: `POST /api/organizations/{organizationId}/unit-purchases`
+
+A confirmation sent again for a purchase cancelled since buys nothing, as any
+replay does, and is sent back to `/organizations/{organizationId}/units/buy`
+with the message that VTaVision cancelled the purchase, which is not invoiced,
+instead of to the Units page with `purchased=1`.
+
 ## Operator commands (`apps/ops`)
 
 ### Added: `pnpm --filter @app/ops cancel-unit-purchase`
