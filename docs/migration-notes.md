@@ -1341,17 +1341,19 @@ anything is read or audited.
 
 **Migration 28, `00000000000028_unit_purchase_cancellations`.** Additive only:
 
-- creates `unit_purchase_cancellations` (purchase, organization, operator,
-  reason, when), its key the purchase id, with a composite foreign key to
-  `unit_purchases` (`id`, `organizationId`), `ON DELETE RESTRICT`, and a CHECK
-  on the operator's and the reason's lengths;
+- creates the enum `UnitPurchaseCancellationFault` (`VTAVISION`,
+  `CUSTOMER`);
+- creates `unit_purchase_cancellations` (purchase, organization, whose
+  mistake it was, operator, reason, when), its key the purchase id, with a
+  composite foreign key to `unit_purchases` (`id`, `organizationId`),
+  `ON DELETE RESTRICT`, and a CHECK on the operator's and the reason's lengths;
 - adds the unique index `unit_purchases_id_organizationId_key`, which every
   existing row satisfies because `id` is already the primary key. Building it
   blocks writes to `unit_purchases` for as long as it takes, which is brief
   while purchases are few.
 
 No existing table, column or row is updated or deleted. Rolling back means
-dropping the table and the index, which loses every cancellation: a cancelled
+dropping the table, the enum and the index, which loses every cancellation: a cancelled
 purchase's block would fund reservations again and the export would invoice it.
 
 **What changes at deploy.** The ledger reads each block's cancellation when it

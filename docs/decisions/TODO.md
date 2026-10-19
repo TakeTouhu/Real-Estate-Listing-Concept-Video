@@ -1241,18 +1241,22 @@ them is **built**. Each item below records the settled decision and what remains
       verified route's cost puts any approved price below its floor, the price
       goes back to the product owner rather than being raised in code.
 - [x] **Decide how a purchase made in error is corrected** — **DECIDED and
-      built (UP-5, ADR-0070).** The product owner decided on 2026-10-19: a
-      purchase made by mistake, the customer's or VTaVision's, is cancelled by
-      an operator who judges each case; its unused Units are withdrawn, its used
-      Units stay used, and the purchase is not invoiced, used Units included.
-      `cancel-unit-purchase` records the cancellation, audited, under the
-      period's lock; a withdrawn block funds no new reservation; the export
-      marks the purchase cancelled with nothing to invoice; the Units page says
-      so. A purchase already invoiced is refunded or offset by hand. *Before:
-      ADR-0067 Decision 2 kept a purchase and its block as permanent evidence,
-      and UP-4 (ADR-0069 Decision 7) listed a credited purchase again; the
-      recommendation put to the product owner, an audited credit with the Units
-      left in place, was not the one chosen.*
+      built (UP-5, ADR-0070).** The product owner decided on 2026-10-19 and
+      revised it the same day: only VTaVision's own mistake is free. A
+      purchase VTaVision made by mistake is cancelled whenever it is found:
+      its unused Units are withdrawn, its used Units stay used, and it is not
+      invoiced, used Units included. A purchase the customer made by mistake
+      is charged, unless it is cancelled within 10 hours of its approval with
+      none of its Units used. An operator judges whose mistake it was and
+      runs `cancel-unit-purchase --fault`, which records the cancellation,
+      audited, under the period's lock; a withdrawn block funds no new
+      reservation; the export marks the purchase cancelled with nothing to
+      invoice; the Units page says so. A purchase already invoiced is
+      refunded or offset by hand. *Before: ADR-0067 Decision 2 kept a
+      purchase and its block as permanent evidence, and UP-4 (ADR-0069
+      Decision 7) listed a credited purchase again; the recommendation put to
+      the product owner, an audited credit with the Units left in place, was
+      not the one chosen.*
 - [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
       (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
       composite foreign key; an HQ block on a plan that sells none is refused.*

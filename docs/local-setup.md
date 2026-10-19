@@ -129,15 +129,19 @@ set, first show it:
 
 ```bash
 pnpm --filter @app/ops cancel-unit-purchase \
-  --purchase upur_... --operator "Your name" --reason "Bought by mistake"
+  --purchase upur_... --fault customer \
+  --operator "Your name" --reason "Bought by mistake"
 ```
 
-This writes nothing: it shows the purchase, how many of its Units were
-delivered, are still generating and are unused, and what cancelling would do.
-Run the same command again with `--confirm` to cancel it. Its unused Units are
-withdrawn at once, the used ones stay used, and the purchase is not invoiced;
-a cancellation cannot be undone. Exit code 0 means shown, cancelled or already
-cancelled, 1 refused, 2 unusable arguments.
+`--fault` says whose mistake it was: `vtavision` or `customer`. This writes
+nothing: it shows the purchase, how many of its Units were delivered, are still
+generating and are unused, and what cancelling would do or why it would be
+refused. Run the same command again with `--confirm` to cancel it.
+VTaVision's own mistake is cancelled whenever it is found: its unused Units
+are withdrawn, the used ones stay used, and it is not invoiced. The customer's
+is cancelled only within 10 hours of its approval with none of its Units used,
+and otherwise refused. A cancellation cannot be undone. Exit code 0 means
+shown, cancelled or already cancelled, 1 refused, 2 unusable arguments.
 
 ## 5. Run the checks
 

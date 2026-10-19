@@ -11,9 +11,14 @@ route.**
 | --- | --- |
 | `purchaseId` | primary key; with `organizationId`, a foreign key to `unit_purchases` (`id`, `organizationId`), `ON DELETE RESTRICT` |
 | `organizationId` | the purchase's organization |
+| `fault` | `UnitPurchaseCancellationFault`: whose mistake the operator judged it, `VTAVISION` or `CUSTOMER` |
 | `operatorName` | 1 to 200 characters, by CHECK |
 | `reason` | 1 to 500 characters, by CHECK |
 | `cancelledAt` | the database's clock when the cancelling transaction started |
+
+### Added: enum `UnitPurchaseCancellationFault`
+
+`VTAVISION` or `CUSTOMER`.
 
 ### Changed: `unit_purchases`
 
@@ -38,6 +43,7 @@ column or row changes.
 | Option | Shape |
 | --- | --- |
 | `--purchase` | the purchase id, up to 100 characters |
+| `--fault` | `vtavision` or `customer`: whose mistake it was. The customer's is cancelled only within 10 hours of the approval with no Unit delivered or still generating |
 | `--operator` | the operator's name, up to 200 characters |
 | `--reason` | why, up to 500 characters |
 | `--confirm` | a flag: without it, the purchase is only shown and nothing is written |
@@ -45,10 +51,11 @@ column or row changes.
 | Exit code | When |
 | --- | --- |
 | `0` | shown (without `--confirm`), cancelled, or already cancelled |
-| `1` | refused: no such purchase, or a card-paid one; nothing was written |
+| `1` | refused: no such purchase, a card-paid one, or the customer's mistake past its 10 hours or with a Unit used; nothing was written |
 | `2` | unusable arguments |
 
-A cancellation is audited `unit_purchase.cancelled` on the purchase.
+A cancellation is audited `unit_purchase.cancelled` on the purchase, with whose
+mistake it was. A refusal writes nothing.
 
 ### Changed: `pnpm --filter @app/ops export-unit-purchases`
 
@@ -70,15 +77,21 @@ A cancellation is audited `unit_purchase.cancelled` on the purchase.
   `cancelledAt`.
 - New: `UnitPurchaseCancellationRepository` (`find`, `cancel`),
   `CancelUnitPurchaseOutcome` (`CANCELLED`, `ALREADY_CANCELLED`, `CARD_PAID`,
-  `NOT_FOUND`), `CancellableUnitPurchase`, `CancelledUnitPurchase`,
-  `UnitPurchaseCancellation`, `UnitPurchaseUsage` and `unitPurchaseUsage`,
+  `REFUND_WINDOW_PASSED`, `UNITS_USED`, `NOT_FOUND`), `CancelUnitPurchaseRequest`
+  (with `fault`), `CancellableUnitPurchase` (with `readAt`, the database's
+  clock as read), `CancelledUnitPurchase`, `UnitPurchaseCancellation` (with
+  `fault`), `UnitPurchaseUsage` and `unitPurchaseUsage`,
   `UNIT_PURCHASE_CANCELLED_AUDIT_ACTION` (`unit_purchase.cancelled`) and
   `UNIT_PURCHASE_CANCELLATION_LIMITS`.
+- New: `UnitPurchaseCancellationFault`, `CustomerMistakeRefusal`,
+  `cancellationRefusal(fault, purchase)`, `CUSTOMER_MISTAKE_REFUND_WINDOW_MS`
+  (10 hours) and `customerMistakeRefundDeadline(approvedAt)`.
 
 ## Internal API (`@app/database`)
 
 - `createUnitPurchaseCancellationRepository(prisma)`: the cancellation and its
-  audit entry in one transaction, under the period's cost-admission lock.
+  audit entry in one transaction, under the period's cost-admission lock,
+  refusing the customer's mistake on the usage and clock read there.
 - `loadPeriodBalance` reads whether each block's purchase is cancelled.
 - The purchase and invoicing repositories read each purchase's cancellation.
 

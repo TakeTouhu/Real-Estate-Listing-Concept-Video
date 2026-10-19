@@ -272,10 +272,12 @@ new CSV file, per organization and contract, for invoicing; each organization
 listed is audited.
 
 **UP-5 — cancelling a mistaken purchase** (ADR-0070, migration 28): an operator
-command cancels a purchase made by mistake, the customer's or VTaVision's,
-after showing it and only with `--confirm`. Its unused Units are withdrawn at
-once, Units already used stay used, and the purchase is not invoiced: the export
-marks it cancelled with nothing to invoice, and the Units page says so.
+command cancels a purchase made by mistake, after showing it and only with
+`--confirm`. Only VTaVision's own mistake is free: its unused Units are
+withdrawn at once, Units already used stay used, and the purchase is not
+invoiced. The customer's mistake is charged, unless it is cancelled within 10
+hours of its approval with none of its Units used. The export marks a
+cancelled purchase with nothing to invoice, and the Units page says so.
 
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
