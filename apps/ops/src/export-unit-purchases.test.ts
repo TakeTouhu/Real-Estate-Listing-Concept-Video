@@ -229,6 +229,13 @@ describe("running it", () => {
     expect([...written]).toEqual([["october.csv", unitPurchasesCsv(purchases)]]);
   });
 
+  it("counts one purchase for one organization in the singular", async () => {
+    const { repository, files } = harness([listed("upur_1", "org_1", 35_900)]);
+    expect((await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).message).toContain(
+      "Wrote 1 purchase for 1 organization approved from",
+    );
+  });
+
   it("writes the header alone when nothing was bought, and says so", async () => {
     const { written, repository, files } = harness([]);
     expect(await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).toEqual({

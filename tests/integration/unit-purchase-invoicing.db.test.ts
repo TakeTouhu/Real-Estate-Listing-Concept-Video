@@ -150,7 +150,8 @@ describe("the invoicing export", () => {
   it("audits each organization it lists once, naming the operator, the window and what it listed", async () => {
     await buy(ORG_A, "2026-04-17T09:00:00.000Z");
     await buy(ORG_A, "2026-04-18T12:00:00.000Z", "HIGH_QUALITY");
-    await buy(ORG_B, "2026-04-20T00:00:00.000Z");
+    await buy(ORG_A, "2026-04-20T00:00:00.000Z");
+    await buy(ORG_B, "2026-04-17T10:00:00.000Z");
 
     await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: { name: "  Aoi Tanaka ", reason: " April " } });
 
@@ -174,6 +175,20 @@ describe("the invoicing export", () => {
           to: "2026-04-19T00:00:00.000Z",
           purchases: 2,
           priceYenExTax: 44_900,
+        },
+      },
+      {
+        organizationId: ORG_B,
+        actorUserId: null,
+        resourceType: "organization",
+        resourceId: ORG_B,
+        metadata: {
+          operator: "Aoi Tanaka",
+          reason: "April",
+          from: "2026-04-17T00:00:00.000Z",
+          to: "2026-04-19T00:00:00.000Z",
+          purchases: 1,
+          priceYenExTax: 35_900,
         },
       },
     ]);

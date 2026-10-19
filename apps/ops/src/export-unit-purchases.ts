@@ -179,10 +179,12 @@ export async function runExportUnitPurchases(
   }
   const organizations = new Set(purchases.map((purchase) => purchase.organizationId)).size;
   const total = purchases.reduce((sum, purchase) => sum + purchase.priceYenExTax, 0);
+  const counted = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
   return {
     exitCode: 0,
     message:
-      `Wrote ${purchases.length} purchases for ${organizations} organizations approved ${window} to ${out}: ` +
+      `Wrote ${counted(purchases.length, "purchase")} for ${counted(organizations, "organization")} ` +
+      `approved ${window} to ${out}: ` +
       `¥${YEN.format(total)} excluding tax in total. ` +
       `Each organization is audited with operator ${request.operator.name}.`,
   };
