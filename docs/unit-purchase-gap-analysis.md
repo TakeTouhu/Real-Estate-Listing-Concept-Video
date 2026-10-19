@@ -93,6 +93,10 @@ Two facts shape the order:
 - **Showing the period opens nothing.** The confirmation step states the
   period's end as it would open; the approval opens it, and refuses if the
   period it opened ends elsewhere.
+- **A period the renewal did not open.** Review found the screen offering
+  packages over a period opened by hand, which approving then refuses to buy
+  around (`PERIOD_CONFLICT`). The screen now offers nothing in that state
+  (ADR-0068 Decision 2).
 - **The first route that changes a charge had no CSRF check beyond
   `SameSite=Lax`.** SecurityCompliance asks for one on cookie-based mutations.
   The purchase route now refuses a post whose `Origin` is not this host; the

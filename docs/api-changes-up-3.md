@@ -13,7 +13,7 @@ and 2). Anyone else is told they cannot buy Units for the organization.
 
 | Query | Shows |
 | --- | --- |
-| none | what the plan sells: its packages and the date they expire, or why none can be bought here |
+| none | what the plan sells: its packages and the date they expire, or why none can be bought here (including a period in the ledger the plan's renewal did not open) |
 | `package=NORMAL` or `package=HIGH_QUALITY` | the confirmation step for that package, with one approval button (Decision 3); a package the plan does not sell is refused on the screen |
 | `error=…` | the message a refused or failed purchase came back with |
 
@@ -58,11 +58,14 @@ A form post (`application/x-www-form-urlencoded`) from the confirmation step
   | `NOT_STARTED` | `startsAt`: the plan's anchor |
   | `THROUGH_SALES` | Enterprise: `packages`, bought through the representative |
   | `CARD_PAYMENT_NOT_AVAILABLE` | a self-service plan |
+  | `PERIOD_CONFLICT` | the ledger holds a period now that the plan's renewal did not open; approving would buy none |
   | `AVAILABLE` | `packages`, `periodEndsAt` and `contractReference` |
 
   It throws `FORBIDDEN` for a non-member or a member without `billing.manage`,
   unaudited.
 - `UnitPurchaseDeps.ledger` now also needs `findPeriodAt`.
+- `isRenewalPeriod(period, subscription, bounds)`: whether a period is the one
+  `renewEntitlementPeriod` opens for those bounds.
 - `UnitsOverview` (`ACTIVE`) gains `mayBuyUnits`: whether the viewer holds
   `billing.manage`.
 - The type `UnitPurchaseOffers`.

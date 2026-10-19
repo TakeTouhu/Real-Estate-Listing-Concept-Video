@@ -433,6 +433,24 @@ describe("what the purchase screen offers (UP-3)", () => {
     expect(await service.offers(ids.BILLING, ORG)).toEqual(before);
   });
 
+  it("offers nothing while the ledger holds a period the plan did not open, as approving buys none", async () => {
+    const opened = await ledger.openPeriod({
+      id: "uep_itest_by_hand",
+      organizationId: ORG,
+      planKey: "premium",
+      billingCycleKey: "by-hand",
+      startsAt: new Date("2026-04-10T00:00:00.000Z"),
+      endsAt: new Date("2026-05-10T00:00:00.000Z"),
+      commercialReference: "by hand",
+      actorUserId: null,
+    });
+    expect(opened.kind).toBe("OPENED");
+
+    expect(await service.offers(ids.BILLING, ORG)).toEqual({ kind: "PERIOD_CONFLICT" });
+    await expect(service.approve(ids.BILLING, request())).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(await written()).toEqual({ purchases: 0, blocks: 0, audits: [] });
+  });
+
   it("refuses a member without billing.manage, writing nothing", async () => {
     await expect(service.offers(ids.ADMIN, ORG)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await prisma.auditLog.count({ where: { organizationId: ORG, action: "unit_purchase.refused" } })).toBe(0);

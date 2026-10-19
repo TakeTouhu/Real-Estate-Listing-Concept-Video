@@ -53,13 +53,21 @@ a package that approving would refuse:
 | a plan not started | says when it starts |
 | Enterprise | lists its packages and says they are bought through the VTaVision representative; no review link, no button (ADR-0053 Decision 5A) |
 | a card-paid plan | says additional Units cannot be bought by card yet |
+| a period in the ledger now that the plan's renewal did not open | says additional Units cannot be bought here right now and to contact the VTaVision representative; nothing is offered |
 | an invoice-paid Standard or Premium plan | lists each package it sells with its price, excluding tax, and the date every package bought now expires |
 
-- **The period.** The ledger's period containing now, if one is open; otherwise
-  the current period as it would open, as on the Units page. Showing it opens
-  nothing (ADR-0066 Decision 3). Approving opens it (ADR-0067 Decision 3).
-- **The price.** The open period's frozen plan prices the package, as when the
-  purchase is written; before it opens, the subscription's plan does.
+- **The period.** The plan's current renewal period, which approving opens or
+  finds open (ADR-0056, ADR-0067 Decision 3). Showing it opens nothing
+  (ADR-0066 Decision 3).
+- **A period the renewal did not open.** If the ledger holds another period
+  now, approving refuses to buy around it (`PERIOD_CONFLICT`, ADR-0056), so the
+  screen offers nothing and points to the representative. A period is the
+  renewal's when its id, billing key, plan, start, end and contract reference
+  are the ones the renewal writes: the facts the ledger compares
+  (`isRenewalPeriod`).
+- **The price.** The plan's. The period's frozen plan, which prices the purchase
+  when it is written, is the same plan, because a renewal period is opened with
+  it.
 - **One package per purchase** (ADR-0066 Decision 4, item 2). HQ is never
   offered on Standard, and the screen says so.
 
@@ -127,6 +135,11 @@ customer is sent to look rather than told it failed.
 - **The origin check covers this route only.** The other cookie-based mutation
   routes rely on `SameSite=Lax` alone; extending the check to them is recorded
   in `TODO.md`.
+- **A period that overlaps this one without containing now.** The screen reads
+  the period containing now only. A period opened by hand that overlaps the
+  current period elsewhere is not seen; approving then fails and says to check
+  the Units page, buying nothing. No product path opens a period other than the
+  renewal, so only ledger rows written by hand reach either state.
 
 ---
 

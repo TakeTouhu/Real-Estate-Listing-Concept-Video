@@ -246,6 +246,28 @@ describe("the purchase screen", () => {
     expect(document.querySelector("form")).toBeNull();
   });
 
+  it("offers nothing while the ledger holds a period the plan did not open", async () => {
+    subscribe();
+    reader.periods.push({
+      id: "uep_by_hand",
+      organizationId: orgId,
+      billingCycleKey: "by-hand",
+      planKey: "premium",
+      baseUnits: 40,
+      includedHighQualityUnits: 5,
+      highQualityAddOnAvailable: true,
+      startsAt: iso("2026-04-10T00:00:00.000Z"),
+      endsAt: iso("2026-05-10T00:00:00.000Z"),
+      commercialReference: "by hand",
+      createdAt: iso("2026-04-10T00:00:00.000Z"),
+    });
+    await signInAs("OWNER");
+    const text = await renderBuy({ package: "NORMAL" });
+    expect(text).toContain("Additional Units cannot be bought here right now. Contact your VTaVision representative.");
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(document.querySelector("form")).toBeNull();
+  });
+
   it("shows the refusal it was sent back with", async () => {
     subscribe();
     await signInAs("OWNER");

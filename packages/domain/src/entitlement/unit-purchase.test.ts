@@ -406,7 +406,7 @@ describe("re-checked when written", () => {
 });
 
 describe("what the purchase screen offers (UP-3)", () => {
-  /** A period opened by hand, so its frozen plan and its end are the ledger's, not the subscription's. */
+  /** A period the plan's renewal did not open: its own id, key, plan and end. */
   function openByHand(planKey: "standard" | "premium", endsAt: Date): void {
     reader.periods.push({
       id: "uep_by_hand",
@@ -495,15 +495,36 @@ describe("what the purchase screen offers (UP-3)", () => {
     });
   });
 
-  it("prices from the open period's frozen plan and ends with it", async () => {
+  it("offers nothing while the ledger holds a period the plan did not open, as approving buys none", async () => {
     subscribe();
-    openByHand("standard", iso("2026-05-10T00:00:00.000Z"));
-    expect(await service.offers(ids.BILLING, orgId)).toMatchObject({
-      kind: "AVAILABLE",
-      planKey: "standard",
-      packages: [{ quality: "NORMAL", units: 5, priceYenExTax: 19_900 }],
-      periodEndsAt: iso("2026-05-10T00:00:00.000Z"),
-    });
+    openByHand("premium", iso("2026-05-10T00:00:00.000Z"));
+    expect(await service.offers(ids.BILLING, orgId)).toEqual({ kind: "PERIOD_CONFLICT" });
+    await expect(service.approve(ids.BILLING, request())).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(store.purchases).toEqual([]);
+  });
+
+  it("offers the same packages once a purchase has opened the period", async () => {
+    subscribe();
+    const before = await service.offers(ids.BILLING, orgId);
+    expect((await service.approve(ids.BILLING, request())).kind).toBe("APPROVED");
+    expect(reader.periods).toHaveLength(1);
+    expect(await service.offers(ids.BILLING, orgId)).toEqual(before);
+  });
+
+  it.each([
+    ["its id", { id: "uep_other" }],
+    ["its billing key", { billingCycleKey: "other" }],
+    ["its plan", { planKey: "standard" as const }],
+    ["its start", { startsAt: iso("2026-04-15T00:00:00.001Z") }],
+    ["its end", { endsAt: iso("2026-05-14T00:00:00.000Z") }],
+    ["its contract reference", { commercialReference: "other" }],
+  ])("treats an open period differing from the renewal in %s as one the plan did not open", async (_what, change) => {
+    subscribe();
+    expect((await service.approve(ids.BILLING, request())).kind).toBe("APPROVED");
+    const [opened] = reader.periods;
+    if (opened === undefined) throw new Error("expected the purchase to open the period");
+    reader.periods.splice(0, 1, { ...opened, ...change });
+    expect(await service.offers(ids.BILLING, orgId)).toEqual({ kind: "PERIOD_CONFLICT" });
   });
 
   it("offers only what a purchase then accepts as shown", async () => {

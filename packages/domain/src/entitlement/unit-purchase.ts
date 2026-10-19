@@ -8,6 +8,7 @@ import { createCustomerPlanCatalog, type CustomerPlanKey } from "../pricing/cust
 import type { Yen } from "../pricing/units";
 import type { UnitEntitlementPeriod, UnitEntitlementRepository } from "./ports";
 import {
+  isRenewalPeriod,
   renewalPeriodAt,
   renewEntitlementPeriod,
   type OrganizationSubscription,
@@ -222,6 +223,11 @@ export type UnitPurchaseOffers =
     }
   /** A card-paid plan: card payment is not built. */
   | { readonly kind: "CARD_PAYMENT_NOT_AVAILABLE"; readonly planKey: CustomerPlanKey }
+  /**
+   * The ledger holds a period now that the plan's renewal did not open, so
+   * approving would not buy into it (`PERIOD_CONFLICT`): nothing is offered.
+   */
+  | { readonly kind: "PERIOD_CONFLICT" }
   | {
       readonly kind: "AVAILABLE";
       readonly planKey: CustomerPlanKey;
@@ -249,8 +255,8 @@ export class UnitPurchaseService {
    * expire. Each is offered only if the check a purchase is written under passes
    * for it, so the screen offers exactly what {@link approve} accepts.
    *
-   * Reads only. A period nobody has opened yet is shown as it would open, as on
-   * the Units page (ADR-0066 Decision 3).
+   * Reads only. The period is the one approving opens or finds open; nobody
+   * has to have opened it yet (ADR-0066 Decision 3).
    *
    * @throws AppError FORBIDDEN for a non-member, or a member without `billing.manage` (unaudited).
    */
@@ -259,12 +265,13 @@ export class UnitPurchaseService {
     const now = this.deps.identity.clock.now();
     const subscription = await this.deps.subscriptions.findByOrganization(organizationId);
     if (subscription === null) return { kind: "NO_PLAN" };
-    const opened = await this.deps.ledger.findPeriodAt(organizationId, now);
-    const bounds = opened ?? renewalPeriodAt(subscription.anchorAt, now);
+    const bounds = renewalPeriodAt(subscription.anchorAt, now);
     if (bounds === null) return { kind: "NOT_STARTED", planKey: subscription.planKey, startsAt: subscription.anchorAt };
+    // Approving opens this period or finds it open, and buys around no other.
+    const opened = await this.deps.ledger.findPeriodAt(organizationId, now);
+    if (opened !== null && !isRenewalPeriod(opened, subscription, bounds)) return { kind: "PERIOD_CONFLICT" };
 
-    // The period's frozen plan prices the package once it is open, as when a purchase is written.
-    const planKey = opened?.planKey ?? subscription.planKey;
+    const planKey = subscription.planKey;
     const packages = QUALITIES.flatMap((quality) => addOnPackageOffer(planKey, quality) ?? []);
     const facts = { subscription, period: { planKey, endsAt: bounds.endsAt }, approverPermissions: actor.permissions };
     const refused = packages

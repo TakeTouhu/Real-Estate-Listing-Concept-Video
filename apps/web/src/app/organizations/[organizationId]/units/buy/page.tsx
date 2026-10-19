@@ -82,6 +82,8 @@ function Offers({ offers }: { offers: UnitPurchaseOffers }) {
       return <p>Your plan starts on {formatJst(offers.startsAt)}. Additional Units can be bought from then.</p>;
     case "CARD_PAYMENT_NOT_AVAILABLE":
       return <p>Your plan is paid by card, and additional Units cannot be bought by card yet.</p>;
+    case "PERIOD_CONFLICT":
+      return <p>Additional Units cannot be bought here right now. Contact your VTaVision representative.</p>;
     case "THROUGH_SALES":
       return (
         <>
