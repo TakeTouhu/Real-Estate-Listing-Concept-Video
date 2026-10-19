@@ -129,7 +129,35 @@ Two facts shape the order:
   machine; such a cell gets a leading `'` (Decision 4).
 - **Correcting a purchase made in error is still open.** The export lists a
   credited purchase again if its window is exported again; the decision is
-  with the product owner (Decision 6, `TODO.md`).
+  with the product owner (Decision 6, `TODO.md`). *Decided on 2026-10-19 and
+  built in UP-5, below.*
+
+## Found while building UP-5
+
+Not one of the four approved pull requests: the product owner decided on
+2026-10-19 how a mistaken purchase is corrected
+(`/mnt/project-files/cto/unit-purchase-correction-proposal.md`), and UP-5
+builds it (ADR-0070).
+
+- **Withdrawing without rewriting.** The purchase and its block are billing
+  evidence (ADR-0067 Decision 2), so the cancellation is a row of its own and
+  the ledger reads it: a withdrawn block has 0 remaining (ADR-0070 Decision 3).
+- **A generation running when the purchase is cancelled.** Its funding is
+  frozen, so it finishes; if it fails, its Units are not returned to the block,
+  because they were unused and so are withdrawn.
+- **Ordering against reservations.** The cancellation takes the period's
+  cost-admission lock, so a reservation is admitted wholly before it or wholly
+  after it (Decision 4).
+- **A card-paid purchase** would be charged by its payment processor, so not
+  invoicing it refunds nothing: it is refused, and none exists yet.
+- **The organization's name in a terminal.** The command prints it as a quoted
+  string with control characters escaped, so a name cannot move the cursor or
+  rewrite what the operator reads before confirming.
+- **Prisma fills `@default(now())` on the machine running the command**, not in
+  the database, so the cancellation is stamped explicitly with the database's
+  clock.
+- **The export still lists a cancelled purchase**, so a window exported again
+  reconciles with an earlier file, with nothing to invoice for it (Decision 6).
 
 ## Not in this plan
 

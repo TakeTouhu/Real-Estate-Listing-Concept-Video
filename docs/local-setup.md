@@ -122,6 +122,23 @@ the command never overwrites one. Each organization listed is audited with the
 operator and the reason. Exit code 0 means the file was written, 1 refused, 2
 unusable arguments.
 
+## 4d. Cancel a mistaken Unit purchase (optional)
+
+An operator cancels a purchase made by mistake (ADR-0070). With `DATABASE_URL`
+set, first show it:
+
+```bash
+pnpm --filter @app/ops cancel-unit-purchase \
+  --purchase upur_... --operator "Your name" --reason "Bought by mistake"
+```
+
+This writes nothing: it shows the purchase, how many of its Units were
+delivered, are still generating and are unused, and what cancelling would do.
+Run the same command again with `--confirm` to cancel it. Its unused Units are
+withdrawn at once, the used ones stay used, and the purchase is not invoiced;
+a cancellation cannot be undone. Exit code 0 means shown, cancelled or already
+cancelled, 1 refused, 2 unusable arguments.
+
 ## 5. Run the checks
 
 ```bash

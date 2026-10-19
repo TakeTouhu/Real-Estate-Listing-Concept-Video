@@ -4,7 +4,8 @@ Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0066-plan-provisioning-and-units-overview.md` (UP-1),
 `docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2),
 `docs/decisions/0068-unit-purchase-screen-and-route.md` (UP-3),
-`docs/decisions/0069-unit-purchase-list-and-invoicing-export.md` (UP-4)
+`docs/decisions/0069-unit-purchase-list-and-invoicing-export.md` (UP-4),
+`docs/decisions/0070-unit-purchase-cancellation.md` (UP-5)
 Gap analysis: `docs/unit-purchase-gap-analysis.md`
 
 Unit purchase is built in four pull requests, approved by the product owner on
@@ -15,6 +16,11 @@ invoiced afterwards:
 2. **UP-2**: the purchase record and its one-transaction grant.
 3. **UP-3**: the purchase screen.
 4. **UP-4**: the purchase list and the invoicing export.
+
+The product owner then decided on 2026-10-19 how a mistaken purchase is
+corrected, built as a fifth:
+
+5. **UP-5**: an operator cancels a mistaken purchase.
 
 Each extends this record. Unit purchase is not a Roadmap phase, so it receives
 no `phase-N-complete` tag.
@@ -1124,3 +1130,258 @@ UP-4 waits for the product owner's yes before merge. It completes the approved
 Unit purchase plan. Open: the decision on correcting a purchase made in error,
 and Stripe card payment, which needs the payment-failure gate settled and the
 product owner's go-ahead for live charges.
+
+## UP-5 — cancelling a mistaken purchase
+
+Base: `47e5614` (PR #92 merge commit on `main`).
+ADR: `docs/decisions/0070-unit-purchase-cancellation.md`
+
+The product owner decided on 2026-10-19 how a purchase made by mistake is
+corrected, the customer's or VTaVision's: an operator cancels it, its unused
+Units are withdrawn, its used Units stay used, and it is not invoiced. UP-5
+builds that, as one pull request after the approved four.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `f6d2a8c` | migration 28 and the cancellation repository, the withdrawn-block rule in the ledger, the `cancel-unit-purchase` command, the export's two columns and its total, the Units page's cancelled and withdrawn lines, their unit, page, shape and database tests |
+| `73ab5a4` | the lock test releases its held lock however its check goes (found by the mutation pass, below) |
+| this commit | ADR-0070, the documentation updates and this record; a comment in the cancellation database test saying its package is test data |
+
+The exact head SHA is reported with the pull request.
+
+### What UP-5 does
+
+- **An operator cancels a purchase.** `pnpm --filter @app/ops
+  cancel-unit-purchase --purchase --operator --reason` shows the purchase and
+  how its Units stand, and writes nothing; with `--confirm` it cancels it
+  (ADR-0070 Decision 1). A card-paid purchase is refused.
+- **The cancellation** is one row per purchase in
+  `unit_purchase_cancellations`, inside the purchase's organization, stamped
+  with the database's clock; the purchase and its block are never changed
+  (Decision 2).
+- **Its unused Units are withdrawn.** A block whose purchase is cancelled has 0
+  remaining, so no new reservation draws on it; generations it already funded
+  settle as they would have, and a release frees nothing (Decision 3).
+- **One transaction under the period's cost-admission lock**, so each
+  reservation is admitted wholly before or after it (Decision 4), with one
+  `unit_purchase.cancelled` audit entry naming the operator, the reason and the
+  Units delivered, still generating and withdrawn (Decision 5).
+- **Not invoiced.** The export lists a cancelled purchase with `cancelled_at`
+  and 0 in `to_invoice_yen_ex_tax`, and its total leaves it out (Decision 6).
+- **The Units page** marks the block "withdrawn, purchase cancelled" and, for a
+  `billing.view` holder, the purchase "cancelled by VTaVision on" its date, "not
+  invoiced" (Decision 7).
+
+### Cancelling a purchase
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant O as Operator
+  participant C as cancel-unit-purchase
+  participant DB as PostgreSQL
+  participant R as A reservation
+
+  O->>C: --purchase, --operator, --reason
+  C->>DB: the purchase, its block's allocations, any cancellation
+  C-->>O: the purchase, delivered / generating / unused, what cancelling does
+  O->>C: the same with --confirm
+  C->>DB: BEGIN; locate the purchase's period
+  C->>DB: cost-admission lock (organization, period)
+  R--xDB: a reservation into the period waits for the lock
+  C->>DB: the purchase and its block's allocations
+  alt already cancelled, or card-paid
+    C->>DB: COMMIT, nothing written
+    C-->>O: exit 0 already cancelled, or exit 1 refused
+  end
+  C->>DB: now(); insert the cancellation; audit unit_purchase.cancelled
+  C->>DB: COMMIT
+  R->>DB: the balance reads the cancellation: the block has 0 left
+  C-->>O: exit 0, withdrawn / kept / left to finish, not invoiced
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `73ab5a4`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5666 / 5666**, 197 files (was 5619, 194 files, on `47e5614`) |
+| `pnpm test:db` | **1435 / 1435**, 53 files (was 1415, 52) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 29 migrations, up to date |
+
+CI on the pull request's exact head is reported with the pull request.
+
+**Run by hand.** Against local PostgreSQL, with an organization named
+`ESC[2J=株式会社 "神田"` (its first character the escape character) holding two
+invoice-paid purchases of 10 Normal Units in a September period:
+- without `--confirm`, the command showed the name as
+  `"\u001b[2J=株式会社 \"神田\""`, the purchase's package, price, contract and
+  dates, "used: 0 delivered, 0 still generating; unused: 10" and what
+  cancelling would do, wrote nothing and exited 0;
+- with `--confirm` it said 10 unused Units were withdrawn and the purchase
+  would not be invoiced, and wrote one cancellation, the operator's name
+  trimmed and stamped with the database's clock, and one
+  `unit_purchase.cancelled` entry with no actor, the operator, the reason, the
+  package and price, and 0 consumed, 0 in flight and 10 withdrawn;
+- running it again said when and by whom it had been cancelled and wrote
+  nothing; an unknown purchase was refused, exit 1; `--confirm=yes` exited 2
+  with the usage;
+- the export of the window listed both purchases, the cancelled one with its
+  `cancelled_at` in Japan time and 0 to invoice, totalled ¥19,900 "not
+  counting 1 cancelled purchase", and audited `cancelled: 1` and
+  `toInvoiceYenExTax: 19900` beside the count of 2 and ¥39,800.
+
+The data was removed afterwards.
+
+New tests (47 unit, 20 database):
+- **the ledger** (`allocation.test.ts`, 5 new): a withdrawn block has 0
+  left even when none of it was used, and says it is withdrawn; it is passed
+  over for the next eligible block, oldest first, and counts nothing towards an
+  all-or-nothing plan; it keeps what it already funded and gets nothing back
+  from a release; an allocation naming a block the period does not hold is
+  still refused;
+- **usage and invoicing** (`unit-purchase-cancellation.test.ts`, 7): what is
+  delivered, still generating and unused for each reservation state, and
+  nothing to invoice once cancelled;
+- **the command** (`cancel-unit-purchase.test.ts`, 24): every option but
+  `--confirm` required, trimmed and length-limited, every problem at once;
+  nothing written without `--confirm`; the preview's lines; control characters
+  escaped; no such purchase, already cancelled and card-paid, with and without
+  `--confirm`; what a cancellation says;
+- **the export** (`export-unit-purchases.test.ts`, 2 new) and **the Units
+  page** (`units-page.test.tsx`, 1 new; `units-overview.test.ts`, 1 new): the
+  two columns, the total and what it left out; the withdrawn block and the
+  cancelled purchase's line;
+- **shape** (`unit-purchase-cancellation-shape.test.ts`, 7): migration 28 the
+  newest of 29, one table and one index, no rewrite of an existing row; the
+  keys, the foreign key and the CHECK; no stored count; one transaction
+  writing only the cancellation and its audit entry, its only raw statement the
+  database's clock, after the lock; the balance's read of the cancellation;
+  built only by the operator command. Every earlier shape and dormancy test
+  that pins the newest migration now names migration 28;
+- **live PostgreSQL** (`unit-purchase-cancellation.db.test.ts`, 20): a
+  cancelled block funds no new reservation, which falls to the next block or
+  is refused; a reservation admitted before keeps its funding, and releasing
+  it afterwards returns nothing; one released before cancelling counts as
+  unused; other blocks and Base Units untouched; the record and the audit
+  entry exactly, the purchase and its block unchanged; one cancellation per
+  purchase, also when two run at once; a cancellation waits for a transaction
+  holding the period's lock; no such purchase; card-paid refused; the purchase
+  as the command shows it, before and after; the foreign key, each CHECK and
+  the delete restriction; the export and the Units overview's purchases
+  reading the cancellation.
+
+### Mutation ledger
+
+**37 mutants, all killed, 0 broken, 0 anchor-missing**, in one pass on the code
+of `73ab5a4`. Each mutant weakens one guarantee at an anchor that occurs exactly
+once, and runs against the suites listed for it until one fails:
+
+- **domain**: the entitlement tests (244);
+- **web**: the organization pages' tests (52);
+- **ops**: the operator commands' tests (121);
+- **db**: the cancellation and invoicing database tests (31).
+
+Every mutated file was restored and re-hashed, and all 882 files were
+byte-identical after the pass.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| A01 | ledger | a withdrawn block keeps its unused Units | `allocation.ts` | 4 of 244 (domain) |
+| A02 | ledger | the balance forgets which block is withdrawn | `allocation.ts` | 1 of 244 (domain) |
+| A03 | loader | a cancellation never withdraws the block | `unit-entitlement-repository.ts` | 4 of 31 (db) |
+| A04 | loader | one cancellation is not enough to withdraw | `unit-entitlement-repository.ts` | 4 of 31 (db) |
+| U01 | usage | released Units counted as delivered | `unit-purchase-cancellation.ts` | 2 of 244 (domain) |
+| U02 | usage | released Units counted as still running | `unit-purchase-cancellation.ts` | 2 of 244 (domain) |
+| U03 | usage | running generations counted as unused | `unit-purchase-cancellation.ts` | 4 of 244 (domain) |
+| R01 | lock | the cancellation takes no cost-admission lock | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R02 | once | a cancelled purchase cancelled again | `unit-purchase-cancellation-repository.ts` | 2 of 31 (db) |
+| R03 | card | a card-paid purchase cancelled here | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R04 | record | the operator's name stored untrimmed | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R05 | record | the reason stored untrimmed | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R06 | audit | the cancellation audited as something else | `unit-purchase-cancellation-repository.ts` | 4 of 31 (db) |
+| R07 | audit | the audit says every Unit was withdrawn | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R08 | card | every purchase read as invoice-paid | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R09 | usage | every allocation read as still running | `unit-purchase-cancellation-repository.ts` | 1 of 31 (db) |
+| R10 | record | the purchase's period end shown as its approval | `unit-purchase-cancellation-repository.ts` | 2 of 31 (db) |
+| X01 | export | the export never sees a cancellation | `unit-purchase-invoicing-repository.ts` | 1 of 31 (db) |
+| X02 | audit | the export audit counts no cancellation | `unit-purchase-invoicing-repository.ts` | 1 of 31 (db) |
+| X03 | audit | the export audit invoices cancelled purchases | `unit-purchase-invoicing-repository.ts` | 1 of 31 (db) |
+| X04 | invoice | a cancelled purchase still invoiced | `unit-purchase-invoicing.ts` | 1 of 244 (domain) |
+| X05 | csv | the CSV invoices the price whatever happened | `export-unit-purchases.ts` | 1 of 121 (ops) |
+| X06 | csv | the CSV never says when it was cancelled | `export-unit-purchases.ts` | 1 of 121 (ops) |
+| X07 | csv | the command's total includes cancelled purchases | `export-unit-purchases.ts` | 1 of 121 (ops) |
+| X08 | csv | the command never says what it left out | `export-unit-purchases.ts` | 1 of 121 (ops) |
+| P01 | list | the period's purchases never show a cancellation | `unit-purchase-repository.ts` | 2 of 31 (db) |
+| O01 | overview | the overview drops the cancellation | `units-overview.ts` | 1 of 244 (domain) |
+| O02 | overview | the overview drops the withdrawal | `units-overview.ts` | 1 of 244 (domain) |
+| W01 | page | the page never says a purchase was cancelled | `units/page.tsx` | 1 of 52 (web) |
+| W02 | page | the page shows a withdrawn block as 0 left | `units/page.tsx` | 1 of 52 (web) |
+| K01 | confirm | cancelled without --confirm | `cancel-unit-purchase.ts` | 4 of 121 (ops) |
+| K02 | confirm | --confirm assumed | `cancel-unit-purchase.ts` | 1 of 121 (ops) |
+| K03 | preview | a cancelled purchase offered for cancelling again | `cancel-unit-purchase.ts` | 1 of 121 (ops) |
+| K04 | preview | a card-paid purchase offered for cancelling | `cancel-unit-purchase.ts` | 1 of 121 (ops) |
+| K05 | terminal | a name its members typed printed raw | `cancel-unit-purchase.ts` | 7 of 121 (ops) |
+| K06 | limits | the command accepts what the table refuses | `unit-purchase-cancellation.ts` | 1 of 121 (ops) |
+| K07 | message | the preview says nothing of what is kept | `cancel-unit-purchase.ts` | 1 of 121 (ops) |
+
+The first pass stopped at R01: with the lock removed, the lock test's check
+failed before it released the transaction holding the lock, and every later
+test waited on it. `73ab5a4` releases it however the check goes, and the pass
+was run again from the start. The test that runs two cancellations at once
+passes without the lock too, since the purchase's key alone keeps a second
+cancellation out; the lock test is the one that shows a cancellation waits for
+a reservation.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: a new row for the cancellation, and the Units overview row names withdrawn blocks and cancelled purchases |
+| Entity-relationship diagram | `docs/decisions/0070-unit-purchase-cancellation.md`, below; the one new table and its one relation |
+| Critical sequence diagram | this section, *Cancelling a purchase* |
+| OpenAPI / API change summary | `docs/api-changes-up-5.md`: the table, the Units page's lines, the command's options and exit codes, the export's columns, the internal API |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *UP-5*: migration 28, what changes at deploy, rolling back |
+| Completion report | this file |
+
+Also updated: `docs/local-setup.md` (how to cancel), `docs/Roadmap.md`,
+`docs/decisions/TODO.md` (the item on correcting a purchase made in error,
+closed, and the Unit accounting item) and `docs/unit-purchase-gap-analysis.md`
+(what building UP-5 found). ADR-0053, the approved commercial contract, is
+unchanged: ADR-0070 says how a cancellation stands beside its Decision 3A.
+
+### Activation status
+
+Nothing paid or scheduled is activated. UP-5 adds a table, a read in the
+ledger's balance and an operator command that someone runs by hand: no worker,
+scheduler, credential, environment variable, dependency or payment
+integration. Paid Provider Activation, production credentials, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **A purchase already invoiced is refunded or offset by hand.** The product
+  has no payment integration; the command says so when it cancels.
+- **A cancellation cannot be undone.** A purchase cancelled by mistake is
+  bought again.
+- **After its period has ended**, a purchase can still be cancelled so that it
+  is not invoiced; its unused Units had already expired, and the command still
+  calls them withdrawn.
+- **The command's entry point is not unit-tested.** `src/bin/cancel-unit-purchase.ts`
+  only wires the database to the tested module, as the other commands' do; it
+  was run by hand (above).
+- **The customer is not notified by the product**: whoever handled the request
+  tells them.
+
+### Remaining work
+
+UP-5 waits for the product owner's yes before merge. Open after it: Stripe
+card payment, which needs the payment-failure gate settled and the product
+owner's go-ahead for live charges.

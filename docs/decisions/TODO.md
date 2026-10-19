@@ -1229,7 +1229,8 @@ them is **built**. Each item below records the settled decision and what remains
       grants its block in one transaction. UP-3 (ADR-0068) lets a `billing.manage`
       holder buy a package from the purchase screen. UP-4 (ADR-0069) lists the
       period's purchases on the Units page and exports invoice-paid purchases
-      for invoicing.* **Still unbuilt:** renewal scheduling that opens periods,
+      for invoicing. UP-5 (ADR-0070) lets an operator cancel a mistaken
+      purchase, withdrawing its unused Units.* **Still unbuilt:** renewal scheduling that opens periods,
       no automatic overage at the purchase boundary, and no cancellation after a
       paid Provider submission.
 - [ ] **Check the approved package prices against the provider cost floor**
@@ -1239,19 +1240,19 @@ them is **built**. Each item below records the settled decision and what remains
       applied, because no route is verified and paid activation is BLOCKED. If a
       verified route's cost puts any approved price below its floor, the price
       goes back to the product owner rather than being raised in code.
-- [ ] **Decide how a purchase made in error is corrected** before UP-4's list is
-      used to invoice. ADR-0053 Decision 3A keeps a refund possible for
-      duplicate or incorrect billing caused by VTaVision. A purchase and its
-      block are permanent evidence (ADR-0067 Decision 2): nothing voids a
-      purchase or withdraws its Units, so the invoice can be corrected outside
-      the product but the purchase still appears on the list. Whether an
-      operator marks a purchase as credited, and whether its unused Units are
-      withdrawn, is the product owner's decision. *UP-4 (ADR-0069 Decision 7)
-      lists every invoice-paid purchase in its window, a credited one included,
-      so exporting the same window again would list it again. Put to the
-      product owner on 2026-10-19, recommending an operator command that
-      records an audited credit, shown in the export, with the Units left in
-      place.*
+- [x] **Decide how a purchase made in error is corrected** — **DECIDED and
+      built (UP-5, ADR-0070).** The product owner decided on 2026-10-19: a
+      purchase made by mistake, the customer's or VTaVision's, is cancelled by
+      an operator who judges each case; its unused Units are withdrawn, its used
+      Units stay used, and the purchase is not invoiced, used Units included.
+      `cancel-unit-purchase` records the cancellation, audited, under the
+      period's lock; a withdrawn block funds no new reservation; the export
+      marks the purchase cancelled with nothing to invoice; the Units page says
+      so. A purchase already invoiced is refunded or offset by hand. *Before:
+      ADR-0067 Decision 2 kept a purchase and its block as permanent evidence,
+      and UP-4 (ADR-0069 Decision 7) listed a credited purchase again; the
+      recommendation put to the product owner, an audited credit with the Units
+      left in place, was not the one chosen.*
 - [x] **Build a quality-tagged additional-Unit ledger.** *Built in Phase 6A
       (ADR-0055): `unit_add_on_blocks`, quality-locked at the schema level by a
       composite foreign key; an HQ block on a plan that sells none is refused.*

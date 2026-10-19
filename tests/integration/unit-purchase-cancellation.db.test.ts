@@ -75,7 +75,11 @@ async function openPeriod(): Promise<void> {
   if (opened.kind !== "OPENED") throw new Error(`period: ${opened.kind}`);
 }
 
-/** A purchase of a Normal package and the block it bought, `day` days into the period. */
+/**
+ * A purchase of 10 Normal Units and the block it bought, `day` days into the
+ * period. The quantity and price are test data, not a catalog package: this
+ * file tests cancelling, not what a package costs.
+ */
 async function bought(day: number): Promise<string> {
   seq += 1;
   const purchasedAt = new Date(STARTS_AT.getTime() + day * 86_400_000);

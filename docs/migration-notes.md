@@ -1336,3 +1336,29 @@ many (ADR-0069 Decision 7).
 `DELETE` or `TRUNCATE` on the table. Locally and in CI, the role `DATABASE_URL`
 names owns it. A role without those privileges fails the command before
 anything is read or audited.
+
+## UP-5 — cancelling a mistaken Unit purchase
+
+**Migration 28, `00000000000028_unit_purchase_cancellations`.** Additive only:
+
+- creates `unit_purchase_cancellations` (purchase, organization, operator,
+  reason, when), its key the purchase id, with a composite foreign key to
+  `unit_purchases` (`id`, `organizationId`), `ON DELETE RESTRICT`, and a CHECK
+  on the operator's and the reason's lengths;
+- adds the unique index `unit_purchases_id_organizationId_key`, which every
+  existing row satisfies because `id` is already the primary key. Building it
+  blocks writes to `unit_purchases` for as long as it takes, which is brief
+  while purchases are few.
+
+No existing table, column or row is updated or deleted. Rolling back means
+dropping the table and the index, which loses every cancellation: a cancelled
+purchase's block would fund reservations again and the export would invoice it.
+
+**What changes at deploy.** The ledger reads each block's cancellation when it
+computes a balance, so a cancelled purchase's block funds no new reservation
+from the moment the cancellation commits. The operator command
+`cancel-unit-purchase` is available wherever `apps/ops` runs with
+`DATABASE_URL`; nothing runs it on a schedule. The export's CSV gains two
+columns at the end, `cancelled_at` and `to_invoice_yen_ex_tax`: a spreadsheet
+or script reading it by position is unaffected, and one reading the total
+should read `to_invoice_yen_ex_tax`. No new environment variable.
