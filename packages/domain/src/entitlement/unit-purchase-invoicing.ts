@@ -12,6 +12,16 @@ import type { GenerationQualityTier } from "../orchestration/types";
 
 export const UNIT_PURCHASE_EXPORT_AUDIT_ACTION = "unit_purchase.exported";
 
+/**
+ * How long after its end, by the database's clock, a window can be exported
+ * (ADR-0069 Decision 6). An approval fixes its time when its request starts and
+ * records the purchase later in that request, so one approved just before
+ * `--to` may still be committing. Each transaction an approval runs waits at
+ * most 2 seconds for a connection and is closed after 5, so ten minutes leaves
+ * none still to come.
+ */
+export const UNIT_PURCHASE_EXPORT_SETTLE_MS = 10 * 60 * 1000;
+
 /** One invoice-paid purchase, as an invoice needs it. */
 export interface InvoiceableUnitPurchase {
   readonly purchaseId: string;
@@ -37,12 +47,18 @@ export interface UnitPurchaseExportRequest {
   readonly operator: { readonly name: string; readonly reason: string };
 }
 
+export type UnitPurchaseExportOutcome =
+  | { readonly kind: "EXPORTED"; readonly purchases: readonly InvoiceableUnitPurchase[] }
+  /** The window ended less than the settle time ago. Nothing was read or audited. */
+  | { readonly kind: "NOT_SETTLED"; readonly settlesAt: Date };
+
 export interface UnitPurchaseInvoicingRepository {
   /**
    * The invoice-paid purchases approved in `[from, to)`, by organization, then
    * contract, then approval, and one audit entry per organization listed, in
    * one transaction. A card-paid purchase is never listed: its payment
-   * processor charges it, and invoicing it too would bill it twice.
+   * processor charges it, and invoicing it too would bill it twice. A window
+   * that has not settled is refused.
    */
-  exportForInvoicing(request: UnitPurchaseExportRequest): Promise<readonly InvoiceableUnitPurchase[]>;
+  exportForInvoicing(request: UnitPurchaseExportRequest): Promise<UnitPurchaseExportOutcome>;
 }

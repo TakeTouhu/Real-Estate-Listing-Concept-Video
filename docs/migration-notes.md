@@ -1329,4 +1329,10 @@ schedule. No new environment variable.
 **The export's read.** It selects purchases across organizations by approval
 time. The existing index on `unit_purchases` leads with the organization, so the
 read scans the table; an index on `approvedAt` can be added when purchases are
-many (ADR-0069 Decision 6).
+many (ADR-0069 Decision 7).
+
+**The export's lock.** It reads under a `SHARE` lock on `unit_purchases`
+(ADR-0069 Decision 6), which PostgreSQL grants only to a role with `UPDATE`,
+`DELETE` or `TRUNCATE` on the table. Locally and in CI, the role `DATABASE_URL`
+names owns it. A role without those privileges fails the command before
+anything is read or audited.

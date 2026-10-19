@@ -897,10 +897,15 @@ The exact head SHA is reported with the pull request.
   sees no card, and the overview does not read the purchases for them
   (ADR-0069 Decision 1).
 - **The invoicing export.** `pnpm --filter @app/ops export-unit-purchases`
-  writes the invoice-paid purchases approved in a half-open window that has
-  already ended to a new CSV file, by organization, contract and approval
-  (Decisions 2 and 3). A card-paid purchase is never listed. A `--to` in the
-  future, or an `--out` that exists, is refused before anything is read.
+  writes the invoice-paid purchases approved in a half-open window to a new CSV
+  file, by organization, contract and approval (Decisions 2 and 3). A card-paid
+  purchase is never listed. An `--out` that exists, or a window that ended less
+  than ten minutes ago by the database's clock, is refused before anything is
+  read.
+- **No purchase in the window is recorded after the export.** The settle time
+  lets every approval stamped inside the window finish its request, and the
+  read runs under a `SHARE` lock on `unit_purchases`, which waits for writes in
+  flight (Decision 6).
 - **The file** is RFC 4180 with CRLF line ends and a UTF-8 byte order mark, its
   text cells quoted, and a cell a spreadsheet would read as a formula given a
   leading `'` (Decision 4).
@@ -921,14 +926,18 @@ sequenceDiagram
   O->>C: --from, --to, --out, --operator, --reason
   alt an option missing, no offset, or --from not before --to
     C-->>O: exit 2, the problems and the usage
-  else --to in the future
-    C-->>O: exit 1, nothing read or audited
   end
   C->>F: does --out exist?
   alt it exists
     C-->>O: exit 1, nothing read or audited
   end
   C->>DB: BEGIN
+  C->>DB: clock_timestamp()
+  alt less than ten minutes after --to
+    C->>DB: COMMIT, nothing read or audited
+    C-->>O: exit 1, from when the window can be exported
+  end
+  C->>DB: LOCK unit_purchases IN SHARE MODE (waits for purchases being recorded)
   C->>DB: SALES_ASSISTED purchases approved in [from, to), with organization, block and period
   loop each organization listed
     C->>DB: audit unit_purchase.exported (operator, reason, window, count, total)
@@ -1076,13 +1085,17 @@ charges remain BLOCKED.
 
 - **A purchase made in error cannot be corrected in the product.** Exporting a
   window again lists a purchase credited outside the product. How it is
-  corrected is with the product owner (ADR-0069 Decision 6, `TODO.md`).
+  corrected is with the product owner (ADR-0069 Decision 7, `TODO.md`).
 - **No record of what was invoiced**: consecutive windows are the boundary.
 - **The command's entry point is not unit-tested.** `src/bin/export-unit-purchases.ts`
   only wires the database and the file system to the tested module, as the
   provisioning command's does; it was run by hand (above).
 - **The export scans `unit_purchases` by approval time**: the existing index
   leads with the organization.
+- **An approval that stalls for more than ten minutes** between fixing its
+  approval time and starting its transaction would be recorded after an export
+  of its window. Nothing in the product stalls a request that long; each of its
+  transactions is closed after 5 seconds (ADR-0069 Decision 6).
 - **A file that appears while the purchases are read** fails the command
   without writing it, after the audit entries committed.
 

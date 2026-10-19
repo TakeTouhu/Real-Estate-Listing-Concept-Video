@@ -19,7 +19,7 @@ const files = {
 const prisma = getPrismaClient();
 try {
   const repository = createUnitPurchaseInvoicingRepository(prisma);
-  const result = await runExportUnitPurchases(repository, files, parsed.value, new Date());
+  const result = await runExportUnitPurchases(repository, files, parsed.value);
   if (result.exitCode === 0) console.log(result.message);
   else console.error(result.message);
   process.exitCode = result.exitCode;

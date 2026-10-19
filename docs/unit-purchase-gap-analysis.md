@@ -117,9 +117,11 @@ Two facts shape the order:
   user's current name.
 - **The export must not invoice a card-paid purchase**, which its payment
   processor will charge: it lists `SALES_ASSISTED` purchases only (Decision 3).
-- **A window that has not ended would lose purchases.** One approved after the
-  export but before `--to` would be in neither that file nor the next, so a
-  `--to` in the future is refused (Decision 2).
+- **A window that has not settled would lose purchases.** One approved after
+  the export but before `--to`, or approved before it and still being recorded,
+  would be in neither that file nor the next. So `--to` must be ten minutes ago
+  by the database's clock, and the read waits for writes in flight (Decisions 2
+  and 6).
 - **`pnpm` writes to standard output**, so the CSV goes to a new file instead,
   never overwriting an earlier export.
 - **An organization's name is untrusted text in a spreadsheet.** A name

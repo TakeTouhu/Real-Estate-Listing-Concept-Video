@@ -1,9 +1,10 @@
 import { parseArgs } from "node:util";
-import type {
-  GenerationQualityTier,
-  InvoiceableUnitPurchase,
-  UnitPurchaseExportRequest,
-  UnitPurchaseInvoicingRepository,
+import {
+  UNIT_PURCHASE_EXPORT_SETTLE_MS,
+  type GenerationQualityTier,
+  type InvoiceableUnitPurchase,
+  type UnitPurchaseExportRequest,
+  type UnitPurchaseInvoicingRepository,
 } from "@app/domain";
 import { parseInstant } from "./instant";
 
@@ -21,7 +22,8 @@ import { parseInstant } from "./instant";
 export const USAGE = [
   "Usage: pnpm --filter @app/ops export-unit-purchases \\",
   "  --from <first instant, inclusive, e.g. 2026-10-01T00:00:00+09:00> \\",
-  "  --to <end instant, exclusive and not in the future, e.g. 2026-11-01T00:00:00+09:00> \\",
+  `  --to <end instant, exclusive and at least ${UNIT_PURCHASE_EXPORT_SETTLE_MS / 60_000} minutes ago, ` +
+    "e.g. 2026-11-01T00:00:00+09:00> \\",
   "  --out <a new file, e.g. unit-purchases-2026-10.csv> \\",
   "  --operator <your name> \\",
   "  --reason <why, e.g. October invoices>",
@@ -157,22 +159,22 @@ export async function runExportUnitPurchases(
   repository: UnitPurchaseInvoicingRepository,
   files: ExportFiles,
   { request, out }: ExportArguments,
-  now: Date,
 ): Promise<ExportResult> {
   const window = `from ${jstInstant(request.from)} to ${jstInstant(request.to)}`;
-  if (request.to.getTime() > now.getTime()) {
-    return {
-      exitCode: 1,
-      message:
-        "Refused: --to is in the future, so purchases still to be approved before it would be left out. " +
-        "Nothing was listed or audited.",
-    };
-  }
   if (await files.exists(out)) {
     return { exitCode: 1, message: `Refused: ${out} already exists. Nothing was listed or audited.` };
   }
 
-  const purchases = await repository.exportForInvoicing(request);
+  const exported = await repository.exportForInvoicing(request);
+  if (exported.kind === "NOT_SETTLED") {
+    return {
+      exitCode: 1,
+      message:
+        "Refused: a purchase approved just before --to may still be being recorded, " +
+        `so the window can be exported from ${jstInstant(exported.settlesAt)}. Nothing was listed or audited.`,
+    };
+  }
+  const { purchases } = exported;
   await files.writeNew(out, unitPurchasesCsv(purchases));
   if (purchases.length === 0) {
     return { exitCode: 0, message: `No invoice-paid purchases were approved ${window}. Wrote ${out} with no rows.` };

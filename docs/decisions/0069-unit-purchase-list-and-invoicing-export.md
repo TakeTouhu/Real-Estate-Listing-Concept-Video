@@ -61,9 +61,11 @@ pnpm --filter @app/ops export-unit-purchases \
   consecutive windows (October, then November) neither overlap nor leave a gap.
   Each is an instant with an explicit offset, so no one's local time zone
   decides it.
-- **The window must have ended.** A `--to` in the future is refused before
-  anything is read: purchases approved later in the window would be missing
-  from the file, and the next window would start after them.
+- **The window must have settled.** `--to` must be at least ten minutes ago
+  by the database's clock (Decision 6). An earlier one is refused before
+  anything is read or audited, and the command says from when the window can be
+  exported: a purchase approved just before `--to` may still be being recorded,
+  and the next window starts at `--to`, so it would be in neither file.
 - **A new file each time.** `--out` must not exist; the command refuses before
   reading anything, and writes the file only if it still does not exist
   (`wx`), readable by its owner alone. An earlier export is never overwritten.
@@ -122,9 +124,37 @@ purchases are listed:
 An organization with nothing in the window is not audited, because nothing of
 its was read. The export writes nothing else.
 
+## Decision 6 — No purchase approved in an exported window is recorded after it
+
+An approval fixes its time when its request starts and records the purchase
+later in the same request (ADR-0067 Decisions 3 and 4). Without care, a purchase
+approved just before `--to` could commit just after the export read the
+window: the next window starts at `--to`, so it would never be invoiced. Two
+things close this.
+
+- **The window must have settled.** The export reads the database's clock
+  first and refuses a window that ended less than ten minutes before it,
+  reading and auditing nothing. Each transaction an approval runs waits at most
+  2 seconds for a connection and is closed after 5 (Prisma's defaults, which no
+  repository here changes), so ten minutes after `--to` every approval stamped
+  inside the window has committed or rolled back. The database's clock decides
+  rather than the operator's machine, which may be wrong.
+- **The read waits for writes in flight.** Before reading, the export takes a
+  `SHARE` lock on `unit_purchases`. It waits for every transaction still
+  writing a purchase and holds new ones off until the audit entries commit, so
+  the read sees every purchase committed before it and none is half-recorded
+  around it. An approval waits for it only at its insert, holding nothing the
+  audit entries need, so the lock forms no cycle. Exports are rare and take
+  milliseconds; an approval waiting for one is not noticeably slower.
+
+A serializable read would not help: an approval whose transaction starts after
+the export commits does not overlap it, so nothing conflicts. What remains is
+an approval whose request stalls for more than ten minutes between fixing its
+time and starting its transaction, which nothing in the product does.
+
 ---
 
-## Decision 6 — What stays out
+## Decision 7 — What stays out
 
 - **Correcting a purchase made in error.** The product still cannot mark a
   purchase as credited, so a corrected invoice's purchase is listed again if the

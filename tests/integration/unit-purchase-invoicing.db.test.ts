@@ -107,6 +107,7 @@ afterAll(async () => {
 const OPERATOR = { name: "Aoi Tanaka", reason: "April invoices" };
 const FROM = new Date("2026-04-17T00:00:00.000Z");
 const TO = new Date("2026-04-19T00:00:00.000Z");
+const NONE = { kind: "EXPORTED", purchases: [] };
 
 const exportAudits = () =>
   prisma.auditLog.findMany({
@@ -122,7 +123,7 @@ describe("the invoicing export", () => {
     const a1 = await buy(ORG_A, "2026-04-17T09:00:00.000Z");
     await buy(ORG_B, "2026-04-19T00:00:00.000Z");
 
-    const listed = await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR });
+    const exported = await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR });
 
     const row = (purchaseId: string, organizationId: string, at: string) => ({
       purchaseId,
@@ -133,17 +134,20 @@ describe("the invoicing export", () => {
       expiresAt: PERIOD_END,
     });
     const normal = { quality: "NORMAL", units: 10, priceYenExTax: 35_900 };
-    expect(listed).toEqual([
-      { ...row(a1, ORG_A, "2026-04-17T09:00:00.000Z"), ...normal },
-      { ...row(a2, ORG_A, "2026-04-18T12:00:00.000Z"), quality: "HIGH_QUALITY", units: 2, priceYenExTax: 9_000 },
-      { ...row(b1, ORG_B, "2026-04-17T00:00:00.000Z"), ...normal },
-    ]);
+    expect(exported).toEqual({
+      kind: "EXPORTED",
+      purchases: [
+        { ...row(a1, ORG_A, "2026-04-17T09:00:00.000Z"), ...normal },
+        { ...row(a2, ORG_A, "2026-04-18T12:00:00.000Z"), quality: "HIGH_QUALITY", units: 2, priceYenExTax: 9_000 },
+        { ...row(b1, ORG_B, "2026-04-17T00:00:00.000Z"), ...normal },
+      ],
+    });
   });
 
   it("never lists a card-paid purchase, which its payment processor charges", async () => {
     await buy(ORG_A, "2026-04-17T09:00:00.000Z");
     await prisma.unitPurchase.updateMany({ where: { organizationId: ORG_A }, data: { channel: "SELF_SERVICE" } });
-    expect(await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR })).toEqual([]);
+    expect(await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR })).toEqual(NONE);
     expect(await exportAudits()).toEqual([]);
   });
 
@@ -196,7 +200,7 @@ describe("the invoicing export", () => {
 
   it("lists and audits nothing for a window with no purchase", async () => {
     await buy(ORG_A, "2026-04-20T00:00:00.000Z");
-    expect(await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR })).toEqual([]);
+    expect(await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR })).toEqual(NONE);
     expect(await exportAudits()).toEqual([]);
   });
 
@@ -207,6 +211,65 @@ describe("the invoicing export", () => {
     await invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR });
     expect(await prisma.unitPurchase.findMany({ where: { organizationId: { in: ORGS } } })).toEqual(before);
     expect(await exportAudits()).toHaveLength(2);
+  });
+});
+
+describe("an export and the approvals it lists (Decision 6)", () => {
+  const databaseNow = async () => (await prisma.$queryRaw<[{ now: Date }]>`SELECT clock_timestamp() AS now`)[0].now;
+  const minutesBefore = (instant: Date, minutes: number) => new Date(instant.getTime() - minutes * 60_000);
+
+  it("refuses a window that ended less than ten minutes ago by the database's clock, auditing nothing", async () => {
+    const id = await buy(ORG_A, "2026-04-17T09:00:00.000Z");
+    const now = await databaseNow();
+    await prisma.unitPurchase.update({ where: { id }, data: { approvedAt: minutesBefore(now, 10) } });
+    const to = minutesBefore(now, 9);
+
+    expect(await invoicing.exportForInvoicing({ from: minutesBefore(now, 60), to, operator: OPERATOR })).toEqual({
+      kind: "NOT_SETTLED",
+      settlesAt: new Date(to.getTime() + 10 * 60_000),
+    });
+    expect(await exportAudits()).toEqual([]);
+  });
+
+  it("exports a window that ended more than ten minutes ago", async () => {
+    const id = await buy(ORG_A, "2026-04-17T09:00:00.000Z");
+    const now = await databaseNow();
+    await prisma.unitPurchase.update({ where: { id }, data: { approvedAt: minutesBefore(now, 12) } });
+
+    const request = { from: minutesBefore(now, 60), to: minutesBefore(now, 11), operator: OPERATOR };
+    expect(await invoicing.exportForInvoicing(request)).toMatchObject({
+      kind: "EXPORTED",
+      purchases: [{ purchaseId: id }],
+    });
+  });
+
+  it("waits for a write to the purchases still in flight, then lists what it committed", async () => {
+    const id = await buy(ORG_A, "2026-04-16T12:00:00.000Z");
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    let holding = () => {};
+    const held = new Promise<void>((resolve) => {
+      holding = () => resolve();
+    });
+    // An UPDATE takes the same ROW EXCLUSIVE lock as an approval's INSERT.
+    const writing = prisma.$transaction(async (tx) => {
+      await tx.unitPurchase.update({ where: { id }, data: { approvedAt: new Date("2026-04-17T09:00:00.000Z") } });
+      holding();
+      await released;
+    });
+    await held;
+
+    let finished = false;
+    const exporting = invoicing.exportForInvoicing({ from: FROM, to: TO, operator: OPERATOR }).finally(() => {
+      finished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(finished).toBe(false);
+    release();
+    await writing;
+    expect(await exporting).toMatchObject({ kind: "EXPORTED", purchases: [{ purchaseId: id }] });
   });
 });
 

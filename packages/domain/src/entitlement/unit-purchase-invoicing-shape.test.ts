@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
  * 1. **No migration.** The purchase record already holds every fact listed.
  * 2. **The export reads, and writes only its audit entries**, in one
  *    transaction, and lists invoice-paid purchases only.
- * 3. **Only the operator command exports.** Neither application can reach it.
+ * 3. **It reads a settled window under a lock on the purchases** (Decision 6):
+ *    the database's clock first, then the lock, then the read.
+ * 4. **Only the operator command exports.** Neither application can reach it.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -48,10 +50,21 @@ describe("UP-4 shape", () => {
     expect(source.match(/\$transaction/g)).toHaveLength(1);
     expect(source.match(/\.create\(/g)).toEqual([".create("]);
     expect(source).toContain("tx.auditLog.create(");
-    for (const banned of [/\.update(Many)?\(/, /\.delete(Many)?\(/, /\.upsert\(/, /\.createMany\(/, /\$executeRaw/]) {
+    for (const banned of [/\.update(Many)?\(/, /\.delete(Many)?\(/, /\.upsert\(/, /\.createMany\(/, /Unsafe/]) {
       expect(`${banned}: ${banned.test(source)}`).toBe(`${banned}: false`);
     }
+    expect(source.match(/\$executeRaw`[^`]*`/g)).toEqual(['$executeRaw`LOCK TABLE "unit_purchases" IN SHARE MODE`']);
+    expect(source.match(/\$queryRaw[^`]*`[^`]*`/g)).toEqual(["$queryRaw<[{ now: Date }]>`SELECT clock_timestamp() AS now`"]);
     expect(source.indexOf("tx.unitPurchase.findMany(")).toBeLessThan(source.indexOf("tx.auditLog.create("));
+  });
+
+  it("reads the database's clock, then locks the purchases, then reads them", () => {
+    const source = repository();
+    const clock = source.indexOf("tx.$queryRaw");
+    const lock = source.indexOf("tx.$executeRaw");
+    expect(clock).toBeGreaterThan(source.indexOf("prisma.$transaction("));
+    expect(lock).toBeGreaterThan(clock);
+    expect(source.indexOf("tx.unitPurchase.findMany(")).toBeGreaterThan(lock);
   });
 
   it("lists invoice-paid purchases only", () => {

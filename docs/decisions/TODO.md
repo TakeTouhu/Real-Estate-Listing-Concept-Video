@@ -1246,7 +1246,7 @@ them is **built**. Each item below records the settled decision and what remains
       purchase or withdraws its Units, so the invoice can be corrected outside
       the product but the purchase still appears on the list. Whether an
       operator marks a purchase as credited, and whether its unused Units are
-      withdrawn, is the product owner's decision. *UP-4 (ADR-0069 Decision 6)
+      withdrawn, is the product owner's decision. *UP-4 (ADR-0069 Decision 7)
       lists every invoice-paid purchase in its window, a credited one included,
       so exporting the same window again would list it again. Put to the
       product owner on 2026-10-19, recommending an operator command that

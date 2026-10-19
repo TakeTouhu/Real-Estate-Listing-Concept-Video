@@ -116,7 +116,8 @@ pnpm --filter @app/ops export-unit-purchases \
 ```
 
 `--from` is included and `--to` excluded, so consecutive months neither overlap
-nor leave a gap; `--to` must not be in the future. `--out` must be a new file:
+nor leave a gap; `--to` must be at least ten minutes ago, so that no purchase
+approved before it is still being recorded. `--out` must be a new file:
 the command never overwrites one. Each organization listed is audited with the
 operator and the reason. Exit code 0 means the file was written, 1 refused, 2
 unusable arguments.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { InvoiceableUnitPurchase, UnitPurchaseExportRequest } from "@app/domain";
+import type { InvoiceableUnitPurchase, UnitPurchaseExportOutcome, UnitPurchaseExportRequest } from "@app/domain";
 import {
+  USAGE,
   jstInstant,
   parseExportArguments,
   runExportUnitPurchases,
@@ -12,7 +13,7 @@ import {
 /**
  * The operator command that lists invoice-paid purchases for invoicing (UP-4,
  * ADR-0069): every option required, a window of explicit instants that has
- * already ended, a new file each time, and CSV a spreadsheet reads as written.
+ * settled, a new file each time, and CSV a spreadsheet reads as written.
  */
 
 const VALID = [
@@ -174,16 +175,20 @@ describe("writing the CSV", () => {
   });
 });
 
-function harness(purchases: readonly InvoiceableUnitPurchase[], existing: readonly string[] = []) {
+function harness(
+  purchases: readonly InvoiceableUnitPurchase[],
+  existing: readonly string[] = [],
+  settlesAt: Date | null = null,
+) {
   const requests: UnitPurchaseExportRequest[] = [];
   const written = new Map<string, string>();
   return {
     requests,
     written,
     repository: {
-      exportForInvoicing: async (request: UnitPurchaseExportRequest) => {
+      exportForInvoicing: async (request: UnitPurchaseExportRequest): Promise<UnitPurchaseExportOutcome> => {
         requests.push(request);
-        return purchases;
+        return settlesAt === null ? { kind: "EXPORTED", purchases } : { kind: "NOT_SETTLED", settlesAt };
       },
     },
     files: {
@@ -197,7 +202,6 @@ function harness(purchases: readonly InvoiceableUnitPurchase[], existing: readon
 }
 
 const ARGUMENTS: ExportArguments = { request: REQUEST, out: "october.csv" };
-const AFTER = new Date("2026-11-01T00:00:00.000Z");
 
 const listed = (purchaseId: string, organizationId: string, priceYenExTax: number): InvoiceableUnitPurchase => ({
   purchaseId,
@@ -219,7 +223,7 @@ describe("running it", () => {
       listed("upur_3", "org_2", 19_900),
     ];
     const { requests, written, repository, files } = harness(purchases);
-    expect(await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).toEqual({
+    expect(await runExportUnitPurchases(repository, files, ARGUMENTS)).toEqual({
       exitCode: 0,
       message:
         "Wrote 3 purchases for 2 organizations approved from 2026-10-01T00:00:00+09:00 to 2026-11-01T00:00:00+09:00 " +
@@ -231,14 +235,14 @@ describe("running it", () => {
 
   it("counts one purchase for one organization in the singular", async () => {
     const { repository, files } = harness([listed("upur_1", "org_1", 35_900)]);
-    expect((await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).message).toContain(
+    expect((await runExportUnitPurchases(repository, files, ARGUMENTS)).message).toContain(
       "Wrote 1 purchase for 1 organization approved from",
     );
   });
 
   it("writes the header alone when nothing was bought, and says so", async () => {
     const { written, repository, files } = harness([]);
-    expect(await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).toEqual({
+    expect(await runExportUnitPurchases(repository, files, ARGUMENTS)).toEqual({
       exitCode: 0,
       message:
         "No invoice-paid purchases were approved from 2026-10-01T00:00:00+09:00 to 2026-11-01T00:00:00+09:00. " +
@@ -247,28 +251,26 @@ describe("running it", () => {
     expect(written.get("october.csv")).toBe(unitPurchasesCsv([]));
   });
 
-  it("runs once the window has ended, its end excluded", async () => {
-    const { requests, repository, files } = harness([]);
-    expect((await runExportUnitPurchases(repository, files, ARGUMENTS, REQUEST.to)).exitCode).toBe(0);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("refuses a window that has not ended, listing and auditing nothing", async () => {
-    const { requests, written, repository, files } = harness([listed("upur_1", "org_1", 35_900)]);
-    const before = new Date(REQUEST.to.getTime() - 1);
-    expect(await runExportUnitPurchases(repository, files, ARGUMENTS, before)).toEqual({
+  it("refuses a window that has not settled, writing nothing, and says when it can run", async () => {
+    const settlesAt = new Date("2026-10-31T15:10:00.000Z");
+    const { requests, written, repository, files } = harness([listed("upur_1", "org_1", 35_900)], [], settlesAt);
+    expect(await runExportUnitPurchases(repository, files, ARGUMENTS)).toEqual({
       exitCode: 1,
       message:
-        "Refused: --to is in the future, so purchases still to be approved before it would be left out. " +
-        "Nothing was listed or audited.",
+        "Refused: a purchase approved just before --to may still be being recorded, " +
+        "so the window can be exported from 2026-11-01T00:10:00+09:00. Nothing was listed or audited.",
     });
-    expect(requests).toEqual([]);
+    expect(requests).toEqual([REQUEST]);
     expect(written.size).toBe(0);
+  });
+
+  it("says in its usage how long after its end a window can be exported", () => {
+    expect(USAGE).toContain("--to <end instant, exclusive and at least 10 minutes ago, e.g. 2026-11-01T00:00:00+09:00>");
   });
 
   it("refuses a file that already exists before listing or auditing anything", async () => {
     const { requests, repository, files } = harness([listed("upur_1", "org_1", 35_900)], ["october.csv"]);
-    expect(await runExportUnitPurchases(repository, files, ARGUMENTS, AFTER)).toEqual({
+    expect(await runExportUnitPurchases(repository, files, ARGUMENTS)).toEqual({
       exitCode: 1,
       message: "Refused: october.csv already exists. Nothing was listed or audited.",
     });
@@ -283,6 +285,6 @@ describe("running it", () => {
         throw new Error(`EEXIST: ${path}`);
       },
     };
-    await expect(runExportUnitPurchases(repository, racing, ARGUMENTS, AFTER)).rejects.toThrow("EEXIST: october.csv");
+    await expect(runExportUnitPurchases(repository, racing, ARGUMENTS)).rejects.toThrow("EEXIST: october.csv");
   });
 });
