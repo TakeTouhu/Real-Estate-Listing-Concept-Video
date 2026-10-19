@@ -3,7 +3,8 @@
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0066-plan-provisioning-and-units-overview.md` (UP-1),
 `docs/decisions/0067-unit-purchase-record-and-approval.md` (UP-2),
-`docs/decisions/0068-unit-purchase-screen-and-route.md` (UP-3)
+`docs/decisions/0068-unit-purchase-screen-and-route.md` (UP-3),
+`docs/decisions/0069-unit-purchase-list-and-invoicing-export.md` (UP-4)
 Gap analysis: `docs/unit-purchase-gap-analysis.md`
 
 Unit purchase is built in four pull requests, approved by the product owner on
@@ -870,3 +871,224 @@ scheduler and live Stripe charges remain BLOCKED.
 
 UP-3 waits for the product owner's yes before merge. Next: UP-4, this period's
 purchases on the Units page and the operator CSV for invoicing.
+
+## UP-4 — this period's purchases, and the invoicing export
+
+Base: `0f77141` (PR #91 merge commit on `main`).
+ADR: `docs/decisions/0069-unit-purchase-list-and-invoicing-export.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `1a1b174` | the period's purchases on the Units overview and page, `listForPeriod`, the invoicing repository and its audit, the `export-unit-purchases` command and its CSV, the instant parser in its own module, their unit, page, shape and database tests, ADR-0069 and the documentation updates |
+| `ce154c4` | the export's database test listing two organizations, so each audit entry counts its own; the summary counted in the singular (found running it by hand, below) |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What UP-4 does
+
+- **The period's purchases on the Units page.** A holder of `billing.view` sees
+  a "Purchases this period" card: each package, its price excluding tax, when
+  it was approved in Japan time, and who approved it while they are a member,
+  "a former member" once they have left. With purchases, it says VTaVision
+  invoices each one under the contract with consumption tax added. Anyone else
+  sees no card, and the overview does not read the purchases for them
+  (ADR-0069 Decision 1).
+- **The invoicing export.** `pnpm --filter @app/ops export-unit-purchases`
+  writes the invoice-paid purchases approved in a half-open window that has
+  already ended to a new CSV file, by organization, contract and approval
+  (Decisions 2 and 3). A card-paid purchase is never listed. A `--to` in the
+  future, or an `--out` that exists, is refused before anything is read.
+- **The file** is RFC 4180 with CRLF line ends and a UTF-8 byte order mark, its
+  text cells quoted, and a cell a spreadsheet would read as a formula given a
+  leading `'` (Decision 4).
+- **The audit.** Each organization listed gets one `unit_purchase.exported`
+  entry naming the operator, the reason, the window, the count and the total,
+  in the same transaction as the read (Decision 5).
+
+### Invoicing a month
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant O as Operator
+  participant C as export-unit-purchases
+  participant F as File system
+  participant DB as PostgreSQL
+
+  O->>C: --from, --to, --out, --operator, --reason
+  alt an option missing, no offset, or --from not before --to
+    C-->>O: exit 2, the problems and the usage
+  else --to in the future
+    C-->>O: exit 1, nothing read or audited
+  end
+  C->>F: does --out exist?
+  alt it exists
+    C-->>O: exit 1, nothing read or audited
+  end
+  C->>DB: BEGIN
+  C->>DB: SALES_ASSISTED purchases approved in [from, to), with organization, block and period
+  loop each organization listed
+    C->>DB: audit unit_purchase.exported (operator, reason, window, count, total)
+  end
+  C->>DB: COMMIT
+  C->>F: write the CSV (wx, 0600)
+  C-->>O: exit 0, how many purchases, organizations and yen excluding tax
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `1a1b174`. `ce154c4`
+changes one database test, one message and adds one unit test; on it the unit
+suite and the changed files were re-run.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5617 / 5617**, 194 files on `1a1b174` (was 5556, 192 files, on `0f77141`); **5618 / 5618** on `ce154c4` |
+| `pnpm test:db` | **1412 / 1412**, 52 files (was 1404, 51); the changed export test re-run on `ce154c4`, 8 / 8 |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 28 migrations, up to date |
+
+CI on the pull request's exact head is reported with the pull request.
+
+**Run by hand.** Against local PostgreSQL, with an organization named
+`=株式会社 "神田", 本店` holding a purchase inside a September window and one 30
+minutes after it in Japan time:
+- the command wrote one row, the name as `"'=株式会社 ""神田"", 本店"`;
+- the file had mode `600`, began with the byte order mark and ended each line
+  in CRLF;
+- the audit entry held the operator, the reason, the window, 1 purchase and
+  ¥35,900;
+- running it again was refused because the file existed, a window ending in
+  the future was refused without creating a file, and unusable arguments
+  exited 2 with every problem listed.
+
+The summary said "1 purchases for 1 organizations"; `ce154c4` counts in the
+singular. The data was removed afterwards.
+
+New tests (62 unit, 8 database):
+- **the period's purchases** (`units-overview.test.ts`, 10 new): who sees them
+  by role and by a `billing.view` grant; no read without it; this period's
+  only, oldest first, each approver looked up once and a former member not
+  named; the current period asked for; none for an unopened period;
+- **the Units page** (`units-page.test.tsx`, 4 new): the card's lines, the
+  invoice note, an empty period, and no card for `MANAGER` or `CREATOR`;
+- **the command** (`export-unit-purchases.test.ts`, 43): every option required,
+  trimmed and length-limited; the window's offsets and order; an unknown option
+  or stray argument; Japan time; every text cell rule including each formula
+  character; the file's exact bytes; the summary, the singular, an empty
+  window; a window not ended, a file that exists, and a file that appears while
+  listing;
+- **shape** (`unit-purchase-invoicing-shape.test.ts`, 4): still 28 migrations;
+  the export one transaction writing only audit entries after its read; invoice
+  paid only; built and called only by the operator command. An existing shape
+  test is split in two (1 new) to name the Units overview's wiring as building
+  the purchase repository, and another lists the operator commands' new files;
+- **live PostgreSQL** (`unit-purchase-invoicing.db.test.ts`, 8): the window's
+  bounds, order and fields; no card-paid purchase; an audit entry per
+  organization listed with its own count and total; nothing for an empty
+  window; nothing changed by exporting; the Units overview's purchases with
+  their approvers, a former member, and one period of one organization.
+
+### Mutation ledger
+
+**33 mutants, all killed, 0 broken, 0 anchor-missing**, in one pass on the code
+of `ce154c4`. Each mutant weakens one guarantee at an anchor that occurs exactly
+once, and runs against the suites listed for it until one fails:
+
+- **domain**: the entitlement tests (223);
+- **web**: the Units page and purchase screen tests (51);
+- **ops**: the operator commands' tests (95);
+- **db**: the export, purchase and provisioning database tests (45).
+
+Every mutated file was restored and re-hashed, and all 873 files were
+byte-identical after the pass.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| L01 | who | purchases read and shown without `billing.view` | `units-overview.ts` | 3 of 223 (domain) |
+| L02 | who | an unopened period's empty list shown to everyone | `units-overview.ts` | 2 of 223 (domain) |
+| L03 | approver | an approver who has left still named | `units-overview.ts` | 1 of 223 (domain) |
+| L04 | approver | each purchase looks its approver up again | `units-overview.ts` | 1 of 223 (domain) |
+| L05 | period | another period's purchases listed | `units-overview.ts` | 6 of 223 (domain) |
+| L06 | record | the price shown is the Units | `units-overview.ts` | 4 of 223 (domain) |
+| L07 | order | the period's purchases newest first | `unit-purchase-repository.ts` | 1 of 45 (db) |
+| L08 | scope | a period read without its organization | `unit-purchase-repository.ts` | 1 of 45 (db) |
+| L09 | page | the purchases card shown to everyone | `units/page.tsx` | 2 of 51 (web) |
+| L10 | words | an approver who has left shown as nobody at all | `units/page.tsx` | 1 of 51 (web) |
+| L11 | words | the card drops that purchases are invoiced with tax | `units/page.tsx` | 1 of 51 (web) |
+| L12 | page | the price shown is the Units | `units/page.tsx` | 1 of 51 (web) |
+| E01 | channel | card-paid purchases listed for invoicing | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E02 | window | the window's end included | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E03 | window | the window's start excluded | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E04 | order | contract and approval order dropped | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E05 | audit | no organization audited | `unit-purchase-invoicing-repository.ts` | 2 of 45 (db) |
+| E06 | audit | each audit counts every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E07 | audit | the operator's name not trimmed | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E08 | audit | each audit totals every organization's purchases | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E09 | record | the organization's name listed as its id | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E10 | record | the Units listed as the price | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| E11 | record | the expiry listed as the approval time | `unit-purchase-invoicing-repository.ts` | 1 of 45 (db) |
+| C01 | window | a window that has not ended exported | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| C02 | window | a window ending exactly now refused | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| C03 | file | an existing file not refused before reading | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| C04 | format | only `=` and `+` neutralised | `export-unit-purchases.ts` | 4 of 95 (ops) |
+| C05 | format | quotes in text not doubled | `export-unit-purchases.ts` | 2 of 95 (ops) |
+| C06 | format | no byte order mark | `export-unit-purchases.ts` | 2 of 95 (ops) |
+| C07 | format | LF line ends | `export-unit-purchases.ts` | 2 of 95 (ops) |
+| C08 | format | times written in UTC, labelled Japan time | `export-unit-purchases.ts` | 6 of 95 (ops) |
+| C09 | window | an empty window accepted | `export-unit-purchases.ts` | 1 of 95 (ops) |
+| C10 | format | the Units and the price swapped | `export-unit-purchases.ts` | 1 of 95 (ops) |
+
+E06 and E08 would have survived the first version of the audit test, which
+listed one organization only; `ce154c4` lists two before the pass ran.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the Units overview row names the purchases, a new row for the export, and the Billing row no longer names UP-4 |
+| Entity-relationship diagram | Not applicable: UP-4 adds no table, column or relation |
+| Critical sequence diagram | this section, *Invoicing a month* |
+| OpenAPI / API change summary | `docs/api-changes-up-4.md`: the Units page's card, the command's options, exit codes and file, `listForPeriod`, `purchases` on the overview, the invoicing repository |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *UP-4*: no migration; what changes at deploy; the export's scan |
+| Completion report | this file |
+
+Also updated: `docs/local-setup.md` (how to run the export), `docs/Roadmap.md`,
+`docs/decisions/TODO.md` (the Unit accounting item, the open item on
+correcting a purchase made in error, and the purchase-timing decision) and
+`docs/unit-purchase-gap-analysis.md` (what building UP-4 found).
+
+### Activation status
+
+Nothing paid or scheduled is activated. UP-4 adds a read to the Units page and
+an operator command that someone runs by hand: no worker, scheduler, credential,
+environment variable, dependency or payment integration. Paid Provider
+Activation, production credentials, the production scheduler and live Stripe
+charges remain BLOCKED.
+
+### Known limitations
+
+- **A purchase made in error cannot be corrected in the product.** Exporting a
+  window again lists a purchase credited outside the product. How it is
+  corrected is with the product owner (ADR-0069 Decision 6, `TODO.md`).
+- **No record of what was invoiced**: consecutive windows are the boundary.
+- **The command's entry point is not unit-tested.** `src/bin/export-unit-purchases.ts`
+  only wires the database and the file system to the tested module, as the
+  provisioning command's does; it was run by hand (above).
+- **The export scans `unit_purchases` by approval time**: the existing index
+  leads with the organization.
+- **A file that appears while the purchases are read** fails the command
+  without writing it, after the audit entries committed.
+
+### Remaining work
+
+UP-4 waits for the product owner's yes before merge. It completes the approved
+Unit purchase plan. Open: the decision on correcting a purchase made in error,
+and Stripe card payment, which needs the payment-failure gate settled and the
+product owner's go-ahead for live charges.
