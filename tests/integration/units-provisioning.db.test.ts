@@ -193,6 +193,7 @@ describe("the Units overview", () => {
       normalAddOnRemaining: 0,
       highQualityAddOnRemaining: 0,
       billing: { channel: "SALES_ASSISTED", monthlyPriceYenExTax: 119_800 },
+      mayBuyUnits: true,
     });
     expect(await prisma.unitEntitlementPeriod.count({ where: { organizationId: ORG } })).toBe(0);
     expect(await prisma.auditLog.count({ where: { organizationId: ORG } })).toBe(auditsBefore);
