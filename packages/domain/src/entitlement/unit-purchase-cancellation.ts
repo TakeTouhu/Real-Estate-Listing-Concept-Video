@@ -4,10 +4,13 @@ import { allocationSettlement } from "./allocation";
 /**
  * Cancelling a mistaken Unit purchase (UP-5, ADR-0070).
  *
- * The product owner's rule: a purchase made by mistake, by the customer or by
- * VTaVision, is cancelled by an operator who judges each case. Its unused Units
+ * The product owner's rule: only VTaVision's own mistake is free. A purchase
+ * VTaVision made by mistake is cancelled whenever it is found: its unused Units
  * are withdrawn, Units already used stay used, and the purchase is not
- * invoiced, used Units included. A cancellation covers the whole purchase, once,
+ * invoiced, used Units included. A purchase the customer made by mistake is
+ * charged, unless it is cancelled within 10 hours of its approval with none of
+ * its Units used; then it is withdrawn whole and not invoiced. An operator
+ * judges whose mistake it was. A cancellation covers the whole purchase, once,
  * and cannot be undone.
  *
  * Withdrawing is the ledger's rule, not a write to the block: a block whose
@@ -23,6 +26,20 @@ export const UNIT_PURCHASE_CANCELLED_AUDIT_ACTION = "unit_purchase.cancelled";
 
 /** The longest operator name and reason a cancellation stores, by CHECK in migration 28. */
 export const UNIT_PURCHASE_CANCELLATION_LIMITS = { operator: 200, reason: 500 } as const;
+
+/** Whose mistake the purchase was, as the operator judged it. */
+export type UnitPurchaseCancellationFault = "VTAVISION" | "CUSTOMER";
+
+/**
+ * How long after its approval a purchase the customer made by mistake can
+ * still be refunded, if none of its Units is used: 10 hours, inclusive.
+ */
+export const CUSTOMER_MISTAKE_REFUND_WINDOW_MS = 10 * 60 * 60 * 1000;
+
+/** The last instant a purchase the customer made by mistake can be refunded. */
+export function customerMistakeRefundDeadline(approvedAt: Date): Date {
+  return new Date(approvedAt.getTime() + CUSTOMER_MISTAKE_REFUND_WINDOW_MS);
+}
 
 /** How a purchase's Units stand, from the allocations its block funded. */
 export interface UnitPurchaseUsage {
@@ -56,6 +73,7 @@ export function unitPurchaseUsage(
 }
 
 export interface UnitPurchaseCancellation {
+  readonly fault: UnitPurchaseCancellationFault;
   readonly operatorName: string;
   readonly reason: string;
   /** The database's clock when the cancelling transaction started. */
@@ -81,6 +99,31 @@ export interface CancellableUnitPurchase {
   /** As the read found it: for a cancellation, as it was cancelled. */
   readonly usage: UnitPurchaseUsage;
   readonly cancellation: UnitPurchaseCancellation | null;
+  /**
+   * The database's clock as the read found it: in a cancelling transaction,
+   * when that transaction started, which is when the purchase is cancelled.
+   */
+  readonly readAt: Date;
+}
+
+/**
+ * Why a purchase the customer made by mistake cannot be refunded now: more
+ * than 10 hours have passed since its approval, or some of its Units are
+ * delivered or still generating. `null` when it can be, and always for
+ * VTaVision's own mistake.
+ */
+export type CustomerMistakeRefusal = "REFUND_WINDOW_PASSED" | "UNITS_USED";
+
+export function cancellationRefusal(
+  fault: UnitPurchaseCancellationFault,
+  purchase: Pick<CancellableUnitPurchase, "approvedAt" | "usage" | "readAt">,
+): CustomerMistakeRefusal | null {
+  if (fault === "VTAVISION") return null;
+  if (purchase.readAt.getTime() > customerMistakeRefundDeadline(purchase.approvedAt).getTime()) {
+    return "REFUND_WINDOW_PASSED";
+  }
+  if (purchase.usage.consumed > 0 || purchase.usage.inFlight > 0) return "UNITS_USED";
+  return null;
 }
 
 /** A cancelled purchase. */
@@ -88,6 +131,7 @@ export type CancelledUnitPurchase = CancellableUnitPurchase & { readonly cancell
 
 export interface CancelUnitPurchaseRequest {
   readonly purchaseId: string;
+  readonly fault: UnitPurchaseCancellationFault;
   readonly operator: { readonly name: string; readonly reason: string };
 }
 
@@ -101,6 +145,11 @@ export type CancelUnitPurchaseOutcome =
    * None exists while card payment is not built. Nothing was written.
    */
   | { readonly kind: "CARD_PAID"; readonly purchase: CancellableUnitPurchase }
+  /**
+   * The customer's mistake, refused by `cancellationRefusal`: it stays
+   * invoiced and its Units stay usable. Nothing was written.
+   */
+  | { readonly kind: CustomerMistakeRefusal; readonly purchase: CancellableUnitPurchase }
   | { readonly kind: "NOT_FOUND" };
 
 export interface UnitPurchaseCancellationRepository {
@@ -108,7 +157,8 @@ export interface UnitPurchaseCancellationRepository {
   find(purchaseId: string): Promise<CancellableUnitPurchase | null>;
   /**
    * Cancel the purchase and audit it in one transaction, under its period's
-   * cost-admission lock, reading its usage there.
+   * cost-admission lock, reading its usage and the database's clock there and
+   * deciding `cancellationRefusal` on them.
    */
   cancel(request: CancelUnitPurchaseRequest): Promise<CancelUnitPurchaseOutcome>;
 }

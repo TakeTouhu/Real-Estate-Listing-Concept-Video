@@ -1,9 +1,13 @@
 import { parseArgs } from "node:util";
 import {
   UNIT_PURCHASE_CANCELLATION_LIMITS,
+  cancellationRefusal,
+  customerMistakeRefundDeadline,
   type CancellableUnitPurchase,
   type CancelUnitPurchaseRequest,
+  type CustomerMistakeRefusal,
   type UnitPurchaseCancellation,
+  type UnitPurchaseCancellationFault,
   type UnitPurchaseCancellationRepository,
 } from "@app/domain";
 import { jstInstant, QUALITY_NAMES } from "./export-unit-purchases";
@@ -14,7 +18,12 @@ import { jstInstant, QUALITY_NAMES } from "./export-unit-purchases";
  * Run without `--confirm`, it shows the purchase and what cancelling it would
  * do, and writes nothing. Run again with `--confirm`, it cancels it: the unused
  * Units are withdrawn, the used ones stay used, and the purchase is not
- * invoiced, used Units included. It cannot be undone. Like the other operator
+ * invoiced, used Units included. It cannot be undone.
+ *
+ * `--fault` says whose mistake it was, as the operator judged it. VTaVision's
+ * own is cancelled whenever it is found. The customer's is cancelled only
+ * within 10 hours of its approval with none of its Units used, and is
+ * otherwise refused: it stays invoiced and its Units stay usable. Like the other operator
  * commands, it runs with the database credentials of whoever runs it, which is
  * the privilege, and the cancellation is audited with the operator's name and
  * reason.
@@ -23,6 +32,7 @@ import { jstInstant, QUALITY_NAMES } from "./export-unit-purchases";
 export const USAGE = [
   "Usage: pnpm --filter @app/ops cancel-unit-purchase \\",
   "  --purchase <purchase id, e.g. upur_...> \\",
+  "  --fault <vtavision or customer: whose mistake it was> \\",
   "  --operator <your name> \\",
   "  --reason <why, e.g. bought by mistake, as the customer wrote on 2026-10-19> \\",
   "  [--confirm]   without it, nothing is cancelled: the purchase is only shown",
@@ -57,6 +67,7 @@ export function parseCancelArguments(argv: readonly string[]): ParsedCancelArgum
       allowPositionals: false,
       options: {
         purchase: { type: "string" },
+        fault: { type: "string" },
         operator: { type: "string" },
         reason: { type: "string" },
         confirm: { type: "boolean" },
@@ -68,11 +79,28 @@ export function parseCancelArguments(argv: readonly string[]): ParsedCancelArgum
 
   const errors: string[] = [];
   const purchaseId = required(values, "purchase", errors);
+  const fault = faultOf(values.fault, errors);
   const name = required(values, "operator", errors);
   const reason = required(values, "reason", errors);
-  if (errors.length > 0) return { ok: false, error: errors.join("\n") };
-  return { ok: true, value: { request: { purchaseId, operator: { name, reason } }, confirm: values.confirm === true } };
+  if (errors.length > 0 || fault === null) return { ok: false, error: errors.join("\n") };
+  return {
+    ok: true,
+    value: { request: { purchaseId, fault, operator: { name, reason } }, confirm: values.confirm === true },
+  };
 }
+
+function faultOf(raw: unknown, errors: string[]): UnitPurchaseCancellationFault | null {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value === "vtavision") return "VTAVISION";
+  if (value === "customer") return "CUSTOMER";
+  errors.push(value === "" ? "--fault is required" : "--fault must be vtavision or customer");
+  return null;
+}
+
+const WHOSE: Record<UnitPurchaseCancellationFault, string> = {
+  VTAVISION: "VTaVision's mistake",
+  CUSTOMER: "the customer's mistake",
+};
 
 export interface CancelResult {
   /** 0 when shown, cancelled or already cancelled; 1 when refused. */
@@ -115,14 +143,23 @@ export async function runCancelUnitPurchase(
     }
     if (purchase.cancellation !== null) return alreadyCancelled(purchase, purchase.cancellation);
     if (!purchase.invoicePaid) return cardPaid(purchase);
+    const refusal = cancellationRefusal(request.fault, purchase);
+    if (refusal !== null) return refused(purchase, refusal);
     const { usage } = purchase;
+    const what =
+      request.fault === "VTAVISION"
+        ? `As VTaVision's mistake, cancelling it withdraws its ${usage.unused} unused Units now, and any that ` +
+          `a running generation fails to use; the ${usage.consumed} delivered stay used. The whole purchase ` +
+          "is then not invoiced, used Units included. It cannot be undone."
+        : `As the customer's mistake, cancelling it withdraws all ${usage.unused} of its Units now, none of ` +
+          "them used, and the purchase is not invoiced. This is possible until " +
+          `${jstInstant(customerMistakeRefundDeadline(purchase.approvedAt))}, 10 hours after its approval, ` +
+          "while none of its Units is used. It cannot be undone.";
     return {
       exitCode: 0,
       message: [
         describePurchase(purchase),
-        `Cancelling it withdraws its ${usage.unused} unused Units now, and any that a running generation ` +
-          `fails to use; the ${usage.consumed} delivered stay used. The whole purchase is then not invoiced, ` +
-          "used Units included. It cannot be undone.",
+        what,
         "Nothing was cancelled. To cancel it, run the same command again with --confirm.",
       ].join("\n"),
     };
@@ -136,15 +173,18 @@ export async function runCancelUnitPurchase(
       return alreadyCancelled(outcome.purchase, outcome.purchase.cancellation);
     case "CARD_PAID":
       return cardPaid(outcome.purchase);
+    case "REFUND_WINDOW_PASSED":
+    case "UNITS_USED":
+      return refused(outcome.purchase, outcome.kind);
     case "CANCELLED": {
       const { usage } = outcome.purchase;
       return {
         exitCode: 0,
         message: [
           describePurchase(outcome.purchase),
-          `Cancelled: ${usage.unused} unused Units withdrawn, ${usage.consumed} delivered kept, ` +
-            `${usage.inFlight} still generating left to finish. It will not be invoiced. ` +
-            `Audited with operator ${request.operator.name}.`,
+          `Cancelled as ${WHOSE[request.fault]}: ${usage.unused} unused Units withdrawn, ` +
+            `${usage.consumed} delivered kept, ${usage.inFlight} still generating left to finish. ` +
+            `It will not be invoiced. Audited with operator ${request.operator.name}.`,
           AFTERWARDS,
         ].join("\n"),
       };
@@ -157,8 +197,8 @@ function alreadyCancelled(purchase: CancellableUnitPurchase, cancellation: UnitP
     exitCode: 0,
     message:
       `${describePurchase(purchase)}\n` +
-      `It was already cancelled on ${jstInstant(cancellation.cancelledAt)} by ${cancellation.operatorName}. ` +
-      "Nothing was written.",
+      `It was already cancelled on ${jstInstant(cancellation.cancelledAt)} by ${cancellation.operatorName}, ` +
+      `as ${WHOSE[cancellation.fault]}. Nothing was written.`,
   };
 }
 
@@ -168,5 +208,21 @@ function cardPaid(purchase: CancellableUnitPurchase): CancelResult {
     message:
       `${describePurchase(purchase)}\n` +
       "Refused: its payment processor charged it, so it is refunded there, not cancelled here. Nothing was cancelled.",
+  };
+}
+
+/** The customer's mistake, past its window or with Units used: it stays as bought. */
+function refused(purchase: CancellableUnitPurchase, refusal: CustomerMistakeRefusal): CancelResult {
+  const why =
+    refusal === "REFUND_WINDOW_PASSED"
+      ? "it was approved more than 10 hours ago (the customer's mistake can be refunded until " +
+        `${jstInstant(customerMistakeRefundDeadline(purchase.approvedAt))})`
+      : `${purchase.usage.consumed} of its Units are delivered and ${purchase.usage.inFlight} still generating, ` +
+        "and the customer's mistake is refunded only while none is used";
+  return {
+    exitCode: 1,
+    message:
+      `${describePurchase(purchase)}\n` +
+      `Refused: ${why}. It stays invoiced and its Units stay usable. Nothing was cancelled.`,
   };
 }

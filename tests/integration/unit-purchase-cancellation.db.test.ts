@@ -25,9 +25,10 @@ import {
  * withdrawn-block rule in `allocation.test.ts`. What only a database can prove
  * is here: that a reservation admitted after a cancellation cannot draw on the
  * block, that one admitted before keeps its funding and returns nothing when it
- * is released, that the cancellation is written once, with its audit entry and
- * under the period's lock, and that the purchase and its block are never
- * rewritten.
+ * is released, that the customer's own mistake is refused past its 10 hours or
+ * once a Unit is used, by the database's clock and the usage read under the
+ * lock, that the cancellation is written once, with its audit entry and under
+ * the period's lock, and that the purchase and its block are never rewritten.
  *
  * The period sits in March 2027, after every other suite's, so none overlaps.
  */
@@ -58,6 +59,11 @@ async function cleanup(): Promise<void> {
   await prisma.unitAddOnBlock.deleteMany({ where: { id: { startsWith: "uab_cancel_itest_" } } });
   await prisma.unitEntitlementPeriod.deleteMany({ where: { id: { startsWith: "uep_cancel_itest_" } } });
   await prisma.auditLog.deleteMany({ where: { action: "unit_purchase.cancelled" } });
+  // An export's audit entries too: a run that failed before its own cleanup
+  // must not leave one for the next run to find.
+  await prisma.auditLog.deleteMany({
+    where: { action: "unit_purchase.exported", organizationId: { in: [ORG_A, ORG_B] } },
+  });
 }
 
 /** A Standard period: 15 Base Units, spent here so only blocks fund what follows. */
@@ -191,7 +197,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       await spendBase();
       const mistaken = await bought(1);
       const next = await bought(2);
-      expect((await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR })).kind).toBe("CANCELLED");
+      expect((await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR })).kind).toBe("CANCELLED");
 
       const after = await reserved(3);
       expect(await fundingOf(after.id)).toEqual([[await blockOf(next), 3]]);
@@ -204,7 +210,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     it("refuses a reservation the withdrawn block alone could have funded, writing nothing", async () => {
       await spendBase();
       const mistaken = await bought(1);
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       const before = await prisma.generationReservation.count();
 
       expect(await reserve(1)).toMatchObject({ kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: 0 });
@@ -218,7 +224,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       const funding = await fundingOf(running.id);
       expect(funding).toEqual([[await blockOf(mistaken), 2]]);
 
-      const cancelled = await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      const cancelled = await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       expect(cancelled).toMatchObject({ kind: "CANCELLED", purchase: { usage: { consumed: 0, inFlight: 2, unused: 8 } } });
       expect(await fundingOf(running.id)).toEqual(funding);
 
@@ -248,7 +254,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
         context: ctx(),
       });
       expect(released.kind).toBe("APPLIED");
-      expect(await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR })).toMatchObject({
+      expect(await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR })).toMatchObject({
         kind: "CANCELLED",
         purchase: { usage: { consumed: 0, inFlight: 0, unused: 10 } },
       });
@@ -257,7 +263,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     it("withdraws nothing from another purchase, or from Base Units", async () => {
       const mistaken = await bought(1);
       const kept = await bought(2);
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       const balance = await ledger.balance(ORG_A, PERIOD_ID);
       expect(balance?.baseRemainingUnits).toBe(15);
       expect(await blocks()).toEqual([
@@ -278,11 +284,17 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
 
       const outcome = await cancellations.cancel({
         purchaseId: mistaken,
+        fault: "VTAVISION",
         operator: { name: "  Aoi Tanaka ", reason: " Bought by mistake  " },
       });
 
       const row = await prisma.unitPurchaseCancellation.findUniqueOrThrow({ where: { purchaseId: mistaken } });
-      expect(row).toMatchObject({ organizationId: ORG_A, operatorName: "Aoi Tanaka", reason: "Bought by mistake" });
+      expect(row).toMatchObject({
+        organizationId: ORG_A,
+        fault: "VTAVISION",
+        operatorName: "Aoi Tanaka",
+        reason: "Bought by mistake",
+      });
       expect(row.cancelledAt.getTime()).toBeGreaterThanOrEqual(startedBefore.getTime());
       expect(outcome).toEqual({
         kind: "CANCELLED",
@@ -298,7 +310,13 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
           approvedAt: purchaseBefore.approvedAt,
           expiresAt: ENDS_AT,
           usage: { consumed: 0, inFlight: 1, unused: 9 },
-          cancellation: { operatorName: "Aoi Tanaka", reason: "Bought by mistake", cancelledAt: row.cancelledAt },
+          cancellation: {
+            fault: "VTAVISION",
+            operatorName: "Aoi Tanaka",
+            reason: "Bought by mistake",
+            cancelledAt: row.cancelledAt,
+          },
+          readAt: row.cancelledAt,
         },
       });
       expect(
@@ -316,6 +334,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
           resourceType: "unit_purchase",
           resourceId: mistaken,
           metadata: {
+            fault: "VTAVISION",
             operator: "Aoi Tanaka",
             reason: "Bought by mistake",
             quality: "NORMAL",
@@ -335,9 +354,15 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
 
     it("cancels once: a second cancellation finds the first and writes nothing", async () => {
       const mistaken = await bought(1);
-      const first = await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
-      const second = await cancellations.cancel({ purchaseId: mistaken, operator: { name: "Someone else", reason: "Again" } });
-      expect(second).toEqual({ ...first, kind: "ALREADY_CANCELLED" });
+      const first = await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
+      const second = await cancellations.cancel({
+        purchaseId: mistaken,
+        fault: "CUSTOMER",
+        operator: { name: "Someone else", reason: "Again" },
+      });
+      if (first.kind !== "CANCELLED" || second.kind !== "ALREADY_CANCELLED") throw new Error("expected both");
+      // The first cancellation as recorded, its fault included, read by the second's transaction.
+      expect(second.purchase).toEqual({ ...first.purchase, readAt: second.purchase.readAt });
       expect(await prisma.unitPurchaseCancellation.count()).toBe(1);
       expect(await audits()).toHaveLength(1);
     });
@@ -345,8 +370,8 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     it("writes one of two cancellations sent at once", async () => {
       const mistaken = await bought(1);
       const outcomes = await Promise.all([
-        cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR }),
-        cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR }),
+        cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR }),
+        cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR }),
       ]);
       expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual(["ALREADY_CANCELLED", "CANCELLED"]);
       expect(await audits()).toHaveLength(1);
@@ -377,7 +402,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       await held;
 
       let finished = false;
-      const cancelling = cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR }).finally(() => {
+      const cancelling = cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR }).finally(() => {
         finished = true;
       });
       try {
@@ -392,7 +417,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     });
 
     it("refuses a purchase that does not exist, writing nothing", async () => {
-      expect(await cancellations.cancel({ purchaseId: "upur_nowhere", operator: OPERATOR })).toEqual({
+      expect(await cancellations.cancel({ purchaseId: "upur_nowhere", fault: "VTAVISION", operator: OPERATOR })).toEqual({
         kind: "NOT_FOUND",
       });
       expect(await cancellations.find("upur_nowhere")).toBeNull();
@@ -402,7 +427,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     it("refuses a card-paid purchase, writing nothing", async () => {
       const card = await bought(1);
       await prisma.unitPurchase.update({ where: { id: card }, data: { channel: "SELF_SERVICE" } });
-      expect(await cancellations.cancel({ purchaseId: card, operator: OPERATOR })).toMatchObject({
+      expect(await cancellations.cancel({ purchaseId: card, fault: "VTAVISION", operator: OPERATOR })).toMatchObject({
         kind: "CARD_PAID",
         purchase: { purchaseId: card, invoicePaid: false, cancellation: null },
       });
@@ -420,11 +445,81 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
         usage: { consumed: 0, inFlight: 0, unused: 10 },
         cancellation: null,
       });
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       expect(await cancellations.find(mistaken)).toMatchObject({
-        cancellation: { operatorName: "Aoi Tanaka", reason: "Bought by mistake" },
+        cancellation: { fault: "VTAVISION", operatorName: "Aoi Tanaka", reason: "Bought by mistake" },
       });
       expect(await audits()).toHaveLength(1);
+    });
+  });
+
+  describe("the customer's mistake", () => {
+    /** Approved `hours` hours before the database's clock says it is now. */
+    async function approvedHoursAgo(purchaseId: string, hours: number): Promise<void> {
+      const [{ now }] = await prisma.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
+      await prisma.unitPurchase.update({
+        where: { id: purchaseId },
+        data: { approvedAt: new Date(now.getTime() - hours * 3_600_000) },
+      });
+    }
+    const customer = (purchaseId: string) =>
+      cancellations.cancel({ purchaseId, fault: "CUSTOMER", operator: OPERATOR });
+
+    it("refunds it within 10 hours of its approval while none of its Units is used", async () => {
+      await spendBase();
+      const mistaken = await bought(1);
+      await approvedHoursAgo(mistaken, 9.9);
+      expect(await customer(mistaken)).toMatchObject({
+        kind: "CANCELLED",
+        purchase: { usage: { consumed: 0, inFlight: 0, unused: 10 }, cancellation: { fault: "CUSTOMER" } },
+      });
+      expect(await prisma.unitPurchaseCancellation.findUniqueOrThrow({ where: { purchaseId: mistaken } })).toMatchObject({
+        fault: "CUSTOMER",
+      });
+      expect(await audits()).toMatchObject([{ metadata: { fault: "CUSTOMER", unitsWithdrawn: 10 } }]);
+      expect(await blocks()).toEqual([[await blockOf(mistaken), 0, true]]);
+      expect(await reserve(1)).toMatchObject({ kind: "INSUFFICIENT_ENTITLEMENT" });
+    });
+
+    it("refuses it more than 10 hours after its approval: it stays invoiced and its Units stay usable", async () => {
+      await spendBase();
+      const mistaken = await bought(1);
+      await approvedHoursAgo(mistaken, 10.01);
+      expect(await customer(mistaken)).toMatchObject({
+        kind: "REFUND_WINDOW_PASSED",
+        purchase: { purchaseId: mistaken, cancellation: null },
+      });
+      expect(await prisma.unitPurchaseCancellation.count()).toBe(0);
+      expect(await audits()).toEqual([]);
+      expect(await blocks()).toEqual([[await blockOf(mistaken), 10, false]]);
+      expect(await reserve(1)).toMatchObject({ kind: "RESERVED" });
+    });
+
+    it("refuses it while a generation it funds is running, within the 10 hours", async () => {
+      await spendBase();
+      const mistaken = await bought(1);
+      await reserved(1);
+      await approvedHoursAgo(mistaken, 1);
+      expect(await customer(mistaken)).toMatchObject({
+        kind: "UNITS_USED",
+        purchase: { usage: { consumed: 0, inFlight: 1, unused: 9 }, cancellation: null },
+      });
+      expect(await prisma.unitPurchaseCancellation.count()).toBe(0);
+      expect(await audits()).toEqual([]);
+      expect(await blocks()).toEqual([[await blockOf(mistaken), 9, false]]);
+    });
+
+    it("leaves VTaVision's own mistake cancellable long after its approval, with a generation running", async () => {
+      await spendBase();
+      const mistaken = await bought(1);
+      await reserved(1);
+      await approvedHoursAgo(mistaken, 48);
+      expect(
+        await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR }),
+      ).toMatchObject({
+        kind: "CANCELLED",
+        purchase: { usage: { inFlight: 1, unused: 9 }, cancellation: { fault: "VTAVISION" } },
+      });
     });
   });
 
@@ -433,7 +528,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       const mistaken = await bought(1);
       await expect(
         prisma.unitPurchaseCancellation.create({
-          data: { purchaseId: mistaken, organizationId: ORG_B, operatorName: "x", reason: "x" },
+          data: { purchaseId: mistaken, organizationId: ORG_B, fault: "VTAVISION", operatorName: "x", reason: "x" },
         }),
       ).rejects.toThrow();
     });
@@ -446,13 +541,15 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
     ])("refuses %s", async (_, fields) => {
       const mistaken = await bought(1);
       await expect(
-        prisma.unitPurchaseCancellation.create({ data: { purchaseId: mistaken, organizationId: ORG_A, ...fields } }),
+        prisma.unitPurchaseCancellation.create({
+          data: { purchaseId: mistaken, organizationId: ORG_A, fault: "VTAVISION", ...fields },
+        }),
       ).rejects.toThrow(/unit_purchase_cancellations_shape_check/);
     });
 
     it("refuses deleting a cancelled purchase", async () => {
       const mistaken = await bought(1);
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       await expect(prisma.unitPurchase.delete({ where: { id: mistaken } })).rejects.toThrow();
     });
   });
@@ -469,7 +566,7 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
       ] as const) {
         await prisma.unitPurchase.update({ where: { id }, data: { approvedAt: new Date(at) } });
       }
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       const cancelledAt = (await prisma.unitPurchaseCancellation.findUniqueOrThrow({ where: { purchaseId: mistaken } }))
         .cancelledAt;
 
@@ -488,13 +585,12 @@ RUN("UP-5 — cancelling a mistaken Unit purchase", () => {
         where: { organizationId: ORG_A, action: "unit_purchase.exported" },
       });
       expect(audit.metadata).toMatchObject({ purchases: 2, priceYenExTax: 39_800, cancelled: 1, toInvoiceYenExTax: 19_900 });
-      await prisma.auditLog.deleteMany({ where: { action: "unit_purchase.exported", organizationId: ORG_A } });
     });
 
     it("lists a cancelled purchase with when it was cancelled", async () => {
       const mistaken = await bought(1);
       const kept = await bought(2);
-      await cancellations.cancel({ purchaseId: mistaken, operator: OPERATOR });
+      await cancellations.cancel({ purchaseId: mistaken, fault: "VTAVISION", operator: OPERATOR });
       const listed = await createUnitPurchaseRepository(prisma).listForPeriod(ORG_A, PERIOD_ID);
       expect(listed.map((purchase) => [purchase.id, purchase.cancelledAt instanceof Date])).toEqual([
         [mistaken, true],

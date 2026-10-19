@@ -5,13 +5,15 @@ import { describe, expect, it } from "vitest";
 /**
  * What UP-5 may and may not have changed (ADR-0070).
  *
- * 1. **One migration, the newest**: the cancellation table and the composite
- *    key it points through, additive only, storing no count of Units.
+ * 1. **One migration, the newest**: the cancellation table, the type naming
+ *    whose mistake it was, and the composite key it points through, additive
+ *    only, storing no count of Units.
  * 2. **The purchase and its block are never rewritten.** Withdrawing is the
  *    ledger's reading of the cancellation, not a write.
  * 3. **One transaction, in the established lock order.** The cost-admission lock
- *    first, then the read the cancellation is decided on, then the
- *    cancellation and its audit entry.
+ *    first, then the read the cancellation is decided on, the database's clock
+ *    with it, then the customer's refund window and usage checked on that
+ *    read, then the cancellation and its audit entry.
  * 4. **Only the operator command cancels.** Neither application can reach it.
  */
 
@@ -57,8 +59,11 @@ describe("UP-5 shape", () => {
     expect(dirs).toHaveLength(29);
   });
 
-  it("creates the cancellation table and one unique index, and rewrites no existing row", () => {
+  it("creates the cancellation table, the type naming whose mistake it was and one unique index, and rewrites no existing row", () => {
     const sql = migrationSql();
+    expect(sql.match(/CREATE TYPE "\w+" AS ENUM \([^)]*\)/g)).toEqual([
+      `CREATE TYPE "UnitPurchaseCancellationFault" AS ENUM ('VTAVISION', 'CUSTOMER')`,
+    ]);
     expect(sql.match(/CREATE TABLE "\w+"/g)).toEqual([`CREATE TABLE "unit_purchase_cancellations"`]);
     expect(sql.match(/CREATE (UNIQUE )?INDEX "\w+"/g)).toEqual([
       `CREATE UNIQUE INDEX "unit_purchases_id_organizationId_key"`,
@@ -85,7 +90,8 @@ describe("UP-5 shape", () => {
   it("stores no count of Units: the ledger derives what remains from allocations alone", () => {
     const sql = migrationSql();
     const columns = [...sql.matchAll(/^\s+"(\w+)" /gm)].map(([, column]) => column);
-    expect(columns).toEqual(["purchaseId", "organizationId", "operatorName", "reason", "cancelledAt"]);
+    expect(columns).toEqual(["purchaseId", "organizationId", "fault", "operatorName", "reason", "cancelledAt"]);
+    expect(sql).toContain(`"fault" "UnitPurchaseCancellationFault" NOT NULL,`);
   });
 
   it("cancels in one transaction, under the cost-admission lock, writing only the cancellation and its audit entry", () => {
@@ -95,14 +101,21 @@ describe("UP-5 shape", () => {
     for (const banned of [/\.update(Many)?\(/, /\.delete(Many)?\(/, /\.upsert\(/, /\.createMany\(/, /\$executeRaw/, /Unsafe/]) {
       expect(`${banned}: ${banned.test(source)}`).toBe(`${banned}: false`);
     }
-    // Only the database's clock, to stamp the cancellation with.
+    // Only the database's clock, read with the purchase: the refund window is
+    // checked against it and the cancellation stamped with it.
     expect(source.match(/\$queryRaw[^`]*`[^`]*`/g)).toEqual(["$queryRaw<[{ now: Date }]>`SELECT now() AS now`"]);
+    expect(source).toContain("readAt: now,");
+    expect(source).toContain("cancelledAt: purchase.readAt,");
     const lock = source.indexOf("acquireCostAdmissionLock(tx");
     expect(lock).toBeGreaterThan(source.indexOf("prisma.$transaction("));
-    for (const later of ["read(tx", "tx.$queryRaw", "tx.unitPurchaseCancellation.create(", "tx.auditLog.create("]) {
-      expect(source.indexOf(later)).toBeGreaterThan(lock);
-    }
-    expect(source.indexOf("tx.unitPurchaseCancellation.create(")).toBeLessThan(source.indexOf("tx.auditLog.create("));
+    const order = [
+      "read(tx, purchaseId)",
+      "cancellationRefusal(fault, purchase)",
+      "tx.unitPurchaseCancellation.create(",
+      "tx.auditLog.create(",
+    ].map((step) => source.indexOf(step));
+    expect(order.every((at) => at > lock)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it("withdraws a block by reading its purchase's cancellation in the one balance every reservation plans against", () => {

@@ -1,10 +1,13 @@
 -- UP-5 — cancelling a mistaken Unit purchase (ADR-0070).
 --
 -- One table: an operator's cancellation of a purchase, at most one per
--- purchase, naming who cancelled it and why. The cancellation and its audit
--- entry are written in one transaction under the period's cost-admission lock.
--- From then on no new reservation may draw on the purchase's block, and the
--- purchase is not invoiced; Units already used stay used.
+-- purchase, naming whose mistake it was, who cancelled it and why. The
+-- cancellation and its audit entry are written in one transaction under the
+-- period's cost-admission lock. From then on no new reservation may draw on
+-- the purchase's block, and the purchase is not invoiced; Units already used
+-- stay used. The customer's own mistake is cancelled only within 10 hours of
+-- its approval with no Unit used, which the repository decides under that
+-- lock: no row records a refusal.
 --
 -- The purchase row is not changed: billing evidence is never rewritten
 -- (ADR-0067 Decision 2). How many of its Units were used, still running and
@@ -18,10 +21,14 @@
 -- Additive only. No existing table, column or row is read, updated or deleted,
 -- and migrations 0 through 27 are not touched.
 
+-- CreateEnum
+CREATE TYPE "UnitPurchaseCancellationFault" AS ENUM ('VTAVISION', 'CUSTOMER');
+
 -- CreateTable
 CREATE TABLE "unit_purchase_cancellations" (
     "purchaseId" TEXT NOT NULL,
     "organizationId" TEXT NOT NULL,
+    "fault" "UnitPurchaseCancellationFault" NOT NULL,
     "operatorName" TEXT NOT NULL,
     "reason" TEXT NOT NULL,
     "cancelledAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

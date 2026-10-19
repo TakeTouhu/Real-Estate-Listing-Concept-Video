@@ -9,10 +9,17 @@
  * the ledger (`loadPeriodBalance`). Two cancellations of one purchase are
  * ordered the same way, and the second finds the first.
  *
+ * Whose mistake it was is the operator's judgement, recorded on the
+ * cancellation. VTaVision's own is cancelled whenever it is found. The
+ * customer's is refused unless the database's clock is within 10 hours of the
+ * approval and none of the Units is delivered or still generating, both read
+ * under the lock, so no reservation can start using the Units between the
+ * check and the write (`cancellationRefusal`).
+ *
  * ## Lock order
  *
  * ```text
- * cost-admission advisory lock -> inserts
+ * cost-admission advisory lock -> the purchase, its allocations and now() -> inserts
  * ```
  *
  * The purchase is located before the lock only to name the period's lock key:
@@ -26,6 +33,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   UNIT_PURCHASE_CANCELLED_AUDIT_ACTION,
+  cancellationRefusal,
   unitPurchaseUsage,
   type CancellableUnitPurchase,
   type UnitPurchaseCancellationRepository,
@@ -40,12 +48,18 @@ const PURCHASE_FACTS = {
     select: { quantity: true, allocations: { select: { quantity: true, reservation: { select: { state: true } } } } },
   },
   entitlementPeriod: { select: { endsAt: true } },
-  cancellations: { select: { operatorName: true, reason: true, cancelledAt: true } },
+  cancellations: { select: { fault: true, operatorName: true, reason: true, cancelledAt: true } },
 } as const;
 
+/**
+ * The purchase and the database's clock. In a transaction, `now()` is when the
+ * transaction started, so the cancellation is stamped with the same instant
+ * its refund window was checked against.
+ */
 async function read(db: Tx | PrismaClient, purchaseId: string): Promise<CancellableUnitPurchase | null> {
   const row = await db.unitPurchase.findUnique({ where: { id: purchaseId }, include: PURCHASE_FACTS });
   if (row === null) return null;
+  const [{ now }] = await db.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
   return {
     purchaseId: row.id,
     organizationId: row.organizationId,
@@ -65,6 +79,7 @@ async function read(db: Tx | PrismaClient, purchaseId: string): Promise<Cancella
       })),
     ),
     cancellation: row.cancellations[0] ?? null,
+    readAt: now,
   };
 }
 
@@ -74,7 +89,7 @@ export function createUnitPurchaseCancellationRepository(prisma: PrismaClient): 
       return read(prisma, purchaseId);
     },
 
-    cancel({ purchaseId, operator }) {
+    cancel({ purchaseId, fault, operator }) {
       return prisma.$transaction(async (tx) => {
         const located = await tx.unitPurchase.findUnique({
           where: { id: purchaseId },
@@ -89,17 +104,19 @@ export function createUnitPurchaseCancellationRepository(prisma: PrismaClient): 
           return { kind: "ALREADY_CANCELLED" as const, purchase: { ...purchase, cancellation: purchase.cancellation } };
         }
         if (!purchase.invoicePaid) return { kind: "CARD_PAID" as const, purchase };
+        const refusal = cancellationRefusal(fault, purchase);
+        if (refusal !== null) return { kind: refusal, purchase };
 
-        const [{ now }] = await tx.$queryRaw<[{ now: Date }]>`SELECT now() AS now`;
         const cancellation = await tx.unitPurchaseCancellation.create({
           data: {
             purchaseId,
             organizationId: purchase.organizationId,
+            fault,
             operatorName: operator.name.trim(),
             reason: operator.reason.trim(),
-            cancelledAt: now,
+            cancelledAt: purchase.readAt,
           },
-          select: { operatorName: true, reason: true, cancelledAt: true },
+          select: { fault: true, operatorName: true, reason: true, cancelledAt: true },
         });
         await tx.auditLog.create({
           data: {
@@ -109,6 +126,7 @@ export function createUnitPurchaseCancellationRepository(prisma: PrismaClient): 
             resourceType: "unit_purchase",
             resourceId: purchaseId,
             metadata: {
+              fault: cancellation.fault,
               operator: cancellation.operatorName,
               reason: cancellation.reason,
               quality: purchase.quality,
