@@ -94,12 +94,20 @@ function bought(overrides: Partial<UnitPurchase> & Pick<UnitPurchase, "id" | "ap
     expiresAt: iso("2026-05-15T00:00:00.000Z"),
     idempotencyKey: `key_${overrides.id}`,
     approvedByUserId: ids.BILLING,
+    cancelledAt: null,
     ...overrides,
   });
 }
 
-function listed(quality: GenerationQualityTier, units: number, price: number, at: string, by: string | null) {
-  return { quality, units, priceYenExTax: price, approvedAt: iso(at), approvedBy: by };
+function listed(
+  quality: GenerationQualityTier,
+  units: number,
+  price: number,
+  at: string,
+  by: string | null,
+  cancelledAt: Date | null = null,
+) {
+  return { quality, units, priceYenExTax: price, approvedAt: iso(at), approvedBy: by, cancelledAt };
 }
 
 describe("who may see it", () => {
@@ -219,21 +227,18 @@ describe("without a period in the ledger", () => {
 });
 
 describe("with a period in the ledger", () => {
-  it("shows what the ledger says is left, blocks oldest first", async () => {
+  it("shows what the ledger says is left, blocks oldest first, a withdrawn one marked", async () => {
     subscribe({ planKey: "premium" });
     premiumPeriod();
+    const at = (instant: string) => iso(instant).getTime();
     reader.balances.set("uep_premium", {
       baseRemainingUnits: 12,
       includedHighQualityRemainingUnits: 2,
       blocks: [
-        { id: "b2", quality: "NORMAL", remainingUnits: 4, purchasedAtEpochMs: iso("2026-04-18T00:00:00.000Z").getTime() },
-        {
-          id: "b1",
-          quality: "HIGH_QUALITY",
-          remainingUnits: 2,
-          purchasedAtEpochMs: iso("2026-04-16T00:00:00.000Z").getTime(),
-        },
-        { id: "a3", quality: "NORMAL", remainingUnits: 10, purchasedAtEpochMs: iso("2026-04-18T00:00:00.000Z").getTime() },
+        { id: "b2", quality: "NORMAL", remainingUnits: 4, purchasedAtEpochMs: at("2026-04-18T00:00:00.000Z"), withdrawn: false },
+        { id: "b1", quality: "HIGH_QUALITY", remainingUnits: 2, purchasedAtEpochMs: at("2026-04-16T00:00:00.000Z"), withdrawn: false },
+        { id: "w1", quality: "NORMAL", remainingUnits: 0, purchasedAtEpochMs: at("2026-04-17T00:00:00.000Z"), withdrawn: true },
+        { id: "a3", quality: "NORMAL", remainingUnits: 10, purchasedAtEpochMs: at("2026-04-18T00:00:00.000Z"), withdrawn: false },
       ],
     });
     deps.clock.set(iso("2026-04-20T12:00:00.000Z"));
@@ -245,9 +250,10 @@ describe("with a period in the ledger", () => {
       highQuality: { includedCeiling: 5, ceilingRemaining: 2, fundableFromBase: 2 },
       highQualityAddOnAvailable: true,
       addOnBlocks: [
-        { quality: "HIGH_QUALITY", remainingUnits: 2, purchasedAt: iso("2026-04-16T00:00:00.000Z") },
-        { quality: "NORMAL", remainingUnits: 10, purchasedAt: iso("2026-04-18T00:00:00.000Z") },
-        { quality: "NORMAL", remainingUnits: 4, purchasedAt: iso("2026-04-18T00:00:00.000Z") },
+        { quality: "HIGH_QUALITY", remainingUnits: 2, purchasedAt: iso("2026-04-16T00:00:00.000Z"), withdrawn: false },
+        { quality: "NORMAL", remainingUnits: 0, purchasedAt: iso("2026-04-17T00:00:00.000Z"), withdrawn: true },
+        { quality: "NORMAL", remainingUnits: 10, purchasedAt: iso("2026-04-18T00:00:00.000Z"), withdrawn: false },
+        { quality: "NORMAL", remainingUnits: 4, purchasedAt: iso("2026-04-18T00:00:00.000Z"), withdrawn: false },
       ],
       normalAddOnRemaining: 14,
       highQualityAddOnRemaining: 2,
@@ -377,6 +383,18 @@ describe("the period's purchases", () => {
     ]);
     // Once per approver still a member; never for one who has left.
     expect(findUser.mock.calls.map(([id]) => id).sort()).toEqual([ids.BILLING, ids.OWNER].sort());
+  });
+
+  it("says which were cancelled, and when", async () => {
+    const cancelledAt = iso("2026-04-17T02:00:00.000Z");
+    bought({ id: "p1", approvedAt: iso("2026-04-16T00:00:00.000Z"), cancelledAt });
+    bought({ id: "p2", approvedAt: iso("2026-04-16T01:00:00.000Z") });
+    expect(await service.overview(ids.BILLING, orgId)).toMatchObject({
+      purchases: [
+        listed("NORMAL", 10, 35_900, "2026-04-16T00:00:00.000Z", "billing", cancelledAt),
+        listed("NORMAL", 10, 35_900, "2026-04-16T01:00:00.000Z", "billing", null),
+      ],
+    });
   });
 
   it("asks for this organization's current period only", async () => {

@@ -168,6 +168,7 @@ describe("what a purchase buys", () => {
         idempotencyKey: "key-1",
         approvedByUserId: ids.BILLING,
         approvedAt: NOW,
+        cancelledAt: null,
       },
     });
     expect(reader.periods.map((p) => [p.id, p.startsAt, p.endsAt, p.planKey])).toEqual([
@@ -353,6 +354,7 @@ describe("re-checked when written", () => {
       idempotencyKey: "key-1",
       approvedByUserId: ids.BILLING,
       approvedAt: NOW,
+      cancelledAt: null,
     };
     vi.spyOn(store, "approve").mockResolvedValue({ kind: "EXISTING", purchase: other });
     expect(await service.approve(ids.BILLING, request())).toEqual({ kind: "ALREADY_APPROVED", purchase: other });
@@ -621,6 +623,7 @@ describe("what counts as a replay", () => {
     idempotencyKey: "key-1",
     approvedByUserId: "usr_1",
     approvedAt: NOW,
+    cancelledAt: null,
   };
   const input: ApproveUnitPurchaseInput = {
     organizationId: "org_x",

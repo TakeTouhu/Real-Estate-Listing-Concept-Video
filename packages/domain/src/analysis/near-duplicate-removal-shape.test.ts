@@ -41,8 +41,8 @@ describe("durable shape", () => {
     // contributed exactly one migration, in place.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(24);
     expect(dirs.filter((dir) => dir.includes("near_duplicate"))).toEqual([MIGRATION_DIR]);
-    // MFA-4 added migration 26 after them all, and UP-2 migration 27.
-    expect(dirs).toHaveLength(28);
+    // MFA-4 added migration 26 after them all, UP-2 migration 27 and UP-5 migration 28.
+    expect(dirs).toHaveLength(29);
   });
 
   it("drops the duplicate-approval index and does nothing else", () => {

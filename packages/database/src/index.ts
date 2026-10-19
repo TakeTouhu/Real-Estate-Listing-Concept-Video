@@ -44,6 +44,7 @@ export {
 export { SUBSCRIPTION_AUDIT_ACTION, createSubscriptionRepository } from "./subscription-repository";
 export { createUnitPurchaseRepository } from "./unit-purchase-repository";
 export { createUnitPurchaseInvoicingRepository } from "./unit-purchase-invoicing-repository";
+export { createUnitPurchaseCancellationRepository } from "./unit-purchase-cancellation-repository";
 // `cost-admission-lock` is deliberately absent. A caller outside this package
 // holding that lock would hold it without the transaction that makes it mean
 // anything, and one key formula is worth nothing if it can be taken from

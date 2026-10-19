@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "provision-subscription": "tsx src/bin/provision-subscription.ts",
-    "export-unit-purchases": "tsx src/bin/export-unit-purchases.ts"
+    "export-unit-purchases": "tsx src/bin/export-unit-purchases.ts",
+    "cancel-unit-purchase": "tsx src/bin/cancel-unit-purchase.ts"
   },
   "dependencies": {
     "@app/database": "workspace:*",

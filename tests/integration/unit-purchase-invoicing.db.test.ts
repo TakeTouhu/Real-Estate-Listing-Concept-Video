@@ -132,6 +132,7 @@ describe("the invoicing export", () => {
       contractReference: `VT-${organizationId}`,
       approvedAt: new Date(at),
       expiresAt: PERIOD_END,
+      cancelledAt: null,
     });
     const normal = { quality: "NORMAL", units: 10, priceYenExTax: 35_900 };
     expect(exported).toEqual({
@@ -179,6 +180,8 @@ describe("the invoicing export", () => {
           to: "2026-04-19T00:00:00.000Z",
           purchases: 2,
           priceYenExTax: 44_900,
+          cancelled: 0,
+          toInvoiceYenExTax: 44_900,
         },
       },
       {
@@ -193,6 +196,8 @@ describe("the invoicing export", () => {
           to: "2026-04-19T00:00:00.000Z",
           purchases: 1,
           priceYenExTax: 35_900,
+          cancelled: 0,
+          toInvoiceYenExTax: 35_900,
         },
       },
     ]);

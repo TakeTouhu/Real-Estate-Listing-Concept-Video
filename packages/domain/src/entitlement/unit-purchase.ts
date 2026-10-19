@@ -79,6 +79,8 @@ export interface UnitPurchase {
   readonly idempotencyKey: string;
   readonly approvedByUserId: string;
   readonly approvedAt: Date;
+  /** When an operator cancelled it (UP-5, ADR-0070), or `null`. */
+  readonly cancelledAt: Date | null;
 }
 
 /** What the confirmation step showed and the customer approved. */

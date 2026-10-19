@@ -42,7 +42,8 @@ const repository = () => code(readFileSync(join(REPO_ROOT, REPOSITORY), "utf8"))
 describe("UP-4 shape", () => {
   it("adds no migration", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    expect(dirs).toHaveLength(28);
+    // UP-5 added migration 28 after it.
+    expect(dirs).toHaveLength(29);
   });
 
   it("reads and audits in one transaction, and writes nothing else", () => {

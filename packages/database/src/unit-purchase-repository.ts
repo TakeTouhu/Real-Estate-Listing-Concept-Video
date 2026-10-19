@@ -45,6 +45,7 @@ type Tx = Prisma.TransactionClient;
 const WITH_UNITS_AND_EXPIRY = {
   addOnBlock: { select: { quantity: true } },
   entitlementPeriod: { select: { endsAt: true } },
+  cancellations: { select: { cancelledAt: true } },
 } as const;
 
 type PurchaseRow = Prisma.UnitPurchaseGetPayload<{ include: typeof WITH_UNITS_AND_EXPIRY }>;
@@ -64,6 +65,7 @@ function toPurchase(row: PurchaseRow): UnitPurchase {
     idempotencyKey: row.idempotencyKey,
     approvedByUserId: row.approvedByUserId,
     approvedAt: row.approvedAt,
+    cancelledAt: row.cancellations[0]?.cancelledAt ?? null,
   };
 }
 

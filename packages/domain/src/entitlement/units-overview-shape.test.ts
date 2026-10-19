@@ -45,8 +45,8 @@ const READERS = ["packages/domain/src/entitlement/units-overview.ts", "apps/web/
 describe("UP-1 shape", () => {
   it("adds no migration of its own", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    // UP-2 added migration 27 after it.
-    expect(dirs).toHaveLength(28);
+    // UP-2 added migration 27 after it, and UP-5 migration 28.
+    expect(dirs).toHaveLength(29);
   });
 
   it("builds the overview only in the web app's wiring, and shows it only on the Units page", () => {
@@ -96,10 +96,13 @@ describe("UP-1 shape", () => {
 
   it("gives the operator commands no timer, network call or payment processor", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps", "ops", "src")).map(relative).sort();
-    // UP-4 added the invoicing export and moved the instant parser to its own module (ADR-0069).
+    // UP-4 added the invoicing export and moved the instant parser to its own module (ADR-0069),
+    // and UP-5 the cancellation command (ADR-0070).
     expect(files).toEqual([
+      "apps/ops/src/bin/cancel-unit-purchase.ts",
       "apps/ops/src/bin/export-unit-purchases.ts",
       "apps/ops/src/bin/provision-subscription.ts",
+      "apps/ops/src/cancel-unit-purchase.ts",
       "apps/ops/src/export-unit-purchases.ts",
       "apps/ops/src/instant.ts",
       "apps/ops/src/provision-subscription.ts",

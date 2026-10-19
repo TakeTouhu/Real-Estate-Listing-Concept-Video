@@ -184,12 +184,26 @@ describe("the Units page", () => {
       baseRemainingUnits: 3,
       includedHighQualityRemainingUnits: 4,
       blocks: [
-        { id: "b2", quality: "NORMAL", remainingUnits: 9, purchasedAtEpochMs: iso("2026-04-18T03:00:00.000Z").getTime() },
+        {
+          id: "b2",
+          quality: "NORMAL",
+          remainingUnits: 9,
+          purchasedAtEpochMs: iso("2026-04-18T03:00:00.000Z").getTime(),
+          withdrawn: false,
+        },
         {
           id: "b1",
           quality: "HIGH_QUALITY",
           remainingUnits: 1,
           purchasedAtEpochMs: iso("2026-04-16T00:30:00.000Z").getTime(),
+          withdrawn: false,
+        },
+        {
+          id: "w1",
+          quality: "NORMAL",
+          remainingUnits: 0,
+          purchasedAtEpochMs: iso("2026-04-17T00:00:00.000Z").getTime(),
+          withdrawn: true,
         },
       ],
     });
@@ -199,6 +213,7 @@ describe("the Units page", () => {
     expect(text).toContain("Normal: 9 left · HQ: 1 left");
     expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "HQ: 1 left · bought 16 Apr 2026, 09:30 JST",
+      "Normal: withdrawn, purchase cancelled · bought 17 Apr 2026, 09:00 JST",
       "Normal: 9 left · bought 18 Apr 2026, 12:00 JST",
     ]);
     expect(text).toContain("Normal additional Units fund only Normal videos, and HQ additional Units only HQ videos.");
@@ -259,7 +274,13 @@ describe("this period's purchases (UP-4)", () => {
     });
   }
 
-  function bought(id: string, quality: "NORMAL" | "HIGH_QUALITY", approvedAt: string, approvedByUserId: string): void {
+  function bought(
+    id: string,
+    quality: "NORMAL" | "HIGH_QUALITY",
+    approvedAt: string,
+    approvedByUserId: string,
+    cancelledAt: Date | null = null,
+  ): void {
     const [units, priceYenExTax] = quality === "NORMAL" ? [10, 35_900] : [2, 9_000];
     reader.purchases.push({
       id,
@@ -275,6 +296,7 @@ describe("this period's purchases (UP-4)", () => {
       idempotencyKey: `key_${id}`,
       approvedByUserId,
       approvedAt: iso(approvedAt),
+      cancelledAt,
     });
   }
 
@@ -290,6 +312,23 @@ describe("this period's purchases (UP-4)", () => {
       "+10 Normal Units · ¥35,900 excluding tax · approved 18 Apr 2026, 12:00 JST by a former member",
     ]);
     expect(text).toContain("VTaVision invoices each purchase under your contract, with consumption tax added.");
+  });
+
+  it("says which purchase VTaVision cancelled, and that it is not invoiced (UP-5)", async () => {
+    subscribe("premium");
+    openPeriod();
+    bought("p1", "NORMAL", "2026-04-16T00:30:00.000Z", ownerId, iso("2026-04-17T01:00:00.000Z"));
+    bought("p2", "NORMAL", "2026-04-18T03:00:00.000Z", ownerId);
+    const text = await renderUnits("BILLING");
+    const card = screen.getByRole("heading", { name: "Purchases this period" }).parentElement;
+    expect([...(card?.querySelectorAll("li") ?? [])].map((item) => item.textContent?.replace(/\s+/g, " "))).toEqual([
+      "+10 Normal Units · ¥35,900 excluding tax · approved 16 Apr 2026, 09:30 JST by Owner · cancelled by VTaVision " +
+        "on 17 Apr 2026, 10:00 JST: not invoiced",
+      "+10 Normal Units · ¥35,900 excluding tax · approved 18 Apr 2026, 12:00 JST by Owner",
+    ]);
+    expect(text.replace(/\s+/g, " ")).toContain(
+      "A cancelled purchase is not invoiced, and its unused Units are withdrawn.",
+    );
   });
 
   it("says when nothing was bought this period", async () => {

@@ -20,6 +20,7 @@ import type { PrismaClient } from "@prisma/client";
 import {
   UNIT_PURCHASE_EXPORT_AUDIT_ACTION,
   UNIT_PURCHASE_EXPORT_SETTLE_MS,
+  yenToInvoiceExTax,
   type UnitPurchaseInvoicingRepository,
 } from "@app/domain";
 
@@ -38,6 +39,7 @@ export function createUnitPurchaseInvoicingRepository(prisma: PrismaClient): Uni
             organization: { select: { name: true } },
             addOnBlock: { select: { quantity: true } },
             entitlementPeriod: { select: { endsAt: true } },
+            cancellations: { select: { cancelledAt: true } },
           },
           orderBy: [{ organizationId: "asc" }, { contractReference: "asc" }, { approvedAt: "asc" }, { id: "asc" }],
         });
@@ -51,6 +53,7 @@ export function createUnitPurchaseInvoicingRepository(prisma: PrismaClient): Uni
           priceYenExTax: row.priceYenExTax,
           approvedAt: row.approvedAt,
           expiresAt: row.entitlementPeriod.endsAt,
+          cancelledAt: row.cancellations[0]?.cancelledAt ?? null,
         }));
 
         const organizationIds = [...new Set(purchases.map((purchase) => purchase.organizationId))];
@@ -70,6 +73,8 @@ export function createUnitPurchaseInvoicingRepository(prisma: PrismaClient): Uni
                 to: to.toISOString(),
                 purchases: listed.length,
                 priceYenExTax: listed.reduce((sum, purchase) => sum + purchase.priceYenExTax, 0),
+                cancelled: listed.filter((purchase) => purchase.cancelledAt !== null).length,
+                toInvoiceYenExTax: listed.reduce((sum, purchase) => sum + yenToInvoiceExTax(purchase), 0),
               },
             },
           });

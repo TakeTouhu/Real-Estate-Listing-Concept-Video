@@ -126,6 +126,7 @@ export class InMemoryUnitPurchases
       idempotencyKey: record.idempotencyKey,
       approvedByUserId: record.approvedByUserId,
       approvedAt: record.approvedAt,
+      cancelledAt: null,
     };
     this.purchases.push(purchase);
     return { kind: "APPROVED", purchase };

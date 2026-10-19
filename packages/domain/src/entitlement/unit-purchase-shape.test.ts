@@ -46,13 +46,14 @@ function migrationSql(): string {
 }
 
 describe("durable shape", () => {
-  it("adds exactly one migration, the newest", () => {
+  it("adds exactly one migration, in place", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs).toHaveLength(28);
+    // No longer the newest: UP-5 added migration 28 after it.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(27);
+    expect(dirs).toHaveLength(29);
   });
 
   it("creates the purchase table only, and rewrites no existing row", () => {

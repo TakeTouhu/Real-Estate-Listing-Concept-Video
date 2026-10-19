@@ -31,6 +31,12 @@ export interface AddOnBlockGrant {
   readonly quantity: number;
   /** The FIFO key: when the block was bought, in epoch milliseconds. */
   readonly purchasedAtEpochMs: number;
+  /**
+   * Whether an operator cancelled the purchase that bought it (UP-5, ADR-0070).
+   * A withdrawn block funds no new reservation. The allocations it already
+   * funded settle as they would have, and one that is released is not returned.
+   */
+  readonly withdrawn: boolean;
 }
 
 /** One frozen allocation of an existing reservation, with that reservation's state. */
@@ -47,8 +53,10 @@ export interface ExistingAllocation {
 export interface AddOnBlockBalance {
   readonly id: string;
   readonly quality: GenerationQualityTier;
+  /** Always 0 once the block is withdrawn. */
   readonly remainingUnits: number;
   readonly purchasedAtEpochMs: number;
+  readonly withdrawn: boolean;
 }
 
 /** What remains of one period. */
@@ -120,6 +128,10 @@ export function occupiesEntitlement(state: GenerationReservationState): boolean 
  * Base pool only. Add-on allocations count only against their own block.
  * Allocations naming a block this period does not hold are a defect — they
  * would let a Unit be spent from nowhere — and are refused rather than ignored.
+ *
+ * A withdrawn block has nothing left, whatever its allocations: its allocations
+ * are still checked against it, but no Unit it did not fund before it was
+ * withdrawn can be drawn from it, including one a release frees afterwards.
  */
 export function periodEntitlementBalance(input: {
   readonly plan: PeriodPlanEntitlement;
@@ -155,8 +167,9 @@ export function periodEntitlementBalance(input: {
     blocks: input.blocks.map((block) => ({
       id: block.id,
       quality: block.quality,
-      remainingUnits: block.quantity - (blockUsed.get(block.id) ?? 0),
+      remainingUnits: block.withdrawn ? 0 : block.quantity - (blockUsed.get(block.id) ?? 0),
       purchasedAtEpochMs: block.purchasedAtEpochMs,
+      withdrawn: block.withdrawn,
     })),
   };
 }
