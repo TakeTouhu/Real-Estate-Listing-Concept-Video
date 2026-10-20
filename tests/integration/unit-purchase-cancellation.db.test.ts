@@ -132,6 +132,7 @@ async function reserve(units: number) {
       requestedByUserId: "usr_itest",
       qualityTier: "NORMAL",
       requestedDurationSeconds: units * 30,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

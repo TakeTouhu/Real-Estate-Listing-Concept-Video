@@ -45,8 +45,8 @@ const READERS = ["packages/domain/src/entitlement/units-overview.ts", "apps/web/
 describe("UP-1 shape", () => {
   it("adds no migration of its own", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    // UP-2 added migration 27 after it, and UP-5 migration 28.
-    expect(dirs).toHaveLength(29);
+    // UP-2 added migration 27 after it, UP-5 migration 28 and DS-3 migration 29.
+    expect(dirs).toHaveLength(30);
   });
 
   it("builds the overview only in the web app's wiring, and shows it only on the Units page", () => {

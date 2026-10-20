@@ -109,6 +109,7 @@ async function reservingJob(
       requestedByUserId: "usr_itest",
       qualityTier: quality,
       requestedDurationSeconds: seconds,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

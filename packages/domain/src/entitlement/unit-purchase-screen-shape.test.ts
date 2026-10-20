@@ -46,8 +46,8 @@ function matching(root: string, pattern: RegExp): string[] {
 describe("UP-3 shape", () => {
   it("adds no migration of its own", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-    // UP-5 added migration 28 after it.
-    expect(dirs).toHaveLength(29);
+    // UP-5 added migration 28 after it, and DS-3 migration 29.
+    expect(dirs).toHaveLength(30);
   });
 
   it("reaches the purchase service only from the purchase screen and the purchase route", () => {

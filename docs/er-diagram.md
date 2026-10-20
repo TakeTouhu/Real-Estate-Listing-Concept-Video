@@ -648,3 +648,23 @@ block of the purchase's own period and quality, and the block id is unique, so a
 block is bought at most once. `(entitlementPeriodId, organizationId)` keeps the
 purchase in its period's organization. A block granted without a purchase has
 no row here. `approvedByUserId` is not a foreign key, as no actor column is.
+
+## DS-3 — the disclosure mode, frozen at admission
+
+```mermaid
+erDiagram
+    GenerationJob ||--o{ GenerationDeliverableVersion : "has versions"
+    GenerationJob {
+        DisclosureMode disclosureMode "NOT NULL, no default: frozen at admission"
+    }
+    GenerationDeliverableVersion {
+        DisclosureMode disclosureMode "NOT NULL, no default: copied from its job at planning"
+        string inputFingerprint "sha256:deliverable-input:v2 binds the mode"
+    }
+```
+
+Migration 29. The enum `DisclosureMode` has one value, `THROUGHOUT`, ADR-0052's
+Mode A; Mode B and Mode C add theirs when they are built (ADR-0073). No new
+table or relationship: the job records the mode it was admitted under, and each
+version records the mode it was planned under, which Transaction I copies from
+the job. A version planned before migration 29 keeps its `v1` fingerprint.

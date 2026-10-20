@@ -42,10 +42,11 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: UP-2 added migration 27 after them, and UP-5 migration 28.
+    // No longer the newest: UP-2 added migration 27 after them, UP-5 migration 28
+    // and DS-3 migration 29.
     expect(dirs.slice(25, 27)).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
     expect(dirs.filter((dir) => dir.includes("mfa"))).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
-    expect(dirs).toHaveLength(29);
+    expect(dirs).toHaveLength(30);
   });
 
   it("MFA-4 adds one organizations column, off for every existing organization, and rewrites no row", () => {

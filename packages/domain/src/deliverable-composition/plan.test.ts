@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { sha256Hex } from "@app/shared";
+import type { DisclosureMode } from "../disclosure/mode";
 import { computeCompositionFingerprint } from "../storyboard/fingerprint";
 import { computeGenerationRequestHash } from "../generation/request-identity";
 import {
@@ -17,6 +19,7 @@ const TARGET: DeliverableInputFingerprintTarget = {
   targetOutputResolution: "1080p",
   targetAspectRatio: "16:9",
   requestedDurationSeconds: 60,
+  disclosureMode: "THROUGHOUT",
 };
 
 function scene(
@@ -56,7 +59,23 @@ describe("computeDeliverableInputFingerprint", () => {
 
   it("carries its own versioned vocabulary in the value", () => {
     expect(computeDeliverableInputFingerprint(TARGET, TWO)).toMatch(
-      /^sha256:deliverable-input:v1:[0-9a-f]{64}$/,
+      /^sha256:deliverable-input:v2:[0-9a-f]{64}$/,
+    );
+  });
+
+  it("hashes the target as a four-element tuple ending in the disclosure mode (v2)", () => {
+    // The exact payload v2 hashes. A v1 plan hashed three target elements under
+    // the v1 prefix, so no v1 value can equal a v2 recomputation: a plan stored
+    // before migration 29 fails closed on replay instead of being rewritten.
+    const payload = JSON.stringify([
+      ["1080p", "16:9", 60, "THROUGHOUT"],
+      [
+        [0, "genscene_1", "genreq_1", "sgen_1", "momv_1", "a".repeat(64), "5120000"],
+        [1, "genscene_2", "genreq_2", "sgen_2", "momv_2", "b".repeat(64), "4096000"],
+      ],
+    ]);
+    expect(computeDeliverableInputFingerprint(TARGET, TWO)).toBe(
+      `sha256:deliverable-input:v2:${sha256Hex(payload)}`,
     );
   });
 
@@ -123,6 +142,10 @@ describe("computeDeliverableInputFingerprint", () => {
       ["targetOutputResolution", { targetOutputResolution: "720p" }],
       ["targetAspectRatio", { targetAspectRatio: "9:16" }],
       ["requestedDurationSeconds", { requestedDurationSeconds: 45 }],
+      // Only Mode A is stored yet. A value the type does not allow stands in for
+      // the mode a later milestone adds: the same bytes without the disclosure
+      // are a different deliverable.
+      ["disclosureMode", { disclosureMode: "NONE" as string as DisclosureMode }],
     ];
     for (const [name, override] of targets) {
       it(`changes when ${name} changes`, () => {

@@ -705,6 +705,13 @@ enum GenerationQualityTier {
   HIGH_QUALITY
 }
 
+/// The disclosure mode a generation is admitted under (ADR-0073). THROUGHOUT is
+/// ADR-0052's Mode A, the disclosure for the whole video. Mode B and Mode C add
+/// their values when they are built, with their own rules.
+enum DisclosureMode {
+  THROUGHOUT
+}
+
 enum GenerationJobState {
   CREATED
   RESERVING
@@ -827,6 +834,10 @@ model GenerationJob {
   targetOutputResolution      String
   targetAspectRatio           String
   requestedDurationSeconds    Int
+  /// The disclosure mode the job was admitted under, frozen with it and never
+  /// changed (ADR-0052 Decision 10, ADR-0073). No database default: every writer
+  /// names it. Jobs created before migration 29 are recorded as Mode A.
+  disclosureMode              DisclosureMode
   /// Entitlement arithmetic, frozen at creation. High-quality units sit INSIDE
   /// the total; they are never additional.
   requiredVideoUnits          Int
@@ -1289,11 +1300,15 @@ model GenerationDeliverableVersion {
   generationJobId  String
   /// Job-scoped, starting at 1. A gap or a duplicate is a detectable defect.
   ordinal          Int
-  /// `sha256:deliverable-input:v1:<hex>` over the canonical ordered input set
-  /// plus the job's frozen delivery target. Not an object content hash, not the
-  /// final video's SHA-256, not the storyboard composition fingerprint and not a
-  /// provider request hash -- the prefix exists so a future reader cannot
-  /// compare two of them by accident.
+  /// The disclosure mode this version is planned and delivered under, copied
+  /// from its job at planning and bound into `inputFingerprint` (ADR-0073). Per
+  /// version, because a later disclosure change is a new version. No default.
+  disclosureMode   DisclosureMode
+  /// `sha256:deliverable-input:v2:<hex>` (`v1` before migration 29) over the
+  /// canonical ordered input set plus the frozen delivery target and disclosure
+  /// mode. Not an object content hash, not the final video's SHA-256, not the
+  /// storyboard composition fingerprint and not a provider request hash -- the
+  /// prefix exists so a future reader cannot compare two of them by accident.
   inputFingerprint String
   createdAt        DateTime                          @default(now())
   generationJob    GenerationJob                     @relation("JobDeliverableVersions", fields: [generationJobId], references: [id], onDelete: Restrict)

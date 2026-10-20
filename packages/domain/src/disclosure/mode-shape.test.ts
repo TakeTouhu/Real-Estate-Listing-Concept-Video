@@ -1,0 +1,152 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { DISCLOSURE_MODES } from "./mode";
+
+/**
+ * What DS-3 may and may not have changed (ADR-0073).
+ *
+ * 1. **One migration, the newest**: one enum and two columns, NOT NULL, whose
+ *    default exists only for the ADD COLUMN and is dropped at once. Nothing
+ *    else is created, and no row is rewritten.
+ * 2. **The database's modes are exactly the domain's**, so a mode read from a
+ *    row is one the domain knows.
+ * 3. **Written only where a job is admitted and a version planned, and never
+ *    updated.** Admission refuses a mode not built before its transaction;
+ *    Transaction I copies the job's mode onto the version and recomputes a
+ *    replay with the version's own.
+ */
+
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+const MIGRATIONS = join(REPO_ROOT, "packages", "database", "prisma", "migrations");
+const MIGRATION_DIR = "00000000000029_disclosure_mode_frozen";
+const JOBS = "packages/database/src/orchestration-repositories.ts";
+const PLANS = "packages/database/src/deliverable-composition-repository.ts";
+
+function code(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    if (name === "node_modules" || name === ".next" || name === "dist") return [];
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+    return /\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+const read = (path: string) => code(readFileSync(join(REPO_ROOT, path), "utf8"));
+
+function matching(root: string, pattern: RegExp): string[] {
+  return sourceFiles(join(REPO_ROOT, root))
+    .filter((file) => pattern.test(code(readFileSync(file, "utf8"))))
+    .map((file) => file.slice(REPO_ROOT.length + 1))
+    .sort();
+}
+
+/** The migration's statements, comments dropped and whitespace collapsed. */
+function statements(): string[] {
+  return readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8")
+    .replace(/--[^\n]*/g, " ")
+    .split(";")
+    .map((statement) => statement.replace(/\s+/g, " ").trim())
+    .filter((statement) => statement.length > 0);
+}
+
+/** The values of a Prisma enum, in declaration order. */
+function schemaEnum(name: string): string[] {
+  const schema = readFileSync(join(REPO_ROOT, "packages", "database", "prisma", "schema.prisma"), "utf8");
+  const body = new RegExp(`\\nenum ${name} \\{([^}]*)\\}`).exec(schema)?.[1] ?? "";
+  return body
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, "").trim())
+    .filter((line) => line.length > 0);
+}
+
+/** The body of a model in the schema. */
+function schemaModel(name: string): string {
+  const schema = readFileSync(join(REPO_ROOT, "packages", "database", "prisma", "schema.prisma"), "utf8");
+  return new RegExp(`\\nmodel ${name} \\{([^}]*)\\}`).exec(schema)?.[1] ?? "";
+}
+
+describe("DS-3 shape", () => {
+  it("adds exactly one migration, the newest", () => {
+    const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
+    expect(dirs).toHaveLength(30);
+  });
+
+  it("creates the enum and two required columns, keeps no default, and rewrites no row", () => {
+    expect(statements()).toEqual([
+      `CREATE TYPE "DisclosureMode" AS ENUM ('THROUGHOUT')`,
+      `ALTER TABLE "generation_jobs" ADD COLUMN "disclosureMode" "DisclosureMode" NOT NULL DEFAULT 'THROUGHOUT'`,
+      `ALTER TABLE "generation_jobs" ALTER COLUMN "disclosureMode" DROP DEFAULT`,
+      `ALTER TABLE "generation_deliverable_versions" ADD COLUMN "disclosureMode" "DisclosureMode" NOT NULL DEFAULT 'THROUGHOUT'`,
+      `ALTER TABLE "generation_deliverable_versions" ALTER COLUMN "disclosureMode" DROP DEFAULT`,
+    ]);
+  });
+
+  it("stores exactly the domain's modes, on the job and on each version, with no default", () => {
+    expect(schemaEnum("DisclosureMode")).toEqual([...DISCLOSURE_MODES]);
+    const createType = statements()[0] ?? "";
+    expect(createType).toBe(
+      `CREATE TYPE "DisclosureMode" AS ENUM (${DISCLOSURE_MODES.map((mode) => `'${mode}'`).join(", ")})`,
+    );
+    for (const model of ["GenerationJob", "GenerationDeliverableVersion"]) {
+      const fields = schemaModel(model)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("disclosureMode "));
+      expect(`${model}: ${fields.map((line) => line.replace(/\s+/g, " ")).join(" | ")}`).toBe(
+        `${model}: disclosureMode DisclosureMode`,
+      );
+    }
+  });
+
+  it("is written only where a job is admitted and a version planned", () => {
+    expect(matching("packages/database/src", /disclosureMode/)).toEqual([PLANS, JOBS]);
+    // No route admits a whole-video generation yet, and nothing shows the mode.
+    expect(matching("apps", /disclosureMode|DisclosureMode/)).toEqual([]);
+    // No SQL ever writes it: the one raw mention is the plan's locked read.
+    for (const file of [PLANS, JOBS]) {
+      expect(read(file).match(/(?<!AS )"disclosureMode"(?!::text\s+AS "disclosureMode")/g)).toBeNull();
+    }
+  });
+
+  it("admits a job's mode once, refusing one not built before the transaction opens", () => {
+    const source = read(JOBS);
+    expect(source.match(/disclosureMode: [^,\n}]+/g)).toEqual([
+      "disclosureMode: r.disclosureMode",
+      "disclosureMode: job.disclosureMode",
+    ]);
+    const create = source.slice(source.indexOf("async create("), source.indexOf("async findById("));
+    const refusal = create.indexOf(`if (!isDisclosureMode(job.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };`);
+    expect(refusal).toBeGreaterThan(-1);
+    expect(refusal).toBeLessThan(create.indexOf("prisma.$transaction("));
+    expect(create.indexOf("disclosureMode: job.disclosureMode,")).toBeGreaterThan(
+      create.indexOf("tx.generationJob.create({"),
+    );
+  });
+
+  it("copies the job's mode onto the version it plans, and replays with the version's own", () => {
+    const source = read(PLANS);
+    expect(source.match(/disclosureMode: [^,\n}]+/g)).toEqual([
+      // The locked job row's type, then the replay's read and recomputation.
+      "disclosureMode: DisclosureMode;",
+      "disclosureMode: true",
+      "disclosureMode: version.disclosureMode",
+    ]);
+    const frozen = source.indexOf("const disclosureMode = job.disclosureMode;");
+    expect(frozen).toBeGreaterThan(-1);
+    // The one value goes into the fingerprint and onto the version, in that order.
+    const uses = [...source.matchAll(/^\s+disclosureMode,$/gm)].map((match) => match.index ?? -1);
+    expect(uses).toHaveLength(2);
+    expect(uses[0]).toBeGreaterThan(frozen);
+    expect(uses[0]).toBeLessThan(source.indexOf("tx.generationDeliverableVersion.create("));
+    expect(uses[1]).toBeGreaterThan(source.indexOf("tx.generationDeliverableVersion.create("));
+  });
+});

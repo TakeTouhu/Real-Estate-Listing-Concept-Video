@@ -75,6 +75,7 @@ async function seedJob(
       targetOutputResolution: "1080p",
       targetAspectRatio: "16:9",
       requestedDurationSeconds: 60,
+      disclosureMode: "THROUGHOUT",
       requiredVideoUnits: 2,
       requiredHighQualityUnits: 0,
       state: (options.state ?? "GENERATING") as never,

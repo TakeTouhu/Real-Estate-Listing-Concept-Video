@@ -51,9 +51,9 @@ describe("durable shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: UP-5 added migration 28 after it.
+    // No longer the newest: UP-5 added migration 28 after it, and DS-3 migration 29.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(27);
-    expect(dirs).toHaveLength(29);
+    expect(dirs).toHaveLength(30);
   });
 
   it("creates the purchase table only, and rewrites no existing row", () => {

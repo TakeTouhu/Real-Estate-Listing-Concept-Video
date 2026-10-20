@@ -408,9 +408,11 @@ describe("nothing about the existing adapters changed shape", () => {
     // (ADR-0065), which is authorized to add migration 25 for MFA, and by
     // MFA-4, which is authorized to add migration 26 for the organization's
     // MFA requirement, by UP-2 (ADR-0067), which is authorized to add
-    // migration 27 for Unit purchases, and by UP-5 (ADR-0070), which is
-    // authorized to add migration 28 for cancelling one.
-    expect(dirs.at(-1)).toBe("00000000000028_unit_purchase_cancellations");
+    // migration 27 for Unit purchases, by UP-5 (ADR-0070), which is
+    // authorized to add migration 28 for cancelling one, and by DS-3
+    // (ADR-0073), which is authorized to add migration 29 to freeze the
+    // disclosure mode.
+    expect(dirs.at(-1)).toBe("00000000000029_disclosure_mode_frozen");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

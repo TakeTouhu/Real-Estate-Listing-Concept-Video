@@ -266,6 +266,7 @@ describe.skipIf(!HAS_DB)("concurrent callers are serialized on the row they deci
             requestedByUserId: "usr_itest",
             qualityTier: "NORMAL",
             requestedDurationSeconds: 30,
+            disclosureMode: "THROUGHOUT",
           },
           ctx(),
         ),

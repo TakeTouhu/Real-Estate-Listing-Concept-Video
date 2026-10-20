@@ -179,6 +179,7 @@ async function seedReconcilingAttempt(
       requestedByUserId: "usr_itest",
       qualityTier: "NORMAL",
       requestedDurationSeconds: 30,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

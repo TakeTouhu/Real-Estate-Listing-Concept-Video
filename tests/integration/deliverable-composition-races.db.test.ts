@@ -113,6 +113,7 @@ function fingerprintOf(chain: PlanChain, sha256: string, sizeBytes: number) {
       targetOutputResolution: "1080p",
       targetAspectRatio: "16:9",
       requestedDurationSeconds: 60,
+      disclosureMode: "THROUGHOUT",
     },
     chain.scenes.map((scene) => ({
       position: scene.position,
@@ -650,6 +651,7 @@ RUN("the current deliverable pointer, at PostgreSQL level", () => {
         id: "gdv_foreign",
         generationJobId: theirs.jobId,
         ordinal: 1,
+        disclosureMode: "THROUGHOUT",
         inputFingerprint: "sha256:deliverable-input:v1:y",
       },
     });
@@ -720,6 +722,7 @@ RUN("the current deliverable pointer, at PostgreSQL level", () => {
           id: "gdv_zero",
           generationJobId: chain.jobId,
           ordinal: 0,
+          disclosureMode: "THROUGHOUT",
           inputFingerprint: "sha256:deliverable-input:v1:q",
         },
       }),
@@ -735,6 +738,7 @@ RUN("the current deliverable pointer, at PostgreSQL level", () => {
           id: "gdv_dup_ordinal",
           generationJobId: chain.jobId,
           ordinal: 1,
+          disclosureMode: "THROUGHOUT",
           inputFingerprint: "sha256:deliverable-input:v1:s",
         },
       }),

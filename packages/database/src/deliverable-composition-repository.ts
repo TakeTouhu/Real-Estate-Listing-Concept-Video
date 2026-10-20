@@ -49,6 +49,7 @@ import {
   type AdmitCompositionPlanOutcome,
   type DeliverableCompositionPlanRepository,
   type DeliverableInputFingerprintScene,
+  type DisclosureMode,
 } from "@app/domain";
 import { randomId } from "@app/shared";
 import type { PrismaClient } from "@prisma/client";
@@ -68,6 +69,8 @@ interface JobContextRow {
   readonly targetOutputResolution: string;
   readonly targetAspectRatio: string;
   readonly requestedDurationSeconds: number;
+  /** A database enum whose values are exactly the domain's, so read as one. */
+  readonly disclosureMode: DisclosureMode;
   readonly reservationState: string | null;
 }
 
@@ -177,11 +180,16 @@ export function createDeliverableCompositionPlanRepository(
         }
 
         // ---- 6. Freeze the identity. ------------------------------------
+        // The version takes the mode its Job was admitted under (ADR-0073).
+        // Nothing changes a mode yet; the disclosure change, which will be its
+        // own admission, is what decides a later version's mode.
+        const disclosureMode = job.disclosureMode;
         const inputFingerprint = computeDeliverableInputFingerprint(
           {
             targetOutputResolution: job.targetOutputResolution,
             targetAspectRatio: job.targetAspectRatio,
             requestedDurationSeconds: job.requestedDurationSeconds,
+            disclosureMode,
           },
           frozen,
         );
@@ -202,6 +210,7 @@ export function createDeliverableCompositionPlanRepository(
             id: input.deliverableVersionId,
             generationJobId: job.jobId,
             ordinal,
+            disclosureMode,
             inputFingerprint,
           },
         });
@@ -285,7 +294,8 @@ export function createDeliverableCompositionPlanRepository(
  * "Exactly one latest version whose frozen inputs represent the current planned
  * cycle" is checked as three facts: a version exists, it holds one input per
  * Scene of this Job and no others, and its recorded fingerprint recomputes from
- * its own stored rows under this Job's frozen target.
+ * its own stored rows under this Job's frozen target and the version's own
+ * disclosure mode (ADR-0073).
  *
  * Self-consistency rather than re-derivation from live Scene rows, deliberately.
  * A `COMPOSITION_PENDING` Job cannot have its Scenes moved — revision start
@@ -300,7 +310,7 @@ async function existingPlan(
   const version = await tx.generationDeliverableVersion.findFirst({
     where: { generationJobId: job.jobId },
     orderBy: { ordinal: "desc" },
-    select: { id: true, ordinal: true, inputFingerprint: true },
+    select: { id: true, ordinal: true, disclosureMode: true, inputFingerprint: true },
   });
   if (version === null) throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
 
@@ -368,11 +378,15 @@ async function existingPlan(
     sceneIds.every((scene) => planned.has(scene.id));
   if (!covered) throw new DeliverableCompositionDefect("PARTIAL_PLAN_STATE");
 
+  // The version's own mode, not the Job's: the fingerprint witnesses what the
+  // version was planned under, and a later disclosure change will plan a
+  // version whose mode is not its Job's.
   const recomputed = computeDeliverableInputFingerprint(
     {
       targetOutputResolution: job.targetOutputResolution,
       targetAspectRatio: job.targetAspectRatio,
       requestedDurationSeconds: job.requestedDurationSeconds,
+      disclosureMode: version.disclosureMode,
     },
     inputs.map((row) => ({
       position: row.position,
@@ -491,7 +505,8 @@ async function lockJobForComposition(
            j."currentDeliverableVersionId" AS "currentDeliverableVersionId",
            j."targetOutputResolution"      AS "targetOutputResolution",
            j."targetAspectRatio"           AS "targetAspectRatio",
-           j."requestedDurationSeconds"    AS "requestedDurationSeconds"
+           j."requestedDurationSeconds"    AS "requestedDurationSeconds",
+           j."disclosureMode"::text        AS "disclosureMode"
       FROM "generation_jobs" j
       JOIN "video_projects" p ON p."id" = j."videoProjectId"
      WHERE j."id" = ${generationJobId}

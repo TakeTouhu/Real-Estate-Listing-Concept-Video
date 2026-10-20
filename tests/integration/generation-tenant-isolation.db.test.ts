@@ -258,6 +258,7 @@ describe.skipIf(!HAS_DB)("organization A cannot reach organization B's generatio
           requestedByUserId: "usr_attacker",
           qualityTier: "NORMAL",
           requestedDurationSeconds: 30,
+          disclosureMode: "THROUGHOUT",
         },
         ctx(),
       );

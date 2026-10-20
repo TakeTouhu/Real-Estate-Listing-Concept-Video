@@ -167,6 +167,7 @@ async function seedFalProcessingAttempt(suffix: string, predictionId: string) {
       requestedByUserId: "usr_itest",
       qualityTier: "NORMAL",
       requestedDurationSeconds: 30,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

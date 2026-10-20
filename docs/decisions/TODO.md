@@ -1119,7 +1119,9 @@ them is **built**. Each item below records the settled decision and what remains
       in `@app/domain`. Nothing draws them into a video yet; DS-2 to DS-6 add
       FFmpeg to CI, the frozen mode, the Clean Master, the overlay and the
       publication gate. DS-2 (ADR-0072) added FFmpeg to CI: the composer and
-      inspector pass on real FFmpeg, and each image survives a real encode.*
+      inspector pass on real FFmpeg, and each image survives a real encode.
+      DS-3 (ADR-0073, migration 29) froze the mode on each job and deliverable
+      version, Mode A only.*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1159,6 +1161,20 @@ them is **built**. Each item below records the settled decision and what remains
       disclosure/logo output settings; apply later permission and organization
       changes only to newly admitted generations. No pre-delivery re-check and no
       automatic C → A fallback.
+      *In part (DS-3, ADR-0073): the mode is stored on the job at admission and
+      never updated, and each deliverable version records its own, bound into
+      its input fingerprint. Only Mode A can be stored. Mode C's consent and the
+      two eligibility snapshots arrive with Mode C, and the logo setting with the
+      logo.*
+- [ ] **Decide which disclosure mode a later version carries.** Today every
+      deliverable version copies its job's mode, because nothing changes a mode
+      (ADR-0073 Decision 3). Once a disclosure change plans a version in another
+      mode, a later content regeneration of the same job plans a new version
+      too. Whether that version keeps the mode of the customer's current
+      deliverable, takes the job's admitted mode, or is chosen again at the
+      regeneration's own admission (ADR-0052 Decision 10 makes a disclosure
+      change "its own admission") is a product rule not yet stated. Decide it
+      before disclosure changes are built.
 - [ ] **Build disclosure-mode change accounting.** Recomposition, not
       regeneration. Three free changes per content video, then 1 Unit per further
       block of three; the initial selection is not a change; the count increments
