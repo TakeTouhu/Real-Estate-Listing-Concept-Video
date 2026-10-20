@@ -1,7 +1,9 @@
 # Completion — the AI-generated disclosure (Mode A) and the Clean Master
 
 Branch: `claude/project-thread-az06z2`
-ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1)
+ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
+`docs/decisions/0072-real-ffmpeg-media-suites.md` (DS-2),
+`docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -596,3 +598,208 @@ live Stripe charges remain BLOCKED.
 
 DS-2 waits for the product owner's yes before merge. DS-3 (the disclosure mode
 frozen at admission, migration 29) comes next, after it.
+
+## DS-3 — the disclosure mode, frozen at admission
+
+Base: `cb81844` (PR #95 merge commit on `main`; post-merge CI run 621 green).
+ADR: `docs/decisions/0073-disclosure-mode-frozen-at-admission.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `a092d89` | migration 29, the mode on the job port and in both repositories, the v2 fingerprint, the tests, ADR-0073 and the documentation |
+| `e87b129` | the independent review's findings (below): what a v1 plan's replay does and does not affect, why existing rows are Mode A, the mode type derived from its list, the rollback note |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-3 does
+
+- **Migration 29** creates the enum `DisclosureMode` with one value,
+  `THROUGHOUT` (Mode A), and adds a required `disclosureMode` to
+  `generation_jobs` and `generation_deliverable_versions`. Existing rows
+  become Mode A; the default is dropped in the same migration.
+- **Job admission** (`GenerationJobRepository.create`) stores the mode the
+  caller names, which the port requires, and returns it on the job. A mode
+  not built is answered `DISCLOSURE_MODE_NOT_SUPPORTED` before the transaction
+  opens, so nothing is written.
+- **Transaction I** copies the locked job's mode onto the version it plans and
+  hashes it as the fourth element of the target in
+  `sha256:deliverable-input:v2`. A replay recomputes with the version's own
+  mode. A plan stored under v1 is never rewritten: replayed, it fails closed
+  with `PARTIAL_PLAN_STATE`.
+- **`@app/domain`** gains `DisclosureMode`, `DISCLOSURE_MODES`,
+  `DEFAULT_DISCLOSURE_MODE` and `isDisclosureMode`
+  (`docs/api-changes-ds-3.md`).
+- **No state, transition, event, route, page, command or environment
+  variable changes.** No route admits a whole-video generation yet, and the
+  composition claim, the composer and publication do not read the mode until
+  DS-5 and DS-6.
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `a092d89`, and again
+on `e87b129` where marked: that commit changes a type's declaration, comments
+and documentation only.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean (both commits) |
+| `pnpm test` | **5751 / 5751**, 202 files (5741 before; 10 new) (both commits) |
+| `pnpm test:db` | **1446 / 1446**, 54 files (1439 before; 7 new); on `e87b129`, the two suites the plan touches, 63 / 63 |
+| `pnpm build` | succeeded (both commits) |
+| `prisma migrate diff` (migrations → schema) | no difference (both commits) |
+| `prisma migrate status` | 30 migrations, up to date |
+
+The race test recorded under *Found in Phase 6F* passed in this run.
+
+New tests:
+
+- `packages/domain/src/disclosure/mode.test.ts` (2): Mode A is the only mode
+  and the default; the guard accepts it alone, refusing Mode C's future
+  spelling, near misses and non-strings.
+- `packages/domain/src/disclosure/mode-shape.test.ts` (6): migration 29 is the
+  newest and is exactly its five statements; the domain's modes equal the
+  schema's and the migration's; neither model has a default; the mode is
+  written only by job admission and Transaction I, never by SQL, and no app
+  mentions it; the refusal comes before the transaction; the version takes the
+  job's mode and a replay the version's.
+- `packages/domain/src/deliverable-composition/plan.test.ts` (2 more): the
+  exact v2 payload, and a fingerprint that changes with the mode.
+- `tests/integration/disclosure-mode.db.test.ts` (7): admission stores and
+  returns the mode; an unbuilt mode writes no job and no event; the enum's
+  labels are the domain's; both columns are `NOT NULL` with no default; the
+  database refuses an unknown mode; Transaction I copies the job's mode and
+  stores the v2 fingerprint computed with it; a plan holding exactly the v1
+  value the old code stored fails closed on replay and is left as it was. The
+  test's v1 formula was checked against `cb81844`'s own function, which gives
+  the same value for the same inputs.
+
+Twenty-one existing pins, in 20 files, on the number of migrations or on which
+is newest move by one, as each earlier migration's own did.
+
+### Mutation ledger
+
+**18 mutants: 18 killed, 0 survived, 0 broken, 0 anchor-missing**, in one
+pass on `a092d89`; M01 and M02 ran again on `e87b129`, which re-declares the
+list they mutate, and both were killed. Each breaks one claim of ADR-0073 at an anchor that occurs
+exactly once, and runs against every suite listed for it, so the table shows
+which suites catch it: the unit tests (`mode.test.ts`, `plan.test.ts`), the
+shape test (`mode-shape.test.ts`) and the database suites
+(`disclosure-mode.db.test.ts`, `deliverable-composition-plan.db.test.ts`,
+`generation-orchestration.db.test.ts`). Every mutated file was restored and
+re-hashed, and all 917 files were byte-identical after the pass.
+
+| Mutant | Area | What it breaks | File | Caught by |
+| --- | --- | --- | --- | --- |
+| M01 | admission | any string accepted as a mode | `mode.ts` | unit, database |
+| M02 | admission | Mode C's value listed before it is built | `mode.ts` | unit, database, shape |
+| M03 | fingerprint | the mode left out of the hashed target | `plan.ts` | unit |
+| M04 | fingerprint | the v1 prefix kept | `plan.ts` | unit, database |
+| M05 | fingerprint | the mode hashed before the duration | `plan.ts` | unit |
+| R01 | admission | an unbuilt mode not refused before the write | `orchestration-repositories.ts` | database, shape |
+| R02 | admission | the job created without its mode | `orchestration-repositories.ts` | database, shape |
+| R03 | admission | the job read back without its mode | `orchestration-repositories.ts` | database, shape |
+| R04 | planning | the version created without the mode | `deliverable-composition-repository.ts` | database, shape |
+| R05 | planning | the plan's fingerprint computed without the mode | `deliverable-composition-repository.ts` | database, shape |
+| R06 | planning | the job's mode not read under the lock | `deliverable-composition-repository.ts` | database |
+| R07 | replay | a replay recomputed without the mode | `deliverable-composition-repository.ts` | database, shape |
+| R08 | replay | a replay recomputed with the job's mode | `deliverable-composition-repository.ts` | shape only (below) |
+| R09 | replay | a v1 plan accepted on replay | `deliverable-composition-repository.ts` | database |
+| S01 | migration | the job column keeps its default | `migration.sql` | shape |
+| S02 | migration | existing versions' fingerprints rewritten | `migration.sql` | shape |
+| S03 | schema | a schema default for the job's mode | `schema.prisma` | shape |
+| S04 | schema | a second mode in the schema enum | `schema.prisma` | shape |
+
+**M03 and M05 pass the database suites**, because those compute the expected
+fingerprint with the same function. The unit test's exact v2 payload is what
+pins the hashed structure.
+
+**R08 is equivalent in behaviour** while every version takes its job's only
+mode: the job's and the version's are the same value. Only the shape test's
+pin on the source catches it; a behaviour test needs a second mode, and
+arrives with Mode B or a disclosure change.
+
+**S01 to S04 change the migration or the schema text**, which the live
+database (already migrated) and the generated client do not see; the shape
+test reads the files. CI's `prisma migrate diff --exit-code` would also catch
+S03 and S04.
+
+### Review
+
+The automated code review is still at its usage limit, so an independent
+review read the whole diff (`cb81844..a092d89`) through git objects. It found
+nothing blocking. Answered in `e87b129`:
+
+1. **Should-fix: what a v1 plan's replay affects.** ADR-0073 said a plan stored
+   before migration 29 cannot be replayed and its job can be planned again
+   only by a new cycle. Only Transaction I's replay recomputes a fingerprint;
+   composition's claim and finalization do not read it, so a pending v1 plan
+   is still claimed and composed, and a pending job is not planned again
+   (`COMPOSITION_PENDING` moves only to `COMPOSING` or `FAILED_TERMINAL`). The
+   ADR and the migration notes now say so.
+2. **Why existing rows are Mode A.** The reason given, "the only mode any
+   composition could have given them", was wrong: no composition draws the
+   disclosure yet. The ADR and the migration's comment now give the approved
+   plan as the reason, and say that a version composed before DS-5 holds a
+   video without the disclosure.
+3. **The type and the list could drift.** `DisclosureMode` is now derived from
+   `DISCLOSURE_MODES`.
+4. **Housekeeping.** The rollback note now says to roll the code back with the
+   columns, and the replay check's docstring names the version's mode.
+
+Not changed, with the reason:
+
+- **A runtime guard on the raw read of the job's mode.** The shape test and the
+  database test hold the domain's list and the database enum equal, so a value
+  added to one alone fails CI, and no test could reach the guard.
+- **A pinned v1 value in a unit test.** The database test's formula matches
+  `cb81844`'s code (above). What the test adds to the existing tamper test is
+  that the plan is left as it was and no second version appears.
+- **The missing completion record**: this section.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composition-plan row and the disclosure row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-3*: the two columns and the enum |
+| Critical sequence diagram | Not applicable: no flow changes order; admission and Transaction I each write one more column in the transaction they already had |
+| OpenAPI / API change summary | `docs/api-changes-ds-3.md`: no route or page; the domain exports, the job port and the fingerprint |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-3* |
+| Completion report | this file |
+
+Also updated: `docs/DataModel.md` (where the mode is stored),
+`docs/Roadmap.md`, and `docs/decisions/TODO.md` (the disclosure item and the
+frozen-contract item, in part, and a new item: which mode a later version
+carries once disclosure changes exist).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-3 adds a migration and changes two
+dormant repositories and the domain: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges remain
+BLOCKED.
+
+### Known limitations
+
+- **Only Mode A can be stored.** Mode B and Mode C add their values, and their
+  admission rules, when they are built.
+- **No customer chooses a mode yet.** No route admits a whole-video
+  generation; the generation-start screen is proposed separately.
+- **A replay recomputing with the job's mode instead of the version's cannot
+  be told apart by behaviour** while every version takes its job's only mode.
+  The shape test pins the source; a behaviour test needs a second mode.
+- **A development database's pending v1 plan fails Transaction I's replay**
+  with `PARTIAL_PLAN_STATE`; composition, which does not read the fingerprint,
+  is unaffected. Only development data holds one.
+- **Which mode a later version carries** after a disclosure change is open
+  (TODO).
+
+### Remaining work
+
+DS-3 waits for the product owner's yes before merge. DS-4 (the Clean Master
+record and its private storage location, migration 30) comes next, after it.
