@@ -46,6 +46,7 @@
  */
 
 import { sha256Hex } from "@app/shared";
+import type { DisclosureMode } from "../disclosure/mode";
 
 /** What one Transaction I attempt concluded. Closed and application-owned. */
 export type AdmitCompositionPlanOutcome =
@@ -132,15 +133,20 @@ export class DeliverableCompositionDefect extends Error {
  *   storyboard composed from the eligible analysis set that exists today?*
  * - `sha256:v2:<hex>` — ADR-0034's generation request hash: *are these two
  *   provider requests the same request?*
- * - `sha256:deliverable-input:v1:<hex>` — this one: *was this deliverable
+ * - `sha256:deliverable-input:v2:<hex>` — this one: *was this deliverable
  *   version planned from this exact ordered set of validated scene bytes, for
- *   this exact frozen job delivery target?*
+ *   this exact frozen delivery target and disclosure mode?*
  *
  * None of them is an object content hash. The final video's own SHA-256 is a
  * fourth thing entirely and does not exist yet. Making the vocabulary visible in
  * the stored value is what keeps a future reader from comparing two of them.
+ *
+ * v2 (ADR-0073) adds the disclosure mode to the target. Versions planned before
+ * it keep their `v1` value, which is never rewritten and never recomputed: a v1
+ * plan replayed after the change no longer matches, and fails closed as a
+ * partial plan. Only development databases hold one; nothing has delivered.
  */
-const DELIVERABLE_INPUT_FINGERPRINT_PREFIX = "sha256:deliverable-input:v1";
+const DELIVERABLE_INPUT_FINGERPRINT_PREFIX = "sha256:deliverable-input:v2";
 
 /** One frozen scene rendition, as it enters the fingerprint. */
 export interface DeliverableInputFingerprintScene {
@@ -155,17 +161,20 @@ export interface DeliverableInputFingerprintScene {
 }
 
 /**
- * The job's frozen delivery target, bound into the same digest.
+ * The version's frozen delivery target, bound into the same digest.
  *
  * The same ordered bytes composed for 1080p 16:9 and for 720p 9:16 are not the
- * same deliverable. These three are snapshotted on the Job at creation and never
- * re-read from the mutable project, so binding them here freezes what the
- * customer was admitted under rather than what the project says today.
+ * same deliverable, and neither are the same bytes with and without the
+ * disclosure. The first three are snapshotted on the Job at creation and never
+ * re-read from the mutable project; the mode is frozen on the Job at admission
+ * and copied onto the version (ADR-0073). Binding them here freezes what the
+ * customer was admitted under rather than what anything says today.
  */
 export interface DeliverableInputFingerprintTarget {
   readonly targetOutputResolution: string;
   readonly targetAspectRatio: string;
   readonly requestedDurationSeconds: number;
+  readonly disclosureMode: DisclosureMode;
 }
 
 /**
@@ -201,10 +210,15 @@ export function computeDeliverableInputFingerprint(
 ): string {
   assertPlanInputOrder(scenes);
   const canonical: readonly [
-    readonly [string, string, number],
+    readonly [string, string, number, string],
     readonly (readonly [number, string, string, string, string, string, string])[],
   ] = [
-    [target.targetOutputResolution, target.targetAspectRatio, target.requestedDurationSeconds],
+    [
+      target.targetOutputResolution,
+      target.targetAspectRatio,
+      target.requestedDurationSeconds,
+      target.disclosureMode,
+    ],
     scenes.map(
       (scene): readonly [number, string, string, string, string, string, string] => [
         scene.position,

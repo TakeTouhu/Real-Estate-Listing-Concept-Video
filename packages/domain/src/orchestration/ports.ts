@@ -1,3 +1,4 @@
+import type { DisclosureMode } from "../disclosure/mode";
 import type { GenerationReservationAllocation } from "../entitlement/ports";
 import type { ResolutionNormalization, TargetOutputResolution } from "../generation/model-catalog";
 import type { FxSnapshot, PricingSnapshot } from "../pricing/index";
@@ -81,6 +82,12 @@ export interface GenerationJob {
   readonly targetOutputResolution: TargetOutputResolution;
   readonly targetAspectRatio: string;
   readonly requestedDurationSeconds: number;
+  /**
+   * The disclosure mode this job was admitted under, frozen with it (ADR-0073).
+   * Never changed afterwards: a later change of mode is its own admission and
+   * its own deliverable version (ADR-0052 Decision 10).
+   */
+  readonly disclosureMode: DisclosureMode;
   readonly requiredVideoUnits: number;
   readonly requiredHighQualityUnits: number;
   readonly state: GenerationJobState;
@@ -107,13 +114,20 @@ export interface NewGenerationJob {
   readonly requestedByUserId: string;
   readonly qualityTier: GenerationQualityTier;
   readonly requestedDurationSeconds: number;
+  /**
+   * Named by every caller: there is no default here. The admission that offers
+   * the customer a choice applies ADR-0052's default, Mode A, itself.
+   */
+  readonly disclosureMode: DisclosureMode;
 }
 
 /** Why a job could not be admitted. Closed, and never provider-derived. */
 export type CreateGenerationJobOutcome =
   | { readonly kind: "CREATED"; readonly job: GenerationJob }
   | { readonly kind: "PROJECT_NOT_FOUND" }
-  | { readonly kind: "DURATION_NOT_SUPPORTED" };
+  | { readonly kind: "DURATION_NOT_SUPPORTED" }
+  /** A mode that is not built yet: only Mode A is, until Mode B and Mode C arrive. */
+  | { readonly kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };
 
 export interface GenerationReservation {
   readonly id: string;
@@ -524,7 +538,7 @@ export interface GenerationJobRepository {
    * Create a job and its first transition event in one transaction.
    *
    * Derives the entitlement arithmetic rather than accepting it, and refuses a
-   * duration the product does not sell.
+   * duration the product does not sell and a disclosure mode not yet built.
    */
   create(
     organizationId: string,

@@ -164,6 +164,7 @@ async function seedAcceptedProcessingAttempt(suffix: string) {
       requestedByUserId: "usr_itest",
       qualityTier: "NORMAL",
       requestedDurationSeconds: 30,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

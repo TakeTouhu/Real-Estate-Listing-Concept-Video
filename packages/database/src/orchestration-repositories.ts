@@ -48,6 +48,7 @@ import {
   canTransitionScene,
   canTransitionSceneRequest,
   computeGenerationRequestHash,
+  isDisclosureMode,
   isTargetOutputResolution,
   nextUserRegenerationOrdinal,
   planUnitAllocation,
@@ -575,6 +576,7 @@ function toJob(r: JobRow, organizationId: string): GenerationJob {
     targetOutputResolution: r.targetOutputResolution as GenerationJob["targetOutputResolution"],
     targetAspectRatio: r.targetAspectRatio,
     requestedDurationSeconds: r.requestedDurationSeconds,
+    disclosureMode: r.disclosureMode,
     requiredVideoUnits: r.requiredVideoUnits,
     requiredHighQualityUnits: r.requiredHighQualityUnits,
     state: r.state,
@@ -862,6 +864,10 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
      * deterministic function of duration and quality tier, and accepting them
      * made a 90-second job holding one unit constructible. A duration the
      * product does not sell is refused rather than converted into more units.
+     *
+     * The disclosure mode is frozen here with everything else (ADR-0073). Only
+     * Mode A is built; a caller that is not type-checked and names another mode
+     * is refused before anything is written, not stored for a later reader.
      */
     async create(
       organizationId: string,
@@ -870,6 +876,7 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
     ): Promise<CreateGenerationJobOutcome> {
       const units = requiredUnitsFor(job.qualityTier, job.requestedDurationSeconds);
       if (!units.ok) return { kind: "DURATION_NOT_SUPPORTED" };
+      if (!isDisclosureMode(job.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };
 
       return prisma.$transaction(async (tx): Promise<CreateGenerationJobOutcome> => {
         // Ownership and the output configuration are established in one locked
@@ -898,6 +905,7 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
             targetOutputResolution: project.targetOutputResolution,
             targetAspectRatio: project.aspectRatio,
             requestedDurationSeconds: job.requestedDurationSeconds,
+            disclosureMode: job.disclosureMode,
             requiredVideoUnits: units.value.totalVideoUnits,
             requiredHighQualityUnits: units.value.highQualityUnits,
             state: "CREATED",

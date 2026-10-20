@@ -7,6 +7,7 @@ import {
   DeliverableCompositionDefect,
   JOB_COMPOSITION_PENDING_EVENT_TYPE,
   computeDeliverableInputFingerprint,
+  type DeliverableInputFingerprintTarget,
 } from "@app/domain";
 import { createDeliverableCompositionPlanRepository } from "@app/database";
 import {
@@ -77,10 +78,7 @@ async function eventsFor(aggregateId: string) {
 }
 
 /** The fingerprint the chain's own durable rows say the plan must carry. */
-function expectedFingerprint(
-  chain: PlanChain,
-  target: { targetOutputResolution: string; targetAspectRatio: string; requestedDurationSeconds: number },
-) {
+function expectedFingerprint(chain: PlanChain, target: DeliverableInputFingerprintTarget) {
   return computeDeliverableInputFingerprint(
     target,
     chain.scenes.map((scene) => ({
@@ -95,10 +93,11 @@ function expectedFingerprint(
   );
 }
 
-const TARGET = {
+const TARGET: DeliverableInputFingerprintTarget = {
   targetOutputResolution: "1080p",
   targetAspectRatio: "16:9",
   requestedDurationSeconds: 60,
+  disclosureMode: "THROUGHOUT",
 };
 
 RUN("deliverable composition plan admission (Transaction I)", () => {
@@ -395,7 +394,7 @@ RUN("deliverable composition plan admission (Transaction I)", () => {
         where: { id: result.deliverableVersionId },
       });
       expect(row.inputFingerprint).toBe(result.inputFingerprint);
-      expect(row.inputFingerprint).toMatch(/^sha256:deliverable-input:v1:[0-9a-f]{64}$/);
+      expect(row.inputFingerprint).toMatch(/^sha256:deliverable-input:v2:[0-9a-f]{64}$/);
     });
   });
 

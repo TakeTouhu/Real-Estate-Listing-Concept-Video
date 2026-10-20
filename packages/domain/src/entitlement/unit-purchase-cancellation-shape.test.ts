@@ -50,13 +50,14 @@ function migrationSql(): string {
 }
 
 describe("UP-5 shape", () => {
-  it("adds exactly one migration, the newest", () => {
+  it("adds exactly one migration, in place", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs).toHaveLength(29);
+    // No longer the newest: DS-3 added migration 29 after it.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(28);
+    expect(dirs).toHaveLength(30);
   });
 
   it("creates the cancellation table, the type naming whose mistake it was and one unique index, and rewrites no existing row", () => {

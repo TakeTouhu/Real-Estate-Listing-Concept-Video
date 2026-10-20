@@ -346,6 +346,7 @@ export async function seedChain(
       requestedByUserId: "usr_itest",
       qualityTier: "HIGH_QUALITY",
       requestedDurationSeconds: 60,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );
@@ -502,6 +503,7 @@ export async function seedPriorDeliverable(
       targetOutputResolution: true,
       targetAspectRatio: true,
       requestedDurationSeconds: true,
+      disclosureMode: true,
     },
   });
   // Read-then-create is not a decision under concurrency: two callers re-arming
@@ -516,6 +518,7 @@ export async function seedPriorDeliverable(
         id,
         generationJobId,
         ordinal: 1,
+        disclosureMode: job.disclosureMode,
         inputFingerprint: computeDeliverableInputFingerprint(job, []),
       },
     ],

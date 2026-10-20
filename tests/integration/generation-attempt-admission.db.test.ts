@@ -500,6 +500,7 @@ describe.skipIf(!HAS_DB)("attempt admission derives what it persists", () => {
           requestedByUserId: "usr",
           qualityTier: "NORMAL",
           requestedDurationSeconds: 30,
+          disclosureMode: "THROUGHOUT",
         },
         ctx(),
       );

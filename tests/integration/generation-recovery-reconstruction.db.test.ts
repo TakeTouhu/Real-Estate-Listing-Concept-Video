@@ -78,6 +78,7 @@ describe.skipIf(!HAS_DB)("an uncertain in-flight generation survives a crash", (
         requestedByUserId: "usr_customer",
         qualityTier: "HIGH_QUALITY",
         requestedDurationSeconds: 60,
+        disclosureMode: "THROUGHOUT",
       },
       ctx({ actorType: "USER", actorUserId: "usr_customer", correlationId: "corr_rec_request" }),
     );

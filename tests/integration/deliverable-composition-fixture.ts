@@ -121,6 +121,7 @@ export async function seedPlanChain(
       targetOutputResolution: options.targetOutputResolution ?? "1080p",
       targetAspectRatio: options.targetAspectRatio ?? "16:9",
       requestedDurationSeconds,
+      disclosureMode: "THROUGHOUT",
       requiredVideoUnits,
       requiredHighQualityUnits: 0,
       state: (ledgerFunded ? "RESERVING" : (options.jobState ?? "SCENES_READY")) as never,
@@ -383,7 +384,7 @@ export async function makeCurrentDeliverable(
 ): Promise<string> {
   const id = `gdv_prior_${jobId}_${ordinal}`;
   await prisma.generationDeliverableVersion.create({
-    data: { id, generationJobId: jobId, ordinal, inputFingerprint: fingerprint },
+    data: { id, generationJobId: jobId, ordinal, disclosureMode: "THROUGHOUT", inputFingerprint: fingerprint },
   });
   await prisma.generationJob.update({
     where: { id: jobId },

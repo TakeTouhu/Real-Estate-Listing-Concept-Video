@@ -140,6 +140,11 @@ the per-generation disclosure/logo settings that define its output. Organization
 and user authorization state stays mutable, but a change to it affects only jobs
 admitted later. No field names are chosen here.
 
+*Implemented in part (DS-3, ADR-0073):* the mode is
+`generation_jobs.disclosureMode`, written at admission and never updated, and
+only Mode A (`THROUGHOUT`) can be stored. Mode C's consent and the eligibility
+snapshots arrive with Mode C; there is no logo setting yet.
+
 ### ProviderGeneration
 
 `id`, `organization_id`, `generation_job_id`, `storyboard_scene_id`, `provider`, `model_id`, `provider_prediction_id_encrypted`, `request_hash`, `status`, `estimated_provider_cost`, `actual_provider_cost`, `temporary_output_expires_at`, timestamps
@@ -158,7 +163,9 @@ final-video approval (ADR-0052 Decision 2). Nothing waits on an approval, and no
 approval record gates delivery.
 
 `disclosure_mode` records which of A / B / C the file was produced with — needed
-because old versions must display their own mode for 30 days.
+because old versions must display their own mode for 30 days. *Implemented as
+`generation_deliverable_versions.disclosureMode` (DS-3, ADR-0073), copied from the
+job when the version is planned.*
 `disclosure_change_count` carries the block-of-three accounting: it increments
 only when a *new completed deliverable* is successfully produced, not on failure,
 retry or cancellation (ADR-0052 Decision 9).

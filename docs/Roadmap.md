@@ -125,6 +125,12 @@ each disclosure image over a real encode on nine backgrounds, neutral and
 coloured. The encode keeps the text's lightness within 17 levels of 255 at any
 pixel, and under 1.7 on average. No application code changes.
 
+**DS-3 — the disclosure mode, frozen at admission** (ADR-0073, migration 29):
+each generation job records the mode it was admitted under and each deliverable
+version the mode it was planned under, bound into the plan's input fingerprint
+(now v2). Only Mode A can be stored; admission refuses any other mode. Nothing
+admits a whole-video generation or draws the disclosure yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

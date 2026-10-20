@@ -91,6 +91,7 @@ async function reservingJob(quality: GenerationQualityTier, seconds: number) {
       requestedByUserId: "usr_itest",
       qualityTier: quality,
       requestedDurationSeconds: seconds,
+      disclosureMode: "THROUGHOUT",
     },
     ctx(),
   );

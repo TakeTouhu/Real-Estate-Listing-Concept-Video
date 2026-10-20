@@ -1383,3 +1383,28 @@ reads and writes no table.
 **What changes at deploy.** Nothing: no application code changes. FFmpeg is
 installed only on the CI runner; the worker image is unchanged. No new
 environment variable.
+
+## DS-3 — the disclosure mode, frozen at admission
+
+**Migration 29, `00000000000029_disclosure_mode_frozen`** (ADR-0073):
+
+- creates the enum `DisclosureMode` with one value, `THROUGHOUT` (Mode A, the
+  disclosure for the whole video);
+- adds `disclosureMode` to `generation_jobs` and to
+  `generation_deliverable_versions`, `NOT NULL`. Each is added with
+  `DEFAULT 'THROUGHOUT'`, so every existing row becomes Mode A, and the default
+  is dropped in the same migration, so every later writer must name the mode.
+
+No table, index or constraint is created, and no row is updated or deleted
+beyond the new columns' values. Adding a column with a constant default does
+not rewrite either table on PostgreSQL 11 or later; the `ALTER TABLE`
+statements take a brief exclusive lock each. Rolling back means dropping the two
+columns and the enum: nothing reads them outside the two repositories that
+write them.
+
+**What changes at deploy.** Nothing anyone can notice. No route admits a
+whole-video generation, and the pipeline after admission is dormant. Versions
+planned before migration 29 keep their `sha256:deliverable-input:v1`
+fingerprint, which is never rewritten; replaying such a plan now fails closed
+with `PARTIAL_PLAN_STATE` (ADR-0073 Decision 4). Only development databases can
+hold one. No new environment variable.
