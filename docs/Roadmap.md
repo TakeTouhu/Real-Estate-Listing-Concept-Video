@@ -113,6 +113,12 @@ links are not in the initial release at all (ADR-0052 Decision 12).
 renders at no layer, and the company logo pipeline does not exist. Both are
 required for the initial release and are tracked in `docs/decisions/TODO.md`.
 
+**DS-1 — the AI disclosure layer v1** (ADR-0071, no migration): the exact text,
+Mode A's geometry and six committed transparent images, one per size
+composition produces, white at 70% over a faint shadow and never under 12
+pixels (the product owner, 2026-10-20). Nothing draws them into a video yet;
+DS-2 to DS-6 build the Clean Master, the overlay and the publication gate.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

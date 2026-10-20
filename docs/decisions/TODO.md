@@ -1113,6 +1113,12 @@ them is **built**. Each item below records the settled decision and what remains
       Unbuilt at every layer: composition profile v1 draws no overlay, the
       deliverable verdict does not require one, and publication does not gate on
       one. This is a required initial-release feature, not a nicety.
+      *In progress (approved 2026-10-20, `/mnt/project-files/cto/disclosure-proposal.md`).
+      DS-1 (ADR-0071) built layer v1: six committed images, one per composable
+      size, with the product owner's faint shadow and 12-pixel minimum, pinned
+      in `@app/domain`. Nothing draws them into a video yet; DS-2 to DS-6 add
+      FFmpeg to CI, the frozen mode, the Clean Master, the overlay and the
+      publication gate.*
 - [ ] **Build Mode C gating and consent.** Organization-level enablement,
       `disclosure.none`, per-video consent with two affirmative checkboxes, and
       the consent evidence record (`organizationId`, `userId`, target,

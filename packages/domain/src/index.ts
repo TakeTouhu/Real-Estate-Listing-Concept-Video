@@ -33,3 +33,4 @@ export * from "./media-failure-resolution/index";
 export * from "./deliverable-composition/index";
 export * from "./deliverable-composition-execution/index";
 export * from "./deliverable-validation/index";
+export * from "./disclosure/index";

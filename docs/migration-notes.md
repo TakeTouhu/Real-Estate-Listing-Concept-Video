@@ -1364,3 +1364,13 @@ from the moment the cancellation commits. The operator command
 columns at the end, `cancelled_at` and `to_invoice_yen_ex_tax`: a spreadsheet
 or script reading it by position is unaffected, and one reading the total
 should read `to_invoice_yen_ex_tax`. No new environment variable.
+
+## DS-1 — the AI disclosure layer v1
+
+**No migration.** DS-1 adds constants to `@app/domain`, six images and a font
+under `assets/disclosure/`, and a command run by hand. It reads and writes no
+table.
+
+**What changes at deploy.** Nothing anyone can notice: no composition, page or
+worker reads the images yet. No new environment variable. The images ship with
+the repository; nothing needs to be uploaded or installed.
