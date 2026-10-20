@@ -13,13 +13,9 @@ new file names, new checksums, a new ADR.
 ## The font
 
 `NotoSansJP-Regular.disclosure-subset.ttf` is Noto Sans JP Regular (Google
-Fonts v57) cut down to the characters of the sentence and renamed to the family
-"VTaVision Disclosure". It is licensed under the SIL Open Font License 1.1, in
-`OFL.txt`; its reserved font name is "Source", which the file does not use.
-
-The family is renamed because fontconfig prefers an installed font of the name
-asked for over the file the renderer hands it: on a machine with its own "Noto
-Sans JP", the images would be drawn in that font instead.
+Fonts v57) cut down to the characters of the sentence. It is licensed under the
+SIL Open Font License 1.1, in `OFL.txt`; its reserved font name is "Source",
+which the subset does not use.
 
 - Source: npm `@expo-google-fonts/noto-sans-jp@0.4.4`, tarball integrity
   `sha512-1vl2U7uYG5JAXGERZaLMXtfOSgyOU4Qhq30OOPrbAHjOu8AW9Pral/qN9Anta9fjd6eVRTijiNqcgy2TowzrDA==`,
@@ -36,37 +32,22 @@ Sans JP", the images would be drawn in that font instead.
 
   The output is reproducible: SHA-256
   `64ae008b81bfd23b75f56aba0c73520daf45ea97287b575c5fd398e3beb2556e`.
-- Renamed, in the name table only, with the same fontTools:
 
-  ```bash
-  python3 -I - NotoSansJP-Regular.disclosure-subset.ttf <<'EOF'
-  import sys
-  from fontTools.ttLib import TTFont
-  NAMES = {
-      1: "VTaVision Disclosure",
-      3: "2.004-H2;VTaVision;VTaVisionDisclosure-Regular",
-      4: "VTaVision Disclosure Regular",
-      6: "VTaVisionDisclosure-Regular",
-      25: "VTaVisionDisclosure",
-  }
-  font = TTFont(sys.argv[1], recalcTimestamp=False)
-  for record in font["name"].names:
-      if record.nameID in NAMES:
-          record.string = NAMES[record.nameID]
-  font.save(sys.argv[1])
-  EOF
-  ```
+## The font configuration
 
-  The output is reproducible: SHA-256
-  `73f51ed1f4a54fb9d4bf19ed63071c7e53ef2066cd3aa6c1dc56ed4a78c6ad1e`, the file
-  committed here.
+`fonts.conf` is the fontconfig file the images are drawn under. It loads no
+installed font and assigns anti-aliasing with no hinting and no sub-pixel
+colour. Without it, a machine draws the text with its own settings: stock
+Ubuntu's draw the sentence a pixel narrower, with coloured fringes.
 
-No worker reads the font. It is kept so the images can be rendered again.
+No worker reads the font or its configuration. They are kept so the images can
+be rendered again.
 
 ## Rendering the images
 
 ```bash
-pnpm --filter @app/storage render-disclosure-layers
+pnpm --filter @app/storage render-disclosure-layers --out <directory>
 ```
 
-writes the six images here and prints each file's SHA-256 for the domain table.
+renders the six images into `<directory>`, under `fonts.conf`, and prints each
+file's SHA-256 and whether it is the committed image. It never writes here.

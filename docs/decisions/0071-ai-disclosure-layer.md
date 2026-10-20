@@ -40,9 +40,11 @@ composition profile v1 produces (1280×720, 1920×1080, 720×1280, 1080×1920,
 720×720, 1080×1080). Each image is the size of the frame, with the text already
 in its place, so it is laid over the video at the origin with no coordinates.
 
-- **Rendered once, by hand**, from the bundled font
-  (`pnpm --filter @app/storage render-disclosure-layers`), and committed under
-  `assets/disclosure/`.
+- **Rendered once, by hand**, from the bundled font under the bundled font
+  configuration (Decision 3), and committed under `assets/disclosure/`.
+  `pnpm --filter @app/storage render-disclosure-layers --out <directory>`
+  renders them again into another directory and says whether each is the
+  committed image; it never writes over them.
 - **Pinned.** `DISCLOSURE_LAYER_ASSETS` in `@app/domain` holds each file's
   SHA-256; a test reads each committed file and compares.
 - **Closed.** A size outside the table has no disclosure image. The composer
@@ -65,7 +67,7 @@ byte the image that ships.
 | Colour | white at 70% opacity |
 | Shadow | the same letters in black at 60% opacity, offset 1 pixel down and right |
 | Box | none |
-| Font | Noto Sans JP Regular, bundled under the family name "VTaVision Disclosure" (Decision 3) |
+| Font | Noto Sans JP Regular |
 
 Per size:
 
@@ -90,9 +92,9 @@ sample frames on 2026-10-20:
 
 The product owner chose both on 2026-10-20, on the decision card, option **C 影あり・最小12px** (a shadow, and 12 pixels at least), over the approved description as written (option A) and a shadow at the approved size (option B).
 
-"Text height" is the height of the rendered line's ink, which for this sentence
-is the font's pixel size. Margins are measured to the text, not to its shadow,
-which reaches one pixel further.
+"Text height" is the font's pixel size. The sentence's ink is that tall, or a
+row taller where anti-aliasing reaches below (at 12 pixels, 13 rows). Margins
+are measured to the text, not to its shadow, which reaches one pixel further.
 
 ## Decision 3 — The font
 
@@ -110,18 +112,19 @@ which reaches one pixel further.
   The result is reproducible byte for byte (SHA-256
   `64ae008b81bfd23b75f56aba0c73520daf45ea97287b575c5fd398e3beb2556e`) and holds
   every character of the sentence.
-- **Renamed** to the family "VTaVision Disclosure" (the commands are in
-  `assets/disclosure/README.md`), touching only the name table: the glyphs, and
-  so the images, are unchanged. Asked for a family, fontconfig prefers a font
-  of that name installed on the machine over the file the renderer hands it, so
-  under its own name the subset would be drawn in whatever "Noto Sans JP" a
-  machine has. On CI's runner the re-rendered sentence came out a pixel
-  narrower, as it does locally with another font installed under that name. No
-  installed font is called "VTaVision Disclosure". The renamed file is reproducible too
-  (SHA-256 `73f51ed1f4a54fb9d4bf19ed63071c7e53ef2066cd3aa6c1dc56ed4a78c6ad1e`),
-  and a test pins it and the family it holds.
+- **Drawn under its own font configuration**, `assets/disclosure/fonts.conf`.
+  Unless told otherwise, fontconfig draws text with the machine's own settings:
+  stock Ubuntu hints it slightly and adds red and blue sub-pixel fringes, which
+  draws this sentence a pixel narrower and no longer white, and it would let an
+  installed font of the same family name stand in for the bundled file. The
+  bundled configuration loads no installed font at all and assigns
+  anti-aliasing with no hinting, no sub-pixel colour and no LCD filter, the
+  settings the committed images were drawn with. The renderer refuses to draw
+  unless `FONTCONFIG_FILE` names it, set before the process first draws text,
+  which is when fontconfig reads it.
 
-The font is needed only to render the images again. No worker reads it.
+The font and its configuration are needed only to render the images again. No
+worker reads them.
 
 ## Decision 4 — How the committed images are checked
 
@@ -129,15 +132,20 @@ For each of the six images, a test proves that:
 
 - it is the file the domain table pins;
 - it is the frame's size, with an alpha channel;
-- its ink sits bottom-right within the margins (allowing the shadow's one
-  pixel), is at least the text height and at most three pixels taller, and is
+- its ink ends exactly one pixel (the shadow) inside the right and bottom
+  margins, is the text height plus the shadow's row, or one row more, and is
   more than twenty times as wide as it is tall, so the whole sentence is there;
 - nothing in it is opaque: white pixels are at most 70% opaque, black ones at
   most 60%, and where they overlap at most 88%;
-- rendering it again from the bundled font puts the ink in exactly the same
-  rectangle, with no pixel's colour or opacity more than 16 out of 255 apart
-  (grey text instead of white would be 36 apart). A different text renderer may
-  shade an edge differently; it may not move the text or change its colours.
+- it is white and black only, with no coloured pixel;
+- rendering it again from the bundled font under the bundled configuration
+  puts the ink in exactly the same rectangle, with no colour fringe and no
+  pixel's colour or opacity more than 16 out of 255 apart (grey text instead of
+  white would be 36 apart). A different build of the text renderer may shade
+  an edge differently; it may not move the text or change its colours.
+
+A test also proves the configuration loads no installed font and assigns those
+settings, and that the renderer refuses to draw under any other.
 
 ## Decision 5 — Nothing draws it yet
 

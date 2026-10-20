@@ -29,20 +29,28 @@ Nothing outside the disclosure module and its tests reads them yet.
 
 | Export | Shape |
 | --- | --- |
-| `renderDisclosureLayer({ widthPx, heightPx, fontFile })` | a `Promise<Buffer>`: a transparent PNG of exactly that size, the text placed by `disclosureLayout`, white at 70% over its shadow |
-| `DISCLOSURE_FONT_FAMILY` | `"VTaVision Disclosure"`, the bundled font's own family name, which no installed font shares |
+| `renderDisclosureLayer({ widthPx, heightPx, fontFile, fontConfigFile })` | a `Promise<Buffer>`: a transparent PNG of exactly that size, the text placed by `disclosureLayout`, white at 70% over its shadow. Rejects unless `process.env.FONTCONFIG_FILE` is `fontConfigFile`, which the caller sets before the process first draws text |
+| `DISCLOSURE_FONT_FAMILY` | `"Noto Sans JP"` |
 | `DISCLOSURE_FONT_PATH` | `"assets/disclosure/NotoSansJP-Regular.disclosure-subset.ttf"`, relative to the repository root |
+| `DISCLOSURE_FONTCONFIG_PATH` | `"assets/disclosure/fonts.conf"`, relative to the repository root |
 
 Called only by the command below; a shape test pins that.
 
 ## Commands
 
-### Added: `pnpm --filter @app/storage render-disclosure-layers`
+### Added: `pnpm --filter @app/storage render-disclosure-layers --out <directory>`
 
-Writes the six `assets/disclosure/layer-v1-WxH.png` images from the bundled
-font and prints each file's SHA-256. It takes no options, reads no database
-and needs no environment variable. It is run by hand only when the look is
-deliberately changed, which makes a layer v2.
+Renders the six images from the bundled font, under the bundled font
+configuration, into `<directory>` (relative to where it is typed), and prints
+each file's SHA-256 and whether it is the committed image. It never writes into
+`assets/disclosure/`. It reads no database and needs no environment variable:
+it sets `FONTCONFIG_FILE` for its own process.
+
+| Exit code | When |
+| --- | --- |
+| `0` | every image is the committed one |
+| `1` | at least one differs |
+| `2` | no `--out`, or `--out` is `assets/disclosure` |
 
 `@app/storage` gains `tsx` 4.23.1 as a development dependency, the same version
 `apps/ops` already uses, to run it.
@@ -54,6 +62,7 @@ deliberately changed, which makes a layer v2.
 | File | What it is |
 | --- | --- |
 | `layer-v1-1280x720.png`, `layer-v1-1920x1080.png`, `layer-v1-720x1280.png`, `layer-v1-1080x1920.png`, `layer-v1-720x720.png`, `layer-v1-1080x1080.png` | the disclosure layer v1, one per frame size, each pinned by SHA-256 in `DISCLOSURE_LAYER_ASSETS` |
-| `NotoSansJP-Regular.disclosure-subset.ttf` | Noto Sans JP Regular cut down to the sentence's characters and renamed to the family "VTaVision Disclosure", 10 KB |
+| `NotoSansJP-Regular.disclosure-subset.ttf` | Noto Sans JP Regular cut down to the sentence's characters, 10 KB |
+| `fonts.conf` | the fontconfig file the images are drawn under: no installed font, no hinting, no sub-pixel colour |
 | `OFL.txt` | the font's SIL Open Font License 1.1 |
 | `README.md` | where the font came from, how it was cut down, how the images are rendered, and that they are never edited in place |

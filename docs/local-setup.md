@@ -146,13 +146,15 @@ shown, cancelled or already cancelled, 1 refused, 2 unusable arguments.
 ## 4e. Render the AI disclosure images again (rarely)
 
 ```bash
-pnpm --filter @app/storage render-disclosure-layers
+pnpm --filter @app/storage render-disclosure-layers --out /tmp/disclosure-layers
 ```
 
-Writes the six `assets/disclosure/layer-v1-*.png` images from the bundled font
-and prints each file's SHA-256. Run it only when the disclosure's look is
-deliberately changed, which makes it a new layer version (ADR-0071); the
-committed images are what ships.
+Renders the six disclosure images from the bundled font, under its own font
+configuration, into the directory given, and says for each whether it is the
+committed image in `assets/disclosure/` (exit code 0 if all are, 1 if any
+differs, 2 for unusable arguments). It never writes over the committed images:
+a different look is a new layer version (ADR-0071), and the committed images
+are what ships.
 
 ## 5. Run the checks
 

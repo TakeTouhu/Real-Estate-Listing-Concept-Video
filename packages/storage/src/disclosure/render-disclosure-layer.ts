@@ -16,16 +16,18 @@ import {
   disclosureLayout,
 } from "@app/domain";
 
-/**
- * The family name inside the bundled font file. It is Noto Sans JP renamed, so
- * that no font installed on the machine can match it instead: asked for "Noto
- * Sans JP", fontconfig prefers an installed font of that name over the file
- * given here (ADR-0071 Decision 3).
- */
-export const DISCLOSURE_FONT_FAMILY = "VTaVision Disclosure";
+/** The family name inside the bundled font file. */
+export const DISCLOSURE_FONT_FAMILY = "Noto Sans JP";
 
 /** The bundled subset of Noto Sans JP Regular, relative to the repository root. */
 export const DISCLOSURE_FONT_PATH = "assets/disclosure/NotoSansJP-Regular.disclosure-subset.ttf";
+
+/**
+ * The font configuration the images are drawn under, relative to the
+ * repository root: no installed font, no hinting, no colour fringes
+ * (ADR-0071 Decision 3).
+ */
+export const DISCLOSURE_FONTCONFIG_PATH = "assets/disclosure/fonts.conf";
 
 interface Glyphs {
   readonly data: Buffer;
@@ -70,7 +72,19 @@ export async function renderDisclosureLayer(input: {
   readonly widthPx: number;
   readonly heightPx: number;
   readonly fontFile: string;
+  /** The absolute path of {@link DISCLOSURE_FONTCONFIG_PATH}. */
+  readonly fontConfigFile: string;
 }): Promise<Buffer> {
+  // Unless told otherwise, fontconfig draws text with the machine's own hinting
+  // and sub-pixel settings, and Ubuntu's defaults draw this sentence a pixel
+  // narrower and with coloured fringes. It reads FONTCONFIG_FILE once, when the
+  // process first draws text, so the caller sets it before then.
+  if (process.env.FONTCONFIG_FILE !== input.fontConfigFile) {
+    throw new Error(
+      `The disclosure is drawn only under its own font configuration: set FONTCONFIG_FILE to ${input.fontConfigFile} before the process draws any text`,
+    );
+  }
+
   // Pango reads the text as markup. The text is a constant, but a markup
   // character in it would change what is drawn without failing.
   if (/[<>&]/.test(AI_DISCLOSURE_TEXT)) throw new Error("The disclosure text contains markup");
