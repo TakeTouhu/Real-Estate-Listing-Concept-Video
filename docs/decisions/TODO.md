@@ -1118,7 +1118,12 @@ them is **built**. Each item below records the settled decision and what remains
       size, with the product owner's faint shadow and 12-pixel minimum, pinned
       in `@app/domain`. Nothing draws them into a video yet; DS-2 to DS-6 add
       FFmpeg to CI, the frozen mode, the Clean Master, the overlay and the
-      publication gate.*
+      publication gate. DS-2 (ADR-0072) added FFmpeg to CI: the composer and
+      inspector pass on real FFmpeg, and each image survives a real encode.*
+- [ ] **Choose the worker image's FFmpeg before composition is activated.**
+      The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
+      in CI; no deployment carries FFmpeg yet. Whichever build the worker image
+      ships, run `pnpm test:media` against it before it composes anything.
 - [ ] **Build Mode C gating and consent.** Organization-level enablement,
       `disclosure.none`, per-video consent with two affirmative checkboxes, and
       the consent evidence record (`organizationId`, `userId`, target,

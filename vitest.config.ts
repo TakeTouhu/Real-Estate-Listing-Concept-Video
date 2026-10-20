@@ -45,6 +45,8 @@ export default defineConfig({
       "**/.next/**",
       // Live-PostgreSQL suites; run via vitest.integration.config.ts.
       "tests/integration/**",
+      // Real-FFmpeg suites; run via vitest.media.config.ts.
+      "tests/media/**",
     ],
     coverage: {
       provider: "v8",
