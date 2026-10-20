@@ -7,7 +7,8 @@
  * six composition profile v1 rasters, and the inspector measures the result:
  * the exact frame size, the sum of the scene lengths, one video stream and no
  * audio. Decoded frames then show the clips letterboxed rather than cropped,
- * and the shorter clip holding its last frame rather than ending early.
+ * the longer clip trimmed from its start, and the shorter one holding its last
+ * frame rather than ending early, looping or holding its first.
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -23,10 +24,12 @@ import {
 import { createFfmpegDeliverableComposer, FfprobeMediaProbe } from "@app/storage";
 import { decodeFrame, ffmpeg, probeStreams, runner } from "./media-tools";
 
-// A blue 16:9 clip at 25 fps with a tone, two seconds long, whose timestamps
-// start at 3 seconds (a clip need not start at zero), and a red 9:16 clip at
-// 24 fps, one second long. The deliverable gives the first 1.5 seconds (so it
-// is trimmed) and the second 2 seconds (so it holds its last frame).
+// A 16:9 clip at 25 fps with a tone, two seconds long, whose timestamps start
+// at 3 seconds (a clip need not start at zero): blue, turning green at 1.6
+// seconds. And a 9:16 clip at 24 fps, one second long: red, turning yellow for
+// its last two frames. The deliverable gives the first 1.5 seconds, so it is
+// trimmed and must never show green, and the second 2 seconds, so it holds its
+// last frame and must show yellow, not red, after its source ends.
 const LANDSCAPE_SCENE_SECONDS = 1.5;
 const PORTRAIT_SCENE_SECONDS = 2;
 const FRAME_COUNT = (LANDSCAPE_SCENE_SECONDS + PORTRAIT_SCENE_SECONDS) * 30;
@@ -40,12 +43,12 @@ beforeAll(async () => {
   landscape = join(dir, "landscape.mp4");
   portrait = join(dir, "portrait.mp4");
   await ffmpeg([
-    "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=2",
+    "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=2,drawbox=c=green:t=fill:enable='gte(t,1.6)'",
     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-output_ts_offset", "3", landscape,
   ]);
   await ffmpeg([
-    "-f", "lavfi", "-i", "color=c=red:s=360x640:r=24:d=1",
+    "-f", "lavfi", "-i", "color=c=red:s=360x640:r=24:d=1,drawbox=c=yellow:t=fill:enable='gte(t,0.9)'",
     "-c:v", "libx264", "-pix_fmt", "yuv420p", portrait,
   ]);
 });
@@ -70,6 +73,7 @@ function pixel(frame: Buffer, width: number, x: number, y: number): Rgb {
 const isBlack = ([r, g, b]: Rgb): boolean => r <= 8 && g <= 8 && b <= 8;
 const isRed = ([r, g, b]: Rgb): boolean => r >= 200 && g <= 40 && b <= 40;
 const isBlue = ([r, g, b]: Rgb): boolean => r <= 40 && g <= 40 && b >= 200;
+const isYellow = ([r, g, b]: Rgb): boolean => r >= 200 && g >= 200 && b <= 40;
 
 describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} ${target.targetOutputResolution}`, target] as const))(
   "composing into %s",
@@ -134,16 +138,19 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
 
     it("shows the 9:16 clip whole, pillarboxed where the frame is wider, holding its last frame to the scene's end", async () => {
       // The portrait clip is one second long but its scene is two: frame 100
-      // is 1.8 seconds into the scene, well after the source's last frame.
+      // is 1.8 seconds into the scene, well after the source's last frame. A
+      // held last frame is yellow; a held first frame, or the clip looped, red.
       const frame = await decodeFrame(dir, output, FRAME_COUNT - 5);
-      expect(isRed(pixel(frame, width, width / 2, height / 2))).toBe(true);
-      expect(isRed(pixel(frame, width, width / 2, 2))).toBe(true);
-      expect(isRed(pixel(frame, width, width / 2, height - 3))).toBe(true);
+      expect(isYellow(pixel(frame, width, width / 2, height / 2))).toBe(true);
+      expect(isYellow(pixel(frame, width, width / 2, 2))).toBe(true);
+      expect(isYellow(pixel(frame, width, width / 2, height - 3))).toBe(true);
       const pillarboxed = (height * 9) / 16 < width - 4;
       expect(isBlack(pixel(frame, width, 1, height / 2))).toBe(pillarboxed);
     });
 
-    it("cuts from the first clip to the second exactly at the first scene's length", async () => {
+    it("cuts from the first clip, trimmed from its start, to the second exactly at the first scene's length", async () => {
+      // Frame 44 is 1.47 seconds into the first clip: still blue, where the
+      // clip's last 1.5 seconds would have turned green by then.
       const boundary = LANDSCAPE_SCENE_SECONDS * 30;
       const [last, first] = await Promise.all([
         decodeFrame(dir, output, boundary - 1),

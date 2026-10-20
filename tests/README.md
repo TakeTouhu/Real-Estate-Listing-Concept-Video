@@ -31,8 +31,8 @@ pnpm test:media
 ```
 
 Every input is generated in the test or committed in `assets/disclosure/`; no
-customer or provider media is used. CI runs them in the `media` job on Ubuntu
-24.04.
+customer or provider media is used. Without FFmpeg the run fails, its tests
+reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 ## Unit tests
 

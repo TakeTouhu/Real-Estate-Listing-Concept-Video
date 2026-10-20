@@ -187,9 +187,10 @@ pnpm test:media   # vitest.media.config.ts
 ```
 
 They encode synthetic clips into each composition size and lay the disclosure
-images over them, in temporary directories they remove. Without FFmpeg they
-fail rather than skip. CI runs them in the `media` job on Ubuntu 24.04, whose
-FFmpeg 6.1.1 their tolerances were measured with.
+images over them, in temporary directories they remove. Without FFmpeg the
+run fails: the suites cannot make their inputs, so Vitest marks each file
+failed and reports its tests as skipped. CI runs them in the `media` job on
+Ubuntu 24.04, whose FFmpeg 6.1.1 their tolerances were measured with.
 
 ## Notes
 
