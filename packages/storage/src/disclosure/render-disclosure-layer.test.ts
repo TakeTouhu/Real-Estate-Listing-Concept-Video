@@ -29,7 +29,8 @@ interface Measured {
   readonly maxAlpha: number;
   readonly maxWhiteAlpha: number;
   readonly maxBlackAlpha: number;
-  readonly alpha: Uint8Array;
+  /** Each pixel's red, green and blue weighted by its alpha, then its alpha. */
+  readonly premultiplied: Uint8Array;
 }
 
 async function measure(image: Buffer): Promise<Measured> {
@@ -38,11 +39,14 @@ async function measure(image: Buffer): Promise<Measured> {
   let maxAlpha = 0;
   let maxWhiteAlpha = 0;
   let maxBlackAlpha = 0;
-  const alpha = new Uint8Array(info.width * info.height);
+  const premultiplied = new Uint8Array(info.width * info.height * 4);
   for (let pixel = 0; pixel < info.width * info.height; pixel += 1) {
     const at = pixel * info.channels;
     const a = data[at + 3] ?? 0;
-    alpha[pixel] = a;
+    for (let channel = 0; channel < 3; channel += 1) {
+      premultiplied[pixel * 4 + channel] = Math.round(((data[at + channel] ?? 0) * a) / 255);
+    }
+    premultiplied[pixel * 4 + 3] = a;
     if (a === 0) continue;
     const x = pixel % info.width;
     const y = Math.floor(pixel / info.width);
@@ -55,7 +59,16 @@ async function measure(image: Buffer): Promise<Measured> {
     if (r === 255 && g === 255 && b === 255) maxWhiteAlpha = Math.max(maxWhiteAlpha, a);
     if (r === 0 && g === 0 && b === 0) maxBlackAlpha = Math.max(maxBlackAlpha, a);
   }
-  return { width: info.width, height: info.height, channels: info.channels, ink, maxAlpha, maxWhiteAlpha, maxBlackAlpha, alpha };
+  return {
+    width: info.width,
+    height: info.height,
+    channels: info.channels,
+    ink,
+    maxAlpha,
+    maxWhiteAlpha,
+    maxBlackAlpha,
+    premultiplied,
+  };
 }
 
 describe("the bundled font", () => {
@@ -105,17 +118,18 @@ describe.each(DISCLOSURE_LAYER_ASSETS.map((asset) => [`${asset.widthPx}x${asset.
       expect(image.maxAlpha).toBeLessThanOrEqual(Math.ceil(255 * 0.88));
     });
 
-    it("is what the renderer draws from the bundled font", async () => {
+    it("is what the renderer draws from the bundled font, in the same place and colours", async () => {
       const [again, kept] = await Promise.all([
         measure(await renderDisclosureLayer({ widthPx: asset.widthPx, heightPx: asset.heightPx, fontFile: FONT_FILE })),
         measure(committed(asset)),
       ]);
       expect(again.ink).toEqual(kept.ink);
       let largest = 0;
-      for (let pixel = 0; pixel < kept.alpha.length; pixel += 1) {
-        largest = Math.max(largest, Math.abs((again.alpha[pixel] ?? 0) - (kept.alpha[pixel] ?? 0)));
+      for (let value = 0; value < kept.premultiplied.length; value += 1) {
+        largest = Math.max(largest, Math.abs((again.premultiplied[value] ?? 0) - (kept.premultiplied[value] ?? 0)));
       }
-      // A different text renderer may shade an edge differently, never move the text.
+      // A different text renderer may shade an edge differently, never move the
+      // text or change its colour: grey instead of white is 36 apart.
       expect(largest).toBeLessThanOrEqual(16);
     });
   },

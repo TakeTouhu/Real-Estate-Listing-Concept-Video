@@ -63,7 +63,7 @@ byte the image that ships.
 | Bottom margin | 3% of the frame's height, rounded |
 | Text height | 1.25% of the frame's height, a half rounded up, **and never under 12 pixels** |
 | Colour | white at 70% opacity |
-| Shadow | black at 60% opacity, offset 1 pixel down and right, softened (blur σ 0.5) |
+| Shadow | the same letters in black at 60% opacity, offset 1 pixel down and right |
 | Box | none |
 | Font | Noto Sans JP Regular |
 
@@ -126,8 +126,9 @@ For each of the six images, a test proves that:
 - nothing in it is opaque: white pixels are at most 70% opaque, black ones at
   most 60%, and where they overlap at most 88%;
 - rendering it again from the bundled font puts the ink in exactly the same
-  rectangle, with no pixel's opacity more than 16 out of 255 apart. A different
-  text renderer may shade an edge differently; it may not move the text.
+  rectangle, with no pixel's colour or opacity more than 16 out of 255 apart
+  (grey text instead of white would be 36 apart). A different text renderer may
+  shade an edge differently; it may not move the text or change its colours.
 
 ## Decision 5 — Nothing draws it yet
 

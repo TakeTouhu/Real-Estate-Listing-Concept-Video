@@ -75,7 +75,7 @@ describe("Mode A's geometry", () => {
 
   it("is white at 70% over a faint black shadow one pixel down and right", () => {
     expect(DISCLOSURE_TEXT_OPACITY).toBe(0.7);
-    expect(DISCLOSURE_SHADOW).toEqual({ offsetPx: 1, blurSigma: 0.5, opacity: 0.6 });
+    expect(DISCLOSURE_SHADOW).toEqual({ offsetPx: 1, opacity: 0.6 });
     expect(DISCLOSURE_LAYER_KEY).toBe("vtavision-disclosure:v1");
   });
 });

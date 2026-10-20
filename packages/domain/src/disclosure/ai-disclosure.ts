@@ -41,8 +41,8 @@ export const DISCLOSURE_MARGIN_PERCENT = 3;
 /** The text is white at this opacity. Nothing in the layer is opaque. */
 export const DISCLOSURE_TEXT_OPACITY = 0.7;
 
-/** The faint shadow under the text: black, offset down and right, softened, at this opacity. */
-export const DISCLOSURE_SHADOW = { offsetPx: 1, blurSigma: 0.5, opacity: 0.6 } as const;
+/** The faint shadow under the text: the same glyphs in black, offset down and right, at this opacity. */
+export const DISCLOSURE_SHADOW = { offsetPx: 1, opacity: 0.6 } as const;
 
 /** Where and how large the text sits in one frame size. */
 export interface DisclosureLayout {

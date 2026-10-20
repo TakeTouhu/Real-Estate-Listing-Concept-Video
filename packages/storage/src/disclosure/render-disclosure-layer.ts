@@ -22,9 +22,6 @@ export const DISCLOSURE_FONT_FAMILY = "Noto Sans JP";
 /** The bundled subset of Noto Sans JP Regular, relative to the repository root. */
 export const DISCLOSURE_FONT_PATH = "assets/disclosure/NotoSansJP-Regular.disclosure-subset.ttf";
 
-/** Room around the shadow's glyphs for its blur. */
-const SHADOW_PAD_PX = 3;
-
 interface Glyphs {
   readonly data: Buffer;
   readonly width: number;
@@ -39,7 +36,6 @@ async function glyphs(textHeightPx: number, colour: string, fontFile: string): P
       font: `${DISCLOSURE_FONT_FAMILY} ${textHeightPx}px`,
       fontfile: fontFile,
       rgba: true,
-      dpi: 72,
     },
   })
     .raw()
@@ -78,24 +74,6 @@ export async function renderDisclosureLayer(input: {
   const white = await glyphs(layout.textHeightPx, "#FFFFFF", input.fontFile);
   const black = await glyphs(layout.textHeightPx, "#000000", input.fontFile);
 
-  const padded = { width: white.width + 2 * SHADOW_PAD_PX, height: white.height + 2 * SHADOW_PAD_PX };
-  const offsetShadow = await sharp({
-    create: { ...padded, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-  })
-    .composite([
-      {
-        input: await png(black.data, black.width, black.height),
-        left: SHADOW_PAD_PX + DISCLOSURE_SHADOW.offsetPx,
-        top: SHADOW_PAD_PX + DISCLOSURE_SHADOW.offsetPx,
-      },
-    ])
-    .raw()
-    .toBuffer();
-  const softened = await sharp(offsetShadow, { raw: { ...padded, channels: 4 } })
-    .blur(DISCLOSURE_SHADOW.blurSigma)
-    .raw()
-    .toBuffer();
-
   const textLeft = input.widthPx - layout.rightMarginPx - white.width;
   const textTop = input.heightPx - layout.bottomMarginPx - white.height;
   return sharp({
@@ -103,9 +81,9 @@ export async function renderDisclosureLayer(input: {
   })
     .composite([
       {
-        input: await png(withOpacity(softened, DISCLOSURE_SHADOW.opacity), padded.width, padded.height),
-        left: textLeft - SHADOW_PAD_PX,
-        top: textTop - SHADOW_PAD_PX,
+        input: await png(withOpacity(black.data, DISCLOSURE_SHADOW.opacity), black.width, black.height),
+        left: textLeft + DISCLOSURE_SHADOW.offsetPx,
+        top: textTop + DISCLOSURE_SHADOW.offsetPx,
       },
       {
         input: await png(withOpacity(white.data, DISCLOSURE_TEXT_OPACITY), white.width, white.height),

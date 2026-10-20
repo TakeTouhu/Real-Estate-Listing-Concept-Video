@@ -17,7 +17,7 @@ rendered them.
 | `DISCLOSURE_MIN_TEXT_HEIGHT_PX` | `12`: never smaller |
 | `DISCLOSURE_MARGIN_PERCENT` | `3`: right margin of the width, bottom margin of the height |
 | `DISCLOSURE_TEXT_OPACITY` | `0.7` |
-| `DISCLOSURE_SHADOW` | `{ offsetPx: 1, blurSigma: 0.5, opacity: 0.6 }` |
+| `DISCLOSURE_SHADOW` | `{ offsetPx: 1, opacity: 0.6 }`: the same glyphs in black, one pixel down and right |
 | `disclosureLayout(widthPx, heightPx)` | `{ textHeightPx, rightMarginPx, bottomMarginPx }`, integer arithmetic, a half rounded up |
 | `DISCLOSURE_LAYER_ASSETS` | the six committed images: `{ widthPx, heightPx, fileName, sha256 }`, one per raster composition profile v1 produces |
 | `disclosureLayerFor(widthPx, heightPx)` | that size's image, or `null` |
