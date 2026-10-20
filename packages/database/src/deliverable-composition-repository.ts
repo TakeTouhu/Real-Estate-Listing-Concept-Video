@@ -294,7 +294,8 @@ export function createDeliverableCompositionPlanRepository(
  * "Exactly one latest version whose frozen inputs represent the current planned
  * cycle" is checked as three facts: a version exists, it holds one input per
  * Scene of this Job and no others, and its recorded fingerprint recomputes from
- * its own stored rows under this Job's frozen target.
+ * its own stored rows under this Job's frozen target and the version's own
+ * disclosure mode (ADR-0073).
  *
  * Self-consistency rather than re-derivation from live Scene rows, deliberately.
  * A `COMPOSITION_PENDING` Job cannot have its Scenes moved — revision start

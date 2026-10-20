@@ -13,10 +13,11 @@
 -- for the whole video. Mode B and Mode C add theirs when their rules are built.
 --
 -- **Existing rows are Mode A.** Nothing has been delivered and no route creates
--- a job, so every existing row is development data; the approved plan records
--- it as Mode A, the only mode any composition could have given it. The column
--- default exists only for the ADD COLUMN statement and is dropped immediately,
--- so every later writer must name the mode. Existing versions keep their
+-- a job, so every existing row is development data, and the approved plan
+-- records it as Mode A. (No composition draws the disclosure before DS-5, so a
+-- version composed earlier holds a video without it.) The column default exists
+-- only for the ADD COLUMN statement and is dropped immediately, so every later
+-- writer must name the mode. Existing versions keep their
 -- `sha256:deliverable-input:v1` fingerprint, which is never rewritten.
 
 -- CreateEnum

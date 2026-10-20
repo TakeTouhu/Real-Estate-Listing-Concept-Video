@@ -22,11 +22,11 @@
  * or admit them.
  */
 
-/** A disclosure mode a generation can be admitted under. Mode A only, until B and C are built. */
-export type DisclosureMode = "THROUGHOUT";
+/** Every disclosure mode admission accepts, in ADR-0052's order. Mode A only, until B and C are built. */
+export const DISCLOSURE_MODES = ["THROUGHOUT"] as const;
 
-/** Every disclosure mode admission accepts, in ADR-0052's order. */
-export const DISCLOSURE_MODES: readonly DisclosureMode[] = ["THROUGHOUT"];
+/** A disclosure mode a generation can be admitted under: one of `DISCLOSURE_MODES`. */
+export type DisclosureMode = (typeof DISCLOSURE_MODES)[number];
 
 /** ADR-0052 Decision 8: Mode A is the default. */
 export const DEFAULT_DISCLOSURE_MODE: DisclosureMode = "THROUGHOUT";

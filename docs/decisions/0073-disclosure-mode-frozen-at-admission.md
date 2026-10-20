@@ -95,22 +95,26 @@ disclosure are different deliverables, so their fingerprints differ.
 A replay (ADR-0049 Decision 11) recomputes with **the version's own mode**, not
 the job's, so the fingerprint witnesses what the version was planned under.
 
-**A v1 fingerprint is never rewritten or recomputed.** A version planned before
-migration 29 keeps its `sha256:deliverable-input:v1` value. If its plan is
-replayed, the v2 recomputation does not match, and Transaction I fails closed
-with `PARTIAL_PLAN_STATE`, as for any plan whose fingerprint no longer describes
-its own rows. Only development databases hold such a version: the pipeline after
-admission is dormant and nothing has been delivered. A v1 version that is
-already a job's current deliverable is untouched; a later recomposition plans a
-new v2 version beside it.
+**A v1 fingerprint is never rewritten.** A version planned before migration 29
+keeps its `sha256:deliverable-input:v1` value. Only Transaction I's replay
+recomputes a fingerprint, and only for the pending version: replayed, a v1 plan
+no longer matches, and Transaction I raises `PARTIAL_PLAN_STATE`, as for any
+plan whose fingerprint no longer describes its own rows. Composition's claim
+and finalization (ADR-0050) do not read the fingerprint, so a pending v1 plan is
+still claimed and composed as before. A v1 version that is already a job's
+current deliverable is never recomputed; a later recomposition plans a new v2
+version beside it. Only development databases hold a v1 version: the pipeline
+after admission is dormant and nothing has been delivered.
 
 ## Decision 5 — Existing rows are Mode A
 
 Migration 29 adds each column with `DEFAULT 'THROUGHOUT'`, so existing rows are
 Mode A, then drops the default in the same migration. The approved plan records
-development jobs from before DS-3 as Mode A, the only mode any composition could
-have given them. The migration updates no row itself and creates no table,
-index or constraint.
+development jobs from before DS-3 as Mode A. No composition draws the disclosure
+until DS-5, so a version composed before then holds a video without it although
+its row says Mode A; DS-6 will refuse to publish a deliverable without a Clean
+Master, which no such version has. Only development data holds one. The
+migration updates no row itself and creates no table, index or constraint.
 
 ## Decision 6 — Nothing else changes
 
@@ -129,8 +133,8 @@ index or constraint.
   admitted and planned under, and nothing can store a mode that is not built.
 - Mode B and Mode C each add one enum value, in the domain list and the database
   together, with their own admission rules.
-- A plan planned before migration 29 cannot be replayed; it fails closed. Its
-  job can be planned again only by a new cycle, which only development data
-  needs.
+- Transaction I's replay of a plan stored before migration 29 fails closed;
+  composition does not read the fingerprint and is unaffected. Only development
+  data holds such a plan.
 - The question of which mode a later version carries is open until disclosure
   changes are built.
