@@ -207,6 +207,9 @@ importers:
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
+      tsx:
+        specifier: 4.23.1
+        version: 4.23.1
 
   packages/video-providers:
     dependencies:

@@ -18,3 +18,10 @@ export type { PassthroughMalwareScannerOptions } from "./scanner";
  * asserts nothing in production constructs this class (ADR-0041).
  */
 export * from "./managed-output/index";
+
+/**
+ * The AI-generated disclosure layer renderer (ADR-0071). Run by hand through
+ * `pnpm --filter @app/storage render-disclosure-layers` to produce the images in
+ * `assets/disclosure/`; nothing in either application calls it.
+ */
+export * from "./disclosure/index";

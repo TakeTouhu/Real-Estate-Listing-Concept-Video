@@ -143,6 +143,19 @@ is cancelled only within 10 hours of its approval with none of its Units used,
 and otherwise refused. A cancellation cannot be undone. Exit code 0 means
 shown, cancelled or already cancelled, 1 refused, 2 unusable arguments.
 
+## 4e. Render the AI disclosure images again (rarely)
+
+```bash
+pnpm --filter @app/storage render-disclosure-layers --out /tmp/disclosure-layers
+```
+
+Renders the six disclosure images from the bundled font, under its own font
+configuration, into the directory given, and says for each whether it is the
+committed image in `assets/disclosure/` (exit code 0 if all are, 1 if any
+differs, 2 for unusable arguments). It never writes over the committed images:
+a different look is a new layer version (ADR-0071), and the committed images
+are what ships.
+
 ## 5. Run the checks
 
 ```bash
