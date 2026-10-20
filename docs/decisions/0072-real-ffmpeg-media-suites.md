@@ -46,8 +46,9 @@ downloaded media is used. Each suite works in a temporary directory it removes.
 ## Decision 4 — What the composer suite proves
 
 For each of the six composition profile v1 rasters, the real composer encodes a
-blue 16:9 clip at 25 fps with a tone (two seconds, given a 1.5-second scene)
-and a red 9:16 clip at 24 fps (one second, given a two-second scene). Then:
+blue 16:9 clip at 25 fps with a tone whose timestamps start at 3 seconds (two
+seconds, given a 1.5-second scene) and a red 9:16 clip at 24 fps (one second,
+given a two-second scene). Then:
 
 - the real inspector measures exactly the frame size, 3,500 ms, one video
   stream and no audio;

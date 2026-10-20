@@ -370,3 +370,175 @@ charges remain BLOCKED.
 
 DS-1 waits for the product owner's yes before merge. DS-2 (FFmpeg in CI) comes
 next, after it.
+
+## DS-2 — real FFmpeg in CI
+
+Base: `89f889a` (PR #94 merge commit on `main`; post-merge CI run 616 green).
+ADR: `docs/decisions/0072-real-ffmpeg-media-suites.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `64be4cb` | the `media` CI job, `tests/media/` and its configuration, ADR-0072 and the documentation |
+| `1933ec3` | the first clip's timestamps start at 3 seconds, so the suite shows the composer's timeline reset matters (found by the mutation pass, below) |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-2 does
+
+- **A `media` CI job** on `ubuntu-24.04` installs the distribution's FFmpeg
+  (6.1.1), prints its version and runs `pnpm test:media`. It needs no
+  database, secret or network media.
+- **The suites** live in `tests/media/` and run only through
+  `vitest.media.config.ts`; `pnpm test` excludes them, so a unit run still
+  needs no binaries. Without FFmpeg they fail rather than skip.
+- **The composer and the inspector, on real FFmpeg** (30 tests). For each of
+  the six composition profile v1 sizes, the dormant composer encodes two
+  clips: a blue 16:9 one at 25 fps with a tone, whose timestamps start at 3
+  seconds, given 1.5 of its 2 seconds; and a red 9:16 one at 24 fps, given 2
+  seconds for its one. The dormant inspector measures the frame size,
+  3,500 ms, one video stream and no audio; `ffprobe` reports H.264, `yuv420p`,
+  30 fps, square pixels and 105 frames; decoded frames show each clip whole,
+  letterboxed or pillarboxed and never cropped, the red clip holding its last
+  frame to the end of its scene, and the cut exactly at frame 45.
+- **The disclosure over a real encode** (18 tests). Each of the six committed
+  images is laid over a one-second clip of its size, in mid grey, a near-white
+  floor and a near-black room, at profile v1's preset, CRF and pixel format,
+  with FFmpeg's `overlay` at 0:0 (ADR-0072 Decision 5). A decoded frame is
+  compared with the image's straight-alpha blend over the background.
+- **No application code changes.** The composer, the inspector and the images
+  are as they were; the overlay graph is written in the test until DS-5 moves
+  it into the composer.
+
+### The disclosure through H.264
+
+What the encode does to each image, measured on this machine's FFmpeg 6.1.1
+(the same Ubuntu 24.04 package CI installs), against the suite's bounds:
+
+| Measure | Bound | Mid grey | White floor | Dark room |
+| --- | --- | --- | --- | --- |
+| mean error where the image has ink, of 255 | 3 | 1.27 to 1.37 | 1.25 to 1.40 | 1.67 to 1.75 |
+| largest error there | 24 | 8 to 12 | 8 to 14 | 9 to 15 |
+| largest change beyond 16 pixels of the ink | 2 | 0 | 0 | 1 |
+| the text against the background | 80 | 89 to 92 | 146 to 149 | 155 to 161 |
+
+The colours in the images are all greys, so halving the colour resolution
+(`yuv420p`) changes nothing; what differs is H.264's rounding at CRF 18, a level
+or two on average. On the white floor, the shadow is what separates the text
+from the floor, 146 levels below it after the encode.
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI; FFmpeg 6.1.1) on `1933ec3`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5741 / 5741**, 200 files (unchanged: the media suites are not in it) |
+| `pnpm test:media` | **48 / 48**, 2 files, about 30 seconds |
+| `pnpm test:db` | **1439 / 1439**, 53 files (unchanged) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 29 migrations, up to date (no new migration) |
+
+New tests (48, media only): the composer and inspector in six sizes (30) and
+the six images over three backgrounds (18), as above.
+
+### Mutation ledger
+
+**24 mutants: 22 killed, and 2 that survive only alone, 0 broken, 0
+anchor-missing**, in the second of two passes, on the code of `1933ec3`. Each
+mutant breaks one thing the composer's or the inspector's arguments claim, or
+one property of the overlay method, at an anchor that occurs exactly once. Each
+runs against the real-FFmpeg suite **alone**: the unit suite pins every
+argument and would kill each of them without showing that the suite catches it.
+Every mutated file was restored and re-hashed, and all 910 files were
+byte-identical after each pass.
+
+**The first pass, on `64be4cb`, found one gap.** Removing the composer's
+timeline reset before the cut changed nothing, because both test clips started
+at zero. A clip need not: `1933ec3` starts the first clip's timestamps at 3
+seconds, and without the reset the cut no longer falls at frame 45. The first
+pass also counted F11 as broken, because a failed setup step skips its tests
+rather than failing them; the harness now counts the file's failure.
+
+**F11, the square-pixel declaration, is load-bearing.** Scaling a clip into a
+1080p frame rounds one dimension (607.5 to 608 pixels), FFmpeg adjusts the clip's
+pixel shape to compensate, and concat refuses two clips whose pixel shapes
+differ. Without `setsar=1` the three 1080p sizes fail to encode at all.
+
+**E01 and E02 survive alone, and that is by design.** The composer drops audio
+twice: it maps only the filtered video, and it passes `-an`. Removing `-an`
+(E01) leaves no audio mapped; mapping the first clip's audio (E02) is undone by
+`-an`. Each mutant is equivalent alone. Both together (E05) put the tone in the
+deliverable, and the suite catches it.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| F01 | fit | the clip cropped to fill the frame | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F02 | fit | the clip stretched to fill the frame | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F03 | fit | the clip in the top-left corner | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| F04 | fit | white bands instead of black | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F05 | time | a short clip ends early instead of holding | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F06 | time | a long clip is not trimmed | `ffmpeg-composer.ts` | 24 of 30 (composer) |
+| F07 | time | a long clip is sped up to fit instead of trimmed | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F08 | rate | 25 frames a second | `ffmpeg-composer.ts` | 24 of 30 (composer) |
+| F09 | order | the clips in reverse order | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F10 | timeline | no timeline reset before the cut | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F11 | pixels | no square-pixel declaration | `ffmpeg-composer.ts` | setup failed, 15 of 30 not run (composer) |
+| E01 | audio | audio not explicitly dropped | `ffmpeg-composer.ts` | survived, equivalent alone (below) |
+| E02 | audio | the first clip's audio mapped through | `ffmpeg-composer.ts` | survived, equivalent alone (below) |
+| E05 | audio | the first clip's audio mapped through and not dropped | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| E03 | format | full-resolution colour (yuv444p) | `ffmpeg-composer.ts` | 6 of 30 (composer) |
+| E04 | container | Matroska instead of MP4 | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| P01 | inspector | video streams counted as audio | `ffprobe.ts` | 6 of 30 (composer) |
+| P02 | inspector | width and height swapped | `ffprobe.ts` | 4 of 30 (composer) |
+| O01 | overlay | the image's transparency ignored | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+| O02 | overlay | the image laid one pixel to the right | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+| O03 | overlay | the image scaled 2% larger | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+| O04 | overlay | the image read as premultiplied | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+| O05 | overlay | the image at 80% of its opacity | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+| O06 | overlay | the video encoded at CRF 35 | `disclosure-overlay.media.test.ts` | 18 of 18 (overlay) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composer row and the disclosure row note the media suites |
+| Entity-relationship diagram | Not applicable: DS-2 adds no table, column or relation |
+| Critical sequence diagram | Not applicable: DS-2 adds no runtime flow, only tests and a CI job |
+| OpenAPI / API change summary | Not applicable: no route, page, export or command changes |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-2*: no migration, nothing changes at deploy |
+| Completion report | this file |
+
+Also updated: `docs/local-setup.md` and `tests/README.md` (running the media
+suites), `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure item,
+and a new item: choose the worker image's FFmpeg before composition is
+activated).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-2 adds tests, a test configuration
+and a CI job that installs FFmpeg on the runner only: no application code,
+worker, scheduler, credential, environment variable or payment integration.
+Paid Provider Activation, production credentials, the production scheduler and
+live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Only CI and a developer's machine have FFmpeg.** No deployment image
+  carries it; choosing that build, and running the media suites against it, is
+  a TODO item for when composition is activated.
+- **The sources are short, constant-rate and square-pixelled.** A clip with a
+  variable frame rate, non-square pixels or a long duration is not exercised.
+- **The overlay graph is in the test, not the composer**, until DS-5.
+- **The bounds were measured on FFmpeg 6.1.1.** Another FFmpeg or x264 build
+  should land well inside them, but the suite is what says so.
+
+### Remaining work
+
+DS-2 waits for the product owner's yes before merge. DS-3 (the disclosure mode
+frozen at admission, migration 29) comes next, after it.
