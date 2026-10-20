@@ -300,10 +300,11 @@ describe("no new durable shape", () => {
     // MFA-4, which is authorized to add migration 26 for the organization's
     // MFA requirement, by UP-2 (ADR-0067), which is authorized to add
     // migration 27 for Unit purchases, by UP-5 (ADR-0070), which is
-    // authorized to add migration 28 for cancelling one, and by DS-3
-    // (ADR-0073), which is authorized to add migration 29 to freeze the
-    // disclosure mode.
-    expect(dirs.at(-1)).toBe("00000000000029_disclosure_mode_frozen");
+    // authorized to add migration 28 for cancelling one, by DS-3 (ADR-0073),
+    // which is authorized to add migration 29 to freeze the disclosure mode,
+    // and by DS-4 (ADR-0074), which is authorized to add migration 30 for the
+    // Clean Master record.
+    expect(dirs.at(-1)).toBe("00000000000030_clean_master_record");
     // "6a" here means Phase 4C-3B-2H-3B-6A. The top-level Phase 6A's ledger
     // migration shares the substring and is the one authorized exception.
     expect(

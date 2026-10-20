@@ -131,6 +131,12 @@ version the mode it was planned under, bound into the plan's input fingerprint
 (now v2). Only Mode A can be stored; admission refuses any other mode. Nothing
 admits a whole-video generation or draws the disclosure yet.
 
+**DS-4 — the Clean Master record and its internal location** (ADR-0074,
+migration 30): one receipt row per composed deliverable version for its
+overlay-free master, at `org/{organizationId}/internal/clean-masters/{version}`.
+No signed URL of either purpose is made or honoured for any key under
+`internal/`. Nothing writes a master yet; DS-5's composition will.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

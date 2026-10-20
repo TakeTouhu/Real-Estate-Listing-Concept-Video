@@ -118,6 +118,9 @@ disablement for SSO-enforced organizations.
 - Automated cross-tenant authorization tests
 - Organization-prefixed storage keys
 - No public buckets or permanent asset URLs
+- **Internal-only objects are never given a signed URL.** Anything under
+  `org/{organizationId}/internal/`, such as the Clean Master, is refused by the
+  signer and by the verifier, for upload and download alike (ADR-0074)
 
 ## Upload security
 

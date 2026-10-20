@@ -1411,3 +1411,28 @@ fingerprint, which is never rewritten; Transaction I's replay of such a plan now
 fails closed with `PARTIAL_PLAN_STATE`, while composition, which does not read
 the fingerprint, is unaffected (ADR-0073 Decision 4). Only development databases
 can hold one. No new environment variable.
+
+## DS-4 — the Clean Master record
+
+**Migration 30, `00000000000030_clean_master_record`** (ADR-0074):
+
+- creates `generation_deliverable_clean_masters`: `id`, `deliverableVersionId`
+  (unique, foreign key to `generation_deliverable_versions`, `ON DELETE
+  RESTRICT`), `storageKey`, `sha256`, `sizeBytes` (`BIGINT`), `verifiedAt` and
+  `createdAt`, all `NOT NULL`, with no default but `createdAt`'s;
+- adds `deliverable_clean_master_key_check`: the key is exactly
+  `org/{organization}/internal/clean-masters/{deliverableVersionId}` for a
+  non-blank organization segment and the row's own version;
+- adds `deliverable_clean_master_receipt_check`: lowercase 64-character hex, and
+  a size above zero and at most 2^53 − 1.
+
+No existing table is altered and no row is written, updated or deleted; the new
+table is empty, and nothing writes it until DS-5. Creating it takes no lock on
+an existing table beyond the foreign key's brief `SHARE ROW EXCLUSIVE` on
+`generation_deliverable_versions`. Rolling back means dropping the table:
+nothing reads or writes it. Code from before DS-4 runs against the new schema
+unchanged, except that it would sign an internal key if one were ever asked for.
+
+**What changes at deploy.** Nothing anyone can notice. The two signed storage
+routes now answer a token for an internal key with `401`, and nothing issues
+one. No new environment variable.

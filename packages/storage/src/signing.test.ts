@@ -1,5 +1,8 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { signStorageToken, verifyStorageToken } from "./signing";
+import { managedCleanMasterKey } from "@app/domain";
+import { LocalObjectStorage } from "./local-storage";
+import { signStorageToken, verifyStorageToken, type SignedPurpose } from "./signing";
 
 const SECRET = "storage-signing-secret-abc123";
 const KEY = "org/org_1/properties/prp_1/assets/ast_1/original.bin";
@@ -43,5 +46,52 @@ describe("storage token signing", () => {
     expect(verifyStorageToken("", SECRET, "upload", NOW)).toBeNull();
     expect(verifyStorageToken("nodot", SECRET, "upload", NOW)).toBeNull();
     expect(verifyStorageToken("not-base64.sig", SECRET, "upload", NOW)).toBeNull();
+  });
+
+  describe("the internal namespace (ADR-0074)", () => {
+    const MASTER = managedCleanMasterKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
+    const PURPOSES: readonly SignedPurpose[] = ["upload", "download"];
+
+    /** A token made with the secret but without the signer, as a bypass would. */
+    function minted(key: string, purpose: SignedPurpose): string {
+      const payload = Buffer.from(JSON.stringify([key, purpose, NOW + 60]), "utf8").toString(
+        "base64url",
+      );
+      return `${payload}.${createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+    }
+
+    it("is never signed, for either purpose", () => {
+      for (const purpose of PURPOSES) {
+        expect(() =>
+          signStorageToken({ key: MASTER, purpose, expiresAtSeconds: NOW + 60 }, SECRET),
+        ).toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
+      }
+    });
+
+    it("is never honoured, however the token was made", () => {
+      for (const purpose of PURPOSES) {
+        expect(verifyStorageToken(minted(MASTER, purpose), SECRET, purpose, NOW)).toBeNull();
+        expect(verifyStorageToken(minted(MASTER.replace("internal/", "internal/x/"), purpose), SECRET, purpose, NOW)).toBeNull();
+        // The same hand-made token for a customer's key is honoured: the refusal
+        // is the namespace, not the way the token was made.
+        expect(verifyStorageToken(minted(KEY, purpose), SECRET, purpose, NOW)?.key).toBe(KEY);
+      }
+    });
+
+    it("is refused by the local adapter's signed URLs of either kind", async () => {
+      const storage = new LocalObjectStorage({ secret: SECRET });
+      await storage.putObject(MASTER, new Uint8Array([1, 2, 3]));
+      await expect(storage.createSignedDownloadUrl(MASTER, 60)).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+      });
+      await expect(storage.createSignedUploadUrl(MASTER, 60)).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+      });
+      // Server-side reads are unaffected: composition will read its own master.
+      expect(await storage.getObject(MASTER)).toEqual(new Uint8Array([1, 2, 3]));
+      await expect(storage.createSignedDownloadUrl(KEY, 60)).resolves.toMatchObject({
+        url: expect.stringContaining("/api/storage/download?token="),
+      });
+    });
   });
 });

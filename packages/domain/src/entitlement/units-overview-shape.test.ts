@@ -46,7 +46,7 @@ describe("UP-1 shape", () => {
   it("adds no migration of its own", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true }).filter((entry) => entry.isDirectory());
     // UP-2 added migration 27 after it, UP-5 migration 28 and DS-3 migration 29.
-    expect(dirs).toHaveLength(30);
+    expect(dirs).toHaveLength(31);
   });
 
   it("builds the overview only in the web app's wiring, and shows it only on the Units page", () => {

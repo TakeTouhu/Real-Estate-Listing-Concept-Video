@@ -55,7 +55,7 @@ describe("durable shape", () => {
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(17);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(30);
+    expect(dirs).toHaveLength(31);
   });
 
   it("creates the three ledger tables and rewrites no existing row", () => {

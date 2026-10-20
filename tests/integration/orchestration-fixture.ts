@@ -183,6 +183,8 @@ export async function wipeOrchestration(prisma: PrismaClient): Promise<void> {
   // customer's video and spending their unit.
   await prisma.generationDeliverableComposition.deleteMany({});
   await prisma.generationDeliverableValidation.deleteMany({});
+  // The Clean Master is RESTRICT to its version too (ADR-0074).
+  await prisma.generationDeliverableCleanMaster.deleteMany({});
   await prisma.generationDeliverableVersion.deleteMany({});
   // Before the validations they belong to, which come before the attempts: both
   // foreign keys are RESTRICT on purpose, so durable failure history cannot be

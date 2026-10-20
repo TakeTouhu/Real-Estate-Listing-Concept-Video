@@ -668,3 +668,26 @@ Mode A; Mode B and Mode C add theirs when they are built (ADR-0073). No new
 table or relationship: the job records the mode it was admitted under, and each
 version records the mode it was planned under, which Transaction I copies from
 the job. A version planned before migration 29 keeps its `v1` fingerprint.
+
+## DS-4 — the Clean Master record
+
+```mermaid
+erDiagram
+    GenerationDeliverableVersion ||--o| GenerationDeliverableCleanMaster : "has its master (unique, RESTRICT)"
+    GenerationDeliverableCleanMaster {
+        string id PK
+        string deliverableVersionId UK "the version whose composition encoded it"
+        string storageKey "org/{org}/internal/clean-masters/{version}, by CHECK"
+        string sha256 "lowercase hex, by CHECK"
+        bigint sizeBytes "positive, safe-integer range, by CHECK"
+        datetime verifiedAt
+        datetime createdAt
+    }
+```
+
+Migration 30. `generation_deliverable_clean_masters` holds the receipt for the
+overlay-free master of one deliverable version (ADR-0074): at most one per
+version, every column required, never updated. Its key is in the internal
+namespace no signed URL reaches, and a CHECK holds every row's key to its own
+version's place there. RESTRICT keeps a version from being deleted from under
+its master. Nothing writes a row yet; composition does from DS-5.

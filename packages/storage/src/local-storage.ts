@@ -48,12 +48,15 @@ export class LocalObjectStorage implements ObjectStorage {
     };
   }
 
+  // Both signed URLs go through `signStorageToken`, which refuses an
+  // internal-only key (ADR-0074). The executor turns that refusal into a
+  // rejected promise rather than a synchronous throw, as the port promises.
   createSignedUploadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-    return Promise.resolve(this.signedUrl(key, "upload", ttlSeconds));
+    return new Promise((resolve) => resolve(this.signedUrl(key, "upload", ttlSeconds)));
   }
 
   createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-    return Promise.resolve(this.signedUrl(key, "download", ttlSeconds));
+    return new Promise((resolve) => resolve(this.signedUrl(key, "download", ttlSeconds)));
   }
 
   putObject(key: string, data: Uint8Array): Promise<void> {

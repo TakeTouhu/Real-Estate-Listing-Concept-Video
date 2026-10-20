@@ -1121,7 +1121,8 @@ them is **built**. Each item below records the settled decision and what remains
       publication gate. DS-2 (ADR-0072) added FFmpeg to CI: the composer and
       inspector pass on real FFmpeg, and each image survives a real encode.
       DS-3 (ADR-0073, migration 29) froze the mode on each job and deliverable
-      version, Mode A only.*
+      version, Mode A only. DS-4 (ADR-0074, migration 30) added the Clean
+      Master's record and its internal location, which no signed URL reaches.*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1242,6 +1243,20 @@ them is **built**. Each item below records the settled decision and what remains
       its content's lifecycle, including trash/recovery and legal hold; never
       expose or allow download of it; and support disclosure/logo recomposition
       after scene-video deletion with **no provider call**.
+      *In progress. DS-4 (ADR-0074, migration 30) built its record, one receipt
+      per composed version, and its location,
+      `org/{organizationId}/internal/clean-masters/{version}`, refused by every
+      signed URL. Still unbuilt: composition writing it (DS-5), publication
+      requiring it (DS-6), a recomposed version naming another version's
+      master, and its deletion with its content: when physical deletion of
+      videos ships, delete the master's object, then its row, then the version
+      (RESTRICT holds that order), subject to legal hold.*
+- [ ] **Decide whether scene outputs move under the internal namespace** before
+      any route lets a customer download a deliverable. ADR-0052 Decision 17
+      makes scene media internal; their keys,
+      `org/{organizationId}/generations/{attemptId}/output`, are outside
+      `org/{organizationId}/internal/`, so the signers' refusal (ADR-0074) does
+      not cover them. Nothing signs them today.
 - [ ] **Build the internal service-recovery budget.** `base-plan included-user
       slots × 1` → **3 / 10 / 30** per organization per renewal period, from base
       plan slots — **not** active users and **not** purchased additional seats —

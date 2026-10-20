@@ -1323,6 +1323,9 @@ model GenerationDeliverableVersion {
   /// The media verdict about this version's composed object, absent until a
   /// worker claims it. One per version, never per composition attempt.
   validation       GenerationDeliverableValidation?
+  /// The overlay-free master this version's composition encoded (ADR-0074),
+  /// absent until composition stores one. Nothing writes it before DS-5.
+  cleanMaster      GenerationDeliverableCleanMaster?
 
   @@unique([generationJobId, ordinal])
   /// The composite key `GenerationJob.currentDeliverableVersionId` points
@@ -1597,6 +1600,42 @@ model GenerationDeliverableValidation {
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
   @@map("generation_deliverable_validations")
+}
+
+// ===========================================================================
+// DS-4 — the Clean Master record (ADR-0074, ADR-0052 Decision 17)
+// ===========================================================================
+
+/// The overlay-free Clean Master of one deliverable version: no burned-in
+/// disclosure or logo. The customer's video is made from it, and a later
+/// disclosure or logo change is recomposed from it once the scene videos are
+/// gone. Internal only: never downloadable, never shown to a customer, outside
+/// the customer's storage quota, and it consumes no Unit.
+///
+/// A receipt and nothing else, written once with every column, after the bytes
+/// are proven stored, and never updated: a row exists only for a master that is
+/// stored. Nothing writes it yet; composition does from DS-5.
+///
+/// One per version whose composition encoded it. A version recomposed later
+/// from another version's master names that master instead of owning one.
+model GenerationDeliverableCleanMaster {
+  id                   String                       @id
+  deliverableVersionId String                       @unique
+  /// `org/{organizationId}/internal/clean-masters/{deliverableVersionId}`, the
+  /// internal namespace no signed URL reaches. A CHECK holds the shape, so
+  /// every stored row's key is one the signers refuse.
+  storageKey           String
+  /// Canonical lowercase 64-character hex, enforced by CHECK.
+  sha256               String
+  /// Positive and within the domain's safe-integer range, enforced by CHECK.
+  sizeBytes            BigInt
+  verifiedAt           DateTime
+  createdAt            DateTime                     @default(now())
+  /// RESTRICT, never Cascade: no version is deleted from under its master, and
+  /// the master is deleted with its content's lifecycle, deliberately.
+  deliverableVersion   GenerationDeliverableVersion @relation(fields: [deliverableVersionId], references: [id], onDelete: Restrict)
+
+  @@map("generation_deliverable_clean_masters")
 }
 
 // ===========================================================================
