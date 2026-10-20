@@ -370,3 +370,229 @@ charges remain BLOCKED.
 
 DS-1 waits for the product owner's yes before merge. DS-2 (FFmpeg in CI) comes
 next, after it.
+
+## DS-2 — real FFmpeg in CI
+
+Base: `89f889a` (PR #94 merge commit on `main`; post-merge CI run 616 green).
+ADR: `docs/decisions/0072-real-ffmpeg-media-suites.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `64be4cb` | the `media` CI job, `tests/media/` and its configuration, ADR-0072 and the documentation |
+| `1933ec3` | the first clip's timestamps start at 3 seconds, so the suite shows the composer's timeline reset matters (found by the mutation pass, below) |
+| `8fa1507` | this record |
+| this commit | the independent review's findings: coloured backgrounds compared by lightness, clips that change colour partway, clearer failures, and the wording below |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-2 does
+
+- **A `media` CI job** on `ubuntu-24.04` installs the distribution's FFmpeg
+  (6.1.1), prints its version and runs `pnpm test:media`. It needs no
+  database, secret or network media.
+- **The suites** live in `tests/media/` and run only through
+  `vitest.media.config.ts`; `pnpm test` excludes them, so a unit run still
+  needs no binaries. Without FFmpeg the run fails: the suites cannot make
+  their inputs, so Vitest marks each file failed and reports its tests as
+  skipped. When a tool fails, the error carries its exit code and its own
+  message.
+- **The composer and the inspector, on real FFmpeg** (30 tests). For each of
+  the six composition profile v1 sizes, the dormant composer encodes two
+  clips. The first is 16:9 at 25 fps with a tone, its timestamps starting at
+  3 seconds, blue turning green at 1.6 seconds, and given 1.5 of its 2
+  seconds. The second is 9:16 at 24 fps, red turning yellow for its last two
+  frames, and given 2 seconds for its one. The dormant inspector measures the
+  frame size, 3,500 ms, one video stream and no audio; `ffprobe` reports
+  H.264, `yuv420p`, 30 fps, square pixels and 105 frames. Decoded frames show:
+  - each clip whole, letterboxed or pillarboxed and never cropped;
+  - the first clip trimmed from its start: frame 44 is still blue;
+  - the second clip holding its last frame to the end of its scene: frame 100
+    is yellow, where a held first frame or a loop would be red;
+  - the cut exactly at frame 45.
+- **The disclosure over a real encode** (54 tests). Each of the six committed
+  images is laid over a one-second clip of its size, on nine backgrounds:
+  mid grey, a near-white floor, a near-black room, and the colours of a blue
+  sky, a green garden, red brick, a yellow wall, beige plaster and dark wood.
+  The encode uses profile v1's preset, CRF and pixel format, with FFmpeg's
+  `overlay` at 0:0 (ADR-0072 Decision 5). A decoded frame's lightness is
+  compared with that of the image's straight-alpha blend over the background
+  as it decodes, and the rest of the frame in every channel.
+- **No application code changes.** The composer, the inspector and the images
+  are as they were; the overlay graph is written in the test until DS-5 moves
+  it into the composer. One comment in the inspector, which said no test
+  needs an `ffprobe` binary, now says which tests do.
+
+### The disclosure through H.264
+
+What the encode does to each image, measured on this machine's FFmpeg 6.1.1
+(the same Ubuntu 24.04 package CI installs), in levels of 255, ranging over
+the six sizes:
+
+| Background | Mean lightness error where the image has ink | Largest there | The strongest 1% of the text, from the background | Decoded background, from the colour asked for |
+| --- | --- | --- | --- | --- |
+| mid grey `808080` | 1.34 to 1.42 | 7.5 to 12.5 | 82 to 89 | 0 |
+| white floor `f2f2f2` | 1.31 to 1.45 | 8.3 to 14.3 | 137 to 145 | 0 |
+| dark room `202020` | 1.50 to 1.62 | 9.5 to 14.6 | 148 to 158 | 1 |
+| blue sky `2060c0` | 1.47 to 1.63 | 7.9 to 10.2 | 110 to 118 | 3 |
+| green garden `30a040` | 1.39 to 1.52 | 6.3 to 9.8 | 92 to 99 | 3 |
+| red brick `c03030` | 1.51 to 1.69 | 9.5 to 16.6 | 108 to 115 | 3 |
+| yellow wall `f0e060` | 1.43 to 1.56 | 6.4 to 15.7 | 122 to 127 | 3 |
+| beige plaster `d8c8a8` | 1.39 to 1.56 | 7.2 to 10.3 | 113 to 120 | 2 |
+| dark wood `6a4a30` | 1.49 to 1.62 | 7.7 to 11.6 | 115 to 123 | 3 |
+| **bound** | **3** | **24** | **at least 72** | **6** |
+
+Beyond 16 pixels of the text, nothing changes in any channel (bound 2).
+
+The lightness is what the text's legibility rests on, and H.264's rounding at
+CRF 18 moves it by a level or two on average. `yuv420p` keeps lightness at full
+resolution and halves the colour in each direction, so a saturated
+background's colour spreads into the text's edges. The first version of this
+record said that, the images being grey, this changed nothing; over a
+saturated colour it does. Per colour channel, the largest error at the text's edges is 36
+to 68 levels on the blue, green, red and yellow backgrounds (7 to 10 on
+average), 20 to 26 on beige and dark wood, and 8 to 15 on the neutrals. Any
+text over colour in this format does the same; the suite bounds the lightness
+and leaves the colour at the edges unbounded (Known limitations).
+
+On the white floor, the shadow is what separates the text from the floor, at
+least 137 levels below it after the encode. Mid grey remains the weakest
+background, as in DS-1.
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI; FFmpeg 6.1.1) on the code
+of the review commit, the last in the list above.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5741 / 5741**, 200 files (unchanged: the media suites are not in it) |
+| `pnpm test:media` | **84 / 84**, 2 files, about 50 seconds |
+| `pnpm test:db` | **1438 / 1439**, 53 files: the one failure is the known race test below |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference (on `1933ec3`; no schema or migration has changed since) |
+| `prisma migrate status` | 29 migrations, up to date (no new migration) |
+
+**The database failure is not DS-2's.** "Gives two PROCESSING runners one
+history and at most one transfer" is the race test `docs/decisions/TODO.md`
+records under *Found in Phase 6F*: a legal interleaving makes its losing runner
+answer `OUTPUT_VERIFICATION_REPLAYED`, which the test does not expect. DS-2
+does not touch that code. Run alone, it failed 2 of 4 times on `8fa1507`
+without the review's changes, as often as with them; on `1933ec3` the full
+suite passed, and so did CI.
+
+New tests (84, media only): the composer and inspector in six sizes (30) and
+the six images over nine backgrounds (54), as above.
+
+### Mutation ledger
+
+**26 mutants: 24 killed, and 2 that survive only alone, 0 broken, 0
+anchor-missing**, in the third pass, on the review commit's code. Each mutant
+breaks one thing the composer's or the inspector's arguments claim, or one
+property of the overlay method, at an anchor that occurs exactly once. Each
+runs against the real-FFmpeg suite **alone**: the unit suite pins every
+argument and would kill each of them without showing that the suite catches it.
+Every mutated file was restored and re-hashed, and all 910 files were
+byte-identical after each pass.
+
+**The first pass, on `64be4cb`, found one gap.** Removing the composer's
+timeline reset before the cut changed nothing, because both test clips started
+at zero. A clip need not: `1933ec3` starts the first clip's timestamps at 3
+seconds, and without the reset the cut no longer falls at frame 45. The first
+pass also counted F11 as broken, because a failed setup step skips its tests
+rather than failing them; the harness now counts the file's failure.
+
+**The review found two more.** With solid-colour clips, a short clip that loops
+(F12) or a long one that keeps its last 1.5 seconds instead of its first (F13)
+looks the same as the right answer. Run against the suite as it stood on
+`8fa1507`, before the clips changed, both survived; with clips that change
+colour partway, both are killed.
+
+**F11, the square-pixel declaration, is load-bearing.** Scaling a clip into a
+1080p frame rounds one dimension (607.5 to 608 pixels), FFmpeg adjusts the clip's
+pixel shape to compensate, and concat refuses two clips whose pixel shapes
+differ. Without `setsar=1` the three 1080p sizes fail to encode at all.
+
+**E01 and E02 survive alone, and that is by design.** The composer drops audio
+twice: it maps only the filtered video, and it passes `-an`. Removing `-an`
+(E01) leaves no audio mapped; mapping the first clip's audio (E02) is undone by
+`-an`. Each mutant is equivalent alone. Both together (E05) put the tone in the
+deliverable, and the suite catches it.
+
+| Mutant | Area | What it breaks | File | Tests failing |
+| --- | --- | --- | --- | --- |
+| F01 | fit | the clip cropped to fill the frame | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F02 | fit | the clip stretched to fill the frame | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F03 | fit | the clip in the top-left corner | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| F04 | fit | white bands instead of black | `ffmpeg-composer.ts` | 8 of 30 (composer) |
+| F05 | time | a short clip ends early instead of holding | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F06 | time | a long clip is not trimmed | `ffmpeg-composer.ts` | 24 of 30 (composer) |
+| F07 | time | a long clip is sped up to fit instead of trimmed | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F08 | rate | 25 frames a second | `ffmpeg-composer.ts` | 24 of 30 (composer) |
+| F09 | order | the clips in reverse order | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F10 | timeline | no timeline reset before the cut | `ffmpeg-composer.ts` | 18 of 30 (composer) |
+| F11 | pixels | no square-pixel declaration | `ffmpeg-composer.ts` | setup failed, 15 of 30 not run (composer) |
+| F12 | time | a short clip loops instead of holding its last frame | `ffmpeg-composer.ts` | 6 of 30 (composer) |
+| F13 | time | a long clip keeps its last seconds instead of its first | `ffmpeg-composer.ts` | 6 of 30 (composer) |
+| E01 | audio | audio not explicitly dropped | `ffmpeg-composer.ts` | survived, equivalent alone (below) |
+| E02 | audio | the first clip's audio mapped through | `ffmpeg-composer.ts` | survived, equivalent alone (below) |
+| E05 | audio | the first clip's audio mapped through and not dropped | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| E03 | format | full-resolution colour (yuv444p) | `ffmpeg-composer.ts` | 6 of 30 (composer) |
+| E04 | container | Matroska instead of MP4 | `ffmpeg-composer.ts` | 12 of 30 (composer) |
+| P01 | inspector | video streams counted as audio | `ffprobe.ts` | 6 of 30 (composer) |
+| P02 | inspector | width and height swapped | `ffprobe.ts` | 4 of 30 (composer) |
+| O01 | overlay | the image's transparency ignored | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+| O02 | overlay | the image laid one pixel to the right | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+| O03 | overlay | the image scaled 2% larger | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+| O04 | overlay | the image read as premultiplied | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+| O05 | overlay | the image at 80% of its opacity | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+| O06 | overlay | the video encoded at CRF 35 | `disclosure-overlay.media.test.ts` | 54 of 54 (overlay) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composer row and the disclosure row note the media suites |
+| Entity-relationship diagram | Not applicable: DS-2 adds no table, column or relation |
+| Critical sequence diagram | Not applicable: DS-2 adds no runtime flow, only tests and a CI job |
+| OpenAPI / API change summary | Not applicable: no route, page, export or command changes |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-2*: no migration, nothing changes at deploy |
+| Completion report | this file |
+
+Also updated: `docs/local-setup.md` and `tests/README.md` (running the media
+suites), `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure item,
+and a new item: choose the worker image's FFmpeg before composition is
+activated).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-2 adds tests, a test configuration
+and a CI job that installs FFmpeg on the runner only: no application code,
+worker, scheduler, credential, environment variable or payment integration.
+Paid Provider Activation, production credentials, the production scheduler and
+live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Only CI and a developer's machine have FFmpeg.** No deployment image
+  carries it; choosing that build, and running the media suites against it, is
+  a TODO item for when composition is activated.
+- **The sources are short, constant-rate and square-pixelled.** A clip with a
+  variable frame rate, non-square pixels or a long duration is not exercised.
+- **The colour at the text's edges is not bounded.** `yuv420p` halves the
+  colour resolution, so over a saturated background the background's colour
+  spreads into the text's edges, by up to 68 levels in one channel at a pixel
+  (measured on yellow). The suite bounds lightness, which carries legibility,
+  and that stays within 17. Any text in a 4:2:0 video does the same; a
+  full-colour delivery format would be a product decision, not a fix here.
+- **The overlay graph is in the test, not the composer**, until DS-5.
+- **The bounds were measured on FFmpeg 6.1.1.** Another FFmpeg or x264 build
+  should land well inside them, but the suite is what says so.
+
+### Remaining work
+
+DS-2 waits for the product owner's yes before merge. DS-3 (the disclosure mode
+frozen at admission, migration 29) comes next, after it.

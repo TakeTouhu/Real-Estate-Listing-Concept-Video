@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:db": "vitest run --config vitest.integration.config.ts",
+    "test:media": "vitest run --config vitest.media.config.ts",
     "build": "pnpm --filter @app/web build",
     "dev": "pnpm --filter @app/web dev",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"

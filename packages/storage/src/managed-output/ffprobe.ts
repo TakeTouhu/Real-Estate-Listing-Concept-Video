@@ -403,8 +403,9 @@ function safeStdout(stdout: unknown): string {
  * The default process runner, backed by `execFile` with `shell: false`.
  *
  * Provided so a future wiring has a real implementation to inject; constructed
- * nowhere in production this phase, and every test drives a fake runner instead
- * so CI never needs an `ffprobe` binary. `maxBuffer` is what terminates a
+ * nowhere in production this phase. The unit suites drive a fake runner and need
+ * no binary; only the media suites (`tests/media/`, ADR-0072), which CI runs
+ * where FFmpeg is installed, use this one. `maxBuffer` is what terminates a
  * process whose output exceeds the ceiling, and stderr is discarded rather than
  * captured.
  */

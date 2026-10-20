@@ -1374,3 +1374,12 @@ table.
 **What changes at deploy.** Nothing anyone can notice: no composition, page or
 worker reads the images yet. No new environment variable. The images ship with
 the repository; nothing needs to be uploaded or installed.
+
+## DS-2 — real FFmpeg in CI
+
+**No migration.** DS-2 adds test suites, a test configuration and a CI job. It
+reads and writes no table.
+
+**What changes at deploy.** Nothing: no application code changes. FFmpeg is
+installed only on the CI runner; the worker image is unchanged. No new
+environment variable.

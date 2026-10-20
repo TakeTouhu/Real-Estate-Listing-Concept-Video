@@ -119,6 +119,12 @@ composition produces, white at 70% over a faint shadow and never under 12
 pixels (the product owner, 2026-10-20). Nothing draws them into a video yet;
 DS-2 to DS-6 build the Clean Master, the overlay and the publication gate.
 
+**DS-2 — real FFmpeg in CI** (ADR-0072, no migration): a `media` CI job runs
+the dormant composer and inspector on real FFmpeg in all six sizes, and lays
+each disclosure image over a real encode on nine backgrounds, neutral and
+coloured. The encode keeps the text's lightness within 17 levels of 255 at any
+pixel, and under 1.7 on average. No application code changes.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

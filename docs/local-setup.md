@@ -177,6 +177,21 @@ CI runs the same sequence in the `database` job against a PostgreSQL 16 service
 container, and additionally verifies that the committed migrations have no drift
 against the schema.
 
+### Media tests
+
+The suites that run the real `ffmpeg` and `ffprobe` are opt-in too (ADR-0072).
+They need FFmpeg on the `PATH`; on Ubuntu, `sudo apt-get install ffmpeg`.
+
+```bash
+pnpm test:media   # vitest.media.config.ts
+```
+
+They encode synthetic clips into each composition size and lay the disclosure
+images over them, in temporary directories they remove. Without FFmpeg the
+run fails: the suites cannot make their inputs, so Vitest marks each file
+failed and reports its tests as skipped. CI runs them in the `media` job on
+Ubuntu 24.04, whose FFmpeg 6.1.1 their tolerances were measured with.
+
 ## Notes
 
 - `.env.local` and all `.env*` files (except `.env.example`) are git-ignored.
