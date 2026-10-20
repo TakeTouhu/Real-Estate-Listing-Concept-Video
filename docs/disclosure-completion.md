@@ -205,6 +205,7 @@ constant.
 | R13 | colour | the shadow drawn grey | `render-disclosure-layer.ts` | 6 of 31 (storage) |
 | R14 | order | the shadow laid over the text | `render-disclosure-layer.ts` | 6 of 31 (storage) |
 | R12 | font | the text drawn in the machine's own sans-serif | `render-disclosure-layer.ts` | 6 of 31 (storage) |
+| R15 | font | the font asked for by a name an installed font can share | `render-disclosure-layer.ts` | 7 of 32 (storage), on `26d485b` |
 | S01 | dormant | composition reads the image table | `profile.ts` | 1 of 16 (domain) |
 | S02 | dormant | the worker renders the layer itself | `index.ts` | 1 of 16 (domain) |
 
@@ -232,9 +233,11 @@ separate processes, the sentence comes out differently with the file than
 without it, and no font of that name is installed on the machine that drew
 them.
 
-Measured after the fix: `pnpm lint` and `pnpm typecheck` clean, `pnpm test`
-**5733 / 5733**, 200 files. Mutation R15 (below) asks for "Noto Sans JP" again
-and is killed.
+Measured after the fix, on `26d485b`: `pnpm lint` and `pnpm typecheck` clean,
+`pnpm test` **5733 / 5733**, 200 files. Mutation R15 (in the ledger) asks for
+"Noto Sans JP" again and is killed by the family test and, as the renamed file
+no longer answers to that name, by every re-render test; R12 run again on
+`26d485b` is killed by the same seven.
 
 ### Required documentation
 
