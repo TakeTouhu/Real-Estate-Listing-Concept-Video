@@ -39,17 +39,45 @@ export function isInternalStorageKey(key: string): boolean {
 }
 
 /**
- * Throws when the key is internal-only. Every signer calls this before it signs
- * anything, so an internal object can never be given a URL, whichever code path
- * asked for one.
+ * `true` when every segment of the key is a plain name: no empty segment (so no
+ * leading, trailing or doubled `/`), no `.` or `..`, and no `\`.
+ *
+ * Every key the application builds is canonical. A key that is not could be
+ * mapped onto a different object by a store or a URL parser that collapses
+ * `//` or resolves dot-segments, `org/o//internal/x` onto `org/o/internal/x`
+ * among them, so the positional internal check would no longer describe the
+ * object actually reached.
+ */
+export function isCanonicalStorageKey(key: string): boolean {
+  return (
+    !key.includes("\\") &&
+    key.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
+  );
+}
+
+/**
+ * `true` when a signed URL may name the key: canonical, and not internal-only.
+ * The verifier ignores any token for which this is false.
+ */
+export function isSignableStorageKey(key: string): boolean {
+  return isCanonicalStorageKey(key) && !isInternalStorageKey(key);
+}
+
+/**
+ * Throws unless a signed URL may name the key. Every signer calls this before it
+ * signs anything, so an internal object can never be given a URL, whichever
+ * code path asked for one.
  *
  * Reaching it is a defect in the caller, never a customer's doing: no route
  * accepts a key from a customer. So it is an internal error, and its message
  * names no key.
  */
 export function assertSignableStorageKey(key: string): void {
-  if (isInternalStorageKey(key)) {
-    throw new AppError("INTERNAL_ERROR", "An internal-only storage object is never given a signed URL");
+  if (!isSignableStorageKey(key)) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "An internal-only or non-canonical storage key is never given a signed URL",
+    );
   }
 }
 
@@ -61,8 +89,10 @@ declare const managedCleanMasterKeyBrand: unique symbol;
  * A third brand, distinct from `ManagedGenerationOutputKey` and
  * `ManagedDeliverableOutputKey`: a master and the customer's video made from it
  * are different objects with different exposure, and one type covering both
- * would let the composer write the customer's video over the master, or a
- * download path sign the master, with the compiler's blessing.
+ * would let the composer write the customer's video over the master, or hand
+ * the master to code expecting the customer's video, with the compiler's
+ * blessing. The brand does not stop a signer: signers take any string, and the
+ * refusal there is the runtime check above.
  */
 export type ManagedCleanMasterKey = string & {
   readonly [managedCleanMasterKeyBrand]: "ManagedCleanMasterKey";

@@ -87,10 +87,11 @@ org/{organizationId}/internal/clean-masters/{deliverableVersionId}
 - **Extensionless**, like the customer video's key: the receipt proves a digest
   and a byte count, not a container.
 - **Every stored row is at such a key.** A CHECK rebuilds the whole key from its
-  organization segment and the row's own version id, so a row can name neither
-  a customer's object nor another version's master. The organization segment's
-  value cannot be checked there, because the row reaches its organization only
-  through the version's job; the writer derives the key from it.
+  non-blank organization segment and the row's own version id, so a row can
+  name neither a customer's object nor another version's master. The
+  organization segment's value cannot be checked there, because the row reaches
+  its organization only through the version's job; the writer derives the key
+  from it.
 
 ## Decision 3 — No signed URL reaches an internal object
 
@@ -98,8 +99,13 @@ org/{organizationId}/internal/clean-masters/{deliverableVersionId}
   first, which throws an internal error for an internal key, for either
   purpose. Reaching it is a defect in the caller, never something a customer
   chose, since no route accepts a key from a customer; the message names no key.
+- **A key that is not canonical is refused too**: an empty segment (a leading,
+  trailing or doubled `/`), a `.` or `..` segment, or a `\`. A store that
+  collapses `//`, or a URL parser that resolves dot-segments, could map such a
+  key onto the master, so the positional check would no longer describe the
+  object reached. Every key the application builds is canonical.
 - **The verifier ignores.** `verifyStorageToken` returns nothing for a token
-  naming an internal key, however the token was made. The download and upload
+  naming an internal or non-canonical key, however the token was made. The download and upload
   routes therefore answer such a token exactly as they answer a forged one
   (401): the master is never served, and never written over.
 - **The local adapter rejects** both of its signed URLs for an internal key, as
@@ -108,11 +114,14 @@ org/{organizationId}/internal/clean-masters/{deliverableVersionId}
   directly, as it reads scene outputs today; only signed URLs are refused. No
   provider is ever given a URL to a master either: the preflight's source URLs
   come from the same signed-URL port.
-- **Held for every path, not just today's.** A test fails if a second signed-URL
-  implementation appears outside tests, if the local adapter stops signing
-  through `signStorageToken`, or if any app code other than the download route
-  reads object bytes. A production adapter that presigns through its own SDK
-  must call `assertSignableStorageKey` itself, and that test is what makes its
+- **Held for every path, not just today's.** The behaviour tests prove the
+  signer, the verifier, the local adapter and both routes refuse an internal
+  key. A static test pins the rest: the files that name the signer, the
+  verifier or a signed-URL method, in any syntax, are exactly today's; no source
+  file names a presigner or a shared-access signature, and no package depends
+  on one; and no app code but the download route reads object bytes. A
+  production adapter that presigns through its own SDK must call
+  `assertSignableStorageKey` itself, and that test failing is what makes its
   author decide so.
 
 ## Decision 4 — Outside the quota, and no Unit
@@ -132,6 +141,17 @@ master is retained while its content is, moves through trash and recovery with
 it, and at final physical deletion its object is deleted, then its row, then the
 version (RESTRICT enforces that order), subject to any legal hold. This is
 recorded in `docs/decisions/TODO.md`.
+
+The 30-day retention of an old final version is its video's: ADR-0052 Decision
+17 lists it among the stored assets. Nothing deletes a version's row, whose
+composition and validation rows are RESTRICT history too. So a master owned by
+an old version can outlive that version's video, which is what a later
+recomposition from it needs.
+
+Not decided by ADR-0052, and recorded in `docs/decisions/TODO.md`: whether the
+master of a version that is never published (its validation fails, or a newer
+version supersedes it first) is kept, and whether the master of content
+replaced by a paid regeneration is kept once that content's old video expires.
 
 ## Decision 6 — What DS-4 leaves to DS-5 and DS-6
 

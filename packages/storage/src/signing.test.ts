@@ -72,6 +72,14 @@ describe("storage token signing", () => {
       for (const purpose of PURPOSES) {
         expect(verifyStorageToken(minted(MASTER, purpose), SECRET, purpose, NOW)).toBeNull();
         expect(verifyStorageToken(minted(MASTER.replace("internal/", "internal/x/"), purpose), SECRET, purpose, NOW)).toBeNull();
+        // A key a store could rewrite onto the master is ignored too.
+        expect(verifyStorageToken(minted(MASTER.replace("/internal/", "//internal/"), purpose), SECRET, purpose, NOW)).toBeNull();
+        expect(() =>
+          signStorageToken(
+            { key: MASTER.replace("/internal/", "/./internal/"), purpose, expiresAtSeconds: NOW + 60 },
+            SECRET,
+          ),
+        ).toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
         // The same hand-made token for a customer's key is honoured: the refusal
         // is the namespace, not the way the token was made.
         expect(verifyStorageToken(minted(KEY, purpose), SECRET, purpose, NOW)?.key).toBe(KEY);

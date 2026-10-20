@@ -11,9 +11,10 @@ import { describe, expect, it } from "vitest";
  *    version, with no default but its creation time.
  * 3. **Nothing writes or reads it yet.** Composition does from DS-5; no app
  *    mentions it.
- * 4. **No signed URL reaches it.** The one signer refuses an internal key, the
- *    one verifier ignores a token for one, the only signed-URL implementation
- *    goes through them, and the only route serving bytes reads a verified key.
+ * 4. **No signed URL reaches it.** The behaviour tests prove the signer, the
+ *    verifier and the local adapter refuse it; this pins that there is no other
+ *    signer, verifier, signed-URL implementation or presigner, and that the only
+ *    route serving bytes reads a verified key.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -22,6 +23,7 @@ const MIGRATION_DIR = "00000000000030_clean_master_record";
 const SIGNING = "packages/storage/src/signing.ts";
 const LOCAL_STORAGE = "packages/storage/src/local-storage.ts";
 const DOWNLOAD_ROUTE = "apps/web/src/app/api/storage/download/route.ts";
+const UPLOAD_ROUTE = "apps/web/src/app/api/storage/upload/route.ts";
 
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -78,7 +80,7 @@ describe("DS-4 shape", () => {
       `CREATE TABLE "generation_deliverable_clean_masters" ( "id" TEXT NOT NULL, "deliverableVersionId" TEXT NOT NULL, "storageKey" TEXT NOT NULL, "sha256" TEXT NOT NULL, "sizeBytes" BIGINT NOT NULL, "verifiedAt" TIMESTAMP(3) NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "generation_deliverable_clean_masters_pkey" PRIMARY KEY ("id") )`,
       `CREATE UNIQUE INDEX "generation_deliverable_clean_masters_deliverableVersionId_key" ON "generation_deliverable_clean_masters"("deliverableVersionId")`,
       `ALTER TABLE "generation_deliverable_clean_masters" ADD CONSTRAINT "generation_deliverable_clean_masters_deliverableVersionId_fkey" FOREIGN KEY ("deliverableVersionId") REFERENCES "generation_deliverable_versions"("id") ON DELETE RESTRICT ON UPDATE CASCADE`,
-      `ALTER TABLE "generation_deliverable_clean_masters" ADD CONSTRAINT "deliverable_clean_master_key_check" CHECK ( split_part("storageKey", '/', 2) <> '' AND "storageKey" = 'org/' || split_part("storageKey", '/', 2) || '/internal/clean-masters/' || "deliverableVersionId" )`,
+      `ALTER TABLE "generation_deliverable_clean_masters" ADD CONSTRAINT "deliverable_clean_master_key_check" CHECK ( btrim(split_part("storageKey", '/', 2)) <> '' AND "storageKey" = 'org/' || split_part("storageKey", '/', 2) || '/internal/clean-masters/' || "deliverableVersionId" )`,
       `ALTER TABLE "generation_deliverable_clean_masters" ADD CONSTRAINT "deliverable_clean_master_receipt_check" CHECK ( "sha256" ~ '^[0-9a-f]{64}$' AND "sizeBytes" > 0 AND "sizeBytes" <= 9007199254740991 )`,
     ]);
   });
@@ -112,29 +114,40 @@ describe("DS-4 shape", () => {
     ]);
   });
 
-  it("is refused by the one signer and the one verifier", () => {
-    const signing = read(SIGNING);
-    const sign = signing.slice(signing.indexOf("export function signStorageToken("), signing.indexOf("export function verifyStorageToken("));
-    // The refusal is the signer's first statement, before anything is signed.
-    expect(sign.indexOf("assertSignableStorageKey(token.key);")).toBeGreaterThan(-1);
-    expect(sign.indexOf("assertSignableStorageKey(token.key);")).toBeLessThan(sign.indexOf("payloadOf(token)"));
-    const verify = signing.slice(signing.indexOf("export function verifyStorageToken("));
-    const refusal = verify.indexOf("if (isInternalStorageKey(key)) return null;");
-    expect(refusal).toBeGreaterThan(-1);
-    expect(refusal).toBeLessThan(verify.indexOf("return { key, purpose, expiresAtSeconds };"));
+  it("has one signer, one verifier and one signed-URL implementation", () => {
+    // The behaviour tests prove these refuse an internal key. What this pins is
+    // that there is nothing else: a file that starts naming a signed URL, in
+    // any syntax, fails here, and its author must route it through
+    // `assertSignableStorageKey` and add it.
+    expect(matching(["packages", "apps"], /\bsignStorageToken\b/)).toEqual([LOCAL_STORAGE, SIGNING]);
+    expect(matching(["packages", "apps"], /\bverifyStorageToken\b/)).toEqual([
+      DOWNLOAD_ROUTE,
+      UPLOAD_ROUTE,
+      SIGNING,
+    ]);
+    expect(matching(["packages", "apps"], /\bcreateSigned(?:Download|Upload)Url\b/)).toEqual([
+      "packages/domain/src/generation/execution-preflight.ts",
+      "packages/domain/src/property/asset-service.ts",
+      "packages/domain/src/property/ports.ts",
+      LOCAL_STORAGE,
+    ]);
+    // No other way to make a URL to a stored object: no presigner, no SAS.
+    expect(
+      matching(["packages", "apps"], /presign|getSignedUrl|generateBlobSASQueryParameters|generateSasUrl|SharedAccessSignature/i),
+    ).toEqual([]);
+    for (const manifest of [
+      ...readdirSync(join(REPO_ROOT, "packages")).map((name) => `packages/${name}/package.json`),
+      ...readdirSync(join(REPO_ROOT, "apps")).map((name) => `apps/${name}/package.json`),
+      "package.json",
+    ]) {
+      const text = readFileSync(join(REPO_ROOT, manifest), "utf8");
+      expect(`${manifest}: ${/s3-request-presigner|@azure\/storage-blob|@google-cloud\/storage/.test(text)}`).toBe(
+        `${manifest}: false`,
+      );
+    }
   });
 
-  it("is reachable through no other signed URL or byte-serving route", () => {
-    // Every signed-URL implementation outside tests is the local adapter's, and
-    // it signs through the guarded signer.
-    expect(
-      matching(["packages", "apps"], /\bcreateSigned(?:Download|Upload)Url\([^)]*\)[^;{]*\{/),
-    ).toEqual([LOCAL_STORAGE]);
-    const local = read(LOCAL_STORAGE);
-    expect(local.match(/signStorageToken\(/g)).toHaveLength(1);
-    expect(local.match(/this\.signedUrl\(key, "(?:upload|download)", ttlSeconds\)/g)).toHaveLength(2);
-    // The only app code that reads object bytes is the download route, and it
-    // reads the key a verified token named.
+  it("serves stored bytes from one route, for the key a verified token names", () => {
     expect(matching(["apps"], /\.getObject\(/)).toEqual([DOWNLOAD_ROUTE]);
     const route = read(DOWNLOAD_ROUTE);
     expect(route.match(/\.getObject\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);

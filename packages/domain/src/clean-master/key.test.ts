@@ -8,7 +8,9 @@ import {
 import { buildAssetStorageKey, organizationIdFromStorageKey } from "../property/media";
 import {
   assertSignableStorageKey,
+  isCanonicalStorageKey,
   isInternalStorageKey,
+  isSignableStorageKey,
   managedCleanMasterKey,
   type ManagedCleanMasterKey,
 } from "./key";
@@ -93,6 +95,41 @@ describe("the internal namespace", () => {
     ]) {
       expect(`${key}: ${isInternalStorageKey(key)}`).toBe(`${key}: false`);
     }
+  });
+
+  it("cannot be reached through a key a store might rewrite onto it", () => {
+    // Each could land on the master where a store collapses `//` or a URL
+    // parser resolves dot-segments; none is canonical, so none is signable.
+    for (const key of [
+      "org/org_a//internal/clean-masters/gdv_1",
+      "/org/org_a/internal/clean-masters/gdv_1",
+      "org/org_a/./internal/clean-masters/gdv_1",
+      "org/org_a/x/../internal/clean-masters/gdv_1",
+      "org/org_a/internal\\clean-masters/gdv_1",
+      "org/org_a/properties/prp_1/",
+      "",
+    ]) {
+      expect(`${key}: ${isCanonicalStorageKey(key)} ${isSignableStorageKey(key)}`).toBe(
+        `${key}: false false`,
+      );
+      expect(() => assertSignableStorageKey(key)).toThrow(AppError);
+    }
+    // Every key the application builds is canonical.
+    for (const key of [
+      MASTER,
+      buildAssetStorageKey({
+        organizationId: "org_a",
+        propertyId: "prp_1",
+        assetId: "ast_1",
+        variant: "original",
+        extension: "jpg",
+      }),
+      managedGenerationOutputKey({ organizationId: "org_a", attemptId: "sgen_1" }),
+      managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" }),
+    ]) {
+      expect(`${key}: ${isCanonicalStorageKey(key)}`).toBe(`${key}: true`);
+    }
+    expect(isSignableStorageKey(MASTER)).toBe(false);
   });
 
   it("is refused by the signers' guard, and nothing else is", () => {

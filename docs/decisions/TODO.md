@@ -1251,6 +1251,14 @@ them is **built**. Each item below records the settled decision and what remains
       master, and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
       (RESTRICT holds that order), subject to legal hold.*
+- [ ] **Decide which Clean Masters outlive their purpose.** ADR-0052 Decision 17
+      retains a master "with the associated retained video/property content"
+      but does not say whether that covers (a) the master of a version that is
+      never published, because its validation fails or a newer version
+      supersedes it first, or (b) the master of content replaced by a paid
+      regeneration, once that content's old final video passes its 30 days.
+      Decide before any deletion of masters is built; it does not change how
+      DS-5 makes one.
 - [ ] **Decide whether scene outputs move under the internal namespace** before
       any route lets a customer download a deliverable. ADR-0052 Decision 17
       makes scene media internal; their keys,

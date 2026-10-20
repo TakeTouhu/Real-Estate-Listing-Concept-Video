@@ -125,8 +125,9 @@ RUN("the Clean Master record (DS-4)", () => {
       `org/${ORG_A}/clean-masters/${versionId}`,
       `org/${ORG_A}/Internal/clean-masters/${versionId}`,
       `org/${ORG_A}/x/internal/clean-masters/${versionId}`,
-      // No organization, or one segment too many.
+      // No organization, a blank one, or one segment too many.
       `org//internal/clean-masters/${versionId}`,
+      `org/ /internal/clean-masters/${versionId}`,
       `${own}/`,
       `${own}/output`,
       own.replace(/^org\//, "orgs/"),

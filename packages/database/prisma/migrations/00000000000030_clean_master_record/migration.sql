@@ -33,14 +33,15 @@ ALTER TABLE "generation_deliverable_clean_masters" ADD CONSTRAINT "generation_de
 --
 -- The whole key is rebuilt from its organization segment and the row's version
 -- id, so it has exactly five segments, the third is `internal` and the fifth is
--- this row's version. Every stored master is therefore at a key the signers
+-- this row's version. The organization segment is non-blank, as the key
+-- builder requires. Every stored master is therefore at a key the signers
 -- refuse (ADR-0074), and no row can point at a customer's object or at another
 -- version's master. The organization itself cannot be checked here: the row
 -- reaches it through the version's job, and the writer derives the key from it.
 ALTER TABLE "generation_deliverable_clean_masters"
   ADD CONSTRAINT "deliverable_clean_master_key_check"
   CHECK (
-    split_part("storageKey", '/', 2) <> ''
+    btrim(split_part("storageKey", '/', 2)) <> ''
     AND "storageKey" = 'org/' || split_part("storageKey", '/', 2) || '/internal/clean-masters/' || "deliverableVersionId"
   );
 
