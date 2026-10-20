@@ -13,9 +13,13 @@ new file names, new checksums, a new ADR.
 ## The font
 
 `NotoSansJP-Regular.disclosure-subset.ttf` is Noto Sans JP Regular (Google
-Fonts v57) cut down to the characters of the sentence. It is licensed under the
-SIL Open Font License 1.1, in `OFL.txt`; its reserved font name is "Source",
-which the subset does not use.
+Fonts v57) cut down to the characters of the sentence and renamed to the family
+"VTaVision Disclosure". It is licensed under the SIL Open Font License 1.1, in
+`OFL.txt`; its reserved font name is "Source", which the file does not use.
+
+The family is renamed because fontconfig prefers an installed font of the name
+asked for over the file the renderer hands it: on a machine with its own "Noto
+Sans JP", the images would be drawn in that font instead.
 
 - Source: npm `@expo-google-fonts/noto-sans-jp@0.4.4`, tarball integrity
   `sha512-1vl2U7uYG5JAXGERZaLMXtfOSgyOU4Qhq30OOPrbAHjOu8AW9Pral/qN9Anta9fjd6eVRTijiNqcgy2TowzrDA==`,
@@ -32,6 +36,30 @@ which the subset does not use.
 
   The output is reproducible: SHA-256
   `64ae008b81bfd23b75f56aba0c73520daf45ea97287b575c5fd398e3beb2556e`.
+- Renamed, in the name table only, with the same fontTools:
+
+  ```bash
+  python3 -I - NotoSansJP-Regular.disclosure-subset.ttf <<'EOF'
+  import sys
+  from fontTools.ttLib import TTFont
+  NAMES = {
+      1: "VTaVision Disclosure",
+      3: "2.004-H2;VTaVision;VTaVisionDisclosure-Regular",
+      4: "VTaVision Disclosure Regular",
+      6: "VTaVisionDisclosure-Regular",
+      25: "VTaVisionDisclosure",
+  }
+  font = TTFont(sys.argv[1], recalcTimestamp=False)
+  for record in font["name"].names:
+      if record.nameID in NAMES:
+          record.string = NAMES[record.nameID]
+  font.save(sys.argv[1])
+  EOF
+  ```
+
+  The output is reproducible: SHA-256
+  `73f51ed1f4a54fb9d4bf19ed63071c7e53ef2066cd3aa6c1dc56ed4a78c6ad1e`, the file
+  committed here.
 
 No worker reads the font. It is kept so the images can be rendered again.
 

@@ -16,8 +16,13 @@ import {
   disclosureLayout,
 } from "@app/domain";
 
-/** The family name inside the bundled font file. */
-export const DISCLOSURE_FONT_FAMILY = "Noto Sans JP";
+/**
+ * The family name inside the bundled font file. It is Noto Sans JP renamed, so
+ * that no font installed on the machine can match it instead: asked for "Noto
+ * Sans JP", fontconfig prefers an installed font of that name over the file
+ * given here (ADR-0071 Decision 3).
+ */
+export const DISCLOSURE_FONT_FAMILY = "VTaVision Disclosure";
 
 /** The bundled subset of Noto Sans JP Regular, relative to the repository root. */
 export const DISCLOSURE_FONT_PATH = "assets/disclosure/NotoSansJP-Regular.disclosure-subset.ttf";

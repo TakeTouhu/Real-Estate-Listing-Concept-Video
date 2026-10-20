@@ -65,7 +65,7 @@ byte the image that ships.
 | Colour | white at 70% opacity |
 | Shadow | the same letters in black at 60% opacity, offset 1 pixel down and right |
 | Box | none |
-| Font | Noto Sans JP Regular |
+| Font | Noto Sans JP Regular, bundled under the family name "VTaVision Disclosure" (Decision 3) |
 
 Per size:
 
@@ -98,8 +98,7 @@ which reaches one pixel further.
 
 - **Noto Sans JP Regular**, Google Fonts version v57, licensed under the SIL Open
   Font License 1.1 (`assets/disclosure/OFL.txt`). Its reserved font name is
-  "Source"; the subset keeps the family name "Noto Sans JP", which is not
-  reserved.
+  "Source", which the bundled file does not use.
 - **Taken from npm**, `@expo-google-fonts/noto-sans-jp@0.4.4`, whose tarball
   matched its registry integrity
   (`sha512-1vl2U7uYG5JAXGERZaLMXtfOSgyOU4Qhq30OOPrbAHjOu8AW9Pral/qN9Anta9fjd6eVRTijiNqcgy2TowzrDA==`).
@@ -110,7 +109,17 @@ which reaches one pixel further.
   `python3 -m fontTools.subset NotoSansJP_400Regular.ttf --text="本コンテンツは生成AIを使用して作成しています。" --name-IDs='*' --layout-features='*' --output-file=NotoSansJP-Regular.disclosure-subset.ttf`.
   The result is reproducible byte for byte (SHA-256
   `64ae008b81bfd23b75f56aba0c73520daf45ea97287b575c5fd398e3beb2556e`) and holds
-  every character of the sentence. A test pins it.
+  every character of the sentence.
+- **Renamed** to the family "VTaVision Disclosure" (the commands are in
+  `assets/disclosure/README.md`), touching only the name table: the glyphs, and
+  so the images, are unchanged. Asked for a family, fontconfig prefers a font
+  of that name installed on the machine over the file the renderer hands it, so
+  under its own name the subset would be drawn in whatever "Noto Sans JP" a
+  machine has. On CI's runner the re-rendered sentence came out a pixel
+  narrower, as it does locally with another font installed under that name. No
+  installed font is called "VTaVision Disclosure". The renamed file is reproducible too
+  (SHA-256 `73f51ed1f4a54fb9d4bf19ed63071c7e53ef2066cd3aa6c1dc56ed4a78c6ad1e`),
+  and a test pins it and the family it holds.
 
 The font is needed only to render the images again. No worker reads it.
 

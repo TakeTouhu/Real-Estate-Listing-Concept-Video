@@ -30,7 +30,7 @@ Nothing outside the disclosure module and its tests reads them yet.
 | Export | Shape |
 | --- | --- |
 | `renderDisclosureLayer({ widthPx, heightPx, fontFile })` | a `Promise<Buffer>`: a transparent PNG of exactly that size, the text placed by `disclosureLayout`, white at 70% over its shadow |
-| `DISCLOSURE_FONT_FAMILY` | `"Noto Sans JP"` |
+| `DISCLOSURE_FONT_FAMILY` | `"VTaVision Disclosure"`, the bundled font's own family name, which no installed font shares |
 | `DISCLOSURE_FONT_PATH` | `"assets/disclosure/NotoSansJP-Regular.disclosure-subset.ttf"`, relative to the repository root |
 
 Called only by the command below; a shape test pins that.
@@ -54,6 +54,6 @@ deliberately changed, which makes a layer v2.
 | File | What it is |
 | --- | --- |
 | `layer-v1-1280x720.png`, `layer-v1-1920x1080.png`, `layer-v1-720x1280.png`, `layer-v1-1080x1920.png`, `layer-v1-720x720.png`, `layer-v1-1080x1080.png` | the disclosure layer v1, one per frame size, each pinned by SHA-256 in `DISCLOSURE_LAYER_ASSETS` |
-| `NotoSansJP-Regular.disclosure-subset.ttf` | Noto Sans JP Regular cut down to the sentence's characters, 10 KB |
+| `NotoSansJP-Regular.disclosure-subset.ttf` | Noto Sans JP Regular cut down to the sentence's characters and renamed to the family "VTaVision Disclosure", 10 KB |
 | `OFL.txt` | the font's SIL Open Font License 1.1 |
 | `README.md` | where the font came from, how it was cut down, how the images are rendered, and that they are never edited in place |

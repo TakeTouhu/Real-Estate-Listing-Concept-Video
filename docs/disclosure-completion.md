@@ -36,7 +36,8 @@ Commits, oldest first:
 | --- | --- |
 | `0f2ec41` | the domain table, the renderer and its command, the font, the six images, their tests, ADR-0071 and the documentation |
 | `7844e81` | the shadow without the blur that changed nothing, and the re-render test comparing colour (both found by the mutation pass, below) |
-| this commit | this record |
+| `eac4cab` | this record |
+| this commit | the bundled font renamed to its own family, so that no installed font is drawn in its place (found by CI, below), and this record |
 
 The exact head SHA is reported with the pull request.
 
@@ -58,8 +59,9 @@ The exact head SHA is reported with the pull request.
   in `DISCLOSURE_LAYER_ASSETS`, and a size outside the table has none
   (Decision 1).
 - **The font that drew them**, Noto Sans JP Regular cut down to the sentence's
-  characters, 10 KB, with its licence and provenance (Decision 3), and the
-  command that renders them again, run by hand only.
+  characters and renamed to the family "VTaVision Disclosure", 10 KB, with its
+  licence and provenance (Decision 3), and the command that renders them
+  again, run by hand only.
 
 Nothing anyone can notice changes. No composition, validation, publication,
 schema, page or worker reads the layer (Decision 5); DS-3 to DS-6 put it into a
@@ -96,8 +98,8 @@ sequenceDiagram
 
 ### Verification
 
-Measured locally (PostgreSQL 16, configured like CI) on `7844e81`; the commit
-after it adds this record only.
+Measured locally (PostgreSQL 16, configured like CI) on `7844e81`, and the unit
+checks again after the font was renamed (below).
 
 | Check | Result |
 | --- | --- |
@@ -107,9 +109,9 @@ after it adds this record only.
 | `pnpm build` | succeeded |
 | `prisma migrate diff` (migrations → schema) | no difference |
 | `prisma migrate status` | 29 migrations, up to date (no new migration) |
-| the font and the images, reproduced | the subset cut again from the npm tarball's font is byte-identical; the command run again wrote six byte-identical images |
+| the font and the images, reproduced | the subset cut again from the npm tarball's font, and renamed with the README's command, is byte-identical; the command run again wrote six byte-identical images |
 
-New tests (47 unit):
+New tests (48 unit):
 - **the table** (`ai-disclosure.test.ts`, 14): the sentence and its 24
   characters; the text height and both margins for each of the six sizes,
   and that those sizes are exactly the ones composition profile v1 resolves;
@@ -121,8 +123,9 @@ New tests (47 unit):
 - **shape** (`disclosure-shape.test.ts`, 2): the renderer is called only from
   the command; neither application, the managed-output code, composition,
   validation nor the database package names the layer;
-- **the images** (`render-disclosure-layer.test.ts`, 31): the bundled font is
-  the pinned subset; for each image, the committed file is the one the table
+- **the images** (`render-disclosure-layer.test.ts`, 32): the bundled font is
+  the pinned subset, and holds the family the renderer asks for and not "Noto
+  Sans JP"; for each image, the committed file is the one the table
   pins, it is the frame's size with an alpha channel, its ink sits
   bottom-right inside the margins (allowing the shadow's pixel), is the text
   height to three pixels taller, and is more than twenty times as wide as it
@@ -205,6 +208,34 @@ constant.
 | S01 | dormant | composition reads the image table | `profile.ts` | 1 of 16 (domain) |
 | S02 | dormant | the worker renders the layer itself | `index.ts` | 1 of 16 (domain) |
 
+### CI on the pull request
+
+**CI on `eac4cab` failed the six re-render tests** (run 39350689100, job
+`verify`): the sentence came out a pixel narrower than the committed images,
+and pixels inside it differed by up to 179 of 255. Every other test passed.
+
+The renderer asked Pango for the family "Noto Sans JP" and handed it the
+bundled file. fontconfig adds that file to the fonts it knows, but when a font
+of the same name is installed, it matches the installed one. Reproduced
+locally by installing IPAGothic renamed "Noto Sans JP" (through a
+`FONTCONFIG_FILE` that adds its folder to the system configuration): the same
+six tests failed the same way, by one to four pixels.
+
+The fix renames the bundled subset's family to "VTaVision Disclosure", in its
+name table only (ADR-0071 Decision 3). With the same decoy installed, all 32
+tests pass. The glyphs are unchanged, so the six images re-render byte for
+byte the same and the table's checksums stand. A new test pins the font's
+family; the font's checksum is pinned anew.
+
+The images committed in `0f2ec41` were drawn from the bundled font: rendered in
+separate processes, the sentence comes out differently with the file than
+without it, and no font of that name is installed on the machine that drew
+them.
+
+Measured after the fix: `pnpm lint` and `pnpm typecheck` clean, `pnpm test`
+**5733 / 5733**, 200 files. Mutation R15 (below) asks for "Noto Sans JP" again
+and is killed.
+
 ### Required documentation
 
 | Item | Where |
@@ -239,10 +270,11 @@ charges remain BLOCKED.
   no customer receives one without it.
 - **Only the six sizes composition profile v1 produces have an image.** A new
   size needs a new image, rendered and reviewed, before it can be composed.
-- **The re-render test allows an edge's opacity to differ by up to 16 of 255**,
-  in case a different build of the text renderer shades it differently; it
-  pins the text's position exactly. CI and local development use the same
-  prebuilt libvips, so they render identically today.
+- **The re-render test allows a pixel's colour or opacity to differ by up to
+  16 of 255**, in case a different build of the text renderer shades an edge
+  differently, and pins the text's position exactly. A machine whose renderer
+  places a glyph a pixel differently fails it, deliberately: images it drew
+  would not be the reviewed ones.
 - **Mode B (shown for a limited time) and Mode C (omitted)** are not built;
   ADR-0071 Decision 6 says how Mode B will reuse the same image.
 - **The text on a busy, mid-grey background** is legible but faint, as the

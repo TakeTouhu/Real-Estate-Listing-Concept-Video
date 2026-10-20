@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { DISCLOSURE_LAYER_ASSETS, disclosureLayout, type DisclosureLayerAsset } from "@app/domain";
-import { DISCLOSURE_FONT_PATH, renderDisclosureLayer } from "./render-disclosure-layer";
+import { DISCLOSURE_FONT_FAMILY, DISCLOSURE_FONT_PATH, renderDisclosureLayer } from "./render-disclosure-layer";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const FONT_FILE = `${REPO_ROOT}${DISCLOSURE_FONT_PATH}`;
@@ -74,8 +74,16 @@ async function measure(image: Buffer): Promise<Measured> {
 describe("the bundled font", () => {
   it("is the pinned subset of Noto Sans JP Regular", () => {
     expect(createHash("sha256").update(readFileSync(FONT_FILE)).digest("hex")).toBe(
-      "64ae008b81bfd23b75f56aba0c73520daf45ea97287b575c5fd398e3beb2556e",
+      "73f51ed1f4a54fb9d4bf19ed63071c7e53ef2066cd3aa6c1dc56ed4a78c6ad1e",
     );
+  });
+
+  it("is named for the family the renderer asks for, which no installed font shares", () => {
+    // Font names are stored as UTF-16 big-endian.
+    const named = (family: string) => readFileSync(FONT_FILE).includes(Buffer.from(family, "utf16le").swap16());
+    expect(DISCLOSURE_FONT_FAMILY).toBe("VTaVision Disclosure");
+    expect(named(DISCLOSURE_FONT_FAMILY)).toBe(true);
+    expect(named("Noto Sans JP")).toBe(false);
   });
 });
 
