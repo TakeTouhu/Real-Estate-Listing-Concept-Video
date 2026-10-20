@@ -23,8 +23,9 @@ import {
 import { createFfmpegDeliverableComposer, FfprobeMediaProbe } from "@app/storage";
 import { decodeFrame, ffmpeg, probeStreams, runner } from "./media-tools";
 
-// A blue 16:9 clip at 25 fps with a tone, two seconds long, and a red 9:16 clip
-// at 24 fps, one second long. The deliverable gives the first 1.5 seconds (so it
+// A blue 16:9 clip at 25 fps with a tone, two seconds long, whose timestamps
+// start at 3 seconds (a clip need not start at zero), and a red 9:16 clip at
+// 24 fps, one second long. The deliverable gives the first 1.5 seconds (so it
 // is trimmed) and the second 2 seconds (so it holds its last frame).
 const LANDSCAPE_SCENE_SECONDS = 1.5;
 const PORTRAIT_SCENE_SECONDS = 2;
@@ -41,7 +42,7 @@ beforeAll(async () => {
   await ffmpeg([
     "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=2",
     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
-    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", landscape,
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-output_ts_offset", "3", landscape,
   ]);
   await ffmpeg([
     "-f", "lavfi", "-i", "color=c=red:s=360x640:r=24:d=1",
