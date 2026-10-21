@@ -153,11 +153,16 @@ describe("a master's raster is its primary video stream's size and one constant 
     expect(interpretCleanMasterRaster(document)).toEqual(RASTER_1080);
   });
 
-  it("takes the rate from the first real video stream when there are two", () => {
+  it("takes the size and the rate from the first real video stream when there are two", () => {
     const document = ffprobeDocument({
-      streams: [masterStream(1920, 1080, { base: "25/1", average: "25/1" }), masterStream(1920, 1080)],
+      streams: [masterStream(1920, 1080, { base: "25/1", average: "25/1" }), masterStream(1280, 720)],
     });
-    expect(interpretCleanMasterRaster(document)).toMatchObject({ frameRateNumerator: 25 });
+    expect(interpretCleanMasterRaster(document)).toEqual({
+      widthPx: 1920,
+      heightPx: 1080,
+      frameRateNumerator: 25,
+      frameRateDenominator: 1,
+    });
   });
 });
 

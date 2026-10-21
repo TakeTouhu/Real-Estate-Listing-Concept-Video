@@ -26,6 +26,7 @@ import {
   createCleanMasterStore,
 } from "./clean-master-store";
 import { COMPOSED_FILE_NAME, type DeliverableObjectClient } from "./deliverable-composition-io";
+import type { ManagedOutputTempFile } from "./media-validation";
 import type { S3GetObjectInput, S3GetObjectResult, S3ObjectBody } from "./s3-staging-sink";
 
 const ORG = "org_1";
@@ -56,6 +57,24 @@ class CountedOnlyChunk extends Uint8Array {
   }
   override get byteLength(): number {
     return this.reported;
+  }
+}
+
+/**
+ * The fake temporary files, refusing a counted-only chunk with an error rather
+ * than handing Node a length its buffer does not hold, which aborts the test
+ * worker. The store never writes one; a change that did fails an assertion.
+ */
+class GuardedTempFiles extends FakeManagedOutputTempFiles {
+  override async openExclusive0600(path: string): Promise<ManagedOutputTempFile> {
+    const file = await super.openExclusive0600(path);
+    return {
+      write: async (data, offset, length) => {
+        if (data instanceof CountedOnlyChunk) throw new Error("a counted-only chunk reached a file");
+        return file.write(data, offset, length);
+      },
+      close: () => file.close(),
+    };
   }
 }
 
@@ -141,7 +160,7 @@ afterEach(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-function storeFor(client: FakeStore, tempFiles = new FakeManagedOutputTempFiles()) {
+function storeFor(client: FakeStore, tempFiles: FakeManagedOutputTempFiles = new GuardedTempFiles()) {
   return createCleanMasterStore(
     { client, tempFiles },
     { bucket: BUCKET, expectedBucketOwner: OWNER },
@@ -164,7 +183,7 @@ async function localFile(bytes: Uint8Array): Promise<string> {
 describe("probe reads the stored master's receipt and writes nothing", () => {
   it("reports the digest and byte count of every stored chunk, from one read of the key", async () => {
     const client = stored([MASTER.slice(0, 4), MASTER.slice(4)]);
-    const tempFiles = new FakeManagedOutputTempFiles();
+    const tempFiles = new GuardedTempFiles();
     const outcome = await storeFor(client, tempFiles).probe({ key: KEY });
 
     expect(outcome).toEqual({ kind: "STORED", sha256: digestOf(MASTER), sizeBytes: MASTER.byteLength });
@@ -243,7 +262,7 @@ describe("fetch copies the stored master to a private file and names the video b
   });
 
   it("writes every byte through short writes", async () => {
-    const tempFiles = new FakeManagedOutputTempFiles({ writeCaps: [2, 1, 3] });
+    const tempFiles = new GuardedTempFiles({ writeCaps: [2, 1, 3] });
     const outcome = await storeFor(stored([MASTER]), tempFiles).fetch({ key: KEY });
     if (outcome.kind !== "COPIED") throw new Error("expected a copy");
     expect(new Uint8Array(await readFile(outcome.copy.cleanMasterPath))).toEqual(MASTER);
@@ -252,7 +271,7 @@ describe("fetch copies the stored master to a private file and names the video b
   });
 
   it("is absent when nothing is stored, and leaves nothing behind", async () => {
-    const tempFiles = new FakeManagedOutputTempFiles();
+    const tempFiles = new GuardedTempFiles();
     expect(await storeFor(new FakeStore(), tempFiles).fetch({ key: KEY })).toEqual({ kind: "ABSENT" });
     expect(tempFiles.openedPaths).toEqual([]);
     expect(await leftovers()).toEqual([]);
@@ -270,7 +289,7 @@ describe("fetch copies the stored master to a private file and names the video b
       { client: stored([MASTER, new CountedOnlyChunk(MAX_CLEAN_MASTER_BYTES)]), kind: "TOO_LARGE" },
     ];
     for (const { client, files, kind } of cases) {
-      const tempFiles = new FakeManagedOutputTempFiles(files);
+      const tempFiles = new GuardedTempFiles(files);
       const outcome = await storeFor(client, tempFiles).fetch({ key: KEY });
       expect(outcome).toEqual({ kind });
       expect(await leftovers()).toEqual([]);
@@ -392,6 +411,17 @@ describe("publish stores first-wins under the internal namespace and copies back
       expect(client.puts).toHaveLength(1);
       expect(await leftovers()).toEqual([]);
     }
+  });
+
+  it("answers a failed write as retryable without reading the key, even when a master is there", async () => {
+    // A write that failed says nothing about the key; the next attempt's write
+    // finds the stored master and copies it back.
+    const client = new FakeStore({ objects: { [KEY]: [OTHER] }, putThrows: true });
+    expect(await storeFor(client).publish({ key: KEY, localPath: await localFile(MASTER) })).toEqual({
+      kind: "RETRYABLE_FAILURE",
+    });
+    expect(client.gets).toHaveLength(0);
+    expect(await leftovers()).toEqual([]);
   });
 
   it("reports the stored master's own ceiling and read failures from the copy back", async () => {
