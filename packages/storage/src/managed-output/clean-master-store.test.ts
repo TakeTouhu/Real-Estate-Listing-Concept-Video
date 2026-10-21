@@ -46,7 +46,9 @@ function digestOf(...chunks: readonly Uint8Array[]): string {
 /**
  * A chunk that reports a byte length it does not hold, so the ceiling can be
  * crossed without a gigabyte in memory. The store counts a chunk before it
- * hashes or writes it, so these bytes are only ever counted.
+ * hashes or writes it, so a chunk past the ceiling is never written. One at
+ * the ceiling exactly is hashed as its one real byte, so only its count is
+ * asserted.
  */
 class CountedOnlyChunk extends Uint8Array {
   constructor(private readonly reported: number) {
@@ -70,6 +72,7 @@ class FakeStore implements DeliverableObjectClient {
   readonly gets: S3GetObjectInput[] = [];
   readonly puts: { bucket: string; key: string; localPath: string; contentType: string; owner: string | undefined }[] = [];
   readonly stored = new Map<string, readonly (Uint8Array | string)[]>();
+  bodies = 0;
   cancels = 0;
 
   constructor(private readonly options: StoreOptions = {}) {
@@ -93,6 +96,7 @@ class FakeStore implements DeliverableObjectClient {
         this.cancels += 1;
       },
     };
+    this.bodies += 1;
     return { contentLength: null, body };
   }
 
@@ -185,6 +189,7 @@ describe("probe reads the stored master's receipt and writes nothing", () => {
       stored([new Uint8Array(0)]),
     ]) {
       expect(await storeFor(client).probe({ key: KEY })).toEqual({ kind: "RETRYABLE_FAILURE" });
+      expect(client.cancels).toBe(client.bodies);
     }
   });
 
@@ -209,8 +214,8 @@ describe("fetch copies the stored master to a private file and names the video b
     expect(outcome.kind).toBe("COPIED");
     if (outcome.kind !== "COPIED") return;
     const { copy } = outcome;
-    expect(new Uint8Array(await readFile(copy.localPath))).toEqual(MASTER);
-    expect((await stat(copy.localPath)).mode & 0o777).toBe(0o600);
+    expect(new Uint8Array(await readFile(copy.cleanMasterPath))).toEqual(MASTER);
+    expect((await stat(copy.cleanMasterPath)).mode & 0o777).toBe(0o600);
     expect(copy.sha256).toBe(digestOf(MASTER));
     expect(copy.sizeBytes).toBe(MASTER.byteLength);
     expect(client.gets).toEqual([{ bucket: BUCKET, key: KEY, expectedBucketOwner: OWNER }]);
@@ -218,12 +223,12 @@ describe("fetch copies the stored master to a private file and names the video b
 
     // One private directory, made under the temporary directory, holding the
     // copy and naming the video: fixed names, nothing from the tenant.
-    const dir = dirname(copy.localPath);
+    const dir = dirname(copy.cleanMasterPath);
     expect(dirname(dir)).toBe(temp);
     expect(basename(dir).startsWith(CLEAN_MASTER_DIRECTORY_PREFIX)).toBe(true);
-    expect(basename(copy.localPath)).toBe(CLEAN_MASTER_COPY_FILE_NAME);
+    expect(basename(copy.cleanMasterPath)).toBe(CLEAN_MASTER_COPY_FILE_NAME);
     expect(copy.outputPath).toBe(join(dir, COMPOSED_FILE_NAME));
-    for (const path of [copy.localPath, copy.outputPath]) {
+    for (const path of [copy.cleanMasterPath, copy.outputPath]) {
       for (const leak of [ORG, VERSION, BUCKET, "internal", "clean-masters"]) {
         expect(`${path} leaks ${leak}: ${path.slice(temp.length).includes(leak)}`).toBe(`${path} leaks ${leak}: false`);
       }
@@ -241,7 +246,7 @@ describe("fetch copies the stored master to a private file and names the video b
     const tempFiles = new FakeManagedOutputTempFiles({ writeCaps: [2, 1, 3] });
     const outcome = await storeFor(stored([MASTER]), tempFiles).fetch({ key: KEY });
     if (outcome.kind !== "COPIED") throw new Error("expected a copy");
-    expect(new Uint8Array(await readFile(outcome.copy.localPath))).toEqual(MASTER);
+    expect(new Uint8Array(await readFile(outcome.copy.cleanMasterPath))).toEqual(MASTER);
     expect(outcome.copy.sha256).toBe(digestOf(MASTER));
     await outcome.copy.release();
   });
@@ -265,9 +270,16 @@ describe("fetch copies the stored master to a private file and names the video b
       { client: stored([MASTER, new CountedOnlyChunk(MAX_CLEAN_MASTER_BYTES)]), kind: "TOO_LARGE" },
     ];
     for (const { client, files, kind } of cases) {
-      const outcome = await storeFor(client, new FakeManagedOutputTempFiles(files)).fetch({ key: KEY });
+      const tempFiles = new FakeManagedOutputTempFiles(files);
+      const outcome = await storeFor(client, tempFiles).fetch({ key: KEY });
       expect(outcome).toEqual({ kind });
       expect(await leftovers()).toEqual([]);
+      // Every file opened is closed once, and every body returned is cancelled:
+      // a removed directory does not prove either, since an open descriptor
+      // survives `rm`.
+      const opened = files?.openFails === true ? 0 : tempFiles.openedPaths.length;
+      expect(tempFiles.closeCalls).toBe(opened);
+      expect(client.cancels).toBe(client.bodies);
     }
   });
 
@@ -291,8 +303,8 @@ describe("publish stores first-wins under the internal namespace and copies back
     // The copy is read back from the key, never the file the encode wrote.
     expect(client.gets).toEqual([{ bucket: BUCKET, key: KEY, expectedBucketOwner: OWNER }]);
     if (outcome.kind !== "COPIED") throw new Error("expected a copy");
-    expect(outcome.copy.localPath).not.toBe(localPath);
-    expect(new Uint8Array(await readFile(outcome.copy.localPath))).toEqual(MASTER);
+    expect(outcome.copy.cleanMasterPath).not.toBe(localPath);
+    expect(new Uint8Array(await readFile(outcome.copy.cleanMasterPath))).toEqual(MASTER);
     expect(outcome.copy).toMatchObject({ sha256: digestOf(MASTER), sizeBytes: MASTER.byteLength });
     await outcome.copy.release();
   });
@@ -303,7 +315,7 @@ describe("publish stores first-wins under the internal namespace and copies back
 
     expect(client.puts).toHaveLength(1);
     if (outcome.kind !== "COPIED") throw new Error("expected a copy");
-    expect(new Uint8Array(await readFile(outcome.copy.localPath))).toEqual(OTHER);
+    expect(new Uint8Array(await readFile(outcome.copy.cleanMasterPath))).toEqual(OTHER);
     expect(outcome.copy).toMatchObject({ sha256: digestOf(OTHER), sizeBytes: OTHER.byteLength });
     await outcome.copy.release();
   });
@@ -335,10 +347,30 @@ describe("publish stores first-wins under the internal namespace and copies back
     await truncate(path, MAX_CLEAN_MASTER_BYTES + 1);
     expect(await storeFor(client).publish({ key: KEY, localPath: path })).toEqual({ kind: "TOO_LARGE" });
     expect(client.puts).toHaveLength(0);
+    // Too large is said only once the key is seen to hold nothing.
+    expect(client.gets).toHaveLength(1);
 
     await truncate(path, MAX_CLEAN_MASTER_BYTES);
     expect(await storeFor(client).publish({ key: KEY, localPath: path })).toEqual({ kind: "RETRYABLE_FAILURE" });
     expect(client.puts).toHaveLength(1);
+  });
+
+  it("answers an encode over the ceiling with the master already stored, or with what reading it says", async () => {
+    const path = join(scratch, "sparse.mp4");
+    await writeFile(path, new Uint8Array(0));
+    await truncate(path, MAX_CLEAN_MASTER_BYTES + 1);
+
+    const occupied = stored([OTHER]);
+    const outcome = await storeFor(occupied).publish({ key: KEY, localPath: path });
+    if (outcome.kind !== "COPIED") throw new Error("expected the stored master");
+    expect(new Uint8Array(await readFile(outcome.copy.cleanMasterPath))).toEqual(OTHER);
+    expect(occupied.puts).toHaveLength(0);
+    await outcome.copy.release();
+
+    const unreadable = new FakeStore({ objects: { [KEY]: [OTHER] }, getThrows: true });
+    expect(await storeFor(unreadable).publish({ key: KEY, localPath: path })).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(unreadable.puts).toHaveLength(0);
+    expect(await leftovers()).toEqual([]);
   });
 
   it("is retryable, sending nothing, for a missing or empty encoded file", async () => {

@@ -104,6 +104,7 @@ describe("a master's raster is its primary video stream's size and one constant 
 
   it.each([
     ["the average differs from the base rate", { base: "30/1", average: "29/1" }],
+    ["the average has the base rate's numerator over another denominator", { base: "30/1", average: "30/7" }],
     ["the base rate is unknown", { base: "0/0" }],
     ["the average is unknown", { average: "0/0" }],
     ["there is no base rate", { base: null }],
@@ -124,6 +125,21 @@ describe("a master's raster is its primary video stream's size and one constant 
     ]) {
       expect(interpretCleanMasterRaster(document)).toBeNull();
     }
+  });
+
+  it.each([
+    ["a display matrix", { side_data_list: [{ side_data_type: "Display Matrix", displaymatrix: "…", rotation: 90 }] }],
+    ["a display matrix with no turn", { side_data_list: [{ side_data_type: "Display Matrix", rotation: 0 }] }],
+    ["a rotation in other side data", { side_data_list: [{ side_data_type: "Other", rotation: -90 }] }],
+    ["a rotate tag", { tags: { rotate: "90" } }],
+  ])("is unusable when the stream carries %s, which FFmpeg would apply before the disclosure", (_label, extra) => {
+    const stream = { ...masterStream(1920, 1080), ...extra };
+    expect(interpretCleanMasterRaster(ffprobeDocument({ streams: [stream] }))).toBeNull();
+  });
+
+  it("is not refused for side data that turns nothing", () => {
+    const stream = { ...masterStream(1920, 1080), side_data_list: [{ side_data_type: "CPB properties" }], tags: { language: "und" } };
+    expect(interpretCleanMasterRaster(ffprobeDocument({ streams: [stream] }))).toEqual(RASTER_1080);
   });
 
   it("takes the rate from the real video stream, never from artwork listed before it", () => {

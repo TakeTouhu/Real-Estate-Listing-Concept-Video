@@ -483,7 +483,12 @@ export interface DeliverableOutputPublisher {
  * organization, the job, the deliverable or the customer appears in either path.
  */
 export interface LocalCleanMasterCopy {
-  readonly localPath: string;
+  /**
+   * The copy. Named for what it is, as `ApplyDisclosureInput.cleanMasterPath`
+   * is, and never `localPath`, the publisher's field: the master carries no
+   * disclosure and must never be published at the customer's key.
+   */
+  readonly cleanMasterPath: string;
   readonly sha256: Sha256Digest;
   readonly sizeBytes: SafePositiveByteCount;
   readonly outputPath: string;
@@ -552,7 +557,7 @@ export interface CleanMasterStore {
 export interface CleanMasterRaster {
   readonly widthPx: number;
   readonly heightPx: number;
-  /** The frame rate as a reduced fraction; constant, or it is not reported at all. */
+  /** The frame rate as a reduced fraction, reported only when the base and average rates agree. */
   readonly frameRateNumerator: number;
   readonly frameRateDenominator: number;
 }
@@ -562,8 +567,9 @@ export type InspectCleanMasterOutcome =
   | { readonly kind: "RASTER"; readonly raster: CleanMasterRaster }
   /**
    * Not a video this pipeline can lay a disclosure over: the inspector refused
-   * it, it is not MP4-family, it has no video stream, or its frame rate is not
-   * one constant fraction. Deterministic: the stored master is first-wins.
+   * it, it is not MP4-family, it has no video stream, it asks to be shown
+   * turned or flipped, or its base and average frame rates are not one exact
+   * fraction. Deterministic: the stored master is first-wins.
    */
   | { readonly kind: "UNUSABLE" }
   /** The inspector could not run this time. Says nothing about the file. */
@@ -573,8 +579,12 @@ export interface CleanMasterInspector {
   /**
    * Read the frame size and frame rate of a local file this process created.
    * A raster is not a judgement: whether it is the profile's is
-   * {@link cleanMasterMatchesProfile}'s question. An inspector that cannot be
-   * launched at all is a deployment fault and throws.
+   * {@link cleanMasterMatchesProfile}'s question.
+   *
+   * Throws a fixed defect, never an outcome, when the inspector cannot be
+   * launched, when its output passes its ceiling, or when its output is not
+   * the document it promises: none is a fact about the file, and retrying
+   * will not change them.
    */
   inspect(input: { readonly localPath: string }): Promise<InspectCleanMasterOutcome>;
 }

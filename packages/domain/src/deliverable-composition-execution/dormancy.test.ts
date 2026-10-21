@@ -145,7 +145,6 @@ describe("the capability exists but nothing runs it", () => {
       if (name.endsWith("deliverable-composition-io.ts")) continue;
       if (name.endsWith("ffmpeg-composer.ts")) continue;
       if (name.endsWith("clean-master-store.ts")) continue;
-      if (name.endsWith("managed-output/ffprobe.ts")) continue;
       if (name.endsWith("packages/database/src/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
       if (name.endsWith("managed-output/index.ts")) continue;

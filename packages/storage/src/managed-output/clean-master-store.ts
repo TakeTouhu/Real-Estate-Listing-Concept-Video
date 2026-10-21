@@ -108,7 +108,13 @@ export function createCleanMasterStore(
       }
       // A cheap preflight only: the copy below is read back from the stored
       // object, so the ceiling is enforced again against the bytes that exist.
-      if (localBytes > MAX_CLEAN_MASTER_BYTES) return { kind: "TOO_LARGE" };
+      // An encode over the ceiling is not sent, but another attempt may already
+      // have stored a master within it, and what is stored is the answer:
+      // "too large" ends the work, so it is said only when nothing is there.
+      if (localBytes > MAX_CLEAN_MASTER_BYTES) {
+        const stored = await copyStored(deps, config, key);
+        return stored.kind === "ABSENT" ? { kind: "TOO_LARGE" } : stored;
+      }
       if (localBytes <= 0) return { kind: "RETRYABLE_FAILURE" };
 
       try {
@@ -152,8 +158,8 @@ async function copyStored(
     }
   };
 
-  const localPath = join(dir, CLEAN_MASTER_COPY_FILE_NAME);
-  const read = await readStored(deps, config, key, localPath);
+  const cleanMasterPath = join(dir, CLEAN_MASTER_COPY_FILE_NAME);
+  const read = await readStored(deps, config, key, cleanMasterPath);
   if (read.kind !== "READ") {
     await release();
     return read;
@@ -161,7 +167,7 @@ async function copyStored(
   return {
     kind: "COPIED",
     copy: {
-      localPath,
+      cleanMasterPath,
       sha256: sha256Digest(read.sha256),
       sizeBytes: safePositiveByteCount(read.sizeBytes),
       // Beside the copy, because this function made the directory: the video

@@ -5,8 +5,9 @@
  * The disclosure image is frame-sized and laid at the origin, so a master of
  * another size would come out with the image cut off or misplaced, or, smaller
  * than the image's ink, with no disclosure at all. Each master here is made the
- * way a wrong one could arrive, by an encode at another size or rate, and the
- * inspector's reading of it must not match the 1080p landscape profile. The
+ * way a wrong one could arrive, by an encode at another size or rate or with a
+ * turn to apply, and the inspector's reading of it must not match the 1080p
+ * landscape profile. The
  * composer suite proves the opposite half: every master the composer makes
  * matches its own profile.
  */
@@ -69,6 +70,15 @@ describe("a master the 1080p landscape profile must not take", () => {
       raster: { widthPx: 1920, heightPx: 1080, frameRateNumerator: 30, frameRateDenominator: 1 },
     });
     if (outcome.kind === "RASTER") expect(cleanMasterMatchesProfile(outcome.raster, LANDSCAPE_1080)).toBe(true);
+  });
+
+  it("is unusable when it asks to be shown turned, which FFmpeg would apply before the disclosure", async () => {
+    // The coded frames are 1920x1080 and the rate 30/1, as the profile's; only
+    // the display matrix differs, and FFmpeg decodes the frames turned.
+    const matching = await masterAt("to-turn", "1920x1080", "30");
+    const turned = join(dir, "turned.mp4");
+    await ffmpeg(["-display_rotation", "90", "-i", matching, "-c", "copy", turned]);
+    expect(await inspect(turned)).toEqual({ kind: "UNUSABLE" });
   });
 
   it("is unusable when it is not an MP4 video at all", async () => {

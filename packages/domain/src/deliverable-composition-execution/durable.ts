@@ -229,11 +229,15 @@ export const MAX_DELIVERABLE_OUTPUT_BYTES = 536_870_912;
  * The largest Clean Master that may be stored or read back, 1 GiB: twice the
  * customer's video's ceiling (ADR-0076 Decision 1).
  *
- * The master was measured at 1.1 to 1.5 times the video made from it (ADR-0075
- * Decision 1), so a master over this is the master of a video over
- * {@link MAX_DELIVERABLE_OUTPUT_BYTES}, which could never be published anyway.
- * Like the video's, a machine-resource limit, not a product rule: what one
- * worker holds on disk and reads back, and what one master costs to keep.
+ * The master was measured at 1.1 to 1.5 times the video made from it, on three
+ * synthetic inputs (ADR-0075 Decision 1), so a master over this is expected to
+ * be the master of a video over {@link MAX_DELIVERABLE_OUTPUT_BYTES}, which
+ * could never be published anyway. That is a measurement, not a bound: footage
+ * whose master is more than twice its video would be stopped here with a video
+ * that would have fitted, which is why the master's quality is re-measured on
+ * the provider's real output before composition is activated (TODO). Like the
+ * video's, a machine-resource limit, not a product rule: what one worker holds
+ * on disk and reads back, and what one master costs to keep.
  */
 export const MAX_CLEAN_MASTER_BYTES = 1_073_741_824;
 

@@ -26,12 +26,17 @@ read a video's frame rate.
 
 `MAX_CLEAN_MASTER_BYTES` is 1 GiB, twice the customer's video's ceiling
 (`MAX_DELIVERABLE_OUTPUT_BYTES`, 512 MiB). The master was measured at 1.1 to
-1.5 times the video made from it (ADR-0075 Decision 1), so a master over 1 GiB
-is the master of a video over 512 MiB, which could never be published anyway.
-Like the video's, it is a machine-resource limit, not a product rule: what one
-worker holds on disk and reads back, and what one master costs to keep. It is
-enforced against the bytes read from the key, with the encoded file's size only
-a preflight before it is sent.
+1.5 times the video made from it, on three synthetic inputs (ADR-0075
+Decision 1), so a master over 1 GiB is expected to be the master of a video
+over 512 MiB, which could never be published anyway. That is a measurement,
+not a bound: footage whose master is more than twice its video would be
+stopped with a video that would have fitted. So the re-measurement on the
+verified route's real output, already required before composition is
+activated, checks this ceiling too (TODO). Like the video's, it is a
+machine-resource limit, not a product rule: what one worker holds on disk and
+reads back, and what one master costs to keep. It is enforced against the
+bytes read from the key, with the encoded file's size only a preflight before
+it is sent.
 
 ## Decision 2 — The master's store copies back what is stored
 
@@ -56,6 +61,11 @@ methods, each against one master key:
   once all of it is on disk, and a failing `close` (data still owed to the file)
   is a failed copy. Nothing is buffered whole in memory, and the read stops at
   the ceiling rather than after it.
+- **An oversized encode still gets the stored master.** When the encoded file
+  is over the ceiling, `publish` sends nothing and reads the key instead: a
+  master another attempt stored first is still what the video is made from,
+  and only an empty key answers `TOO_LARGE`. The answer cannot depend on which
+  attempt's encode ran first.
 - **Absent only when the store says so.** `ABSENT` is the store's own "no such
   key"; every other unreadable condition is retryable, since calling it absent
   would send composition to encode a master that may already exist. A
@@ -73,7 +83,9 @@ methods, each against one master key:
   customer's video, which the store names because it made the directory. One
   `release` removes both and may be called again; every failure path removes
   the directory before answering. No organization, job, version or key
-  appears in either path.
+  appears in either path. The copy's field is `cleanMasterPath`, as
+  `applyDisclosure`'s input names it, and never `localPath`, the customer
+  video publisher's: the master must never be handed to that publisher.
 
 ## Decision 3 — The master is the profile's size and rate before anything is laid over it
 
@@ -91,14 +103,22 @@ local master's frame size and frame rate, and `cleanMasterMatchesProfile`
   customer's video is validated under (MP4-family, a usable video stream with
   real dimensions, a real duration), or it is `UNUSABLE`. The size is then the
   primary video stream's.
-- **One constant rate, read exactly.** The frame rate is the primary video
+- **Shown as coded.** A stream that asks to be shown turned or flipped (a
+  display matrix in its side data, any side data with a rotation, or a
+  `rotate` tag) is `UNUSABLE`. FFmpeg applies the turn when it decodes, so a
+  master coded at 1920x1080 with a quarter turn reaches the filter graph as
+  1080x1920 while `ffprobe` still reports 1920x1080 (measured on FFmpeg 6.1.1
+  with `-display_rotation 90 -c copy`). The composer never writes one, so a
+  master that carries one is not the composer's.
+- **Agreeing rates, read exactly.** The frame rate is the primary video
   stream's `r_frame_rate`, as a reduced fraction of two positive integers, and
-  only when its `avg_frame_rate` is the same fraction: a stream whose average
-  differs from its base rate does not run at one constant rate. `0/0`
-  (`ffprobe`'s "unknown"), a decimal, a sign, a space or a leading zero is no
-  rate, and the master is `UNUSABLE`. Measured on FFmpeg 6.1.1, a composed
-  master reports `30/1` for both, including for a length that is not a whole
-  number of seconds.
+  only when its `avg_frame_rate` is the same fraction. Agreeing rates do not
+  prove every frame is evenly spaced; they refuse what visibly is not, and the
+  composer is the only writer of the key. `0/0` (`ffprobe`'s "unknown"), a
+  decimal, a sign, a space or a leading zero is no rate, and the master is
+  `UNUSABLE`. Measured on FFmpeg 6.1.1, a composed master reports `30/1` for
+  both, including for a length that is not a whole number of seconds (3.3 s,
+  99 frames).
 - **Exact, with no tolerance.** The width and height must equal the profile's,
   and the rate equal it as a fraction (60/2 is 30/1). A raster is not a
   judgement: the inspector reports a wrong one as read, and the comparison
@@ -107,8 +127,9 @@ local master's frame size and frame rate, and `cleanMasterMatchesProfile`
 The media suites prove both halves on real FFmpeg: every master and video the
 composer makes, in all six sizes, is read as its profile's size and 30/1 and
 matches it; masters encoded at 720p, portrait, two pixels narrower, 25 fps and
-29.97 fps are read as they are and refused for the 1080p landscape profile;
-and a PNG, a Matroska file and a text file are `UNUSABLE`.
+29.97 fps are read as they are and refused for the 1080p landscape profile; a
+matching master given a quarter turn is `UNUSABLE`; and a PNG, a Matroska file
+and a text file are `UNUSABLE`.
 
 ## Decision 4 — Nothing calls them yet
 
@@ -156,11 +177,14 @@ key. No migration.
 - A composition can store its master once, first-wins, under the internal
   namespace, and lay the disclosure over a private copy of exactly the stored
   bytes, with the receipt of that copy.
-- A master of another size or frame rate, or not a constant-rate MP4 video at
-  all, is refused before the disclosure is laid over it.
-- A master is at most 1 GiB. Once DS-5b-2 runs it, a worker encoding one holds
-  the scenes (up to 2 GiB), the encoded master and its copy (up to 1 GiB each)
-  at once, until the scenes are released.
+- A master of another size or frame rate, one that asks to be shown turned,
+  or one that is not an MP4 video with agreeing frame rates, is refused before
+  the disclosure is laid over it.
+- A master is at most 1 GiB, an expectation measured on synthetic inputs that
+  the real route's output must confirm before activation.
+- Once DS-5b-2 runs it, a worker encoding a master holds the scenes (up to
+  2 GiB), the encoded master and its copy (up to 1 GiB each) at once, until
+  the scenes are released.
 
 Paid Provider Activation, production Provider credentials, production paid AI
 calls, production scheduler activation and live Stripe charges remain BLOCKED.

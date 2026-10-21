@@ -204,6 +204,25 @@ export function isIsoBmffFormatName(formatName: unknown): boolean {
     .some((token) => ISO_BMFF_FORMAT_TOKENS.has(token));
 }
 
+/** The document's streams that are objects, in ffprobe's order. */
+function streamsOf(document: Record<string, unknown>): Record<string, unknown>[] {
+  const rawStreams = document.streams;
+  return Array.isArray(rawStreams) ? rawStreams.filter(isRecord) : [];
+}
+
+/**
+ * The document's usable video streams, in ffprobe's order; the first is the
+ * primary one, for the media policy and the Clean Master inspector alike.
+ *
+ * Primary video stream determinism: the first *usable* video stream ffprobe
+ * lists — attached artwork is skipped, so an audio-only file with cover art
+ * has no video stream at all, and a real video that also carries artwork still
+ * selects the real one regardless of listing order.
+ */
+function usableVideoStreams(document: Record<string, unknown>): Record<string, unknown>[] {
+  return streamsOf(document).filter(isUsableVideoStream);
+}
+
 /**
  * Interpret one parsed ffprobe document under the closed media policy.
  *
@@ -223,16 +242,8 @@ export function interpretFfprobeDocument(
     return { kind: "INVALID", reason: "CONTAINER_UNSUPPORTED" };
   }
 
-  const rawStreams = document.streams;
-  const streams: Record<string, unknown>[] = Array.isArray(rawStreams)
-    ? rawStreams.filter(isRecord)
-    : [];
-
-  // Primary video stream determinism: the first *usable* video stream ffprobe
-  // lists — attached artwork is skipped, so an audio-only file with cover art
-  // has no video stream at all, and a real video that also carries artwork
-  // still selects the real one regardless of listing order.
-  const videoStreams = streams.filter(isUsableVideoStream);
+  const streams = streamsOf(document);
+  const videoStreams = usableVideoStreams(document);
   const audioStreams = streams.filter((s) => s.codec_type === "audio");
   const primaryVideo = videoStreams[0];
   if (primaryVideo === undefined) {
@@ -395,23 +406,46 @@ export function exactFrameRate(
 }
 
 /**
+ * Whether a stream asks to be shown turned or flipped: a display matrix in its
+ * side data, a rotation there, or a `rotate` tag.
+ *
+ * FFmpeg applies a display matrix when it decodes, so a master whose coded
+ * frames are 1920x1080 under a quarter turn enters the disclosure's filter
+ * graph as 1080x1920, with the image cut off. Measured on FFmpeg 6.1.1. A
+ * master the composer encodes carries none, so any is refused rather than
+ * interpreted.
+ */
+function carriesOrientation(stream: Record<string, unknown>): boolean {
+  const sideData = stream.side_data_list;
+  if (
+    Array.isArray(sideData) &&
+    sideData.some(
+      (entry) => isRecord(entry) && (entry.side_data_type === "Display Matrix" || "rotation" in entry),
+    )
+  ) {
+    return true;
+  }
+  return isRecord(stream.tags) && "rotate" in stream.tags;
+}
+
+/**
  * Read a Clean Master's frame size and frame rate from one parsed ffprobe
  * document, or `null` when it is not a video a disclosure can be laid over.
  *
  * The media policy decides first, the one the customer's video is validated
  * under: MP4-family, a usable video stream with real dimensions, a real
- * duration. The frame rate is then the primary video stream's, and only when
- * its `r_frame_rate` and `avg_frame_rate` are the same fraction: a stream whose
- * average differs from its base rate does not run at one constant rate, and the
- * profile's is one.
+ * duration. The primary video stream must then carry no orientation, and its
+ * frame rate is its `r_frame_rate`, only when its `avg_frame_rate` is the same
+ * fraction: a stream whose average differs from its base rate does not run at
+ * the one rate the profile names. Equal rates do not prove a constant one; the
+ * composer's own `fps` filter is what makes it constant.
  */
 export function interpretCleanMasterRaster(document: unknown): CleanMasterRaster | null {
   const interpreted = interpretFfprobeDocument(document);
-  if (interpreted.kind !== "FACTS") return null;
+  if (interpreted.kind !== "FACTS" || !isRecord(document)) return null;
 
-  const streams = isRecord(document) && Array.isArray(document.streams) ? document.streams : [];
-  const primary: unknown = streams.filter(isUsableVideoStream)[0];
-  if (!isRecord(primary)) return null;
+  const primary = usableVideoStreams(document)[0];
+  if (primary === undefined || carriesOrientation(primary)) return null;
   const base = exactFrameRate(primary.r_frame_rate);
   const average = exactFrameRate(primary.avg_frame_rate);
   if (
