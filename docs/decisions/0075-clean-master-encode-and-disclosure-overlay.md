@@ -101,11 +101,13 @@ libx264 at the profile's preset, CRF and pixel format, +faststart, mp4
   measurements used, now chosen rather than inferred, as `-f mp4` already is for
   the output.
 - **Nothing from an input's container.** By default FFmpeg copies the first
-  input's title, comment and chapters into the output, and in an mp4 a chapter
-  is written as a text stream. Measured: a clip's title, comment and chapter
-  survived composition. `-map_metadata -1` and `-map_chapters -1` now drop them
-  in all three encodes (`compose`, the master, the video), so nothing a
-  provider's file carries reaches a customer's file. The pixels are unchanged.
+  input's title, comment and chapters into the output, and an mp4 holds a
+  chapter as a track of its own. Measured: a clip's title, comment and chapter
+  survived composition, and with `-map_metadata -1` alone the chapter still
+  did, without its title. `-map_metadata -1` and `-map_chapters -1` together
+  drop them in all three encodes (`compose`, the master, the video), so nothing
+  a provider's file carries reaches a customer's file. The pixels are
+  unchanged.
 - **The mode chooses the graph.** Mode A (`THROUGHOUT`) lays it over the whole
   video. A mode the composer does not implement is refused with an internal
   error, never encoded as Mode A or without the disclosure. Mode B will limit

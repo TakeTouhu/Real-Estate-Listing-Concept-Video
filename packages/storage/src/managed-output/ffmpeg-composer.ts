@@ -52,9 +52,10 @@
  * ## Nothing from an input's container
  *
  * `-map_metadata -1` and `-map_chapters -1`. FFmpeg otherwise copies the first
- * input's title, comment and chapters into the output, and a chapter becomes a
- * text stream in an mp4: a provider clip's tags would reach the Clean Master and
- * then the customer's video.
+ * input's title, comment and chapters into the output, and an mp4 holds a
+ * chapter as a track of its own: a provider clip's tags would reach the Clean
+ * Master and then the customer's video. Both options, because the first alone
+ * still copies the chapter, only without its title.
  *
  * ## The Clean Master, then the disclosure (ADR-0075)
  *

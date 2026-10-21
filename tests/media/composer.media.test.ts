@@ -41,6 +41,8 @@ const LAYER_DIRECTORY = fileURLToPath(new URL("../../assets/disclosure", import.
 // last frame and must show yellow, not red, after its source ends. The first
 // clip also carries a title, a comment, a stream handler name and a chapter,
 // each marked PROVIDER_TAG, standing in for what a provider's file could carry.
+// The chapter runs past the clip's 3-second start, or FFmpeg would drop it
+// whatever the composer asked.
 const LANDSCAPE_SCENE_SECONDS = 1.5;
 const PORTRAIT_SCENE_SECONDS = 2;
 const FRAME_COUNT = (LANDSCAPE_SCENE_SECONDS + PORTRAIT_SCENE_SECONDS) * 30;
@@ -59,7 +61,7 @@ beforeAll(async () => {
   await writeFile(
     tags,
     `;FFMETADATA1\ntitle=${PROVIDER_TAG}-title\ncomment=${PROVIDER_TAG}-comment\n\n` +
-      `[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=${PROVIDER_TAG}-chapter\n`,
+      `[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=10000\ntitle=${PROVIDER_TAG}-chapter\n`,
   );
   await ffmpeg([
     "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=2,drawbox=c=green:t=fill:enable='gte(t,1.6)'",
@@ -192,7 +194,7 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
         const probed = await probeEverything(files[which]);
         expect(probed.text).not.toContain(PROVIDER_TAG);
         expect(probed.chapterCount).toBe(0);
-        // In an mp4 a chapter is a text stream, so one surviving would be a second stream.
+        // An mp4 holds a chapter as a track of its own, so one surviving would be a second stream.
         expect(probed.streamCount).toBe(1);
       });
 
