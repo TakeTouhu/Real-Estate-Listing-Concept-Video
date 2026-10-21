@@ -265,7 +265,13 @@ describe("no production composition", () => {
         }
       }
       if (!name.endsWith(PROBE)) {
-        for (const banned of ["new FfprobeMediaProbe", "FfprobeMediaProbe(", "createDefaultProcessRunner("]) {
+        for (const banned of [
+          "new FfprobeMediaProbe",
+          "FfprobeMediaProbe(",
+          "new FfprobeCleanMasterInspector",
+          "FfprobeCleanMasterInspector(",
+          "createDefaultProcessRunner(",
+        ]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
         // Only the dormant inspector may reference a child process at all.

@@ -82,11 +82,14 @@ export {
   DEFAULT_PROBE_MAX_STDOUT_BYTES,
   DEFAULT_PROBE_PROGRAM,
   DEFAULT_PROBE_TIMEOUT_MS,
+  FfprobeCleanMasterInspector,
   FfprobeMediaProbe,
   MAX_PROBE_STDOUT_BYTES,
   MAX_PROBE_TIMEOUT_MS,
   createDefaultProcessRunner,
+  exactFrameRate,
   ffprobeArgsFor,
+  interpretCleanMasterRaster,
   interpretFfprobeDocument,
   isIsoBmffFormatName,
   validateProbeMaxStdoutBytes,
@@ -122,3 +125,14 @@ export type {
   DeliverableCompositionIoDeps,
   DeliverableObjectClient,
 } from "./deliverable-composition-io";
+
+/**
+ * The dormant Clean Master store (ADR-0076): the master's receipt, a private
+ * copy of the stored master, and first-wins storage under the internal
+ * namespace. Exported for tests and review: nothing in production constructs it.
+ */
+export {
+  CLEAN_MASTER_COPY_FILE_NAME,
+  CLEAN_MASTER_DIRECTORY_PREFIX,
+  createCleanMasterStore,
+} from "./clean-master-store";

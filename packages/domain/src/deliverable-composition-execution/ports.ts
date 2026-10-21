@@ -1,19 +1,20 @@
 /**
  * The composition-execution boundaries.
  *
- * Four ports, and the split is the safety argument: the only thing that touches
- * a database is the repository, the only thing that reads object storage is the
- * materializer, the only thing that runs a subprocess is the composer, and the
- * only thing that writes the canonical object is the publisher. No transaction
- * spans any of the other three — a database transaction held open across a
- * gigabyte download and a twenty-minute encode is a connection the pool never
- * gets back.
+ * Six ports, and the split is the safety argument: the only thing that touches
+ * a database is the repository; the only things that touch object storage are
+ * the materializer (the scenes), the publisher (the customer's video) and the
+ * Clean Master store (the master); and the only things that run a subprocess
+ * are the composer and the Clean Master inspector. No transaction spans any of
+ * the others — a database transaction held open across a gigabyte download and
+ * a twenty-minute encode is a connection the pool never gets back.
  *
  * Every port returns a **closed** outcome. Storage messages, ffmpeg stderr, OS
  * errno values, bucket names and local paths stop at each boundary; what crosses
  * is a member of a small application vocabulary.
  */
 
+import type { ManagedCleanMasterKey } from "../clean-master/key";
 import type { DisclosureMode } from "../disclosure/mode";
 import type { TransitionContext } from "../orchestration/ports";
 import type { CompositionProfile } from "./profile";
@@ -460,4 +461,120 @@ export interface DeliverableOutputPublisher {
     readonly key: ManagedDeliverableOutputKey;
     readonly localPath: string;
   }): Promise<PublishDeliverableOutcome>;
+}
+
+// ---------------------------------------------------------------------------
+// The Clean Master (ADR-0076)
+// ---------------------------------------------------------------------------
+
+/**
+ * A private local copy of the bytes stored at a Clean Master's key, and where
+ * the customer's video made from it is written (ADR-0076 Decision 2).
+ *
+ * The copy is of the stored object, read back from its key, never the file the
+ * master encode wrote: the customer's video is made from the master a later
+ * recomposition will also read, even when another attempt stored it first
+ * (ADR-0071 Decision 7). The receipt is of the bytes in the copy, hashed as
+ * they were written to it.
+ *
+ * `outputPath` is in the same private directory, named by the store because
+ * the store made the directory, so one {@link release} removes the copy and the
+ * video together. Application-created and fixed: nothing about the
+ * organization, the job, the deliverable or the customer appears in either path.
+ */
+export interface LocalCleanMasterCopy {
+  readonly localPath: string;
+  readonly sha256: Sha256Digest;
+  readonly sizeBytes: SafePositiveByteCount;
+  readonly outputPath: string;
+  /** Removes the directory, with the copy and the video. Safe to call more than once. */
+  readonly release: () => Promise<void>;
+}
+
+/** What a read-only look at a Clean Master's key concluded. Closed. */
+export type ProbeCleanMasterOutcome =
+  /** The store established that nothing is at the key. */
+  | { readonly kind: "ABSENT" }
+  /** A master is stored, and this is its receipt, read from its bytes. */
+  | {
+      readonly kind: "STORED";
+      readonly sha256: Sha256Digest;
+      readonly sizeBytes: SafePositiveByteCount;
+    }
+  /** The stored master is over {@link MAX_CLEAN_MASTER_BYTES}. */
+  | { readonly kind: "TOO_LARGE" }
+  /** The key could not be read this time. Says nothing about what is there. */
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
+/** What copying a stored Clean Master to a private local file concluded. Closed. */
+export type FetchCleanMasterOutcome =
+  | { readonly kind: "ABSENT" }
+  | { readonly kind: "COPIED"; readonly copy: LocalCleanMasterCopy }
+  | { readonly kind: "TOO_LARGE" }
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
+/** What storing a Clean Master first-wins, and copying back what is stored, concluded. */
+export type PublishCleanMasterOutcome =
+  /** A copy of the master **actually at the key**, which another attempt may have stored. */
+  | { readonly kind: "COPIED"; readonly copy: LocalCleanMasterCopy }
+  | { readonly kind: "TOO_LARGE" }
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
+export interface CleanMasterStore {
+  /**
+   * Read the key and report the stored master's receipt, writing nothing, here
+   * or on disk. For the attempt that finds the customer's video already stored
+   * and only needs the receipt of the master it was made from.
+   */
+  probe(input: { readonly key: ManagedCleanMasterKey }): Promise<ProbeCleanMasterOutcome>;
+
+  /**
+   * Copy the stored master to a private local file, hashing and counting as it
+   * goes. `ABSENT` only when the store says nothing is there; every other
+   * unreadable condition is `RETRYABLE_FAILURE`, because "absent" sends the
+   * caller to encode a master that may already exist.
+   */
+  fetch(input: { readonly key: ManagedCleanMasterKey }): Promise<FetchCleanMasterOutcome>;
+
+  /**
+   * Store the master encoded at `localPath`, first-wins, then copy back what is
+   * at the key. A key already holding a master is not overwritten: its bytes
+   * are what is copied back, so every attempt lays the disclosure over one
+   * stored master.
+   */
+  publish(input: {
+    readonly key: ManagedCleanMasterKey;
+    readonly localPath: string;
+  }): Promise<PublishCleanMasterOutcome>;
+}
+
+/** A video's frame size and frame rate, as the Clean Master inspector reads them. */
+export interface CleanMasterRaster {
+  readonly widthPx: number;
+  readonly heightPx: number;
+  /** The frame rate as a reduced fraction; constant, or it is not reported at all. */
+  readonly frameRateNumerator: number;
+  readonly frameRateDenominator: number;
+}
+
+/** What inspecting a local Clean Master concluded. Closed. */
+export type InspectCleanMasterOutcome =
+  | { readonly kind: "RASTER"; readonly raster: CleanMasterRaster }
+  /**
+   * Not a video this pipeline can lay a disclosure over: the inspector refused
+   * it, it is not MP4-family, it has no video stream, or its frame rate is not
+   * one constant fraction. Deterministic: the stored master is first-wins.
+   */
+  | { readonly kind: "UNUSABLE" }
+  /** The inspector could not run this time. Says nothing about the file. */
+  | { readonly kind: "RETRYABLE_FAILURE" };
+
+export interface CleanMasterInspector {
+  /**
+   * Read the frame size and frame rate of a local file this process created.
+   * A raster is not a judgement: whether it is the profile's is
+   * {@link cleanMasterMatchesProfile}'s question. An inspector that cannot be
+   * launched at all is a deployment fault and throws.
+   */
+  inspect(input: { readonly localPath: string }): Promise<InspectCleanMasterOutcome>;
 }

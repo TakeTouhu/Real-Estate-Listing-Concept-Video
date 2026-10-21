@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
  *    key, and two CHECKs. No existing row is touched.
  * 2. **A receipt and nothing else**, required in every column, RESTRICT to its
  *    version, with no default but its creation time.
- * 3. **Nothing writes or reads it yet.** Composition does from DS-5; no app
+ * 3. **Nothing writes or reads it yet.** Composition does from DS-5b-2; no app
  *    mentions it.
  * 4. **No signed URL reaches it.** The behaviour tests prove the signer, the
  *    verifier and the local adapter refuse it; this pins that there is no other
@@ -103,14 +103,21 @@ describe("DS-4 shape", () => {
   });
 
   it("is written and read by nothing yet", () => {
-    // DS-5's composition is the first writer; until then no repository, worker
-    // or app names the table, the model or the key.
+    // DS-5b-2's composition is the first writer; until then no repository,
+    // worker or app names the table or the model. DS-5b-1 adds the master's
+    // store, whose port and adapter take the key's type; only the key module
+    // builds one.
     expect(
       matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters|cleanMaster\b/),
     ).toEqual([]);
+    expect(matching(["packages", "apps"], /managedCleanMasterKey\(/)).toEqual([
+      "packages/domain/src/clean-master/key.ts",
+    ]);
     expect(matching(["packages", "apps"], /managedCleanMasterKey|ManagedCleanMasterKey/)).toEqual([
       "packages/domain/src/clean-master/index.ts",
       "packages/domain/src/clean-master/key.ts",
+      "packages/domain/src/deliverable-composition-execution/ports.ts",
+      "packages/storage/src/managed-output/clean-master-store.ts",
     ]);
   });
 

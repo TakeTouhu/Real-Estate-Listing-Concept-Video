@@ -225,6 +225,18 @@ export const MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES = 2 * 1_073_741_824;
 /** The largest composed object that may be published, 512 MiB. */
 export const MAX_DELIVERABLE_OUTPUT_BYTES = 536_870_912;
 
+/**
+ * The largest Clean Master that may be stored or read back, 1 GiB: twice the
+ * customer's video's ceiling (ADR-0076 Decision 1).
+ *
+ * The master was measured at 1.1 to 1.5 times the video made from it (ADR-0075
+ * Decision 1), so a master over this is the master of a video over
+ * {@link MAX_DELIVERABLE_OUTPUT_BYTES}, which could never be published anyway.
+ * Like the video's, a machine-resource limit, not a product rule: what one
+ * worker holds on disk and reads back, and what one master costs to keep.
+ */
+export const MAX_CLEAN_MASTER_BYTES = 1_073_741_824;
+
 // ---------------------------------------------------------------------------
 // Lease, retry and batch bounds
 // ---------------------------------------------------------------------------

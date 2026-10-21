@@ -7,10 +7,11 @@
  * Master for each of the six composition profile v1 rasters, then lays the
  * disclosure over that master to make the customer's video (ADR-0075), and the
  * inspector measures both: the exact frame size, the sum of the scene lengths,
- * one video stream and no audio. Decoded frames then show the clips letterboxed
- * rather than cropped, the longer clip trimmed from its start, and the shorter
- * one holding its last frame rather than ending early, looping or holding its
- * first. The customer's video carries the disclosure where its image puts it,
+ * one video stream and no audio. The Clean Master inspector reads both as the
+ * profile's frame size and rate (ADR-0076). Decoded frames then show the clips
+ * letterboxed rather than cropped, the longer clip trimmed from its start, and
+ * the shorter one holding its last frame rather than ending early, looping or
+ * holding its first. The customer's video carries the disclosure where its image puts it,
  * and is the master everywhere else; the master carries none. And neither
  * carries the tags or chapters the first clip arrives with, as a provider's
  * might.
@@ -24,11 +25,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   COMPOSABLE_TARGETS,
   ISO_BMFF_CONTAINER,
+  cleanMasterMatchesProfile,
   disclosureLayerFor,
   resolveCompositionProfile,
   type CompositionProfile,
 } from "@app/domain";
-import { createFfmpegDeliverableComposer, FfprobeMediaProbe } from "@app/storage";
+import { createFfmpegDeliverableComposer, FfprobeCleanMasterInspector, FfprobeMediaProbe } from "@app/storage";
 import { decodeFrame, decodeRgba, ffmpeg, probeEverything, probeStreams, runner } from "./media-tools";
 
 const LAYER_DIRECTORY = fileURLToPath(new URL("../../assets/disclosure", import.meta.url));
@@ -147,6 +149,20 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
             audioStreamCount: 0,
           },
         });
+      });
+
+      it("is read by the Clean Master inspector as the profile's frame size and rate", async () => {
+        const outcome = await new FfprobeCleanMasterInspector({}, { runner }).inspect({ localPath: files[which] });
+        expect(outcome).toEqual({
+          kind: "RASTER",
+          raster: {
+            widthPx: width,
+            heightPx: height,
+            frameRateNumerator: profile.frameRateNumerator,
+            frameRateDenominator: profile.frameRateDenominator,
+          },
+        });
+        if (outcome.kind === "RASTER") expect(cleanMasterMatchesProfile(outcome.raster, profile)).toBe(true);
       });
 
       it("is H.264 in yuv420p at a constant 30 fps with square pixels, one frame per thirtieth of a second", async () => {
