@@ -69,13 +69,15 @@ export const COMPOSITION_CRF = 18;
  * The master is encoded from the scenes with every other setting above, at a
  * higher quality than the customer's video, which is then encoded from it at
  * {@link COMPOSITION_CRF} with the disclosure laid over it. Measured on FFmpeg
- * 6.1.1, the two encodes together lose at most 0.15 dB of PSNR against one
- * encode at 18, and the master is 1.3 to 2.2 times the customer's video.
+ * 6.1.1 over three inputs, the two encodes together lost at most 0.25 dB of
+ * PSNR against one encode at 18, and the master was 1.1 to 1.5 times the
+ * customer's video: the approved plan's estimate that the master roughly
+ * doubles what is kept per video.
  *
- * Not a column: the composer reads it for the master, and a change to it is a
- * new composition profile, never an edit in place.
+ * Not a column: the composer reads it for the master. Changing it must be a new
+ * composition profile, never an edit in place; DS-5b's profile v2 binds it.
  */
-export const CLEAN_MASTER_CRF = 14;
+export const CLEAN_MASTER_CRF = 16;
 
 /**
  * The exhaustive raster table.

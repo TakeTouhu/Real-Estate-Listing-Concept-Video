@@ -1130,8 +1130,16 @@ them is **built**. Each item below records the settled decision and what remains
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
       ships, run `pnpm test:media` against it before it composes anything. The
       same image must carry `assets/disclosure/`'s six images and pass their
-      directory as the composer's `disclosureLayerDirectory` (ADR-0075
-      Decision 3); without them the composer refuses to make a video.
+      directory, as an absolute path, as the composer's
+      `disclosureLayerDirectory` (ADR-0075 Decision 3); without them the
+      composer refuses to make a video.
+- [ ] **Re-measure the Clean Master's quality on the provider's real output.**
+      `CLEAN_MASTER_CRF` 16 (ADR-0075 Decision 1) was chosen on three synthetic
+      clips, the hardest an 8 Mbps encode of grainy footage: a loss of 0.25 dB
+      and a master 1.5 times the video, within the approved plan's estimate.
+      Before composition is activated, repeat ADR-0075's procedure on the
+      verified route's own clips; a different answer is a new composition
+      profile, not an edit of the constant.
 - [ ] **Build Mode C gating and consent.** Organization-level enablement,
       `disclosure.none`, per-video consent with two affirmative checkboxes, and
       the consent evidence record (`organizationId`, `userId`, target,

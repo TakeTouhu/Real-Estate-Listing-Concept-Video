@@ -11,10 +11,12 @@
  * rather than cropped, the longer clip trimmed from its start, and the shorter
  * one holding its last frame rather than ending early, looping or holding its
  * first. The customer's video carries the disclosure where its image puts it,
- * and is the master everywhere else; the master carries none.
+ * and is the master everywhere else; the master carries none. And neither
+ * carries the tags or chapters the first clip arrives with, as a provider's
+ * might.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +29,7 @@ import {
   type CompositionProfile,
 } from "@app/domain";
 import { createFfmpegDeliverableComposer, FfprobeMediaProbe } from "@app/storage";
-import { decodeFrame, decodeRgba, ffmpeg, probeStreams, runner } from "./media-tools";
+import { decodeFrame, decodeRgba, ffmpeg, probeEverything, probeStreams, runner } from "./media-tools";
 
 const LAYER_DIRECTORY = fileURLToPath(new URL("../../assets/disclosure", import.meta.url));
 
@@ -36,10 +38,14 @@ const LAYER_DIRECTORY = fileURLToPath(new URL("../../assets/disclosure", import.
 // seconds. And a 9:16 clip at 24 fps, one second long: red, turning yellow for
 // its last two frames. The deliverable gives the first 1.5 seconds, so it is
 // trimmed and must never show green, and the second 2 seconds, so it holds its
-// last frame and must show yellow, not red, after its source ends.
+// last frame and must show yellow, not red, after its source ends. The first
+// clip also carries a title, a comment, a stream handler name and a chapter,
+// each marked PROVIDER_TAG, standing in for what a provider's file could carry.
 const LANDSCAPE_SCENE_SECONDS = 1.5;
 const PORTRAIT_SCENE_SECONDS = 2;
 const FRAME_COUNT = (LANDSCAPE_SCENE_SECONDS + PORTRAIT_SCENE_SECONDS) * 30;
+
+const PROVIDER_TAG = "provider-x";
 
 let dir: string;
 let landscape: string;
@@ -49,9 +55,17 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "media-composer-"));
   landscape = join(dir, "landscape.mp4");
   portrait = join(dir, "portrait.mp4");
+  const tags = join(dir, "tags.txt");
+  await writeFile(
+    tags,
+    `;FFMETADATA1\ntitle=${PROVIDER_TAG}-title\ncomment=${PROVIDER_TAG}-comment\n\n` +
+      `[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=${PROVIDER_TAG}-chapter\n`,
+  );
   await ffmpeg([
     "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=2,drawbox=c=green:t=fill:enable='gte(t,1.6)'",
     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+    "-i", tags, "-map", "0", "-map", "1", "-map_metadata", "2", "-map_chapters", "2",
+    "-metadata:s:v:0", `handler_name=${PROVIDER_TAG}-stream`,
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-output_ts_offset", "3", landscape,
   ]);
   await ffmpeg([
@@ -170,6 +184,18 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
         expect(isBlack(pixel(frame, width, 1, height / 2))).toBe(pillarboxed);
       });
 
+      it("carries none of the first clip's tags or chapters, and no stream but the video", async () => {
+        // The clip itself carries them all, so their absence is the composer's.
+        const clip = await probeEverything(landscape);
+        expect(clip.text.split(PROVIDER_TAG).length - 1).toBe(4);
+        expect(clip.chapterCount).toBe(1);
+        const probed = await probeEverything(files[which]);
+        expect(probed.text).not.toContain(PROVIDER_TAG);
+        expect(probed.chapterCount).toBe(0);
+        // In an mp4 a chapter is a text stream, so one surviving would be a second stream.
+        expect(probed.streamCount).toBe(1);
+      });
+
       it("cuts from the first clip, trimmed from its start, to the second exactly at the first scene's length", async () => {
         // Frame 44 is 1.47 seconds into the first clip: still blue, where the
         // clip's last 1.5 seconds would have turned green by then.
@@ -241,8 +267,8 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
           values[Math.floor(share * (values.length - 1))] ?? Number.NaN;
 
         // The disclosure is where its image puts it, at its lightness over the
-        // master. Measured on FFmpeg 6.1.1: a mean error of 1.1 to 4.1 levels
-        // of 255 and a 99th percentile of 4.2 to 20.3. Looser than over a flat
+        // master. Measured on FFmpeg 6.1.1: a mean error of 1.2 to 4.1 levels
+        // of 255 and a 99th percentile of 4.4 to 20.3. Looser than over a flat
         // background (ADR-0072), because these frames hold a cut and letterbox
         // bands: over the pure black of a band, one edge pixel of the first
         // frame is up to 46 out, so the bound is on the 99th percentile, not
@@ -252,11 +278,13 @@ describe.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} $
         // It stands out: the strongest 1% at least 72 levels from the master
         // (measured 120 to 181).
         expect(percentile(contrast, 0.99)).toBeGreaterThanOrEqual(72);
-        // Everywhere else the customer's video is the master, re-encoded, in
-        // lightness within 2 levels (measured). Compared in lightness because
-        // the colour planes are halved, so a band's edge moves by up to 20 in
-        // one channel between the two encodes.
-        expect(largestElsewhere).toBeLessThanOrEqual(4);
+        // Everywhere else the customer's video is the master, re-encoded: in
+        // lightness within 3.5 levels (measured, at the edge of the yellow
+        // bands in the square frames), where text placed there would be 72 or
+        // more out. Compared in lightness because the colour planes are
+        // halved, so a band's edge moves by up to 20 in one channel between
+        // the two encodes.
+        expect(largestElsewhere).toBeLessThanOrEqual(6);
         // And the master itself carries no disclosure: under the text it is
         // what the rows above show (measured exactly).
         expect(largestInMaster).toBeLessThanOrEqual(4);

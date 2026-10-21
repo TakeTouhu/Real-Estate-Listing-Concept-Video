@@ -61,6 +61,17 @@ export async function probeStreams(path: string): Promise<{
   };
 }
 
+/** Everything `ffprobe` reports of a file's container, streams and chapters, as its JSON. */
+export async function probeEverything(path: string): Promise<{
+  readonly text: string;
+  readonly streamCount: number;
+  readonly chapterCount: number;
+}> {
+  const text = await tool("ffprobe", ["-v", "error", "-of", "json", "-show_format", "-show_streams", "-show_chapters", path]);
+  const { streams, chapters } = JSON.parse(text) as { streams: unknown[]; chapters: unknown[] };
+  return { text, streamCount: streams.length, chapterCount: chapters.length };
+}
+
 let decoded = 0;
 
 /** One decoded frame, as packed 8-bit RGB. */

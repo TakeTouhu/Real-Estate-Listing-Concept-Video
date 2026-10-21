@@ -19,8 +19,8 @@
  * 1.25% of the height is 9 pixels in a 720p landscape or square video, too
  * small to read. Every other size is exactly 1.25%.
  *
- * Nothing here draws anything; this is the table the renderer and, later, the
- * composer read. No composition uses it yet (ADR-0071).
+ * Nothing here draws anything; this is the table the renderer and the composer
+ * read (ADR-0071, ADR-0075). No composition runs the composer's disclosure yet.
  */
 
 /** The exact disclosure text (ADR-0052 Decision 8). Never paraphrased, never translated. */

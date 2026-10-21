@@ -7,11 +7,12 @@
  * FFmpeg.
  */
 
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import {
   CLEAN_MASTER_CRF,
@@ -25,12 +26,13 @@ import {
   type DisclosureMode,
 } from "@app/domain";
 import { FakeProcessRunner } from "../testing/media-fakes";
-import type { ProcessRunOutcome } from "./process-runner";
+import type { ProcessRunInput, ProcessRunner, ProcessRunOutcome } from "./process-runner";
 import {
   createFfmpegDeliverableComposer,
   ffmpegCleanMasterArgsFor,
   ffmpegComposeArgsFor,
   ffmpegDisclosureArgsFor,
+  isDeploymentReadFault,
 } from "./ffmpeg-composer";
 
 const LAYER_DIRECTORY = fileURLToPath(new URL("../../../../assets/disclosure", import.meta.url));
@@ -67,6 +69,40 @@ function disclosureInput(overrides: Partial<ApplyDisclosureInput> = {}): ApplyDi
 
 const exitedCleanly: ProcessRunOutcome = { kind: "EXITED", exitCode: 0, stdout: "" };
 
+/** What FFmpeg would have found at the image path while it ran. */
+interface SeenLayer {
+  readonly args: readonly string[];
+  readonly layerPath: string;
+  readonly sha256: string;
+  readonly fileMode: number;
+  readonly directoryMode: number;
+}
+
+/** A runner that reads the image FFmpeg is handed, during the run, as FFmpeg would. */
+class LayerReadingRunner implements ProcessRunner {
+  readonly seen: SeenLayer[] = [];
+
+  async run(input: ProcessRunInput): Promise<ProcessRunOutcome> {
+    const layerPath = input.args[input.args.indexOf("png_pipe") + 4]!;
+    const bytes = await readFile(layerPath);
+    this.seen.push({
+      args: input.args,
+      layerPath,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      fileMode: (await stat(layerPath)).mode & 0o777,
+      directoryMode: (await stat(dirname(layerPath))).mode & 0o777,
+    });
+    return exitedCleanly;
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 async function refusal(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -81,7 +117,7 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
 
 describe("the Clean Master encode", () => {
   it("is encoded at a higher quality than the customer's video", () => {
-    expect(CLEAN_MASTER_CRF).toBe(14);
+    expect(CLEAN_MASTER_CRF).toBe(16);
     // A lower Constant Rate Factor is a higher quality.
     expect(CLEAN_MASTER_CRF).toBeLessThan(COMPOSITION_CRF);
   });
@@ -91,7 +127,7 @@ describe("the Clean Master encode", () => {
     const master = ffmpegCleanMasterArgsFor(composeInput());
     const crfAt = composed.indexOf("-crf") + 1;
     expect(composed[crfAt]).toBe("18");
-    expect(master[crfAt]).toBe("14");
+    expect(master[crfAt]).toBe("16");
     expect(master.filter((_, index) => index !== crfAt)).toEqual(composed.filter((_, index) => index !== crfAt));
   });
 
@@ -114,21 +150,27 @@ describe("the Clean Master encode", () => {
 
 describe("the disclosure's argument vector", () => {
   it("is pinned element by element for Mode A", () => {
-    expect(ffmpegDisclosureArgsFor(disclosureInput(), "/opt/vta/disclosure/layer-v1-1920x1080.png")).toEqual([
+    expect(ffmpegDisclosureArgsFor(disclosureInput(), "/tmp/vta-disclosure-x/layer.png")).toEqual([
       "-nostdin",
       "-y",
       "-v",
       "error",
       "-i",
       "/tmp/vta-compose-x/stored-clean-master.mp4",
+      "-f",
+      "png_pipe",
       "-loop",
       "1",
       "-i",
-      "/opt/vta/disclosure/layer-v1-1920x1080.png",
+      "/tmp/vta-disclosure-x/layer.png",
       "-filter_complex",
       "[0:v][1:v]overlay=0:0:format=auto:shortest=1,format=yuv420p[out]",
       "-map",
       "[out]",
+      "-map_metadata",
+      "-1",
+      "-map_chapters",
+      "-1",
       "-an",
       "-c:v",
       "libx264",
@@ -146,7 +188,7 @@ describe("the disclosure's argument vector", () => {
     ]);
   });
 
-  it("encodes with the settings of whichever profile it is handed", () => {
+  it("carries the profile's own settings rather than copies of them", () => {
     const profile = { ...profileOf("9:16", "720p"), encoderPreset: "slow", crf: 20 };
     const args = ffmpegDisclosureArgsFor(disclosureInput({ profile }), "/x/layer.png");
     expect(args[args.indexOf("-preset") + 1]).toBe("slow");
@@ -172,33 +214,76 @@ describe("the disclosure's argument vector", () => {
   });
 });
 
+describe("nothing from an input's container reaches either file", () => {
+  it.each([
+    ["compose", ffmpegComposeArgsFor(composeInput())],
+    ["the Clean Master", ffmpegCleanMasterArgsFor(composeInput())],
+    ["the disclosure", ffmpegDisclosureArgsFor(disclosureInput(), "/x/layer.png")],
+  ] as const)("%s drops every input's tags and chapters", (_name, args) => {
+    // `-1` turns off FFmpeg's default of copying the first input's.
+    const tagsAt = args.indexOf("-map_metadata");
+    const chaptersAt = args.indexOf("-map_chapters");
+    expect(args[tagsAt + 1]).toBe("-1");
+    expect(args[chaptersAt + 1]).toBe("-1");
+    // Output options: after the graph, before the output path.
+    expect(tagsAt).toBeGreaterThan(args.indexOf("-filter_complex"));
+    expect(chaptersAt).toBeGreaterThan(args.indexOf("-filter_complex"));
+  });
+});
+
 describe("the disclosure image is the reviewed one, or nothing runs", () => {
   let scratch: string;
 
-  beforeAll(async () => {
+  // A fresh directory per test, so no test's files decide another's result.
+  beforeEach(async () => {
     scratch = await mkdtemp(join(tmpdir(), "composer-layers-"));
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await rm(scratch, { recursive: true, force: true });
   });
 
   it.each(COMPOSABLE_TARGETS.map((target) => [`${target.targetAspectRatio} ${target.targetOutputResolution}`, target] as const))(
-    "lays the committed image for %s",
+    "lays a private copy of the committed image for %s, removed after the run",
     async (_name, target) => {
       const profile = profileOf(target.targetAspectRatio, target.targetOutputResolution);
       const asset = DISCLOSURE_LAYER_ASSETS.find(
         (one) => one.widthPx === profile.targetWidthPx && one.heightPx === profile.targetHeightPx,
       )!;
-      const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+      const runner = new LayerReadingRunner();
       const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: LAYER_DIRECTORY });
       await expect(composer.applyDisclosure(disclosureInput({ profile }))).resolves.toEqual({ kind: "SUCCESS" });
-      expect(runner.runs).toHaveLength(1);
-      expect(runner.lastRun.args).toEqual(
-        ffmpegDisclosureArgsFor(disclosureInput({ profile }), join(LAYER_DIRECTORY, asset.fileName)),
-      );
+      expect(runner.seen).toHaveLength(1);
+      const [seen] = runner.seen;
+      expect(seen!.args).toEqual(ffmpegDisclosureArgsFor(disclosureInput({ profile }), seen!.layerPath));
+      // FFmpeg read the reviewed bytes, from a file of the composer's own that
+      // only this process can read or write, never the deployment's file.
+      expect(seen!.sha256).toBe(asset.sha256);
+      expect(seen!.layerPath.startsWith(LAYER_DIRECTORY)).toBe(false);
+      expect(basename(seen!.layerPath)).toBe("layer.png");
+      expect(seen!.fileMode).toBe(0o600);
+      expect(seen!.directoryMode).toBe(0o700);
+      expect(await exists(dirname(seen!.layerPath))).toBe(false);
     },
   );
+
+  it("removes the private copy when the run throws", async () => {
+    const runner = new LayerReadingRunner();
+    runner.run = async (input) => {
+      await LayerReadingRunner.prototype.run.call(runner, input);
+      return { kind: "LAUNCH_FAILED" };
+    };
+    const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: LAYER_DIRECTORY });
+    expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
+    expect(await exists(dirname(runner.seen[0]!.layerPath))).toBe(false);
+  });
+
+  it("refuses a relative image directory when the composer is built", () => {
+    const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+    expect(() =>
+      createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: "assets/disclosure" }),
+    ).toThrow(AppError);
+  });
 
   it("refuses, as a deployment fault, when no directory is configured", async () => {
     const runner = new FakeProcessRunner({ outcome: exitedCleanly });
@@ -214,21 +299,72 @@ describe("the disclosure image is the reviewed one, or nothing runs", () => {
     expect(runner.runs).toHaveLength(0);
   });
 
-  it("refuses an image that is not the reviewed one, however close", async () => {
+  it("refuses, as a deployment fault, when a directory stands where the image should be", async () => {
     const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+    await mkdir(join(scratch, "layer-v1-1920x1080.png"));
     const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: scratch });
-    // Another frame size's committed image under this size's name, and this
-    // size's image with one byte appended.
-    await copyFile(join(LAYER_DIRECTORY, "layer-v1-1280x720.png"), join(scratch, "layer-v1-1920x1080.png"));
-    expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
-    const reviewed = await readFile(join(LAYER_DIRECTORY, "layer-v1-1920x1080.png"));
-    await writeFile(join(scratch, "layer-v1-1920x1080.png"), Buffer.concat([reviewed, Buffer.from([0])]));
     expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
     expect(runner.runs).toHaveLength(0);
-    // The reviewed bytes themselves are accepted from any directory.
-    await writeFile(join(scratch, "layer-v1-1920x1080.png"), reviewed);
+  });
+
+  it("refuses an image that is not the reviewed one, however close, and checks again at every run", async () => {
+    const runner = new LayerReadingRunner();
+    const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: scratch });
+    const image = join(scratch, "layer-v1-1920x1080.png");
+    const otherSize = await readFile(join(LAYER_DIRECTORY, "layer-v1-1280x720.png"));
+    const reviewed = await readFile(join(LAYER_DIRECTORY, "layer-v1-1920x1080.png"));
+    // Another frame size's committed image under this size's name, and this
+    // size's image with one byte appended.
+    await writeFile(image, otherSize);
+    expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
+    await writeFile(image, Buffer.concat([reviewed, Buffer.from([0])]));
+    expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
+    expect(runner.seen).toHaveLength(0);
+    // The reviewed bytes themselves are accepted from any directory...
+    await copyFile(join(LAYER_DIRECTORY, "layer-v1-1920x1080.png"), image);
     await expect(composer.applyDisclosure(disclosureInput())).resolves.toEqual({ kind: "SUCCESS" });
-    expect(runner.lastRun.args).toContain(join(scratch, "layer-v1-1920x1080.png"));
+    expect(runner.seen).toHaveLength(1);
+    // ...and a success is not remembered: replaced afterwards, the image is
+    // refused at the next run.
+    await writeFile(image, otherSize);
+    expect(await refusal(composer.applyDisclosure(disclosureInput()))).toBe("CONFIGURATION_ERROR");
+    expect(runner.seen).toHaveLength(1);
+  });
+
+  it.runIf(process.platform === "linux")(
+    "retries when the image cannot be read for a reason the deployment did not cause",
+    async () => {
+      const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+      // Reading this file fails with an I/O error, as a failing disk would.
+      await symlink("/proc/self/mem", join(scratch, "layer-v1-1920x1080.png"));
+      const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: scratch });
+      await expect(composer.applyDisclosure(disclosureInput())).resolves.toEqual({ kind: "RETRYABLE_FAILURE" });
+      expect(runner.runs).toHaveLength(0);
+    },
+  );
+
+  it("retries when the private copy cannot be made", async () => {
+    const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+    const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: LAYER_DIRECTORY });
+    const original = process.env["TMPDIR"];
+    process.env["TMPDIR"] = join(scratch, "no-such-directory");
+    try {
+      await expect(composer.applyDisclosure(disclosureInput())).resolves.toEqual({ kind: "RETRYABLE_FAILURE" });
+    } finally {
+      if (original === undefined) delete process.env["TMPDIR"];
+      else process.env["TMPDIR"] = original;
+    }
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it("tells a deployment's read fault from a passing one", () => {
+    for (const code of ["ENOENT", "ENOTDIR", "EISDIR", "EACCES", "EPERM", "ELOOP", "ENAMETOOLONG"]) {
+      expect(`${code}: ${isDeploymentReadFault(Object.assign(new Error(code), { code }))}`).toBe(`${code}: true`);
+    }
+    for (const code of ["EMFILE", "ENFILE", "EIO", "EAGAIN", undefined]) {
+      expect(`${code}: ${isDeploymentReadFault(Object.assign(new Error("x"), { code }))}`).toBe(`${code}: false`);
+    }
+    expect(isDeploymentReadFault(null)).toBe(false);
   });
 
   it("refuses a frame size with no image as a defect, never scaling another size's", async () => {
@@ -241,6 +377,20 @@ describe("the disclosure image is the reviewed one, or nothing runs", () => {
     ] as const) {
       const profile = { ...profileOf(), targetWidthPx, targetHeightPx };
       expect(await refusal(composer.applyDisclosure(disclosureInput({ profile })))).toBe("INTERNAL_ERROR");
+    }
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it("reports a defect as a defect even where the deployment has no images", async () => {
+    const runner = new FakeProcessRunner({ outcome: exitedCleanly });
+    const composer = createFfmpegDeliverableComposer({ runner });
+    for (const input of [
+      disclosureInput({ disclosureMode: "NONE" as DisclosureMode }),
+      disclosureInput({ profile: { ...profileOf(), targetWidthPx: 640, targetHeightPx: 360 } }),
+      disclosureInput({ outputPath: "/tmp/vta-compose-x/stored-clean-master.mp4" }),
+      disclosureInput({ outputPath: "/tmp/vta-compose-x/../vta-compose-x/stored-clean-master.mp4" }),
+    ]) {
+      expect(await refusal(composer.applyDisclosure(input))).toBe("INTERNAL_ERROR");
     }
     expect(runner.runs).toHaveLength(0);
   });
@@ -280,14 +430,20 @@ describe("both encodes map a run as compose does", () => {
     );
   });
 
-  it("both refuse a profile they do not implement before running anything", async () => {
+  it("all three refuse a profile they do not implement before running anything", async () => {
     const runner = new FakeProcessRunner({ outcome: exitedCleanly });
     const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: LAYER_DIRECTORY });
     for (const profile of [
       { ...profileOf(), fitMode: "COVER_CROP" },
       { ...profileOf(), transitionMode: "CROSSFADE" },
       { ...profileOf(), audioMode: "KEEP_ALL" },
+      { ...profileOf(), videoCodec: "hevc" },
+      { ...profileOf(), encoderPreset: "slow" },
+      // The pixel format is written into the filter graph, so a value that is
+      // not the one implemented never reaches it.
+      { ...profileOf(), pixelFormat: "yuv420p[out];movie=x" },
     ]) {
+      expect(await refusal(composer.compose({ ...composeInput(), profile }))).toBe("INTERNAL_ERROR");
       expect(await refusal(composer.composeCleanMaster({ ...composeInput(), profile }))).toBe("INTERNAL_ERROR");
       expect(await refusal(composer.applyDisclosure(disclosureInput({ profile })))).toBe("INTERNAL_ERROR");
     }

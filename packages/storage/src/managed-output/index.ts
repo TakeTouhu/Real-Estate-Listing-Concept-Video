@@ -108,7 +108,6 @@ export {
   createFfmpegDeliverableComposer,
   ffmpegCleanMasterArgsFor,
   ffmpegComposeArgsFor,
-  ffmpegDisclosureArgsFor,
   validateComposeTimeoutMs,
 } from "./ffmpeg-composer";
 export type { FfmpegComposerConfig, FfmpegComposerDeps } from "./ffmpeg-composer";
