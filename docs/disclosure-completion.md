@@ -4,7 +4,8 @@ Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0072-real-ffmpeg-media-suites.md` (DS-2),
 `docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3),
-`docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4)
+`docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4),
+`docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -21,7 +22,8 @@ as a series of pull requests, before anything can deliver a video:
 4. **DS-4**: the Clean Master record and its private storage location, refused
    by every download path.
 5. **DS-5**: composition makes the Clean Master, then the customer's video from
-   it.
+   it, in two pull requests: DS-5a, the composer's two encodes, and DS-5b,
+   composition running them.
 6. **DS-6**: publication requires the disclosure of the job's mode and a Clean
    Master, and that the measured video matches its planned size and length.
 
@@ -992,3 +994,262 @@ credentials, the production scheduler and live Stripe charges remain BLOCKED.
 
 DS-4 waits for the product owner's yes before merge. DS-5 (composition makes
 the Clean Master, then the customer's video from it) comes next, after it.
+
+## DS-5a — the Clean Master encode, and the disclosure laid over it
+
+Base: `0c1eff2` (PR #97 merge commit on `main`; post-merge CI run 631 green).
+ADR: `docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md`
+
+DS-5 is built in two pull requests. DS-5a gives the composer its two encodes;
+DS-5b will make composition run them, store the master and write its record.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `94ed441` | the two encodes, the image check, the unit tests, the media suites on the composer, ADR-0075 and the documentation |
+| `8d070ef` | the independent review's answers: FFmpeg reads a private copy of the checked image through a stated reader; no input's tags or chapters reach a composed file; defects checked before the deployment, with codec, pixel format and preset added to the profile check; transient read failures retried; the master at CRF 16 |
+| this commit | this record, and the composer media suite's chapter moved past its clip's start so FFmpeg would carry it over (found by mutation round 2) |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-5a does
+
+- **`composeCleanMaster`** encodes the composition graph `compose` runs at
+  `CLEAN_MASTER_CRF`, 16, with nothing laid over it. Its argument vector
+  differs from `compose`'s in that one value.
+- **`applyDisclosure`** makes the customer's video from a Clean Master file:
+  the committed disclosure image for the frame size, looped, laid over it at
+  the origin (`overlay=0:0:format=auto:shortest=1,format=yuv420p`), encoded at
+  the profile's preset, CRF and pixel format with no audio. Mode A only; any
+  other mode is refused.
+- **The image is the reviewed one, and FFmpeg reads only those bytes.** Before
+  every run the composer reads the image from its configured
+  `disclosureLayerDirectory` (an absolute path) and compares its SHA-256 with
+  the one `DISCLOSURE_LAYER_ASSETS` pins, then writes the bytes it compared to
+  a private directory of its own and hands FFmpeg that copy, through a stated
+  reader (`-f png_pipe`). A missing setting, a missing or unreadable file, or
+  another image is a deployment fault and nothing runs; a frame size with no
+  image, a mode it does not implement, or an output path that is the master's
+  is a defect, reported as one whatever the deployment holds.
+- **Nothing from an input's container.** `-map_metadata -1` and
+  `-map_chapters -1` in all three encodes, `compose` included: a provider
+  clip's title, comment or chapter no longer reaches a composed file.
+- **The media suites drive both.** In all six sizes, the master and the
+  customer's video keep every fact the composer suite measured before, carry
+  none of the first clip's tags or chapters, the disclosure is where its image
+  puts it, the video is the master everywhere else, and the master carries
+  none. The overlay suite's nine backgrounds go through the composer, with its
+  bounds and measurements unchanged.
+- **Nothing calls them yet.** The runner still composes with profile v1 and
+  calls `compose`; nothing in production constructs the composer.
+
+### Why CRF 16
+
+Measured on FFmpeg 6.1.1, 1080p at 30 fps, the master and then the customer's
+video at CRF 18 from it, against one encode at CRF 18 from the same input
+(ADR-0075 Decision 1, which records how to reproduce it):
+
+| Input | PSNR lost, master at CRF 12 / 14 / 16 | Master against the video |
+| --- | --- | --- |
+| a textured pan with grain, from an 8 Mbps encode (provider-like) | 0.10 / 0.15 / 0.25 dB | 3.0 / 2.2 / 1.5 times |
+| a Mandelbrot zoom, from an 8 Mbps encode | 0.00 / 0.01 / 0.02 dB | 1.5 / 1.3 / 1.1 times |
+| `testsrc2`, lossless | 0.00 / 0.00 / 0.01 dB | 1.5 / 1.3 / 1.2 times |
+
+SSIM moves by 0.003 at most. The approved plan estimated that the master
+roughly doubles what is kept per video. CRF 16 keeps to that (1.1 to 1.5 times
+the video); CRF 14, the first build's choice, would have been 2.2 times on the
+provider-like footage for 0.1 dB nobody can see. Every video is made from the
+master directly, once, so the loss never compounds. The storage is VTaVision's
+and outside customer quota (ADR-0052 Decision 17). The table is three synthetic
+clips; `docs/decisions/TODO.md` asks for a re-measurement on the verified
+route's own clips before composition is activated.
+
+### Verification
+
+Measured locally (PostgreSQL 16 and FFmpeg 6.1.1, configured like CI) on
+`8d070ef`; this record's commit changes only the composer media suite's
+fixture and comments, and that suite passed again on it (90 / 90).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5804 / 5804**, 206 files (5771 before; 33 new) |
+| `pnpm test:db` | **1452 / 1452**, 55 files (unchanged) |
+| `pnpm test:media` | **144 / 144**, 2 files (84 before; 60 new) |
+| `pnpm build` | succeeded |
+
+New and changed tests:
+
+- `packages/storage/src/managed-output/ffmpeg-composer-disclosure.test.ts`
+  (33): the master's quality, 16, above the video's; its vector, `compose`'s
+  with only the CRF changed and nothing laid over it; the disclosure vector
+  pinned element by element, carrying the profile's settings, with no scaling,
+  cropping or drawn text; a mode it does not implement refused; all three
+  vectors dropping every input's tags and chapters; for each of the six sizes,
+  FFmpeg handed a private copy holding the reviewed bytes (mode `0600`, in a
+  `0700` directory, never the deployment's file), removed after the run, also
+  when the run throws; a relative directory refused when the composer is
+  built; no directory, a missing image, a directory in its place, another
+  size's image and the reviewed image with one byte appended all refused as
+  deployment faults with nothing run; the reviewed bytes accepted from any
+  directory, and a success not remembered (the image replaced afterwards is
+  refused at the next run); an I/O error and a copy that cannot be written
+  retried; the read-error classification; a frame size with no image, an
+  unknown mode and an output path that is the master's (also through `..`)
+  refused as defects even with no directory configured; all three encodes map
+  a run as `compose` does and refuse a profile they do not implement, now
+  including another codec, preset or pixel format.
+- `packages/storage/src/managed-output/ffmpeg-composer.test.ts`: `compose`'s
+  pinned vector carries the two metadata options.
+- `tests/media/composer.media.test.ts` (90, was 30): the five existing checks
+  now run on the master and on the customer's video in each size, as does a
+  sixth: the first clip arrives with a title, a comment, a stream handler name
+  and a chapter, and neither file carries any of them or any stream but the
+  video. Three frames per size (the first, the cut, the held last frame) prove
+  the disclosure, the master underneath, and the master's lack of one.
+- `tests/media/disclosure-overlay.media.test.ts` (54): now through the
+  composer, over a Clean Master of each background.
+- `packages/domain/src/disclosure/disclosure-shape.test.ts`: the composer is
+  the one managed-output file that may read the layer table.
+
+Measured at CRF 16 (FFmpeg 6.1.1), the composer suite's disclosure checks: a
+mean error of 1.2 to 4.1 where the image has ink (bound 6), a 99th percentile of
+4.4 to 20.3 (bound 30), the strongest 1% of the text 120 to 181 from the master
+(bound at least 72), the video within 3.5 of the master beyond the text (bound
+6, raised from 4: the largest is at the yellow bands' edge in the square
+frames), and the master under the text exactly what the rows above show. The
+overlay suite measured the same as ADR-0072.
+
+### Mutation testing
+
+Two rounds, each mutant applied to the source, the relevant suites run, and the file restored and checked by SHA-256; the repository's 929-file manifest was identical before and after each pass.
+
+**Round 1, on `94ed441`: 27 / 27 killed.** **Round 2, on `8d070ef`, after the
+review: 47 / 47 killed**, none survived, none broken. Round 2 re-anchors round
+1's mutants to the changed code and adds 20 for what the review changed. Its
+first pass found that T02 (`compose` keeping chapters) was killed only by the
+unit suites: the media fixture's chapter ended before its clip's 3-second
+start, so FFmpeg dropped it whatever the composer asked. The fixture's chapter
+now runs past that start, and T01 and T02 were run again on this record's
+commit.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| E01 | master quality | the master at the video's CRF | unit-new |
+| E02 | master quality | the master below the video's quality | unit-new |
+| E07 | master quality | the master at the earlier CRF 14 | unit-new |
+| E03 | master quality | the master encoded at the profile's CRF | unit-new |
+| E04 | master quality | compose encoded at the master's CRF | unit-new, unit-old |
+| E05 | master quality | composeCleanMaster runs compose's vector | unit-new |
+| E06 | master content | something drawn into the master (and compose) | unit-old, media-composer |
+| V01 | image check | the image never verified | unit-new |
+| V02 | image check | the digest not compared | unit-new |
+| V03 | image check | another size's image for every frame | unit-new, media-composer |
+| V04 | image check | a missing image called an internal defect | unit-new |
+| V05 | image check | a different image called an internal defect | unit-new |
+| V06 | image check | a frame size without an image called a deployment fault | unit-new |
+| V07 | image check | no directory called an internal defect | unit-new |
+| V08 | image check | a passing check remembered | unit-new |
+| V09 | image check | every read failure a deployment fault | unit-new |
+| V10 | image check | every read failure retried | unit-new |
+| V11 | image check | an I/O error called a deployment fault | unit-new |
+| V12 | image check | a relative directory accepted | unit-new |
+| C01 | private copy | FFmpeg handed the deployment's file | unit-new |
+| C02 | private copy | the copy readable by others | unit-new |
+| C03 | private copy | the copy left behind | unit-new |
+| C04 | private copy | a copy that cannot be made thrown, not retried | unit-new |
+| O01 | overlay | the image laid one pixel off the origin | unit-new, media-composer, media-overlay |
+| O02 | overlay | the master laid over the image | unit-new, media-composer, media-overlay |
+| O03 | overlay | blending not in the master's format | unit-new |
+| O04 | overlay | the video not ended with the master | unit-new |
+| O05 | overlay | the image not looped | unit-new |
+| O10 | overlay | the image's reader left to FFmpeg's guess | unit-new |
+| O06 | overlay | no closing pixel format | unit-new |
+| O07 | overlay | the video encoded at the master's CRF | unit-new |
+| O08 | overlay | audio kept in the video | unit-new |
+| O09 | overlay | an unknown mode encoded as Mode A | unit-new |
+| T01 | tags | compose keeps the inputs' tags | unit-old, unit-new, media-composer |
+| T02 | tags | compose keeps the inputs' chapters | unit-old, unit-new, media-composer |
+| T03 | tags | the video keeps the master's tags and chapters | unit-new |
+| D01 | defects first | the output over the master not refused | unit-new |
+| D02 | defects first | the same path compared unresolved | unit-new |
+| D03 | defects first | the deployment checked before the defects | unit-new |
+| P01 | guard | applyDisclosure skips the profile guard | unit-new |
+| P02 | guard | composeCleanMaster skips the profile guard | unit-new |
+| P03 | guard | the pixel format unchecked | unit-new |
+| P04 | guard | the preset unchecked | unit-new |
+| P05 | guard | the codec unchecked | unit-new |
+| R01 | outcomes | a failed exit read as success | unit-new, unit-old |
+| R02 | outcomes | a missing binary retried | unit-new, unit-old |
+| S01 | shape | the layer table read outside the composer | shape |
+
+Suites: `unit-new` = `ffmpeg-composer-disclosure.test.ts`; `unit-old` =
+`ffmpeg-composer.test.ts`; `shape` = `disclosure-shape.test.ts`;
+`media-composer` and `media-overlay` = the two media suites on real FFmpeg.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 and DS-4, an independent review
+agent reviewed `94ed441` against `0c1eff2`, reading only git objects. Verdict:
+nothing blocking; five should-fix findings and nine nits, all answered in
+`8d070ef`:
+
+| Finding | Answer |
+| --- | --- |
+| The hash check does not cover the bytes FFmpeg reads: with `-loop 1` FFmpeg rereads the image for the whole encode, a `%` in the directory expands as a pattern, a relative directory resolves elsewhere | Fixed. Measured first: for these paths FFmpeg picks its PNG pipe reader, but for a path holding a `%` pattern its image-sequence reader, with which an image replaced in place during an encode changed every later frame. FFmpeg now reads a private copy of the checked bytes (`0700` directory, `0600` file created exclusively, removed after the run) through a stated reader, `-f png_pipe`; the directory must be absolute. ADR-0075 Decision 3 and the docstrings no longer claim the risk ends when FFmpeg opens the file |
+| `applyDisclosure` assumes the master is the profile's size: a smaller master would come out with no disclosure, and validation would accept it | Recorded for DS-5b, which hands it the master (ADR-0075 Decision 6): composition probes the read-back master and requires its width, height and 30/1 rate to equal the profile's before laying anything over it, with a media test of a mismatched master. Nothing calls `applyDisclosure` until then |
+| No test proves the image is checked at every run; two tests share a scratch directory | Fixed: after a success the image is replaced and the next run refused; a fresh directory per test |
+| CRF 14 exceeds the approved "roughly double" estimate, with the summary leading on the smaller ratios, and the measurements cannot be reproduced | Fixed by choosing CRF 16, which keeps to the approved estimate (1.1 to 1.5 times) at 0.25 dB; ADR-0075 states the comparison plainly and records the procedure; TODO asks for a re-measurement on the provider's real clips |
+| Provider metadata reaches the customer's file (pre-existing in `compose`) | Confirmed by measurement (a clip's title, comment and chapter survived, the chapter as a track of its own, and with `-map_metadata -1` alone the chapter still survived, untitled) and fixed in all three encodes, pixels unchanged; the media suite tags its first clip and proves neither output carries it |
+| Nit: the pixel format reaches the filter graph unchecked | Fixed: the profile check now pins codec, pixel format and preset for all three encodes |
+| Nit: defects reported as configuration faults when no directory is set | Fixed: profile, mode, frame size and the output path are checked before the deployment |
+| Nit: every read error a permanent configuration fault | Fixed: only missing or unreadable files are; others, and a copy that cannot be written, retry |
+| Nit: the video written over the master | Fixed: refused as a defect |
+| Nit: "a change is a new profile" is not enforced | Recorded: DS-5b's profile v2 binds the master's CRF; nothing runs the master encode until then |
+| Nit: the disclosure's argument builder is exported with any image path | Fixed: no longer exported from `@app/storage` |
+| Nit: stale comments | Fixed in `ai-disclosure.ts` and the composer's header |
+| Nit: `compose` no longer runs on real FFmpeg | Stated in ADR-0075 Decision 4: its vector is proved equal to the master's but for the CRF, and the master runs in every size |
+| Nit: the PR is about 1,160 changed lines against the ~500 guideline | Kept as one milestone: DS-5 was already split in two, and splitting the two encodes from their media suites would leave each without its proof. With the answers it is about 400 lines of code, 810 of tests and 330 of documentation |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composer and disclosure rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | Not applicable: no flow runs the encodes yet; DS-5b adds composition's sequence |
+| OpenAPI / API change summary | `docs/api-changes-ds-5a.md`: no HTTP change; the composer's methods, its setting and the domain exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-5a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure
+item; the worker image must carry the six images and name their directory by
+an absolute path; a new item: re-measure the master's quality on the provider's
+real output).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-5a changes the composer and its
+port: no worker, scheduler, credential, environment variable or payment
+integration. Paid Provider Activation, production credentials, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Composition does not run the encodes yet**, so a composed deliverable still
+  has no disclosure; DS-5b switches the runner, and DS-6 refuses to publish one
+  without its master.
+- **`applyDisclosure` trusts the master's size and rate**; DS-5b checks them
+  before calling it.
+- **No worker image carries the images** or names their directory (TODO).
+- **The master's quality is not a column** and was measured on synthetic clips;
+  DS-5b's profile v2 binds it, and TODO asks for a re-measurement on real
+  provider output.
+
+### Remaining work
+
+DS-5a waits for the product owner's yes before merge. DS-5b (composition runs
+the two encodes, stores the master first-wins, writes its record) comes next,
+after it.

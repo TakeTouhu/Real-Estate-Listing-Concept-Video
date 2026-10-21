@@ -137,6 +137,14 @@ overlay-free master, at `org/{organizationId}/internal/clean-masters/{version}`.
 No signed URL of either purpose is made or honoured for any key under
 `internal/`. Nothing writes a master yet; DS-5's composition will.
 
+**DS-5a — the Clean Master encode, and the disclosure laid over it**
+(ADR-0075, no migration): the composer can encode the overlay-free master at
+CRF 16 and make the customer's video from it at the profile's CRF 18 with the
+disclosure image for its size laid over it, refusing an image that is not the
+reviewed one and handing FFmpeg a private copy of the checked bytes. No input's
+tags or chapters reach a composed file. Real FFmpeg in CI proves both in all six
+sizes. Composition does not call either yet; DS-5b will.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

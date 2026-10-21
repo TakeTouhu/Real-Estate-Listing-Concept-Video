@@ -14,6 +14,7 @@
  * is a member of a small application vocabulary.
  */
 
+import type { DisclosureMode } from "../disclosure/mode";
 import type { TransitionContext } from "../orchestration/ports";
 import type { CompositionProfile } from "./profile";
 import type {
@@ -335,6 +336,21 @@ export type ComposeDeliverableOutcome =
    */
   | { readonly kind: "RETRYABLE_FAILURE" };
 
+/** What laying the disclosure over a Clean Master needs (ADR-0075 Decision 2). */
+export interface ApplyDisclosureInput {
+  /**
+   * The Clean Master the customer's video is made from: a local copy of the
+   * bytes stored at its key, never the file the master encode wrote, so a
+   * later recomposition from the stored master makes the same video
+   * (ADR-0071 Decision 7).
+   */
+  readonly cleanMasterPath: string;
+  readonly profile: CompositionProfile;
+  /** The deliverable version's frozen mode (ADR-0073). */
+  readonly disclosureMode: DisclosureMode;
+  readonly outputPath: string;
+}
+
 export interface DeliverableMediaComposer {
   /**
    * Compose the clips into one file at `outputPath`.
@@ -345,6 +361,24 @@ export interface DeliverableMediaComposer {
    * retrying a missing binary forever is not recovery.
    */
   compose(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome>;
+
+  /**
+   * Compose the clips into the overlay-free Clean Master at `outputPath`: the
+   * same video as {@link compose}, at the master's higher quality
+   * (ADR-0075 Decision 1). Fails and throws as `compose` does.
+   */
+  composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome>;
+
+  /**
+   * Lay the disclosure for the profile's frame size, as the mode requires, over
+   * the Clean Master, and encode the customer's video at `outputPath` with the
+   * profile's settings (ADR-0075 Decision 2).
+   *
+   * Fails as `compose` does. A deployment whose disclosure image is missing or
+   * is not the reviewed image throws a fixed `CONFIGURATION_ERROR`: a video
+   * cannot be given its disclosure there, and retrying will not change that.
+   */
+  applyDisclosure(input: ApplyDisclosureInput): Promise<ComposeDeliverableOutcome>;
 }
 
 // ---------------------------------------------------------------------------

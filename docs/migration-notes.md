@@ -1436,3 +1436,13 @@ unchanged, except that it would sign an internal key if one were ever asked for.
 **What changes at deploy.** Nothing anyone can notice. The two signed storage
 routes now answer a token for an internal key with `401`, and nothing issues
 one. No new environment variable.
+
+## DS-5a — the Clean Master encode, and the disclosure laid over it
+
+**No migration.** DS-5a adds two methods to the composer and moves the media
+suites onto them. It reads and writes no table.
+
+**What changes at deploy.** Nothing: nothing in production constructs the
+composer, and the composition runner still calls only `compose`. No new
+environment variable; the composer's new `disclosureLayerDirectory` setting is
+a constructor argument, set by nothing yet.

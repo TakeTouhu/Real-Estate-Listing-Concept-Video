@@ -64,6 +64,22 @@ export const COMPOSITION_FRAME_RATE_DENOMINATOR = 1;
 export const COMPOSITION_CRF = 18;
 
 /**
+ * The Clean Master's Constant Rate Factor (ADR-0075 Decision 1).
+ *
+ * The master is encoded from the scenes with every other setting above, at a
+ * higher quality than the customer's video, which is then encoded from it at
+ * {@link COMPOSITION_CRF} with the disclosure laid over it. Measured on FFmpeg
+ * 6.1.1 over three inputs, the two encodes together lost at most 0.25 dB of
+ * PSNR against one encode at 18, and the master was 1.1 to 1.5 times the
+ * customer's video: the approved plan's estimate that the master roughly
+ * doubles what is kept per video.
+ *
+ * Not a column: the composer reads it for the master. Changing it must be a new
+ * composition profile, never an edit in place; DS-5b's profile v2 binds it.
+ */
+export const CLEAN_MASTER_CRF = 16;
+
+/**
  * The exhaustive raster table.
  *
  * Every dimension is even, which `yuv420p` requires: chroma is subsampled by

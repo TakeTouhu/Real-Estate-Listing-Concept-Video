@@ -106,6 +106,7 @@ export {
   DEFAULT_COMPOSE_TIMEOUT_MS,
   MAX_COMPOSE_TIMEOUT_MS,
   createFfmpegDeliverableComposer,
+  ffmpegCleanMasterArgsFor,
   ffmpegComposeArgsFor,
   validateComposeTimeoutMs,
 } from "./ffmpeg-composer";
