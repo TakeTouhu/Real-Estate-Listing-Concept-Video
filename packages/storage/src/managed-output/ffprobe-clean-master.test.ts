@@ -130,6 +130,7 @@ describe("a master's raster is its primary video stream's size and one constant 
   it.each([
     ["a display matrix", { side_data_list: [{ side_data_type: "Display Matrix", displaymatrix: "…", rotation: 90 }] }],
     ["a display matrix with no turn", { side_data_list: [{ side_data_type: "Display Matrix", rotation: 0 }] }],
+    ["a display matrix that names no rotation", { side_data_list: [{ side_data_type: "Display Matrix", displaymatrix: "…" }] }],
     ["a rotation in other side data", { side_data_list: [{ side_data_type: "Other", rotation: -90 }] }],
     ["a rotate tag", { tags: { rotate: "90" } }],
   ])("is unusable when the stream carries %s, which FFmpeg would apply before the disclosure", (_label, extra) => {
