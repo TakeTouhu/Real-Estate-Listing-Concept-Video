@@ -6,7 +6,7 @@ import { DISCLOSURE_MODES } from "./mode";
 /**
  * What DS-3 may and may not have changed (ADR-0073).
  *
- * 1. **One migration, the newest**: one enum and two columns, NOT NULL, whose
+ * 1. **One migration, migration 29**: one enum and two columns, NOT NULL, whose
  *    default exists only for the ADD COLUMN and is dropped at once. Nothing
  *    else is created, and no row is rewritten.
  * 2. **The database's modes are exactly the domain's**, so a mode read from a
@@ -71,13 +71,14 @@ function schemaModel(name: string): string {
 }
 
 describe("DS-3 shape", () => {
-  it("adds exactly one migration, the newest", () => {
+  it("adds exactly one migration, in place", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs).toHaveLength(30);
+    // No longer the newest: DS-4 added migration 30 after it.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(29);
+    expect(dirs).toHaveLength(31);
   });
 
   it("creates the enum and two required columns, keeps no default, and rewrites no row", () => {

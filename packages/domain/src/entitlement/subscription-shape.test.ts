@@ -45,7 +45,7 @@ describe("durable shape", () => {
     expect(dirs.filter((dir) => dir.includes("phase6b"))).toEqual([MIGRATION_DIR]);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(30);
+    expect(dirs).toHaveLength(31);
   });
 
   it("creates one table, rewrites nothing, and holds the channel rule in the schema", () => {

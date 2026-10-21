@@ -3,7 +3,8 @@
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0072-real-ffmpeg-media-suites.md` (DS-2),
-`docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3)
+`docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3),
+`docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -803,3 +804,191 @@ BLOCKED.
 
 DS-3 waits for the product owner's yes before merge. DS-4 (the Clean Master
 record and its private storage location, migration 30) comes next, after it.
+
+## DS-4 — the Clean Master record and its internal location
+
+Base: `17d39a3` (PR #96 merge commit on `main`; post-merge CI run 625 green).
+ADR: `docs/decisions/0074-clean-master-record-and-internal-location.md`
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `0e88b25` | migration 30, the key and the internal namespace, the signers' refusal, the tests, ADR-0074 and the documentation |
+| `1d4e70a` | the answers to the independent review: non-canonical keys refused, the wider static guard, the blank-organization CHECK, the lifecycle TODO |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-4 does
+
+- **Migration 30** creates `generation_deliverable_clean_masters`, one receipt
+  per composed deliverable version for its overlay-free master: the key, the
+  SHA-256, the size and when the bytes were proven, every column required,
+  RESTRICT to the version. A CHECK holds each row's key to its own version's
+  place in the internal namespace; another holds the receipt to canonical
+  values.
+- **The internal namespace**, `org/{organizationId}/internal/`, holds the
+  master at `…/internal/clean-masters/{deliverableVersionId}`, built only by
+  `managedCleanMasterKey` under its own brand.
+- **No signed URL reaches it.** `signStorageToken` throws for an internal key,
+  `verifyStorageToken` ignores a token for one, and `LocalObjectStorage`
+  rejects both of its signed URLs for one. The download and upload routes
+  answer such a token as a forged one (`401`) and serve or write nothing.
+- **Outside quota and Units.** No quota is built and the TODO item already
+  excludes the master; nothing touches the Unit ledger.
+- **Nothing writes a master yet.** DS-5's composition will. No state,
+  transition, event, page, command or environment variable changes.
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `1d4e70a`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5771 / 5771**, 205 files (5751 before; 20 new) |
+| `pnpm test:db` | **1452 / 1452**, 55 files (1446 before; 6 new) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations → schema) | no difference |
+| `prisma migrate status` | 31 migrations, up to date |
+
+New tests:
+
+- `packages/domain/src/clean-master/key.test.ts` (7): the key's exact shape and
+  owner; its refusals of a blank identifier or one containing `/`; its brand,
+  distinct from the scene output's and the customer video's (typecheck-level);
+  the namespace holds the master and no customer key, and is the exact,
+  case-sensitive third segment; no key a store could rewrite onto the master
+  (doubled or leading `/`, `.`, `..`, `\`) is signable, and every key the
+  application builds is canonical; the guard throws an internal error naming
+  no key, and only for a key it may not sign.
+- `packages/domain/src/clean-master/clean-master-shape.test.ts` (6): migration
+  30 is the newest and is exactly its five statements; the model is the receipt
+  and RESTRICT; nothing writes or reads it and no app names the key; the files
+  naming the signer, the verifier or a signed-URL method are exactly today's,
+  and no source or manifest names a presigner; the download route is the only
+  app code that reads object bytes, and reads a verified key.
+- `packages/storage/src/signing.test.ts` (3 more): never signed for either
+  purpose; never honoured however the token was made, nor through a key a store
+  could rewrite onto it, while the same hand-made token for a customer's key
+  is; the local adapter rejects both URLs while
+  server-side reads still work.
+- `tests/api/storage-routes.test.ts` (4): the download route serves a
+  customer's object and refuses the master with `401`; the upload route never
+  writes over the master and still accepts a customer's upload.
+- `tests/integration/clean-master.db.test.ts` (6): every column required, no
+  default but `createdAt`; a stored master's key is one the signer refuses; one
+  master per version; ten wrong keys refused; six bad receipts refused and the
+  largest safe size accepted; a missing version refused, and a version cannot be
+  deleted from under its master but can once the master is gone.
+
+Twenty-two existing pins on the migration count and the newest migration move
+from 30 to 31 directories, as each earlier migration's own did. The
+orchestration fixture's wipe deletes Clean Masters before versions.
+
+### Mutation testing
+
+**39 of 39 killed** on `1d4e70a` (`ds4/mutate.py` in the session scratchpad).
+An earlier pass of the first 32 on `0e88b25` also killed every one.
+Each source mutant replaced one anchor that occurs exactly once; each database
+mutant weakened one live constraint with SQL and restored it afterwards, so the
+database suite was run against the constraint it relies on, not just the
+migration's text. Every file was restored and re-hashed, and the file manifest
+and the live constraints were identical after the pass.
+
+| Area | Mutants | Killed by |
+| --- | --- | --- |
+| The internal namespace: never true, wrong segment, no `org` prefix, case-insensitive, any segment | K01–K05 | the key test, and for the first two also the signer, route and database tests |
+| The key: `/` accepted, blank accepted, version id unchecked, master outside `internal/`, master beside the customer's video | K06–K10 | the key test; the last two also the signer, route and database tests |
+| The guard: a no-op, a message naming the key, a 403 instead of an internal error | K11–K13 | the key test, and the signer and database tests where they apply |
+| The signer and verifier: no refusal, refusal of downloads only (either side), honouring an internal key | G01–G04 | the signer test, and the route and database tests where they apply |
+| The local adapter: a synchronous throw, signing around the guard | L01–L02 | the signer test |
+| Canonical keys: every key canonical, empty segments, dot segments, a backslash, a verifier checking only the namespace, signable ignoring the namespace | C01–C06 | the key and signer tests, and the route and database tests for the last |
+| The migration and schema text: no key check, CASCADE, a rewritten row, a schema CASCADE, a default verification time | S01–S05 | the shape test |
+| The live constraints: any `org/` key, no version binding, an empty or a blank organization, uppercase hex, zero bytes, no upper bound, no uniqueness, CASCADE | D01–D09 | the database test |
+
+Every mutant in the code was killed by a behaviour test; the shape test alone
+kills only the migration's and schema's text, which the live-constraint mutants
+cover behaviourally.
+
+### Review
+
+The automated review is still at its usage limit, so an independent review read
+the whole of `0e88b25` from git objects. It found nothing blocking: no code path
+can issue or honour a signed URL for a master, and nothing writes one. Its
+findings, and what `1d4e70a` does about each:
+
+- **Should-fix: the static guard matched method syntax only**, so an adapter
+  written as an object literal or arrow property, or a presigner with another
+  name, would have passed, and ADR-0074 claimed more than that. The guard now
+  pins every file naming the signer, the verifier or a signed-URL method in any
+  syntax, and refuses any presigner or shared-access signature in source and
+  any presigner package in a manifest. ADR-0074 now says exactly that.
+- **Should-fix: masters with no stated lifecycle.** The master of a version that
+  is never published, and of content replaced by a paid regeneration, are not
+  covered by ADR-0052 Decision 17's retention rule; both are now a TODO item.
+  The suggestion to own the master by the job instead was not taken: a paid
+  regeneration makes new content and so a new master, which a job-owned row
+  could not hold. The review's concern that a version could not be deleted
+  after its 30 days does not arise: that retention is the old version's video,
+  not its row, which its composition and validation rows already keep. ADR-0074
+  Decision 5 now says so.
+- **Odd key shapes** (`org/o//internal/x`, a leading `/`, `.` or `..` segments)
+  passed the positional check, and a store that collapses `//` could map them
+  onto the master. Nothing builds such a key, but the signer and verifier now
+  refuse any key that is not canonical.
+- **The CHECK accepted a blank organization segment** (`org/ /…`), though the
+  notes said non-blank. It now trims before comparing, with a test.
+- **The brand's comment** claimed it stops a signer; signers take any string,
+  and the comment now says the runtime check is what refuses.
+- **Brittle source-text pins** on the signer and local adapter repeated what the
+  behaviour tests prove; they are dropped.
+- **Not changed: the preflight reports a signer refusal as a storage outage.**
+  That mapping predates DS-4, and the preflight signs only a source photograph's
+  key read from its asset row, so an internal key cannot reach it.
+- **The completion record** is this section.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: a Clean Master row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-4*: the table and its relationship |
+| Critical sequence diagram | Not applicable: no flow changes; nothing writes or reads the master yet, and the routes' refusal is one more reason a token is invalid |
+| OpenAPI / API change summary | `docs/api-changes-ds-4.md`: the two routes' refusal, the domain exports and the signing changes |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-4* |
+| Completion report | this file |
+
+Also updated: `docs/DataModel.md` (where the master is recorded),
+`docs/SecurityCompliance.md` (internal objects are never signed),
+`docs/Roadmap.md`, and `docs/decisions/TODO.md` (the disclosure and Clean
+Master items, in part, and a new item: whether scene outputs move under
+`internal/`).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-4 adds a migration, a domain module
+and a refusal in the signer: no worker, scheduler, credential, environment
+variable or payment integration. Paid Provider Activation, production
+credentials, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No master exists yet.** DS-5 encodes and records it; DS-6 requires it.
+- **The CHECK cannot verify the key's organization** against the version's
+  job; the writer derives it.
+- **A production adapter that presigns through its own SDK** must call the
+  guard itself; the shape test fails when one appears, so its author decides.
+- **Scene outputs are outside `internal/`** and are signed by nothing today
+  (TODO).
+- **Deletion with the content** is unbuilt, as is all physical deletion of
+  videos (TODO records the order).
+- **Which masters outlive their purpose** (a version never published, content
+  replaced by a paid regeneration) is not decided by ADR-0052 (TODO).
+
+### Remaining work
+
+DS-4 waits for the product owner's yes before merge. DS-5 (composition makes
+the Clean Master, then the customer's video from it) comes next, after it.

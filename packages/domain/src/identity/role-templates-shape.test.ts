@@ -48,7 +48,7 @@ describe("durable shape", () => {
     expect(dirs.filter((dir) => dir.includes("phase6c"))).toEqual([MIGRATION_DIR]);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(30);
+    expect(dirs).toHaveLength(31);
   });
 
   it("recreates the Role type and maps REVIEWER to VIEWER in both tables, touching nothing else", () => {

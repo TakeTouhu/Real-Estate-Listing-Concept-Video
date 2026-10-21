@@ -43,7 +43,7 @@ describe("durable shape", () => {
     expect(dirs.filter((dir) => dir.includes("near_duplicate"))).toEqual([MIGRATION_DIR]);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(30);
+    expect(dirs).toHaveLength(31);
   });
 
   it("drops the duplicate-approval index and does nothing else", () => {

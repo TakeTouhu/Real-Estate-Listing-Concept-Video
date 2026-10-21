@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { assertSignableStorageKey, isSignableStorageKey } from "@app/domain";
 import { timingSafeEqualString } from "@app/shared";
 
 export type SignedPurpose = "upload" | "download";
@@ -24,8 +25,13 @@ function sign(payload: string, secret: string): string {
  * Create a single-purpose, expiring token that authorizes exactly one storage
  * key for exactly one operation. Upload tokens cannot be used to download and
  * vice versa (SecurityCompliance.md: "Input URLs are single-purpose").
+ *
+ * Throws for an internal-only key (ADR-0074): the Clean Master, and anything
+ * else under `org/{organizationId}/internal/`, is never given a URL. Nor is a
+ * key that is not canonical, which a store could map onto another object.
  */
 export function signStorageToken(token: SignedKeyToken, secret: string): string {
+  assertSignableStorageKey(token.key);
   const payload = payloadOf(token);
   return `${payload}.${sign(payload, secret)}`;
 }
@@ -33,6 +39,10 @@ export function signStorageToken(token: SignedKeyToken, secret: string): string 
 /**
  * Verify a storage token. Returns the token when the signature is valid, the
  * purpose matches, and it has not expired; otherwise null.
+ *
+ * Also null for an internal-only or non-canonical key, however the token was
+ * made (ADR-0074), so a route that redeems tokens serves and accepts nothing in
+ * the internal namespace, and answers exactly as it does for a forged token.
  */
 export function verifyStorageToken(
   raw: string,
@@ -63,5 +73,6 @@ export function verifyStorageToken(
   }
   if (purpose !== expectedPurpose) return null;
   if (expiresAtSeconds <= nowSeconds) return null;
+  if (!isSignableStorageKey(key)) return null;
   return { key, purpose, expiresAtSeconds };
 }

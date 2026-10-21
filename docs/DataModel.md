@@ -182,6 +182,10 @@ from which later disclosure/logo changes are recomposed after scene videos are
 deleted. It is internal: excluded from customer quota, never customer-exposed or
 downloadable, retained and deleted with its content's lifecycle (trash/recovery
 included, legal hold where applicable). Its representation is not chosen here.
+DS-4 (ADR-0074) records it in `generation_deliverable_clean_masters`, one
+receipt per composed version, stored at
+`org/{organizationId}/internal/clean-masters/{deliverableVersionId}`, where no
+signed URL reaches; DS-5 chooses its encode.
 
 ### CreditLedger
 
