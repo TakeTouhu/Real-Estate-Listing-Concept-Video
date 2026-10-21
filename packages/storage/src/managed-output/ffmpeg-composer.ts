@@ -47,13 +47,39 @@
  * `-an`, and `a=0` in the concat. Provider clips may carry incidental audio
  * nobody reviewed; a deliverable that plays unexpected sound in an estate
  * agent's office is a product decision, not a default.
+ *
+ * ## The Clean Master, then the disclosure (ADR-0075)
+ *
+ * `composeCleanMaster` runs the same graph as `compose` at the master's higher
+ * quality, `CLEAN_MASTER_CRF`, and lays nothing over it. `applyDisclosure` then
+ * encodes the customer's video from a Clean Master with the profile's own
+ * settings, laying the committed disclosure image for the frame size over it at
+ * the origin:
+ *
+ * ```text
+ * [0:v][1:v]overlay=0:0:format=auto:shortest=1,format=yuv420p
+ * ```
+ *
+ * the image looped as the second input, the method ADR-0072 measured. The image
+ * is read from the deployment's copy of `assets/disclosure/` and its SHA-256 is
+ * compared with the one `DISCLOSURE_LAYER_ASSETS` pins before every run, so the
+ * image laid over a video is the image that was reviewed, whatever the worker
+ * image carries. There is no fallback: a missing or different image, or a frame
+ * size the table does not cover, refuses the run rather than scaling another
+ * size's image or shipping a video without its disclosure.
  */
 
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { AppError } from "@app/shared";
 import {
+  CLEAN_MASTER_CRF,
   COMPOSITION_AUDIO_MODE,
   COMPOSITION_FIT_MODE,
   COMPOSITION_TRANSITION_MODE,
+  disclosureLayerFor,
+  type ApplyDisclosureInput,
   type ComposeDeliverableInput,
   type ComposeDeliverableOutcome,
   type CompositionProfile,
@@ -104,6 +130,12 @@ export function validateComposeTimeoutMs(value: unknown): number {
 export interface FfmpegComposerConfig {
   readonly programPath?: string;
   readonly timeoutMs?: number;
+  /**
+   * The deployment's copy of `assets/disclosure/`, where the committed
+   * disclosure images are. Only `applyDisclosure` reads it, and without it
+   * refuses to run.
+   */
+  readonly disclosureLayerDirectory?: string;
 }
 
 export interface FfmpegComposerDeps {
@@ -148,6 +180,18 @@ function clipFilter(
  * frozen profile.
  */
 export function ffmpegComposeArgsFor(input: ComposeDeliverableInput): readonly string[] {
+  return composeArgsAt(input, input.profile.crf);
+}
+
+/**
+ * The Clean Master's argument vector: the composition graph, encoded at
+ * {@link CLEAN_MASTER_CRF} instead of the profile's own quality.
+ */
+export function ffmpegCleanMasterArgsFor(input: ComposeDeliverableInput): readonly string[] {
+  return composeArgsAt(input, CLEAN_MASTER_CRF);
+}
+
+function composeArgsAt(input: ComposeDeliverableInput, crf: number): readonly string[] {
   if (input.clips.length === 0) {
     throw new AppError("INTERNAL_ERROR", "A composition requires at least one clip");
   }
@@ -177,7 +221,7 @@ export function ffmpegComposeArgsFor(input: ComposeDeliverableInput): readonly s
     "-preset",
     profile.encoderPreset,
     "-crf",
-    String(profile.crf),
+    String(crf),
     "-pix_fmt",
     profile.pixelFormat,
     "-movflags",
@@ -192,6 +236,99 @@ export function ffmpegComposeArgsFor(input: ComposeDeliverableInput): readonly s
   return args;
 }
 
+/**
+ * The argument vector that lays the disclosure image at `layerPath` over the
+ * Clean Master and encodes the customer's video with the profile's settings.
+ *
+ * The image is the frame's size, so it goes at the origin with no coordinates
+ * and no scaling. Looped, it is a frame for every frame of the master, and
+ * `shortest=1` ends the video with the master. `format=auto` blends in the
+ * master's own format, and the closing `format` hands the encoder the profile's.
+ */
+export function ffmpegDisclosureArgsFor(
+  input: ApplyDisclosureInput,
+  layerPath: string,
+): readonly string[] {
+  const { profile } = input;
+  let overlay: string;
+  switch (input.disclosureMode) {
+    case "THROUGHOUT":
+      // Mode A: the whole video. Mode B will limit it with `enable`.
+      overlay = "overlay=0:0:format=auto:shortest=1";
+      break;
+    default: {
+      const exhaustive: never = input.disclosureMode;
+      void exhaustive;
+      throw new AppError("INTERNAL_ERROR", "The composer was handed a disclosure mode it does not implement");
+    }
+  }
+  return [
+    "-nostdin",
+    "-y",
+    "-v",
+    "error",
+    "-i",
+    input.cleanMasterPath,
+    "-loop",
+    "1",
+    "-i",
+    layerPath,
+    "-filter_complex",
+    `[0:v][1:v]${overlay},format=${profile.pixelFormat}[out]`,
+    "-map",
+    "[out]",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-preset",
+    profile.encoderPreset,
+    "-crf",
+    String(profile.crf),
+    "-pix_fmt",
+    profile.pixelFormat,
+    "-movflags",
+    "+faststart",
+    "-f",
+    "mp4",
+    input.outputPath,
+  ];
+}
+
+/**
+ * The deployment's disclosure image for the profile's frame size, proved to be
+ * the reviewed image.
+ *
+ * Read and hashed before every run rather than once at start-up, so a file
+ * replaced while the worker runs is caught at its next use. Between this check
+ * and FFmpeg opening the file, the image is as safe as the deployment's own
+ * filesystem, the same trust the `ffmpeg` binary itself needs.
+ */
+async function verifiedDisclosureLayerPath(
+  directory: string | undefined,
+  profile: CompositionProfile,
+): Promise<string> {
+  if (directory === undefined) {
+    throw new AppError("CONFIGURATION_ERROR", "This deployment has no disclosure images");
+  }
+  const asset = disclosureLayerFor(profile.targetWidthPx, profile.targetHeightPx);
+  // Every raster a profile resolves to has an image (ADR-0071 Decision 1), so
+  // this is a defect in the profile, never a fact about the deployment.
+  if (asset === null) {
+    throw new AppError("INTERNAL_ERROR", "No disclosure image exists for this frame size");
+  }
+  const path = join(directory, asset.fileName);
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch {
+    throw new AppError("CONFIGURATION_ERROR", "A disclosure image is missing from this deployment");
+  }
+  if (createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
+    throw new AppError("CONFIGURATION_ERROR", "A disclosure image in this deployment is not the reviewed image");
+  }
+  return path;
+}
+
 export function createFfmpegDeliverableComposer(
   deps: FfmpegComposerDeps,
   config: FfmpegComposerConfig = {},
@@ -199,55 +336,75 @@ export function createFfmpegDeliverableComposer(
   const program = config.programPath ?? DEFAULT_COMPOSE_PROGRAM;
   const timeoutMs = validateComposeTimeoutMs(config.timeoutMs ?? DEFAULT_COMPOSE_TIMEOUT_MS);
 
+  async function run(args: readonly string[]): Promise<ComposeDeliverableOutcome> {
+    const outcome = await deps.runner.run({
+      program,
+      args,
+      timeoutMs,
+      maxStdoutBytes: COMPOSE_MAX_STDOUT_BYTES,
+    });
+
+    switch (outcome.kind) {
+      case "EXITED":
+        // A real exit status is evidence about this run. Non-zero is
+        // retryable: the encoder may have hit a transient resource problem,
+        // and this phase has no authority to declare a customer's deliverable
+        // permanently unencodable. stderr is never read.
+        return outcome.exitCode === 0
+          ? { kind: "SUCCESS" }
+          : { kind: "RETRYABLE_FAILURE" };
+      case "TIMED_OUT":
+      case "OUTPUT_TOO_LARGE":
+      case "TRANSIENT_FAILURE":
+        return { kind: "RETRYABLE_FAILURE" };
+      case "LAUNCH_FAILED":
+        // The binary is missing or unusable: a *deployment* fault, not a fact
+        // about the video. Retrying it forever would hide a broken rollout
+        // behind a queue that never drains.
+        throw new AppError(
+          "CONFIGURATION_ERROR",
+          "The deliverable composer executable is unavailable in this deployment",
+        );
+      default: {
+        const exhaustive: never = outcome;
+        void exhaustive;
+        throw new AppError("INTERNAL_ERROR", "The composer returned an unknown outcome");
+      }
+    }
+  }
+
   return {
     async compose(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
-      // The profile is the platform's, so a mismatch is an internal defect
-      // rather than anything about the media.
-      if (
-        input.profile.fitMode !== COMPOSITION_FIT_MODE ||
-        input.profile.transitionMode !== COMPOSITION_TRANSITION_MODE ||
-        input.profile.audioMode !== COMPOSITION_AUDIO_MODE
-      ) {
-        throw new AppError(
-          "INTERNAL_ERROR",
-          "The composer was handed a profile it does not implement",
-        );
-      }
+      assertImplementedProfile(input.profile);
+      return run(ffmpegComposeArgsFor(input));
+    },
 
-      const outcome = await deps.runner.run({
-        program,
-        args: ffmpegComposeArgsFor(input),
-        timeoutMs,
-        maxStdoutBytes: COMPOSE_MAX_STDOUT_BYTES,
-      });
+    async composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
+      assertImplementedProfile(input.profile);
+      return run(ffmpegCleanMasterArgsFor(input));
+    },
 
-      switch (outcome.kind) {
-        case "EXITED":
-          // A real exit status is evidence about this run. Non-zero is
-          // retryable: the encoder may have hit a transient resource problem,
-          // and this phase has no authority to declare a customer's deliverable
-          // permanently unencodable. stderr is never read.
-          return outcome.exitCode === 0
-            ? { kind: "SUCCESS" }
-            : { kind: "RETRYABLE_FAILURE" };
-        case "TIMED_OUT":
-        case "OUTPUT_TOO_LARGE":
-        case "TRANSIENT_FAILURE":
-          return { kind: "RETRYABLE_FAILURE" };
-        case "LAUNCH_FAILED":
-          // The binary is missing or unusable: a *deployment* fault, not a fact
-          // about the video. Retrying it forever would hide a broken rollout
-          // behind a queue that never drains.
-          throw new AppError(
-            "CONFIGURATION_ERROR",
-            "The deliverable composer executable is unavailable in this deployment",
-          );
-        default: {
-          const exhaustive: never = outcome;
-          void exhaustive;
-          throw new AppError("INTERNAL_ERROR", "The composer returned an unknown outcome");
-        }
-      }
+    async applyDisclosure(input: ApplyDisclosureInput): Promise<ComposeDeliverableOutcome> {
+      assertImplementedProfile(input.profile);
+      const layerPath = await verifiedDisclosureLayerPath(config.disclosureLayerDirectory, input.profile);
+      return run(ffmpegDisclosureArgsFor(input, layerPath));
     },
   };
+}
+
+/**
+ * The profile is the platform's, so a mismatch is an internal defect rather
+ * than anything about the media.
+ */
+function assertImplementedProfile(profile: CompositionProfile): void {
+  if (
+    profile.fitMode !== COMPOSITION_FIT_MODE ||
+    profile.transitionMode !== COMPOSITION_TRANSITION_MODE ||
+    profile.audioMode !== COMPOSITION_AUDIO_MODE
+  ) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      "The composer was handed a profile it does not implement",
+    );
+  }
 }

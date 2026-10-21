@@ -1,16 +1,16 @@
 /**
- * The committed disclosure images (ADR-0071), laid over a real encode.
+ * The committed disclosure images (ADR-0071), laid over a real encode by the
+ * composer (ADR-0075).
  *
- * DS-5 will have the composer lay the image for the frame size over the video at
- * the origin. This suite proves the method before any composer depends on it:
- * each of the six images, over neutral and coloured clips, encoded with
- * composition profile v1's own settings, comes out of FFmpeg with the lightness
- * of the image's straight-alpha blend over the background, within what H.264 at
- * CRF 18 changes, and leaves the rest of the frame as it was. On the white floor
- * the shadow is what keeps the white text readable, and it survives the encode.
+ * Each of the six images, laid by the composer's `applyDisclosure` over a
+ * Clean Master of neutral and coloured clips and encoded with composition
+ * profile v1's own settings, comes out of FFmpeg with the lightness of the
+ * image's straight-alpha blend over the background, within what H.264 at CRF 18
+ * changes, and leaves the rest of the frame as it was. On the white floor the
+ * shadow is what keeps the white text readable, and it survives the encode.
  *
- * The overlay graph here is the method, not yet product code. When DS-5 moves it
- * into the composer, this suite drives the composer instead.
+ * ADR-0072 measured the method with the graph written here; DS-5a moved it into
+ * the composer, and this suite now drives the composer.
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -18,10 +18,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DISCLOSURE_LAYER_ASSETS, resolveCompositionProfile, type CompositionProfile } from "@app/domain";
-import { decodeFrame, decodeRgba, ffmpeg } from "./media-tools";
+import {
+  CLEAN_MASTER_CRF,
+  DISCLOSURE_LAYER_ASSETS,
+  resolveCompositionProfile,
+  type CompositionProfile,
+} from "@app/domain";
+import { createFfmpegDeliverableComposer } from "@app/storage";
+import { decodeFrame, decodeRgba, ffmpeg, runner } from "./media-tools";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: `${REPO_ROOT}assets/disclosure` });
 
 // Three neutrals, and the colours a room is likely to show behind the text.
 const BACKGROUNDS = [
@@ -101,15 +108,22 @@ describe.each(DISCLOSURE_LAYER_ASSETS.map((asset) => [`${asset.widthPx}x${asset.
     });
 
     it.each(BACKGROUNDS)("over a $name clip keeps the text's lightness, and nothing else changes", async ({ hex }) => {
+      // A one-second Clean Master of the background, encoded at the master's
+      // settings, and the customer's video the composer makes from it.
+      const master = join(dir, `${width}x${height}-${hex}-clean-master.mp4`);
       const output = join(dir, `${width}x${height}-${hex}.mp4`);
       await ffmpeg([
         "-f", "lavfi", "-i", `color=c=0x${hex}:s=${width}x${height}:r=30:d=1`,
-        "-loop", "1", "-i", imagePath,
-        "-filter_complex", `[0:v][1:v]overlay=0:0:format=auto:shortest=1,format=${profile.pixelFormat}[out]`,
-        "-map", "[out]", "-an",
-        "-c:v", "libx264", "-preset", profile.encoderPreset, "-crf", String(profile.crf), "-pix_fmt", profile.pixelFormat,
-        "-f", "mp4", output,
+        "-c:v", "libx264", "-preset", profile.encoderPreset, "-crf", String(CLEAN_MASTER_CRF), "-pix_fmt", profile.pixelFormat,
+        "-f", "mp4", master,
       ]);
+      const outcome = await composer.applyDisclosure({
+        cleanMasterPath: master,
+        profile,
+        disclosureMode: "THROUGHOUT",
+        outputPath: output,
+      });
+      expect(outcome).toEqual({ kind: "SUCCESS" });
       const frame = await decodeFrame(dir, output, 15);
       expect(frame).toHaveLength(width * height * 3);
 

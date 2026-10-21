@@ -4,7 +4,8 @@ Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0072-real-ffmpeg-media-suites.md` (DS-2),
 `docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3),
-`docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4)
+`docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4),
+`docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -21,7 +22,8 @@ as a series of pull requests, before anything can deliver a video:
 4. **DS-4**: the Clean Master record and its private storage location, refused
    by every download path.
 5. **DS-5**: composition makes the Clean Master, then the customer's video from
-   it.
+   it, in two pull requests: DS-5a, the composer's two encodes, and DS-5b,
+   composition running them.
 6. **DS-6**: publication requires the disclosure of the job's mode and a Clean
    Master, and that the measured video matches its planned size and length.
 

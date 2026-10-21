@@ -188,6 +188,15 @@ class FakeComposer implements DeliverableMediaComposer {
     this.inputs.push(input);
     return this.outcome;
   }
+
+  // The runner still composes with profile v1 and calls neither of these.
+  async composeCleanMaster(): Promise<ComposeDeliverableOutcome> {
+    throw new Error("the runner does not compose a Clean Master yet");
+  }
+
+  async applyDisclosure(): Promise<ComposeDeliverableOutcome> {
+    throw new Error("the runner does not lay the disclosure yet");
+  }
 }
 
 class FakePublisher implements DeliverableOutputPublisher {

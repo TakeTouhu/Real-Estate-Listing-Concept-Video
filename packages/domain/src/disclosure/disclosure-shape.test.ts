@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * What DS-1 may and may not have changed (ADR-0071).
+ * What DS-1 may and may not have changed (ADR-0071), and where DS-5a lets the
+ * disclosure reach a video (ADR-0075).
  *
- * It adds the disclosure layer v1 table, its committed images and the renderer
- * that made them. Nothing draws the disclosure into a video yet: composition,
- * validation and both applications are as they were, and the renderer runs only
- * by hand.
+ * DS-1 added the disclosure layer v1 table, its committed images and the
+ * renderer that made them, which runs only by hand. DS-5a lets the composer lay
+ * an image over a Clean Master; nothing else reads the table, so composition
+ * execution, validation, the database and both applications are as they were.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -40,10 +41,12 @@ describe("DS-1 shape", () => {
     ]);
   });
 
-  it("puts the disclosure into no video yet", () => {
+  it("lets only the composer lay the disclosure over a video", () => {
     const layer = /AI_DISCLOSURE_TEXT|DISCLOSURE_LAYER_ASSETS|disclosureLayerFor|disclosureLayout|renderDisclosureLayer/;
     expect(matching("apps", layer)).toEqual([]);
-    expect(matching("packages/storage/src/managed-output", layer)).toEqual([]);
+    expect(matching("packages/storage/src/managed-output", layer)).toEqual([
+      "packages/storage/src/managed-output/ffmpeg-composer.ts",
+    ]);
     expect(matching("packages/domain/src/deliverable-composition-execution", layer)).toEqual([]);
     expect(matching("packages/domain/src/deliverable-validation", layer)).toEqual([]);
     expect(matching("packages/database/src", layer)).toEqual([]);

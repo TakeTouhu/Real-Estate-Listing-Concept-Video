@@ -1,6 +1,7 @@
 export {
   COMPOSABLE_ASPECT_RATIOS,
   COMPOSABLE_TARGETS,
+  CLEAN_MASTER_CRF,
   COMPOSITION_AUDIO_MODE,
   COMPOSITION_CRF,
   COMPOSITION_ENCODER_PRESET,
@@ -55,6 +56,7 @@ export type {
   ManagedDeliverableOutputKey,
 } from "./durable";
 export type {
+  ApplyDisclosureInput,
   BlockCompositionInput,
   BlockCompositionOutcome,
   ClaimCompositionWorkInput,
