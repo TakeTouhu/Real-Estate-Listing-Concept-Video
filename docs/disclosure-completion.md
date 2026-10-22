@@ -5,7 +5,8 @@ ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0072-real-ffmpeg-media-suites.md` (DS-2),
 `docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3),
 `docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4),
-`docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a)
+`docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a),
+`docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -22,8 +23,9 @@ as a series of pull requests, before anything can deliver a video:
 4. **DS-4**: the Clean Master record and its private storage location, refused
    by every download path.
 5. **DS-5**: composition makes the Clean Master, then the customer's video from
-   it, in two pull requests: DS-5a, the composer's two encodes, and DS-5b,
-   composition running them.
+   it, in three pull requests: DS-5a, the composer's two encodes; DS-5b-1, the
+   master's store and the inspector that checks it; and DS-5b-2, composition
+   running all of them.
 6. **DS-6**: publication requires the disclosure of the job's mode and a Clean
    Master, and that the measured video matches its planned size and length.
 
@@ -1252,4 +1254,285 @@ scheduler and live Stripe charges remain BLOCKED.
 
 DS-5a waits for the product owner's yes before merge. DS-5b (composition runs
 the two encodes, stores the master first-wins, writes its record) comes next,
+after it.
+
+## DS-5b-1 — storing the Clean Master, and checking it before the disclosure
+
+Base: `e759a96` (PR #98 merge commit on `main`; post-merge CI run 637 green).
+ADR: `docs/decisions/0076-clean-master-store-and-inspection.md`
+
+DS-5b is built in two pull requests. DS-5b-1 adds the pieces composition still
+lacked to run DS-5a's two encodes, and nothing calls them; DS-5b-2 switches the
+runner to them, with migration 31 for two new block codes (ADR-0076
+Decision 5, not built).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `50dacbf` | the master's ceiling, the store, the inspector, the comparison with the profile, the tests, the media suites, ADR-0076 and the documentation |
+| `cf81e2a` | the independent review's answers: a master that asks to be shown turned is refused; the copy's path named `cleanMasterPath`; an oversized encode answered with the master already stored; one primary-stream selection for both inspectors; every opened file closed and every body cancelled, asserted; the ceiling and the rate check worded as what they are |
+| `4a3dbac` | a display matrix that names no rotation refused too (written for mutant F12) |
+| this commit | this record; from the mutation pass, a failed write proved to answer without reading the key, the two-stream case given two sizes, counted-only chunks refused by the fake's files; the Roadmap and architecture rows worded as ADR-0076 now is |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-5b-1 does
+
+- **`MAX_CLEAN_MASTER_BYTES`**, 1 GiB, twice the customer's video's ceiling.
+  The master was measured at 1.1 to 1.5 times its video on three synthetic
+  inputs, so this is an expectation, not a bound; the re-measurement on the
+  verified route's real clips, already required before activation, now checks
+  it too.
+- **`createCleanMasterStore`** (`@app/storage`): `probe` reads a master's key
+  and reports its receipt, writing nothing; `fetch` streams the stored master
+  into a private file, hashing as it writes; `publish` stores an encoded
+  master first-wins under the internal namespace and copies back what is at
+  the key, which may be another attempt's master. One read per method, the
+  ceiling enforced on the bytes read, `ABSENT` only when the store says so,
+  one private directory per copy holding the copy and the customer's video,
+  removed on every failure and by one `release`. A key outside
+  `org/{organizationId}/internal/`, or not canonical, is refused as a defect.
+- **`FfprobeCleanMasterInspector`** (`@app/storage`) reads a local master's
+  frame size and frame rate through the media validator's own `ffprobe` run,
+  now shared by both: the media policy first, then no display matrix or
+  rotation, then base and average rates that are one exact fraction.
+- **`cleanMasterMatchesProfile`** (`@app/domain`): the raster equals the
+  profile's width, height and rate (as a fraction), exactly.
+- **Nothing calls them.** The runner still claims under profile v1 and calls
+  `compose`; the dormancy tripwires now name the store and the inspector. No
+  migration.
+
+### Verification
+
+Measured locally (PostgreSQL 16 and FFmpeg 6.1.1, configured like CI) on this
+record's commit, except the database suite, run on `cf81e2a`: nothing it runs
+changed after.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5877 / 5877**, 208 files (5804 before; 73 new) |
+| `pnpm test:db` | **1452 / 1452**, 55 files (unchanged) |
+| `pnpm test:media` | **164 / 164**, 3 files (144 before; 20 new) |
+| `pnpm build` | succeeded |
+
+New and changed tests:
+
+- `packages/storage/src/managed-output/clean-master-store.test.ts`
+  (18), against a fake object store and real files under a
+  per-test `TMPDIR`: probe reports the digest and count of every stored chunk
+  from one read and writes nothing; absent only on the store's "no such key";
+  a failing get, a failing stream, a chunk that is not bytes and an empty
+  object retryable; exactly the ceiling accepted and one byte more refused
+  without reading further; fetch writes exactly the stored bytes, owner-only,
+  through short writes, with the receipt of what it wrote and the video's path
+  beside it; every failure (a short write, a failing close, a failing stream,
+  the ceiling) removes its directory, closes every file it opened and cancels
+  every body; publish stores and copies back the stored object, copies back
+  another attempt's master without overwriting it, refuses a key outside the
+  internal namespace or not canonical before touching anything, sends nothing
+  over the ceiling and answers with what is stored, sends nothing for a
+  missing or empty encode, and is retryable when the write fails (without
+  reading the key, even with a master there) or nothing is at the key after
+  it. The fake's files refuse a counted-only chunk, so a change that writes
+  one fails an assertion instead of aborting the worker.
+- `packages/storage/src/managed-output/ffprobe-clean-master.test.ts` (41): the
+  exact frame-rate reading and its twelve refusals; the raster of a composed
+  master, reduced; a wrong size or rate reported as read; base and average
+  rates that differ, including in the denominator only, or are unknown or
+  missing; every media-policy refusal; four kinds of orientation refused, and
+  side data that turns nothing accepted; the real video stream, never artwork
+  listed before it, and the first of two real streams for both size and rate;
+  the validator's argument vector, defaults, bounds and
+  configuration checks; each run outcome mapped; the three defects thrown
+  without the output's text.
+- `packages/domain/src/deliverable-composition-execution/profile.test.ts`:
+  each of the six profiles matches its own raster and no other; 60/2 is 30/1;
+  one pixel off either way, swapped, 25, 29.97, 60, 30/2, unknown, zero and
+  zero-denominator rates refused.
+- `tests/media/clean-master-inspector.media.test.ts` (8), on real FFmpeg:
+  masters encoded at 720p, portrait, 1918 wide, 25 fps and 29.97 fps read as
+  they are and refused for the 1080p landscape profile; a 1920x1080 30 fps
+  master matched; the same master given a quarter turn with `-c copy`
+  unusable; a PNG, a Matroska file and a text file unusable.
+- `tests/media/composer.media.test.ts`: in all six sizes, the inspector reads
+  the master and the customer's video as the profile's raster, and both match.
+- The dormancy and shape tests: production constructs neither the store nor
+  the inspector; only the port and the store name the master key's type, and
+  only the key module builds one.
+
+### Mutation testing
+
+Two rounds, each mutant applied to the source, the relevant suites run, and
+the file restored and checked by SHA-256; the repository's 935-file manifest
+was identical before and after each pass.
+
+**Round 1, on `4a3dbac`: 75 mutants, 71 killed by an assertion.** Two survived
+and two were caught only because the test worker crashed:
+
+- **S13** (a failed write ignored, then the key read back) survived: every
+  failed-write case also had an empty key, so reading it gave the same answer.
+  A new test fails the write with a master already stored and requires
+  `RETRYABLE_FAILURE` with no read.
+- **F20** (the width taken from the last video stream) survived: the
+  two-stream case used the same size twice. It now uses two sizes and checks
+  the whole raster.
+- **S24** (the ceiling not enforced on the read) and **S33** (probe writing a
+  file) made the store write a counted-only chunk, whose reported length Node
+  aborts on. The fake's files now refuse such a chunk with an error, so a
+  change that writes one fails an assertion.
+
+**Round 2, on this record's code and tests: the 36 store mutants, D01 and F20 run
+again, 38 / 38 killed by an assertion.** In total, **75 / 75 killed**, none
+survived, none broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| S01 | namespace | a canonical key outside internal/ stored | store |
+| S02 | namespace | a non-canonical internal key stored | store |
+| S03 | preflight | an unreadable encode called too large | store |
+| S04 | preflight | an encode over the ceiling sent | store |
+| S05 | preflight | an encode of exactly the ceiling refused | store |
+| S06 | preflight | an oversized encode answers TOO_LARGE without reading the key | store |
+| S07 | preflight | an oversized encode over an empty key retried | store |
+| S08 | preflight | an empty encode sent | store |
+| S09 | write | the master never stored | store |
+| S10 | write | stored in another bucket | store |
+| S11 | write | stored without the expected bucket owner | store |
+| S12 | write | stored with another content type | store |
+| S13 | write | a failed write ignored | store |
+| S14 | write | absent after the write answered as absent | store |
+| S15 | directory | no directory called absent | store |
+| S16 | directory | a failed copy leaves its directory | store |
+| S17 | directory | release removes only the copy | store |
+| S18 | directory | the video's path outside the directory | store |
+| S19 | directory | the copy under another name | store |
+| S20 | directory | the directory under another prefix | store |
+| S21 | read | no body called retryable | store |
+| S22 | read | a chunk that is not bytes skipped | store |
+| S23 | read | a master of exactly the ceiling refused | store |
+| S24 | read | the ceiling never enforced on the read | store |
+| S25 | read | a failed write to the copy ignored | store |
+| S26 | read | an empty object called absent | store |
+| S27 | read | a failing close ignored | store |
+| S28 | read | a file left open on failure | store |
+| S29 | read | a body left uncancelled | store |
+| S30 | read | a throwing read called absent | store |
+| S31 | read | another key read | store |
+| S32 | read | read without the expected bucket owner | store |
+| S33 | read | probe writes a file | store |
+| S34 | read | probe reports another digest | store |
+| S35 | read | the copy's receipt counts one byte less | store |
+| S36 | read | the hash taken of a chunk's first byte only | store |
+| D01 | ceiling | the ceiling one byte higher | store |
+| F01 | rate | a leading zero read | inspector-unit |
+| F02 | rate | a zero denominator read | inspector-unit |
+| F03 | rate | the rate's pattern unanchored | inspector-unit |
+| F04 | rate | an unsafe integer read | inspector-unit |
+| F05 | rate | the rate not reduced | inspector-unit |
+| F06 | rate | the divisor wrong | inspector-unit, media-inspector |
+| F07 | rate | the average's numerator not compared | inspector-unit |
+| F08 | rate | the average's denominator not compared | inspector-unit |
+| F09 | rate | no average required | inspector-unit |
+| F10 | rate | no base rate required | inspector-unit |
+| F11 | orientation | orientation never checked | inspector-unit, media-inspector |
+| F12 | orientation | a display matrix only by its rotation | inspector-unit |
+| F13 | orientation | a rotation in other side data ignored | inspector-unit |
+| F14 | orientation | a rotate tag ignored | inspector-unit |
+| F15 | orientation | a turn of 0 not refused | inspector-unit |
+| F16 | stream | the first listed stream, artwork included | inspector-unit |
+| F17 | stream | the last usable video stream | inspector-unit |
+| F18 | stream | the shared selection takes artwork | inspector-unit, validator-unit |
+| F19 | policy | the media policy skipped | inspector-unit, media-inspector |
+| F20 | policy | the size from the last stream | inspector-unit |
+| F21 | outcome | a refused file called retryable | inspector-unit, media-inspector |
+| F22 | outcome | a failed run called unusable | inspector-unit |
+| F23 | outcome | an unreadable raster called retryable | inspector-unit, media-inspector |
+| F24 | runner | a timeout called a refusal | inspector-unit, validator-unit |
+| F25 | runner | a missing binary called retryable | inspector-unit, validator-unit |
+| F26 | runner | malformed output called a refusal | inspector-unit, validator-unit |
+| F27 | runner | another argument vector | inspector-unit, validator-unit |
+| F28 | runner | the configured timeout ignored | inspector-unit, validator-unit |
+| P01 | profile | a zero denominator matched | profile |
+| P02 | profile | the width not compared | profile, media-inspector |
+| P03 | profile | the height not compared | profile |
+| P04 | profile | the rate compared by numerator | profile |
+| P05 | profile | two pixels of tolerance | profile, media-inspector |
+| P06 | profile | the area compared, so a turned master matches | profile, media-inspector |
+| Z01 | dormancy | the worker constructs the store | domain-dormancy |
+| Z02 | dormancy | the worker constructs the inspector | domain-dormancy |
+| Z03 | dormancy | the store constructs the inspector | storage-dormancy |
+| Z04 | shape | the store builds a master key | shape |
+
+Suites: `store` = `clean-master-store.test.ts`; `inspector-unit` =
+`ffprobe-clean-master.test.ts`; `validator-unit` = `ffprobe.test.ts` and
+`media-validation.test.ts`; `profile` = `profile.test.ts`; `domain-dormancy`
+and `storage-dormancy` = the two dormancy tests; `shape` =
+`clean-master-shape.test.ts`; `media-inspector` = the inspector media suite on
+real FFmpeg. Z01 and Z02 add a construction to the worker's bootstrap; Z03
+and Z04 add one to the store's module.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-5a, an independent review
+agent reviewed `50dacbf` against `e759a96`, reading only git objects. It traced
+every return path in the store by hand and found no wrong outcome, and found
+the validator's behaviour unchanged by the shared `ffprobe` run. Verdict:
+nothing blocking; five should-fix findings and seven nits, all answered in
+`cf81e2a`:
+
+| Finding | Answer |
+| --- | --- |
+| The copy's path is named `localPath`, the customer video publisher's field, so DS-5b-2 could hand the master to that publisher | Fixed: `cleanMasterPath`, as `applyDisclosure`'s input names it, with a doc saying why |
+| The fetch failure tests do not prove files are closed or bodies cancelled (`rm -rf` succeeds with a file still open) | Fixed: every failure case asserts each opened file closed and each body cancelled, in probe's loop too |
+| No rate case differs in the denominator only | Fixed: 30/1 against 30/7 |
+| The inspector does not check rotation: FFmpeg turns a master with a display matrix before the overlay, so 1920x1080 coded frames would be overlaid as 1080x1920 | Confirmed by measurement on FFmpeg 6.1.1 (`-display_rotation 90 -c copy`: `ffprobe` reports 1920x1080, the filter graph sees 1080x1920) and fixed: a display matrix, any rotation in side data, or a `rotate` tag is `UNUSABLE`, unit-tested in four forms and on real FFmpeg |
+| The 1 GiB ceiling is stated as a guarantee, but rests on three measurements | Fixed: worded as a measured expectation with its consequence named (a master over twice its video would be stopped with a video that fitted), and added to the re-measurement TODO |
+| Nit: an oversized or empty encode answers without reading the key, though another attempt may have stored a master | Fixed for the oversized encode, which would end the work: it sends nothing and answers with the stored master, `TOO_LARGE` only over an empty key. An empty encode stays retryable, which already reads the key on the next attempt |
+| Nit: an unneeded dormancy exemption for `ffprobe.ts` | Removed |
+| Nit: the inspector's port doc names only a launch failure | Fixed: names oversized and malformed output too, and says none is a fact about the file |
+| Nit: "constant rate" claims too much | Fixed in the port, the adapter and ADR-0076: agreeing rates refuse what visibly is not constant; the composer, the key's only writer, is what makes it constant |
+| Nit: the primary stream is selected twice | Fixed: one `usableVideoStreams` helper for the validator and the inspector |
+| Nit: a test comment says a counted-only chunk is never hashed | Fixed |
+| Nit: export order | Fixed |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composition-execution and Clean Master rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | Not applicable: nothing runs the store or the inspector; DS-5b-2 adds composition's sequence (ADR-0076 Decision 5 states it) |
+| OpenAPI / API change summary | `docs/api-changes-ds-5b-1.md`: no HTTP change; the domain and storage exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-5b-1*: no migration; DS-5b-2 plans migration 31 |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure
+item; the master's ceiling joins the re-measurement on the provider's real
+output).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-5b-1 adds a store and an inspector
+that nothing constructs: no worker, scheduler, credential, environment
+variable or payment integration. Paid Provider Activation, production
+credentials, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Composition does not run any of it yet**, so a composed deliverable still
+  has no disclosure and no master; DS-5b-2 switches the runner.
+- **The ceiling is a measured expectation**, on synthetic clips; TODO asks for
+  the real route's.
+- **Agreeing rates are not proof of a constant rate.** The inspector refuses
+  what visibly is not one; the composer's `fps` filter is what makes a master
+  constant, and nothing else writes the key.
+
+### Remaining work
+
+DS-5b-1 waits for the product owner's yes before merge. DS-5b-2 (profile v2,
+the claim carrying the mode and the master's key, the master before the video,
+one record, migration 31's two block codes, and `compose` removed) comes next,
 after it.

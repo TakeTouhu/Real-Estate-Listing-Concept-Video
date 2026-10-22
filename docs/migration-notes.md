@@ -1446,3 +1446,13 @@ suites onto them. It reads and writes no table.
 composer, and the composition runner still calls only `compose`. No new
 environment variable; the composer's new `disclosureLayerDirectory` setting is
 a constructor argument, set by nothing yet.
+
+## DS-5b-1 — storing the Clean Master, and checking it before the disclosure
+
+**No migration.** DS-5b-1 adds the master's store and its inspector. It reads
+and writes no table; the master's table (migration 30) is still written by
+nothing.
+
+**What changes at deploy.** Nothing: nothing in production constructs the store
+or the inspector, and the composition runner still calls only `compose`. No new
+environment variable.

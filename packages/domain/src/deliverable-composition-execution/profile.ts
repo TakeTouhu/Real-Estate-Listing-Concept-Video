@@ -33,6 +33,7 @@
 
 import { AppError } from "@app/shared";
 import type { TargetOutputResolution } from "../generation/model-catalog";
+import type { CleanMasterRaster } from "./ports";
 
 /** The versioned profile identity, persisted verbatim on every work row. */
 export const COMPOSITION_PROFILE_KEY = "vtavision-compose:v1";
@@ -197,6 +198,30 @@ export function resolveCompositionProfile(target: {
       crf: COMPOSITION_CRF,
     },
   };
+}
+
+/**
+ * `true` when a Clean Master is the profile's frame size and frame rate, so the
+ * disclosure image for that size, laid at the origin, covers it exactly
+ * (ADR-0076 Decision 3).
+ *
+ * Exact: no rounding and no tolerance. A master of another size would come out
+ * with the image cut off or misplaced, or, smaller than the image's ink, with no
+ * disclosure at all. The frame rates are compared as fractions, so 60/2 is 30/1;
+ * a fraction over zero is no rate at all, and 0/0, ffprobe's "unknown", would
+ * otherwise equal every fraction.
+ */
+export function cleanMasterMatchesProfile(
+  raster: CleanMasterRaster,
+  profile: CompositionProfile,
+): boolean {
+  return (
+    raster.frameRateDenominator > 0 &&
+    raster.widthPx === profile.targetWidthPx &&
+    raster.heightPx === profile.targetHeightPx &&
+    raster.frameRateNumerator * profile.frameRateDenominator ===
+      raster.frameRateDenominator * profile.frameRateNumerator
+  );
 }
 
 /**

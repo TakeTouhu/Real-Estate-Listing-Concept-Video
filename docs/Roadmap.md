@@ -145,6 +145,16 @@ reviewed one and handing FFmpeg a private copy of the checked bytes. No input's
 tags or chapters reach a composed file. Real FFmpeg in CI proves both in all six
 sizes. Composition does not call either yet; DS-5b will.
 
+**DS-5b-1 — storing the Clean Master, and checking it before the disclosure**
+(ADR-0076, no migration): a store that keeps the master first-wins under the
+internal namespace and copies back exactly the stored bytes with their receipt,
+at most 1 GiB; and an inspector that reads a master's frame size and a frame
+rate its base and average agree on, refusing a master that is not the
+profile's or asks to be shown turned. Real FFmpeg in CI proves every composed
+master matches its profile and masters of another size, rate or orientation do
+not. Nothing calls either yet; DS-5b-2 runs them in
+composition.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

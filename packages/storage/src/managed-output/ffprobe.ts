@@ -3,6 +3,9 @@ import { AppError } from "@app/shared";
 import type { ProcessRunInput, ProcessRunOutcome, ProcessRunner } from "./process-runner";
 import {
   ISO_BMFF_CONTAINER,
+  type CleanMasterInspector,
+  type CleanMasterRaster,
+  type InspectCleanMasterOutcome,
   type ManagedOutputMediaFacts,
   type ManagedOutputMediaInvalidReason,
 } from "@app/domain";
@@ -201,6 +204,25 @@ export function isIsoBmffFormatName(formatName: unknown): boolean {
     .some((token) => ISO_BMFF_FORMAT_TOKENS.has(token));
 }
 
+/** The document's streams that are objects, in ffprobe's order. */
+function streamsOf(document: Record<string, unknown>): Record<string, unknown>[] {
+  const rawStreams = document.streams;
+  return Array.isArray(rawStreams) ? rawStreams.filter(isRecord) : [];
+}
+
+/**
+ * The document's usable video streams, in ffprobe's order; the first is the
+ * primary one, for the media policy and the Clean Master inspector alike.
+ *
+ * Primary video stream determinism: the first *usable* video stream ffprobe
+ * lists — attached artwork is skipped, so an audio-only file with cover art
+ * has no video stream at all, and a real video that also carries artwork still
+ * selects the real one regardless of listing order.
+ */
+function usableVideoStreams(document: Record<string, unknown>): Record<string, unknown>[] {
+  return streamsOf(document).filter(isUsableVideoStream);
+}
+
 /**
  * Interpret one parsed ffprobe document under the closed media policy.
  *
@@ -220,16 +242,8 @@ export function interpretFfprobeDocument(
     return { kind: "INVALID", reason: "CONTAINER_UNSUPPORTED" };
   }
 
-  const rawStreams = document.streams;
-  const streams: Record<string, unknown>[] = Array.isArray(rawStreams)
-    ? rawStreams.filter(isRecord)
-    : [];
-
-  // Primary video stream determinism: the first *usable* video stream ffprobe
-  // lists — attached artwork is skipped, so an audio-only file with cover art
-  // has no video stream at all, and a real video that also carries artwork
-  // still selects the real one regardless of listing order.
-  const videoStreams = streams.filter(isUsableVideoStream);
+  const streams = streamsOf(document);
+  const videoStreams = usableVideoStreams(document);
   const audioStreams = streams.filter((s) => s.codec_type === "audio");
   const primaryVideo = videoStreams[0];
   if (primaryVideo === undefined) {
@@ -273,29 +287,61 @@ export function interpretFfprobeDocument(
 // ---------------------------------------------------------------------------
 
 export class FfprobeMediaProbe implements ManagedOutputMediaProbe {
-  readonly #program: string;
-  readonly #timeoutMs: number;
-  readonly #maxStdoutBytes: number;
-  readonly #runner: ProcessRunner;
+  readonly #run: (localPath: string) => Promise<FfprobeRun>;
 
   constructor(config: FfprobeMediaProbeConfig, deps: FfprobeMediaProbeDeps) {
-    this.#program = config.programPath ?? DEFAULT_PROBE_PROGRAM;
-    if (typeof this.#program !== "string" || this.#program.trim().length === 0) {
-      throw new AppError("CONFIGURATION_ERROR", "Media inspector program must be non-blank");
-    }
-    this.#timeoutMs = validateProbeTimeoutMs(config.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
-    this.#maxStdoutBytes = validateProbeMaxStdoutBytes(
-      config.maxStdoutBytes ?? DEFAULT_PROBE_MAX_STDOUT_BYTES,
-    );
-    this.#runner = deps.runner;
+    this.#run = ffprobeRunnerFor(config, deps);
   }
 
   async probe(localPath: string): Promise<ManagedOutputMediaProbeOutcome> {
-    const outcome = await this.#runner.run({
-      program: this.#program,
+    const run = await this.#run(localPath);
+    if (run.kind === "RETRYABLE") return { kind: "RETRYABLE" };
+    // It ran and refused the file: structurally unreadable media. The
+    // inspector's own diagnostics are not carried.
+    if (run.kind === "REJECTED") return { kind: "INVALID", reason: "PROBE_REJECTED" };
+
+    const interpreted = interpretFfprobeDocument(run.document);
+    return interpreted.kind === "FACTS"
+      ? { kind: "FACTS", facts: interpreted.facts }
+      : { kind: "INVALID", reason: interpreted.reason };
+  }
+}
+
+/** What one bounded `ffprobe` run concluded, before any policy is applied. */
+type FfprobeRun =
+  | { readonly kind: "DOCUMENT"; readonly document: unknown }
+  /** It ran and exited non-zero: it refused the file. */
+  | { readonly kind: "REJECTED" }
+  /** It could not run this time. Says nothing about the file or the deployment. */
+  | { readonly kind: "RETRYABLE" };
+
+/**
+ * The one way this module runs `ffprobe`: the validated program, timeout and
+ * stdout ceiling, the fixed argument vector, and the closed reading of what
+ * happened. Shared by both inspectors, so the media validator and the Clean
+ * Master inspector cannot disagree about what a timeout or a missing binary
+ * means.
+ */
+function ffprobeRunnerFor(
+  config: FfprobeMediaProbeConfig,
+  deps: FfprobeMediaProbeDeps,
+): (localPath: string) => Promise<FfprobeRun> {
+  const program = config.programPath ?? DEFAULT_PROBE_PROGRAM;
+  if (typeof program !== "string" || program.trim().length === 0) {
+    throw new AppError("CONFIGURATION_ERROR", "Media inspector program must be non-blank");
+  }
+  const timeoutMs = validateProbeTimeoutMs(config.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
+  const maxStdoutBytes = validateProbeMaxStdoutBytes(
+    config.maxStdoutBytes ?? DEFAULT_PROBE_MAX_STDOUT_BYTES,
+  );
+  const runner = deps.runner;
+
+  return async (localPath) => {
+    const outcome = await runner.run({
+      program,
       args: ffprobeArgsFor(localPath),
-      timeoutMs: this.#timeoutMs,
-      maxStdoutBytes: this.#maxStdoutBytes,
+      timeoutMs,
+      maxStdoutBytes,
     });
 
     switch (outcome.kind) {
@@ -316,25 +362,128 @@ export class FfprobeMediaProbe implements ManagedOutputMediaProbe {
         break;
     }
 
-    if (outcome.exitCode !== 0) {
-      // It ran and refused the file: structurally unreadable media. The
-      // inspector's own diagnostics are not carried.
-      return { kind: "INVALID", reason: "PROBE_REJECTED" };
-    }
+    if (outcome.exitCode !== 0) return { kind: "REJECTED" };
 
-    let document: unknown;
     try {
-      document = JSON.parse(outcome.stdout);
+      return { kind: "DOCUMENT", document: JSON.parse(outcome.stdout) as unknown };
     } catch {
       // Malformed output from a tool that exited zero is a contract violation,
       // not media evidence. The raw text never enters the defect.
       throw new ManagedOutputMediaValidationDefect("PROBE_OUTPUT_MALFORMED");
     }
+  };
+}
 
-    const interpreted = interpretFfprobeDocument(document);
-    return interpreted.kind === "FACTS"
-      ? { kind: "FACTS", facts: interpreted.facts }
-      : { kind: "INVALID", reason: interpreted.reason };
+// ---------------------------------------------------------------------------
+// The Clean Master inspector (ADR-0076 Decision 3)
+// ---------------------------------------------------------------------------
+
+function greatestCommonDivisor(a: number, b: number): number {
+  let x = a;
+  let y = b;
+  while (y !== 0) [x, y] = [y, x % y];
+  return x;
+}
+
+/**
+ * An `ffprobe` frame rate (`"30/1"`) as a reduced fraction, or `null`.
+ *
+ * Exact: two positive integers and nothing else. `"0/0"`, ffprobe's "unknown",
+ * a decimal, a sign, spaces and a missing value are all `null`, because a frame
+ * rate this cannot read exactly is not one it may compare.
+ */
+export function exactFrameRate(
+  value: unknown,
+): { readonly numerator: number; readonly denominator: number } | null {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^([1-9][0-9]*)\/([1-9][0-9]*)$/);
+  if (match === null) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator)) return null;
+  const divisor = greatestCommonDivisor(numerator, denominator);
+  return { numerator: numerator / divisor, denominator: denominator / divisor };
+}
+
+/**
+ * Whether a stream asks to be shown turned or flipped: a display matrix in its
+ * side data, a rotation there, or a `rotate` tag.
+ *
+ * FFmpeg applies a display matrix when it decodes, so a master whose coded
+ * frames are 1920x1080 under a quarter turn enters the disclosure's filter
+ * graph as 1080x1920, with the image cut off. Measured on FFmpeg 6.1.1. A
+ * master the composer encodes carries none, so any is refused rather than
+ * interpreted.
+ */
+function carriesOrientation(stream: Record<string, unknown>): boolean {
+  const sideData = stream.side_data_list;
+  if (
+    Array.isArray(sideData) &&
+    sideData.some(
+      (entry) => isRecord(entry) && (entry.side_data_type === "Display Matrix" || "rotation" in entry),
+    )
+  ) {
+    return true;
+  }
+  return isRecord(stream.tags) && "rotate" in stream.tags;
+}
+
+/**
+ * Read a Clean Master's frame size and frame rate from one parsed ffprobe
+ * document, or `null` when it is not a video a disclosure can be laid over.
+ *
+ * The media policy decides first, the one the customer's video is validated
+ * under: MP4-family, a usable video stream with real dimensions, a real
+ * duration. The primary video stream must then carry no orientation, and its
+ * frame rate is its `r_frame_rate`, only when its `avg_frame_rate` is the same
+ * fraction: a stream whose average differs from its base rate does not run at
+ * the one rate the profile names. Equal rates do not prove a constant one; the
+ * composer's own `fps` filter is what makes it constant.
+ */
+export function interpretCleanMasterRaster(document: unknown): CleanMasterRaster | null {
+  const interpreted = interpretFfprobeDocument(document);
+  if (interpreted.kind !== "FACTS" || !isRecord(document)) return null;
+
+  const primary = usableVideoStreams(document)[0];
+  if (primary === undefined || carriesOrientation(primary)) return null;
+  const base = exactFrameRate(primary.r_frame_rate);
+  const average = exactFrameRate(primary.avg_frame_rate);
+  if (
+    base === null ||
+    average === null ||
+    base.numerator !== average.numerator ||
+    base.denominator !== average.denominator
+  ) {
+    return null;
+  }
+  return {
+    widthPx: interpreted.facts.videoWidth,
+    heightPx: interpreted.facts.videoHeight,
+    frameRateNumerator: base.numerator,
+    frameRateDenominator: base.denominator,
+  };
+}
+
+/**
+ * The `ffprobe`-backed Clean Master inspector: the master's frame size and
+ * frame rate, read before the disclosure is laid over it (ADR-0076 Decision 3).
+ *
+ * The same program, bounds and argument vector as the media validator's probe,
+ * and the same reading of a timeout or a missing binary.
+ */
+export class FfprobeCleanMasterInspector implements CleanMasterInspector {
+  readonly #run: (localPath: string) => Promise<FfprobeRun>;
+
+  constructor(config: FfprobeMediaProbeConfig, deps: FfprobeMediaProbeDeps) {
+    this.#run = ffprobeRunnerFor(config, deps);
+  }
+
+  async inspect({ localPath }: { readonly localPath: string }): Promise<InspectCleanMasterOutcome> {
+    const run = await this.#run(localPath);
+    if (run.kind === "RETRYABLE") return { kind: "RETRYABLE_FAILURE" };
+    if (run.kind === "REJECTED") return { kind: "UNUSABLE" };
+    const raster = interpretCleanMasterRaster(run.document);
+    return raster === null ? { kind: "UNUSABLE" } : { kind: "RASTER", raster };
   }
 }
 

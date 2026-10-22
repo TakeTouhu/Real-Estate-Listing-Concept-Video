@@ -1124,7 +1124,9 @@ them is **built**. Each item below records the settled decision and what remains
       version, Mode A only. DS-4 (ADR-0074, migration 30) added the Clean
       Master's record and its internal location, which no signed URL reaches.
       DS-5a (ADR-0075) let the composer encode the master and lay the
-      disclosure over it; composition does not run either yet (DS-5b).*
+      disclosure over it. DS-5b-1 (ADR-0076) added the master's store and the
+      inspector that checks its size and rate; composition does not run any of
+      them yet (DS-5b-2).*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1139,7 +1141,10 @@ them is **built**. Each item below records the settled decision and what remains
       and a master 1.5 times the video, within the approved plan's estimate.
       Before composition is activated, repeat ADR-0075's procedure on the
       verified route's own clips; a different answer is a new composition
-      profile, not an edit of the constant.
+      profile, not an edit of the constant. The same measurement checks
+      `MAX_CLEAN_MASTER_BYTES` (ADR-0076 Decision 1): 1 GiB assumes no master
+      is more than twice its video, and one that is would be stopped with a
+      video that would have fitted.
 - [ ] **Build Mode C gating and consent.** Organization-level enablement,
       `disclosure.none`, per-video consent with two affirmative checkboxes, and
       the consent evidence record (`organizationId`, `userId`, target,

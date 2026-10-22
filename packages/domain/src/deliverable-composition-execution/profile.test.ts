@@ -22,6 +22,7 @@ import {
   COMPOSITION_TRANSITION_MODE,
   COMPOSITION_VIDEO_CODEC,
   assertRunnableProfile,
+  cleanMasterMatchesProfile,
   isComposableAspectRatio,
   resolveCompositionProfile,
 } from "./profile";
@@ -181,5 +182,52 @@ describe("a persisted profile from another version is refused, never re-derived"
       expect(error).toBeInstanceOf(AppError);
       expect((error as AppError).code).toBe("CONFIGURATION_ERROR");
     }
+  });
+});
+
+describe("a Clean Master is laid over only at the profile's exact size and rate", () => {
+  const profiles = COMPOSABLE_TARGETS.map((target) => {
+    const outcome = resolveCompositionProfile(target);
+    if (outcome.kind !== "RESOLVED") throw new Error("expected a profile");
+    return outcome.profile;
+  });
+  const rasterOf = (profile: (typeof profiles)[number]) => ({
+    widthPx: profile.targetWidthPx,
+    heightPx: profile.targetHeightPx,
+    frameRateNumerator: profile.frameRateNumerator,
+    frameRateDenominator: profile.frameRateDenominator,
+  });
+
+  it("matches each profile's own raster, and no other profile's", () => {
+    for (const profile of profiles) {
+      for (const other of profiles) {
+        expect(cleanMasterMatchesProfile(rasterOf(other), profile)).toBe(other === profile);
+      }
+    }
+  });
+
+  it("compares the rate as a fraction", () => {
+    const profile = profiles[0]!;
+    expect(cleanMasterMatchesProfile({ ...rasterOf(profile), frameRateNumerator: 60, frameRateDenominator: 2 }, profile)).toBe(true);
+  });
+
+  it.each([
+    ["one pixel narrower", { widthPx: 1919 }],
+    ["one pixel wider", { widthPx: 1921 }],
+    ["one pixel shorter", { heightPx: 1079 }],
+    ["one pixel taller", { heightPx: 1081 }],
+    ["swapped", { widthPx: 1080, heightPx: 1920 }],
+    ["at 25 fps", { frameRateNumerator: 25 }],
+    ["at 29.97 fps", { frameRateNumerator: 30000, frameRateDenominator: 1001 }],
+    ["at 60 fps", { frameRateNumerator: 60 }],
+    ["at 30/2", { frameRateDenominator: 2 }],
+    ["at an unknown rate", { frameRateNumerator: 0, frameRateDenominator: 0 }],
+    ["at a zero rate", { frameRateNumerator: 0 }],
+    ["at a zero denominator", { frameRateDenominator: 0 }],
+  ])("refuses a 1080p master %s", (_label, change) => {
+    const profile = profileFor("16:9", "1080p");
+    if (profile.kind !== "RESOLVED") throw new Error("expected a profile");
+    const raster = { ...rasterOf(profile.profile), ...change };
+    expect(cleanMasterMatchesProfile(raster, profile.profile)).toBe(false);
   });
 });

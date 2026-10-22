@@ -223,7 +223,11 @@ async function materializeOne(
   }
 }
 
-async function writeAll(
+/**
+ * Write all of `chunk`, or report that the file stopped taking bytes. Shared
+ * with the Clean Master store, which streams into its copy the same way.
+ */
+export async function writeAll(
   file: { write(d: Uint8Array, o: number, l: number): Promise<{ bytesWritten: number }> },
   chunk: Uint8Array,
 ): Promise<boolean> {
