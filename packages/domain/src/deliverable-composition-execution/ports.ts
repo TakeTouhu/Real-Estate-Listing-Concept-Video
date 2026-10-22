@@ -86,6 +86,18 @@ export interface DeliverableCompositionClaim {
   readonly profile: CompositionProfile;
   readonly outputStorageKey: ManagedDeliverableOutputKey;
   /**
+   * The deliverable version's frozen disclosure mode (ADR-0073), read under the
+   * claim's locks: what the customer's video must show. Never re-read from the
+   * job, a setting or a permission (ADR-0052 Decision 10).
+   */
+  readonly disclosureMode: DisclosureMode;
+  /**
+   * Where this version's Clean Master is stored (ADR-0074), in the internal
+   * namespace no signed URL reaches. Built here, from the same two identifiers
+   * as {@link outputStorageKey}, so the runner never builds a key.
+   */
+  readonly cleanMasterStorageKey: ManagedCleanMasterKey;
+  /**
    * The length the job was admitted for, carried so the duration invariant can
    * be proved by the caller rather than inside the claim transaction.
    *
@@ -134,10 +146,30 @@ export interface ClaimCompositionWorkInput {
 // Finalize and defer
 // ---------------------------------------------------------------------------
 
+/** A stored Clean Master's receipt, read from the bytes at its key (ADR-0076 Decision 2). */
+export interface CleanMasterReceipt {
+  readonly sha256: Sha256Digest;
+  readonly sizeBytes: SafePositiveByteCount;
+  /**
+   * When those bytes were read and hashed: the master's record's `verifiedAt`
+   * (ADR-0074), which can be an encode earlier than the video's.
+   */
+  readonly verifiedAt: number;
+}
+
 export interface FinalizeCompositionInput {
   readonly claim: DeliverableCompositionClaim;
   readonly outputSha256: Sha256Digest;
   readonly outputSizeBytes: SafePositiveByteCount;
+  /**
+   * The receipt of the Clean Master the customer's video was made from, which
+   * Transaction J2 records in the same commit as the video's (ADR-0077).
+   *
+   * `null` only while composition runs profile v1, which makes no master;
+   * DS-5b-2b's profile v2 always has one, and makes this required.
+   */
+  readonly cleanMaster: CleanMasterReceipt | null;
+  /** When the video's receipt was established: its `outputVerifiedAt`. */
   readonly verifiedAt: number;
   readonly context: TransitionContext;
 }
@@ -209,8 +241,10 @@ export interface DeliverableCompositionRepository {
   ): Promise<ClaimCompositionWorkOutcome>;
 
   /**
-   * Transaction J2, in one short transaction: the durable receipt and
-   * `COMPOSING -> DELIVERABLE_VALIDATING`, together or not at all.
+   * Transaction J2, in one short transaction: the durable receipt, the Clean
+   * Master's record when there is a master, and
+   * `COMPOSING -> DELIVERABLE_VALIDATING`, together or not at all. A replay
+   * compares both receipts.
    */
   finalizeComposition(
     input: FinalizeCompositionInput,

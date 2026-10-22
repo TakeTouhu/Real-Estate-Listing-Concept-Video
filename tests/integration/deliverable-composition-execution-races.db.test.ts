@@ -34,7 +34,8 @@ import {
  *
  * **A block racing a finalize.** Whichever commits first, the row ends in one
  * of the two states and the other caller is told it lost — never a row that is
- * both verified and blocked.
+ * both verified and blocked. **Two finalizes** of one claim record one Clean
+ * Master between them.
  *
  * No `sleep` is a synchronization authority. Ordering is established with a real
  * row lock held by a third connection, and `pg_stat_activity` is consulted to
@@ -49,6 +50,14 @@ const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
 const LEASE_MS = 30 * 60_000;
 const SHA = sha256Digest("f".repeat(64));
 const BYTES = safePositiveByteCount(4_096);
+const MASTER = {
+  sha256: sha256Digest("e".repeat(64)),
+  sizeBytes: safePositiveByteCount(8_192),
+  verifiedAt: NOW + 30_000,
+};
+
+const mastersOf = (deliverableVersionId: string) =>
+  prisma.generationDeliverableCleanMaster.count({ where: { deliverableVersionId } });
 
 async function blockedBackends(client: PrismaClient): Promise<number> {
   const rows = await client.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
@@ -221,12 +230,14 @@ RUN("composition execution under contention", () => {
         claim: stale.claim,
         outputSha256: SHA,
         outputSizeBytes: BYTES,
+        cleanMaster: MASTER,
         verifiedAt: NOW + 120_000,
         context: ctx(),
       }),
     ).toEqual({ kind: "LEASE_LOST" });
 
     expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(before);
+    expect(await mastersOf(planned.deliverableVersionId)).toBe(0);
     expect(await eventCount(prisma)).toBe(events);
     expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
   });
@@ -268,6 +279,7 @@ RUN("composition execution under contention", () => {
           claim: held.claim,
           outputSha256: SHA,
           outputSizeBytes: BYTES,
+          cleanMaster: MASTER,
           verifiedAt: NOW + 60_000,
           context: ctx(),
         }),
@@ -294,15 +306,62 @@ RUN("composition execution under contention", () => {
         expect(blockOutcome.ok && blockOutcome.value.kind).toBe("LEASE_LOST");
         expect(work.blockCode).toBeNull();
         expect(work.blockedAt).toBeNull();
+        expect(await mastersOf(planned.deliverableVersionId)).toBe(1);
         expect((await jobOf(prisma, planned.jobId)).state).toBe("DELIVERABLE_VALIDATING");
       } else {
         expect(blockOutcome.ok && blockOutcome.value.kind).toBe("BLOCKED");
         expect(finalizeOutcome.ok && finalizeOutcome.value.kind).toBe("LEASE_LOST");
         expect(work?.outputSha256).toBeNull();
         expect(work?.lastRetryCode).toBeNull();
+        // The lost finalize recorded no master either: the record and the
+        // receipt commit together or not at all.
+        expect(await mastersOf(planned.deliverableVersionId)).toBe(0);
         // Blocking moves no job, so a lost finalize leaves it composing.
         expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
       }
+    } finally {
+      await a.$disconnect();
+      await b.$disconnect();
+    }
+  });
+
+  it("records one master when two finalizes of one claim race", async () => {
+    // A worker that retries its finalize, or two that hold the same claim,
+    // must not record the master twice or fail on its unique key: the second
+    // waits on the job's lock, then finds the work verified and the job moved
+    // on (ADR-0077 Decision 3).
+    const planned = await seedPlannedDeliverable(prisma);
+    const held = await claimVia(prisma, planned.deliverableVersionId);
+    if (held.kind !== "CLAIMED") throw new Error("expected a claim");
+
+    const barrier = await jobBarrier(planned.jobId);
+    const a = new PrismaClient();
+    const b = new PrismaClient();
+
+    try {
+      const finalizeVia = (client: PrismaClient) =>
+        settled(
+          createDeliverableCompositionExecutionRepository(client).finalizeComposition({
+            claim: held.claim,
+            outputSha256: SHA,
+            outputSizeBytes: BYTES,
+            cleanMaster: MASTER,
+            verifiedAt: NOW + 60_000,
+            context: ctx(),
+          }),
+        );
+      const first = finalizeVia(a);
+      const second = finalizeVia(b);
+      expect(await waitForBlocked(prisma, 2)).toBe(true);
+      await barrier.release();
+
+      const kinds = [await first, await second].map((outcome) =>
+        outcome.ok ? outcome.value.kind : `threw ${String(outcome.error)}`,
+      );
+      expect(kinds.filter((kind) => kind === "FINALIZED")).toHaveLength(1);
+      expect(kinds.filter((kind) => kind === "LEASE_LOST" || kind === "ALREADY_FINALIZED")).toHaveLength(1);
+      expect(await mastersOf(planned.deliverableVersionId)).toBe(1);
+      expect((await compositionOf(prisma, planned.deliverableVersionId))?.status).toBe("OUTPUT_VERIFIED");
     } finally {
       await a.$disconnect();
       await b.$disconnect();

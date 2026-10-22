@@ -120,6 +120,17 @@ export const COMPOSITION_BLOCK_CODES = [
   "SOURCE_INTEGRITY_MISMATCH",
   /** The composed object exceeds the deliverable ceiling. */
   "OUTPUT_SIZE_LIMIT_EXCEEDED",
+  /**
+   * The stored Clean Master exceeds {@link MAX_CLEAN_MASTER_BYTES} (ADR-0077).
+   * First-wins, so no later attempt stores a smaller one.
+   */
+  "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED",
+  /**
+   * The stored Clean Master is not a video the disclosure can be laid over, or
+   * is not the profile's frame size and frame rate (ADR-0076 Decision 3,
+   * ADR-0077). First-wins, so every attempt would read the same bytes.
+   */
+  "CLEAN_MASTER_UNUSABLE",
 ] as const;
 export type DeliverableCompositionBlockCode = (typeof COMPOSITION_BLOCK_CODES)[number];
 
@@ -345,6 +356,11 @@ export type DeliverableCompositionExecutionDefectCode =
   | "PARTIAL_COMPOSITION_STATE"
   /** A finalize re-presented a different receipt for an already-verified object. */
   | "OUTPUT_RECEIPT_CONFLICT"
+  /**
+   * A finalize re-presented a different Clean Master receipt, or none, for a
+   * deliverable whose master is already recorded (or the reverse).
+   */
+  | "CLEAN_MASTER_RECEIPT_CONFLICT"
   /** A block re-presented a different code for an already-blocked row. */
   | "COMPOSITION_BLOCK_CONFLICT"
   /** The job's current deliverable pointer moved during composition. */
@@ -359,6 +375,8 @@ const DEFECT_MESSAGES: Record<DeliverableCompositionExecutionDefectCode, string>
     "Composition work, job and deliverable disagree about whether composition completed",
   OUTPUT_RECEIPT_CONFLICT:
     "A composed deliverable already carries a different durable output receipt",
+  CLEAN_MASTER_RECEIPT_CONFLICT:
+    "A composed deliverable already carries a different durable Clean Master receipt",
   COMPOSITION_BLOCK_CONFLICT:
     "A blocked composition already carries a different durable block reason",
   CURRENT_DELIVERABLE_POINTER_MOVED:

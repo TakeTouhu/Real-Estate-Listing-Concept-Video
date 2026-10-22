@@ -343,6 +343,9 @@ export class DeliverableCompositionRunner {
       claim,
       outputSha256,
       outputSizeBytes,
+      // Profile v1 makes no Clean Master, so there is no receipt to record.
+      // DS-5b-2b's profile v2 makes one before the video and passes it here.
+      cleanMaster: null,
       verifiedAt: this.#deps.clock(),
       context: this.#deps.context(claim.organizationId),
     });

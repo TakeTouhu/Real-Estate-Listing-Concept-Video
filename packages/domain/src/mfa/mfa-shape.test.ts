@@ -46,7 +46,7 @@ describe("durable shape", () => {
     // and DS-3 migration 29.
     expect(dirs.slice(25, 27)).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
     expect(dirs.filter((dir) => dir.includes("mfa"))).toEqual([MIGRATION_DIR, REQUIREMENT_DIR]);
-    expect(dirs).toHaveLength(31);
+    expect(dirs).toHaveLength(32);
   });
 
   it("MFA-4 adds one organizations column, off for every existing organization, and rewrites no row", () => {
