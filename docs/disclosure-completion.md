@@ -6,7 +6,8 @@ ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0073-disclosure-mode-frozen-at-admission.md` (DS-3),
 `docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4),
 `docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a),
-`docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1)
+`docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1),
+`docs/decisions/0077-composition-records-for-the-clean-master.md` (DS-5b-2a)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -23,9 +24,10 @@ as a series of pull requests, before anything can deliver a video:
 4. **DS-4**: the Clean Master record and its private storage location, refused
    by every download path.
 5. **DS-5**: composition makes the Clean Master, then the customer's video from
-   it, in three pull requests: DS-5a, the composer's two encodes; DS-5b-1, the
-   master's store and the inspector that checks it; and DS-5b-2, composition
-   running all of them.
+   it, in four pull requests: DS-5a, the composer's two encodes; DS-5b-1, the
+   master's store and the inspector that checks it; DS-5b-2a, the claim's and
+   Transaction J2's records for the master, with migration 31; and DS-5b-2b,
+   composition running all of them.
 6. **DS-6**: publication requires the disclosure of the job's mode and a Clean
    Master, and that the measured video matches its planned size and length.
 

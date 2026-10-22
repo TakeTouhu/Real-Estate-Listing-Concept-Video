@@ -117,17 +117,21 @@ describe("DS-3 shape", () => {
     // No route admits a whole-video generation yet, and nothing shows the mode.
     expect(matching("apps", /disclosureMode|DisclosureMode/)).toEqual([]);
     // No SQL ever writes it: the raw mentions are the plan's and the claim's
-    // locked reads.
+    // locked reads, and composition discovery's filter.
     for (const file of [PLANS, EXECUTION, JOBS]) {
-      expect(read(file).match(/(?<!AS )"disclosureMode"(?!::text\s+AS "disclosureMode")/g)).toBeNull();
+      expect(
+        read(file).match(/(?<!AS )"disclosureMode"(?!::text\s+(?:AS "disclosureMode"|IN \(\$\{RENDERABLE_DISCLOSURE_MODES\}\)))/g),
+      ).toBeNull();
     }
   });
 
   it("is read by the composition claim from the version, under its lock, and written nowhere", () => {
     const source = read(EXECUTION);
     expect(source.match(/disclosureMode[^\n]*/g)).toEqual([
-      // The locked row's field, the version's column, the narrowing, the claim.
+      // The locked row's field, discovery's filter, the narrowing, the claim,
+      // the version's column.
       "disclosureMode: string;",
+      'disclosureMode"::text IN (${RENDERABLE_DISCLOSURE_MODES})',
       "disclosureMode = assertRenderableDisclosureMode(ctx.disclosureMode);",
       "disclosureMode,",
       'disclosureMode"::text        AS "disclosureMode",',

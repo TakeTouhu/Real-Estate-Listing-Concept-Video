@@ -1470,8 +1470,24 @@ cannot drop an enum value, so rolling back means leaving both values in place:
 code from before DS-5b-2a never writes them, and no row holds them, so it runs
 against the new schema unchanged.
 
+- **PostgreSQL 12 or later.** Prisma runs each migration in a transaction, and
+  `ALTER TYPE … ADD VALUE` inside a transaction block needs PostgreSQL 12
+  (CI and local setup use 16). The new values cannot be used before the
+  migration's transaction commits; the migration uses neither.
+- **Leaving the values in place is safe only until DS-5b-2b ships.** From then
+  the runner can block a row with either code, and code from before DS-5b-2a
+  would read a block code it does not know. Rolling back past DS-5b-2b is a
+  decision for that milestone's notes.
+- **A true down-migration is possible while no row holds either value**:
+  recreate the type without them, as migration 19 did for its enum (rename the
+  type, create it again with the four original values, cast the
+  `blockCode` column across, drop the old type). Check first that
+  `SELECT count(*) FROM "generation_deliverable_compositions" WHERE "blockCode"::text
+  LIKE 'CLEAN_MASTER_%'` is 0.
+
 **What changes at deploy.** Nothing anyone can notice. Nothing in production
 constructs the composition repository, so its new behaviour (the claim's mode
 and master key, the master's record in Transaction J2, discovery skipping work
-frozen under another profile) runs in tests only. No new environment variable.
+frozen under another profile or planned under a mode the build does not draw)
+runs in tests only. No new environment variable.
 

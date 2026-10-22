@@ -150,6 +150,11 @@ export interface ClaimCompositionWorkInput {
 export interface CleanMasterReceipt {
   readonly sha256: Sha256Digest;
   readonly sizeBytes: SafePositiveByteCount;
+  /**
+   * When those bytes were read and hashed: the master's record's `verifiedAt`
+   * (ADR-0074), which can be an encode earlier than the video's.
+   */
+  readonly verifiedAt: number;
 }
 
 export interface FinalizeCompositionInput {
@@ -164,7 +169,7 @@ export interface FinalizeCompositionInput {
    * DS-5b-2b's profile v2 always has one, and makes this required.
    */
   readonly cleanMaster: CleanMasterReceipt | null;
-  /** When both receipts are recorded, and the instant written beside each. */
+  /** When the video's receipt was established: its `outputVerifiedAt`. */
   readonly verifiedAt: number;
   readonly context: TransitionContext;
 }

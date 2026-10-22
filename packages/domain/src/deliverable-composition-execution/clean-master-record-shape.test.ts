@@ -12,7 +12,8 @@ import { COMPOSITION_BLOCK_CODES } from "./durable";
  * 3. **The master's record is written in Transaction J2 and nowhere else**,
  *    after the video's receipt and before the job moves, so the two commit
  *    together; the receipt and the key it is written at are the ones J2 holds.
- * 4. **Discovery offers only work frozen under this build's profile.**
+ * 4. **Discovery offers only work the claim will take**: frozen under this
+ *    build's profile, and planned under a mode it renders.
  * 5. **Still dormant**: nothing produces a master, so the runner records none,
  *    and nothing yet blocks with either new code.
  */
@@ -50,6 +51,13 @@ function schemaEnum(name: string): string[] {
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, "").trim())
     .filter((line) => line.length > 0);
+}
+
+/** Where `needle` first occurs in `text`, which it must. */
+function at(text: string, needle: string): number {
+  const index = text.indexOf(needle);
+  expect(`${needle}: ${index > -1}`).toBe(`${needle}: true`);
+  return index;
 }
 
 /** The body of one repository method, up to the next one. */
@@ -92,29 +100,32 @@ describe("DS-5b-2a shape", () => {
     expect(source.includes("generation_deliverable_clean_masters")).toBe(false);
 
     const finalize = method("finalizeComposition", "deferComposition");
-    const create = finalize.indexOf("tx.generationDeliverableCleanMaster.create(");
-    expect(create).toBeGreaterThan(finalize.indexOf("if (verified.count !== 1)"));
-    expect(create).toBeLessThan(finalize.indexOf("tx.generationJob.updateMany("));
-    expect(create).toBeGreaterThan(finalize.indexOf("if (input.cleanMaster !== null) {"));
+    const create = at(finalize, "tx.generationDeliverableCleanMaster.create(");
+    expect(create).toBeGreaterThan(at(finalize, "if (verified.count !== 1)"));
+    expect(create).toBeLessThan(at(finalize, "tx.generationJob.updateMany("));
+    expect(create).toBeGreaterThan(at(finalize, "if (input.cleanMaster !== null) {"));
     // At the key J2 rebuilds, as the video's is, never one taken from the claim.
     expect(finalize).toContain("storageKey: expectedMasterKey,");
     expect(finalize.includes("cleanMasterStorageKey")).toBe(false);
     // The replay reads it after the video's comparison, and writes nothing.
     const replay = finalize.slice(
-      finalize.indexOf(`if (ctx.workStatus === "OUTPUT_VERIFIED")`),
-      finalize.indexOf(`return { kind: "ALREADY_FINALIZED" };`),
+      at(finalize, `if (ctx.workStatus === "OUTPUT_VERIFIED")`),
+      at(finalize, `return { kind: "ALREADY_FINALIZED" };`),
     );
-    expect(replay.indexOf("tx.generationDeliverableCleanMaster.findUnique(")).toBeGreaterThan(
-      replay.indexOf(`"OUTPUT_RECEIPT_CONFLICT"`),
+    expect(at(replay, "tx.generationDeliverableCleanMaster.findUnique(")).toBeGreaterThan(
+      at(replay, `"OUTPUT_RECEIPT_CONFLICT"`),
     );
     expect(replay).toContain(`"CLEAN_MASTER_RECEIPT_CONFLICT"`);
     expect(replay.includes(".create(")).toBe(false);
     expect(replay.includes(".update")).toBe(false);
   });
 
-  it("offers only work frozen under this build's profile", () => {
+  it("offers only work frozen under this build's profile, planned under a mode it renders", () => {
     const find = method("findCompositionCandidates", "claimCompositionWork");
     expect(find).toContain(`AND (w."id" IS NULL OR w."profileKey" = \${COMPOSITION_PROFILE_KEY})`);
+    expect(find).toContain(`AND v."disclosureMode"::text IN (\${RENDERABLE_DISCLOSURE_MODES})`);
+    // From the list the claim's own refusal reads, as bound parameters.
+    expect(repository()).toContain("const RENDERABLE_DISCLOSURE_MODES = Prisma.join([...DISCLOSURE_MODES]);");
   });
 
   it("stays dormant: the runner records no master and blocks with neither new code", () => {

@@ -1267,10 +1267,13 @@ them is **built**. Each item below records the settled decision and what remains
       per composed version, and its location,
       `org/{organizationId}/internal/clean-masters/{version}`, refused by every
       signed URL. DS-5b-2a (ADR-0077) made Transaction J2 its writer, in the
-      commit that records the video's receipt. Still unbuilt: composition
-      making a master to record (DS-5b-2b), publication
+      commit that records the video's receipt; it records the receipt it is
+      given and does not yet check it against the frozen profile. Still
+      unbuilt: composition making a master to record, with J2 then refusing a
+      finalize under profile v2 that names none (DS-5b-2b), publication
       requiring it (DS-6), a recomposed version naming another version's
-      master, and its deletion with its content: when physical deletion of
+      master (which then decides what its own Transaction J2 records, ADR-0077
+      Decision 3), and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
       (RESTRICT holds that order), subject to legal hold.*
 - [ ] **Decide which Clean Masters outlive their purpose.** ADR-0052 Decision 17
@@ -1556,9 +1559,11 @@ them is **built**. Each item below records the settled decision and what remains
       per-row transactional/CAS-safe action with per-row eligibility
       re-evaluation. **No global per-cause revert.** It must also reach
       composition work left `PENDING` or `RUNNING` under a profile the running
-      build does not carry: discovery no longer offers it and its retry claim
-      refuses it (ADR-0077 Decision 4), so without this tooling its job stays
-      `COMPOSING`. Only development data can be in that state today.
+      build does not carry, and a version planned under a disclosure mode it
+      does not draw: discovery no longer offers either and the claim refuses
+      both (ADR-0077 Decision 4), so without this tooling the job stays
+      `COMPOSING` or `COMPOSITION_PENDING`. Only development data can be in
+      that state today.
 - [x] **Record which plan an organization is on, and renew its periods.**
       *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
       organization (plan, channel, anchor, commercial reference; Enterprise

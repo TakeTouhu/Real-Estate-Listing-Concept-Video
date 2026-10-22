@@ -34,6 +34,7 @@ import {
   COMPOSITION_EXECUTION_REASON_CODE,
   COMPOSITION_PROFILE_KEY,
   DELIVERABLE_COMPOSING_EVENT_TYPE,
+  DISCLOSURE_MODES,
   DELIVERABLE_COMPOSING_STATE,
   DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
@@ -85,6 +86,12 @@ const COMPOSABLE_TARGET_PAIRS = Prisma.join(
       Prisma.sql`(${target.targetAspectRatio}, ${target.targetOutputResolution})`,
   ),
 );
+
+/**
+ * The disclosure modes this build can render, as bound parameters, from the
+ * same list the claim's `assertRenderableDisclosureMode` reads (ADR-0077).
+ */
+const RENDERABLE_DISCLOSURE_MODES = Prisma.join([...DISCLOSURE_MODES]);
 
 /** The job and its pending plan, read under the locks the claim has taken. */
 interface ClaimContextRow {
@@ -161,11 +168,13 @@ export function createDeliverableCompositionExecutionRepository(
       // frozen delivery target is outside profile v1 is filtered here rather
       // than discovered at claim time — every claim would refuse it, so leaving
       // it listable lets enough such jobs crowd out work that can be composed.
-      // And work frozen under a profile this build does not carry is filtered
-      // for the same reason (ADR-0077): its retry claim refuses it
-      // (`assertRunnableProfile`), every time, so offering it would be a claim
-      // refused forever. A build that changes the profile leaves such rows
-      // where they are, for an operator to decide.
+      // And work frozen under a profile this build does not carry, or planned
+      // under a disclosure mode it cannot render, is filtered for the same
+      // reason (ADR-0077): the claim refuses it (`assertRunnableProfile`,
+      // `assertRenderableDisclosureMode`) every time, so offering it would be
+      // a claim refused forever. A build that changes the profile leaves such
+      // rows where they are, for an operator to decide; a version under a mode
+      // added by a newer build waits for a build that renders it.
       const rows = await prisma.$queryRaw<DeliverableCompositionCandidate[]>`
         SELECT v."id"              AS "deliverableVersionId",
                j."id"              AS "generationJobId",
@@ -187,6 +196,7 @@ export function createDeliverableCompositionExecutionRepository(
            AND (j."targetAspectRatio", j."targetOutputResolution")
                IN (${COMPOSABLE_TARGET_PAIRS})
            AND (w."id" IS NULL OR w."profileKey" = ${COMPOSITION_PROFILE_KEY})
+           AND v."disclosureMode"::text IN (${RENDERABLE_DISCLOSURE_MODES})
          ORDER BY
            CASE
              WHEN w."id" IS NULL THEN v."createdAt"
@@ -484,7 +494,8 @@ export function createDeliverableCompositionExecutionRepository(
         // made from would be a deliverable no later disclosure change could be
         // recomposed for. Written once, complete, never updated (ADR-0074), at
         // the key rebuilt here rather than taken from the claim, as the video's
-        // is. Under the version's lock, so no second writer races it.
+        // is, with the instant its bytes were proven. A second finalize waits
+        // on the job's lock and then finds the job moved on, so it writes none.
         if (input.cleanMaster !== null) {
           await tx.generationDeliverableCleanMaster.create({
             data: {
@@ -493,7 +504,7 @@ export function createDeliverableCompositionExecutionRepository(
               storageKey: expectedMasterKey,
               sha256: input.cleanMaster.sha256,
               sizeBytes: BigInt(input.cleanMaster.sizeBytes),
-              verifiedAt: new Date(input.verifiedAt),
+              verifiedAt: new Date(input.cleanMaster.verifiedAt),
             },
           });
         }
