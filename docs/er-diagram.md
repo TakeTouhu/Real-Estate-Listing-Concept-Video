@@ -699,5 +699,6 @@ composition's block-code enum, `CLEAN_MASTER_SIZE_LIMIT_EXCEEDED` and
 `CLEAN_MASTER_UNUSABLE` (ADR-0077). The one writer of
 `GenerationDeliverableCleanMaster` is now Transaction J2, which writes its row in
 the same commit as the `GenerationDeliverableComposition` row's move to
-`OUTPUT_VERIFIED`, when it is given a master's receipt; under profile v1 it is
-given none, so no row is written yet.
+`OUTPUT_VERIFIED`, when it is given a master's receipt, with the master's own
+proof instant as `verifiedAt`; under profile v1 it is given none, so no row is
+written yet.

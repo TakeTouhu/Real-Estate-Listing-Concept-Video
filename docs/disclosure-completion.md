@@ -1538,3 +1538,220 @@ DS-5b-1 waits for the product owner's yes before merge. DS-5b-2 (profile v2,
 the claim carrying the mode and the master's key, the master before the video,
 one record, migration 31's two block codes, and `compose` removed) comes next,
 after it.
+
+## DS-5b-2a — composition's records for the Clean Master
+
+Base: `650970e` (PR #99 merge commit on `main`; post-merge CI run 641 green).
+ADR: `docs/decisions/0077-composition-records-for-the-clean-master.md`
+
+ADR-0076 Decision 5 planned DS-5b-2 as one change. The runner's rewrite and
+its tests are on their own near the size a milestone may be, so DS-5b-2 is two
+pull requests: DS-5b-2a makes the records ready, with **migration 31**, and
+changes nothing composition does; DS-5b-2b switches the runner to profile v2.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `4e106d9` | migration 31, the claim's mode and master key, Transaction J2's master record and its replay, discovery's profile filter, the defect, the tests, ADR-0077 and the documentation |
+| `1d3f428` | the independent review's answers: discovery also skips a version under a mode the build does not draw; the master's own proof instant carried on its receipt; the race of two finalizes, a forged other-tenant finalize and a replay at another instant tested; the refused record matched by its CHECK's name; ADR-0077, the migration notes and TODO worded as the code now is |
+| this commit | this record; the Roadmap, architecture and ER rows naming discovery's mode filter and the master's own proof instant |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-5b-2a does
+
+- **Migration 31** adds `CLEAN_MASTER_SIZE_LIMIT_EXCEEDED` and
+  `CLEAN_MASTER_UNUSABLE` to `DeliverableCompositionBlockCode`, two
+  `ALTER TYPE … ADD VALUE` statements; the domain's list grows with them, in
+  the same order. Nothing blocks with either yet.
+- **The claim carries the version's mode and the master's key.**
+  `disclosureMode` is read from the deliverable version under the claim's
+  `FOR UPDATE OF j, v` lock and narrowed by the new
+  `assertRenderableDisclosureMode` before anything is written; a mode this
+  build does not know is `CONFIGURATION_ERROR`. `cleanMasterStorageKey` is
+  built by the claim from the same two identifiers as the video's key.
+- **Transaction J2 records the master beside the video.** `finalizeComposition`
+  takes `cleanMaster: CleanMasterReceipt | null` and, when given one, writes
+  the `generation_deliverable_clean_masters` row after the work row's guarded
+  move to `OUTPUT_VERIFIED` and before the job's move, at the key J2 rebuilds,
+  with the master's own proof instant. A refused record rolls back both
+  receipts and the job's move. A replay compares the video's receipt first,
+  then the master's (key, digest, size, and whether one exists); any other
+  answer is the new defect `CLEAN_MASTER_RECEIPT_CONFLICT`.
+- **Discovery offers only work the claim will take**: no work row frozen under
+  a profile other than this build's, and no version planned under a mode
+  outside `DISCLOSURE_MODES`, bound as parameters from the list the claim's
+  refusal reads.
+- **Still dormant.** The runner passes `cleanMaster: null` (profile v1 makes no
+  master) and blocks with neither new code; nothing in production constructs
+  the repository or the runner.
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI) on `1d3f428`; this
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5886 / 5886**, 209 files (5877 before; 9 new) |
+| `pnpm test:db` | ****1468 / 1468**, 55 files (1452 before; 16 new)** |
+| `pnpm test:media` | not run: nothing it covers changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New and changed tests:
+
+- `tests/integration/deliverable-composition-execution.db.test.ts`: the claim
+  carries the version's mode and the master's key, first and on a retry; both
+  new block codes stored; J2 writes the master's receipt at its internal key
+  with its own instant, writes none for `null`, and writes neither receipt
+  (and moves nothing) when the master's record is refused by
+  `deliverable_clean_master_receipt_check`; a replay at another instant
+  accepted and nothing rewritten; another organization's finalize of the
+  version is `LEASE_LOST` and writes no master; a replay with another digest,
+  size, key, or a master named or missing against the record, is
+  `CLEAN_MASTER_RECEIPT_CONFLICT`, the video's receipt compared first;
+  discovery never offers work frozen under another profile (with a control
+  showing it offered before), and a direct claim of it is
+  `CONFIGURATION_ERROR`.
+- `tests/integration/deliverable-composition-execution-races.db.test.ts`: a
+  stale finalize writes no master; two finalizes of one claim that race record
+  exactly one master, one `FINALIZED` and the other `LEASE_LOST` or
+  `ALREADY_FINALIZED`, and no unique-key error.
+- `packages/domain/src/disclosure/mode.test.ts`: the refusal and its code.
+- `packages/domain/src/deliverable-composition-execution/durable.test.ts`: the
+  six block codes; the defect's fixed message.
+- `packages/domain/src/deliverable-composition-execution/runner.test.ts`: the
+  runner passes `cleanMaster: null`.
+- `packages/domain/src/deliverable-composition-execution/clean-master-record-shape.test.ts`
+  (new, 6): migration 31 is the newest and adds exactly two values; the
+  schema's enum is the domain's list; J2 writes the record in finalize only,
+  between the work row's move and the job's, at the key it rebuilds, and the
+  replay reads it after the video's comparison and writes nothing; discovery's
+  two filters; the runner records no master and blocks with neither code.
+- `packages/domain/src/disclosure/mode-shape.test.ts` and
+  `packages/domain/src/clean-master/clean-master-shape.test.ts`: the mode is
+  read by the claim from the version and written nowhere; the master's table
+  is named only by the composition repository. The migration-count tripwires
+  move to 32 directories.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `4e106d9`: 27 mutants, 27 killed.** R07 (the master never
+recorded) was killed by both database suites, but the shape test passed it:
+its order check compared positions of a missing needle (-1). The shape test now
+requires each needle to be present.
+
+**Round 2, on `1d3f428`: the 27 mutants again, with R11 rewritten for the
+receipt's own instant and R21 to R23 added for the review's answers,
+30 / 30 killed.** In total, none survived, none broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| R01 | discovery | the profile filter removed | db-execution, shape-2a |
+| R02 | discovery | work with no row needs a profile too | db-execution |
+| R03 | discovery | another profile offered instead | db-execution |
+| R04 | claim | the mode taken unchecked | shape-mode |
+| R05 | claim | the mode read from the job | shape-mode |
+| R06 | claim | the master's key built for another id | db-execution |
+| R07 | write | the master never recorded | db-execution, db-races, shape-2a |
+| R08 | write | recorded at the claim's key | shape-2a |
+| R09 | write | recorded with the video's digest | db-execution |
+| R10 | write | recorded with the video's size | db-execution |
+| R11 | write | recorded at the video's instant, not the master's | db-execution |
+| R12 | write | recorded under the composition's id prefix | db-execution |
+| R13 | write | the key rebuilt for another organization | db-execution |
+| R14 | replay | the master's comparison dropped | db-execution, shape-2a |
+| R15 | replay | a record accepted when none is named | db-execution |
+| R16 | replay | the key not compared | db-execution |
+| R17 | replay | the digest not compared | db-execution |
+| R18 | replay | the size not compared | db-execution |
+| R19 | replay | a missing record accepted when one is named | db-execution |
+| R20 | replay | the video's code reported for the master | db-execution |
+| R21 | discovery | the mode filter removed | shape-2a |
+| R22 | discovery | the mode filter reads another list | db-execution, shape-2a |
+| R23 | write | recorded a moment after the master's instant | db-execution |
+| D01 | codes | CLEAN_MASTER_UNUSABLE dropped from the list | durable, shape-2a |
+| D02 | codes | the defect's message changed | durable |
+| D03 | mode | any mode rendered | mode |
+| D04 | mode | refused with another code | mode |
+| D05 | dormancy | the runner records a master | runner, shape-2a |
+| G01 | migration | one value not added | shape-2a |
+| G02 | schema | the schema's enum lacks a value | shape-2a |
+
+Suites: `db-execution` and `db-races` = the two composition database suites;
+`shape-2a` = `clean-master-record-shape.test.ts`; `shape-mode` =
+`mode-shape.test.ts`; `mode` = `mode.test.ts`; `durable` = `durable.test.ts`;
+`runner` = `runner.test.ts`. R04 and R05 are killed only by the shape test:
+the one mode that exists is the same on the job and the version and is always
+renderable, so no database state tells them apart. R08 likewise: for any
+claim the repository issued, the claim's key and the one J2 rebuilds are the
+same string. And R21: no row can hold a mode outside the list until a
+migration adds one.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-5b-1, an independent review
+agent reviewed `4e106d9` against `650970e`, reading only git objects. It found
+Transaction J2's order and atomicity, the replay, the claim, discovery's SQL
+and migration 31 correct. Verdict: nothing blocking; three should-fix findings
+and five nits, all answered in `1d3f428`:
+
+| Finding | Answer |
+| --- | --- |
+| Discovery does not mirror the claim's new mode refusal: an older build left running beside a newer enum would be offered versions it refuses forever, starving work it can do | Fixed: `AND v."disclosureMode"::text IN (…)` from `DISCLOSURE_MODES`, bound, with a shape test and mutants R21 and R22 |
+| J2 does not tie the master receipt's presence to the frozen profile, and ADR-0074's recomposed version, which names another version's master, conflicts with "v2 always has one" | Recorded in ADR-0077 Decision 3 and TODO: J2 records the receipt it is given; DS-5b-2b makes it required and has J2 refuse `null` under v2; a recomposed version, unbuilt, decides its own J2 record |
+| Two concurrent finalizes are never raced | Tested: one `FINALIZED`, the other `LEASE_LOST` or `ALREADY_FINALIZED`, no unique-key error, one master |
+| No cross-tenant J2 test | Tested: a claim forged with another organization is `LEASE_LOST` and writes no master |
+| Nit: the refused-master test accepts any error | Fixed: matches `deliverable_clean_master_receipt_check`; the discovery test gained a control showing the row offered before the change |
+| Nit: this record's header is stale | Fixed: ADR-0077 listed, DS-5 counted as four pull requests |
+| Nit: J2 writes the finalize's instant as the master's `verifiedAt`, though ADR-0074 defines it as when the stored bytes were proven | Fixed: `CleanMasterReceipt` carries `verifiedAt`, the store's proof instant, which J2 records; the finalize's `verifiedAt` stays the video's. Tested, and mutants R11 and R23 |
+| Nit: the renderable check reuses the admission list | Kept: the composer's overlay choice is an exhaustive switch over `DisclosureMode` with a `never` default, so a mode admitted without being drawn does not build. Stated in ADR-0077 Decision 4 |
+| Nit: the migration notes could say more | Added: PostgreSQL 12 or later; leaving the values in place is safe only until DS-5b-2b writes either; a type-recreate down-migration while no row holds them, with the check to run first |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composition-execution and Clean Master rows |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-5b-2a*: the two block codes, and the master's record now written by J2 |
+| Critical sequence diagram | Not applicable: composition's sequence is unchanged until DS-5b-2b (ADR-0076 Decision 5 states it); J2's order is ADR-0077 Decision 3 |
+| OpenAPI / API change summary | `docs/api-changes-ds-5b-2a.md`: no HTTP change; the domain and database changes |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-5b-2a*: migration 31 |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure
+item, the Clean Master item, and operator recovery reaching work stranded
+under another profile or mode).
+
+### Activation status
+
+Nothing paid or scheduled is activated. DS-5b-2a adds records that nothing in
+production writes: no worker, scheduler, credential, environment variable or
+payment integration. Paid Provider Activation, production credentials, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Composition still makes no master**, so a composed deliverable still has
+  no disclosure and no master record; DS-5b-2b switches the runner.
+- **J2 does not check the receipt against the profile**; DS-5b-2b makes it
+  required under v2.
+- **Work stranded under another profile or mode waits for an operator**, whose
+  recovery tooling is unbuilt (TODO). Only development data can be in that
+  state.
+
+### Remaining work
+
+DS-5b-2a waits for the product owner's yes before merge, migration 31
+included. DS-5b-2b (profile v2, the master before the video, `cleanMaster`
+required with J2 refusing `null`, a defect for a video stored without its
+master, the new block codes used, `compose` removed, and a media end-to-end
+test) comes next, after it.
