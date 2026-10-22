@@ -1125,8 +1125,10 @@ them is **built**. Each item below records the settled decision and what remains
       Master's record and its internal location, which no signed URL reaches.
       DS-5a (ADR-0075) let the composer encode the master and lay the
       disclosure over it. DS-5b-1 (ADR-0076) added the master's store and the
-      inspector that checks its size and rate; composition does not run any of
-      them yet (DS-5b-2).*
+      inspector that checks its size and rate. DS-5b-2a (ADR-0077, migration
+      31) gave the composition claim the version's mode and the master's key,
+      and Transaction J2 the master's record; composition does not run any of
+      them yet (DS-5b-2b).*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1264,7 +1266,9 @@ them is **built**. Each item below records the settled decision and what remains
       *In progress. DS-4 (ADR-0074, migration 30) built its record, one receipt
       per composed version, and its location,
       `org/{organizationId}/internal/clean-masters/{version}`, refused by every
-      signed URL. Still unbuilt: composition writing it (DS-5), publication
+      signed URL. DS-5b-2a (ADR-0077) made Transaction J2 its writer, in the
+      commit that records the video's receipt. Still unbuilt: composition
+      making a master to record (DS-5b-2b), publication
       requiring it (DS-6), a recomposed version naming another version's
       master, and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
@@ -1550,7 +1554,11 @@ them is **built**. Each item below records the settled decision and what remains
       original `BLOCKED` row and terminal verdict left immutable, a **new**
       recovery cycle rather than a re-queue, the enumerated audit fields, and
       per-row transactional/CAS-safe action with per-row eligibility
-      re-evaluation. **No global per-cause revert.**
+      re-evaluation. **No global per-cause revert.** It must also reach
+      composition work left `PENDING` or `RUNNING` under a profile the running
+      build does not carry: discovery no longer offers it and its retry claim
+      refuses it (ADR-0077 Decision 4), so without this tooling its job stays
+      `COMPOSING`. Only development data can be in that state today.
 - [x] **Record which plan an organization is on, and renew its periods.**
       *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
       organization (plan, channel, anchor, commercial reference; Enterprise

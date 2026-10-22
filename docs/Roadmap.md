@@ -155,6 +155,14 @@ master matches its profile and masters of another size, rate or orientation do
 not. Nothing calls either yet; DS-5b-2 runs them in
 composition.
 
+**DS-5b-2a — composition's records for the Clean Master** (ADR-0077,
+migration 31): the composition claim carries the version's frozen disclosure
+mode and its master's key; Transaction J2 records the master's receipt in the
+same commit as the video's, and a replay that disagrees about either is a
+defect; discovery stops offering work frozen under a profile the build does not
+carry; and two block codes exist for a master over its ceiling or not usable.
+Composition still runs profile v1 and makes no master; DS-5b-2b switches it.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

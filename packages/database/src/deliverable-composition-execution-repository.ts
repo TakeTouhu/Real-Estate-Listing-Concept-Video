@@ -11,7 +11,8 @@
  * J1  claim     COMPOSITION_PENDING -> COMPOSING, work created RUNNING
  *     (retry)   PENDING|expired RUNNING -> RUNNING, job untouched
  * --- external: materialize, compose, publish ---
- * J2  finalize  work -> OUTPUT_VERIFIED, COMPOSING -> DELIVERABLE_VALIDATING
+ * J2  finalize  work -> OUTPUT_VERIFIED, the Clean Master's record,
+ *               COMPOSING -> DELIVERABLE_VALIDATING
  *     defer     work -> PENDING with a closed retry code, job untouched
  * ```
  *
@@ -31,6 +32,7 @@
 import {
   COMPOSABLE_TARGETS,
   COMPOSITION_EXECUTION_REASON_CODE,
+  COMPOSITION_PROFILE_KEY,
   DELIVERABLE_COMPOSING_EVENT_TYPE,
   DELIVERABLE_COMPOSING_STATE,
   DELIVERABLE_OUTPUT_VERIFIED_EVENT_TYPE,
@@ -38,7 +40,9 @@ import {
   DeliverableCompositionExecutionDefect,
   JOB_COMPOSING_EVENT_TYPE,
   JOB_DELIVERABLE_VALIDATING_EVENT_TYPE,
+  assertRenderableDisclosureMode,
   assertRunnableProfile,
+  managedCleanMasterKey,
   managedDeliverableOutputKey,
   managedGenerationOutputKey,
   resolveCompositionProfile,
@@ -66,6 +70,7 @@ import { appendGenerationEvent } from "./orchestration-repositories";
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
 
 const COMPOSITION_ID_PREFIX = "gdcmp";
+const CLEAN_MASTER_ID_PREFIX = "gdmst";
 
 /**
  * The composable `(aspect ratio, resolution)` pairs, as bound parameters.
@@ -93,6 +98,7 @@ interface ClaimContextRow {
   readonly requestedDurationSeconds: number;
   readonly versionId: string;
   readonly versionOrdinal: number;
+  readonly disclosureMode: string;
   readonly workId: string | null;
   readonly workStatus: string | null;
   readonly workVersion: number | null;
@@ -149,12 +155,17 @@ export function createDeliverableCompositionExecutionRepository(
       // it is deferred, and a slow scheduler then re-offers the same prefix
       // forever.
       //
-      // Two classes are excluded for exactly that reason. `BLOCKED` rows match
+      // Three classes are excluded for exactly that reason. `BLOCKED` rows match
       // no arm below, because a deterministic refusal that kept appearing in
-      // the batch would be re-claimed and re-refused forever. And a job whose
+      // the batch would be re-claimed and re-refused forever. A job whose
       // frozen delivery target is outside profile v1 is filtered here rather
       // than discovered at claim time — every claim would refuse it, so leaving
       // it listable lets enough such jobs crowd out work that can be composed.
+      // And work frozen under a profile this build does not carry is filtered
+      // for the same reason (ADR-0077): its retry claim refuses it
+      // (`assertRunnableProfile`), every time, so offering it would be a claim
+      // refused forever. A build that changes the profile leaves such rows
+      // where they are, for an operator to decide.
       const rows = await prisma.$queryRaw<DeliverableCompositionCandidate[]>`
         SELECT v."id"              AS "deliverableVersionId",
                j."id"              AS "generationJobId",
@@ -175,6 +186,7 @@ export function createDeliverableCompositionExecutionRepository(
                )
            AND (j."targetAspectRatio", j."targetOutputResolution")
                IN (${COMPOSABLE_TARGET_PAIRS})
+           AND (w."id" IS NULL OR w."profileKey" = ${COMPOSITION_PROFILE_KEY})
          ORDER BY
            CASE
              WHEN w."id" IS NULL THEN v."createdAt"
@@ -240,6 +252,9 @@ export function createDeliverableCompositionExecutionRepository(
         } else {
           profile = persistedProfile(ctx);
         }
+        // The version's own frozen mode, read under its lock (ADR-0073), and
+        // checked before anything is written, like the profile.
+        const disclosureMode = assertRenderableDisclosureMode(ctx.disclosureMode);
 
         const plan = await readPlanInputs(tx, ctx.versionId);
         if (plan.length === 0) {
@@ -363,6 +378,11 @@ export function createDeliverableCompositionExecutionRepository(
               organizationId: ctx.organizationId,
               deliverableVersionId: ctx.versionId,
             }),
+            disclosureMode,
+            cleanMasterStorageKey: managedCleanMasterKey({
+              organizationId: ctx.organizationId,
+              deliverableVersionId: ctx.versionId,
+            }),
             requestedDurationSeconds: ctx.requestedDurationSeconds,
             scenes,
           },
@@ -383,6 +403,10 @@ export function createDeliverableCompositionExecutionRepository(
           organizationId: input.claim.organizationId,
           deliverableVersionId: input.claim.deliverableVersionId,
         });
+        const expectedMasterKey = managedCleanMasterKey({
+          organizationId: input.claim.organizationId,
+          deliverableVersionId: input.claim.deliverableVersionId,
+        });
 
         if (ctx.workStatus === "OUTPUT_VERIFIED") {
           // Replay. The durable receipt is never rewritten: a second, different
@@ -400,6 +424,24 @@ export function createDeliverableCompositionExecutionRepository(
             stored.outputSizeBytes === BigInt(input.outputSizeBytes);
           if (!same) {
             throw new DeliverableCompositionExecutionDefect("OUTPUT_RECEIPT_CONFLICT");
+          }
+          // The master's record is compared the same way, and its absence is a
+          // receipt too: the first commit wrote one exactly when it was given
+          // one, so a replay that disagrees about whether there is a master is
+          // as much a conflict as one that disagrees about its bytes.
+          const master = await tx.generationDeliverableCleanMaster.findUnique({
+            where: { deliverableVersionId: input.claim.deliverableVersionId },
+            select: { storageKey: true, sha256: true, sizeBytes: true },
+          });
+          const sameMaster =
+            input.cleanMaster === null
+              ? master === null
+              : master !== null &&
+                master.storageKey === expectedMasterKey &&
+                master.sha256 === input.cleanMaster.sha256 &&
+                master.sizeBytes === BigInt(input.cleanMaster.sizeBytes);
+          if (!sameMaster) {
+            throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_RECEIPT_CONFLICT");
           }
           return { kind: "ALREADY_FINALIZED" };
         }
@@ -436,6 +478,25 @@ export function createDeliverableCompositionExecutionRepository(
           },
         });
         if (verified.count !== 1) return { kind: "LEASE_LOST" };
+
+        // The master's record, in the same commit as the video's receipt
+        // (ADR-0077): a video recorded without the record of the master it was
+        // made from would be a deliverable no later disclosure change could be
+        // recomposed for. Written once, complete, never updated (ADR-0074), at
+        // the key rebuilt here rather than taken from the claim, as the video's
+        // is. Under the version's lock, so no second writer races it.
+        if (input.cleanMaster !== null) {
+          await tx.generationDeliverableCleanMaster.create({
+            data: {
+              id: randomId(CLEAN_MASTER_ID_PREFIX),
+              deliverableVersionId: ctx.versionId,
+              storageKey: expectedMasterKey,
+              sha256: input.cleanMaster.sha256,
+              sizeBytes: BigInt(input.cleanMaster.sizeBytes),
+              verifiedAt: new Date(input.verifiedAt),
+            },
+          });
+        }
 
         const event = (eventType: string) => ({
           ...input.context,
@@ -632,6 +693,7 @@ async function lockClaimChain(
            j."requestedDurationSeconds"    AS "requestedDurationSeconds",
            v."id"                          AS "versionId",
            v."ordinal"                     AS "versionOrdinal",
+           v."disclosureMode"::text        AS "disclosureMode",
            w."id"                          AS "workId",
            w."status"::text                AS "workStatus",
            w."version"                     AS "workVersion",

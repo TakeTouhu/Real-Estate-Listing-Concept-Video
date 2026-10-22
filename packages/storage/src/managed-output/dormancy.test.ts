@@ -417,9 +417,10 @@ describe("nothing about the existing adapters changed shape", () => {
     // migration 27 for Unit purchases, by UP-5 (ADR-0070), which is
     // authorized to add migration 28 for cancelling one, by DS-3 (ADR-0073),
     // which is authorized to add migration 29 to freeze the disclosure mode,
-    // and by DS-4 (ADR-0074), which is authorized to add migration 30 for the
-    // Clean Master record.
-    expect(dirs.at(-1)).toBe("00000000000030_clean_master_record");
+    // by DS-4 (ADR-0074), which is authorized to add migration 30 for the
+    // Clean Master record, and by DS-5b-2a (ADR-0077), which is authorized to
+    // add migration 31 for two Clean Master block codes.
+    expect(dirs.at(-1)).toBe("00000000000031_clean_master_block_codes");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

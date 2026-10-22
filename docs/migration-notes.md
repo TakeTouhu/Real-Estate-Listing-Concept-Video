@@ -1456,3 +1456,22 @@ nothing.
 **What changes at deploy.** Nothing: nothing in production constructs the store
 or the inspector, and the composition runner still calls only `compose`. No new
 environment variable.
+
+## DS-5b-2a — composition's records for the Clean Master
+
+**Migration 31, `00000000000031_clean_master_block_codes`** (ADR-0077): two
+`ALTER TYPE "DeliverableCompositionBlockCode" ADD VALUE` statements, for
+`CLEAN_MASTER_SIZE_LIMIT_EXCEEDED` and `CLEAN_MASTER_UNUSABLE`.
+
+No table or column changes and no row is written, updated or deleted; no
+composition row holds either value, because nothing records them yet. Adding
+an enum value takes a brief lock on the type and rewrites nothing. PostgreSQL
+cannot drop an enum value, so rolling back means leaving both values in place:
+code from before DS-5b-2a never writes them, and no row holds them, so it runs
+against the new schema unchanged.
+
+**What changes at deploy.** Nothing anyone can notice. Nothing in production
+constructs the composition repository, so its new behaviour (the claim's mode
+and master key, the master's record in Transaction J2, discovery skipping work
+frozen under another profile) runs in tests only. No new environment variable.
+

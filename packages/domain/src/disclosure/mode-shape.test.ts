@@ -22,6 +22,7 @@ const MIGRATIONS = join(REPO_ROOT, "packages", "database", "prisma", "migrations
 const MIGRATION_DIR = "00000000000029_disclosure_mode_frozen";
 const JOBS = "packages/database/src/orchestration-repositories.ts";
 const PLANS = "packages/database/src/deliverable-composition-repository.ts";
+const EXECUTION = "packages/database/src/deliverable-composition-execution-repository.ts";
 
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -76,9 +77,10 @@ describe("DS-3 shape", () => {
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    // No longer the newest: DS-4 added migration 30 after it.
+    // No longer the newest: DS-4 added migration 30 after it, and DS-5b-2a
+    // migration 31.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(29);
-    expect(dirs).toHaveLength(31);
+    expect(dirs).toHaveLength(32);
   });
 
   it("creates the enum and two required columns, keeps no default, and rewrites no row", () => {
@@ -109,13 +111,28 @@ describe("DS-3 shape", () => {
   });
 
   it("is written only where a job is admitted and a version planned", () => {
-    expect(matching("packages/database/src", /disclosureMode/)).toEqual([PLANS, JOBS]);
+    // DS-5b-2a's composition claim reads the version's mode (ADR-0077); it
+    // writes none.
+    expect(matching("packages/database/src", /disclosureMode/)).toEqual([EXECUTION, PLANS, JOBS]);
     // No route admits a whole-video generation yet, and nothing shows the mode.
     expect(matching("apps", /disclosureMode|DisclosureMode/)).toEqual([]);
-    // No SQL ever writes it: the one raw mention is the plan's locked read.
-    for (const file of [PLANS, JOBS]) {
+    // No SQL ever writes it: the raw mentions are the plan's and the claim's
+    // locked reads.
+    for (const file of [PLANS, EXECUTION, JOBS]) {
       expect(read(file).match(/(?<!AS )"disclosureMode"(?!::text\s+AS "disclosureMode")/g)).toBeNull();
     }
+  });
+
+  it("is read by the composition claim from the version, under its lock, and written nowhere", () => {
+    const source = read(EXECUTION);
+    expect(source.match(/disclosureMode[^\n]*/g)).toEqual([
+      // The locked row's field, the version's column, the narrowing, the claim.
+      "disclosureMode: string;",
+      "disclosureMode = assertRenderableDisclosureMode(ctx.disclosureMode);",
+      "disclosureMode,",
+      'disclosureMode"::text        AS "disclosureMode",',
+    ]);
+    expect(source).toContain('v."disclosureMode"::text        AS "disclosureMode"');
   });
 
   it("admits a job's mode once, refusing one not built before the transaction opens", () => {

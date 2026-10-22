@@ -11,5 +11,10 @@ export {
   disclosureLayout,
 } from "./ai-disclosure";
 export type { DisclosureLayerAsset, DisclosureLayout } from "./ai-disclosure";
-export { DEFAULT_DISCLOSURE_MODE, DISCLOSURE_MODES, isDisclosureMode } from "./mode";
+export {
+  DEFAULT_DISCLOSURE_MODE,
+  DISCLOSURE_MODES,
+  assertRenderableDisclosureMode,
+  isDisclosureMode,
+} from "./mode";
 export type { DisclosureMode } from "./mode";

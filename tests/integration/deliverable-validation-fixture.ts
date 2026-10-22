@@ -141,6 +141,8 @@ async function composeVersion(
     claim: claimed.claim,
     outputSha256: sha256Digest(receipt.sha256),
     outputSizeBytes: safePositiveByteCount(receipt.sizeBytes),
+    // Any master receipt: Phase 5C validates the customer's video, not this.
+    cleanMaster: { sha256: sha256Digest("c".repeat(64)), sizeBytes: safePositiveByteCount(8_192) },
     verifiedAt: COMPOSE_NOW + 60_000,
     context: ctx(),
   });

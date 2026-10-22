@@ -2,12 +2,15 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   DeliverableCompositionExecutionDefect,
+  managedCleanMasterKey,
   managedDeliverableOutputKey,
   managedGenerationOutputKey,
   safePositiveByteCount,
   sha256Digest,
   type ClaimCompositionWorkOutcome,
   type DeliverableCompositionClaim,
+  type SafePositiveByteCount,
+  type Sha256Digest,
 } from "@app/domain";
 import { createDeliverableCompositionExecutionRepository } from "@app/database";
 import { ctx, dropTenants, HAS_DB, ORG_A, ORG_B, seedTenants, wipeOrchestration } from "./orchestration-fixture";
@@ -41,6 +44,10 @@ const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
 const LEASE_MS = 30 * 60_000;
 const OUTPUT_SHA = sha256Digest("d".repeat(64));
 const OUTPUT_BYTES = safePositiveByteCount(4_096);
+const MASTER = { sha256: sha256Digest("a".repeat(64)), sizeBytes: safePositiveByteCount(8_192) };
+
+const masterOf = (deliverableVersionId: string) =>
+  prisma.generationDeliverableCleanMaster.findUnique({ where: { deliverableVersionId } });
 
 let leaseSeq = 0;
 
@@ -121,6 +128,29 @@ RUN("Phase 5B — durable composition execution", () => {
       }
       expect(result.outputStorageKey).toBe(
         managedDeliverableOutputKey({
+          organizationId: ORG_A,
+          deliverableVersionId: planned.deliverableVersionId,
+        }),
+      );
+      // The version's frozen mode, and its master's key in the internal
+      // namespace (ADR-0077).
+      expect(result.disclosureMode).toBe("THROUGHOUT");
+      expect(result.cleanMasterStorageKey).toBe(
+        managedCleanMasterKey({
+          organizationId: ORG_A,
+          deliverableVersionId: planned.deliverableVersionId,
+        }),
+      );
+    });
+
+    it("carries the mode and the master's key on a retry claim too", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      await claimed(ORG_A, planned.deliverableVersionId);
+      const retry = await claimed(ORG_A, planned.deliverableVersionId, NOW + LEASE_MS + 1);
+      expect(retry.attemptCount).toBe(2);
+      expect(retry.disclosureMode).toBe("THROUGHOUT");
+      expect(retry.cleanMasterStorageKey).toBe(
+        managedCleanMasterKey({
           organizationId: ORG_A,
           deliverableVersionId: planned.deliverableVersionId,
         }),
@@ -380,6 +410,9 @@ RUN("Phase 5B — durable composition execution", () => {
       "DURATION_INVARIANT_MISMATCH",
       "SOURCE_INTEGRITY_MISMATCH",
       "OUTPUT_SIZE_LIMIT_EXCEEDED",
+      // Migration 31's two (ADR-0077).
+      "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED",
+      "CLEAN_MASTER_UNUSABLE",
     ] as const) {
       it(`persists ${blockCode}`, async () => {
         const planned = await seedPlannedDeliverable(prisma);
@@ -581,11 +614,15 @@ RUN("Phase 5B — durable composition execution", () => {
   // -------------------------------------------------------------------------
 
   describe("J2 writes the receipt and moves COMPOSING -> DELIVERABLE_VALIDATING", () => {
-    async function finalize(claimValue: DeliverableCompositionClaim) {
+    async function finalize(
+      claimValue: DeliverableCompositionClaim,
+      cleanMaster: typeof MASTER | null = MASTER,
+    ) {
       return repository.finalizeComposition({
         claim: claimValue,
         outputSha256: OUTPUT_SHA,
         outputSizeBytes: OUTPUT_BYTES,
+        cleanMaster,
         verifiedAt: NOW + 60_000,
         context: ctx(),
       });
@@ -631,9 +668,13 @@ RUN("Phase 5B — durable composition execution", () => {
       const total = await eventCount(prisma);
       const after = await compositionOf(prisma, planned.deliverableVersionId);
 
+      const masterAfter = await masterOf(planned.deliverableVersionId);
+
       expect(await finalize(result)).toEqual({ kind: "ALREADY_FINALIZED" });
       expect(await eventCount(prisma)).toBe(total);
       expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(after);
+      expect(await masterOf(planned.deliverableVersionId)).toEqual(masterAfter);
+      expect(await prisma.generationDeliverableCleanMaster.count()).toBe(1);
     });
 
     it("refuses a different receipt for an already-verified deliverable", async () => {
@@ -646,10 +687,11 @@ RUN("Phase 5B — durable composition execution", () => {
           claim: result,
           outputSha256: sha256Digest("e".repeat(64)),
           outputSizeBytes: OUTPUT_BYTES,
+          cleanMaster: MASTER,
           verifiedAt: NOW + 120_000,
           context: ctx(),
         }),
-      ).rejects.toBeInstanceOf(DeliverableCompositionExecutionDefect);
+      ).rejects.toThrow(expect.objectContaining({ code: "OUTPUT_RECEIPT_CONFLICT" }));
     });
 
     it("refuses a finalize from a worker whose lease moved on", async () => {
@@ -667,6 +709,145 @@ RUN("Phase 5B — durable composition execution", () => {
       expect((await claim(ORG_A, planned.deliverableVersionId, NOW + 999_999)).kind).toBe(
         "ALREADY_VERIFIED",
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // J2 — the Clean Master's record (ADR-0077)
+  // -------------------------------------------------------------------------
+
+  describe("J2 records the Clean Master in the same commit as the video", () => {
+    async function finalize(
+      claimValue: DeliverableCompositionClaim,
+      cleanMaster: { readonly sha256: Sha256Digest; readonly sizeBytes: SafePositiveByteCount } | null,
+    ) {
+      return repository.finalizeComposition({
+        claim: claimValue,
+        outputSha256: OUTPUT_SHA,
+        outputSizeBytes: OUTPUT_BYTES,
+        cleanMaster,
+        verifiedAt: NOW + 60_000,
+        context: ctx(),
+      });
+    }
+
+    it("writes the master's receipt at its internal key, beside the video's", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+
+      expect(await finalize(result, MASTER)).toEqual({ kind: "FINALIZED" });
+
+      const stored = await masterOf(planned.deliverableVersionId);
+      expect(stored).toEqual({
+        id: expect.stringMatching(/^gdmst_/),
+        deliverableVersionId: planned.deliverableVersionId,
+        storageKey: managedCleanMasterKey({
+          organizationId: ORG_A,
+          deliverableVersionId: planned.deliverableVersionId,
+        }),
+        sha256: MASTER.sha256,
+        sizeBytes: BigInt(MASTER.sizeBytes),
+        verifiedAt: new Date(NOW + 60_000),
+        createdAt: expect.any(Date),
+      });
+      expect((await compositionOf(prisma, planned.deliverableVersionId))?.status).toBe(
+        "OUTPUT_VERIFIED",
+      );
+    });
+
+    it("writes no record when there is no master, as under profile v1", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+
+      expect(await finalize(result, null)).toEqual({ kind: "FINALIZED" });
+      expect(await masterOf(planned.deliverableVersionId)).toBeNull();
+      expect(await finalize(result, null)).toEqual({ kind: "ALREADY_FINALIZED" });
+    });
+
+    it("writes neither receipt, and moves nothing, when the master's record is refused", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+      const before = await compositionOf(prisma, planned.deliverableVersionId);
+      const events = await eventCount(prisma);
+
+      // Upper-case hex: the receipt CHECK refuses it, after the video's
+      // receipt and before the job moves. Nothing of either may survive.
+      const refused = { sha256: "A".repeat(64) as Sha256Digest, sizeBytes: MASTER.sizeBytes };
+      await expect(finalize(result, refused)).rejects.toThrow();
+
+      expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(before);
+      expect(await masterOf(planned.deliverableVersionId)).toBeNull();
+      expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
+      expect(await eventCount(prisma)).toBe(events);
+    });
+
+    for (const [label, replayed] of [
+      ["another digest", { sha256: sha256Digest("b".repeat(64)), sizeBytes: MASTER.sizeBytes }],
+      ["another size", { sha256: MASTER.sha256, sizeBytes: safePositiveByteCount(8_193) }],
+      ["no master", null],
+    ] as const) {
+      it(`refuses a replay naming ${label}, and rewrites nothing`, async () => {
+        const planned = await seedPlannedDeliverable(prisma);
+        const result = await claimed(ORG_A, planned.deliverableVersionId);
+        await finalize(result, MASTER);
+        const stored = await masterOf(planned.deliverableVersionId);
+        const events = await eventCount(prisma);
+
+        await expect(finalize(result, replayed)).rejects.toThrow(
+          expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_CONFLICT" }),
+        );
+        expect(await masterOf(planned.deliverableVersionId)).toEqual(stored);
+        expect(await eventCount(prisma)).toBe(events);
+      });
+    }
+
+    it("refuses a replay naming a master when the first commit recorded none", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+      await finalize(result, null);
+
+      await expect(finalize(result, MASTER)).rejects.toThrow(
+        expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_CONFLICT" }),
+      );
+      expect(await masterOf(planned.deliverableVersionId)).toBeNull();
+    });
+
+    it("refuses a replay whose recorded master is at another key", async () => {
+      // Only a hand-written row can hold another key, and the key CHECK allows
+      // only the version's own key under another organization segment.
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+      await finalize(result, MASTER);
+      await prisma.generationDeliverableCleanMaster.update({
+        where: { deliverableVersionId: planned.deliverableVersionId },
+        data: {
+          storageKey: managedCleanMasterKey({
+            organizationId: ORG_B,
+            deliverableVersionId: planned.deliverableVersionId,
+          }),
+        },
+      });
+
+      await expect(finalize(result, MASTER)).rejects.toThrow(
+        expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_CONFLICT" }),
+      );
+    });
+
+    it("checks the video's receipt first, so a replay wrong in both names the video", async () => {
+      const planned = await seedPlannedDeliverable(prisma);
+      const result = await claimed(ORG_A, planned.deliverableVersionId);
+      await finalize(result, MASTER);
+
+      await expect(
+        repository.finalizeComposition({
+          claim: result,
+          outputSha256: sha256Digest("e".repeat(64)),
+          outputSizeBytes: OUTPUT_BYTES,
+          cleanMaster: null,
+          verifiedAt: NOW + 120_000,
+          context: ctx(),
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: "OUTPUT_RECEIPT_CONFLICT" }));
     });
   });
 
@@ -721,6 +902,39 @@ RUN("Phase 5B — durable composition execution", () => {
       ).toContain(planned.deliverableVersionId);
     });
 
+    it("never offers work frozen under a profile this build does not carry", async () => {
+      // A retry claim of such a row refuses it every time (`assertRunnableProfile`),
+      // so offering it would be a claim refused forever (ADR-0077). Each row is
+      // otherwise due: one deferred and one whose lease expired.
+      const deferred = await seedPlannedDeliverable(prisma);
+      const deferredClaim = await claimed(ORG_A, deferred.deliverableVersionId);
+      await repository.deferComposition({
+        claim: deferredClaim,
+        retryCode: "COMPOSER_RETRYABLE",
+        nextAttemptAt: NOW + 1_000,
+      });
+      const expired = await seedPlannedDeliverable(prisma);
+      await claimed(ORG_A, expired.deliverableVersionId);
+      const current = await seedPlannedDeliverable(prisma);
+      await claimed(ORG_A, current.deliverableVersionId);
+
+      await prisma.generationDeliverableComposition.updateMany({
+        where: { deliverableVersionId: { in: [deferred.deliverableVersionId, expired.deliverableVersionId] } },
+        data: { profileKey: "vtavision-compose:v0" },
+      });
+
+      const ids = (
+        await repository.findCompositionCandidates({ limit: 25, now: NOW + LEASE_MS + 1 })
+      ).map((one) => one.deliverableVersionId);
+      expect(ids).toContain(current.deliverableVersionId);
+      expect(ids).not.toContain(deferred.deliverableVersionId);
+      expect(ids).not.toContain(expired.deliverableVersionId);
+      // And the claim it is no longer offered to still refuses it.
+      await expect(
+        claim(ORG_A, expired.deliverableVersionId, NOW + LEASE_MS + 1),
+      ).rejects.toThrow(expect.objectContaining({ code: "CONFIGURATION_ERROR" }));
+    });
+
     it("never offers blocked work, at any instant", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       const result = await claimed(ORG_A, planned.deliverableVersionId);
@@ -746,6 +960,7 @@ RUN("Phase 5B — durable composition execution", () => {
         claim: result,
         outputSha256: OUTPUT_SHA,
         outputSizeBytes: OUTPUT_BYTES,
+        cleanMaster: MASTER,
         verifiedAt: NOW + 60_000,
         context: ctx(),
       });

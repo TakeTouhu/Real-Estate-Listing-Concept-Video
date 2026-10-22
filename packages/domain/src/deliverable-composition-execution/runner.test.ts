@@ -42,6 +42,7 @@ import type {
   PublishDeliverableOutcome,
 } from "./ports";
 import { managedGenerationOutputKey, safePositiveByteCount, sha256Digest } from "../completion/output";
+import { managedCleanMasterKey } from "../clean-master/key";
 import type { TransitionContext } from "../orchestration/ports";
 
 const ORG = "org_1";
@@ -87,6 +88,11 @@ function claimOf(overrides: Partial<DeliverableCompositionClaim> = {}): Delivera
     attemptCount: 1,
     profile: PROFILE,
     outputStorageKey: managedDeliverableOutputKey({
+      organizationId: ORG,
+      deliverableVersionId: VERSION,
+    }),
+    disclosureMode: "THROUGHOUT",
+    cleanMasterStorageKey: managedCleanMasterKey({
       organizationId: ORG,
       deliverableVersionId: VERSION,
     }),
@@ -490,6 +496,8 @@ describe("F — publication separates a transient failure from an oversized outp
     const finalize = h.repository.finalized[0]!;
     expect(finalize.outputSha256).toBe(receipt.sha256);
     expect(finalize.outputSizeBytes).toBe(receipt.sizeBytes);
+    // Profile v1 makes no master, so it records none (ADR-0077).
+    expect(finalize.cleanMaster).toBeNull();
   });
 });
 
@@ -711,6 +719,7 @@ describe("L — canonical output that already exists is finalized without encodi
     const finalize = h.repository.finalized[0]!;
     expect(finalize.outputSha256).toBe(RECEIPT.sha256);
     expect(finalize.outputSizeBytes).toBe(RECEIPT.sizeBytes);
+    expect(finalize.cleanMaster).toBeNull();
   });
 
   it("reports a replayed finalize as already-finalized, not as a fresh one", async () => {

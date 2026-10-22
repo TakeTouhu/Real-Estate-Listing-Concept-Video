@@ -49,6 +49,10 @@ const NOW = Date.UTC(2026, 8, 25, 12, 0, 0);
 const LEASE_MS = 30 * 60_000;
 const SHA = sha256Digest("f".repeat(64));
 const BYTES = safePositiveByteCount(4_096);
+const MASTER = { sha256: sha256Digest("e".repeat(64)), sizeBytes: safePositiveByteCount(8_192) };
+
+const mastersOf = (deliverableVersionId: string) =>
+  prisma.generationDeliverableCleanMaster.count({ where: { deliverableVersionId } });
 
 async function blockedBackends(client: PrismaClient): Promise<number> {
   const rows = await client.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
@@ -221,12 +225,14 @@ RUN("composition execution under contention", () => {
         claim: stale.claim,
         outputSha256: SHA,
         outputSizeBytes: BYTES,
+        cleanMaster: MASTER,
         verifiedAt: NOW + 120_000,
         context: ctx(),
       }),
     ).toEqual({ kind: "LEASE_LOST" });
 
     expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(before);
+    expect(await mastersOf(planned.deliverableVersionId)).toBe(0);
     expect(await eventCount(prisma)).toBe(events);
     expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
   });
@@ -268,6 +274,7 @@ RUN("composition execution under contention", () => {
           claim: held.claim,
           outputSha256: SHA,
           outputSizeBytes: BYTES,
+          cleanMaster: MASTER,
           verifiedAt: NOW + 60_000,
           context: ctx(),
         }),
@@ -294,12 +301,16 @@ RUN("composition execution under contention", () => {
         expect(blockOutcome.ok && blockOutcome.value.kind).toBe("LEASE_LOST");
         expect(work.blockCode).toBeNull();
         expect(work.blockedAt).toBeNull();
+        expect(await mastersOf(planned.deliverableVersionId)).toBe(1);
         expect((await jobOf(prisma, planned.jobId)).state).toBe("DELIVERABLE_VALIDATING");
       } else {
         expect(blockOutcome.ok && blockOutcome.value.kind).toBe("BLOCKED");
         expect(finalizeOutcome.ok && finalizeOutcome.value.kind).toBe("LEASE_LOST");
         expect(work?.outputSha256).toBeNull();
         expect(work?.lastRetryCode).toBeNull();
+        // The lost finalize recorded no master either: the record and the
+        // receipt commit together or not at all.
+        expect(await mastersOf(planned.deliverableVersionId)).toBe(0);
         // Blocking moves no job, so a lost finalize leaves it composing.
         expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
       }

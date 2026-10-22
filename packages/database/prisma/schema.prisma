@@ -1427,6 +1427,11 @@ enum DeliverableCompositionBlockCode {
   DURATION_INVARIANT_MISMATCH
   SOURCE_INTEGRITY_MISMATCH
   OUTPUT_SIZE_LIMIT_EXCEEDED
+  /// The stored Clean Master is over its ceiling (ADR-0077, migration 31).
+  CLEAN_MASTER_SIZE_LIMIT_EXCEEDED
+  /// The stored Clean Master is not a video the disclosure can be laid over,
+  /// or not the profile's size and frame rate (ADR-0077, migration 31).
+  CLEAN_MASTER_UNUSABLE
 }
 
 model GenerationDeliverableComposition {

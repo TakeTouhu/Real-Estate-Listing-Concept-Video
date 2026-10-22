@@ -691,3 +691,13 @@ version, every column required, never updated. Its key is in the internal
 namespace no signed URL reaches, and a CHECK holds every row's key to its own
 version's place there. RESTRICT keeps a version from being deleted from under
 its master. Nothing writes a row yet; composition does from DS-5.
+
+## DS-5b-2a — the master recorded with its video
+
+No entity or relationship changes. Migration 31 adds two values to the
+composition's block-code enum, `CLEAN_MASTER_SIZE_LIMIT_EXCEEDED` and
+`CLEAN_MASTER_UNUSABLE` (ADR-0077). The one writer of
+`GenerationDeliverableCleanMaster` is now Transaction J2, which writes its row in
+the same commit as the `GenerationDeliverableComposition` row's move to
+`OUTPUT_VERIFIED`, when it is given a master's receipt; under profile v1 it is
+given none, so no row is written yet.

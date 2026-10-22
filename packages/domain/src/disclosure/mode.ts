@@ -22,6 +22,8 @@
  * or admit them.
  */
 
+import { AppError } from "@app/shared";
+
 /** Every disclosure mode admission accepts, in ADR-0052's order. Mode A only, until B and C are built. */
 export const DISCLOSURE_MODES = ["THROUGHOUT"] as const;
 
@@ -33,4 +35,24 @@ export const DEFAULT_DISCLOSURE_MODE: DisclosureMode = "THROUGHOUT";
 
 export function isDisclosureMode(value: unknown): value is DisclosureMode {
   return typeof value === "string" && (DISCLOSURE_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * A mode read back from a stored row, as one this build can render (ADR-0077).
+ *
+ * The database enum and {@link DISCLOSURE_MODES} grow together, so a stored
+ * value outside the list is a build running behind its database: a deployment
+ * fault, refused as an unrunnable composition profile is, and never rendered as
+ * another mode.
+ *
+ * @throws AppError CONFIGURATION_ERROR when this build does not know the mode.
+ */
+export function assertRenderableDisclosureMode(value: unknown): DisclosureMode {
+  if (!isDisclosureMode(value)) {
+    throw new AppError(
+      "CONFIGURATION_ERROR",
+      "This build cannot render the disclosure mode frozen on that record",
+    );
+  }
+  return value;
 }

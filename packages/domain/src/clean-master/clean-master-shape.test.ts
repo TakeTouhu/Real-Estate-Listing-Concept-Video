@@ -5,11 +5,11 @@ import { describe, expect, it } from "vitest";
 /**
  * What DS-4 may and may not have changed (ADR-0074).
  *
- * 1. **One migration, the newest**: one table, its unique index and foreign
+ * 1. **One migration, migration 30**: one table, its unique index and foreign
  *    key, and two CHECKs. No existing row is touched.
  * 2. **A receipt and nothing else**, required in every column, RESTRICT to its
  *    version, with no default but its creation time.
- * 3. **Nothing writes or reads it yet.** Composition does from DS-5b-2; no app
+ * 3. **Only Transaction J2 writes or reads it** (DS-5b-2a, ADR-0077); no app
  *    mentions it.
  * 4. **No signed URL reaches it.** The behaviour tests prove the signer, the
  *    verifier and the local adapter refuse it; this pins that there is no other
@@ -66,13 +66,14 @@ function schemaModel(name: string): string[] {
 }
 
 describe("DS-4 shape", () => {
-  it("adds exactly one migration, the newest", () => {
+  it("adds exactly one migration, in place", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs).toHaveLength(31);
+    // No longer the newest: DS-5b-2a added migration 31 after it.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(30);
+    expect(dirs).toHaveLength(32);
   });
 
   it("creates one table, its key and its two checks, and touches no existing row", () => {
@@ -102,18 +103,27 @@ describe("DS-4 shape", () => {
     ).toEqual(["cleanMaster GenerationDeliverableCleanMaster?"]);
   });
 
-  it("is written and read by nothing yet", () => {
-    // DS-5b-2's composition is the first writer; until then no repository,
-    // worker or app names the table or the model. DS-5b-1 adds the master's
-    // store, whose port and adapter take the key's type; only the key module
-    // builds one.
+  it("is written and read only by Transaction J2", () => {
+    // DS-5b-2a (ADR-0077): the composition repository is the one module that
+    // names the table or the model, and the claim is the one place outside the
+    // key module that builds a key. The port carries the receipt to it, and
+    // the runner, under profile v1, passes none. DS-5b-1's master store takes
+    // the key's type; no app mentions any of it.
+    const REPOSITORY = "packages/database/src/deliverable-composition-execution-repository.ts";
     expect(
-      matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters|cleanMaster\b/),
-    ).toEqual([]);
+      matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters/),
+    ).toEqual([REPOSITORY]);
+    expect(matching(["packages", "apps"], /cleanMaster\b/)).toEqual([
+      REPOSITORY,
+      "packages/domain/src/deliverable-composition-execution/ports.ts",
+      "packages/domain/src/deliverable-composition-execution/runner.ts",
+    ]);
     expect(matching(["packages", "apps"], /managedCleanMasterKey\(/)).toEqual([
+      REPOSITORY,
       "packages/domain/src/clean-master/key.ts",
     ]);
     expect(matching(["packages", "apps"], /managedCleanMasterKey|ManagedCleanMasterKey/)).toEqual([
+      REPOSITORY,
       "packages/domain/src/clean-master/index.ts",
       "packages/domain/src/clean-master/key.ts",
       "packages/domain/src/deliverable-composition-execution/ports.ts",

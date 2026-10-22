@@ -16,6 +16,7 @@ import {
   COMPOSITION_RETRY_CODES,
   COMPOSITION_STATUSES,
   DEFAULT_COMPOSITION_LEASE_MS,
+  DeliverableCompositionExecutionDefect,
   DEFAULT_COMPOSITION_RETRY_DELAY_MS,
   DELIVERABLE_OUTPUT_CONTENT_TYPE,
   MAX_COMPOSITION_BATCH_SIZE,
@@ -59,12 +60,15 @@ describe("retry codes and block codes are disjoint vocabularies", () => {
     ]);
   });
 
-  it("names exactly the four deterministic refusals", () => {
+  it("names exactly the six deterministic refusals", () => {
     expect([...COMPOSITION_BLOCK_CODES]).toEqual([
       "SOURCE_BYTES_LIMIT_EXCEEDED",
       "DURATION_INVARIANT_MISMATCH",
       "SOURCE_INTEGRITY_MISMATCH",
       "OUTPUT_SIZE_LIMIT_EXCEEDED",
+      // The Clean Master's two (ADR-0077, migration 31).
+      "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED",
+      "CLEAN_MASTER_UNUSABLE",
     ]);
   });
 
@@ -206,5 +210,16 @@ describe("every bound refuses rather than clamps", () => {
       // far more than it did.
       expect(() => validateCompositionBatchLimit(value)).toThrow(AppError);
     }
+  });
+});
+
+describe("the Clean Master's defect (ADR-0077)", () => {
+  it("names a replayed master receipt that disagrees, with a fixed message", () => {
+    const defect = new DeliverableCompositionExecutionDefect("CLEAN_MASTER_RECEIPT_CONFLICT");
+    expect(defect.code).toBe("CLEAN_MASTER_RECEIPT_CONFLICT");
+    expect(defect.name).toBe("DeliverableCompositionExecutionDefect");
+    expect(defect.message).toBe(
+      "A composed deliverable already carries a different durable Clean Master receipt",
+    );
   });
 });

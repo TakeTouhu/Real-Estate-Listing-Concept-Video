@@ -65,6 +65,7 @@ export type {
   ClaimCompositionWorkOutcome,
   CleanMasterInspector,
   CleanMasterRaster,
+  CleanMasterReceipt,
   CleanMasterStore,
   ComposeDeliverableInput,
   ComposeDeliverableOutcome,
