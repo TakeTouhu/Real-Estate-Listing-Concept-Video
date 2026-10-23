@@ -162,11 +162,11 @@ RUN("Phase 5B — durable composition execution", () => {
       );
     });
 
-    it("freezes profile v1 onto the row from the job's delivery target", async () => {
+    it("freezes profile v2 onto the row from the job's delivery target", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       await claimed(ORG_A, planned.deliverableVersionId);
       const work = await compositionOf(prisma, planned.deliverableVersionId);
-      expect(work?.profileKey).toBe("vtavision-compose:v1");
+      expect(work?.profileKey).toBe("vtavision-compose:v2");
       expect(work?.targetWidthPx).toBe(1920);
       expect(work?.targetHeightPx).toBe(1080);
       expect(work?.frameRateNumerator).toBe(30);
@@ -189,7 +189,7 @@ RUN("Phase 5B — durable composition execution", () => {
       expect(await eventCount(prisma)).toBe(before + 2);
     });
 
-    it("refuses a job whose target is outside profile v1, writing nothing at all", async () => {
+    it("refuses a job whose target is outside the profile's rasters, writing nothing at all", async () => {
       const planned = await seedPlannedDeliverable(prisma, { targetAspectRatio: "21:9" });
       const before = await worldSnapshot(prisma);
 
@@ -200,7 +200,7 @@ RUN("Phase 5B — durable composition execution", () => {
       expect(await worldSnapshot(prisma)).toEqual(before);
     });
 
-    it("refuses every aspect ratio outside the three v1 composes", async () => {
+    it("refuses every aspect ratio outside the three the profile composes", async () => {
       for (const targetAspectRatio of ["21:9", "4:3", "16:9 ", "", "HD"]) {
         const planned = await seedPlannedDeliverable(prisma, { targetAspectRatio });
         expect((await claim(ORG_A, planned.deliverableVersionId)).kind).toBe("UNSUPPORTED_TARGET");
@@ -210,7 +210,7 @@ RUN("Phase 5B — durable composition execution", () => {
 
     it("cannot be reached through the resolution, because the schema bounds it", async () => {
       // `generation_jobs_target_resolution_check` already restricts the column
-      // to exactly the two resolutions profile v1 composes, so an unsupported
+      // to exactly the two resolutions the profile composes, so an unsupported
       // resolution is not a state a real job can be in. The profile's own
       // refusal for it is defence against a future product tier being added to
       // the job vocabulary without being added to the raster table -- and this
@@ -758,7 +758,7 @@ RUN("Phase 5B — durable composition execution", () => {
       );
     });
 
-    it("writes no record when there is no master, as under profile v1", async () => {
+    it("writes no record when given no master, which the port allows until DS-5b-2b-2", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       const result = await claimed(ORG_A, planned.deliverableVersionId);
 
@@ -1011,7 +1011,7 @@ RUN("Phase 5B — durable composition execution", () => {
       );
     });
 
-    it("never offers a job whose target is outside profile v1", async () => {
+    it("never offers a job whose target is outside the profile's rasters", async () => {
       const composable = await seedPlannedDeliverable(prisma);
       const unsupported = await seedPlannedDeliverable(prisma, { targetAspectRatio: "21:9" });
       const alsoUnsupported = await seedPlannedDeliverable(prisma, { targetAspectRatio: "4:3" });

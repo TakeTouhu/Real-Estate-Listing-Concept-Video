@@ -1,5 +1,5 @@
 /**
- * Composition profile v1 — the frozen answer to "how are these clips encoded?"
+ * Composition profile v2 — the frozen answer to "how are these clips encoded?"
  *
  * Phase 5A froze *which* scene renditions belong to a deliverable. This freezes
  * *how* they become one file, and it is deliberately a small closed table rather
@@ -23,12 +23,17 @@
  * and refusing is the whole point: Phase 5B has no authority to reinterpret what
  * a job was admitted under.
  *
- * ## What v1 deliberately does not do
+ * ## What v2 adds to v1, and what neither does
  *
- * No crop, no speed change, no transitions beyond a hard cut, no audio, no
- * overlay, no watermark, no disclosure burn-in. Each of those is a product
- * decision with its own review, and several are legally meaningful. v1 composes
- * exactly what was planned and nothing else.
+ * v1 composed the customer's video straight from the scenes. v2 makes the
+ * overlay-free Clean Master from them first, at {@link CLEAN_MASTER_CRF}, and
+ * the customer's video from the stored master, with disclosure layer v1 laid
+ * over it as the version's mode requires (ADR-0075, ADR-0078). The raster, the
+ * frame rate and the customer's video's encoder settings are v1's.
+ *
+ * Neither does a crop, a speed change, a transition beyond a hard cut, audio,
+ * a logo or a watermark. Each of those is a product decision with its own
+ * review, and several are legally meaningful.
  */
 
 import { AppError } from "@app/shared";
@@ -36,15 +41,15 @@ import type { TargetOutputResolution } from "../generation/model-catalog";
 import type { CleanMasterRaster } from "./ports";
 
 /** The versioned profile identity, persisted verbatim on every work row. */
-export const COMPOSITION_PROFILE_KEY = "vtavision-compose:v1";
+export const COMPOSITION_PROFILE_KEY = "vtavision-compose:v2";
 
 /**
- * The aspect ratios v1 can compose.
+ * The aspect ratios the profile can compose, v1's and v2's alike.
  *
  * A closed list, matching the product's supported delivery shapes. The column
  * it is compared against is free-form text on `GenerationJob`, snapshotted when
  * the job began, so a historical job may legitimately carry something outside
- * this list — and that job is simply not composable under v1.
+ * this list — and that job is simply not composable under this profile.
  */
 export const COMPOSABLE_ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 export type ComposableAspectRatio = (typeof COMPOSABLE_ASPECT_RATIOS)[number];
@@ -61,7 +66,10 @@ export const COMPOSITION_ENCODER_PRESET = "medium";
 export const COMPOSITION_FRAME_RATE_NUMERATOR = 30;
 export const COMPOSITION_FRAME_RATE_DENOMINATOR = 1;
 
-/** Constant Rate Factor. One value in v1, and the CHECK constraint pins it. */
+/**
+ * Constant Rate Factor of the customer's video. One value in v1 and v2, and the
+ * CHECK constraint pins it.
+ */
 export const COMPOSITION_CRF = 18;
 
 /**
@@ -75,8 +83,8 @@ export const COMPOSITION_CRF = 18;
  * customer's video: the approved plan's estimate that the master roughly
  * doubles what is kept per video.
  *
- * Not a column: the composer reads it for the master. Changing it must be a new
- * composition profile, never an edit in place; DS-5b's profile v2 binds it.
+ * Not a column: the composer reads it for the master. Profile v2 binds it, so
+ * changing it must be a new composition profile, never an edit in place.
  */
 export const CLEAN_MASTER_CRF = 16;
 
@@ -97,8 +105,8 @@ const RASTERS: Readonly<
 };
 
 /**
- * Every `(aspect ratio, resolution)` pair v1 can compose, derived from the same
- * table {@link resolveCompositionProfile} reads.
+ * Every `(aspect ratio, resolution)` pair the profile can compose, derived from
+ * the same table {@link resolveCompositionProfile} reads.
  *
  * Exported so candidate discovery can exclude a job whose frozen target this
  * profile version cannot deliver, without a second hand-written copy of the
@@ -136,8 +144,8 @@ export interface CompositionProfile {
 export type CompositionProfileOutcome =
   | { readonly kind: "RESOLVED"; readonly profile: CompositionProfile }
   /**
-   * The job's frozen aspect ratio or resolution is outside what v1 composes.
-   * An ordinary outcome, not an error: the job was admitted legitimately under
+   * The job's frozen aspect ratio or resolution is outside what the profile
+   * composes. An ordinary outcome, not an error: the job was admitted legitimately under
    * a target this profile version cannot deliver, and saying so is more honest
    * than approximating it.
    */
@@ -151,7 +159,7 @@ export function isComposableAspectRatio(value: unknown): value is ComposableAspe
 }
 
 /**
- * Resolve the frozen job target into the v1 profile, or refuse.
+ * Resolve the frozen job target into this build's profile, or refuse.
  *
  * Refuses rather than normalizes. A blank string, `21:9`, `16 : 9`, `HD` and an
  * unknown resolution all take the same path: `UNSUPPORTED_TARGET`. There is no
@@ -232,7 +240,8 @@ export function cleanMasterMatchesProfile(
  * settings and encode a different video into the same deliverable. It refuses
  * instead, which turns a silent product change into an operational decision.
  *
- * @throws AppError CONFIGURATION_ERROR when the persisted profile is not v1.
+ * @throws AppError CONFIGURATION_ERROR when the persisted profile is not this
+ * build's (v2).
  */
 export function assertRunnableProfile(profile: CompositionProfile): CompositionProfile {
   if (profile.profileKey !== COMPOSITION_PROFILE_KEY) {

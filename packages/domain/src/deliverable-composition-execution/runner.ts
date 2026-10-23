@@ -1,10 +1,22 @@
 /**
  * The bounded composition-execution coordinator.
  *
- * One pass: discover a bounded batch, and for each candidate claim → materialize
- * → compose → publish → finalize, or defer with a closed code. It does not loop,
- * sleep, schedule itself, own a timer or construct anything. Nothing in this
- * repository calls it.
+ * One pass: discover a bounded batch, and for each candidate claim → the Clean
+ * Master → the customer's video → finalize, or defer or block with a closed
+ * code. It does not loop, sleep, schedule itself, own a timer or construct
+ * anything. Nothing in this repository calls it.
+ *
+ * ## The master before the video (ADR-0078)
+ *
+ * Under profile v2 the scenes become the overlay-free Clean Master, stored
+ * first-wins at its internal key, and the customer's video is made from a copy
+ * of the **stored** master, with the disclosure the version's mode requires laid
+ * over it. So every video is made from the master a later recomposition will
+ * read, even when another attempt stored that master first, and the transaction
+ * that records the video's receipt records the master's in the same commit.
+ *
+ * A stored master is reused, never encoded again: the scenes are fetched only
+ * when nothing is at the master's key, and released as soon as it is stored.
  *
  * ## Why the ordering is what it is
  *
@@ -34,11 +46,11 @@
  * while the deliverable already exists.
  *
  * So every claim reads the canonical key before fetching a single source. If
- * bytes are there, this pass finalizes against their receipt and composes
- * nothing. It does not make duplicate execution impossible — work before the
- * first publication can still be thrown away — it makes recovery after
- * publication cost one read instead of one encode, which is what a heartbeat
- * would otherwise have been introduced to achieve.
+ * bytes are there, this pass reads the master's receipt, finalizes against both
+ * and composes nothing. It does not make duplicate execution impossible — work
+ * before the first publication can still be thrown away — it makes recovery
+ * after publication cost two reads instead of two encodes, which is what a
+ * heartbeat would otherwise have been introduced to achieve.
  *
  * ## One bad candidate never poisons the batch
  *
@@ -64,6 +76,7 @@ import { randomId } from "@app/shared";
 import {
   DEFAULT_COMPOSITION_LEASE_MS,
   DEFAULT_COMPOSITION_RETRY_DELAY_MS,
+  DeliverableCompositionExecutionDefect,
   MAX_COMPOSITION_BATCH_SIZE,
   MAX_DELIVERABLE_COMPOSITION_SOURCE_BYTES,
   validateCompositionBatchLimit,
@@ -72,12 +85,17 @@ import {
   type DeliverableCompositionBlockCode,
   type DeliverableCompositionRetryCode,
 } from "./durable";
+import { cleanMasterMatchesProfile } from "./profile";
 import type {
+  CleanMasterInspector,
+  CleanMasterReceipt,
+  CleanMasterStore,
   DeliverableCompositionClaim,
   DeliverableCompositionRepository,
   DeliverableCompositionSourceMaterializer,
   DeliverableMediaComposer,
   DeliverableOutputPublisher,
+  LocalCleanMasterCopy,
 } from "./ports";
 import type { TransitionContext } from "../orchestration/ports";
 import type { SafePositiveByteCount, Sha256Digest } from "../completion/output";
@@ -87,6 +105,10 @@ export interface DeliverableCompositionDeps {
   readonly materializer: DeliverableCompositionSourceMaterializer;
   readonly composer: DeliverableMediaComposer;
   readonly publisher: DeliverableOutputPublisher;
+  /** Stores the Clean Master first-wins and copies back what is stored (ADR-0076). */
+  readonly cleanMasterStore: CleanMasterStore;
+  /** Reads a master's copy's frame size and rate before the disclosure is laid over it. */
+  readonly cleanMasterInspector: CleanMasterInspector;
   /** Injected, never `Date.now()` inside the logic. */
   readonly clock: () => number;
   readonly context: (organizationId: string) => TransitionContext;
@@ -105,7 +127,7 @@ export interface DeliverableCompositionReport {
   readonly blocked: number;
   readonly leaseLost: number;
   readonly notClaimable: number;
-  /** Claims refused because the job's target is outside profile v1. */
+  /** Claims refused because the job's target is outside the profile's rasters. */
   readonly unsupportedTarget: number;
   readonly failed: number;
 }
@@ -118,6 +140,14 @@ type ExecutionOutcome =
   | "LEASE_LOST"
   | "NOT_CLAIMABLE"
   | "UNSUPPORTED_TARGET";
+
+/** What a claimed attempt can end in. */
+type AttemptOutcome = "FINALIZED" | "ALREADY" | "DEFERRED" | "BLOCKED" | "LEASE_LOST";
+
+/** A private copy of the stored master, and when the store established its receipt. */
+type MasterInHand =
+  | { readonly kind: "COPY"; readonly copy: LocalCleanMasterCopy; readonly verifiedAt: number }
+  | { readonly kind: "ENDED"; readonly outcome: AttemptOutcome };
 
 export class DeliverableCompositionRunner {
   readonly #deps: DeliverableCompositionDeps;
@@ -244,7 +274,7 @@ export class DeliverableCompositionRunner {
       case "PUBLISHED":
         // Canonical bytes exist. Finalize against *their* receipt; composing
         // again could only produce a file nobody would publish.
-        return this.#finalize(claim.claim, existing.sha256, existing.sizeBytes);
+        return this.#finalizeStored(claim.claim, existing.sha256, existing.sizeBytes);
       case "OUTPUT_TOO_LARGE":
         // Already over the ceiling, and first-wins means it cannot be replaced.
         // Re-encoding would be work in service of a write that is refused.
@@ -265,9 +295,82 @@ export class DeliverableCompositionRunner {
     return this.#compose(claim.claim);
   }
 
-  async #compose(
+  /**
+   * The customer's video is stored, and so is the master it was made from:
+   * composition stores the master first. Finalize against both receipts, each
+   * read from what is stored.
+   */
+  async #finalizeStored(
     claim: DeliverableCompositionClaim,
-  ): Promise<"FINALIZED" | "ALREADY" | "DEFERRED" | "BLOCKED" | "LEASE_LOST"> {
+    outputSha256: Sha256Digest,
+    outputSizeBytes: SafePositiveByteCount,
+  ): Promise<AttemptOutcome> {
+    const master = await this.#deps.cleanMasterStore.probe({ key: claim.cleanMasterStorageKey });
+    switch (master.kind) {
+      case "STORED":
+        return this.#finalize(claim, outputSha256, outputSizeBytes, {
+          sha256: master.sha256,
+          sizeBytes: master.sizeBytes,
+          verifiedAt: this.#deps.clock(),
+        });
+      case "TOO_LARGE":
+        // First-wins: the stored master cannot be replaced, so every attempt
+        // reads the same oversized object.
+        return this.#block(claim, "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED");
+      case "RETRYABLE_FAILURE":
+        return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
+      case "ABSENT":
+        // A video stored without its master is a state composition cannot
+        // produce. Encoding a master now would record one the video was not
+        // made from.
+        throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING");
+      default: {
+        const exhaustive: never = master;
+        void exhaustive;
+        throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING");
+      }
+    }
+  }
+
+  async #compose(claim: DeliverableCompositionClaim): Promise<AttemptOutcome> {
+    const master = await this.#masterInHand(claim);
+    if (master.kind === "ENDED") return master.outcome;
+    try {
+      return await this.#deliverFrom(claim, master.copy, master.verifiedAt);
+    } finally {
+      // Unconditional, as for the scenes: the copy and the customer's video
+      // share one directory, and losing the outcome to a cleanup failure would
+      // be a defect.
+      await master.copy.release().catch(() => undefined);
+    }
+  }
+
+  /**
+   * A private copy of the master stored at the version's key: the one already
+   * there, or, when nothing is, one made from the scenes and stored first-wins.
+   * Either way the copy is of the stored bytes, which may be another attempt's.
+   */
+  async #masterInHand(claim: DeliverableCompositionClaim): Promise<MasterInHand> {
+    const fetched = await this.#deps.cleanMasterStore.fetch({ key: claim.cleanMasterStorageKey });
+    switch (fetched.kind) {
+      case "COPIED":
+        return { kind: "COPY", copy: fetched.copy, verifiedAt: this.#deps.clock() };
+      case "TOO_LARGE":
+        return this.#ended(this.#block(claim, "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED"));
+      case "RETRYABLE_FAILURE":
+        // Never read as "absent": that would encode a master that may exist.
+        return this.#ended(this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE"));
+      case "ABSENT":
+        return this.#makeMaster(claim);
+      default: {
+        const exhaustive: never = fetched;
+        void exhaustive;
+        return this.#ended(this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE"));
+      }
+    }
+  }
+
+  async #makeMaster(claim: DeliverableCompositionClaim): Promise<MasterInHand> {
     const materialized = await this.#deps.materializer.materialize({
       organizationId: claim.organizationId,
       scenes: claim.scenes,
@@ -276,20 +379,20 @@ export class DeliverableCompositionRunner {
       // The canonical object is first-wins and the plan's receipt is immutable,
       // so the next attempt would compare the same bytes against the same
       // digest. Retrying it is a loop, not recovery.
-      return this.#block(claim, "SOURCE_INTEGRITY_MISMATCH");
+      return this.#ended(this.#block(claim, "SOURCE_INTEGRITY_MISMATCH"));
     }
     if (materialized.kind !== "MATERIALIZED") {
-      return this.#defer(claim, "SOURCE_READ_RETRYABLE");
+      return this.#ended(this.#defer(claim, "SOURCE_READ_RETRYABLE"));
     }
 
-    // The materializer owns the directory, so it names the output too. Nothing
-    // here derives a path: a caller-computed location would sit outside the
-    // directory `release()` removes, and the composed file would survive every
-    // attempt.
+    // The materializer owns the directory, so it names where the master is
+    // encoded too. Nothing here derives a path: a caller-computed location
+    // would sit outside the directory `release()` removes, and the encoded
+    // file would survive every attempt.
     const { outputPath } = materialized;
 
     try {
-      const composed = await this.#deps.composer.compose({
+      const composed = await this.#deps.composer.composeCleanMaster({
         clips: materialized.sources.map((source, index) => ({
           localPath: source.localPath,
           // Index rather than a lookup by position: the materializer returns
@@ -301,51 +404,105 @@ export class DeliverableCompositionRunner {
         profile: claim.profile,
         outputPath,
       });
-      if (composed.kind !== "SUCCESS") return this.#defer(claim, "COMPOSER_RETRYABLE");
+      if (composed.kind !== "SUCCESS") return this.#ended(this.#defer(claim, "COMPOSER_RETRYABLE"));
 
-      const published = await this.#deps.publisher.publish({
-        key: claim.outputStorageKey,
+      const stored = await this.#deps.cleanMasterStore.publish({
+        key: claim.cleanMasterStorageKey,
         localPath: outputPath,
       });
-      if (published.kind === "OUTPUT_TOO_LARGE") {
-        // The plan and the profile are immutable, so the same inputs encode to
-        // the same size on every attempt. Only a different limit or a different
-        // plan changes the answer, and neither happens by waiting.
-        return this.#block(claim, "OUTPUT_SIZE_LIMIT_EXCEEDED");
+      switch (stored.kind) {
+        case "COPIED":
+          return { kind: "COPY", copy: stored.copy, verifiedAt: this.#deps.clock() };
+        case "TOO_LARGE":
+          // The plan and the profile are immutable, so the same scenes encode
+          // to the same size on every attempt, and a stored oversized master
+          // cannot be replaced.
+          return this.#ended(this.#block(claim, "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED"));
+        case "RETRYABLE_FAILURE":
+          return this.#ended(this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE"));
+        default: {
+          const exhaustive: never = stored;
+          void exhaustive;
+          return this.#ended(this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE"));
+        }
       }
-      if (published.kind !== "PUBLISHED") return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
-
-      return this.#finalize(claim, published.sha256, published.sizeBytes);
     } finally {
-      // Unconditional, on every path including a thrown defect. A cleanup
-      // failure is swallowed rather than allowed to replace the real answer:
-      // leaving a temporary directory behind is an operational annoyance, and
-      // losing the outcome of a successful composition is a defect.
+      // The scenes and the encoded master go as soon as the master is stored
+      // (or is not), on every path including a thrown defect, so a worker does
+      // not hold them while the customer's video is encoded. A cleanup failure
+      // is swallowed rather than allowed to replace the real answer.
       await materialized.release().catch(() => undefined);
     }
+  }
+
+  /** Check the master's copy, lay the disclosure over it, store the video, finalize. */
+  async #deliverFrom(
+    claim: DeliverableCompositionClaim,
+    copy: LocalCleanMasterCopy,
+    masterVerifiedAt: number,
+  ): Promise<AttemptOutcome> {
+    const inspected = await this.#deps.cleanMasterInspector.inspect({
+      localPath: copy.cleanMasterPath,
+    });
+    if (inspected.kind === "RETRYABLE_FAILURE") return this.#defer(claim, "COMPOSER_RETRYABLE");
+    if (inspected.kind === "UNUSABLE" || !cleanMasterMatchesProfile(inspected.raster, claim.profile)) {
+      // The stored master is first-wins, so every attempt inspects the same
+      // bytes. A disclosure image laid over a master of another size would be
+      // cut off, misplaced or missing (ADR-0076 Decision 3).
+      return this.#block(claim, "CLEAN_MASTER_UNUSABLE");
+    }
+
+    const disclosed = await this.#deps.composer.applyDisclosure({
+      cleanMasterPath: copy.cleanMasterPath,
+      profile: claim.profile,
+      disclosureMode: claim.disclosureMode,
+      outputPath: copy.outputPath,
+    });
+    if (disclosed.kind !== "SUCCESS") return this.#defer(claim, "COMPOSER_RETRYABLE");
+
+    const published = await this.#deps.publisher.publish({
+      key: claim.outputStorageKey,
+      localPath: copy.outputPath,
+    });
+    if (published.kind === "OUTPUT_TOO_LARGE") {
+      // The plan and the profile are immutable, so the same inputs encode to
+      // the same size on every attempt. Only a different limit or a different
+      // plan changes the answer, and neither happens by waiting.
+      return this.#block(claim, "OUTPUT_SIZE_LIMIT_EXCEEDED");
+    }
+    if (published.kind !== "PUBLISHED") return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
+
+    return this.#finalize(claim, published.sha256, published.sizeBytes, {
+      sha256: copy.sha256,
+      sizeBytes: copy.sizeBytes,
+      verifiedAt: masterVerifiedAt,
+    });
+  }
+
+  async #ended(outcome: Promise<AttemptOutcome>): Promise<MasterInHand> {
+    return { kind: "ENDED", outcome: await outcome };
   }
 
   /**
    * Write the durable receipt, whichever path established it.
    *
    * Shared by the compose path and the canonical-replay path on purpose: both
-   * are finalizing against a receipt read from the object at the canonical key,
-   * and the only difference is whether this worker is the one that put it there.
-   * A second copy of this mapping could disagree about what `ALREADY_FINALIZED`
-   * means.
+   * are finalizing against receipts read from the objects at the canonical
+   * keys, and the only difference is whether this worker is the one that put
+   * them there. A second copy of this mapping could disagree about what
+   * `ALREADY_FINALIZED` means.
    */
   async #finalize(
     claim: DeliverableCompositionClaim,
     outputSha256: Sha256Digest,
     outputSizeBytes: SafePositiveByteCount,
+    cleanMaster: CleanMasterReceipt,
   ): Promise<"FINALIZED" | "ALREADY" | "LEASE_LOST"> {
     const finalized = await this.#deps.repository.finalizeComposition({
       claim,
       outputSha256,
       outputSizeBytes,
-      // Profile v1 makes no Clean Master, so there is no receipt to record.
-      // DS-5b-2b's profile v2 makes one before the video and passes it here.
-      cleanMaster: null,
+      cleanMaster,
       verifiedAt: this.#deps.clock(),
       context: this.#deps.context(claim.organizationId),
     });

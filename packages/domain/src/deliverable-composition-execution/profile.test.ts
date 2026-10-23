@@ -1,5 +1,5 @@
 /**
- * Composition profile v1 — the exhaustive table, and everything it refuses.
+ * Composition profile v2 — the exhaustive table, and everything it refuses.
  *
  * The refusals carry most of the weight. A profile that quietly approximated an
  * unknown target would deliver a letterboxed or cropped video the customer never
@@ -89,8 +89,8 @@ describe("the raster table is exhaustive and even on both axes", () => {
     }
   });
 
-  it("names v1 explicitly, so a later version cannot inherit this row", () => {
-    expect(COMPOSITION_PROFILE_KEY).toBe("vtavision-compose:v1");
+  it("names v2 explicitly, so neither an earlier nor a later version can inherit this row", () => {
+    expect(COMPOSITION_PROFILE_KEY).toBe("vtavision-compose:v2");
   });
 });
 
@@ -158,25 +158,26 @@ describe("the aspect-ratio guard is a closed list", () => {
 });
 
 describe("a persisted profile from another version is refused, never re-derived", () => {
-  const v1 = (() => {
+  const current = (() => {
     const outcome = profileFor("16:9", "1080p");
     if (outcome.kind !== "RESOLVED") throw new Error("expected a profile");
     return outcome.profile;
   })();
 
-  it("returns a v1 profile unchanged", () => {
-    expect(assertRunnableProfile(v1)).toEqual(v1);
+  it("returns a v2 profile unchanged", () => {
+    expect(assertRunnableProfile(current)).toEqual(current);
   });
 
   it("refuses a profile carrying any other key", () => {
-    for (const key of ["vtavision-compose:v2", "vtavision-compose:v0", "", "other"]) {
-      expect(() => assertRunnableProfile({ ...v1, profileKey: key })).toThrow(AppError);
+    // v1 made no Clean Master, so work frozen under it cannot run under v2.
+    for (const key of ["vtavision-compose:v1", "vtavision-compose:v3", "", "other"]) {
+      expect(() => assertRunnableProfile({ ...current, profileKey: key })).toThrow(AppError);
     }
   });
 
   it("refuses with a configuration defect, not a media verdict", () => {
     try {
-      assertRunnableProfile({ ...v1, profileKey: "vtavision-compose:v2" });
+      assertRunnableProfile({ ...current, profileKey: "vtavision-compose:v1" });
       throw new Error("expected a refusal");
     } catch (error) {
       expect(error).toBeInstanceOf(AppError);

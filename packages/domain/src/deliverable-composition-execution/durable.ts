@@ -361,6 +361,12 @@ export type DeliverableCompositionExecutionDefectCode =
    * deliverable whose master is already recorded (or the reverse).
    */
   | "CLEAN_MASTER_RECEIPT_CONFLICT"
+  /**
+   * The customer's video is stored at its key and the Clean Master it is made
+   * from is not at its own. Composition stores the master before it makes the
+   * video, and nothing deletes either (ADR-0078).
+   */
+  | "CLEAN_MASTER_MISSING"
   /** A block re-presented a different code for an already-blocked row. */
   | "COMPOSITION_BLOCK_CONFLICT"
   /** The job's current deliverable pointer moved during composition. */
@@ -377,6 +383,8 @@ const DEFECT_MESSAGES: Record<DeliverableCompositionExecutionDefectCode, string>
     "A composed deliverable already carries a different durable output receipt",
   CLEAN_MASTER_RECEIPT_CONFLICT:
     "A composed deliverable already carries a different durable Clean Master receipt",
+  CLEAN_MASTER_MISSING:
+    "A composed deliverable's video is stored without the Clean Master it was made from",
   COMPOSITION_BLOCK_CONFLICT:
     "A blocked composition already carries a different durable block reason",
   CURRENT_DELIVERABLE_POINTER_MOVED:

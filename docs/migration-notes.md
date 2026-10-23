@@ -1491,3 +1491,24 @@ and master key, the master's record in Transaction J2, discovery skipping work
 frozen under another profile or planned under a mode the build does not draw)
 runs in tests only. No new environment variable.
 
+
+## DS-5b-2b-1 — composition makes the Clean Master first
+
+**No migration** (ADR-0078). Composition profile v2 keeps every column v1
+froze at v1's value, including `crf` 18 for the customer's video, and nothing
+in the database constrains `profileKey`. The master's record (migration 30) and
+the two block codes (migration 31) are written by the runner from now on, once
+anything runs it.
+
+**Rolling back.** To DS-5b-2a's build: safe. That build refuses a row frozen
+under v2 at claim and its discovery does not offer one, so such a row waits
+rather than being encoded under v1; it knows both block codes; and the master
+records and stored masters stay as they are. But a version not yet claimed
+would be claimed under v1 and composed with no master and no disclosure, so
+once composition is activated, no rollback goes back past this milestone. Past
+DS-5b-2a: only while no row
+holds either new block code, with the same check DS-5b-2a's notes give, because
+a build from before it does not know them.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the composition runner. No new environment variable.

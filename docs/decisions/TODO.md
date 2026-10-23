@@ -1127,8 +1127,10 @@ them is **built**. Each item below records the settled decision and what remains
       disclosure over it. DS-5b-1 (ADR-0076) added the master's store and the
       inspector that checks its size and rate. DS-5b-2a (ADR-0077, migration
       31) gave the composition claim the version's mode and the master's key,
-      and Transaction J2 the master's record; composition does not run any of
-      them yet (DS-5b-2b).*
+      and Transaction J2 the master's record. DS-5b-2b-1 (ADR-0078) switched
+      the runner to profile v2: it makes the master first and the customer's
+      video from the stored master with the version's disclosure. Nothing in
+      production runs it, and publication does not yet require either (DS-6).*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1268,9 +1270,12 @@ them is **built**. Each item below records the settled decision and what remains
       `org/{organizationId}/internal/clean-masters/{version}`, refused by every
       signed URL. DS-5b-2a (ADR-0077) made Transaction J2 its writer, in the
       commit that records the video's receipt; it records the receipt it is
-      given and does not yet check it against the frozen profile. Still
-      unbuilt: composition making a master to record, with J2 then refusing a
-      finalize under profile v2 that names none (DS-5b-2b), publication
+      given and does not yet check it against the frozen profile. DS-5b-2b-1
+      (ADR-0078) has the runner make a master and hand its receipt to every
+      finalize; a stored video found without its master is a defect that
+      holds that deliverable until an operator acts (ADR-0052 Decision 20's
+      recovery, unbuilt). Still unbuilt: J2 refusing a finalize that names no
+      master (DS-5b-2b-2), publication
       requiring it (DS-6), a recomposed version naming another version's
       master (which then decides what its own Transaction J2 records, ADR-0077
       Decision 3), and its deletion with its content: when physical deletion of

@@ -164,6 +164,15 @@ carry or planned under a disclosure mode it does not draw; and two block codes
 exist for a master over its ceiling or not usable.
 Composition still runs profile v1 and makes no master; DS-5b-2b switches it.
 
+**DS-5b-2b-1 — composition makes the Clean Master first** (ADR-0078, no
+migration): composition profile v2. The runner makes the overlay-free master
+from the scenes and stores it first-wins, or reuses the one already stored,
+checks the stored copy's size and frame rate, makes the customer's video from
+it with the version's disclosure, and finalizes with both receipts. A master
+over its ceiling or not usable blocks with its own code, and a stored video
+found without its master is a defect. Nothing in production runs it; DS-5b-2b-2
+makes the master's receipt required and removes the one-pass encode.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
