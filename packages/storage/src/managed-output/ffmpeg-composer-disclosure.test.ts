@@ -30,7 +30,6 @@ import type { ProcessRunInput, ProcessRunner, ProcessRunOutcome } from "./proces
 import {
   createFfmpegDeliverableComposer,
   ffmpegCleanMasterArgsFor,
-  ffmpegComposeArgsFor,
   ffmpegDisclosureArgsFor,
   isDeploymentReadFault,
 } from "./ffmpeg-composer";
@@ -122,15 +121,6 @@ describe("the Clean Master encode", () => {
     expect(CLEAN_MASTER_CRF).toBeLessThan(COMPOSITION_CRF);
   });
 
-  it("is the composition graph with only its quality changed", () => {
-    const composed = ffmpegComposeArgsFor(composeInput());
-    const master = ffmpegCleanMasterArgsFor(composeInput());
-    const crfAt = composed.indexOf("-crf") + 1;
-    expect(composed[crfAt]).toBe("18");
-    expect(master[crfAt]).toBe("16");
-    expect(master.filter((_, index) => index !== crfAt)).toEqual(composed.filter((_, index) => index !== crfAt));
-  });
-
   it("lays nothing over the video", () => {
     const master = ffmpegCleanMasterArgsFor(composeInput());
     for (const banned of ["overlay", "drawtext", "-loop", ".png"]) {
@@ -216,7 +206,6 @@ describe("the disclosure's argument vector", () => {
 
 describe("nothing from an input's container reaches either file", () => {
   it.each([
-    ["compose", ffmpegComposeArgsFor(composeInput())],
     ["the Clean Master", ffmpegCleanMasterArgsFor(composeInput())],
     ["the disclosure", ffmpegDisclosureArgsFor(disclosureInput(), "/x/layer.png")],
   ] as const)("%s drops every input's tags and chapters", (_name, args) => {
@@ -396,7 +385,7 @@ describe("the disclosure image is the reviewed one, or nothing runs", () => {
   });
 });
 
-describe("both encodes map a run as compose does", () => {
+describe("both encodes map a run to the composer's closed vocabulary", () => {
   const methods = [
     [
       "composeCleanMaster",
@@ -430,7 +419,7 @@ describe("both encodes map a run as compose does", () => {
     );
   });
 
-  it("all three refuse a profile they do not implement before running anything", async () => {
+  it("both refuse a profile they do not implement before running anything", async () => {
     const runner = new FakeProcessRunner({ outcome: exitedCleanly });
     const composer = createFfmpegDeliverableComposer({ runner }, { disclosureLayerDirectory: LAYER_DIRECTORY });
     for (const profile of [
@@ -443,7 +432,6 @@ describe("both encodes map a run as compose does", () => {
       // not the one implemented never reaches it.
       { ...profileOf(), pixelFormat: "yuv420p[out];movie=x" },
     ]) {
-      expect(await refusal(composer.compose({ ...composeInput(), profile }))).toBe("INTERNAL_ERROR");
       expect(await refusal(composer.composeCleanMaster({ ...composeInput(), profile }))).toBe("INTERNAL_ERROR");
       expect(await refusal(composer.applyDisclosure(disclosureInput({ profile })))).toBe("INTERNAL_ERROR");
     }

@@ -619,10 +619,7 @@ RUN("Phase 5B — durable composition execution", () => {
   // -------------------------------------------------------------------------
 
   describe("J2 writes the receipt and moves COMPOSING -> DELIVERABLE_VALIDATING", () => {
-    async function finalize(
-      claimValue: DeliverableCompositionClaim,
-      cleanMaster: CleanMasterReceipt | null = MASTER,
-    ) {
+    async function finalize(claimValue: DeliverableCompositionClaim, cleanMaster: CleanMasterReceipt = MASTER) {
       return repository.finalizeComposition({
         claim: claimValue,
         outputSha256: OUTPUT_SHA,
@@ -722,7 +719,7 @@ RUN("Phase 5B — durable composition execution", () => {
   // -------------------------------------------------------------------------
 
   describe("J2 records the Clean Master in the same commit as the video", () => {
-    async function finalize(claimValue: DeliverableCompositionClaim, cleanMaster: CleanMasterReceipt | null) {
+    async function finalize(claimValue: DeliverableCompositionClaim, cleanMaster: CleanMasterReceipt) {
       return repository.finalizeComposition({
         claim: claimValue,
         outputSha256: OUTPUT_SHA,
@@ -758,14 +755,48 @@ RUN("Phase 5B — durable composition execution", () => {
       );
     });
 
-    it("writes no record when given no master, which the port allows until DS-5b-2b-2", async () => {
-      const planned = await seedPlannedDeliverable(prisma);
-      const result = await claimed(ORG_A, planned.deliverableVersionId);
+    // Only an untyped caller can name no master: the type requires one (ADR-0079).
+    for (const [label, missing] of [
+      ["null", null],
+      ["undefined", undefined],
+    ] as const) {
+      const noMaster = missing as unknown as CleanMasterReceipt;
 
-      expect(await finalize(result, null)).toEqual({ kind: "FINALIZED" });
-      expect(await masterOf(planned.deliverableVersionId)).toBeNull();
-      expect(await finalize(result, null)).toEqual({ kind: "ALREADY_FINALIZED" });
-    });
+      it(`refuses a finalize whose master is ${label}, writing nothing`, async () => {
+        const planned = await seedPlannedDeliverable(prisma);
+        const result = await claimed(ORG_A, planned.deliverableVersionId);
+        const before = await compositionOf(prisma, planned.deliverableVersionId);
+        const events = await eventCount(prisma);
+
+        await expect(finalize(result, noMaster)).rejects.toThrow(
+          expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_MISSING" }),
+        );
+        expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(before);
+        expect(await masterOf(planned.deliverableVersionId)).toBeNull();
+        expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
+        expect(await eventCount(prisma)).toBe(events);
+        // The worker still holds its lease: the finalize it owes can still land.
+        expect(await finalize(result, MASTER)).toEqual({ kind: "FINALIZED" });
+      });
+
+      it(`refuses a replay whose master is ${label}, rather than calling it finalized`, async () => {
+        const planned = await seedPlannedDeliverable(prisma);
+        const result = await claimed(ORG_A, planned.deliverableVersionId);
+        await finalize(result, MASTER);
+        const stored = await masterOf(planned.deliverableVersionId);
+        const work = await compositionOf(prisma, planned.deliverableVersionId);
+        const events = await eventCount(prisma);
+
+        await expect(finalize(result, noMaster)).rejects.toThrow(
+          expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_MISSING" }),
+        );
+        expect(await masterOf(planned.deliverableVersionId)).toEqual(stored);
+        expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(work);
+        expect(await eventCount(prisma)).toBe(events);
+        // Not an answer about the deliverable: the identical receipt still replays.
+        expect(await finalize(result, MASTER)).toEqual({ kind: "ALREADY_FINALIZED" });
+      });
+    }
 
     it("writes neither receipt, and moves nothing, when the master's record is refused", async () => {
       const planned = await seedPlannedDeliverable(prisma);
@@ -817,7 +848,6 @@ RUN("Phase 5B — durable composition execution", () => {
     for (const [label, replayed] of [
       ["another digest", { ...MASTER, sha256: sha256Digest("b".repeat(64)) }],
       ["another size", { ...MASTER, sizeBytes: safePositiveByteCount(8_193) }],
-      ["no master", null],
     ] as const) {
       it(`refuses a replay naming ${label}, and rewrites nothing`, async () => {
         const planned = await seedPlannedDeliverable(prisma);
@@ -834,10 +864,15 @@ RUN("Phase 5B — durable composition execution", () => {
       });
     }
 
-    it("refuses a replay naming a master when the first commit recorded none", async () => {
+    it("refuses a replay naming a master for a verified deliverable with no master's record", async () => {
+      // Every commit of this build writes one, so only a row verified before
+      // profile v2, or a hand-deleted record, lacks it.
       const planned = await seedPlannedDeliverable(prisma);
       const result = await claimed(ORG_A, planned.deliverableVersionId);
-      await finalize(result, null);
+      await finalize(result, MASTER);
+      await prisma.generationDeliverableCleanMaster.delete({
+        where: { deliverableVersionId: planned.deliverableVersionId },
+      });
 
       await expect(finalize(result, MASTER)).rejects.toThrow(
         expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_CONFLICT" }),
@@ -876,7 +911,7 @@ RUN("Phase 5B — durable composition execution", () => {
           claim: result,
           outputSha256: sha256Digest("e".repeat(64)),
           outputSizeBytes: OUTPUT_BYTES,
-          cleanMaster: null,
+          cleanMaster: { ...MASTER, sha256: sha256Digest("b".repeat(64)) },
           verifiedAt: NOW + 120_000,
           context: ctx(),
         }),

@@ -225,11 +225,6 @@ class FakeComposer implements DeliverableMediaComposer {
     private readonly disclosure: ComposeDeliverableOutcome = { kind: "SUCCESS" },
   ) {}
 
-  // Never called: the customer's video is made only from the Clean Master.
-  async compose(): Promise<ComposeDeliverableOutcome> {
-    throw new Error("the runner must never compose a video without its disclosure");
-  }
-
   async composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
     this.log.push("encode master");
     this.masterInputs.push(input);

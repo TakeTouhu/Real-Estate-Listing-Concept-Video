@@ -164,11 +164,10 @@ export interface FinalizeCompositionInput {
   /**
    * The receipt of the Clean Master the customer's video was made from, which
    * Transaction J2 records in the same commit as the video's (ADR-0077).
-   *
-   * Profile v2's runner always passes one (ADR-0078); `null` stays in the type
-   * only until DS-5b-2b-2 makes it required and J2 refuses a missing one.
+   * Required: no video is recorded without the master it was made from, and
+   * J2 refuses a finalize that names none (ADR-0079).
    */
-  readonly cleanMaster: CleanMasterReceipt | null;
+  readonly cleanMaster: CleanMasterReceipt;
   /** When the video's receipt was established: its `outputVerifiedAt`. */
   readonly verifiedAt: number;
   readonly context: TransitionContext;
@@ -242,9 +241,8 @@ export interface DeliverableCompositionRepository {
 
   /**
    * Transaction J2, in one short transaction: the durable receipt, the Clean
-   * Master's record when there is a master, and
-   * `COMPOSING -> DELIVERABLE_VALIDATING`, together or not at all. A replay
-   * compares both receipts.
+   * Master's record, and `COMPOSING -> DELIVERABLE_VALIDATING`, together or not
+   * at all. A replay compares both receipts.
    */
   finalizeComposition(
     input: FinalizeCompositionInput,
@@ -386,21 +384,21 @@ export interface ApplyDisclosureInput {
   readonly outputPath: string;
 }
 
+/**
+ * The two encodes composition runs: the scenes into the Clean Master, then the
+ * master into the customer's video with its disclosure. There is no encode of
+ * the scenes straight into the customer's video: every video is made from a
+ * master (ADR-0079).
+ */
 export interface DeliverableMediaComposer {
   /**
-   * Compose the clips into one file at `outputPath`.
+   * Compose the clips into the overlay-free Clean Master at `outputPath`, at the
+   * master's higher quality (ADR-0075 Decision 1).
    *
    * No stderr, command line, exit object or OS error crosses this boundary. A
    * composer that cannot be launched at all is a *deployment* fault and throws a
    * fixed `CONFIGURATION_ERROR` rather than reporting a retryable failure —
    * retrying a missing binary forever is not recovery.
-   */
-  compose(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome>;
-
-  /**
-   * Compose the clips into the overlay-free Clean Master at `outputPath`: the
-   * same video as {@link compose}, at the master's higher quality
-   * (ADR-0075 Decision 1). Fails and throws as `compose` does.
    */
   composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome>;
 
@@ -409,9 +407,10 @@ export interface DeliverableMediaComposer {
    * the Clean Master, and encode the customer's video at `outputPath` with the
    * profile's settings (ADR-0075 Decision 2).
    *
-   * Fails as `compose` does. A deployment whose disclosure image is missing or
-   * is not the reviewed image throws a fixed `CONFIGURATION_ERROR`: a video
-   * cannot be given its disclosure there, and retrying will not change that.
+   * Fails as `composeCleanMaster` does. A deployment whose disclosure image is
+   * missing or is not the reviewed image throws a fixed `CONFIGURATION_ERROR`:
+   * a video cannot be given its disclosure there, and retrying will not change
+   * that.
    */
   applyDisclosure(input: ApplyDisclosureInput): Promise<ComposeDeliverableOutcome>;
 }

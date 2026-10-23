@@ -1,6 +1,7 @@
 /**
- * The dormant deliverable composer: its exact argument vector, and the
- * outcomes it maps a run to.
+ * The dormant deliverable composer's Clean Master encode, the one encode of the
+ * scenes (ADR-0079): its exact argument vector, and the outcomes it maps a run
+ * to. `ffmpeg-composer-disclosure.test.ts` covers the disclosure's encode.
  *
  * No subprocess is launched anywhere in this file. The argument vector is
  * pinned element by element because it is the whole security surface of this
@@ -11,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import {
+  CLEAN_MASTER_CRF,
   DEFAULT_COMPOSITION_LEASE_MS,
   resolveCompositionProfile,
   type ComposeDeliverableInput,
@@ -25,7 +27,7 @@ import {
   DEFAULT_COMPOSE_TIMEOUT_MS,
   MAX_COMPOSE_TIMEOUT_MS,
   createFfmpegDeliverableComposer,
-  ffmpegComposeArgsFor,
+  ffmpegCleanMasterArgsFor,
   validateComposeTimeoutMs,
 } from "./ffmpeg-composer";
 
@@ -45,7 +47,7 @@ function inputOf(overrides: Partial<ComposeDeliverableInput> = {}): ComposeDeliv
       { localPath: "/tmp/vta-compose-x/input-0001", durationSeconds: 7 },
     ],
     profile: profileOf(),
-    outputPath: "/tmp/vta-compose-x/output.mp4",
+    outputPath: "/tmp/vta-compose-x/clean-master.mp4",
     ...overrides,
   };
 }
@@ -60,7 +62,7 @@ function filterComplexOf(args: readonly string[]): string {
 
 describe("the argument vector is exact", () => {
   it("is pinned element by element for the documented two-clip case", () => {
-    expect(ffmpegComposeArgsFor(inputOf())).toEqual([
+    expect(ffmpegCleanMasterArgsFor(inputOf())).toEqual([
       "-nostdin",
       "-y",
       "-v",
@@ -91,19 +93,19 @@ describe("the argument vector is exact", () => {
       "-preset",
       "medium",
       "-crf",
-      "18",
+      "16",
       "-pix_fmt",
       "yuv420p",
       "-movflags",
       "+faststart",
       "-f",
       "mp4",
-      "/tmp/vta-compose-x/output.mp4",
+      "/tmp/vta-compose-x/clean-master.mp4",
     ]);
   });
 
   it("states the container rather than inferring it from the output path", () => {
-    const args = ffmpegComposeArgsFor(inputOf({ outputPath: "/tmp/x/output" }));
+    const args = ffmpegCleanMasterArgsFor(inputOf({ outputPath: "/tmp/x/output" }));
     expect(args[args.indexOf("-f") + 1]).toBe("mp4");
     expect(args.at(-1)).toBe("/tmp/x/output");
   });
@@ -114,7 +116,7 @@ describe("the argument vector is exact", () => {
       ["1:1", "1080p", 1080, 1080],
     ] as const) {
       const filters = filterComplexOf(
-        ffmpegComposeArgsFor(inputOf({ profile: profileOf(aspect, resolution) })),
+        ffmpegCleanMasterArgsFor(inputOf({ profile: profileOf(aspect, resolution) })),
       );
       expect(filters).toContain(`scale=${w}:${h}:force_original_aspect_ratio=decrease`);
       expect(filters).toContain(`pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black`);
@@ -122,7 +124,7 @@ describe("the argument vector is exact", () => {
   });
 
   it("contains and pads, and never crops or changes playback speed", () => {
-    const filters = filterComplexOf(ffmpegComposeArgsFor(inputOf()));
+    const filters = filterComplexOf(ffmpegCleanMasterArgsFor(inputOf()));
     expect(filters).toContain("force_original_aspect_ratio=decrease");
     expect(filters).toContain("pad=");
     for (const banned of ["crop", "setpts=0.", "atempo", "scale2ref", "increase"]) {
@@ -132,7 +134,7 @@ describe("the argument vector is exact", () => {
 
   it("holds a short clip and trims a long one to exactly its scene length", () => {
     const filters = filterComplexOf(
-      ffmpegComposeArgsFor(inputOf({ clips: [{ localPath: "/tmp/x/input-0000", durationSeconds: 3 }] })),
+      ffmpegCleanMasterArgsFor(inputOf({ clips: [{ localPath: "/tmp/x/input-0000", durationSeconds: 3 }] })),
     );
     // Both, in this order: tpad never shortens, and trim is what makes the
     // result exact in the other direction.
@@ -142,13 +144,13 @@ describe("the argument vector is exact", () => {
   });
 
   it("resets each segment's timeline before concatenating", () => {
-    const filters = filterComplexOf(ffmpegComposeArgsFor(inputOf()));
+    const filters = filterComplexOf(ffmpegCleanMasterArgsFor(inputOf()));
     expect(filters.match(/setpts=PTS-STARTPTS/g)).toHaveLength(2);
     expect(filters.indexOf("setpts=PTS-STARTPTS")).toBeLessThan(filters.indexOf("concat="));
   });
 
   it("drops audio in both places it could survive", () => {
-    const args = ffmpegComposeArgsFor(inputOf());
+    const args = ffmpegCleanMasterArgsFor(inputOf());
     expect(args).toContain("-an");
     expect(filterComplexOf(args)).toContain("a=0");
     expect(args.some((arg) => arg.startsWith("-c:a"))).toBe(false);
@@ -160,21 +162,34 @@ describe("the argument vector is exact", () => {
         localPath: `/tmp/x/input-${String(index).padStart(4, "0")}`,
         durationSeconds: 2,
       }));
-      const args = ffmpegComposeArgsFor(inputOf({ clips }));
+      const args = ffmpegCleanMasterArgsFor(inputOf({ clips }));
       expect(args.filter((arg) => arg === "-i")).toHaveLength(count);
       expect(filterComplexOf(args)).toContain(`concat=n=${count}:v=1:a=0[out]`);
     }
   });
 
   it("refuses to build a vector for no clips at all", () => {
-    expect(() => ffmpegComposeArgsFor(inputOf({ clips: [] }))).toThrow(AppError);
+    expect(() => ffmpegCleanMasterArgsFor(inputOf({ clips: [] }))).toThrow(AppError);
+  });
+});
+
+describe("every video is made from a master", () => {
+  it("offers the master's encode and the disclosure's, and no encode of the scenes into a video", () => {
+    const composer = createFfmpegDeliverableComposer({ runner: new FakeProcessRunner({ outcome: { kind: "EXITED", exitCode: 0, stdout: "" } }) });
+    expect(Object.keys(composer).sort()).toEqual(["applyDisclosure", "composeCleanMaster"]);
+  });
+
+  it("encodes the master at its own quality, whatever the profile's", () => {
+    // The profile's CRF is the customer's video's (ADR-0078 Decision 1).
+    const args = ffmpegCleanMasterArgsFor(inputOf({ profile: { ...profileOf(), crf: 23 } }));
+    expect(args[args.indexOf("-crf") + 1]).toBe(String(CLEAN_MASTER_CRF));
   });
 });
 
 describe("nothing customer-derived reaches an argument", () => {
   it("varies only by application-created path and frozen profile numbers", () => {
-    const args = ffmpegComposeArgsFor(inputOf());
-    const paths = new Set(["/tmp/vta-compose-x/input-0000", "/tmp/vta-compose-x/input-0001", "/tmp/vta-compose-x/output.mp4"]);
+    const args = ffmpegCleanMasterArgsFor(inputOf());
+    const paths = new Set(["/tmp/vta-compose-x/input-0000", "/tmp/vta-compose-x/input-0001", "/tmp/vta-compose-x/clean-master.mp4"]);
     for (const arg of args) {
       if (paths.has(arg)) continue;
       // Everything else is a fixed flag, a fixed vocabulary word, or a number
@@ -184,7 +199,7 @@ describe("nothing customer-derived reaches an argument", () => {
   });
 
   it("builds no command string and can reach no shell", () => {
-    const args = ffmpegComposeArgsFor(inputOf());
+    const args = ffmpegCleanMasterArgsFor(inputOf());
     const joined = args.join(" ");
     for (const banned of ["&&", "||", ";", "|", "`", "$(", ">", "<"]) {
       // `;` separates filter-graph elements inside one argument, but must never
@@ -240,22 +255,22 @@ describe("timeouts are bounded, and always shorter than the lease", () => {
     await createFfmpegDeliverableComposer(
       { runner },
       { programPath: "/opt/bin/ffmpeg", timeoutMs: 120_000 },
-    ).compose(inputOf());
+    ).composeCleanMaster(inputOf());
     expect(runner.lastRun.program).toBe("/opt/bin/ffmpeg");
     expect(runner.lastRun.timeoutMs).toBe(120_000);
     expect(runner.lastRun.maxStdoutBytes).toBe(COMPOSE_MAX_STDOUT_BYTES);
-    expect(runner.lastRun.args).toEqual(ffmpegComposeArgsFor(inputOf()));
+    expect(runner.lastRun.args).toEqual(ffmpegCleanMasterArgsFor(inputOf()));
   });
 });
 
 describe("process outcomes are mapped to the closed composer vocabulary", () => {
-  const compose = async (outcome: ProcessRunOutcome): Promise<ComposeDeliverableOutcome> => {
+  const encode = async (outcome: ProcessRunOutcome): Promise<ComposeDeliverableOutcome> => {
     const runner = new FakeProcessRunner({ outcome });
-    return createFfmpegDeliverableComposer({ runner }).compose(inputOf());
+    return createFfmpegDeliverableComposer({ runner }).composeCleanMaster(inputOf());
   };
 
   it("maps a clean exit to SUCCESS", async () => {
-    await expect(compose({ kind: "EXITED", exitCode: 0, stdout: "" })).resolves.toEqual({
+    await expect(encode({ kind: "EXITED", exitCode: 0, stdout: "" })).resolves.toEqual({
       kind: "SUCCESS",
     });
   });
@@ -264,7 +279,7 @@ describe("process outcomes are mapped to the closed composer vocabulary", () => 
     // This phase has no authority to declare a customer's deliverable
     // permanently unencodable from an exit status alone.
     for (const exitCode of [1, 69, 255]) {
-      await expect(compose({ kind: "EXITED", exitCode, stdout: "" })).resolves.toEqual({
+      await expect(encode({ kind: "EXITED", exitCode, stdout: "" })).resolves.toEqual({
         kind: "RETRYABLE_FAILURE",
       });
     }
@@ -273,21 +288,21 @@ describe("process outcomes are mapped to the closed composer vocabulary", () => 
   it("maps a timeout, an overrun and a host failure to the same retryable answer", async () => {
     const kinds = ["TIMED_OUT", "OUTPUT_TOO_LARGE", "TRANSIENT_FAILURE"] as const;
     for (const kind of kinds) {
-      await expect(compose({ kind })).resolves.toEqual({ kind: "RETRYABLE_FAILURE" });
+      await expect(encode({ kind })).resolves.toEqual({ kind: "RETRYABLE_FAILURE" });
     }
   });
 
   it("turns an unavailable binary into a configuration defect, not a retry", async () => {
     // Retrying a missing binary forever would hide a broken rollout behind a
     // queue that never drains.
-    await expect(compose({ kind: "LAUNCH_FAILED" })).rejects.toThrow(AppError);
+    await expect(encode({ kind: "LAUNCH_FAILED" })).rejects.toThrow(AppError);
   });
 
   it("never carries stderr, an exit object or any diagnostic across the port", async () => {
     const runner = new FakeProcessRunner({
       outcome: { kind: "EXITED", exitCode: 3, stdout: "secret diagnostic text" },
     });
-    const outcome = await createFfmpegDeliverableComposer({ runner }).compose(inputOf());
+    const outcome = await createFfmpegDeliverableComposer({ runner }).composeCleanMaster(inputOf());
     expect(JSON.stringify(outcome)).toBe(JSON.stringify({ kind: "RETRYABLE_FAILURE" }));
   });
 
@@ -299,7 +314,7 @@ describe("process outcomes are mapped to the closed composer vocabulary", () => 
       { ...profileOf(), transitionMode: "CROSSFADE" },
       { ...profileOf(), audioMode: "KEEP_ALL" },
     ]) {
-      await expect(composer.compose(inputOf({ profile: broken }))).rejects.toThrow(AppError);
+      await expect(composer.composeCleanMaster(inputOf({ profile: broken }))).rejects.toThrow(AppError);
     }
     expect(runner.runs).toHaveLength(0);
   });
