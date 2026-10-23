@@ -214,6 +214,15 @@ describe("defects say what is wrong and disclose nothing", () => {
       }
     }
   });
+
+  it("says what a refused publication lacks (ADR-0080)", () => {
+    expect(new DeliverableValidationDefect("DISCLOSURE_NOT_DRAWN").message).toBe(
+      "A deliverable cannot be published unless its composition drew the disclosure its mode requires",
+    );
+    expect(new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED").message).toBe(
+      "A deliverable cannot be published without its recorded Clean Master",
+    );
+  });
 });
 
 describe("the event vocabulary is application-owned and fixed", () => {

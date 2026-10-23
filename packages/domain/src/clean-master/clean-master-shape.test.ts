@@ -116,13 +116,16 @@ describe("DS-4 shape", () => {
     expect(
       matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters/),
     ).toEqual([REPOSITORY, VALIDATION]);
-    // Transaction G only reads: no model call, and the table appears once, as
-    // the chain query's join.
+    // Transaction G only reads: no model call, and the table appears twice,
+    // in discovery's filter and as the chain query's join.
     const validation = read(VALIDATION);
     expect(validation).not.toMatch(/generationDeliverableCleanMaster/);
     expect(
       validation.replace(/\s+/g, " ").match(/[^ ]+ [^ ]+ "generation_deliverable_clean_masters"[^=]*= [^ ]+/g),
-    ).toEqual([`LEFT JOIN "generation_deliverable_clean_masters" m ON m."deliverableVersionId" = v."id"`]);
+    ).toEqual([
+      `1 FROM "generation_deliverable_clean_masters" m WHERE m."deliverableVersionId" = v."id"`,
+      `LEFT JOIN "generation_deliverable_clean_masters" m ON m."deliverableVersionId" = v."id"`,
+    ]);
     expect(matching(["packages", "apps"], /cleanMaster\b/)).toEqual([
       REPOSITORY,
       "packages/domain/src/deliverable-composition-execution/ports.ts",

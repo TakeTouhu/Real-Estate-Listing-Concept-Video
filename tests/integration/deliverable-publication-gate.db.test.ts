@@ -234,6 +234,77 @@ RUN("ADR-0080 — Transaction G requires the disclosure and the Clean Master", (
     });
   }
 
+  for (const alteration of ALTERATIONS) {
+    it(`neither offers nor claims a version with ${alteration.label}`, async () => {
+      const fresh = await seedComposedDeliverable(prisma);
+      const awaiting = await seedComposedDeliverable(prisma);
+      await validated(awaiting);
+      const offered = async () =>
+        (await repository.findValidationCandidates({ now: NOW + 5_000, limit: 25 }))
+          .map((candidate) => candidate.deliverableVersionId)
+          .sort();
+      // As this build composes them, both are offered: one to validate, one
+      // whose verdict awaits publication.
+      expect(await offered()).toEqual(
+        [fresh.deliverableVersionId, awaiting.deliverableVersionId].sort(),
+      );
+
+      await alteration.apply(fresh);
+      await alteration.apply(awaiting);
+      // Discovery mirrors the gate, so no number of these can fill a batch.
+      expect(await offered()).toEqual([]);
+
+      // And the claim refuses before any lease: nothing is validated that
+      // Transaction G would refuse to publish.
+      const before = await eventCount(prisma);
+      await expect(
+        repository.claimDeliverableValidation({
+          organizationId: fresh.organizationId,
+          deliverableVersionId: fresh.deliverableVersionId,
+          now: NOW,
+          leaseToken: "vlease_gate_refused",
+          leaseExpiresAt: NOW + 15 * 60_000,
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: alteration.code }));
+      expect(await validationOf(prisma, fresh.deliverableVersionId)).toBeNull();
+      expect(await eventCount(prisma)).toBe(before);
+
+      await alteration.undo(fresh);
+      await alteration.undo(awaiting);
+      expect(await offered()).toEqual(
+        [fresh.deliverableVersionId, awaiting.deliverableVersionId].sort(),
+      );
+    });
+  }
+
+  it("answers a verdict that is not the one named as NOT_PUBLISHABLE, whatever the version carries", async () => {
+    const composed = await seedComposedDeliverable(prisma);
+    const publication = await validated(composed);
+    for (const alteration of ALTERATIONS.slice(0, 2)) await alteration.apply(composed);
+
+    expect(
+      (await publish({ ...publication, validationVersion: publication.validationVersion + 1 })).kind,
+    ).toBe("NOT_PUBLISHABLE");
+  });
+
+  it("answers a pointer that would move back as NOT_PUBLISHABLE, whatever the version carries", async () => {
+    const first = await seedComposedDeliverable(prisma);
+    const older = await validated(first);
+    expect((await publish(older)).kind).toBe("PUBLISHED_AND_CONSUMED");
+    const second = await seedRecomposedDeliverable(prisma, first);
+    expect((await publish(await validated(second))).kind).toBe("PUBLISHED_AS_REPLACEMENT");
+    // The job awaiting a publication again, and the customer's video newer than
+    // the one this names: only step 4 stands between them.
+    const job = await jobOf(prisma, first.jobId);
+    await prisma.generationJob.update({
+      where: { id: first.jobId },
+      data: { state: "DELIVERABLE_VALIDATING", stateVersion: job.stateVersion + 1 },
+    });
+    for (const alteration of ALTERATIONS.slice(0, 2)) await alteration.apply(first);
+
+    expect((await publish(older)).kind).toBe("NOT_PUBLISHABLE");
+  });
+
   it("answers a version the job no longer awaits as NOT_PUBLISHABLE, whatever it carries", async () => {
     const composed = await seedComposedDeliverable(prisma);
     const publication = await validated(composed);

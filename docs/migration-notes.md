@@ -1539,23 +1539,30 @@ has no Clean Master recorded at its canonical key; no schema, enum, constraint
 or row changes.
 
 **Before deploying to a database that holds development data**, find what the
-gate will refuse: a version awaiting publication that was composed under v1,
-or that has no master. Each would be refused on every validation pass; the
-sweep reports it as `FAILED` and goes on to the rest.
+gate will refuse: a version awaiting validation or publication that was
+composed under v1, that has no master, or whose master is recorded under a key
+that is not its own organization's. Validation discovery no longer offers any
+of them, and the claim and Transaction G refuse each with a defect, so each
+holds its job in `DELIVERABLE_VALIDATING` and its reservation `RESERVED` until
+an operator acts (ADR-0080 Decision 4).
 
 ```sql
 SELECT count(*)
   FROM "generation_deliverable_versions" v
   JOIN "generation_jobs" j ON j."id" = v."generationJobId"
+  JOIN "video_projects" p ON p."id" = j."videoProjectId"
   JOIN "generation_deliverable_compositions" c ON c."deliverableVersionId" = v."id"
   LEFT JOIN "generation_deliverable_clean_masters" m ON m."deliverableVersionId" = v."id"
  WHERE j."state" = 'DELIVERABLE_VALIDATING'
    AND c."status" = 'OUTPUT_VERIFIED'
-   AND (c."profileKey" <> 'vtavision-compose:v2' OR m."id" IS NULL);
+   AND (c."profileKey" <> 'vtavision-compose:v2'
+        OR m."id" IS NULL
+        OR m."storageKey" <> 'org/' || p."organizationId" || '/internal/clean-masters/' || v."id");
 ```
 
-It returns 0 on a database the test suites have run against. Production holds
-no such row: nothing has ever composed there.
+This build cannot make such a row: it composes only under v2, and Transaction
+J2 records the master at that key in the receipt's commit. Production holds
+none: nothing has ever composed there.
 
 **Rolling back.** To DS-5b-2b-2's build: safe. That build publishes everything
 this build publishes, and also the versions this build refuses, which this

@@ -37,6 +37,7 @@
  */
 
 import {
+  COMPOSITION_PROFILE_KEY,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
   DELIVERABLE_PUBLICATION_REASON_CODE,
   DELIVERABLE_PUBLISHED_EVENT_TYPE,
@@ -44,6 +45,7 @@ import {
   DELIVERABLE_VALIDATED_EVENT_TYPE,
   DELIVERABLE_VALIDATED_STATE,
   DELIVERABLE_VALIDATION_REASON_CODE,
+  DISCLOSURE_MODES,
   DeliverableValidationDefect,
   ISO_BMFF_CONTAINER,
   JOB_DELIVERABLE_READY_EVENT_TYPE,
@@ -74,7 +76,7 @@ import {
   type PublishValidatedDeliverableOutcome,
 } from "@app/domain";
 import { randomId } from "@app/shared";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -121,6 +123,12 @@ interface ValidationChainRow {
   readonly cleanMasterStorageKey: string | null;
 }
 
+/**
+ * The disclosure modes profile v2 draws, as bound parameters, from the same list
+ * `profileDrewDisclosure` reads (ADR-0080).
+ */
+const RENDERABLE_DISCLOSURE_MODES = Prisma.join([...DISCLOSURE_MODES]);
+
 /** The entitlement hold, read under its own lock. */
 interface ReservationRow {
   readonly reservationId: string;
@@ -158,6 +166,12 @@ export function createDeliverableValidationRepository(
       // the old version would be listed, offered to Transaction G, and refused
       // forever while occupying a slot in every bounded batch.
       //
+      // The profile, mode and master conditions are Transaction G's (ADR-0080),
+      // checked again by the claim. A version G would refuse is never validated
+      // and never offered, so however many there are, they cannot fill a batch.
+      // The master's key is the one `managedCleanMasterKey` builds, for the
+      // version's own organization: the database suite proves the two agree.
+      //
       // Effective-eligibility ordering, the same discipline ADR-0048 settled for
       // media-failure resolution: a row is ordered by the instant it actually
       // becomes due, not by when its deliverable was planned.
@@ -174,6 +188,15 @@ export function createDeliverableValidationRepository(
                  ON w."deliverableVersionId" = v."id"
          WHERE j."state" = 'DELIVERABLE_VALIDATING'::"GenerationJobState"
            AND c."status" = 'OUTPUT_VERIFIED'::"DeliverableCompositionStatus"
+           AND c."profileKey" = ${COMPOSITION_PROFILE_KEY}
+           AND v."disclosureMode"::text IN (${RENDERABLE_DISCLOSURE_MODES})
+           AND EXISTS (
+                 SELECT 1
+                   FROM "generation_deliverable_clean_masters" m
+                  WHERE m."deliverableVersionId" = v."id"
+                    AND m."storageKey" =
+                        'org/' || p."organizationId" || '/internal/clean-masters/' || v."id"
+               )
            AND v."ordinal" = (
                  SELECT MAX(sib."ordinal")
                    FROM "generation_deliverable_versions" sib
@@ -236,6 +259,10 @@ export function createDeliverableValidationRepository(
         if (ctx.versionOrdinal !== ctx.highestOrdinal) return { kind: "NOT_ELIGIBLE" };
 
         const receipt = provenCompositionReceipt(ctx, input.organizationId);
+        // What Transaction G will require (ADR-0080), before any lease: a
+        // version it would refuse is not worth validating.
+        assertDisclosureDrawn(ctx);
+        assertCleanMasterRecorded(ctx);
 
         const now = new Date(input.now);
         const leaseExpiresAt = new Date(input.leaseExpiresAt);

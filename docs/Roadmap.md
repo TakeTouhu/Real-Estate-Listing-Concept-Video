@@ -184,8 +184,9 @@ with a master of another size.
 migration): Transaction G publishes a version, first or replacement, only when
 its composition's frozen profile drew the version's disclosure mode and its
 Clean Master is recorded at its canonical key; otherwise it refuses with a
-defect and writes nothing. The validation sweep now reports such a defect for
-that deliverable and goes on to the rest. DS-6b will require the measured
+defect and writes nothing. Validation discovery and the claim no longer offer
+or validate such a version, and the sweep reports any defect for that
+deliverable and goes on to the rest. DS-6b will require the measured
 video to be the planned size and length.
 
 Completion criteria as met: a composed deliverable is proved technically valid,

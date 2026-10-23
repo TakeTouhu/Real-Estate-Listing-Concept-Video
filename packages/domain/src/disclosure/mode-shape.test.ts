@@ -146,10 +146,11 @@ describe("DS-3 shape", () => {
   it("is read by Transaction G from the version, under its lock, and written nowhere", () => {
     // DS-6a (ADR-0080): the chain query reads the version's own mode, never
     // the job's, after the version's row is locked; the gate compares it with
-    // what the frozen profile drew.
+    // what the frozen profile drew, and discovery mirrors the gate.
     const source = read(VALIDATION);
     expect(source.match(/[^\n]*[dD]isclosureMode[^\n]*/g)?.map((line) => line.trim())).toEqual([
       "readonly versionDisclosureMode: string;",
+      'AND v."disclosureMode"::text IN (${RENDERABLE_DISCLOSURE_MODES})',
       'v."disclosureMode"::text        AS "versionDisclosureMode",',
       "if (ctx.profileKey === null || !profileDrewDisclosure(ctx.profileKey, ctx.versionDisclosureMode)) {",
     ]);

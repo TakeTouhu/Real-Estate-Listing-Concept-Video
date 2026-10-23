@@ -1291,9 +1291,15 @@ them is **built**. Each item below records the settled decision and what remains
       names no master. DS-6a (ADR-0080) has Transaction G refuse to publish a
       version without it. Still unbuilt: a
       recomposed version naming another version's master (which then decides
-      what its own Transaction J2 records, ADR-0077 Decision 3), and its deletion with its content: when physical deletion of
+      what its own Transaction J2 records, ADR-0077 Decision 3); when it is
+      built, ADR-0080 Decision 2 must be revisited, because Transaction G and
+      validation discovery require a master at the version's own key, and the
+      table's CHECK ties the key to the row's version. And its deletion with
+      its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
-      (RESTRICT holds that order), subject to legal hold.*
+      (RESTRICT holds that order), subject to legal hold, under the job and
+      version locks Transaction G takes, because G reads the master's row
+      without locking it (ADR-0080 Decision 2).*
 - [ ] **Decide which Clean Masters outlive their purpose.** ADR-0052 Decision 17
       retains a master "with the associated retained video/property content"
       but does not say whether that covers (a) the master of a version that is
@@ -1570,6 +1576,12 @@ them is **built**. Each item below records the settled decision and what remains
       `BLOCKED` / `INVALID_MEDIA` / `INTEGRITY_MISMATCH` must settle identically
       for billing. Includes choosing whether an existing domain state represents
       this or a new one is required — **the ADR deliberately does not pick one.**
+      It must also reach a version Transaction G refuses with
+      `DISCLOSURE_NOT_DRAWN` or `CLEAN_MASTER_NOT_RECORDED` (ADR-0080
+      Decision 4): its job stays `DELIVERABLE_VALIDATING` and an initial
+      generation's reservation stays `RESERVED`, as for Transaction G's other
+      defects, until this or operator recovery exists. Only development data
+      or a row altered by hand can be in that state today.
 - [ ] **Build operator recovery tooling.** ADR-0052 Decision 20 plus ADR-0054
       Decision 6: an internal-only privilege reachable by no customer role, the
       original `BLOCKED` row and terminal verdict left immutable, a **new**
@@ -1584,7 +1596,11 @@ them is **built**. Each item below records the settled decision and what remains
       that state today. It must also reach composition work held by a defect,
       such as a stored video found without its Clean Master
       (`CLEAN_MASTER_MISSING`, ADR-0078 Decision 4), which is re-claimed and
-      fails again every lease period.
+      fails again every lease period. And it must reach a version validation
+      discovery no longer offers and Transaction G refuses, one whose
+      composition drew no disclosure or whose Clean Master is not recorded
+      (ADR-0080 Decisions 4 and 5): its job stays `DELIVERABLE_VALIDATING`
+      and its reservation `RESERVED`.
 - [ ] **Make a composition defect findable before composition is activated.**
       The runner isolates a defect per candidate and reports only a `failed`
       count (ADR-0050); nothing durable names the row or the defect's code, so

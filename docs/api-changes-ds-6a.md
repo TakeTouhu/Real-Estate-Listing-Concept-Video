@@ -24,6 +24,8 @@ No change.
 | Method | Change |
 | --- | --- |
 | `publishDeliverable` | after the replay and eligibility checks and before the publication's kind is decided, refuses with `DISCLOSURE_NOT_DRAWN` a version whose composition's frozen profile did not draw its mode, and with `CLEAN_MASTER_NOT_RECORDED` one with no master record at its canonical key; the transaction rolls back. Initial publications and replacements alike. A replay is answered `ALREADY_PUBLISHED` as before |
+| `findValidationCandidates` | offers a version only when its composition's profile is v2, its mode is one v2 draws and its master is recorded at its own organization's key, on every arm |
+| `claimDeliverableValidation` | refuses with the same two defects, after its eligibility checks and before any lease or write, a version Transaction G would refuse. A `VALID` verdict awaiting publication is answered `ALREADY_VALID` as before, and Transaction G judges it |
 
 ### Changed: `@app/domain` validation runner
 
@@ -37,8 +39,8 @@ No change.
 
 - `PublishValidatedDeliverableInput` and `PublishValidatedDeliverableOutcome`:
   the refusals are defects, not outcomes (ADR-0080 Decision 4).
-- The claim, the verdicts and discovery: the chain query reads three more
-  columns, and only Transaction G uses them.
+- The claim's and the verdicts' outcomes. The chain query reads three more
+  columns, which only the claim and Transaction G use.
 
 ## Database
 
