@@ -213,13 +213,21 @@ describe("every bound refuses rather than clamps", () => {
   });
 });
 
-describe("the Clean Master's defect (ADR-0077)", () => {
+describe("the Clean Master's defects (ADR-0077, ADR-0078)", () => {
   it("names a replayed master receipt that disagrees, with a fixed message", () => {
     const defect = new DeliverableCompositionExecutionDefect("CLEAN_MASTER_RECEIPT_CONFLICT");
     expect(defect.code).toBe("CLEAN_MASTER_RECEIPT_CONFLICT");
     expect(defect.name).toBe("DeliverableCompositionExecutionDefect");
     expect(defect.message).toBe(
       "A composed deliverable already carries a different durable Clean Master receipt",
+    );
+  });
+
+  it("names a stored video found without its master, with a fixed message", () => {
+    const defect = new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING");
+    expect(defect.code).toBe("CLEAN_MASTER_MISSING");
+    expect(defect.message).toBe(
+      "A composed deliverable's video is stored without the Clean Master it was made from",
     );
   });
 });

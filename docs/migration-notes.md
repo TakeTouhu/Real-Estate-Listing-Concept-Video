@@ -1506,9 +1506,14 @@ rather than being encoded under v1; it knows both block codes; and the master
 records and stored masters stay as they are. But a version not yet claimed
 would be claimed under v1 and composed with no master and no disclosure, so
 once composition is activated, no rollback goes back past this milestone. Past
-DS-5b-2a: only while no row
-holds either new block code, with the same check DS-5b-2a's notes give, because
-a build from before it does not know them.
+DS-5b-2a: only while no row holds either new block code, with the same check
+DS-5b-2a's notes give, because a build from before it does not know them, and
+while no work row frozen under v2 is `PENDING` or `RUNNING`: a build from
+before DS-5b-2a does not filter discovery by profile, so it would offer every
+such row on every pass and its claim would refuse each one, crowding out work
+it can do. Check that `SELECT count(*) FROM "generation_deliverable_compositions"
+WHERE "profileKey" = 'vtavision-compose:v2' AND "status" IN ('PENDING', 'RUNNING')`
+is 0.
 
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the composition runner. No new environment variable.

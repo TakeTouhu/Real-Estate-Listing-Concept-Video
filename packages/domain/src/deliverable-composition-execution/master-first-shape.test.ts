@@ -77,7 +77,11 @@ describe("DS-5b-2b-1 shape", () => {
 
   it("adds no durable code for a missing master", () => {
     expect(COMPOSITION_BLOCK_CODES as readonly string[]).not.toContain("CLEAN_MASTER_MISSING");
-    expect(runner).toContain(`new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING")`);
+    // Thrown in one place: the probe of a stored video's master finding none.
+    const thrown = once(`throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING");`);
+    const absent = runner.lastIndexOf(`case "ABSENT":`, thrown);
+    expect(absent).toBeGreaterThan(once("cleanMasterStore.probe("));
+    expect(runner.slice(absent + `case "ABSENT":`.length, thrown).includes("case ")).toBe(false);
     const schema = readFileSync(
       join(__dirname, "..", "..", "..", "database", "prisma", "schema.prisma"),
       "utf8",

@@ -1078,6 +1078,10 @@ So the disclosure is unimplemented at every layer that could carry it: the
 encoder does not draw it, the verdict does not require it, and publication does
 not gate on it. Whoever activates publication owns closing that gap.
 
+*Update (DS-5b-2b-1, ADR-0078): composition profile v2 draws Mode A over every
+video it makes. The verdict and publication still do not require it (DS-6);
+the work is tracked under "Render the AI-generated disclosure".*
+
 **The placement rules are no longer open.** ADR-0052 Decision 8 fixes the exact
 text, the three modes and Mode A's geometry, so this is implementation work
 against a settled specification — not a decision still to be made. The earlier
@@ -1568,7 +1572,16 @@ them is **built**. Each item below records the settled decision and what remains
       does not draw: discovery no longer offers either and the claim refuses
       both (ADR-0077 Decision 4), so without this tooling the job stays
       `COMPOSING` or `COMPOSITION_PENDING`. Only development data can be in
-      that state today.
+      that state today. It must also reach composition work held by a defect,
+      such as a stored video found without its Clean Master
+      (`CLEAN_MASTER_MISSING`, ADR-0078 Decision 4), which is re-claimed and
+      fails again every lease period.
+- [ ] **Make a composition defect findable before composition is activated.**
+      The runner isolates a defect per candidate and reports only a `failed`
+      count (ADR-0050); nothing durable names the row or the defect's code, so
+      an operator cannot tell which deliverable is held, or why. Record the
+      composition's id and the code where an operator can read them, without
+      a storage key, signed URL or provider payload.
 - [x] **Record which plan an organization is on, and renew its periods.**
       *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
       organization (plan, channel, anchor, commercial reference; Enterprise

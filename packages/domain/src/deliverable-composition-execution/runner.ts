@@ -327,7 +327,7 @@ export class DeliverableCompositionRunner {
       default: {
         const exhaustive: never = master;
         void exhaustive;
-        throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_MISSING");
+        return this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE");
       }
     }
   }
@@ -341,7 +341,7 @@ export class DeliverableCompositionRunner {
       // Unconditional, as for the scenes: the copy and the customer's video
       // share one directory, and losing the outcome to a cleanup failure would
       // be a defect.
-      await master.copy.release().catch(() => undefined);
+      await releaseQuietly(master.copy);
     }
   }
 
@@ -414,9 +414,9 @@ export class DeliverableCompositionRunner {
         case "COPIED":
           return { kind: "COPY", copy: stored.copy, verifiedAt: this.#deps.clock() };
         case "TOO_LARGE":
-          // The plan and the profile are immutable, so the same scenes encode
-          // to the same size on every attempt, and a stored oversized master
-          // cannot be replaced.
+          // Nothing was stored. The plan and the profile are immutable, so the
+          // same scenes encode to the same size on every attempt, and waiting
+          // changes nothing.
           return this.#ended(this.#block(claim, "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED"));
         case "RETRYABLE_FAILURE":
           return this.#ended(this.#defer(claim, "OUTPUT_PUBLISH_RETRYABLE"));
@@ -431,7 +431,7 @@ export class DeliverableCompositionRunner {
       // (or is not), on every path including a thrown defect, so a worker does
       // not hold them while the customer's video is encoded. A cleanup failure
       // is swallowed rather than allowed to replace the real answer.
-      await materialized.release().catch(() => undefined);
+      await releaseQuietly(materialized);
     }
   }
 
@@ -536,6 +536,18 @@ export class DeliverableCompositionRunner {
     // A replayed block is still a block: the row already carries this exact
     // code, and reporting it as a lost lease would misdescribe a settled row.
     return outcome.kind === "LEASE_LOST" ? "LEASE_LOST" : "BLOCKED";
+  }
+}
+
+/**
+ * Release a directory without letting its cleanup replace the attempt's answer,
+ * whether `release` rejects or throws before it returns a promise.
+ */
+async function releaseQuietly(owner: { release(): Promise<void> }): Promise<void> {
+  try {
+    await owner.release();
+  } catch {
+    // Swallowed on purpose: a leaked directory is the lesser defect.
   }
 }
 

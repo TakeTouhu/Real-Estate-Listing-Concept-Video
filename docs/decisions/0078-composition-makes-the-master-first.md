@@ -68,6 +68,13 @@ the runner does this:
   video go when the attempt ends. Each release runs on every path and a
   cleanup failure never replaces the attempt's answer, as for the scenes
   before.
+- **Two encodes, one lease.** An attempt that makes the master runs two
+  encodes back to back, so with the defaults (a 30-minute lease, a 20-minute
+  limit per encode) a healthy attempt can outlive its lease. That costs work,
+  not correctness: a reclaiming attempt finds the master stored and encodes
+  only the video, and the video's first-wins key and J2's guarded finalize
+  settle which attempt records the result. The lease and the encode limit are
+  set when composition is activated.
 - **The runner never calls `compose`**, the one-pass encode with no
   disclosure. It stays on the port only until DS-5b-2b-2 removes it.
 
@@ -81,9 +88,11 @@ the runner does this:
 | the inspector: `RETRYABLE_FAILURE` | defer `COMPOSER_RETRYABLE` |
 | the master's encode or the overlay fails | defer `COMPOSER_RETRYABLE` |
 
-The scenes' and the video's codes are unchanged. Both blocks are deterministic
-because the stored master is never replaced: every later attempt reads the
-same bytes (ADR-0077 Decision 1). An unreadable master key is never read as
+The scenes' and the video's codes are unchanged. Both blocks are deterministic.
+A stored master is never replaced, so every later attempt reads the same bytes
+(ADR-0077 Decision 1). A master refused by `publish` as too large was never
+stored, and the plan and the profile are immutable, so every attempt encodes
+the same scenes to the same size, as for the customer's video. An unreadable master key is never read as
 absent, because that would encode a master that may already exist.
 
 ## Decision 4 — A stored video without its master is a defect
@@ -98,9 +107,14 @@ When the video's key holds bytes and the master's holds none, the runner throws
   stored video was not made from, which is the record ADR-0074 exists to rule
   out.
 - **As every composition defect is handled.** The pass counts it as `failed`
-  and carries on with the batch. The row keeps its lease, is offered again once
-  the lease expires, and fails the same way until an operator repairs it
-  (ADR-0052 Decision 20's recovery, unbuilt). It is a code only: no migration.
+  and carries on with the batch. The claim has already committed, so the row
+  stays `RUNNING` under its lease, is offered again once the lease expires,
+  and fails the same way, each time reading the stored video in full and
+  growing the row's attempt count, until an operator repairs it (ADR-0052
+  Decision 20's recovery, unbuilt). Nothing durable names the defect: the
+  report carries counts only. Making a composition defect findable is
+  required before composition is activated (TODO). It is a code only: no
+  migration.
 
 ## Decision 5 — The master's proof instant
 

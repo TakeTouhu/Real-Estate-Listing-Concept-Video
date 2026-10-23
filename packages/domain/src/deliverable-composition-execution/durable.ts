@@ -121,8 +121,9 @@ export const COMPOSITION_BLOCK_CODES = [
   /** The composed object exceeds the deliverable ceiling. */
   "OUTPUT_SIZE_LIMIT_EXCEEDED",
   /**
-   * The stored Clean Master exceeds {@link MAX_CLEAN_MASTER_BYTES} (ADR-0077).
-   * First-wins, so no later attempt stores a smaller one.
+   * The Clean Master exceeds {@link MAX_CLEAN_MASTER_BYTES} (ADR-0077): the
+   * stored one, which first-wins never replaces, or the one just encoded, which
+   * the same scenes encode to again on every attempt.
    */
   "CLEAN_MASTER_SIZE_LIMIT_EXCEEDED",
   /**
@@ -277,7 +278,8 @@ export const MAX_CLEAN_MASTER_BYTES = 1_073_741_824;
  * looping forever is that the next claim reads the canonical key *before*
  * materializing anything — once the object exists, the reclaiming worker
  * finalizes against its receipt instead of encoding again. Work before the first
- * publication can still be wasted; recovery after it costs one read.
+ * publication can still be wasted; recovery after it costs two reads, the
+ * video's and its master's (ADR-0078).
  */
 export const DEFAULT_COMPOSITION_LEASE_MS = 30 * 60_000;
 export const MAX_COMPOSITION_LEASE_MS = 2 * 60 * 60_000;

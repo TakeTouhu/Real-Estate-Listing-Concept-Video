@@ -476,7 +476,8 @@ export interface DeliverableOutputPublisher {
    * Probing first breaks that: once canonical bytes exist, the next claim reads
    * their receipt and finalizes. It does not make duplicate execution
    * impossible — work before the first publication can still be wasted — it
-   * makes recovery *after* publication cost one read instead of one encode.
+   * makes recovery *after* publication cost two reads, the video's and its
+   * master's, instead of two encodes (ADR-0078).
    */
   probeExistingOutput(input: {
     readonly key: ManagedDeliverableOutputKey;

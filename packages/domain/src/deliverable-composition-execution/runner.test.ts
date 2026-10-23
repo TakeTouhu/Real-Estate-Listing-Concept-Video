@@ -213,10 +213,11 @@ class FakeMaterializer implements DeliverableCompositionSourceMaterializer {
 class FakeComposer implements DeliverableMediaComposer {
   readonly masterInputs: ComposeDeliverableInput[] = [];
   readonly disclosureInputs: ApplyDisclosureInput[] = [];
-  /** The clock's instant when the disclosure was laid, if it was. */
+  /** The clock's instants when the master was encoded and the disclosure laid. */
+  encodedAt: number | null = null;
   disclosedAt: number | null = null;
   log: Log = [];
-  /** Reads the clock: laying the disclosure takes time, as an encode does. */
+  /** Reads the clock: each encode takes time. */
   tick: () => number = () => 0;
 
   constructor(
@@ -232,6 +233,7 @@ class FakeComposer implements DeliverableMediaComposer {
   async composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
     this.log.push("encode master");
     this.masterInputs.push(input);
+    this.encodedAt = this.tick();
     return this.master;
   }
 
@@ -456,13 +458,16 @@ describe("A — a deliverable with nothing stored is composed master first, then
   });
 
   it("hands the master encode one clip per scene, in plan order, at the frozen durations", async () => {
-    const h = harness();
+    // Distinct durations, so a clip paired with another scene's would show.
+    const claim = claimOf({ scenes: [scene(1, 4), scene(2, 6), scene(3, 5)] });
+    const h = harness({ repository: new FakeRepository({ claim: { kind: "CLAIMED", claim } }) });
     await h.run();
     const input = h.composer.masterInputs[0]!;
-    expect(input.clips.map((clip) => clip.durationSeconds)).toEqual([5, 5]);
+    expect(input.clips.map((clip) => clip.durationSeconds)).toEqual([4, 6, 5]);
     expect(input.clips.map((clip) => clip.localPath)).toEqual([
       `${TEMP_DIR}/input-0000`,
       `${TEMP_DIR}/input-0001`,
+      `${TEMP_DIR}/input-0002`,
     ]);
     expect(input.profile).toEqual(PROFILE);
   });
@@ -507,9 +512,11 @@ describe("A — a deliverable with nothing stored is composed master first, then
       sha256: MASTER_SHA,
       sizeBytes: MASTER_BYTES,
     });
-    // The master's instant is when the store answered, not the finalize's.
-    expect(master.verifiedAt).toBeLessThan(h.composer.disclosedAt!);
-    expect(master.verifiedAt).toBeLessThan(finalize.verifiedAt);
+    // The master's instant is the one clock read between its encode and the
+    // disclosure: when the store answered. The finalize's is the video's.
+    expect(master.verifiedAt).toBe(h.composer.encodedAt! + 1_000);
+    expect(h.composer.disclosedAt).toBe(master.verifiedAt + 1_000);
+    expect(finalize.verifiedAt).toBe(h.composer.disclosedAt! + 1_000);
   });
 
   it("releases each directory once on the success path", async () => {
@@ -682,7 +689,9 @@ describe("G — a master already stored is reused, never encoded again", () => {
       sha256: MASTER_SHA,
       sizeBytes: MASTER_BYTES,
     });
-    expect(master.verifiedAt).toBeLessThan(h.composer.disclosedAt!);
+    // Read when the fetch answered: after the pass's and the claim's reads.
+    expect(master.verifiedAt).toBe(NOW + 3_000);
+    expect(h.composer.disclosedAt).toBe(master.verifiedAt + 1_000);
     expect(report.finalized).toBe(1);
   });
 
@@ -727,6 +736,27 @@ describe("H — the master's copy is checked before the disclosure is laid over 
       expect(h.repository.blocked.map((one) => one.blockCode)).toEqual(["CLEAN_MASTER_UNUSABLE"]);
       expect(h.composer.disclosureInputs).toHaveLength(0);
     }
+  });
+
+  it("compares with the claim's own profile, whatever its size", async () => {
+    const resolved = resolveCompositionProfile({
+      targetAspectRatio: "9:16",
+      targetOutputResolution: "720p",
+    });
+    if (resolved.kind !== "RESOLVED") throw new Error("fixture profile must resolve");
+    const claim = claimOf({ profile: resolved.profile });
+    const portrait = { widthPx: 720, heightPx: 1280, frameRateNumerator: 30, frameRateDenominator: 1 };
+    const fits = harness({
+      repository: new FakeRepository({ claim: { kind: "CLAIMED", claim } }),
+      inspector: new FakeInspector({ kind: "RASTER", raster: portrait }),
+    });
+    await fits.run();
+    expect(fits.repository.finalized).toHaveLength(1);
+    expect(fits.composer.disclosureInputs[0]!.profile).toEqual(resolved.profile);
+    // The fixture's 1080p landscape master is refused for this claim.
+    const other = harness({ repository: new FakeRepository({ claim: { kind: "CLAIMED", claim } }) });
+    await other.run();
+    expect(other.repository.blocked.map((one) => one.blockCode)).toEqual(["CLEAN_MASTER_UNUSABLE"]);
   });
 
   it("accepts the profile's raster written as an unreduced fraction", async () => {
@@ -986,15 +1016,35 @@ describe("N — files go exactly where their owners put them, and never outlive 
         throw new Error("inspector defect");
       }
     }
+    // A missing disclosure image, for one, is the composer's CONFIGURATION_ERROR.
+    class ThrowingOverlay extends FakeComposer {
+      override async applyDisclosure(): Promise<ComposeDeliverableOutcome> {
+        throw new Error("disclosure image missing");
+      }
+    }
     for (const h of [
       harness({ publisher: new ThrowingPublisher() }),
       harness({ inspector: new ThrowingInspector() }),
+      harness({ composer: new ThrowingOverlay() }),
     ]) {
       const report = await h.run();
       expect(report.failed).toBe(1);
       expect(h.materializer.released).toBe(1);
       expect(h.store.released).toBe(1);
     }
+  });
+
+  it("releases the scenes when the master's encode throws, holding no copy", async () => {
+    class ThrowingEncoder extends FakeComposer {
+      override async composeCleanMaster(): Promise<ComposeDeliverableOutcome> {
+        throw new Error("encoder defect");
+      }
+    }
+    const h = harness({ composer: new ThrowingEncoder() });
+    const report = await h.run();
+    expect(report.failed).toBe(1);
+    expect(h.materializer.released).toBe(1);
+    expect(h.store.publishedPaths).toHaveLength(0);
   });
 
   it("releases the scenes when the master's store throws", async () => {
@@ -1009,30 +1059,44 @@ describe("N — files go exactly where their owners put them, and never outlive 
     expect(h.materializer.released).toBe(1);
   });
 
-  it("keeps the attempt's answer when a release fails", async () => {
-    const refuse = (): Promise<void> => Promise.reject(new Error("rmdir failed"));
+  it("keeps the attempt's answer when a release fails, however it fails", async () => {
+    const rejects = (): Promise<void> => Promise.reject(new Error("rmdir failed"));
+    const throws = (): Promise<void> => {
+      throw new Error("rmdir failed before returning a promise");
+    };
     class LeakyMaterializer extends FakeMaterializer {
+      constructor(private readonly failing: () => Promise<void>) {
+        super();
+      }
       override async materialize(
         input: Parameters<FakeMaterializer["materialize"]>[0],
       ): Promise<MaterializeCompositionSourcesOutcome> {
         const outcome = await super.materialize(input);
-        return outcome.kind === "MATERIALIZED" ? { ...outcome, release: refuse } : outcome;
+        return outcome.kind === "MATERIALIZED" ? { ...outcome, release: this.failing } : outcome;
       }
     }
     class LeakyStore extends FakeCleanMasterStore {
+      constructor(private readonly failing: () => Promise<void>) {
+        super();
+      }
       override async publish(
         input: Parameters<FakeCleanMasterStore["publish"]>[0],
       ): Promise<PublishCleanMasterOutcome> {
         const outcome = await super.publish(input);
         return outcome.kind === "COPIED"
-          ? { ...outcome, copy: { ...outcome.copy, release: refuse } }
+          ? { ...outcome, copy: { ...outcome.copy, release: this.failing } }
           : outcome;
       }
     }
-    const h = harness({ materializer: new LeakyMaterializer(), store: new LeakyStore() });
-    const report = await h.run();
-    expect(report.finalized).toBe(1);
-    expect(report.failed).toBe(0);
+    for (const [scenes, copy] of [
+      [rejects, throws],
+      [throws, rejects],
+    ] as const) {
+      const h = harness({ materializer: new LeakyMaterializer(scenes), store: new LeakyStore(copy) });
+      const report = await h.run();
+      expect(report.finalized).toBe(1);
+      expect(report.failed).toBe(0);
+    }
   });
 });
 
@@ -1070,7 +1134,9 @@ describe("O — a video already stored is finalized against both stored receipts
       sha256: MASTER_SHA,
       sizeBytes: MASTER_BYTES,
     });
-    expect(master.verifiedAt).toBeLessThan(finalize.verifiedAt);
+    // Read when the probe answered; the finalize reads the clock next.
+    expect(master.verifiedAt).toBe(NOW + 3_000);
+    expect(finalize.verifiedAt).toBe(NOW + 4_000);
     expect(report.finalized).toBe(1);
   });
 
