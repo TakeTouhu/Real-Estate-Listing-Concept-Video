@@ -2010,3 +2010,219 @@ remain BLOCKED.
 
 DS-5b-2b-1 waits for the product owner's yes before merge. DS-5b-2b-2 comes
 next, then DS-6.
+
+
+## DS-5b-2b-2 — every video is made from a recorded master
+
+Base: `a1e8a68` (PR #101 merge commit on `main`; post-merge CI run 650 green).
+ADR: `docs/decisions/0079-every-video-is-made-from-a-recorded-master.md`
+
+The second half of DS-5b-2b, and the last of DS-5. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `de31afc` | the required master's receipt and J2's refusal, the one-pass encode removed, the end-to-end media suite, ADR-0079 and the documentation |
+| `7b7c068` | the review's answers: the temporary-root check, J2's refusal against a client that fails on any use, the stored 1080p master, the stronger replay checks, the stand-ins named, the two defects' docs |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-5b-2b-2 does
+
+- **The master's receipt is required.** `FinalizeCompositionInput.cleanMaster`
+  is a `CleanMasterReceipt`. Transaction J2 refuses a finalize naming none with
+  the new defect `CLEAN_MASTER_RECEIPT_MISSING` before its transaction opens,
+  so nothing is read, locked or written, and records the master on every first
+  commit. A replay always compares the master's record; one naming a master
+  for a verified deliverable with no record is `CLEAN_MASTER_RECEIPT_CONFLICT`.
+- **No encode of the scenes into a video.** `compose` is gone from the
+  composer's port and the FFmpeg composer, and `ffmpegComposeArgsFor` from
+  `@app/storage`. The scenes' graph is built only by `ffmpegCleanMasterArgsFor`,
+  at CRF 16 whatever the profile's.
+- **The runner end to end on real FFmpeg.** A media suite runs it on the real
+  scene materializer, Clean Master store, composer, Clean Master inspector and
+  video publisher, against an in-memory first-wins object store: fresh, from a
+  master another attempt stored, after the video's store fails, with a stored
+  master of another size, and after a lost lease.
+- **Still dormant.** Nothing in production constructs the runner or calls J2.
+
+```mermaid
+sequenceDiagram
+    participant R as Runner
+    participant J2 as Transaction J2
+    R->>J2: finalize(video's receipt, master's receipt)
+    alt no master's receipt (untyped caller)
+        J2-->>R: defect CLEAN_MASTER_RECEIPT_MISSING, nothing read or written
+    else work verified already
+        J2->>J2: compare the video's receipt, then the master's record
+        J2-->>R: ALREADY_FINALIZED, or a receipt conflict
+    else work RUNNING under this lease
+        J2->>J2: video's receipt, master's record, job to DELIVERABLE_VALIDATING
+        J2-->>R: FINALIZED
+    end
+```
+
+The runner's own order is DS-5b-2b-1's diagram, unchanged.
+
+### Verification
+
+Measured locally on `7b7c068` (PostgreSQL 16 configured like CI; FFmpeg
+6.1.1, the version CI's `media` job installs on ubuntu-24.04). This record's
+commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5912 / 5912**, 212 files (5905 before) |
+| `pnpm test:db` | **1470 / 1470**, 55 files (1468 before) |
+| `pnpm test:media` | **169 / 169**, 4 files (the end-to-end suite new, 5) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New and changed tests:
+
+- `tests/media/composition-runner.media.test.ts` (new, 5): the runner on the
+  real adapters and FFmpeg, the five cases of ADR-0079 Decision 3. After every
+  attempt no temporary file is left, every file a program read or wrote and
+  every file an adapter opened was under the suite's own root (and there was
+  at least one), only the configured bucket was written and only as
+  `video/mp4`.
+- `packages/database/src/deliverable-composition-execution-repository.test.ts`
+  (new, 3): J2 refuses a master that is `null`, `undefined` or absent, against
+  a client that fails on any property read, so nothing is touched.
+- `packages/domain/src/deliverable-composition-execution/master-required-shape.test.ts`
+  (new, 3): the finalize input requires the master; J2's refusal comes before
+  its transaction and is its only test of the master's presence, with no
+  branch on the input's master and one `create`; the composer's port offers
+  exactly the two encodes, and `ffmpegComposeArgsFor` is gone.
+- `packages/storage/src/managed-output/ffmpeg-composer.test.ts`: the vector
+  pinned element by element is now the master's, at CRF 16; the composer
+  offers exactly `composeCleanMaster` and `applyDisclosure`; the master stays
+  at CRF 16 when the profile's is 23.
+- `tests/integration/deliverable-composition-execution.db.test.ts`: a missing
+  master (`null` and `undefined`) is refused on a running row and on a replay,
+  changing no row and no event, and the identical receipt still replays; a
+  replay naming a master for a verified deliverable whose record is gone is a
+  conflict; the replay case with no master removed.
+- `durable.test.ts`: the new defect's message.
+- `ffmpeg-composer-disclosure.test.ts`, `runner.test.ts`,
+  `clean-master-record-shape.test.ts`: the one-pass encode and the `null`
+  master removed.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `de31afc`: 21 mutants, 21 killed.**
+
+**Round 2, on `7b7c068`: the 21 again, with E09 and E10 added for the
+review's answers and J04 also run against the new unit test: 23 / 23
+killed.** None survived, none broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| J01 | J2 | no refusal of a missing master | db-execution, shape-2b2 |
+| J02 | J2 | an `undefined` master let through | db-execution, shape-2b2 |
+| J03 | J2 | a `null` master let through | db-execution, shape-2b2 |
+| J04 | J2 | the refusal moved inside the transaction | shape-2b2, j2-unit |
+| J05 | J2 | a missing master refused as a conflict | db-execution, shape-2b2 |
+| J06 | J2 | the master's record not written | db-execution |
+| J07 | J2 | a replay accepted where no record exists | db-execution |
+| T01 | port | a `null` master allowed again | shape-2b2 |
+| T02 | port | the one-pass encode back on the port | shape-2b2 |
+| C01 | composer | the one-pass encode back in the composer | composer, shape-2b2 |
+| C02 | composer | the master at the profile's quality | composer |
+| C03 | composer | the one-pass vector exported again | shape-2b2 |
+| D01 | defect | the missing receipt's message changed | durable |
+| E01 | e2e | a stored master ignored and encoded again from the scenes | media-runner |
+| E02 | e2e | the video's key never probed | media-runner |
+| E03 | e2e | the master's receipt taken from the video | media-runner |
+| E04 | e2e | the master's copy never released | media-runner |
+| E05 | e2e | the scenes' directory never removed | media-runner |
+| E06 | e2e | the store's directory never removed | media-runner |
+| E07 | e2e | the disclosure image's private copy never removed | media-runner |
+| E08 | e2e | the disclosure drawn on no frame | media-runner |
+| E09 | e2e | the scenes' directory made outside the temporary root | media-runner |
+| E10 | e2e | the master's frame size not compared with the profile's | media-runner |
+
+Suites: `db-execution` = the composition database suite; `shape-2b2` =
+`master-required-shape.test.ts`; `j2-unit` =
+`deliverable-composition-execution-repository.test.ts`; `composer` =
+`ffmpeg-composer.test.ts`; `durable` = `durable.test.ts`; `media-runner` =
+the end-to-end media suite. T01, T02 and C03 are killed only by the shape
+test: a wider type, an extra method on the port and an extra export change no
+behaviour. J04 leaves no row different, so the database suite cannot see it.
+E01 to E10 were run against the end-to-end suite alone, to show it catches
+each one without the unit suites; E09 is caught only by the check that every
+file was under the suite's root.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-5b-2b-1, an independent
+review agent reviewed `de31afc` against `a1e8a68`, reading only git objects. It
+found J2's refusal, the always-written record, the replay, every caller passing
+a master, nothing left relying on `compose` or a `null` master, the temporary
+roots, the media suite's other claims, the shape tests and the security
+posture correct. Verdict: nothing blocking; four should-fix findings and nine
+nits, answered in `7b7c068`:
+
+| Finding | Answer |
+| --- | --- |
+| The no-temporary-file check would pass if an adapter stopped using `TMPDIR`: an empty root proves nothing then | Fixed: every file a program read or wrote, and every file the adapters opened, must be under the suite's root, and there must be some. Mutant E09 (the scenes' directory made under `/tmp`) is killed only by this |
+| "Nothing is locked" is backed only by source order | Fixed: a unit test runs J2's refusal against a client that fails on any property read, for `null`, `undefined` and an absent field. Mutant J04 (the refusal moved inside the transaction) is now killed by it as well as the shape test |
+| The guard checks presence, not shape: an untyped `{}` fails inside the transaction as a `TypeError` | Kept, and stated in ADR-0079 Decision 1: the receipt's fields are branded values only `sha256Digest` and `safePositiveByteCount` make, J2 does not re-check the video's either, and a malformed one fails inside the transaction and rolls back with the video's receipt. Re-checking here would also stop the database suite from proving that rollback through the table's CHECK. The path needs an untyped caller, and the only caller is the typed runner |
+| 801 changed lines of code and tests against the ~500 guideline | Kept in one pull request and justified in its description: production code is 131 changed lines after the answers; the rest is tests, 489 of them the end-to-end suite the plan names as this milestone's. Splitting would leave the first half with no end-to-end proof of what it removes |
+| Nit: test 1 cannot tell the stored copy from the local encode | A comment says so and points to tests 2 and 3, which prove it |
+| Nit: `expect` inside the in-memory store loses its message | Fixed: it records buckets and content types, asserted after each run |
+| Nit: the null-replay test is trivially true | Fixed: it also checks the work row, the event count, and that the identical receipt still replays |
+| Nit: the shape test's pattern is narrow | Kept as a regression pin; the database and unit suites are the proof |
+| Nit: "the real storage adapters" overstates the doubles | Fixed in ADR-0079 Decision 3 and the architecture row: the object store, the temporary files and the repository are named as stand-ins |
+| Nit: an unwrapped TODO line | Fixed |
+| Nit: `CLEAN_MASTER_MISSING` and `CLEAN_MASTER_RECEIPT_MISSING` are easy to confuse | Each one's doc now says which it is about (storage, or a finalize's input) and names the other; ADR-0079 too |
+| Nit: the completion report has no DS-5b-2b-2 section | This record's commit adds it |
+| Nit: no real-ffprobe case for a master of another size | Added: a stored 1920x1080 master blocks with `CLEAN_MASTER_UNUSABLE`, reading no scene and making no video. Mutant E10 |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composition-execution and Clean Master rows |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-5b-2b-2*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above (J2); the runner's is DS-5b-2b-1's |
+| OpenAPI / API change summary | `docs/api-changes-ds-5b-2b-2.md`: no HTTP change; the required receipt, the defect, J2, the removed encode |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-5b-2b-2*: no migration; rolling back to DS-5b-2b-1 is safe |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure
+item and the Clean Master item).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+runner, its adapters or J2's caller: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **The end-to-end suite uses an in-memory object store and a scripted
+  repository.** The S3 adapter's conditional create and J2 are each tested in
+  their own suites, not together with real FFmpeg.
+- **A stored video without its master waits for an operator**, whose recovery
+  tooling is unbuilt, and nothing durable names it yet (TODO).
+- **J2 checks that the master's receipt is there, not its fields.** A
+  malformed one can come only from an untyped caller; it fails inside the
+  transaction and rolls back with the video's receipt (ADR-0079 Decision 1).
+- **Publication does not yet require the disclosure or the master** (DS-6).
+
+### Remaining work
+
+DS-5b-2b-2 waits for the product owner's yes before merge. DS-6 comes next:
+publication requires the disclosure of the version's mode, a recorded Clean
+Master and measured facts that match the frozen profile.
