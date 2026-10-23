@@ -180,6 +180,14 @@ real FFmpeg, the real storage adapters and an in-memory object store, fresh,
 from another attempt's master, after a failed store, after a lost lease and
 with a master of another size.
 
+**DS-6a — publication requires the disclosure and the master** (ADR-0080, no
+migration): Transaction G publishes a version, first or replacement, only when
+its composition's frozen profile drew the version's disclosure mode and its
+Clean Master is recorded at its canonical key; otherwise it refuses with a
+defect and writes nothing. The validation sweep now reports such a defect for
+that deliverable and goes on to the rest. DS-6b will require the measured
+video to be the planned size and length.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

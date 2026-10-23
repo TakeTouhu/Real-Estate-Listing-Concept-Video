@@ -37,6 +37,7 @@
  */
 
 import { AppError } from "@app/shared";
+import { isDisclosureMode } from "../disclosure/mode";
 import type { TargetOutputResolution } from "../generation/model-catalog";
 import type { CleanMasterRaster } from "./ports";
 
@@ -230,6 +231,20 @@ export function cleanMasterMatchesProfile(
     raster.frameRateNumerator * profile.frameRateDenominator ===
       raster.frameRateDenominator * profile.frameRateNumerator
   );
+}
+
+/**
+ * Whether a composition frozen under `profileKey` drew the disclosure of `mode`
+ * over the customer's video (ADR-0080).
+ *
+ * Only v2 draws one: it lays the version's mode over every video it makes
+ * (ADR-0078), and v1 drew none. A mode this build does not know was drawn by
+ * nobody. Publication asks this of the composition's frozen key, never of
+ * today's, so a v1 video verified before v2 is not published as if it carried
+ * the disclosure.
+ */
+export function profileDrewDisclosure(profileKey: string, mode: unknown): boolean {
+  return profileKey === COMPOSITION_PROFILE_KEY && isDisclosureMode(mode);
 }
 
 /**

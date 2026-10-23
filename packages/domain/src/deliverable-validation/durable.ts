@@ -284,6 +284,13 @@ export type DeliverableValidationDefectCode =
   | "RESERVATION_NOT_CONSUMABLE"
   /** A ledger-funded reservation's frozen allocations do not fund what it reserved. */
   | "RESERVATION_FUNDING_INCOMPLETE"
+  /**
+   * The composition behind the bytes did not draw the disclosure its version's
+   * mode requires: frozen under a profile that draws none (ADR-0080).
+   */
+  | "DISCLOSURE_NOT_DRAWN"
+  /** The version has no Clean Master recorded at its canonical key (ADR-0080). */
+  | "CLEAN_MASTER_NOT_RECORDED"
   /** `validate()` returned something the closed outcome parser rejects. */
   | "VALIDATOR_RESULT_MALFORMED"
   /** `validate()` threw. Not evidence about the media. */
@@ -308,6 +315,9 @@ const DEFECT_MESSAGES: Record<DeliverableValidationDefectCode, string> = {
     "The entitlement hold does not admit a consume for this publication",
   RESERVATION_FUNDING_INCOMPLETE:
     "The entitlement hold's frozen funding does not cover the Units it reserved",
+  DISCLOSURE_NOT_DRAWN:
+    "A deliverable cannot be published unless its composition drew the disclosure its mode requires",
+  CLEAN_MASTER_NOT_RECORDED: "A deliverable cannot be published without its recorded Clean Master",
   VALIDATOR_RESULT_MALFORMED:
     "The deliverable media validator returned a result outside its contract",
   VALIDATOR_FAILED: "The deliverable media validator failed unexpectedly",

@@ -24,6 +24,7 @@ import {
   assertRunnableProfile,
   cleanMasterMatchesProfile,
   isComposableAspectRatio,
+  profileDrewDisclosure,
   resolveCompositionProfile,
 } from "./profile";
 
@@ -230,5 +231,27 @@ describe("a Clean Master is laid over only at the profile's exact size and rate"
     if (profile.kind !== "RESOLVED") throw new Error("expected a profile");
     const raster = { ...rasterOf(profile.profile), ...change };
     expect(cleanMasterMatchesProfile(raster, profile.profile)).toBe(false);
+  });
+});
+
+describe("only a v2 composition drew the disclosure, and only of a known mode", () => {
+  it("answers yes for v2 and Mode A", () => {
+    expect(profileDrewDisclosure(COMPOSITION_PROFILE_KEY, "THROUGHOUT")).toBe(true);
+  });
+
+  it("answers no for v1, which drew none, and for a profile this build does not know", () => {
+    for (const key of ["vtavision-compose:v1", "vtavision-compose:v3", "", "VTAVISION-COMPOSE:V2"]) {
+      expect(`${key}: ${profileDrewDisclosure(key, "THROUGHOUT")}`).toBe(`${key}: false`);
+    }
+  });
+
+  it("answers no for a mode this build cannot draw, even under v2", () => {
+    // Mode B and Mode C are not stored yet; a value read back that is neither
+    // was drawn by nobody, and is never read as Mode A.
+    for (const mode of ["NONE", "FIRST_AND_LAST", "throughout", "", null, undefined, 1]) {
+      expect(`${String(mode)}: ${profileDrewDisclosure(COMPOSITION_PROFILE_KEY, mode)}`).toBe(
+        `${String(mode)}: false`,
+      );
+    }
   });
 });

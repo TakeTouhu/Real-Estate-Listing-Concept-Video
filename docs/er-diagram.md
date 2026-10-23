@@ -718,3 +718,11 @@ Not applicable: no entity, relationship or column changes, and no migration
 so every `GenerationDeliverableComposition` row it moves to `OUTPUT_VERIFIED`
 has its `GenerationDeliverableCleanMaster` row; the schema does not express
 that, and J2 is its only writer.
+
+## DS-6a — publication requires the disclosure and the master
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0080). Transaction G now reads `GenerationDeliverableVersion.disclosureMode`,
+`GenerationDeliverableComposition.profileKey` and the version's
+`GenerationDeliverableCleanMaster` row, and publishes only when the profile
+drew the version's mode and the master is recorded at its canonical key.

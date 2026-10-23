@@ -23,6 +23,7 @@ const MIGRATION_DIR = "00000000000029_disclosure_mode_frozen";
 const JOBS = "packages/database/src/orchestration-repositories.ts";
 const PLANS = "packages/database/src/deliverable-composition-repository.ts";
 const EXECUTION = "packages/database/src/deliverable-composition-execution-repository.ts";
+const VALIDATION = "packages/database/src/deliverable-validation-repository.ts";
 
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -111,16 +112,19 @@ describe("DS-3 shape", () => {
   });
 
   it("is written only where a job is admitted and a version planned", () => {
-    // DS-5b-2a's composition claim reads the version's mode (ADR-0077); it
-    // writes none.
-    expect(matching("packages/database/src", /disclosureMode/)).toEqual([EXECUTION, PLANS, JOBS]);
+    // DS-5b-2a's composition claim reads the version's mode (ADR-0077), and
+    // DS-6a's Transaction G reads it to judge the publication (ADR-0080);
+    // neither writes it.
+    expect(matching("packages/database/src", /disclosureMode/)).toEqual([EXECUTION, PLANS, VALIDATION, JOBS]);
     // No route admits a whole-video generation yet, and nothing shows the mode.
     expect(matching("apps", /disclosureMode|DisclosureMode/)).toEqual([]);
-    // No SQL ever writes it: the raw mentions are the plan's and the claim's
-    // locked reads, and composition discovery's filter.
-    for (const file of [PLANS, EXECUTION, JOBS]) {
+    // No SQL ever writes it: the raw mentions are the plan's, the claim's and
+    // Transaction G's locked reads, and composition discovery's filter.
+    for (const file of [PLANS, EXECUTION, VALIDATION, JOBS]) {
       expect(
-        read(file).match(/(?<!AS )"disclosureMode"(?!::text\s+(?:AS "disclosureMode"|IN \(\$\{RENDERABLE_DISCLOSURE_MODES\}\)))/g),
+        read(file).match(
+          /(?<!AS )"disclosureMode"(?!::text\s+(?:AS "(?:version)?[dD]isclosureMode"|IN \(\$\{RENDERABLE_DISCLOSURE_MODES\}\)))/g,
+        ),
       ).toBeNull();
     }
   });
@@ -137,6 +141,19 @@ describe("DS-3 shape", () => {
       'disclosureMode"::text        AS "disclosureMode",',
     ]);
     expect(source).toContain('v."disclosureMode"::text        AS "disclosureMode"');
+  });
+
+  it("is read by Transaction G from the version, under its lock, and written nowhere", () => {
+    // DS-6a (ADR-0080): the chain query reads the version's own mode, never
+    // the job's, after the version's row is locked; the gate compares it with
+    // what the frozen profile drew.
+    const source = read(VALIDATION);
+    expect(source.match(/[^\n]*[dD]isclosureMode[^\n]*/g)?.map((line) => line.trim())).toEqual([
+      "readonly versionDisclosureMode: string;",
+      'v."disclosureMode"::text        AS "versionDisclosureMode",',
+      "if (ctx.profileKey === null || !profileDrewDisclosure(ctx.profileKey, ctx.versionDisclosureMode)) {",
+    ]);
+    expect(source).not.toMatch(/j\."disclosureMode"/);
   });
 
   it("admits a job's mode once, refusing one not built before the transaction opens", () => {

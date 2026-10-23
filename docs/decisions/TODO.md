@@ -1082,6 +1082,10 @@ not gate on it. Whoever activates publication owns closing that gap.
 video it makes. The verdict and publication still do not require it (DS-6);
 the work is tracked under "Render the AI-generated disclosure".*
 
+*Update (DS-6a, ADR-0080): Transaction G now publishes a version only when its
+composition's frozen profile drew the version's mode. The verdict does not
+examine the frames for it, by design: the evidence is the profile.*
+
 **The placement rules are no longer open.** ADR-0052 Decision 8 fixes the exact
 text, the three modes and Mode A's geometry, so this is implementation work
 against a settled specification — not a decision still to be made. The earlier
@@ -1135,8 +1139,11 @@ them is **built**. Each item below records the settled decision and what remains
       the runner to profile v2: it makes the master first and the customer's
       video from the stored master with the version's disclosure. DS-5b-2b-2
       (ADR-0079) had J2 refuse a finalize that names no master, removed the
-      one-pass encode, and ran the runner end to end on real FFmpeg. Nothing in
-      production runs it, and publication does not yet require either (DS-6).*
+      one-pass encode, and ran the runner end to end on real FFmpeg. DS-6a
+      (ADR-0080) has Transaction G publish a version only when its
+      composition's frozen profile drew the version's mode and its master is
+      recorded. Nothing in production runs any of it. Still unbuilt: the
+      verdict requiring the planned size and length (DS-6b).*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1281,7 +1288,8 @@ them is **built**. Each item below records the settled decision and what remains
       finalize; a stored video found without its master is a defect that
       holds that deliverable until an operator acts (ADR-0052 Decision 20's
       recovery, unbuilt). DS-5b-2b-2 (ADR-0079) has J2 refuse a finalize that
-      names no master. Still unbuilt: publication requiring it (DS-6), a
+      names no master. DS-6a (ADR-0080) has Transaction G refuse to publish a
+      version without it. Still unbuilt: a
       recomposed version naming another version's master (which then decides
       what its own Transaction J2 records, ADR-0077 Decision 3), and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
@@ -1582,7 +1590,10 @@ them is **built**. Each item below records the settled decision and what remains
       count (ADR-0050); nothing durable names the row or the defect's code, so
       an operator cannot tell which deliverable is held, or why. Record the
       composition's id and the code where an operator can read them, without
-      a storage key, signed URL or provider payload.
+      a storage key, signed URL or provider payload. *The same holds for the
+      validation sweep, which isolates its candidates since DS-6a (ADR-0080)
+      and reports a defect's code in that pass's report only: a version
+      Transaction G refuses is held, unnamed, until an operator acts.*
 - [x] **Record which plan an organization is on, and renew its periods.**
       *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
       organization (plan, channel, anchor, commercial reference; Enterprise

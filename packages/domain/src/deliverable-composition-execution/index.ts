@@ -15,6 +15,7 @@ export {
   assertRunnableProfile,
   cleanMasterMatchesProfile,
   isComposableAspectRatio,
+  profileDrewDisclosure,
   resolveCompositionProfile,
 } from "./profile";
 export type {

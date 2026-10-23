@@ -51,7 +51,9 @@ import {
   deliverableValidationReceipt,
   frozenFundingCoversReservation,
   isDeliverableInvalidReason,
+  managedCleanMasterKey,
   managedDeliverableOutputKey,
+  profileDrewDisclosure,
   safePositiveByteCount,
   sha256Digest,
   validateDeliverableValidationBatchLimit,
@@ -91,7 +93,11 @@ interface ValidationChainRow {
   readonly versionId: string;
   readonly versionOrdinal: number;
   readonly highestOrdinal: number;
+  /** The disclosure mode the version was planned under (ADR-0073). */
+  readonly versionDisclosureMode: string;
   readonly compositionStatus: string | null;
+  /** The profile the composition was frozen under: what it drew (ADR-0080). */
+  readonly profileKey: string | null;
   readonly outputStorageKey: string | null;
   readonly outputSha256: string | null;
   readonly outputSizeBytes: bigint | null;
@@ -111,6 +117,8 @@ interface ValidationChainRow {
   readonly videoStreamCount: bigint | null;
   readonly audioStreamCount: bigint | null;
   readonly validatedAt: Date | null;
+  /** The version's Clean Master record's key, absent when none is recorded. */
+  readonly cleanMasterStorageKey: string | null;
 }
 
 /** The entitlement hold, read under its own lock. */
@@ -490,7 +498,18 @@ export function createDeliverableValidationRepository(
           return { kind: "NOT_PUBLISHABLE" };
         }
 
-        // ---- 5. Which publication is this? ----------------------------------
+        // ---- 5. What the customer will hold (ADR-0080). ---------------------
+        // The disclosure the version's mode requires, drawn by the composition
+        // that made these bytes, and the overlay-free master every later
+        // disclosure change is recomposed from (ADR-0052 Decisions 8 and 17).
+        // Defects, not outcomes: this build composes only under v2, which draws
+        // the version's mode and records the master in the receipt's commit, so
+        // a version failing either was composed by an earlier build or altered
+        // by hand. Both arms, initial and replacement, and before any write.
+        assertDisclosureDrawn(ctx);
+        assertCleanMasterRecorded(ctx);
+
+        // ---- 6. Which publication is this? ----------------------------------
         // The same two legitimate shapes Transaction I admits a cycle for, read
         // back at the end of it. An initial publication spends the customer's
         // entitlement; a recomposition replaces a video they already paid for,
@@ -518,7 +537,7 @@ export function createDeliverableValidationRepository(
           throw new DeliverableValidationDefect("PARTIAL_PUBLICATION_STATE");
         }
 
-        // ---- 6. The writes. All of them, or none. ---------------------------
+        // ---- 7. The writes. All of them, or none. ---------------------------
         const moved = await tx.generationJob.updateMany({
           where: {
             id: ctx.jobId,
@@ -848,7 +867,9 @@ async function lockValidationChain(
            (SELECT MAX(sib."ordinal")
               FROM "generation_deliverable_versions" sib
              WHERE sib."generationJobId" = j."id")  AS "highestOrdinal",
+           v."disclosureMode"::text        AS "versionDisclosureMode",
            c."status"::text                AS "compositionStatus",
+           c."profileKey"                  AS "profileKey",
            c."outputStorageKey"            AS "outputStorageKey",
            c."outputSha256"                AS "outputSha256",
            c."outputSizeBytes"             AS "outputSizeBytes",
@@ -867,7 +888,8 @@ async function lockValidationChain(
            w."videoHeight"                 AS "videoHeight",
            w."videoStreamCount"            AS "videoStreamCount",
            w."audioStreamCount"            AS "audioStreamCount",
-           w."validatedAt"                 AS "validatedAt"
+           w."validatedAt"                 AS "validatedAt",
+           m."storageKey"                  AS "cleanMasterStorageKey"
       FROM "generation_deliverable_versions" v
       JOIN "generation_jobs" j ON j."id" = v."generationJobId"
       JOIN "video_projects" p ON p."id" = j."videoProjectId"
@@ -877,6 +899,8 @@ async function lockValidationChain(
              ON c."deliverableVersionId" = v."id"
       LEFT JOIN "generation_deliverable_validations" w
              ON w."deliverableVersionId" = v."id"
+      LEFT JOIN "generation_deliverable_clean_masters" m
+             ON m."deliverableVersionId" = v."id"
      WHERE v."id" = ${deliverableVersionId}
        AND p."organizationId" = ${organizationId}
   `;
@@ -1032,6 +1056,29 @@ function assertReceiptBinding(
     ctx.receiptSizeBytes !== BigInt(receipt.sizeBytes)
   ) {
     throw new DeliverableValidationDefect("VALIDATION_RECEIPT_CONFLICT");
+  }
+}
+
+/** The composition that made these bytes drew the disclosure of the version's mode. */
+function assertDisclosureDrawn(ctx: ValidationChainRow): void {
+  if (ctx.profileKey === null || !profileDrewDisclosure(ctx.profileKey, ctx.versionDisclosureMode)) {
+    throw new DeliverableValidationDefect("DISCLOSURE_NOT_DRAWN");
+  }
+}
+
+/**
+ * The version's Clean Master is recorded, at the internal key J2 records it at.
+ *
+ * Read in the chain's query rather than locked: the record has no update path,
+ * and nothing in this build deletes one.
+ */
+function assertCleanMasterRecorded(ctx: ValidationChainRow): void {
+  const key = managedCleanMasterKey({
+    organizationId: ctx.organizationId,
+    deliverableVersionId: ctx.versionId,
+  });
+  if (ctx.cleanMasterStorageKey !== key) {
+    throw new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED");
   }
 }
 
