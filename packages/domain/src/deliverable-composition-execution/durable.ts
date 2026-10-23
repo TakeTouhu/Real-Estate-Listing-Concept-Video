@@ -366,13 +366,15 @@ export type DeliverableCompositionExecutionDefectCode =
   | "CLEAN_MASTER_RECEIPT_CONFLICT"
   /**
    * A finalize named no Clean Master receipt. The type requires one, so only an
-   * untyped caller can reach this (ADR-0079).
+   * untyped caller can reach this (ADR-0079). About the finalize's input, not
+   * storage: compare `CLEAN_MASTER_MISSING`'s stored video.
    */
   | "CLEAN_MASTER_RECEIPT_MISSING"
   /**
    * The customer's video is stored at its key and the Clean Master it is made
    * from is not at its own. Composition stores the master before it makes the
-   * video, and nothing deletes either (ADR-0078).
+   * video, and nothing deletes either (ADR-0078). About storage, not a
+   * finalize's input: compare `CLEAN_MASTER_RECEIPT_MISSING`.
    */
   | "CLEAN_MASTER_MISSING"
   /** A block re-presented a different code for an already-blocked row. */

@@ -27,10 +27,19 @@ FFmpeg or real files in its own suite, never all of them together.
 
 - **J2 refuses a finalize that names none**, with the new defect
   `CLEAN_MASTER_RECEIPT_MISSING`, before its transaction opens, so nothing is
-  read, locked or written. The type rules it out, so only an untyped caller can
-  reach it; the check is there because a video recorded without its master is
-  a deliverable no later disclosure change could be recomposed for (ADR-0052
-  Decision 17).
+  read, locked or written: a unit test runs it against a client that fails on
+  any use. The type rules it out, so only an untyped caller can reach it; the
+  check is there because a video recorded without its master is a deliverable
+  no later disclosure change could be recomposed for (ADR-0052 Decision 17).
+  The name is about the finalize's input; `CLEAN_MASTER_MISSING` (ADR-0078) is
+  about what is stored.
+- **Presence, not shape.** J2 checks that a receipt is there, not its fields,
+  as it does for the video's: both are branded values only `sha256Digest` and
+  `safePositiveByteCount` make. A malformed one from an untyped caller fails
+  inside the transaction, on the master table's CHECK or before it, and the
+  transaction rolls back with the video's receipt (the database suite holds
+  that for the CHECK). Checking the fields again here would also stop that
+  suite from proving the rollback.
 - **Every first commit records the master**, at the key J2 rebuilds, as
   before.
 - **A replay always compares a record.** A verified deliverable with no
@@ -57,9 +66,11 @@ nothing else.
 
 A media suite (`tests/media/composition-runner.media.test.ts`) runs the runner
 on the real scene materializer, Clean Master store, composer, Clean Master
-inspector and video publisher, against an in-memory first-wins object store
-and a scripted repository whose claim carries profile v2 for 16:9 720p. It
-proves:
+inspector and video publisher. Three things are stand-ins: the object store, in
+memory and first-wins as the S3 adapter's conditional create is; the temporary
+files, the testing factory with no fault configured, which opens real files
+exclusively at 0600 as production's does; and the repository, scripted, whose
+claim carries profile v2 for 16:9 720p. It proves:
 
 - **Fresh**: one master's encode, one inspection, one disclosure's encode; the
   stored master shows the scene where the disclosure's text goes and the
@@ -72,10 +83,15 @@ proves:
 - **The video's store failing**: the attempt defers with
   `OUTPUT_PUBLISH_RETRYABLE` and leaves the master stored; the next reads no
   scene and encodes only the video, from that master.
+- **A master of another size**: a stored 1920x1080 master is read by the real
+  inspector and blocks with `CLEAN_MASTER_UNUSABLE`; no scene is read and no
+  video made.
 - **A stored video**: an attempt that lost its lease after storing both is
   followed by one that launches no program at all and hands J2 the same two
   receipts.
-- **No temporary file survives** any attempt.
+- **No temporary file survives** any attempt, and every file an attempt made,
+  read or wrote was under the suite's own temporary root, so that check is
+  not vacuous.
 
 The suite builds nothing production runs: it constructs the runner in a test.
 

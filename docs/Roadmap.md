@@ -177,7 +177,8 @@ migration): Transaction J2 refuses a finalize that names no Clean Master and
 records the master on every commit; the composer's one-pass encode of the
 scenes into a video is removed; and a media suite runs the runner end to end on
 real FFmpeg, the real storage adapters and an in-memory object store, fresh,
-from another attempt's master, after a failed store and after a lost lease.
+from another attempt's master, after a failed store, after a lost lease and
+with a master of another size.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

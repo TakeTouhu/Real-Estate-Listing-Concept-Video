@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -81,15 +81,21 @@ const SAMPLED_FRAME = 15;
 
 const sha256Of = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-/** An object store in memory, first-wins as the real adapter's conditional create is. */
+/**
+ * An object store in memory, first-wins as the real adapter's conditional
+ * create is. It records what it is asked rather than asserting it: the adapters
+ * turn a thrown error into a retryable answer, which would hide the reason.
+ */
 class MemoryObjectStore implements DeliverableObjectClient {
   readonly objects = new Map<string, Uint8Array>();
   readonly reads: string[] = [];
+  readonly buckets = new Set<string>();
+  readonly contentTypes = new Set<string>();
   /** Keys whose next store fails, as an unreachable bucket would. */
   readonly refuseNextPut = new Set<string>();
 
   async getObject(input: S3GetObjectInput): Promise<S3GetObjectResult> {
-    expect(input.bucket).toBe(BUCKET);
+    this.buckets.add(input.bucket);
     this.reads.push(input.key);
     const bytes = this.objects.get(input.key);
     if (bytes === undefined) return { contentLength: null, body: null };
@@ -115,8 +121,8 @@ class MemoryObjectStore implements DeliverableObjectClient {
     readonly localPath: string;
     readonly contentType: string;
   }): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
-    expect(input.bucket).toBe(BUCKET);
-    expect(input.contentType).toBe("video/mp4");
+    this.buckets.add(input.bucket);
+    this.contentTypes.add(input.contentType);
     if (this.refuseNextPut.delete(input.key)) throw new Error("store unreachable");
     if (this.objects.has(input.key)) return { kind: "ALREADY_EXISTS" };
     this.objects.set(input.key, new Uint8Array(await readFile(input.localPath)));
@@ -170,6 +176,7 @@ let dir: string;
 let blueClip: Uint8Array;
 let redClip: Uint8Array;
 let greenMaster: Uint8Array;
+let greenMaster1080p: Uint8Array;
 let temp: string;
 let originalTmpdir: string | undefined;
 
@@ -186,14 +193,21 @@ beforeAll(async () => {
   // A master another attempt could have stored: the right size, rate and
   // length, but green, so a video made from it cannot be mistaken for one
   // made from the scenes.
-  const greenMasterPath = join(dir, "green-master.mp4");
-  const encoded = await createFfmpegDeliverableComposer({ runner }).composeCleanMaster({
-    clips: [{ localPath: green, durationSeconds: 3 }],
-    profile: PROFILE,
-    outputPath: greenMasterPath,
-  });
-  expect(encoded).toEqual({ kind: "SUCCESS" });
-  greenMaster = new Uint8Array(await readFile(greenMasterPath));
+  // And one of another frame size, which no 720p video may be made from.
+  const masterOf = async (profile: CompositionProfile, name: string): Promise<Uint8Array> => {
+    const path = join(dir, name);
+    const encoded = await createFfmpegDeliverableComposer({ runner }).composeCleanMaster({
+      clips: [{ localPath: green, durationSeconds: 3 }],
+      profile,
+      outputPath: path,
+    });
+    expect(encoded).toEqual({ kind: "SUCCESS" });
+    return new Uint8Array(await readFile(path));
+  };
+  greenMaster = await masterOf(PROFILE, "green-master.mp4");
+  const landscape1080p = resolveCompositionProfile({ targetAspectRatio: "16:9", targetOutputResolution: "1080p" });
+  if (landscape1080p.kind !== "RESOLVED") throw new Error("16:9 1080p resolves");
+  greenMaster1080p = await masterOf(landscape1080p.profile, "green-master-1080p.mp4");
 });
 
 afterAll(async () => {
@@ -254,13 +268,20 @@ function harness(options: { readonly withScenes: boolean }) {
   const repository = new ScriptedRepository(claim);
   /** Every program the composer and the inspector launched, in order. */
   const launched: string[] = [];
+  /** Every file those programs were given to read or write. */
+  const files: string[] = [];
   const counting: ProcessRunner = {
     run: (input) => {
       launched.push(input.program);
+      input.args.forEach((arg, index) => {
+        if (input.args[index - 1] === "-i") files.push(arg);
+      });
+      files.push(input.args.at(-1)!);
       return runner.run(input);
     },
   };
-  const io = { client: store, tempFiles: new FakeManagedOutputTempFiles() };
+  const tempFiles = new FakeManagedOutputTempFiles();
+  const io = { client: store, tempFiles };
   let now = NOW;
   const composition = new DeliverableCompositionRunner({
     repository,
@@ -280,7 +301,7 @@ function harness(options: { readonly withScenes: boolean }) {
       metadata: {},
     }),
   });
-  return { store, repository, launched, run: () => composition.runOnce(1) };
+  return { store, repository, launched, files, tempFiles, run: () => composition.runOnce(1) };
 }
 
 /** The bytes at `key`, written to a file of this suite's for FFmpeg to read. */
@@ -316,9 +337,18 @@ function meanLuma(frame: Buffer, pixels: readonly number[]): number {
   return total / pixels.length;
 }
 
-/** What each attempt must leave behind: nothing. */
-async function expectNoTemporaryFiles(): Promise<void> {
+/**
+ * What each attempt must leave behind: nothing. Only meaningful if every file
+ * it made was under the test's temporary root, so that is checked first: each
+ * file a program read or wrote, and each the adapters opened.
+ */
+async function expectNoTemporaryFiles(h: ReturnType<typeof harness>): Promise<void> {
+  const made = [...h.files, ...h.tempFiles.openedPaths];
+  expect(made.length).toBeGreaterThan(0);
+  expect(made.filter((path) => !path.startsWith(temp + sep))).toEqual([]);
   expect(await readdir(temp)).toEqual([]);
+  expect([...h.store.buckets]).toEqual([BUCKET]);
+  expect([...h.store.contentTypes].filter((type) => type !== "video/mp4")).toEqual([]);
 }
 
 /** Both receipts handed to J2 describe the bytes stored at their keys. */
@@ -334,7 +364,12 @@ function expectReceiptsOfStoredBytes(store: MemoryObjectStore, finalize: Finaliz
 
 describe("the runner on real FFmpeg", () => {
   it("makes the master from the scenes, then the customer's video from the stored master, and hands J2 both receipts", async () => {
-    const { store, repository, launched, run } = harness({ withScenes: true });
+    // Here the stored master is this attempt's own encode, byte for byte, so
+    // this test cannot tell the stored copy from the encoder's file; the next
+    // two, whose master another attempt stored, are what prove the video is
+    // made from the stored bytes.
+    const h = harness({ withScenes: true });
+    const { store, repository, launched, run } = h;
 
     expect(await run()).toMatchObject({ considered: 1, claimed: 1, finalized: 1, failed: 0 });
     // The master's encode, its inspection, then the disclosure's encode.
@@ -344,7 +379,7 @@ describe("the runner on real FFmpeg", () => {
     expect([...store.objects.keys()].sort()).toEqual(
       [MASTER_KEY, OUTPUT_KEY, ...claimOf().scenes.map((scene) => scene.sourceStorageKey)].sort(),
     );
-    await expectNoTemporaryFiles();
+    await expectNoTemporaryFiles(h);
 
     const master = await storedFile(store, MASTER_KEY, "master");
     const video = await storedFile(store, OUTPUT_KEY, "video");
@@ -374,7 +409,8 @@ describe("the runner on real FFmpeg", () => {
 
   it("makes the customer's video from a master another attempt stored, reading no scene and encoding no master", async () => {
     // No scene is stored: a runner that went to the scenes would defer.
-    const { store, repository, launched, run } = harness({ withScenes: false });
+    const h = harness({ withScenes: false });
+    const { store, repository, launched, run } = h;
     store.objects.set(MASTER_KEY, greenMaster);
 
     expect(await run()).toMatchObject({ finalized: 1, deferred: 0, failed: 0 });
@@ -383,7 +419,7 @@ describe("the runner on real FFmpeg", () => {
     expect(store.objects.get(MASTER_KEY)).toBe(greenMaster);
     expect(repository.finalized[0]!.cleanMaster.sha256).toBe(sha256Of(greenMaster));
     expectReceiptsOfStoredBytes(store, repository.finalized[0]!);
-    await expectNoTemporaryFiles();
+    await expectNoTemporaryFiles(h);
 
     // The video is the stored master's picture, with the disclosure over it.
     const ink = new Set(await inkPixels());
@@ -394,7 +430,8 @@ describe("the runner on real FFmpeg", () => {
   });
 
   it("after the video's store fails, makes the video again from the stored master without encoding it again", async () => {
-    const { store, repository, launched, run } = harness({ withScenes: true });
+    const h = harness({ withScenes: true });
+    const { store, repository, launched, run } = h;
     store.refuseNextPut.add(OUTPUT_KEY);
 
     expect(await run()).toMatchObject({ finalized: 0, deferred: 1, failed: 0 });
@@ -403,7 +440,7 @@ describe("the runner on real FFmpeg", () => {
     const master = store.objects.get(MASTER_KEY)!;
     const sceneReads = store.sceneReads();
     expect(sceneReads).toBe(2);
-    await expectNoTemporaryFiles();
+    await expectNoTemporaryFiles(h);
 
     launched.length = 0;
     expect(await run()).toMatchObject({ finalized: 1, failed: 0 });
@@ -413,11 +450,27 @@ describe("the runner on real FFmpeg", () => {
     expect(store.sceneReads()).toBe(sceneReads);
     expect(store.objects.get(MASTER_KEY)).toBe(master);
     expectReceiptsOfStoredBytes(store, repository.finalized[0]!);
-    await expectNoTemporaryFiles();
+    await expectNoTemporaryFiles(h);
+  });
+
+  it("blocks on a stored master of another frame size, making no video", async () => {
+    const h = harness({ withScenes: true });
+    const { store, repository, launched, run } = h;
+    store.objects.set(MASTER_KEY, greenMaster1080p);
+
+    expect(await run()).toMatchObject({ blocked: 1, finalized: 0, deferred: 0, failed: 0 });
+    expect(repository.blocked.map((one) => one.blockCode)).toEqual(["CLEAN_MASTER_UNUSABLE"]);
+    // Read by the real inspector as 1920x1080, and nothing encoded after it.
+    expect(launched).toEqual(["ffprobe"]);
+    expect(store.sceneReads()).toBe(0);
+    expect(store.objects.has(OUTPUT_KEY)).toBe(false);
+    expect(store.objects.get(MASTER_KEY)).toBe(greenMaster1080p);
+    await expectNoTemporaryFiles(h);
   });
 
   it("finalizes a stored video against both stored receipts, launching nothing", async () => {
-    const { store, repository, launched, run } = harness({ withScenes: true });
+    const h = harness({ withScenes: true });
+    const { store, repository, launched, run } = h;
     // The first attempt stores both, then loses its lease before J2 commits.
     repository.finalizeAnswers.push("LEASE_LOST");
     expect(await run()).toMatchObject({ leaseLost: 1, failed: 0 });
@@ -431,6 +484,6 @@ describe("the runner on real FFmpeg", () => {
     const second = repository.finalized[1]!;
     expectReceiptsOfStoredBytes(store, second);
     expect([second.outputSha256, second.cleanMaster.sha256]).toEqual([first.outputSha256, first.cleanMaster.sha256]);
-    await expectNoTemporaryFiles();
+    await expectNoTemporaryFiles(h);
   });
 });

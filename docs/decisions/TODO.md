@@ -1281,9 +1281,9 @@ them is **built**. Each item below records the settled decision and what remains
       finalize; a stored video found without its master is a defect that
       holds that deliverable until an operator acts (ADR-0052 Decision 20's
       recovery, unbuilt). DS-5b-2b-2 (ADR-0079) has J2 refuse a finalize that
-      names no master. Still unbuilt: publication requiring it (DS-6), a recomposed version naming another version's
-      master (which then decides what its own Transaction J2 records, ADR-0077
-      Decision 3), and its deletion with its content: when physical deletion of
+      names no master. Still unbuilt: publication requiring it (DS-6), a
+      recomposed version naming another version's master (which then decides
+      what its own Transaction J2 records, ADR-0077 Decision 3), and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
       (RESTRICT holds that order), subject to legal hold.*
 - [ ] **Decide which Clean Masters outlive their purpose.** ADR-0052 Decision 17

@@ -784,11 +784,17 @@ RUN("Phase 5B — durable composition execution", () => {
         const result = await claimed(ORG_A, planned.deliverableVersionId);
         await finalize(result, MASTER);
         const stored = await masterOf(planned.deliverableVersionId);
+        const work = await compositionOf(prisma, planned.deliverableVersionId);
+        const events = await eventCount(prisma);
 
         await expect(finalize(result, noMaster)).rejects.toThrow(
           expect.objectContaining({ code: "CLEAN_MASTER_RECEIPT_MISSING" }),
         );
         expect(await masterOf(planned.deliverableVersionId)).toEqual(stored);
+        expect(await compositionOf(prisma, planned.deliverableVersionId)).toEqual(work);
+        expect(await eventCount(prisma)).toBe(events);
+        // Not an answer about the deliverable: the identical receipt still replays.
+        expect(await finalize(result, MASTER)).toEqual({ kind: "ALREADY_FINALIZED" });
       });
     }
 
