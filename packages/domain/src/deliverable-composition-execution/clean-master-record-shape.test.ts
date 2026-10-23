@@ -14,8 +14,10 @@ import { COMPOSITION_BLOCK_CODES } from "./durable";
  *    together; the receipt and the key it is written at are the ones J2 holds.
  * 4. **Discovery offers only work the claim will take**: frozen under this
  *    build's profile, and planned under a mode it renders.
- * 5. **Still dormant**: nothing produces a master, so the runner records none,
- *    and nothing yet blocks with either new code.
+ *
+ * A fifth claim, that the runner recorded no master and blocked with neither
+ * new code, held until DS-5b-2b-1 switched the runner to profile v2
+ * (ADR-0078); `master-first-shape.test.ts` pins what the runner does now.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -126,13 +128,5 @@ describe("DS-5b-2a shape", () => {
     expect(find).toContain(`AND v."disclosureMode"::text IN (\${RENDERABLE_DISCLOSURE_MODES})`);
     // From the list the claim's own refusal reads, as bound parameters.
     expect(repository()).toContain("const RENDERABLE_DISCLOSURE_MODES = Prisma.join([...DISCLOSURE_MODES]);");
-  });
-
-  it("stays dormant: the runner records no master and blocks with neither new code", () => {
-    const runner = code(readFileSync(join(__dirname, "runner.ts"), "utf8"));
-    expect(runner.match(/cleanMaster\b[^\n]*/g)).toEqual(["cleanMaster: null,"]);
-    for (const blockCode of ["CLEAN_MASTER_SIZE_LIMIT_EXCEEDED", "CLEAN_MASTER_UNUSABLE"]) {
-      expect(`${blockCode}: ${runner.includes(blockCode)}`).toBe(`${blockCode}: false`);
-    }
   });
 });

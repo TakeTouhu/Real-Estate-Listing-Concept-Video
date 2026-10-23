@@ -7,7 +7,8 @@ ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0074-clean-master-record-and-internal-location.md` (DS-4),
 `docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a),
 `docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1),
-`docs/decisions/0077-composition-records-for-the-clean-master.md` (DS-5b-2a)
+`docs/decisions/0077-composition-records-for-the-clean-master.md` (DS-5b-2a),
+`docs/decisions/0078-composition-makes-the-master-first.md` (DS-5b-2b-1)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -24,10 +25,12 @@ as a series of pull requests, before anything can deliver a video:
 4. **DS-4**: the Clean Master record and its private storage location, refused
    by every download path.
 5. **DS-5**: composition makes the Clean Master, then the customer's video from
-   it, in four pull requests: DS-5a, the composer's two encodes; DS-5b-1, the
+   it, in five pull requests: DS-5a, the composer's two encodes; DS-5b-1, the
    master's store and the inspector that checks it; DS-5b-2a, the claim's and
-   Transaction J2's records for the master, with migration 31; and DS-5b-2b,
-   composition running all of them.
+   Transaction J2's records for the master, with migration 31; DS-5b-2b-1,
+   composition running all of them; and DS-5b-2b-2, the master's receipt
+   required, the one-pass encode removed, and the runner run end to end on
+   real FFmpeg.
 6. **DS-6**: publication requires the disclosure of the job's mode and a Clean
    Master, and that the measured video matches its planned size and length.
 
@@ -1755,3 +1758,254 @@ included. DS-5b-2b (profile v2, the master before the video, `cleanMaster`
 required with J2 refusing `null`, a defect for a video stored without its
 master, the new block codes used, `compose` removed, and a media end-to-end
 test) comes next, after it.
+
+## DS-5b-2b-1 — composition makes the Clean Master first
+
+Base: `e8e966a` (PR #100 merge commit on `main`; post-merge CI run 646 green
+after one re-run of its media job, which had stalled installing FFmpeg before
+any test ran).
+ADR: `docs/decisions/0078-composition-makes-the-master-first.md`
+
+DS-5b-2b is split in two to stay near the milestone size. This half switches
+the runner to profile v2; DS-5b-2b-2 makes the master's receipt required with
+Transaction J2 refusing a missing one, removes the one-pass `compose`, and runs
+the runner end to end on real FFmpeg. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `37106fa` | profile v2, the master-first runner, the defect, the tests, ADR-0078 and the documentation |
+| `d32f67b` | the independent review's answers: the master's instant pinned on every path; the defect thrown in one place; releases that throw before returning a promise caught; a 9:16 720p claim, the composer throwing and distinct scene durations tested; the defect's cost, the lease and the rollback past DS-5b-2a stated; stale architecture and TODO text corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-5b-2b-1 does
+
+- **Profile v2.** `COMPOSITION_PROFILE_KEY` is `vtavision-compose:v2`, binding
+  the master's CRF 16, the overlay and disclosure layer v1. Every column a
+  work row freezes keeps v1's value, so no migration; a v1 row is refused at
+  claim and never offered.
+- **The master before the video.** After the claim, its deterministic
+  refusals and the probe of the video's key, the runner fetches the master;
+  if nothing is stored it materializes the scenes, encodes the master, stores
+  it first-wins and releases the scenes. It inspects the stored copy, requires
+  the profile's size and frame rate, lays the version's disclosure over the
+  copy, publishes the video and finalizes with both receipts. A stored master
+  is reused, never encoded again.
+- **A stored video** is finalized against its master's stored receipt; a
+  stored video found without its master is the new defect
+  `CLEAN_MASTER_MISSING`, and nothing is finalized.
+- **The two block codes are used**: `CLEAN_MASTER_SIZE_LIMIT_EXCEEDED` for a
+  master over its ceiling, `CLEAN_MASTER_UNUSABLE` for one the inspector
+  refuses or of another size or rate. The master's store failing defers with
+  `OUTPUT_PUBLISH_RETRYABLE`; the inspector, either encode or the overlay
+  failing, with `COMPOSER_RETRYABLE`.
+- **The master's receipt carries its own instant**, the clock read when the
+  store answered for its bytes.
+- **Still dormant.** Nothing in production constructs the runner. It never
+  calls `compose`, which stays on the port until DS-5b-2b-2.
+
+```mermaid
+sequenceDiagram
+    participant R as Runner
+    participant DB as Repository (J1, J2)
+    participant V as Video publisher
+    participant M as Master store
+    participant S as Scene materializer
+    participant C as Composer
+    participant I as Inspector
+    R->>DB: claim (mode, master key, profile v2)
+    R->>V: probe the video's key
+    alt video stored
+        R->>M: probe the master's key
+        R->>DB: J2 with both stored receipts (master absent: defect)
+    else video absent
+        R->>M: fetch the master
+        opt nothing stored
+            R->>S: materialize the scenes
+            R->>C: composeCleanMaster
+            R->>M: publish first-wins, copy back the stored bytes
+            R->>S: release the scenes
+        end
+        R->>I: inspect the copy (profile's size and rate)
+        R->>C: applyDisclosure(copy, version's mode)
+        R->>V: publish the video
+        R->>DB: J2 with the video's and the master's receipts
+        R->>M: release the copy
+    end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16, configured like CI). Lint, typecheck, unit
+and build on `d32f67b`; the database suite on `37106fa`, whose database code
+and tests `d32f67b` does not change. This record's commit changes only this
+file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5905 / 5905**, 210 files (5886 before; 19 new) |
+| `pnpm test:db` | **1468 / 1468**, 55 files (none new; six expectations and titles moved to v2) |
+| `pnpm test:media` | not run locally: no media code changed; CI's `media` job runs it |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New and changed tests:
+
+- `packages/domain/src/deliverable-composition-execution/runner.test.ts`
+  (rewritten, 60): one log shared by every fake fixes the order on each path.
+  The master is encoded from the scenes in plan order at their frozen
+  durations, stored from where it was encoded at the claim's master key, and
+  the disclosure is laid over the stored copy, never the encoded file, with
+  the version's mode. Another attempt's stored master is used and recorded. A
+  stored master is reused, fetching no scene. Every code: the master too large
+  on probe, fetch or store; unusable, or of another size or rate, including a
+  9:16 720p claim; the store and the inspector failing; either encode failing.
+  The master's instant is exact on all three paths. The scenes and the copy
+  are released once each on every exit, including thrown adapters and a
+  release that rejects or throws. A stored video is finalized against both
+  stored receipts, and one without its master is a defect that writes
+  nothing.
+- `packages/domain/src/deliverable-composition-execution/master-first-shape.test.ts`
+  (new, 5): profile v2; `compose` never called; the order of the store, scene,
+  encode, inspection, disclosure and publication calls; a master on every
+  finalize; the defect thrown once, in the probe's `ABSENT` case, with no
+  durable code.
+- `profile.test.ts`, `durable.test.ts`: v2 named, v1 and v3 refused; the
+  defect's fixed message.
+- `clean-master-record-shape.test.ts`: DS-5b-2a's dormancy claim retired, as
+  the runner now records a master.
+- `tests/integration/deliverable-composition-execution.db.test.ts`: the frozen
+  profile key is v2.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `37106fa`: 34 mutants, 33 killed.** U12 (every clip given the
+first scene's duration) survived: every fixture scene was 5 seconds long. The
+test now uses three scenes of different lengths, and U12 is killed.
+
+**Round 2, on `d32f67b`: the 34 again, with U15 and U17 to U20 re-anchored on
+the reworded comment and `releaseQuietly`, and U33 to U38 added for the
+review's answers: 40 / 40 killed.** None survived, none broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| U01 | stored | finalized without reading the master | runner |
+| U02 | stored | a missing master encoded afresh | runner |
+| U03 | stored | an oversized stored master deferred | runner |
+| U04 | stored | an unreadable master blocked | runner |
+| U05 | stored | the video's receipt recorded as the master's | runner |
+| U06 | reuse | the stored master never fetched | runner, shape-2b1 |
+| U07 | reuse | an oversized stored master deferred | runner |
+| U08 | reuse | an unreadable master key read as absent | runner |
+| U09 | reuse | the master fetched from the video's key | runner |
+| U10 | make | an integrity mismatch deferred | runner |
+| U11 | make | a failed master encode ignored | runner |
+| U12 | make | the scenes encoded at one duration | runner |
+| U13 | make | the master stored from a scene's path | runner |
+| U14 | make | the master stored at the video's key | runner |
+| U15 | make | an oversized new master deferred | runner |
+| U16 | make | a failed master store blocked | runner |
+| U17 | release | the scenes never released | runner |
+| U18 | release | a failed scene release replaces the answer | runner |
+| U19 | release | the copy never released | runner |
+| U20 | release | a failed copy release replaces the answer | runner |
+| U21 | inspect | an unrunnable inspector blocks | runner |
+| U22 | inspect | the profile's raster not required | runner, shape-2b1 |
+| U23 | inspect | an unusable master accepted | runner |
+| U24 | inspect | the master's encode output inspected, not the copy | runner |
+| U25 | disclose | the disclosure laid over the wrong file | runner, shape-2b1 |
+| U26 | disclose | a mode other than the claim's | shape-2b1 |
+| U27 | disclose | a failed overlay ignored | runner |
+| U28 | publish | the master published as the video | runner |
+| U29 | publish | the video published at the master's key | runner |
+| U30 | receipt | the video's receipt recorded as the master's | runner |
+| U31 | receipt | the master's instant taken at finalize | runner |
+| U32 | receipt | no master handed to J2 | runner, shape-2b1 |
+| U33 | receipt | a new master's instant not read | runner |
+| U34 | receipt | a fetched master's instant not read | runner |
+| U35 | receipt | a probed master's instant not read | runner |
+| U36 | stored | the missing master thrown as another error | shape-2b1 |
+| U37 | release | a synchronous release failure escapes | runner |
+| U38 | inspect | compared with a fixed 1080p landscape raster | runner |
+| P01 | profile | the build back on v1 | profile, shape-2b1, db-execution |
+| D01 | defect | the missing master's message changed | durable |
+
+Suites: `runner` = `runner.test.ts`; `shape-2b1` = `master-first-shape.test.ts`;
+`profile` = `profile.test.ts`; `durable` = `durable.test.ts`; `db-execution` =
+the composition database suite. U26 and U36 are killed only by the shape test:
+the one mode that exists is the claim's, and the runner isolates every thrown
+defect, so no behaviour tells either apart.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-5b-2a, an independent review
+agent reviewed `37106fa` against `e8e966a`, reading only git objects. It found
+the order, the disclosure on every published video, the receipts, the
+two-worker races, every code, the releases and the no-migration claim correct.
+Verdict: nothing blocking; five should-fix findings and eight nits, all
+answered in `d32f67b`:
+
+| Finding | Answer |
+| --- | --- |
+| `CLEAN_MASTER_MISSING` is re-claimed and fails again every lease period, re-reading the whole video each time, and nothing durable names the row | Stated in ADR-0078 Decision 4 with its cost. TODO: operator recovery must reach such rows, and a new item makes a composition defect findable before activation. Kept as a defect: a block code would need a migration and give an impossible state a durable name |
+| The master's `verifiedAt` is never pinned: reading the clock at another moment, or not at all, survives | Pinned with the ticking clock on all three paths: the one read between the master's encode and the disclosure, and the read right after a fetch or a probe. Mutants U31 and U33 to U35 |
+| Which defect the stored video's missing master throws is not pinned; the unreachable `default` throws the same | The `default` now defers, as the other unreachable defaults do, so the defect is thrown in one place, and the shape test requires it there, in the probe's `ABSENT` case. Mutant U36 |
+| Rolling back past DS-5b-2a also needs no live v2 row: that build's discovery would offer each one forever | Added to the migration notes, with the query, checked against a local database |
+| Four docs still say composition draws no disclosure | Fixed: the architecture rows for composition, the disclosure and validation, and the Phase 5C follow-up in TODO |
+| Nit: a master refused by `publish` as too large was never stored, so "cannot be replaced" is the wrong reason | Fixed in the runner's comment, the block code's doc and ADR-0078 Decision 3: the same scenes encode to the same size |
+| Nit: two comments still say recovery costs one read | Fixed: two reads, the video's and its master's |
+| Nit: two encodes can outlive the default lease | Stated in ADR-0078 Decision 2, and the composer test's comment says so: it costs work, not correctness, and the limits are set at activation |
+| Nit: a release that throws before returning a promise escapes | Fixed: both releases go through `releaseQuietly`; tested both ways, mutant U37. A throwing clock is not handled: it is an injected `() => number` the claim has already read |
+| Nit: the convergence test uses two scripted harnesses | Kept: each worker's half is what the runner decides; the store's first-wins is the store's suite (ADR-0076) and J2's race is the database races suite |
+| Nit: the shape test checks source order | Kept as a guard beside the behaviour tests, which check execution order through one shared log |
+| Nit: no claim profile other than 1080p landscape | Added: a 9:16 720p claim is finalized from a 720x1280 master and refused for the 1080p landscape one. Mutant U38 |
+| Nit: the composer throwing is untested | Added: the overlay throwing releases both directories; the master's encode throwing releases the scenes and stores nothing |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the composition-execution and Clean Master rows |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-5b-2b-1*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above; the order is ADR-0078 Decision 2 |
+| OpenAPI / API change summary | `docs/api-changes-ds-5b-2b-1.md`: no HTTP change; the profile key, the runner's dependencies and behaviour, the defect |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-5b-2b-1*: no migration, and what rolling back means |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure
+item and the Clean Master item).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+runner, its store or its inspector: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **J2 still accepts no master**: `cleanMaster` keeps `| null` until
+  DS-5b-2b-2, though the runner always passes one.
+- **`compose` stays on the port and in the composer** until DS-5b-2b-2; the
+  runner never calls it, and a shape test holds that.
+- **The runner has run on fakes only.** Real FFmpeg runs each encode and the
+  inspector in the media suite, but not the runner end to end; DS-5b-2b-2 adds
+  that test.
+- **A stored video without its master waits for an operator**, whose recovery
+  tooling is unbuilt (TODO). Composition cannot produce that state.
+- **Publication does not yet require the disclosure or the master** (DS-6).
+
+### Remaining work
+
+DS-5b-2b-1 waits for the product owner's yes before merge. DS-5b-2b-2 comes
+next, then DS-6.

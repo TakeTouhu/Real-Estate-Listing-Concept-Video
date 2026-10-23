@@ -120,7 +120,7 @@ export type ClaimCompositionWorkOutcome =
   /** Already composed and verified; nothing to do. */
   | { readonly kind: "ALREADY_VERIFIED" }
   /**
-   * The job's frozen delivery target is outside composition profile v1.
+   * The job's frozen delivery target is outside the composition profile's rasters.
    *
    * A returned outcome rather than a thrown defect, and the transaction writes
    * nothing: no work row, no lease, no job transition, no event. The job was
@@ -165,8 +165,8 @@ export interface FinalizeCompositionInput {
    * The receipt of the Clean Master the customer's video was made from, which
    * Transaction J2 records in the same commit as the video's (ADR-0077).
    *
-   * `null` only while composition runs profile v1, which makes no master;
-   * DS-5b-2b's profile v2 always has one, and makes this required.
+   * Profile v2's runner always passes one (ADR-0078); `null` stays in the type
+   * only until DS-5b-2b-2 makes it required and J2 refuses a missing one.
    */
   readonly cleanMaster: CleanMasterReceipt | null;
   /** When the video's receipt was established: its `outputVerifiedAt`. */
@@ -476,7 +476,8 @@ export interface DeliverableOutputPublisher {
    * Probing first breaks that: once canonical bytes exist, the next claim reads
    * their receipt and finalizes. It does not make duplicate execution
    * impossible — work before the first publication can still be wasted — it
-   * makes recovery *after* publication cost one read instead of one encode.
+   * makes recovery *after* publication cost two reads, the video's and its
+   * master's, instead of two encodes (ADR-0078).
    */
   probeExistingOutput(input: {
     readonly key: ManagedDeliverableOutputKey;

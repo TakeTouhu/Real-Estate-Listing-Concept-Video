@@ -165,9 +165,10 @@ export function createDeliverableCompositionExecutionRepository(
       // Three classes are excluded for exactly that reason. `BLOCKED` rows match
       // no arm below, because a deterministic refusal that kept appearing in
       // the batch would be re-claimed and re-refused forever. A job whose
-      // frozen delivery target is outside profile v1 is filtered here rather
-      // than discovered at claim time — every claim would refuse it, so leaving
-      // it listable lets enough such jobs crowd out work that can be composed.
+      // frozen delivery target is outside the profile's rasters is filtered
+      // here rather than discovered at claim time — every claim would refuse
+      // it, so leaving it listable lets enough such jobs crowd out work that
+      // can be composed.
       // And work frozen under a profile this build does not carry, or planned
       // under a disclosure mode it cannot render, is filtered for the same
       // reason (ADR-0077): the claim refuses it (`assertRunnableProfile`,
@@ -850,8 +851,8 @@ function proveExecutablePlan(
 /**
  * The profile this deliverable was first claimed under, read back verbatim.
  *
- * Never re-derived from today's defaults. A build carrying profile v2 that
- * re-derived here would encode the retry of a v1 deliverable with v2 settings,
+ * Never re-derived from today's defaults. A build carrying profile v3 that
+ * re-derived here would encode the retry of a v2 deliverable with v3 settings,
  * and the two halves of one deliverable's history would disagree about what the
  * customer was promised.
  */

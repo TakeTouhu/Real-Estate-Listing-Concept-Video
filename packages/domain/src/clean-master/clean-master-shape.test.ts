@@ -107,8 +107,8 @@ describe("DS-4 shape", () => {
     // DS-5b-2a (ADR-0077): the composition repository is the one module that
     // names the table or the model, and the claim is the one place outside the
     // key module that builds a key. The port carries the receipt to it, and
-    // the runner, under profile v1, passes none. DS-5b-1's master store takes
-    // the key's type; no app mentions any of it.
+    // the runner, under profile v2, passes the stored master's (ADR-0078).
+    // DS-5b-1's master store takes the key's type; no app mentions any of it.
     const REPOSITORY = "packages/database/src/deliverable-composition-execution-repository.ts";
     expect(
       matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters/),

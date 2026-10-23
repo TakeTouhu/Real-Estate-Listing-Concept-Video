@@ -209,9 +209,11 @@ describe("timeouts are bounded, and always shorter than the lease", () => {
     expect(DEFAULT_COMPOSE_TIMEOUT_MS).toBeLessThan(DEFAULT_COMPOSITION_LEASE_MS);
     // But it is not an invariant, and this suite does not pretend otherwise: the
     // ceiling here exceeds the default lease outright, the two values are
-    // configured independently in different packages, and materialization and
-    // publication add further unbounded time. Correctness rests on the runner
-    // probing the canonical key before it encodes, not on this inequality.
+    // configured independently in different packages, materialization and
+    // publication add further unbounded time, and an attempt that makes the
+    // Clean Master runs two encodes. Correctness rests on the runner probing
+    // the canonical key before it encodes, and reusing a stored master instead
+    // of encoding it again (ADR-0078), not on this inequality.
     expect(MAX_COMPOSE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_COMPOSITION_LEASE_MS);
   });
 

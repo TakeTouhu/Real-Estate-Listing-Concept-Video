@@ -702,3 +702,11 @@ the same commit as the `GenerationDeliverableComposition` row's move to
 `OUTPUT_VERIFIED`, when it is given a master's receipt, with the master's own
 proof instant as `verifiedAt`; under profile v1 it is given none, so no row is
 written yet.
+
+## DS-5b-2b-1 — composition makes the master first
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0078). The work row's `profileKey` is now `vtavision-compose:v2`, a value,
+not a schema change. The runner gives Transaction J2 a master's receipt on every
+finalize, so every verified composition gets its
+`GenerationDeliverableCleanMaster` row; nothing in production runs it yet.
