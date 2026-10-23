@@ -59,8 +59,9 @@
  *
  * ## The Clean Master, then the disclosure (ADR-0075)
  *
- * `composeCleanMaster` runs the same graph as `compose` at the master's higher
- * quality, `CLEAN_MASTER_CRF`, and lays nothing over it. `applyDisclosure` then
+ * `composeCleanMaster` runs that graph at the master's higher quality,
+ * `CLEAN_MASTER_CRF`, and lays nothing over it. There is no encode of the scenes
+ * straight into the customer's video (ADR-0079). `applyDisclosure` then
  * encodes the customer's video from a Clean Master with the profile's own
  * settings, laying the committed disclosure image for the frame size over it at
  * the origin:
@@ -189,25 +190,15 @@ function clipFilter(
 }
 
 /**
- * The exact semantic argument vector.
+ * The Clean Master's exact argument vector: the composition graph, encoded at
+ * {@link CLEAN_MASTER_CRF} rather than the profile's own quality, which is the
+ * customer's video's.
  *
  * Exported so the unit suite can pin it without running a subprocess. The only
  * variable elements are application-created local paths and numbers from the
  * frozen profile.
  */
-export function ffmpegComposeArgsFor(input: ComposeDeliverableInput): readonly string[] {
-  return composeArgsAt(input, input.profile.crf);
-}
-
-/**
- * The Clean Master's argument vector: the composition graph, encoded at
- * {@link CLEAN_MASTER_CRF} instead of the profile's own quality.
- */
 export function ffmpegCleanMasterArgsFor(input: ComposeDeliverableInput): readonly string[] {
-  return composeArgsAt(input, CLEAN_MASTER_CRF);
-}
-
-function composeArgsAt(input: ComposeDeliverableInput, crf: number): readonly string[] {
   if (input.clips.length === 0) {
     throw new AppError("INTERNAL_ERROR", "A composition requires at least one clip");
   }
@@ -242,7 +233,7 @@ function composeArgsAt(input: ComposeDeliverableInput, crf: number): readonly st
     "-preset",
     profile.encoderPreset,
     "-crf",
-    String(crf),
+    String(CLEAN_MASTER_CRF),
     "-pix_fmt",
     profile.pixelFormat,
     "-movflags",
@@ -429,11 +420,6 @@ export function createFfmpegDeliverableComposer(
   }
 
   return {
-    async compose(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
-      assertImplementedProfile(input.profile);
-      return run(ffmpegComposeArgsFor(input));
-    },
-
     async composeCleanMaster(input: ComposeDeliverableInput): Promise<ComposeDeliverableOutcome> {
       assertImplementedProfile(input.profile);
       return run(ffmpegCleanMasterArgsFor(input));

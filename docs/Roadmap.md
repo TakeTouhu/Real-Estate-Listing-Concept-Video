@@ -170,8 +170,14 @@ from the scenes and stores it first-wins, or reuses the one already stored,
 checks the stored copy's size and frame rate, makes the customer's video from
 it with the version's disclosure, and finalizes with both receipts. A master
 over its ceiling or not usable blocks with its own code, and a stored video
-found without its master is a defect. Nothing in production runs it; DS-5b-2b-2
-makes the master's receipt required and removes the one-pass encode.
+found without its master is a defect. Nothing in production runs it.
+
+**DS-5b-2b-2 — every video is made from a recorded master** (ADR-0079, no
+migration): Transaction J2 refuses a finalize that names no Clean Master and
+records the master on every commit; the composer's one-pass encode of the
+scenes into a video is removed; and a media suite runs the runner end to end on
+real FFmpeg, the real storage adapters and an in-memory object store, fresh,
+from another attempt's master, after a failed store and after a lost lease.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

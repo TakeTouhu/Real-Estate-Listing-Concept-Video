@@ -359,10 +359,16 @@ export type DeliverableCompositionExecutionDefectCode =
   /** A finalize re-presented a different receipt for an already-verified object. */
   | "OUTPUT_RECEIPT_CONFLICT"
   /**
-   * A finalize re-presented a different Clean Master receipt, or none, for a
-   * deliverable whose master is already recorded (or the reverse).
+   * A finalize re-presented a different Clean Master receipt for a deliverable
+   * whose master is already recorded, or one for a verified deliverable whose
+   * master was never recorded.
    */
   | "CLEAN_MASTER_RECEIPT_CONFLICT"
+  /**
+   * A finalize named no Clean Master receipt. The type requires one, so only an
+   * untyped caller can reach this (ADR-0079).
+   */
+  | "CLEAN_MASTER_RECEIPT_MISSING"
   /**
    * The customer's video is stored at its key and the Clean Master it is made
    * from is not at its own. Composition stores the master before it makes the
@@ -385,6 +391,8 @@ const DEFECT_MESSAGES: Record<DeliverableCompositionExecutionDefectCode, string>
     "A composed deliverable already carries a different durable output receipt",
   CLEAN_MASTER_RECEIPT_CONFLICT:
     "A composed deliverable already carries a different durable Clean Master receipt",
+  CLEAN_MASTER_RECEIPT_MISSING:
+    "A composed deliverable cannot be recorded without the Clean Master it was made from",
   CLEAN_MASTER_MISSING:
     "A composed deliverable's video is stored without the Clean Master it was made from",
   COMPOSITION_BLOCK_CONFLICT:

@@ -710,3 +710,11 @@ Not applicable: no entity, relationship or column changes, and no migration
 not a schema change. The runner gives Transaction J2 a master's receipt on every
 finalize, so every verified composition gets its
 `GenerationDeliverableCleanMaster` row; nothing in production runs it yet.
+
+## DS-5b-2b-2 — every video is made from a recorded master
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0079). Transaction J2 now refuses a finalize without a master's receipt,
+so every `GenerationDeliverableComposition` row it moves to `OUTPUT_VERIFIED`
+has its `GenerationDeliverableCleanMaster` row; the schema does not express
+that, and J2 is its only writer.

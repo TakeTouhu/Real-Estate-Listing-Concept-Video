@@ -10,7 +10,7 @@
  * ```text
  * J1  claim     COMPOSITION_PENDING -> COMPOSING, work created RUNNING
  *     (retry)   PENDING|expired RUNNING -> RUNNING, job untouched
- * --- external: materialize, compose, publish ---
+ * --- external: the Clean Master, the customer's video ---
  * J2  finalize  work -> OUTPUT_VERIFIED, the Clean Master's record,
  *               COMPOSING -> DELIVERABLE_VALIDATING
  *     defer     work -> PENDING with a closed retry code, job untouched
@@ -54,6 +54,7 @@ import {
   type BlockCompositionOutcome,
   type ClaimCompositionWorkInput,
   type ClaimCompositionWorkOutcome,
+  type CleanMasterReceipt,
   type CompositionProfile,
   type CompositionSceneInput,
   type DeferCompositionInput,
@@ -402,6 +403,14 @@ export function createDeliverableCompositionExecutionRepository(
     },
 
     async finalizeComposition(input: FinalizeCompositionInput) {
+      // Refused before anything is read or written. The type requires the
+      // master's receipt, so only an untyped caller can omit it, and a video
+      // recorded without the master it was made from is a deliverable no later
+      // disclosure change could be recomposed for (ADR-0079).
+      const cleanMaster: CleanMasterReceipt | null | undefined = input.cleanMaster;
+      if (cleanMaster === null || cleanMaster === undefined) {
+        throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_RECEIPT_MISSING");
+      }
       return prisma.$transaction(async (tx): Promise<FinalizeCompositionOutcome> => {
         const ctx = await lockClaimChain(
           tx,
@@ -436,21 +445,19 @@ export function createDeliverableCompositionExecutionRepository(
           if (!same) {
             throw new DeliverableCompositionExecutionDefect("OUTPUT_RECEIPT_CONFLICT");
           }
-          // The master's record is compared the same way, and its absence is a
-          // receipt too: the first commit wrote one exactly when it was given
-          // one, so a replay that disagrees about whether there is a master is
-          // as much a conflict as one that disagrees about its bytes.
+          // The master's record is compared the same way. Every first commit
+          // writes one, so a verified deliverable without one was never
+          // finalized by this build, and a replay naming a master for it is as
+          // much a conflict as one naming other bytes.
           const master = await tx.generationDeliverableCleanMaster.findUnique({
             where: { deliverableVersionId: input.claim.deliverableVersionId },
             select: { storageKey: true, sha256: true, sizeBytes: true },
           });
           const sameMaster =
-            input.cleanMaster === null
-              ? master === null
-              : master !== null &&
-                master.storageKey === expectedMasterKey &&
-                master.sha256 === input.cleanMaster.sha256 &&
-                master.sizeBytes === BigInt(input.cleanMaster.sizeBytes);
+            master !== null &&
+            master.storageKey === expectedMasterKey &&
+            master.sha256 === input.cleanMaster.sha256 &&
+            master.sizeBytes === BigInt(input.cleanMaster.sizeBytes);
           if (!sameMaster) {
             throw new DeliverableCompositionExecutionDefect("CLEAN_MASTER_RECEIPT_CONFLICT");
           }
@@ -497,18 +504,16 @@ export function createDeliverableCompositionExecutionRepository(
         // the key rebuilt here rather than taken from the claim, as the video's
         // is, with the instant its bytes were proven. A second finalize waits
         // on the job's lock and then finds the job moved on, so it writes none.
-        if (input.cleanMaster !== null) {
-          await tx.generationDeliverableCleanMaster.create({
-            data: {
-              id: randomId(CLEAN_MASTER_ID_PREFIX),
-              deliverableVersionId: ctx.versionId,
-              storageKey: expectedMasterKey,
-              sha256: input.cleanMaster.sha256,
-              sizeBytes: BigInt(input.cleanMaster.sizeBytes),
-              verifiedAt: new Date(input.cleanMaster.verifiedAt),
-            },
-          });
-        }
+        await tx.generationDeliverableCleanMaster.create({
+          data: {
+            id: randomId(CLEAN_MASTER_ID_PREFIX),
+            deliverableVersionId: ctx.versionId,
+            storageKey: expectedMasterKey,
+            sha256: input.cleanMaster.sha256,
+            sizeBytes: BigInt(input.cleanMaster.sizeBytes),
+            verifiedAt: new Date(input.cleanMaster.verifiedAt),
+          },
+        });
 
         const event = (eventType: string) => ({
           ...input.context,

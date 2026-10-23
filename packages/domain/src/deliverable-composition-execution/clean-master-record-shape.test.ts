@@ -105,7 +105,6 @@ describe("DS-5b-2a shape", () => {
     const create = at(finalize, "tx.generationDeliverableCleanMaster.create(");
     expect(create).toBeGreaterThan(at(finalize, "if (verified.count !== 1)"));
     expect(create).toBeLessThan(at(finalize, "tx.generationJob.updateMany("));
-    expect(create).toBeGreaterThan(at(finalize, "if (input.cleanMaster !== null) {"));
     // At the key J2 rebuilds, as the video's is, never one taken from the claim.
     expect(finalize).toContain("storageKey: expectedMasterKey,");
     expect(finalize.includes("cleanMasterStorageKey")).toBe(false);

@@ -1517,3 +1517,16 @@ is 0.
 
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the composition runner. No new environment variable.
+
+## DS-5b-2b-2 — every video is made from a recorded master
+
+**No migration** (ADR-0079). Transaction J2 now refuses a finalize naming no
+Clean Master and records the master on every first commit; no schema, enum,
+constraint or row changes.
+
+**Rolling back.** To DS-5b-2b-1's build: safe. That build's runner passes a
+master on every finalize and its J2 records it, so it writes what this build
+writes; it only also accepts a finalize with none, which nothing makes.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the composition runner or calls J2. No new environment variable.

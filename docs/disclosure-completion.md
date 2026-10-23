@@ -8,7 +8,8 @@ ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0075-clean-master-encode-and-disclosure-overlay.md` (DS-5a),
 `docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1),
 `docs/decisions/0077-composition-records-for-the-clean-master.md` (DS-5b-2a),
-`docs/decisions/0078-composition-makes-the-master-first.md` (DS-5b-2b-1)
+`docs/decisions/0078-composition-makes-the-master-first.md` (DS-5b-2b-1),
+`docs/decisions/0079-every-video-is-made-from-a-recorded-master.md` (DS-5b-2b-2)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 

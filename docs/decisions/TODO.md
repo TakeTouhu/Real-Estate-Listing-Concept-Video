@@ -1133,7 +1133,9 @@ them is **built**. Each item below records the settled decision and what remains
       31) gave the composition claim the version's mode and the master's key,
       and Transaction J2 the master's record. DS-5b-2b-1 (ADR-0078) switched
       the runner to profile v2: it makes the master first and the customer's
-      video from the stored master with the version's disclosure. Nothing in
+      video from the stored master with the version's disclosure. DS-5b-2b-2
+      (ADR-0079) had J2 refuse a finalize that names no master, removed the
+      one-pass encode, and ran the runner end to end on real FFmpeg. Nothing in
       production runs it, and publication does not yet require either (DS-6).*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
@@ -1278,9 +1280,8 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0078) has the runner make a master and hand its receipt to every
       finalize; a stored video found without its master is a defect that
       holds that deliverable until an operator acts (ADR-0052 Decision 20's
-      recovery, unbuilt). Still unbuilt: J2 refusing a finalize that names no
-      master (DS-5b-2b-2), publication
-      requiring it (DS-6), a recomposed version naming another version's
+      recovery, unbuilt). DS-5b-2b-2 (ADR-0079) has J2 refuse a finalize that
+      names no master. Still unbuilt: publication requiring it (DS-6), a recomposed version naming another version's
       master (which then decides what its own Transaction J2 records, ADR-0077
       Decision 3), and its deletion with its content: when physical deletion of
       videos ships, delete the master's object, then its row, then the version
