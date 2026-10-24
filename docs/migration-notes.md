@@ -1605,8 +1605,8 @@ fake, or a row altered by hand, can have written one. Production holds none:
 nothing has ever composed there.
 
 **Rolling back.** To DS-6a's build: safe. That build publishes everything this
-build publishes, and also off-plan videos, which this build's composer does not
-make. An `INVALID_MEDIA` verdict this build wrote for an off-plan video stays
+build publishes, and also off-plan videos, which the media suites show this
+build's composer does not make. An `INVALID_MEDIA` verdict this build wrote for an off-plan video stays
 terminal under that build too.
 
 **What changes at deploy.** Nothing anyone can notice: nothing in production

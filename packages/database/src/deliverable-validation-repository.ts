@@ -70,6 +70,7 @@ import {
   type FinalizeDeliverableValidOutcome,
   type FinalizeDeliverableValidationInvalidInput,
   type FinalizeDeliverableValidationMismatchInput,
+  type FinalizeDeliverableValidationOffPlanInput,
   type FinalizeDeliverableValidationValidInput,
   type FinalizeDeliverableVerdictOutcome,
   type ManagedOutputMediaFacts,
@@ -456,6 +457,17 @@ export function createDeliverableValidationRepository(
       });
     },
 
+    async finalizeOffPlan(input: FinalizeDeliverableValidationOffPlanInput) {
+      // The reason is this transaction's, from the facts and its own locked
+      // read of the plan, never the caller's: an INVALID_MEDIA verdict is never
+      // reopened, so a wrong plan in a caller must not condemn a correct video.
+      return finalizeTerminalVerdict(prisma, input.claim, "INVALID_MEDIA", input.validatedAt, (ctx) => {
+        const reason = deliverableOffPlanReason(input.facts, plannedMediaOf(ctx));
+        if (reason === null) throw new DeliverableValidationDefect("OFF_PLAN_VERDICT_ON_PLAN");
+        return { invalidReason: reason };
+      });
+    },
+
     async finalizeIntegrityMismatch(input: FinalizeDeliverableValidationMismatchInput) {
       return finalizeTerminalVerdict(
         prisma,
@@ -785,6 +797,11 @@ export function createDeliverableValidationRepository(
  * Transaction G before anything reaches a customer; this path has no second
  * gate, which is why the check cannot be weaker here than there.
  */
+/** What a terminal non-`VALID` verdict records beyond its status. */
+interface TerminalVerdict {
+  readonly invalidReason?: ManagedOutputMediaInvalidReason;
+}
+
 async function finalizeTerminalVerdict(
   prisma: PrismaClient,
   claim: {
@@ -797,7 +814,8 @@ async function finalizeTerminalVerdict(
   },
   status: "INVALID_MEDIA" | "INTEGRITY_MISMATCH",
   validatedAt: number,
-  verdict: { readonly invalidReason?: ManagedOutputMediaInvalidReason },
+  /** The verdict, or how to judge it from the locked chain (ADR-0081). */
+  judged: TerminalVerdict | ((ctx: ValidationChainRow) => TerminalVerdict),
 ): Promise<FinalizeDeliverableVerdictOutcome> {
   return prisma.$transaction(async (tx): Promise<FinalizeDeliverableVerdictOutcome> => {
     const ctx = await lockValidationChain(tx, claim.organizationId, claim.deliverableVersionId);
@@ -809,7 +827,11 @@ async function finalizeTerminalVerdict(
       // correction to apply.
       throw new DeliverableValidationDefect("VALIDATION_VERDICT_CONFLICT");
     }
+    // Judged lazily, after a lost lease or a VALID row is answered: those are
+    // never a defect of the judgement.
+    const verdictOf = (): TerminalVerdict => (typeof judged === "function" ? judged(ctx) : judged);
     if (ctx.validationStatus === "INVALID_MEDIA" || ctx.validationStatus === "INTEGRITY_MISMATCH") {
+      const verdict = verdictOf();
       if (
         ctx.validationStatus !== status ||
         ctx.invalidReason !== (verdict.invalidReason ?? null)
@@ -826,6 +848,7 @@ async function finalizeTerminalVerdict(
     // whose row was reclaimed loses as an ordinary `LEASE_LOST`, and only a
     // caller that genuinely still holds the row can raise a defect here.
     assertBindingsAgree(ctx, claim.organizationId, claim.expectedReceipt);
+    const verdict = verdictOf();
 
     const written = await tx.generationDeliverableValidation.updateMany({
       where: {

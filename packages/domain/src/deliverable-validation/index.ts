@@ -47,6 +47,7 @@ export type {
   FinalizeDeliverableValidOutcome,
   FinalizeDeliverableValidationInvalidInput,
   FinalizeDeliverableValidationMismatchInput,
+  FinalizeDeliverableValidationOffPlanInput,
   FinalizeDeliverableValidationValidInput,
   FinalizeDeliverableVerdictOutcome,
   PublishValidatedDeliverableInput,

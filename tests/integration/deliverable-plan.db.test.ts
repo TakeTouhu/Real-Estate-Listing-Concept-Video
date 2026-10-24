@@ -99,7 +99,11 @@ async function state(composed: ComposedDeliverable) {
 /** A VALID row's stored facts altered by hand, and the plan they now miss. */
 interface FactAlteration {
   readonly label: string;
-  readonly data: { readonly videoWidth?: bigint; readonly durationMs?: bigint };
+  readonly data: {
+    readonly videoWidth?: bigint;
+    readonly videoHeight?: bigint;
+    readonly durationMs?: bigint;
+  };
 }
 
 const FACT_ALTERATIONS: readonly FactAlteration[] = [
@@ -184,6 +188,73 @@ RUN("ADR-0081 — a deliverable must measure its planned size and length", () =>
     await expect(
       finalizeValid(forged, { ...ON_PLAN, videoWidth: 1280, videoHeight: 720 }),
     ).rejects.toThrow(expect.objectContaining({ code: "VALID_FACTS_OFF_PLAN" }));
+  });
+
+  describe("an off-plan verdict is the rows' to judge, not the caller's", () => {
+    const FORGED_PLAN = { widthPx: 1280, heightPx: 720, durationMs: 5_000, durationToleranceMs: 34 };
+
+    function finalizeOffPlan(validationClaim: DeliverableValidationClaim, facts: ManagedOutputMediaFacts) {
+      return repository.finalizeOffPlan({ claim: validationClaim, facts, validatedAt: NOW + 1_000 });
+    }
+
+    it("derives the reason from its own read of the plan", async () => {
+      const composed = await seedComposedDeliverable(prisma);
+      const held = await claim(composed);
+      // By the forged plan this is the wrong size; by the rows, the wrong length.
+      expect(
+        (await finalizeOffPlan({ ...held, plannedMedia: FORGED_PLAN }, { ...ON_PLAN, durationMs: 5_000 }))
+          .kind,
+      ).toBe("FINALIZED");
+      expect((await validationOf(prisma, composed.deliverableVersionId))?.invalidReason).toBe(
+        "DURATION_INVALID",
+      );
+    });
+
+    it("refuses to condemn a video that is on its plan, writing nothing", async () => {
+      const composed = await seedComposedDeliverable(prisma);
+      const held = await claim(composed);
+      const before = await state(composed);
+
+      await expect(finalizeOffPlan({ ...held, plannedMedia: FORGED_PLAN }, ON_PLAN)).rejects.toThrow(
+        expect.objectContaining({ code: "OFF_PLAN_VERDICT_ON_PLAN" }),
+      );
+      expect(await state(composed)).toEqual(before);
+      // The lease is still held, and the video's real verdict is written.
+      expect((await finalizeValid(held, ON_PLAN)).kind).toBe("FINALIZED");
+    });
+
+    it("answers a replay of the same verdict and refuses a different one", async () => {
+      const composed = await seedComposedDeliverable(prisma);
+      const held = await claim(composed);
+      const wide = { ...ON_PLAN, videoWidth: 1280, videoHeight: 720 };
+      expect((await finalizeOffPlan(held, wide)).kind).toBe("FINALIZED");
+      const before = await state(composed);
+
+      expect((await finalizeOffPlan(held, wide)).kind).toBe("ALREADY_FINALIZED");
+      await expect(finalizeOffPlan(held, { ...ON_PLAN, durationMs: 12_000 })).rejects.toThrow(
+        expect.objectContaining({ code: "VALIDATION_VERDICT_CONFLICT" }),
+      );
+      await expect(finalizeOffPlan(held, ON_PLAN)).rejects.toThrow(
+        expect.objectContaining({ code: "OFF_PLAN_VERDICT_ON_PLAN" }),
+      );
+      expect(await state(composed)).toEqual(before);
+    });
+
+    it("answers a lost lease as LEASE_LOST, judging nothing", async () => {
+      const composed = await seedComposedDeliverable(prisma);
+      const lost = await claim(composed);
+      // Reclaimed once the first lease has expired.
+      const reclaimed = await repository.claimDeliverableValidation({
+        organizationId: composed.organizationId,
+        deliverableVersionId: composed.deliverableVersionId,
+        now: NOW + 16 * 60_000,
+        leaseToken: "vlease_plan_reclaim",
+        leaseExpiresAt: NOW + 31 * 60_000,
+      });
+      expect(reclaimed.kind).toBe("CLAIMED");
+
+      expect((await finalizeOffPlan(lost, ON_PLAN)).kind).toBe("LEASE_LOST");
+    });
   });
 
   it("records an off-plan video as INVALID_MEDIA through the runner, holding the job and its Unit", async () => {
@@ -322,6 +393,47 @@ RUN("ADR-0081 — a deliverable must measure its planned size and length", () =>
         );
       }
     }
+  });
+
+  it("answers a verdict that is not the one named as NOT_PUBLISHABLE, whatever its facts", async () => {
+    const composed = await seedComposedDeliverable(prisma);
+    const publication = await validated(composed);
+    await alterFacts(composed, { videoWidth: 1280n });
+
+    expect(
+      (await publish({ ...publication, validationVersion: publication.validationVersion + 1 })).kind,
+    ).toBe("NOT_PUBLISHABLE");
+  });
+
+  it("answers a pointer that would move back as NOT_PUBLISHABLE, whatever its facts", async () => {
+    const first = await seedComposedDeliverable(prisma);
+    const older = await validated(first);
+    expect((await publish(older)).kind).toBe("PUBLISHED_AND_CONSUMED");
+    const second = await seedRecomposedDeliverable(prisma, first);
+    expect((await publish(await validated(second))).kind).toBe("PUBLISHED_AS_REPLACEMENT");
+    // The job awaiting a publication again, and the customer's video newer than
+    // the one this names: only the pointer's direction stands between them.
+    const job = await jobOf(prisma, first.jobId);
+    await prisma.generationJob.update({
+      where: { id: first.jobId },
+      data: { state: "DELIVERABLE_VALIDATING", stateVersion: job.stateVersion + 1 },
+    });
+    await alterFacts(first, { durationMs: 12_000n });
+
+    expect((await publish(older)).kind).toBe("NOT_PUBLISHABLE");
+  });
+
+  it("answers a version the job no longer awaits as NOT_PUBLISHABLE, whatever its facts", async () => {
+    const composed = await seedComposedDeliverable(prisma);
+    const publication = await validated(composed);
+    await alterFacts(composed, { videoWidth: 1280n });
+    const job = await jobOf(prisma, composed.jobId);
+    await prisma.generationJob.update({
+      where: { id: composed.jobId },
+      data: { state: "FAILED_TERMINAL", stateVersion: job.stateVersion + 1 },
+    });
+
+    expect((await publish(publication)).kind).toBe("NOT_PUBLISHABLE");
   });
 
   it("does not judge a replay: the publication it names already happened", async () => {

@@ -59,8 +59,15 @@ container and stream counts stay the media policy's.
 **Why one frame.** The container's duration is rounded to the millisecond on
 the way in (`Math.round(format.duration × 1000)`), and a frame is the smallest
 step the composer takes. On real FFmpeg the composer's output measures exactly
-the planned length (the media suite asserts it). A missing or extra scene is at
-least a second, far outside the tolerance.
+the planned length (the media suites assert it, for every composable target). A
+missing or extra scene is at least a second, far outside the tolerance.
+
+One frame of drift is accepted deliberately. It changes nothing a customer
+sees, while a tighter bound would refuse a correct video on any FFmpeg build
+whose container duration differs from the frames by a frame, and every refusal
+holds a reservation until terminal settlement exists (Decision 4). The FFmpeg
+the worker image ships must pass the media suites, this assertion included,
+before it composes anything (`docs/decisions/TODO.md`).
 
 **Why these two reasons.** Both already exist in the closed media vocabulary
 and in the database's enum, and both say what is wrong with the video. A new
@@ -71,16 +78,23 @@ immutable bytes against the composition's frozen columns.
 
 ## Decision 3 — A verdict, not a defect
 
-The composer can produce an off-plan video, so this is a verdict about the
-bytes, unlike ADR-0080's refusals:
+Only measuring the bytes can show a composer mistake, so a wrong size or length
+is a verdict about them, unlike ADR-0080's refusals:
 
 1. **The claim carries the plan.** `claimDeliverableValidation` derives it
    from the composition and the job under the chain's locks and returns it as
    `claim.plannedMedia`.
-2. **The runner judges.** When the validator answers `VALID`, the runner
-   compares the facts with the claim's plan. An off-plan video is finalized
-   `INVALID_MEDIA` with the reason, and neither `finalizeValid` nor Transaction
-   G is called. Within the plan, nothing changes.
+2. **The runner judges, the repository decides.** When the validator answers
+   `VALID`, the runner compares the facts with the claim's plan. For an
+   off-plan video it calls `finalizeOffPlan` with the measured facts, and
+   neither `finalizeValid` nor Transaction G. `finalizeOffPlan` derives the plan
+   again from its own locked read and the reason from it, never taking the
+   caller's word: an `INVALID_MEDIA` verdict is never reopened, so a caller
+   with a wrong plan must not condemn a correct video. Facts on that plan are
+   refused with the defect `OFF_PLAN_VERDICT_ON_PLAN`, writing nothing; a lost
+   lease is answered `LEASE_LOST` before anything is judged; a replay of the
+   same verdict is answered `ALREADY_FINALIZED`, and of another one refused as
+   `VALIDATION_VERDICT_CONFLICT`. Within the plan, nothing changes.
 3. **`finalizeValid` refuses an off-plan verdict.** It derives the plan again
    from its own locked read, not from the claim's copy, and throws the defect
    `VALID_FACTS_OFF_PLAN` for facts outside it, writing nothing. The runner
@@ -104,7 +118,9 @@ bytes, unlike ADR-0080's refusals:
 
 It is an ordinary terminal `INVALID_MEDIA` verdict (ADR-0051): terminal, never
 re-validated, no event, no pointer move, no Unit consumed. The customer keeps
-any video they already hold.
+any video they already hold. Like every `INVALID_MEDIA` row it keeps the reason
+and not the measurements, which the table's shape constraint requires to be
+empty: keeping them would need a migration.
 
 **The hold is not released yet.** The job stays `DELIVERABLE_VALIDATING` and an
 initial generation's reservation stays `RESERVED`. ADR-0052 Decision 19 requires
@@ -117,9 +133,10 @@ in kind. It must close before validation is activated.
 ## Decision 5 — Dormant, no migration
 
 Nothing in production constructs the validation runner or calls Transaction G.
-No schema, enum or row changes: the reasons exist and the defect is a code.
+No schema, enum or row changes: the reasons exist and the defects are codes.
 Rolling back to DS-6a's build is safe: it publishes everything this build
-publishes, and also off-plan videos, which this build's composer does not make.
+publishes, and also off-plan videos, which the media suites show this build's
+composer does not make.
 
 ---
 

@@ -42,7 +42,8 @@
  * A `VALID` answer from the validator says the bytes are a usable video. It is
  * then compared with the claim's plan, the composition's frozen frame size and
  * the job's admitted length, and a video of another size or length is
- * finalized `INVALID_MEDIA` with that reason rather than `VALID` (ADR-0081).
+ * finalized `INVALID_MEDIA` rather than `VALID`, with the reason the repository
+ * derives from its own read of the plan (ADR-0081).
  *
  * ## One bad candidate never poisons the batch
  *
@@ -288,9 +289,11 @@ export class DeliverableValidationRunner {
         // length is the composer's mistake, and a verdict, not a retry.
         const offPlan = deliverableOffPlanReason(outcome.facts, claim.plannedMedia);
         if (offPlan !== null) {
-          const refused = await this.#repository.finalizeInvalidMedia({
+          // The facts, not the reason: the repository derives the reason from
+          // its own locked read of the plan before it condemns anything.
+          const refused = await this.#repository.finalizeOffPlan({
             claim,
-            reason: offPlan,
+            facts: outcome.facts,
             validatedAt,
           });
           return refused.kind === "LEASE_LOST" ? { kind: "LOST" } : { kind: "INVALID_MEDIA" };

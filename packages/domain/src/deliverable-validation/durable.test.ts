@@ -189,6 +189,7 @@ describe("defects say what is wrong and disclose nothing", () => {
     "DISCLOSURE_NOT_DRAWN",
     "CLEAN_MASTER_NOT_RECORDED",
     "VALID_FACTS_OFF_PLAN",
+    "OFF_PLAN_VERDICT_ON_PLAN",
     "VALIDATOR_RESULT_MALFORMED",
     "VALIDATOR_FAILED",
     "PERSISTED_RECORD_MALFORMED",
@@ -225,9 +226,12 @@ describe("defects say what is wrong and disclose nothing", () => {
     );
   });
 
-  it("says what an off-plan valid verdict is (ADR-0081)", () => {
+  it("says what an off-plan refusal is (ADR-0081)", () => {
     expect(new DeliverableValidationDefect("VALID_FACTS_OFF_PLAN").message).toBe(
       "A deliverable's valid verdict must measure the planned frame size and length",
+    );
+    expect(new DeliverableValidationDefect("OFF_PLAN_VERDICT_ON_PLAN").message).toBe(
+      "A deliverable cannot be refused as off plan when it measures the planned frame size and length",
     );
   });
 });

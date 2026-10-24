@@ -1160,7 +1160,11 @@ them is **built**. Each item below records the settled decision and what remains
       same image must carry `assets/disclosure/`'s six images and pass their
       directory, as an absolute path, as the composer's
       `disclosureLayerDirectory` (ADR-0075 Decision 3); without them the
-      composer refuses to make a video.
+      composer refuses to make a video. *Since DS-6b (ADR-0081) this run
+      must include the runner suite's on-plan assertion: a build whose
+      container duration differs from the frames by more than one frame
+      would have every video refused as `DURATION_INVALID`, each holding its
+      reservation.*
 - [ ] **Re-measure the Clean Master's quality on the provider's real output.**
       `CLEAN_MASTER_CRF` 16 (ADR-0075 Decision 1) was chosen on three synthetic
       clips, the hardest an 8 Mbps encode of grainy footage: a loss of 0.25 dB
@@ -1591,7 +1595,7 @@ them is **built**. Each item below records the settled decision and what remains
       generation's reservation stays `RESERVED`, as for Transaction G's other
       defects, until this or operator recovery exists. Only development data
       or a row altered by hand can be in that state today. Since DS-6b
-      (ADR-0081 Decision 4) the composer's own mistakes reach it too: a video
+      (ADR-0081 Decision 4) a composer mistake would reach it too: a video
       that is not its planned size or length is an `INVALID_MEDIA` verdict,
       whose reservation stays `RESERVED` until this is built.
 - [ ] **Build operator recovery tooling.** ADR-0052 Decision 20 plus ADR-0054

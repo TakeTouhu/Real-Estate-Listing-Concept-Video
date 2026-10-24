@@ -116,6 +116,10 @@ function fakeRepository(options: FakeOptions) {
       calls.push("finalizeInvalidMedia");
       return options.finalizeVerdict ?? { kind: "FINALIZED" };
     },
+    async finalizeOffPlan() {
+      calls.push("finalizeOffPlan");
+      return options.finalizeVerdict ?? { kind: "FINALIZED" };
+    },
     async finalizeIntegrityMismatch() {
       calls.push("finalizeIntegrityMismatch");
       return options.finalizeVerdict ?? { kind: "FINALIZED" };
@@ -295,18 +299,19 @@ describe("what each validator answer becomes", () => {
 });
 
 describe("a usable video that is not the planned one (ADR-0081)", () => {
-  /** The runner, with the reason its INVALID_MEDIA verdict carried. */
+  /** The runner, with the facts its off-plan verdict was handed. */
   function offPlanRunner(facts: ManagedOutputMediaFacts, finalizeVerdict?: FinalizeDeliverableVerdictOutcome) {
     const { repository, calls } = fakeRepository(finalizeVerdict === undefined ? {} : { finalizeVerdict });
-    const seen: { reason?: unknown } = {};
+    const seen: { facts?: unknown; claim?: unknown } = {};
     const runner = new DeliverableValidationRunner(
       {},
       {
         repository: {
           ...repository,
-          async finalizeInvalidMedia(input) {
-            seen.reason = input.reason;
-            return repository.finalizeInvalidMedia(input);
+          async finalizeOffPlan(input) {
+            seen.facts = input.facts;
+            seen.claim = input.claim;
+            return repository.finalizeOffPlan(input);
           },
         },
         validator: {
@@ -331,8 +336,8 @@ describe("a usable video that is not the planned one (ADR-0081)", () => {
     ]) {
       const { runner, calls, seen } = offPlanRunner(facts);
       expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "INVALID_MEDIA" });
-      expect(seen.reason).toBe("VIDEO_DIMENSIONS_INVALID");
-      expect(calls).toEqual(["claim", "validate", "finalizeInvalidMedia"]);
+      expect(seen.facts).toEqual(facts);
+      expect(calls).toEqual(["claim", "validate", "finalizeOffPlan"]);
     }
   });
 
@@ -340,22 +345,26 @@ describe("a usable video that is not the planned one (ADR-0081)", () => {
     for (const durationMs of [10_035, 9_965, 11_000, 9_000, 1]) {
       const { runner, calls, seen } = offPlanRunner({ ...FACTS, durationMs });
       expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "INVALID_MEDIA" });
-      expect(seen.reason).toBe("DURATION_INVALID");
-      expect(calls).toEqual(["claim", "validate", "finalizeInvalidMedia"]);
+      expect(seen.facts).toMatchObject({ durationMs });
+      expect(calls).toEqual(["claim", "validate", "finalizeOffPlan"]);
     }
   });
 
-  it("judges the size first, so a video wrong in both is refused for its size", async () => {
-    const { runner, seen } = offPlanRunner({ ...FACTS, videoWidth: 1280, durationMs: 5_000 });
+  it("hands the repository the claim and the measured facts, never a reason", async () => {
+    const facts = { ...FACTS, videoWidth: 1280, durationMs: 5_000 };
+    const { runner, calls, seen } = offPlanRunner(facts);
     await runner.runOne("org_1", "gdv_1", CONTEXT);
-    expect(seen.reason).toBe("VIDEO_DIMENSIONS_INVALID");
+    // The reason is the repository's to derive from its own read of the plan:
+    // a permanent verdict is not taken on the runner's word.
+    expect(seen).toEqual({ facts, claim: CLAIM });
+    expect(calls).not.toContain("finalizeInvalidMedia");
   });
 
   it("publishes a video within one frame of the planned length", async () => {
     for (const durationMs of [10_034, 9_966, 10_000]) {
       const { runner, calls, seen } = offPlanRunner({ ...FACTS, durationMs });
       expect((await runner.runOne("org_1", "gdv_1", CONTEXT)).kind).toBe("PUBLISHED_AND_CONSUMED");
-      expect(seen.reason).toBeUndefined();
+      expect(seen.facts).toBeUndefined();
       expect(calls).toEqual(["claim", "validate", "finalizeValid", "publish"]);
     }
   });

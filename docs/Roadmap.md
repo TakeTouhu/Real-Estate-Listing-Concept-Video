@@ -194,7 +194,7 @@ its job's admitted length within one frame period, is recorded `INVALID_MEDIA`
 with `VIDEO_DIMENSIONS_INVALID` or `DURATION_INVALID` and is not published.
 `finalizeValid` and Transaction G refuse a `VALID` verdict off that plan as a
 defect, and discovery no longer offers one. The disclosure plan's six
-milestones are built; its terminal settlement of an unusable deliverable is
+milestones are built, for Mode A; the terminal settlement of an unusable deliverable is
 not (ADR-0052 Decision 19, `docs/decisions/TODO.md`).
 
 Completion criteria as met: a composed deliverable is proved technically valid,

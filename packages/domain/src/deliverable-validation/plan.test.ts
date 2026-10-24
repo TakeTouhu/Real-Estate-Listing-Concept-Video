@@ -51,7 +51,7 @@ describe("the plan is the composition's raster and the job's length", () => {
     expect(tolerance(1, 1)).toBe(1_000);
   });
 
-  it("gives every target this build composes a plan of its own raster", () => {
+  it("plans every target this build composes, refusing none", () => {
     expect(COMPOSABLE_TARGETS.length).toBeGreaterThan(0);
     for (const target of COMPOSABLE_TARGETS) {
       const resolved = resolveCompositionProfile(target);

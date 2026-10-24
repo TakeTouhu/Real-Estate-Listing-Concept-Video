@@ -66,15 +66,18 @@ export function plannedDeliverableMedia(input: {
   readonly frameRateDenominator: number;
   readonly requestedDurationSeconds: number;
 }): PlannedDeliverableMedia {
-  const durationMs = input.requestedDurationSeconds * 1000;
   if (
     !isPositiveSafeInteger(input.targetWidthPx) ||
     !isPositiveSafeInteger(input.targetHeightPx) ||
     !isPositiveSafeInteger(input.frameRateNumerator) ||
     !isPositiveSafeInteger(input.frameRateDenominator) ||
-    !isPositiveSafeInteger(input.requestedDurationSeconds) ||
-    !isPositiveSafeInteger(durationMs)
+    !isPositiveSafeInteger(input.requestedDurationSeconds)
   ) {
+    throw new DeliverableValidationDefect("PERSISTED_RECORD_MALFORMED");
+  }
+  // Multiplied only once it is known to be a number.
+  const durationMs = input.requestedDurationSeconds * 1000;
+  if (!isPositiveSafeInteger(durationMs)) {
     throw new DeliverableValidationDefect("PERSISTED_RECORD_MALFORMED");
   }
   const framePeriodMs = 1000 * input.frameRateDenominator;
