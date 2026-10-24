@@ -29,6 +29,8 @@ export type {
   DeliverableValidationStatus,
   DurableDeliverableValidationRecord,
 } from "./durable";
+export { deliverableOffPlanReason, plannedDeliverableMedia } from "./plan";
+export type { DeliverableOffPlanReason, PlannedDeliverableMedia } from "./plan";
 export { deliverableValidationReceipt } from "./ports";
 export type {
   ClaimDeliverableValidationOutcome,
@@ -45,6 +47,7 @@ export type {
   FinalizeDeliverableValidOutcome,
   FinalizeDeliverableValidationInvalidInput,
   FinalizeDeliverableValidationMismatchInput,
+  FinalizeDeliverableValidationOffPlanInput,
   FinalizeDeliverableValidationValidInput,
   FinalizeDeliverableVerdictOutcome,
   PublishValidatedDeliverableInput,

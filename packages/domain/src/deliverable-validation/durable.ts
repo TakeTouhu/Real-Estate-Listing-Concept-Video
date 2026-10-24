@@ -291,6 +291,16 @@ export type DeliverableValidationDefectCode =
   | "DISCLOSURE_NOT_DRAWN"
   /** The version has no Clean Master recorded at its canonical key (ADR-0080). */
   | "CLEAN_MASTER_NOT_RECORDED"
+  /**
+   * A `VALID` verdict names facts that are not the planned size and length: the
+   * runner refuses those as `INVALID_MEDIA` before any verdict (ADR-0081).
+   */
+  | "VALID_FACTS_OFF_PLAN"
+  /**
+   * An off-plan verdict names facts that are the planned size and length: the
+   * caller's plan disagrees with the rows (ADR-0081).
+   */
+  | "OFF_PLAN_VERDICT_ON_PLAN"
   /** `validate()` returned something the closed outcome parser rejects. */
   | "VALIDATOR_RESULT_MALFORMED"
   /** `validate()` threw. Not evidence about the media. */
@@ -318,6 +328,10 @@ const DEFECT_MESSAGES: Record<DeliverableValidationDefectCode, string> = {
   DISCLOSURE_NOT_DRAWN:
     "A deliverable cannot be published unless its composition drew the disclosure its mode requires",
   CLEAN_MASTER_NOT_RECORDED: "A deliverable cannot be published without its recorded Clean Master",
+  VALID_FACTS_OFF_PLAN:
+    "A deliverable's valid verdict must measure the planned frame size and length",
+  OFF_PLAN_VERDICT_ON_PLAN:
+    "A deliverable cannot be refused as off plan when it measures the planned frame size and length",
   VALIDATOR_RESULT_MALFORMED:
     "The deliverable media validator returned a result outside its contract",
   VALIDATOR_FAILED: "The deliverable media validator failed unexpectedly",

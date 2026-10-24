@@ -54,6 +54,7 @@ const CLAIM: DeliverableValidationClaim = {
   attemptCount: 1,
   outputStorageKey: KEY,
   expectedReceipt: RECEIPT,
+  plannedMedia: { widthPx: 1920, heightPx: 1080, durationMs: 10_000, durationToleranceMs: 34 },
 };
 
 const PUBLICATION: DeliverableValidationPublicationTarget = {
@@ -113,6 +114,10 @@ function fakeRepository(options: FakeOptions) {
     },
     async finalizeInvalidMedia() {
       calls.push("finalizeInvalidMedia");
+      return options.finalizeVerdict ?? { kind: "FINALIZED" };
+    },
+    async finalizeOffPlan() {
+      calls.push("finalizeOffPlan");
       return options.finalizeVerdict ?? { kind: "FINALIZED" };
     },
     async finalizeIntegrityMismatch() {
@@ -290,6 +295,110 @@ describe("what each validator answer becomes", () => {
     );
     expect((await runner.runOne("org_1", "gdv_1", CONTEXT)).kind).toBe("PUBLISHED_AND_CONSUMED");
     expect(calls).toEqual(["claim", "validate", "finalizeValid", "publish"]);
+  });
+});
+
+describe("a usable video that is not the planned one (ADR-0081)", () => {
+  /** The runner, with the facts its off-plan verdict was handed. */
+  function offPlanRunner(facts: ManagedOutputMediaFacts, finalizeVerdict?: FinalizeDeliverableVerdictOutcome) {
+    const { repository, calls } = fakeRepository(finalizeVerdict === undefined ? {} : { finalizeVerdict });
+    const seen: { facts?: unknown; claim?: unknown } = {};
+    const runner = new DeliverableValidationRunner(
+      {},
+      {
+        repository: {
+          ...repository,
+          async finalizeOffPlan(input) {
+            seen.facts = input.facts;
+            seen.claim = input.claim;
+            return repository.finalizeOffPlan(input);
+          },
+        },
+        validator: {
+          async validateDeliverable() {
+            calls.push("validate");
+            return { kind: "VALID", facts };
+          },
+        },
+        clock: () => 1_000,
+        leaseTokens: { next: () => "vlease_next" },
+      },
+    );
+    return { runner, calls, seen };
+  }
+
+  it("records another frame size as INVALID_MEDIA, and never a verdict or a publication", async () => {
+    for (const facts of [
+      { ...FACTS, videoWidth: 1280, videoHeight: 720 },
+      { ...FACTS, videoWidth: 1080, videoHeight: 1920 },
+      { ...FACTS, videoWidth: 1921 },
+      { ...FACTS, videoHeight: 1079 },
+    ]) {
+      const { runner, calls, seen } = offPlanRunner(facts);
+      expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "INVALID_MEDIA" });
+      expect(seen.facts).toEqual(facts);
+      expect(calls).toEqual(["claim", "validate", "finalizeOffPlan"]);
+    }
+  });
+
+  it("records another length as INVALID_MEDIA, beyond one frame either way", async () => {
+    for (const durationMs of [10_035, 9_965, 11_000, 9_000, 1]) {
+      const { runner, calls, seen } = offPlanRunner({ ...FACTS, durationMs });
+      expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "INVALID_MEDIA" });
+      expect(seen.facts).toMatchObject({ durationMs });
+      expect(calls).toEqual(["claim", "validate", "finalizeOffPlan"]);
+    }
+  });
+
+  it("hands the repository the claim and the measured facts, never a reason", async () => {
+    const facts = { ...FACTS, videoWidth: 1280, durationMs: 5_000 };
+    const { runner, calls, seen } = offPlanRunner(facts);
+    await runner.runOne("org_1", "gdv_1", CONTEXT);
+    // The reason is the repository's to derive from its own read of the plan:
+    // a permanent verdict is not taken on the runner's word.
+    expect(seen).toEqual({ facts, claim: CLAIM });
+    expect(calls).not.toContain("finalizeInvalidMedia");
+  });
+
+  it("publishes a video within one frame of the planned length", async () => {
+    for (const durationMs of [10_034, 9_966, 10_000]) {
+      const { runner, calls, seen } = offPlanRunner({ ...FACTS, durationMs });
+      expect((await runner.runOne("org_1", "gdv_1", CONTEXT)).kind).toBe("PUBLISHED_AND_CONSUMED");
+      expect(seen.facts).toBeUndefined();
+      expect(calls).toEqual(["claim", "validate", "finalizeValid", "publish"]);
+    }
+  });
+
+  it("judges against the claim's plan, not a fixed one", async () => {
+    const square: DeliverableValidationClaim = {
+      ...CLAIM,
+      plannedMedia: { widthPx: 1080, heightPx: 1080, durationMs: 30_000, durationToleranceMs: 40 },
+    };
+    const { repository, calls } = fakeRepository({ claim: { kind: "CLAIMED", claim: square } });
+    const runner = new DeliverableValidationRunner(
+      {},
+      {
+        repository,
+        validator: {
+          async validateDeliverable() {
+            calls.push("validate");
+            return { kind: "VALID", facts: { ...FACTS, videoWidth: 1080, durationMs: 30_040 } };
+          },
+        },
+        clock: () => 1_000,
+        leaseTokens: { next: () => "vlease_next" },
+      },
+    );
+    expect((await runner.runOne("org_1", "gdv_1", CONTEXT)).kind).toBe("PUBLISHED_AND_CONSUMED");
+    // The fixed 1920x1080, 10-second fixture is off this plan.
+    const off = runnerFor({ claim: { kind: "CLAIMED", claim: square } }, { kind: "VALID", facts: FACTS });
+    expect(await off.runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "INVALID_MEDIA" });
+  });
+
+  it("reports LOST when the refusal matched no row", async () => {
+    const { runner, calls } = offPlanRunner({ ...FACTS, durationMs: 12_000 }, { kind: "LEASE_LOST" });
+    expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind: "LOST" });
+    expect(calls).not.toContain("publish");
   });
 });
 

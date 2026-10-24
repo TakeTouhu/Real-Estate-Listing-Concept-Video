@@ -1086,6 +1086,11 @@ the work is tracked under "Render the AI-generated disclosure".*
 composition's frozen profile drew the version's mode. The verdict does not
 examine the frames for it, by design: the evidence is the profile.*
 
+*Update (DS-6b, ADR-0081): the verdict now requires the video to be its
+composition's frozen frame size, the size the disclosure image was made for,
+and its job's admitted length within one frame. Mode A is rendered and gated
+at every layer; nothing in production runs it.*
+
 **The placement rules are no longer open.** ADR-0052 Decision 8 fixes the exact
 text, the three modes and Mode A's geometry, so this is implementation work
 against a settled specification — not a decision still to be made. The earlier
@@ -1142,8 +1147,12 @@ them is **built**. Each item below records the settled decision and what remains
       one-pass encode, and ran the runner end to end on real FFmpeg. DS-6a
       (ADR-0080) has Transaction G publish a version only when its
       composition's frozen profile drew the version's mode and its master is
-      recorded. Nothing in production runs any of it. Still unbuilt: the
-      verdict requiring the planned size and length (DS-6b).*
+      recorded. DS-6b (ADR-0081) has the verdict require the composition's
+      frozen frame size and the job's admitted length within one frame, and
+      `finalizeValid`, Transaction G and discovery refuse a `VALID` verdict
+      off that plan. The plan's six milestones are built, for Mode A; Modes B
+      and C are not (see "Build Mode C gating and consent"). Nothing in
+      production runs any of it.*
 - [ ] **Choose the worker image's FFmpeg before composition is activated.**
       The media suites (ADR-0072) were measured on Ubuntu 24.04's FFmpeg 6.1.1
       in CI; no deployment carries FFmpeg yet. Whichever build the worker image
@@ -1151,7 +1160,11 @@ them is **built**. Each item below records the settled decision and what remains
       same image must carry `assets/disclosure/`'s six images and pass their
       directory, as an absolute path, as the composer's
       `disclosureLayerDirectory` (ADR-0075 Decision 3); without them the
-      composer refuses to make a video.
+      composer refuses to make a video. *Since DS-6b (ADR-0081) this run
+      must include the runner suite's on-plan assertion: a build whose
+      container duration differs from the frames by more than one frame
+      would have every video refused as `DURATION_INVALID`, each holding its
+      reservation.*
 - [ ] **Re-measure the Clean Master's quality on the provider's real output.**
       `CLEAN_MASTER_CRF` 16 (ADR-0075 Decision 1) was chosen on three synthetic
       clips, the hardest an 8 Mbps encode of grainy footage: a loss of 0.25 dB
@@ -1581,7 +1594,10 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 4): its job stays `DELIVERABLE_VALIDATING` and an initial
       generation's reservation stays `RESERVED`, as for Transaction G's other
       defects, until this or operator recovery exists. Only development data
-      or a row altered by hand can be in that state today.
+      or a row altered by hand can be in that state today. Since DS-6b
+      (ADR-0081 Decision 4) a composer mistake would reach it too: a video
+      that is not its planned size or length is an `INVALID_MEDIA` verdict,
+      whose reservation stays `RESERVED` until this is built.
 - [ ] **Build operator recovery tooling.** ADR-0052 Decision 20 plus ADR-0054
       Decision 6: an internal-only privilege reachable by no customer role, the
       original `BLOCKED` row and terminal verdict left immutable, a **new**
@@ -1600,7 +1616,10 @@ them is **built**. Each item below records the settled decision and what remains
       discovery no longer offers and Transaction G refuses, one whose
       composition drew no disclosure or whose Clean Master is not recorded
       (ADR-0080 Decisions 4 and 5): its job stays `DELIVERABLE_VALIDATING`
-      and its reservation `RESERVED`.
+      and its reservation `RESERVED`. The same holds for a `VALID` verdict
+      whose stored facts are off its plan, which discovery no longer offers
+      and Transaction G refuses (ADR-0081 Decision 3); only a row altered by
+      hand, or one written by a fake validator before DS-6b, can be one.
 - [ ] **Make a composition defect findable before composition is activated.**
       The runner isolates a defect per candidate and reports only a `failed`
       count (ADR-0050); nothing durable names the row or the defect's code, so

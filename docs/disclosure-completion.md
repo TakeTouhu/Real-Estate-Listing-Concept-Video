@@ -9,7 +9,9 @@ ADRs: `docs/decisions/0071-ai-disclosure-layer.md` (DS-1),
 `docs/decisions/0076-clean-master-store-and-inspection.md` (DS-5b-1),
 `docs/decisions/0077-composition-records-for-the-clean-master.md` (DS-5b-2a),
 `docs/decisions/0078-composition-makes-the-master-first.md` (DS-5b-2b-1),
-`docs/decisions/0079-every-video-is-made-from-a-recorded-master.md` (DS-5b-2b-2)
+`docs/decisions/0079-every-video-is-made-from-a-recorded-master.md` (DS-5b-2b-2),
+`docs/decisions/0080-publication-requires-the-disclosure-and-the-master.md` (DS-6a),
+`docs/decisions/0081-a-deliverable-must-measure-its-planned-size-and-length.md` (DS-6b)
 Plan: `/mnt/project-files/cto/disclosure-proposal.md`, approved by the product
 owner on 2026-10-20
 
@@ -2447,3 +2449,241 @@ remain BLOCKED.
 DS-6a waits for the product owner's yes before merge. DS-6b comes next: the
 measured video must be the frozen profile's size and the plan's length, or
 the verdict is `INVALID_MEDIA`.
+
+## DS-6b — a deliverable must measure its planned size and length
+
+Base: `f586477` (PR #103 merge commit on `main`; post-merge CI run 661 green).
+ADR: `docs/decisions/0081-a-deliverable-must-measure-its-planned-size-and-length.md`
+
+The second half of DS-6, the last disclosure milestone. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `0e32fe0` | the plan and the comparison, the runner's verdict, the claim's plan, `finalizeValid`'s, Transaction G's and discovery's refusals, ADR-0081 and the documentation |
+| `533c3f8` | the review's answers: the repository decides an off-plan verdict's reason (`finalizeOffPlan`), the length multiplied only once checked, the tolerance's rationale, the facts an `INVALID_MEDIA` row cannot keep, one wording for what the composer is shown to make, the FFmpeg item, the place tests for mutant G04, and a test helper's type CI's typecheck caught |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-6b does
+
+- **The plan.** A deliverable version must measure its composition's frozen
+  frame size exactly and its job's admitted length within one frame period of
+  the frozen rate, rounded up to whole milliseconds (34 ms at 30 fps).
+  `plannedDeliverableMedia` derives it; `deliverableOffPlanReason` compares,
+  size first.
+- **A verdict.** The claim carries the plan, read under its locks. When the
+  validator answers `VALID` for a video off the plan, the runner hands the
+  measured facts to `finalizeOffPlan`, which derives the reason,
+  `VIDEO_DIMENSIONS_INVALID` or `DURATION_INVALID`, from its own locked read of
+  the plan and records `INVALID_MEDIA`. Nothing is published. It refuses to
+  condemn a video that is on plan (`OFF_PLAN_VERDICT_ON_PLAN`).
+- **Defects behind it.** `finalizeValid` and Transaction G derive the plan
+  again from their own locked read and refuse a `VALID` verdict off it with
+  `VALID_FACTS_OFF_PLAN`, writing nothing; Transaction G for a first
+  publication and a replacement alike, after ADR-0080's gate, a replay
+  unjudged. Discovery offers a `VALID` verdict awaiting publication only while
+  its stored facts are on plan.
+- **Still dormant.** Nothing in production constructs the validation runner or
+  calls Transaction G.
+
+```mermaid
+sequenceDiagram
+    participant C as Claim
+    participant R as Runner
+    participant F as finalizeValid
+    participant G as Transaction G
+    C->>C: plan = composition's raster and rate, job's length (locked)
+    C-->>R: claim with plannedMedia
+    R->>R: validator says VALID: compare facts with the plan
+    alt another size, or length beyond one frame
+        R->>R: finalizeOffPlan(facts): reason from its own read, nothing published
+    else on plan
+        R->>F: facts
+        F->>F: plan re-derived from its own read; off plan is a defect
+        F-->>G: the VALID row to publish
+        G->>G: stored facts against the plan re-derived; off plan is a defect
+        G->>G: pointer, consume or replace, events
+    end
+```
+
+### Verification
+
+Measured locally on `533c3f8` (PostgreSQL 16 and FFmpeg 6.1.1, configured like
+CI). This record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5937 / 5937**, 213 files (5920 before) |
+| `pnpm test:db` | **1505 / 1505**, 57 files (1484 before) |
+| `pnpm test:media` | **169 / 169**, 4 files |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+CI on `0e32fe0` (run 662) failed at its typecheck step: a test helper's type
+in the new database suite did not admit a field the discovery test passes. The
+local typecheck had been run before that test was added. The database and
+media jobs were green. Fixed in `533c3f8`.
+
+New and changed tests:
+
+- `tests/integration/deliverable-plan.db.test.ts` (new, 21): composed through
+  the real Transactions I and J2. The claim carries the plan, for 16:9 1080p
+  over 10 seconds and 9:16 720p over 30. `finalizeValid` refuses off-plan
+  facts, writing nothing, and judges against its own read, not a forged
+  claim's; it accepts a length within one frame. `finalizeOffPlan` derives the
+  reason from the rows, refuses to condemn an on-plan video, answers a replay
+  and refuses a different one, and answers a lost lease before judging. The
+  runner on the real repository records `INVALID_MEDIA` with the reason,
+  holding the job and its reservation, and no later pass re-validates it.
+  Transaction G refuses a stored width, a stored length or a composition
+  raster altered by hand, on a first publication and a replacement, writing
+  nothing, and still answers a replay, another verdict, a backwards pointer
+  and a moved-on job as before. Discovery offers a `VALID` verdict only while
+  its stored facts are on plan, and its SQL tolerance agrees with
+  `plannedDeliverableMedia` on both sides of the boundary at 30, 29.97, 25 and
+  24 fps.
+- `plan.test.ts` (new, 10): the plan, the tolerance at six rates, every
+  composable target, malformed rows, the exact size, the boundary either way,
+  a missing scene, and the size judged first.
+- `runner.test.ts` (+6): an off-plan size or length goes to `finalizeOffPlan`
+  with its facts, never to `finalizeValid` or Transaction G; within one frame
+  it publishes; the claim's plan is the one judged against; a lost refusal is
+  `LOST`.
+- `durable.test.ts`: the two defects named, and their messages pinned.
+- `composition-runner.media.test.ts`: the real composer's video, probed on
+  real FFmpeg, is on plan, and another size or length would not be.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `0e32fe0`: 36 mutants, 35 killed.** G04 survived: moving
+Transaction G's check before the verdict is matched changed what a mismatched
+verdict is answered with, and no test held an off-plan row against another
+verdict, a backwards pointer or a moved-on job.
+
+**Round 2, on `533c3f8`: the 36 (R02 and P06 re-anchored, since the runner
+now hands over facts and the length is checked in two steps), plus G06 and
+G07 for the check's other places and O01 to O05 for `finalizeOffPlan`: 43
+mutants, 43 killed.** None broken, none equivalent.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| P01 | plan | the tolerance rounded down | plan, db-plan |
+| P02 | plan | no tolerance at all | plan |
+| P03 | plan | the length planned in seconds, not milliseconds | plan, db-plan |
+| P04 | plan | a malformed width accepted | plan |
+| P05 | plan | zero accepted as a value | plan |
+| P06 | plan | an unsafe length in milliseconds accepted | plan |
+| C01 | compare | the width not compared | plan, runner |
+| C02 | compare | the height not compared | plan, runner |
+| C03 | compare | width and height compared crosswise | plan, runner |
+| C04 | compare | the boundary itself refused | plan, runner |
+| C05 | compare | a short video accepted (no absolute value) | plan, runner |
+| C06 | compare | the length not compared | plan, runner |
+| C07 | compare | the length judged before the size | plan |
+| R01 | runner | no comparison: every usable video is VALID | runner |
+| R02 | runner | other facts handed to the off-plan verdict | runner |
+| O04 | runner | the runner names the reason itself again | runner |
+| R03 | runner | a lost refusal reported as recorded | runner |
+| R04 | runner | the refused video still finalized VALID | runner |
+| R05 | runner | a fixed plan instead of the claim's | runner |
+| Q01 | claim | the claim carries no plan | db-plan |
+| Q02 | claim | the plan's width read from the height | db-plan |
+| Q03 | claim | the plan's length a constant | db-plan |
+| O01 | off-plan | finalizeOffPlan trusts the claim's plan | db-plan |
+| O02 | off-plan | a video on its plan condemned anyway | db-plan |
+| O03 | off-plan | judged before a lost lease is answered | db-plan |
+| O05 | off-plan | the defect's message changed | durable |
+| F01 | finalize | finalizeValid writes off-plan facts | db-plan |
+| F02 | finalize | finalizeValid trusts the claim's plan | db-plan |
+| G01 | G | Transaction G does not re-prove the facts | db-plan |
+| G02 | G | re-proved only for a first publication | db-plan |
+| G03 | G | a replay judged too | db-plan |
+| G04 | G | judged before the verdict is matched | db-plan |
+| G06 | G | judged before the pointer's direction | db-plan |
+| G07 | G | judged before eligibility | db-plan |
+| G05 | G | the stored facts compared with themselves | db-plan |
+| D01 | discovery | any VALID verdict offered | db-plan |
+| D02 | discovery | the tolerance rounded down | db-plan |
+| D03 | discovery | the boundary itself refused | db-plan |
+| D04 | discovery | a short verdict offered (no absolute value) | db-plan |
+| D05 | discovery | the height not compared | db-plan |
+| D06 | discovery | the width not compared | db-plan |
+| X01 | defect | the refusal's message changed | durable |
+| X02 | defect | the refusal raised as a malformed record | db-plan |
+
+Suites: `db-plan` = `deliverable-plan.db.test.ts`; `db-validation` =
+`deliverable-validation.db.test.ts`; `plan`, `durable`, `runner` = their unit
+suites.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-6a, an independent review
+agent reviewed `0e32fe0` against `f586477`, reading only git objects. It found
+the SQL tolerance equal to the TypeScript one for every row the constraints
+admit, both of Transaction G's arms checked and the replay unjudged, discovery
+stricter than the claim, no existing test silently broken, no new unscoped
+query, and the composer's output on plan for every composable target on CI's
+FFmpeg. Verdict: nothing blocking; one should-fix and five nits, answered in
+`533c3f8`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: the permanent off-plan verdict trusts the runner's copy of the plan, while `finalizeValid` re-derives it; a caller with a wrong plan would condemn a correct video for good | Fixed: `finalizeOffPlan` takes the facts, derives the reason from its own locked read, and refuses an on-plan video with `OFF_PLAN_VERDICT_ON_PLAN`, writing nothing (ADR-0081 Decision 3). The measured facts cannot be kept: the `INVALID_MEDIA` shape constraint requires them empty, and keeping them would need a migration (Decision 4) |
+| Nit: one frame of tolerance lets a one-frame error through | Kept, and the ADR now says why: a frame changes nothing a customer sees, while a tighter bound would refuse a correct video on an FFmpeg build whose container duration is off by a frame, and each refusal holds a reservation (Decision 2) |
+| Nit: the length is multiplied before it is checked | Fixed: multiplied only once known to be a number |
+| Nit: the documents disagree on whether the composer can go off plan | One wording: a composer mistake would; the media suites show this build's does not |
+| Nit: the every-target plan test checks little | Kept, renamed: it proves no composable target is refused as malformed |
+| Residual risk: an FFmpeg reporting encoder delay in the container duration would have every video refused | The worker-image FFmpeg item in `TODO.md` now requires the on-plan assertion to pass on the chosen build |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the deliverable-validation and Transaction G row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-6b*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-ds-6b.md`: no HTTP change; the plan, the comparison, the defect, the claim, the runner, `finalizeValid`, Transaction G, discovery |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-6b*: no migration; the query that finds the verdicts Transaction G now refuses; rolling back is safe |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure,
+terminal settlement and operator recovery items).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+validation runner or calls Transaction G: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **An off-plan deliverable holds its reservation.** Its `INVALID_MEDIA`
+  verdict leaves the job `DELIVERABLE_VALIDATING` and an initial generation's
+  reservation `RESERVED`, as every `INVALID_MEDIA` verdict does, until the
+  terminal settlement of ADR-0052 Decision 19 is built (TODO). It must be built
+  before validation is activated.
+- **The verdict keeps the reason, not the measurements**, which the
+  `INVALID_MEDIA` shape constraint requires to be empty.
+- **The reason does not say which.** `VIDEO_DIMENSIONS_INVALID` and
+  `DURATION_INVALID` mean both "unusable" and "not the planned one"; an
+  operator tells them apart by measuring the immutable bytes against the
+  composition's frozen columns. A distinct reason would need a migration.
+- **Only Mode A.** Modes B and C are not built (TODO).
+- **Nothing durable names a held version or a sweep's defect** (TODO).
+
+### Remaining work
+
+DS-6b waits for the product owner's yes before merge. With it, the disclosure
+plan's six milestones are built. The generation start screen and the preview
+and download screens are to be proposed separately.

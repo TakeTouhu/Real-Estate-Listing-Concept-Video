@@ -39,6 +39,7 @@ import type {
   DeliverableValidationReceiptBinding,
   DurableDeliverableValidationRecord,
 } from "./durable";
+import type { PlannedDeliverableMedia } from "./plan";
 
 // ---------------------------------------------------------------------------
 // Candidate discovery
@@ -90,6 +91,11 @@ export interface DeliverableValidationClaim {
   readonly outputStorageKey: ManagedDeliverableOutputKey;
   /** Frozen from the composition's durable receipt, never re-derived. */
   readonly expectedReceipt: ManagedOutputVerificationReceipt;
+  /**
+   * What the video must measure: the composition's frozen frame size and the
+   * job's admitted length (ADR-0081). Read under the claim's locks.
+   */
+  readonly plannedMedia: PlannedDeliverableMedia;
 }
 
 /**
@@ -132,6 +138,16 @@ export interface FinalizeDeliverableValidationValidInput {
 export interface FinalizeDeliverableValidationInvalidInput {
   readonly claim: DeliverableValidationClaim;
   readonly reason: ManagedOutputMediaInvalidReason;
+  readonly validatedAt: number;
+}
+
+/**
+ * A usable video that is not the planned one: its measured facts, from which the
+ * repository derives the reason itself (ADR-0081).
+ */
+export interface FinalizeDeliverableValidationOffPlanInput {
+  readonly claim: DeliverableValidationClaim;
+  readonly facts: ManagedOutputMediaFacts;
   readonly validatedAt: number;
 }
 
@@ -278,7 +294,13 @@ export interface DeliverableValidationRepository {
     readonly leaseExpiresAt: number;
   }): Promise<ClaimDeliverableValidationOutcome>;
 
-  /** `RUNNING` → `VALID`, with the normalized media facts and one event. */
+  /**
+   * `RUNNING` → `VALID`, with the normalized media facts and one event.
+   *
+   * Refuses facts that are not the planned size and length with the defect
+   * `VALID_FACTS_OFF_PLAN`, judged against its own locked read of the plan,
+   * never the claim's copy (ADR-0081).
+   */
   finalizeValid(
     input: FinalizeDeliverableValidationValidInput,
   ): Promise<FinalizeDeliverableValidOutcome>;
@@ -292,6 +314,20 @@ export interface DeliverableValidationRepository {
    */
   finalizeInvalidMedia(
     input: FinalizeDeliverableValidationInvalidInput,
+  ): Promise<FinalizeDeliverableVerdictOutcome>;
+
+  /**
+   * `RUNNING` → `INVALID_MEDIA` for a usable video that is not the planned one
+   * (ADR-0081). Same restraint as `finalizeInvalidMedia`.
+   *
+   * The reason is derived here, from the measured facts and this transaction's
+   * own locked read of the plan, never taken from the caller: the verdict is
+   * permanent, so a caller's wrong plan must not condemn a correct video. Facts
+   * on that plan are refused with the defect `OFF_PLAN_VERDICT_ON_PLAN`,
+   * writing nothing.
+   */
+  finalizeOffPlan(
+    input: FinalizeDeliverableValidationOffPlanInput,
   ): Promise<FinalizeDeliverableVerdictOutcome>;
 
   /** `RUNNING` → `INTEGRITY_MISMATCH`. Same restraint as `INVALID_MEDIA`. */
