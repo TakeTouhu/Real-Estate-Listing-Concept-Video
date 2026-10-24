@@ -472,6 +472,73 @@ describe("one bounded pass", () => {
   });
 });
 
+describe("one bad candidate never poisons the batch", () => {
+  function sweepWith(throwOnPublish: (call: number) => unknown) {
+    const { repository, calls } = fakeRepository({ candidates: ["gdv_1", "gdv_2", "gdv_3"] });
+    let publishes = 0;
+    const runner = new DeliverableValidationRunner(
+      {},
+      {
+        repository: {
+          ...repository,
+          async publishDeliverable(input) {
+            publishes += 1;
+            const thrown = throwOnPublish(publishes);
+            if (thrown !== undefined) throw thrown;
+            return repository.publishDeliverable(input);
+          },
+        },
+        validator: {
+          async validateDeliverable() {
+            return { kind: "VALID", facts: FACTS };
+          },
+        },
+        clock: () => 1_000,
+        leaseTokens: { next: () => "vlease_next" },
+      },
+    );
+    return { runner, calls };
+  }
+
+  it("reports a defect as that candidate's outcome, with its code, and sweeps on", async () => {
+    const { runner } = sweepWith((call) =>
+      call === 2 ? new DeliverableValidationDefect("DISCLOSURE_NOT_DRAWN") : undefined,
+    );
+    const report = await runner.runOnce(3, CONTEXT);
+    expect(report.outcomes).toEqual([
+      { deliverableVersionId: "gdv_1", outcome: { kind: "PUBLISHED_AND_CONSUMED" } },
+      {
+        deliverableVersionId: "gdv_2",
+        outcome: { kind: "FAILED", code: "DISCLOSURE_NOT_DRAWN" },
+      },
+      { deliverableVersionId: "gdv_3", outcome: { kind: "PUBLISHED_AND_CONSUMED" } },
+    ]);
+    expect(report.claimed).toBe(2);
+  });
+
+  it("keeps nothing of an error that is not one of its defects", async () => {
+    const { runner } = sweepWith((call) =>
+      call === 1 ? new Error("connection to db.internal:5432 reset") : undefined,
+    );
+    const report = await runner.runOnce(3, CONTEXT);
+    expect(report.outcomes[0]).toEqual({
+      deliverableVersionId: "gdv_1",
+      outcome: { kind: "FAILED", code: null },
+    });
+    expect(JSON.stringify(report)).not.toContain("db.internal");
+    expect(report.outcomes.slice(1).map((o) => o.outcome.kind)).toEqual([
+      "PUBLISHED_AND_CONSUMED",
+      "PUBLISHED_AND_CONSUMED",
+    ]);
+  });
+
+  it("still throws from runOne, where the caller asked about one deliverable", async () => {
+    const { runner } = sweepWith(() => new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED"));
+    const error = await runner.runOne("org_1", "gdv_1", CONTEXT).catch((e: unknown) => e);
+    expect((error as DeliverableValidationDefect).code).toBe("CLEAN_MASTER_NOT_RECORDED");
+  });
+});
+
 describe("configuration is proved, not assumed", () => {
   it("refuses a lease or retry delay outside its bound at construction", () => {
     const { repository } = fakeRepository({});

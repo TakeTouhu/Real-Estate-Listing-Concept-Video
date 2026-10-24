@@ -2226,3 +2226,224 @@ remain BLOCKED.
 DS-5b-2b-2 waits for the product owner's yes before merge. DS-6 comes next:
 publication requires the disclosure of the version's mode, a recorded Clean
 Master and measured facts that match the frozen profile.
+
+## DS-6a — publication requires the disclosure and the master
+
+Base: `baadec8` (PR #102 merge commit on `main`; post-merge CI run 655 green on
+its second attempt, after the media job hung installing FFmpeg).
+ADR: `docs/decisions/0080-publication-requires-the-disclosure-and-the-master.md`
+
+The first half of DS-6, the last disclosure milestone. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `b5f8101` | Transaction G's gate, the isolated sweep, ADR-0080 and the documentation |
+| `059e34b` | the review's answers: discovery and the claim mirror the gate, the held reservation stated, the forward constraints recorded, the migration notes' query, the gate's place pinned, the messages pinned |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What DS-6a does
+
+- **Transaction G requires what the customer will hold.** It publishes a
+  version, first or replacement, only when its composition's frozen profile
+  drew the version's own disclosure mode (`profileDrewDisclosure`: v2 and a
+  mode this build knows) and its Clean Master is recorded at
+  `org/{organizationId}/internal/clean-masters/{version}` for the version's own
+  organization. Otherwise it throws `DISCLOSURE_NOT_DRAWN` or
+  `CLEAN_MASTER_NOT_RECORDED` and the transaction rolls back: no pointer, no
+  spent Unit, no event.
+- **In its place.** After the replay (answered `ALREADY_PUBLISHED` unjudged)
+  and every ordinary `NOT_PUBLISHABLE` check, before the publication's kind is
+  decided.
+- **Discovery and the claim mirror it.** Validation discovery offers a version
+  only when the same conditions hold, on every arm, and the claim refuses with
+  the same defects before any lease. A version Transaction G would refuse is
+  never validated and never takes a place in a batch.
+- **The sweep isolates each candidate.** A thrown error becomes that
+  candidate's `FAILED` outcome with the defect's code, or `null`, and the sweep
+  goes on; `runOne` still throws.
+- **Still dormant.** Nothing in production constructs the validation runner or
+  calls Transaction G.
+
+```mermaid
+sequenceDiagram
+    participant D as Discovery
+    participant C as Claim
+    participant G as Transaction G
+    D->>D: v2 profile, a mode v2 draws, master at the version's own key
+    D-->>C: only versions G could publish
+    C->>C: same two checks before any lease
+    C-->>G: (after the verdict) the VALID row to publish
+    alt the pointer already names this version
+        G-->>G: ALREADY_PUBLISHED, not judged
+    else job moved on, another verdict, pointer would move back
+        G-->>G: NOT_PUBLISHABLE
+    else composition drew no disclosure / no master at its key
+        G-->>G: defect, rolled back: nothing published, no Unit spent
+    else
+        G->>G: pointer, consume or replace, events
+    end
+```
+
+### Verification
+
+Measured locally on `059e34b` (PostgreSQL 16 configured like CI). This
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **5920 / 5920**, 212 files (5912 before) |
+| `pnpm test:db` | **1484 / 1484**, 56 files (1470 before) |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+The media suite is not affected: nothing it runs changed. CI runs it.
+
+New and changed tests:
+
+- `tests/integration/deliverable-publication-gate.db.test.ts` (new, 14):
+  composed through the real Transaction J2, then one row altered by hand: a
+  composition frozen under v1, no master, a master under another
+  organization's key. For each: a first publication and a replacement are
+  refused with the defect, writing nothing, and the same verdict publishes once
+  the row is put back; discovery offers neither a fresh nor a validated
+  version, and the claim refuses before writing a validation row. The gate
+  does not judge a replay, a job that moved on, a verdict that is not the one
+  named, or a pointer that would move back.
+- `runner.test.ts` (3): a defect becomes that candidate's `FAILED` outcome
+  with its code and the sweep goes on; nothing of another error is kept;
+  `runOne` still throws.
+- `profile.test.ts` (3): only v2 and a known mode drew the disclosure.
+- `durable.test.ts`: the two defects named, and their messages pinned.
+- `clean-master-shape.test.ts`, `mode-shape.test.ts`: Transaction G is the one
+  new reader of the master's table and of the version's mode, and writes
+  neither.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `b5f8101`: 25 mutants, 22 killed.** G08 survived (equivalent,
+below), and D01 and D02 survived because no test pinned the two defects'
+messages.
+
+**Round 2, on `059e34b`: the 25 again, with the anchors of the gate's five
+mutants made unique now that the claim calls it too, plus G14 and G15 for the
+gate's place and Q01 to Q07 for discovery and the claim: 34 mutants, 33
+killed, 1 equivalent.** None broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| G01 | gate | no gate at all | db-gate |
+| G02 | gate | the disclosure not checked | db-gate |
+| G03 | gate | the master not checked | db-gate |
+| G04 | gate | the gate guards only a first publication | db-gate |
+| G05 | gate | the gate judges a replay | db-gate |
+| G06 | gate | the gate judges before eligibility | db-gate |
+| G14 | gate | the gate judges before the verdict is matched | db-gate |
+| G15 | gate | the gate judges before the pointer's direction | db-gate |
+| G07 | gate | the two refusals' codes swapped | db-gate |
+| G08 | gate | a composition with no profile treated as drawn | **survived** (equivalent, below) |
+| G09 | gate | any master record accepted, whatever its key | db-gate |
+| G10 | gate | the key rebuilt for the wrong version | db-gate |
+| G11 | gate | the master joined to the customer's current version | db-gate |
+| G12 | gate | the job's mode read instead of the version's | mode-shape |
+| G13 | gate | the composition's profile read from the customer's current version | db-gate |
+| Q01 | mirror | discovery offers any profile | db-gate |
+| Q02 | mirror | discovery offers any mode | mode-shape |
+| Q03 | mirror | discovery offers a version with no master | db-gate |
+| Q04 | mirror | discovery accepts a master under any key | db-gate |
+| Q05 | mirror | the claim validates what G would refuse | db-gate |
+| Q06 | mirror | the claim does not check the disclosure | db-gate |
+| Q07 | mirror | the claim does not check the master | db-gate |
+| P01 | profile | any mode counted as drawn under v2 | profile |
+| P02 | profile | any profile counted as drawing the mode | profile, db-gate |
+| P03 | profile | v1 counted as drawing it too | profile, db-gate |
+| P04 | profile | the key compared without case | profile |
+| D01 | defect | the disclosure refusal's message changed | durable |
+| D02 | defect | the master refusal's message changed | durable |
+| R01 | sweep | a defect stops the sweep again | runner |
+| R02 | sweep | the defect's code dropped | runner |
+| R03 | sweep | a failed candidate counted as claimed | runner |
+| R04 | sweep | an unknown error's message kept | runner |
+| R05 | sweep | runOne isolates too and stops throwing | runner |
+| R06 | sweep | the failed candidate left out of the report | runner |
+
+Suites: `db-gate` = `deliverable-publication-gate.db.test.ts`;
+`db-validation` = `deliverable-validation.db.test.ts`; `profile`, `durable`,
+`runner` = their unit suites; `mode-shape` = `mode-shape.test.ts`.
+
+**G08 is equivalent.** It lets a composition with no profile through. The
+column is `NOT NULL`, and Transaction G refuses a version without a verified
+composition (`COMPOSITION_NOT_VERIFIED`) before the gate, so no row reaches
+the gate with a null profile. The check stays because the chain query's outer
+join types the column as nullable. G12 and Q02 change no behaviour this
+build can show, because the version's mode is copied from the job's and the
+database's modes are exactly the domain's; the shape test pins both.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to DS-5b-2b-2, an independent
+review agent reviewed `b5f8101` against `baadec8`, reading only git objects. It
+found both arms gated, the key agreeing with J2's, the join unable to multiply
+rows, the unlocked read safe, and no tenant or error-text leak. Verdict:
+nothing blocking; three should-fix findings and five nits, answered in
+`059e34b`:
+
+| Finding | Answer |
+| --- | --- |
+| Refused rows still starve the sweep once there are a batch's worth (25), and a v1 or masterless version is still validated before G refuses it | Fixed: discovery and the claim mirror the gate (ADR-0080 Decision 5), as composition's do for the profile and the mode. The database suite proves discovery's SQL key is `managedCleanMasterKey`'s |
+| ADR-0052 Decision 19: a refused version's reservation stays `RESERVED` with no word about it | Stated in ADR-0080 Decision 4 and the consequences; the terminal-settlement and operator-recovery items in `TODO.md` now name this state. It is the gap Transaction G's other defects already leave |
+| A recomposition from another version's master would be refused by the version's-own-key rule | Recorded in ADR-0080 Decision 2 and the Clean Master TODO item: Decision 2 must be revisited when that is built |
+| Nit: `FAILED` is not counted as claimed even when it wrote something; integrity defects now only reach the report | The count's meaning is stated in ADR-0080 Decision 5; making a defect findable before activation is already a TODO item, which names the validation sweep |
+| Nit: the migration notes' query misses a master under another organization's key, and "returns 0" proves nothing | Fixed: the query covers it (run locally to check it parses); the sentence now says why this build cannot make such a row |
+| Nit: the gate's place is tested only against a moved-on job and a replay; the sweep isolation only with fakes | The verdict-mismatch and pointer-regression cases added (mutants G14 and G15). The isolation is the runner's own logic and stays unit-tested, as composition's is; with discovery mirroring the gate, no defect of this milestone reaches the sweep through the database |
+| Nit: deleting videos must take the locks G takes, since G reads the master unlocked | Recorded in ADR-0080 Decision 2 and the Clean Master TODO item |
+| Nit: `profileDrewDisclosure` reads the admission list rather than a per-profile table | Kept: the composer's overlay switch is exhaustive over the modes, so v2 draws every mode admission accepts, and a profile that drew differently would be a new profile key, which this function refuses |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the deliverable-validation and Transaction G row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *DS-6a*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-ds-6a.md`: no HTTP change; the function, the defects, Transaction G, discovery, the claim, the runner |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *DS-6a*: no migration; the query that finds what the gate holds; rolling back is safe |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/decisions/TODO.md` (the disclosure,
+Clean Master, terminal settlement, operator recovery and findability items).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+validation runner or calls Transaction G: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production credentials, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **A refused version holds its reservation.** Its job stays
+  `DELIVERABLE_VALIDATING` and an initial generation's reservation `RESERVED`
+  until the operator recovery and terminal settlement of ADR-0052 Decisions 19
+  and 20 exist (TODO). Only development data or a row altered by hand can be
+  in that state.
+- **The evidence of the disclosure is the frozen profile, not the frames.**
+  The media suites prove v2 draws it; publication does not look at the video.
+- **Nothing durable names a held version or a sweep's defect** (TODO).
+- **The verdict does not yet require the planned size and length** (DS-6b).
+
+### Remaining work
+
+DS-6a waits for the product owner's yes before merge. DS-6b comes next: the
+measured video must be the frozen profile's size and the plan's length, or
+the verdict is `INVALID_MEDIA`.

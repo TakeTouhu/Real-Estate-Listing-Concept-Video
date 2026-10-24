@@ -37,6 +37,7 @@
  */
 
 import {
+  COMPOSITION_PROFILE_KEY,
   DELIVERABLE_OUTPUT_VERIFIED_STATE,
   DELIVERABLE_PUBLICATION_REASON_CODE,
   DELIVERABLE_PUBLISHED_EVENT_TYPE,
@@ -44,6 +45,7 @@ import {
   DELIVERABLE_VALIDATED_EVENT_TYPE,
   DELIVERABLE_VALIDATED_STATE,
   DELIVERABLE_VALIDATION_REASON_CODE,
+  DISCLOSURE_MODES,
   DeliverableValidationDefect,
   ISO_BMFF_CONTAINER,
   JOB_DELIVERABLE_READY_EVENT_TYPE,
@@ -51,7 +53,9 @@ import {
   deliverableValidationReceipt,
   frozenFundingCoversReservation,
   isDeliverableInvalidReason,
+  managedCleanMasterKey,
   managedDeliverableOutputKey,
+  profileDrewDisclosure,
   safePositiveByteCount,
   sha256Digest,
   validateDeliverableValidationBatchLimit,
@@ -72,7 +76,7 @@ import {
   type PublishValidatedDeliverableOutcome,
 } from "@app/domain";
 import { randomId } from "@app/shared";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -91,7 +95,11 @@ interface ValidationChainRow {
   readonly versionId: string;
   readonly versionOrdinal: number;
   readonly highestOrdinal: number;
+  /** The disclosure mode the version was planned under (ADR-0073). */
+  readonly versionDisclosureMode: string;
   readonly compositionStatus: string | null;
+  /** The profile the composition was frozen under: what it drew (ADR-0080). */
+  readonly profileKey: string | null;
   readonly outputStorageKey: string | null;
   readonly outputSha256: string | null;
   readonly outputSizeBytes: bigint | null;
@@ -111,7 +119,15 @@ interface ValidationChainRow {
   readonly videoStreamCount: bigint | null;
   readonly audioStreamCount: bigint | null;
   readonly validatedAt: Date | null;
+  /** The version's Clean Master record's key, absent when none is recorded. */
+  readonly cleanMasterStorageKey: string | null;
 }
+
+/**
+ * The disclosure modes profile v2 draws, as bound parameters, from the same list
+ * `profileDrewDisclosure` reads (ADR-0080).
+ */
+const RENDERABLE_DISCLOSURE_MODES = Prisma.join([...DISCLOSURE_MODES]);
 
 /** The entitlement hold, read under its own lock. */
 interface ReservationRow {
@@ -150,6 +166,12 @@ export function createDeliverableValidationRepository(
       // the old version would be listed, offered to Transaction G, and refused
       // forever while occupying a slot in every bounded batch.
       //
+      // The profile, mode and master conditions are Transaction G's (ADR-0080),
+      // checked again by the claim. A version G would refuse is never validated
+      // and never offered, so however many there are, they cannot fill a batch.
+      // The master's key is the one `managedCleanMasterKey` builds, for the
+      // version's own organization: the database suite proves the two agree.
+      //
       // Effective-eligibility ordering, the same discipline ADR-0048 settled for
       // media-failure resolution: a row is ordered by the instant it actually
       // becomes due, not by when its deliverable was planned.
@@ -166,6 +188,15 @@ export function createDeliverableValidationRepository(
                  ON w."deliverableVersionId" = v."id"
          WHERE j."state" = 'DELIVERABLE_VALIDATING'::"GenerationJobState"
            AND c."status" = 'OUTPUT_VERIFIED'::"DeliverableCompositionStatus"
+           AND c."profileKey" = ${COMPOSITION_PROFILE_KEY}
+           AND v."disclosureMode"::text IN (${RENDERABLE_DISCLOSURE_MODES})
+           AND EXISTS (
+                 SELECT 1
+                   FROM "generation_deliverable_clean_masters" m
+                  WHERE m."deliverableVersionId" = v."id"
+                    AND m."storageKey" =
+                        'org/' || p."organizationId" || '/internal/clean-masters/' || v."id"
+               )
            AND v."ordinal" = (
                  SELECT MAX(sib."ordinal")
                    FROM "generation_deliverable_versions" sib
@@ -228,6 +259,10 @@ export function createDeliverableValidationRepository(
         if (ctx.versionOrdinal !== ctx.highestOrdinal) return { kind: "NOT_ELIGIBLE" };
 
         const receipt = provenCompositionReceipt(ctx, input.organizationId);
+        // What Transaction G will require (ADR-0080), before any lease: a
+        // version it would refuse is not worth validating.
+        assertDisclosureDrawn(ctx);
+        assertCleanMasterRecorded(ctx);
 
         const now = new Date(input.now);
         const leaseExpiresAt = new Date(input.leaseExpiresAt);
@@ -490,7 +525,18 @@ export function createDeliverableValidationRepository(
           return { kind: "NOT_PUBLISHABLE" };
         }
 
-        // ---- 5. Which publication is this? ----------------------------------
+        // ---- 5. What the customer will hold (ADR-0080). ---------------------
+        // The disclosure the version's mode requires, drawn by the composition
+        // that made these bytes, and the overlay-free master every later
+        // disclosure change is recomposed from (ADR-0052 Decisions 8 and 17).
+        // Defects, not outcomes: this build composes only under v2, which draws
+        // the version's mode and records the master in the receipt's commit, so
+        // a version failing either was composed by an earlier build or altered
+        // by hand. Both arms, initial and replacement, and before any write.
+        assertDisclosureDrawn(ctx);
+        assertCleanMasterRecorded(ctx);
+
+        // ---- 6. Which publication is this? ----------------------------------
         // The same two legitimate shapes Transaction I admits a cycle for, read
         // back at the end of it. An initial publication spends the customer's
         // entitlement; a recomposition replaces a video they already paid for,
@@ -518,7 +564,7 @@ export function createDeliverableValidationRepository(
           throw new DeliverableValidationDefect("PARTIAL_PUBLICATION_STATE");
         }
 
-        // ---- 6. The writes. All of them, or none. ---------------------------
+        // ---- 7. The writes. All of them, or none. ---------------------------
         const moved = await tx.generationJob.updateMany({
           where: {
             id: ctx.jobId,
@@ -848,7 +894,9 @@ async function lockValidationChain(
            (SELECT MAX(sib."ordinal")
               FROM "generation_deliverable_versions" sib
              WHERE sib."generationJobId" = j."id")  AS "highestOrdinal",
+           v."disclosureMode"::text        AS "versionDisclosureMode",
            c."status"::text                AS "compositionStatus",
+           c."profileKey"                  AS "profileKey",
            c."outputStorageKey"            AS "outputStorageKey",
            c."outputSha256"                AS "outputSha256",
            c."outputSizeBytes"             AS "outputSizeBytes",
@@ -867,7 +915,8 @@ async function lockValidationChain(
            w."videoHeight"                 AS "videoHeight",
            w."videoStreamCount"            AS "videoStreamCount",
            w."audioStreamCount"            AS "audioStreamCount",
-           w."validatedAt"                 AS "validatedAt"
+           w."validatedAt"                 AS "validatedAt",
+           m."storageKey"                  AS "cleanMasterStorageKey"
       FROM "generation_deliverable_versions" v
       JOIN "generation_jobs" j ON j."id" = v."generationJobId"
       JOIN "video_projects" p ON p."id" = j."videoProjectId"
@@ -877,6 +926,8 @@ async function lockValidationChain(
              ON c."deliverableVersionId" = v."id"
       LEFT JOIN "generation_deliverable_validations" w
              ON w."deliverableVersionId" = v."id"
+      LEFT JOIN "generation_deliverable_clean_masters" m
+             ON m."deliverableVersionId" = v."id"
      WHERE v."id" = ${deliverableVersionId}
        AND p."organizationId" = ${organizationId}
   `;
@@ -1032,6 +1083,29 @@ function assertReceiptBinding(
     ctx.receiptSizeBytes !== BigInt(receipt.sizeBytes)
   ) {
     throw new DeliverableValidationDefect("VALIDATION_RECEIPT_CONFLICT");
+  }
+}
+
+/** The composition that made these bytes drew the disclosure of the version's mode. */
+function assertDisclosureDrawn(ctx: ValidationChainRow): void {
+  if (ctx.profileKey === null || !profileDrewDisclosure(ctx.profileKey, ctx.versionDisclosureMode)) {
+    throw new DeliverableValidationDefect("DISCLOSURE_NOT_DRAWN");
+  }
+}
+
+/**
+ * The version's Clean Master is recorded, at the internal key J2 records it at.
+ *
+ * Read in the chain's query rather than locked: the record has no update path,
+ * and nothing in this build deletes one.
+ */
+function assertCleanMasterRecorded(ctx: ValidationChainRow): void {
+  const key = managedCleanMasterKey({
+    organizationId: ctx.organizationId,
+    deliverableVersionId: ctx.versionId,
+  });
+  if (ctx.cleanMasterStorageKey !== key) {
+    throw new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED");
   }
 }
 

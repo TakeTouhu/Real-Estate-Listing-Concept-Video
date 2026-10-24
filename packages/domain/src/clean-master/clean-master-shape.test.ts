@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
  *    key, and two CHECKs. No existing row is touched.
  * 2. **A receipt and nothing else**, required in every column, RESTRICT to its
  *    version, with no default but its creation time.
- * 3. **Only Transaction J2 writes or reads it** (DS-5b-2a, ADR-0077); no app
- *    mentions it.
+ * 3. **Only Transaction J2 writes it** (DS-5b-2a, ADR-0077), and only J2 and
+ *    Transaction G read it (DS-6a, ADR-0080); no app mentions it.
  * 4. **No signed URL reaches it.** The behaviour tests prove the signer, the
  *    verifier and the local adapter refuse it; this pins that there is no other
  *    signer, verifier, signed-URL implementation or presigner, and that the only
@@ -103,16 +103,29 @@ describe("DS-4 shape", () => {
     ).toEqual(["cleanMaster GenerationDeliverableCleanMaster?"]);
   });
 
-  it("is written and read only by Transaction J2", () => {
+  it("is written only by Transaction J2, and read by J2 and Transaction G", () => {
     // DS-5b-2a (ADR-0077): the composition repository is the one module that
-    // names the table or the model, and the claim is the one place outside the
-    // key module that builds a key. The port carries the receipt to it, and
-    // the runner, under profile v2, passes the stored master's (ADR-0078).
-    // DS-5b-1's master store takes the key's type; no app mentions any of it.
+    // writes the table, and the claim is the one place outside the key module
+    // that builds a key. The port carries the receipt to it, and the runner,
+    // under profile v2, passes the stored master's (ADR-0078). DS-6a
+    // (ADR-0080): Transaction G reads the row in its chain query and rebuilds
+    // the key to compare. DS-5b-1's master store takes the key's type; no app
+    // mentions any of it.
     const REPOSITORY = "packages/database/src/deliverable-composition-execution-repository.ts";
+    const VALIDATION = "packages/database/src/deliverable-validation-repository.ts";
     expect(
       matching(["packages", "apps"], /generationDeliverableCleanMaster|generation_deliverable_clean_masters/),
-    ).toEqual([REPOSITORY]);
+    ).toEqual([REPOSITORY, VALIDATION]);
+    // Transaction G only reads: no model call, and the table appears twice,
+    // in discovery's filter and as the chain query's join.
+    const validation = read(VALIDATION);
+    expect(validation).not.toMatch(/generationDeliverableCleanMaster/);
+    expect(
+      validation.replace(/\s+/g, " ").match(/[^ ]+ [^ ]+ "generation_deliverable_clean_masters"[^=]*= [^ ]+/g),
+    ).toEqual([
+      `1 FROM "generation_deliverable_clean_masters" m WHERE m."deliverableVersionId" = v."id"`,
+      `LEFT JOIN "generation_deliverable_clean_masters" m ON m."deliverableVersionId" = v."id"`,
+    ]);
     expect(matching(["packages", "apps"], /cleanMaster\b/)).toEqual([
       REPOSITORY,
       "packages/domain/src/deliverable-composition-execution/ports.ts",
@@ -120,10 +133,12 @@ describe("DS-4 shape", () => {
     ]);
     expect(matching(["packages", "apps"], /managedCleanMasterKey\(/)).toEqual([
       REPOSITORY,
+      VALIDATION,
       "packages/domain/src/clean-master/key.ts",
     ]);
     expect(matching(["packages", "apps"], /managedCleanMasterKey|ManagedCleanMasterKey/)).toEqual([
       REPOSITORY,
+      VALIDATION,
       "packages/domain/src/clean-master/index.ts",
       "packages/domain/src/clean-master/key.ts",
       "packages/domain/src/deliverable-composition-execution/ports.ts",

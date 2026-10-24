@@ -37,6 +37,12 @@
  * not be validated would destroy what they already have. A settlement policy for
  * a permanently unusable deliverable is a separate, reviewed decision.
  *
+ * ## One bad candidate never poisons the batch
+ *
+ * `runOnce` isolates each candidate: a thrown defect is reported as that
+ * candidate's `FAILED` outcome and the sweep goes on (ADR-0080). `runOne` throws
+ * it to its caller.
+ *
  * ## Dormant
  *
  * Nothing in production constructs this runner, schedules it, or calls it. There
@@ -52,6 +58,7 @@ import {
   DEFAULT_DELIVERABLE_VALIDATION_LEASE_MS,
   DEFAULT_DELIVERABLE_VALIDATION_RETRY_DELAY_MS,
   DeliverableValidationDefect,
+  type DeliverableValidationDefectCode,
   validateDeliverableValidationBatchLimit,
   validateDeliverableValidationLeaseMs,
   validateDeliverableValidationRetryDelayMs,
@@ -90,7 +97,14 @@ export type DeliverableValidationRunOutcome =
   | { readonly kind: "NOT_ELIGIBLE" }
   | { readonly kind: "NOT_FOUND" }
   /** Claimed and finalized, but the write matched zero rows — reclaimed. */
-  | { readonly kind: "LOST" };
+  | { readonly kind: "LOST" }
+  /**
+   * `runOnce` only: something threw, the attempt stopped and the sweep went on.
+   * The code is kept when it was one of this module's defects, and nothing else
+   * about the error is: a database or adapter error's text is not this report's
+   * to carry. `runOne` throws instead, unchanged.
+   */
+  | { readonly kind: "FAILED"; readonly code: DeliverableValidationDefectCode | null };
 
 export interface DeliverableValidationRunReport {
   readonly claimed: number;
@@ -114,12 +128,17 @@ export interface DeliverableValidationDeps {
   readonly leaseTokens: DeliverableValidationLeaseTokenFactory;
 }
 
-/** Outcome kinds that mean nothing was claimed and nothing was attempted. */
+/**
+ * Outcome kinds not counted as claimed: nothing was claimed and nothing was
+ * attempted, or something threw, which is counted by its own kind as
+ * composition's sweep counts it.
+ */
 const UNCLAIMED_KINDS: readonly DeliverableValidationRunOutcome["kind"][] = [
   "NOT_CLAIMABLE",
   "ALREADY_TERMINAL",
   "NOT_ELIGIBLE",
   "NOT_FOUND",
+  "FAILED",
 ];
 
 export class DeliverableValidationRunner {
@@ -164,11 +183,23 @@ export class DeliverableValidationRunner {
     }[] = [];
     let claimed = 0;
     for (const candidate of candidates) {
-      const outcome = await this.#runOne(
-        candidate.organizationId,
-        candidate.deliverableVersionId,
-        context,
-      );
+      let outcome: DeliverableValidationRunOutcome;
+      try {
+        outcome = await this.#runOne(
+          candidate.organizationId,
+          candidate.deliverableVersionId,
+          context,
+        );
+      } catch (error: unknown) {
+        // Isolated on purpose, as composition's sweep is (ADR-0050). A VALID row
+        // Transaction G refuses is offered first on every pass, so without this
+        // one defect would stop every other deliverable in the batch from ever
+        // being published (ADR-0080).
+        outcome = {
+          kind: "FAILED",
+          code: error instanceof DeliverableValidationDefect ? error.code : null,
+        };
+      }
       if (!UNCLAIMED_KINDS.includes(outcome.kind)) claimed += 1;
       outcomes.push({ deliverableVersionId: candidate.deliverableVersionId, outcome });
     }

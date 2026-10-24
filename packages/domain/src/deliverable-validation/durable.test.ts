@@ -186,6 +186,8 @@ describe("defects say what is wrong and disclose nothing", () => {
     "FOREIGN_DELIVERABLE_VERSION",
     "RESERVATION_NOT_CONSUMABLE",
     "RESERVATION_FUNDING_INCOMPLETE",
+    "DISCLOSURE_NOT_DRAWN",
+    "CLEAN_MASTER_NOT_RECORDED",
     "VALIDATOR_RESULT_MALFORMED",
     "VALIDATOR_FAILED",
     "PERSISTED_RECORD_MALFORMED",
@@ -211,6 +213,15 @@ describe("defects say what is wrong and disclose nothing", () => {
         expect(`${code}:${banned}: ${message.includes(banned)}`).toBe(`${code}:${banned}: false`);
       }
     }
+  });
+
+  it("says what a refused publication lacks (ADR-0080)", () => {
+    expect(new DeliverableValidationDefect("DISCLOSURE_NOT_DRAWN").message).toBe(
+      "A deliverable cannot be published unless its composition drew the disclosure its mode requires",
+    );
+    expect(new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED").message).toBe(
+      "A deliverable cannot be published without its recorded Clean Master",
+    );
   });
 });
 
