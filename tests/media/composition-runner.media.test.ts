@@ -25,10 +25,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   DeliverableCompositionRunner,
+  deliverableOffPlanReason,
   disclosureLayerFor,
   managedCleanMasterKey,
   managedDeliverableOutputKey,
   managedGenerationOutputKey,
+  plannedDeliverableMedia,
   resolveCompositionProfile,
   safePositiveByteCount,
   sha256Digest,
@@ -394,6 +396,35 @@ describe("the runner on real FFmpeg", () => {
       });
       expect((await probeStreams(path)).video[0]?.nb_frames).toBe(String(FRAME_COUNT));
     }
+
+    // The video is the planned one, as deliverable validation will judge it
+    // (ADR-0081), and another size or length would not be.
+    const probed = await new FfprobeMediaProbe({}, { runner }).probe(video);
+    if (probed.kind !== "FACTS") throw new Error("the customer's video did not probe");
+    const requestedDurationSeconds = claimOf().requestedDurationSeconds;
+    expect(
+      deliverableOffPlanReason(
+        probed.facts,
+        plannedDeliverableMedia({ ...PROFILE, requestedDurationSeconds }),
+      ),
+    ).toBeNull();
+    expect(
+      deliverableOffPlanReason(
+        probed.facts,
+        plannedDeliverableMedia({
+          ...PROFILE,
+          targetWidthPx: HEIGHT,
+          targetHeightPx: WIDTH,
+          requestedDurationSeconds,
+        }),
+      ),
+    ).toBe("VIDEO_DIMENSIONS_INVALID");
+    expect(
+      deliverableOffPlanReason(
+        probed.facts,
+        plannedDeliverableMedia({ ...PROFILE, requestedDurationSeconds: requestedDurationSeconds + 1 }),
+      ),
+    ).toBe("DURATION_INVALID");
 
     // Where the disclosure's text is, the master shows the scene and the
     // customer's video shows the text.

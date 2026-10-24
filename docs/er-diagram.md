@@ -726,3 +726,12 @@ Not applicable: no entity, relationship or column changes, and no migration
 `GenerationDeliverableComposition.profileKey` and the version's
 `GenerationDeliverableCleanMaster` row, and publishes only when the profile
 drew the version's mode and the master is recorded at its canonical key.
+
+## DS-6b — a deliverable must measure its planned size and length
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0081). The validation claim, `finalizeValid`, Transaction G and discovery's
+`VALID` arm now read `GenerationDeliverableComposition.targetWidthPx`,
+`targetHeightPx`, `frameRateNumerator`, `frameRateDenominator` and
+`GenerationJob.requestedDurationSeconds`, and compare a verdict's facts with
+them.

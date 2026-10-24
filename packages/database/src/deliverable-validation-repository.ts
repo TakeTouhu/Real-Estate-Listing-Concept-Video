@@ -54,7 +54,9 @@ import {
   frozenFundingCoversReservation,
   isDeliverableInvalidReason,
   managedCleanMasterKey,
+  deliverableOffPlanReason,
   managedDeliverableOutputKey,
+  plannedDeliverableMedia,
   profileDrewDisclosure,
   safePositiveByteCount,
   sha256Digest,
@@ -72,6 +74,7 @@ import {
   type FinalizeDeliverableVerdictOutcome,
   type ManagedOutputMediaFacts,
   type ManagedOutputMediaInvalidReason,
+  type PlannedDeliverableMedia,
   type PublishValidatedDeliverableInput,
   type PublishValidatedDeliverableOutcome,
 } from "@app/domain";
@@ -97,9 +100,16 @@ interface ValidationChainRow {
   readonly highestOrdinal: number;
   /** The disclosure mode the version was planned under (ADR-0073). */
   readonly versionDisclosureMode: string;
+  /** The length the job was admitted for: the deliverable's planned length (ADR-0081). */
+  readonly requestedDurationSeconds: number;
   readonly compositionStatus: string | null;
   /** The profile the composition was frozen under: what it drew (ADR-0080). */
   readonly profileKey: string | null;
+  /** The profile's frozen raster and rate: the planned frame size (ADR-0081). */
+  readonly targetWidthPx: number | null;
+  readonly targetHeightPx: number | null;
+  readonly frameRateNumerator: number | null;
+  readonly frameRateDenominator: number | null;
   readonly outputStorageKey: string | null;
   readonly outputSha256: string | null;
   readonly outputSizeBytes: bigint | null;
@@ -172,6 +182,12 @@ export function createDeliverableValidationRepository(
       // The master's key is the one `managedCleanMasterKey` builds, for the
       // version's own organization: the database suite proves the two agree.
       //
+      // A VALID verdict is offered only when its stored facts are the planned
+      // video's, which Transaction G re-proves (ADR-0081): the frozen raster
+      // exactly, and the admitted length within one frame period rounded up
+      // to whole milliseconds -- `plannedDeliverableMedia`'s integer ceiling,
+      // which the database suite proves at its boundary.
+      //
       // Effective-eligibility ordering, the same discipline ADR-0048 settled for
       // media-failure resolution: a row is ordered by the instant it actually
       // becomes due, not by when its deliverable was planned.
@@ -208,7 +224,12 @@ export function createDeliverableValidationRepository(
                   AND w."nextAttemptAt" <= ${at})
               OR (w."status" = 'RUNNING'::"DeliverableValidationStatus"
                   AND w."leaseExpiresAt" <= ${at})
-              OR w."status" = 'VALID'::"DeliverableValidationStatus"
+              OR (w."status" = 'VALID'::"DeliverableValidationStatus"
+                  AND w."videoWidth" = c."targetWidthPx"
+                  AND w."videoHeight" = c."targetHeightPx"
+                  AND abs(w."durationMs" - j."requestedDurationSeconds"::bigint * 1000)
+                      <= (1000 * c."frameRateDenominator"::bigint + c."frameRateNumerator" - 1)
+                         / c."frameRateNumerator")
                )
          ORDER BY
            CASE
@@ -263,6 +284,9 @@ export function createDeliverableValidationRepository(
         // version it would refuse is not worth validating.
         assertDisclosureDrawn(ctx);
         assertCleanMasterRecorded(ctx);
+        // What the measured video must be (ADR-0081), derived under this lock
+        // so the worker judges against the rows, never against its own guess.
+        const plannedMedia = plannedMediaOf(ctx);
 
         const now = new Date(input.now);
         const leaseExpiresAt = new Date(input.leaseExpiresAt);
@@ -344,6 +368,7 @@ export function createDeliverableValidationRepository(
               deliverableVersionId: ctx.versionId,
             }),
             expectedReceipt: receipt,
+            plannedMedia,
           },
         };
       });
@@ -370,6 +395,10 @@ export function createDeliverableValidationRepository(
         if (!holdsClaim(ctx, input.claim)) return { kind: "LEASE_LOST" };
         if (ctx.jobState !== "DELIVERABLE_VALIDATING") return { kind: "LEASE_LOST" };
         assertBindingsAgree(ctx, input.claim.organizationId, input.claim.expectedReceipt);
+        // Judged against this transaction's own read of the plan, not the
+        // claim's copy: a VALID verdict is a statement that these are the
+        // planned video's measurements (ADR-0081).
+        assertFactsOnPlan(input.facts, ctx);
 
         const version = input.claim.version + 1;
         const written = await tx.generationDeliverableValidation.updateMany({
@@ -535,6 +564,9 @@ export function createDeliverableValidationRepository(
         // by hand. Both arms, initial and replacement, and before any write.
         assertDisclosureDrawn(ctx);
         assertCleanMasterRecorded(ctx);
+        // And the verdict's stored measurements are the planned video's
+        // (ADR-0081): what finalizeValid proved, re-proved from the row.
+        assertFactsOnPlan(persistedFacts(ctx), ctx);
 
         // ---- 6. Which publication is this? ----------------------------------
         // The same two legitimate shapes Transaction I admits a cycle for, read
@@ -895,8 +927,13 @@ async function lockValidationChain(
               FROM "generation_deliverable_versions" sib
              WHERE sib."generationJobId" = j."id")  AS "highestOrdinal",
            v."disclosureMode"::text        AS "versionDisclosureMode",
+           j."requestedDurationSeconds"    AS "requestedDurationSeconds",
            c."status"::text                AS "compositionStatus",
            c."profileKey"                  AS "profileKey",
+           c."targetWidthPx"               AS "targetWidthPx",
+           c."targetHeightPx"              AS "targetHeightPx",
+           c."frameRateNumerator"          AS "frameRateNumerator",
+           c."frameRateDenominator"        AS "frameRateDenominator",
            c."outputStorageKey"            AS "outputStorageKey",
            c."outputSha256"                AS "outputSha256",
            c."outputSizeBytes"             AS "outputSizeBytes",
@@ -1106,6 +1143,42 @@ function assertCleanMasterRecorded(ctx: ValidationChainRow): void {
   });
   if (ctx.cleanMasterStorageKey !== key) {
     throw new DeliverableValidationDefect("CLEAN_MASTER_NOT_RECORDED");
+  }
+}
+
+/**
+ * The video this version must measure: its composition's frozen raster and rate,
+ * and its job's admitted length (ADR-0081).
+ *
+ * The composition's columns are `NOT NULL`; they read as nullable only because
+ * the chain outer-joins the composition, and every caller has already refused a
+ * version without a verified one.
+ */
+function plannedMediaOf(ctx: ValidationChainRow): PlannedDeliverableMedia {
+  if (
+    ctx.targetWidthPx === null ||
+    ctx.targetHeightPx === null ||
+    ctx.frameRateNumerator === null ||
+    ctx.frameRateDenominator === null
+  ) {
+    throw new DeliverableValidationDefect("PERSISTED_RECORD_MALFORMED");
+  }
+  return plannedDeliverableMedia({
+    targetWidthPx: ctx.targetWidthPx,
+    targetHeightPx: ctx.targetHeightPx,
+    frameRateNumerator: ctx.frameRateNumerator,
+    frameRateDenominator: ctx.frameRateDenominator,
+    requestedDurationSeconds: ctx.requestedDurationSeconds,
+  });
+}
+
+/**
+ * A `VALID` verdict's facts are the planned video's. The runner refuses an
+ * off-plan video as `INVALID_MEDIA` before it gets here, so this is a defect.
+ */
+function assertFactsOnPlan(facts: ManagedOutputMediaFacts, ctx: ValidationChainRow): void {
+  if (deliverableOffPlanReason(facts, plannedMediaOf(ctx)) !== null) {
+    throw new DeliverableValidationDefect("VALID_FACTS_OFF_PLAN");
   }
 }
 

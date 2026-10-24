@@ -1571,3 +1571,44 @@ build cannot make.
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the validation runner or calls Transaction G. No new environment
 variable.
+
+## DS-6b — a deliverable must measure its planned size and length
+
+**No migration** (ADR-0081). An off-plan video is recorded `INVALID_MEDIA` with
+an existing reason (`VIDEO_DIMENSIONS_INVALID` or `DURATION_INVALID`), and
+Transaction G refuses, as a defect, a `VALID` verdict whose stored facts are off
+plan; no schema, enum, constraint or row changes.
+
+**Before deploying to a database that holds development data**, find the
+`VALID` verdicts awaiting publication that DS-6a's build wrote with off-plan
+facts. Discovery no longer offers them and Transaction G refuses them, so each
+holds its job in `DELIVERABLE_VALIDATING` and its reservation `RESERVED` until
+an operator acts (ADR-0081 Decision 3).
+
+```sql
+SELECT count(*)
+  FROM "generation_deliverable_validations" w
+  JOIN "generation_deliverable_versions" v ON v."id" = w."deliverableVersionId"
+  JOIN "generation_jobs" j ON j."id" = v."generationJobId"
+  JOIN "generation_deliverable_compositions" c ON c."deliverableVersionId" = v."id"
+ WHERE j."state" = 'DELIVERABLE_VALIDATING'
+   AND w."status" = 'VALID'
+   AND (w."videoWidth" <> c."targetWidthPx"
+        OR w."videoHeight" <> c."targetHeightPx"
+        OR abs(w."durationMs" - j."requestedDurationSeconds"::bigint * 1000)
+           > (1000 * c."frameRateDenominator"::bigint + c."frameRateNumerator" - 1)
+             / c."frameRateNumerator");
+```
+
+Only a validator returning facts the composer did not produce, such as a test
+fake, or a row altered by hand, can have written one. Production holds none:
+nothing has ever composed there.
+
+**Rolling back.** To DS-6a's build: safe. That build publishes everything this
+build publishes, and also off-plan videos, which this build's composer does not
+make. An `INVALID_MEDIA` verdict this build wrote for an off-plan video stays
+terminal under that build too.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the validation runner or calls Transaction G. No new environment
+variable.

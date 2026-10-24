@@ -37,6 +37,13 @@
  * not be validated would destroy what they already have. A settlement policy for
  * a permanently unusable deliverable is a separate, reviewed decision.
  *
+ * ## A usable video that is not the planned one
+ *
+ * A `VALID` answer from the validator says the bytes are a usable video. It is
+ * then compared with the claim's plan, the composition's frozen frame size and
+ * the job's admitted length, and a video of another size or length is
+ * finalized `INVALID_MEDIA` with that reason rather than `VALID` (ADR-0081).
+ *
  * ## One bad candidate never poisons the batch
  *
  * `runOnce` isolates each candidate: a thrown defect is reported as that
@@ -63,6 +70,7 @@ import {
   validateDeliverableValidationLeaseMs,
   validateDeliverableValidationRetryDelayMs,
 } from "./durable";
+import { deliverableOffPlanReason } from "./plan";
 import type {
   DeliverableMediaValidationPort,
   DeliverableValidationClaim,
@@ -276,6 +284,17 @@ export class DeliverableValidationRunner {
     const validatedAt = this.#clock();
     switch (outcome.kind) {
       case "VALID": {
+        // Usable media, but is it the video that was planned? A wrong size or
+        // length is the composer's mistake, and a verdict, not a retry.
+        const offPlan = deliverableOffPlanReason(outcome.facts, claim.plannedMedia);
+        if (offPlan !== null) {
+          const refused = await this.#repository.finalizeInvalidMedia({
+            claim,
+            reason: offPlan,
+            validatedAt,
+          });
+          return refused.kind === "LEASE_LOST" ? { kind: "LOST" } : { kind: "INVALID_MEDIA" };
+        }
         const written = await this.#repository.finalizeValid({
           claim,
           facts: outcome.facts,

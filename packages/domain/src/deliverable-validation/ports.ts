@@ -39,6 +39,7 @@ import type {
   DeliverableValidationReceiptBinding,
   DurableDeliverableValidationRecord,
 } from "./durable";
+import type { PlannedDeliverableMedia } from "./plan";
 
 // ---------------------------------------------------------------------------
 // Candidate discovery
@@ -90,6 +91,11 @@ export interface DeliverableValidationClaim {
   readonly outputStorageKey: ManagedDeliverableOutputKey;
   /** Frozen from the composition's durable receipt, never re-derived. */
   readonly expectedReceipt: ManagedOutputVerificationReceipt;
+  /**
+   * What the video must measure: the composition's frozen frame size and the
+   * job's admitted length (ADR-0081). Read under the claim's locks.
+   */
+  readonly plannedMedia: PlannedDeliverableMedia;
 }
 
 /**
@@ -278,7 +284,13 @@ export interface DeliverableValidationRepository {
     readonly leaseExpiresAt: number;
   }): Promise<ClaimDeliverableValidationOutcome>;
 
-  /** `RUNNING` → `VALID`, with the normalized media facts and one event. */
+  /**
+   * `RUNNING` → `VALID`, with the normalized media facts and one event.
+   *
+   * Refuses facts that are not the planned size and length with the defect
+   * `VALID_FACTS_OFF_PLAN`, judged against its own locked read of the plan,
+   * never the claim's copy (ADR-0081).
+   */
   finalizeValid(
     input: FinalizeDeliverableValidationValidInput,
   ): Promise<FinalizeDeliverableValidOutcome>;

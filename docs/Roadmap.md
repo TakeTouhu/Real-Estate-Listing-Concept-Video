@@ -186,8 +186,16 @@ its composition's frozen profile drew the version's disclosure mode and its
 Clean Master is recorded at its canonical key; otherwise it refuses with a
 defect and writes nothing. Validation discovery and the claim no longer offer
 or validate such a version, and the sweep reports any defect for that
-deliverable and goes on to the rest. DS-6b will require the measured
-video to be the planned size and length.
+deliverable and goes on to the rest.
+
+**DS-6b — a deliverable must measure its planned size and length** (ADR-0081,
+no migration): a video that is not its composition's frozen frame size, or not
+its job's admitted length within one frame period, is recorded `INVALID_MEDIA`
+with `VIDEO_DIMENSIONS_INVALID` or `DURATION_INVALID` and is not published.
+`finalizeValid` and Transaction G refuse a `VALID` verdict off that plan as a
+defect, and discovery no longer offers one. The disclosure plan's six
+milestones are built; its terminal settlement of an unusable deliverable is
+not (ADR-0052 Decision 19, `docs/decisions/TODO.md`).
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
