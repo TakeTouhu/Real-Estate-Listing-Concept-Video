@@ -751,3 +751,12 @@ Not applicable: no entity, relationship or column changes, and no migration
 and `failedAt`, `GenerationScene.state` and `stateVersion`,
 `GenerationJob.state` and `stateVersion`, and for an initial generation
 `GenerationReservation.state`, `stateVersion` and `releasedAt`, in one commit.
+
+## GS-2b — a failed job's other scenes close
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0084). Transaction L writes `SceneGeneration.orchestrationState`,
+`stateVersion` and `updatedAt` for an attempt still `QUEUED`,
+`SceneGenerationRequest.state`, `stateVersion` and, when it fails, `failedAt`,
+and `GenerationScene.state`, `stateVersion` and `updatedAt`, in one commit.
+

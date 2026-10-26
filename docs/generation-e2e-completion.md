@@ -2,7 +2,8 @@
 
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
-`docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a)
+`docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a),
+`docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -625,3 +626,312 @@ production scheduler and live Stripe charges remain BLOCKED.
 
 GS-2a waits for the product owner's yes before merge. GS-2b (ending the failed
 job's other scenes and cancelling their queued attempts) comes next.
+
+## GS-2b — a failed job's other scenes close
+
+Base: `ad535fd` (PR #106 merge commit on `main`; post-merge CI run 675 green).
+ADR: `docs/decisions/0084-a-failed-jobs-other-scenes-close.md`
+
+The second half of GS-2. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `50b643e` | the domain decision, the runner, Transaction L, the tests, ADR-0084 and the documentation |
+| `3e5ae35` | the review's answers: an admitted request under a scene still `PENDING` closes, a scene with no request tested, the documents corrected on the job lock and the legacy column, three new TODO items |
+| this commit | this record |
+
+`50b643e`'s message says the job is neither written nor locked; it is locked,
+for the lock order, and never written. `3e5ae35` corrects the documents.
+
+The exact head SHA is reported with the pull request.
+
+### What GS-2b does
+
+- **One decision per open scene of a failed job.**
+  `decideFailedJobSceneClosure` reads the job's and scene's states, the
+  scene's pointer, its requests and every attempt's state. A scene that never
+  started is cancelled with its pending request. A scene that started, or
+  whose request was admitted, fails: each attempt still waiting to be sent is
+  cancelled before submission, and its request fails (or is cancelled, if it
+  was never admitted). A scene with an attempt the provider may hold is not
+  closed yet; anything else is refused with a closed reason, and nothing is
+  written.
+- **A sweep over durable facts.** Transaction L is its own short transaction,
+  offered scenes by a bounded candidate query that mirrors every refusal; a
+  candidate whose closure throws is reported and passed over. Transactions H
+  and K are unchanged.
+- **The cost-admission lock, then job and scene, requests and attempts.** The
+  job is locked for that order and never written; the reservation is read,
+  unlocked, for the lock's key, and never written: the Unit was released when
+  the job failed.
+- **Still dormant.** Nothing in production constructs the runner or the
+  repository.
+
+```mermaid
+sequenceDiagram
+    participant P as Pass (runner)
+    participant Q as Candidate query
+    participant L as Transaction L
+    participant D as decideFailedJobSceneClosure
+    P->>Q: limit (1..100)
+    Q-->>P: scene ids, oldest first
+    loop each candidate, once
+        P->>L: organization, scene, instant, context
+        L->>L: cost-admission lock (organization, billing cycle)
+        L->>L: lock job and scene (tenant-scoped), then requests, then attempts
+        L->>D: facts
+        alt never started, never admitted
+            D-->>L: CLOSE CANCELLED
+            L->>L: request PENDING -> CANCELLED, scene -> CANCELLED
+        else started, or admitted
+            D-->>L: CLOSE FAILED_TERMINAL
+            L->>L: each QUEUED attempt -> CANCELLED_PRE_SUBMISSION
+            L->>L: request -> FAILED_TERMINAL (failedAt), or CANCELLED if never admitted
+            L->>L: scene -> FAILED_TERMINAL
+        else attempt in flight, or refused
+            D-->>L: NOT_CLOSABLE (reason), nothing written
+        end
+    end
+```
+
+### Verification
+
+Measured locally on `3e5ae35` (PostgreSQL 16 configured like CI; FFmpeg
+6.1.1, the version CI's `media` job installs). This record's commit changes
+only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6118 / 6118**, 221 files (6053 on `ad535fd`) |
+| `pnpm test:db` | **1623 / 1623**, 60 files (1586 on `ad535fd`) |
+| `pnpm test:media` | **169 / 169**, 4 files (on `50b643e`): no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New tests:
+
+- `packages/domain/src/failed-job-scene-closure/closure.test.ts`: each
+  closable shape and what it closes into, including an admitted request
+  under a scene still `PENDING`; every in-flight attempt state waited for;
+  every other job and scene state and every contradicting shape refused with
+  its closed reason, in order; the whole table of scene, request and attempt
+  states closing exactly eighteen shapes, each along a legal edge; the batch
+  bound; the vocabulary and the defects' fixed messages.
+- `packages/domain/src/failed-job-scene-closure/runner.test.ts`: each
+  candidate closed once, with its own instant and correlation; closures,
+  cancelled attempts and failures counted; the bound checked before the
+  query; a closure that throws reported `FAILED` with its defect code, or
+  `null`, and the pass going on.
+- `packages/domain/src/failed-job-scene-closure/dormancy.test.ts`: nothing in
+  production constructs the runner or the repository, and neither reaches
+  past the database, the domain and Prisma; the repository updates attempts,
+  requests and the scene only, inserts or deletes nothing, cancels only a
+  `QUEUED` attempt, never writes the job, the reservation or a delivered
+  pointer, takes the cost-admission lock, then job and scene, requests and
+  attempts, and decides in one place.
+- `tests/integration/failed-job-scene-closure.db.test.ts` (37 tests), each job
+  failed through Transaction K first:
+  - a scene that never started cancelled, the job and reservation unchanged;
+  - a scene with no request closed alone, from `PENDING` and from
+    `GENERATING`;
+  - a started scene failed with its waiting attempt cancelled (its legacy
+    column untouched), with its request never admitted, and with its attempt
+    ended each way (refused, retryable, provider failure, exhausted,
+    cancelled, verified);
+  - an admitted request under a scene still `PENDING`, through the real
+    admission primitive, failed with its scene;
+  - only the waiting attempt cancelled behind an ended one; an attempt at the
+    provider waited for, and the scene closed once it ends; no attempt
+    admitted afterwards;
+  - refused, not offered and nothing written: a ready scene, an already
+    closed one, the job's own failed scene, a live and a cancelled job, and
+    six contradicting shapes written by hand;
+  - tenancy; discovery offering exactly what closes, oldest first and bounded;
+    the dormant runner;
+  - concurrency: two closures close once; the cost-admission lock waited for,
+    its holder's commit deciding; a writer holding that lock and then needing
+    the job waited behind without a deadlock; a job-first writer waited for.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `50b643e`: 73 mutants, 71 killed, 2 survived, none broken.**
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| C01 | decide | the job's state is not asked | closure, db |
+| C02 | decide | a ready scene is open | closure, db |
+| C03 | decide | a started scene is cancelled | closure, db |
+| C04 | decide | a pointer naming a rendition ignored | closure, db |
+| C05 | decide | a second request ignored | closure, db |
+| C06 | decide | a regeneration request closes | closure, db |
+| C07 | decide | a delivered request closes | closure, db |
+| C08 | decide | a pending request with an attempt closes | closure, db |
+| C09 | decide | a generating request under a scene that never started closes | closure, db |
+| C10 | decide | a closed request closes again | closure, db |
+| C11 | decide | an attempt with no state passes | closure |
+| C12 | decide | an attempt in flight ignored | closure, db |
+| C13 | decide | a waiting attempt not counted | closure, db |
+| C14 | decide | a waiting attempt counted as in flight | closure, db |
+| C15 | decide | a pending request fails instead of being cancelled | closure, db |
+| C16 | decide | a scene with no request closes its absent request | closure |
+| C17 | bound | a batch of 101 accepted | closure, runner, db |
+| C18 | bound | a fraction accepted | closure, runner, db |
+| C19 | vocabulary | a defect's message changed | closure |
+| C20 | vocabulary | the scene cancellation event renamed | closure, db |
+| C21 | vocabulary | the reason code renamed | closure, db |
+| U01 | runner | a candidate closed twice | runner |
+| U02 | runner | the bound not validated | runner |
+| U03 | runner | one instant for every closure | runner |
+| U04 | runner | one correlation for every closure | runner |
+| U05 | runner | a throw stops the pass | runner |
+| U06 | runner | any error reported as a defect | runner |
+| U07 | runner | cancelled attempts not counted | runner, db |
+| U08 | runner | failures not counted | runner |
+| U09 | runner | refusals counted as closed | runner |
+| R01 | locks | the cost-admission lock skipped | db, dormancy |
+| R02 | locks | the organization's unreserved key for every job | db |
+| R03 | locks | the job chain locked before the cost-admission lock | db, dormancy |
+| R04 | locks | the job not locked | db, dormancy |
+| R05 | locks | the requests not locked | dormancy |
+| R06 | locks | the attempts not locked | dormancy |
+| R07 | tenancy | the lock does not prove the organization | db |
+| R08 | facts | the job's state not read | db |
+| R09 | facts | the pointer not read | db |
+| R10 | facts | the request's delivery not read | db |
+| R11 | facts | the request's kind not read | db |
+| R12 | writes | an ended attempt cancelled too | db |
+| R13 | writes | a cancelled attempt's event dropped | db |
+| R14 | writes | the attempt's version not bumped | db |
+| R15 | writes | a started request cancelled instead of failed | db |
+| R16 | writes | the closure instant not the failedAt | db |
+| R17 | writes | the failed request's version not bumped | db |
+| R18 | writes | the cancelled request's version not bumped | db |
+| R19 | writes | the scene's version not bumped | db |
+| R20 | writes | a pending request left open | db |
+| R21 | events | the scene's event always a failure | db |
+| R22 | events | the events lose the reason code | db |
+| R23 | events | the events lose the caller's correlation | db |
+| R24 | events | the request's failure recorded as a cancellation | db |
+| Q01 | discovery | a live job's scenes offered | db |
+| Q02 | discovery | a ready scene offered | **survived** |
+| Q03 | discovery | a pointer ignored | db |
+| Q04 | discovery | a second request ignored | **survived** |
+| Q05 | discovery | a regeneration offered | db |
+| Q06 | discovery | a delivered request offered | db |
+| Q07 | discovery | a generating request under a scene that never started offered | db |
+| Q08 | discovery | a closed request offered | db |
+| Q09 | discovery | an attempt under a pending request ignored | db |
+| Q10 | discovery | an attempt in flight ignored | db |
+| Q11 | discovery | a waiting attempt counted as in flight | db |
+| Q12 | discovery | an accepted attempt counted as not in flight | db |
+| Q13 | discovery | newest first | db |
+| Q14 | discovery | the bound ignored | db |
+| Q15 | discovery | the bound not validated | db |
+| Q16 | discovery | the organization taken from the wrong row | db |
+| G01 | guard | the worker constructs the runner | dormancy |
+| G02 | guard | the repository writes the reservation | dormancy |
+| G03 | guard | the repository inserts a row | dormancy |
+
+Suites: `closure`, `runner` and `dormancy` = the three domain suites above;
+`db` = the new closure database suite.
+
+The two survivors:
+
+- **Q02** (a ready or closed scene offered) survived because every database
+  test's scene had a request, whose own state already excluded it. A scene
+  with no request is now tested, closing alone and never offered again.
+- **Q04** (a second request ignored by the query) is equivalent: at most one
+  initial request per scene (`scene_generation_requests_initial_key`), so a
+  second request is a regeneration, which the query's kind condition already
+  excludes. The count stays as the decision's explicit mirror.
+
+**Round 2, on `3e5ae35`: 74 mutants, 73 killed, 1 survived (Q04, equivalent),
+none broken.** C09, C10, Q07 and Q08 were re-anchored on the changed decision and query,
+and R25 added; Q02 is now killed by the no-request test. The changed and new
+ones:
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| C09 | decide | an admitted request's scene still pending is cancelled | closure, db |
+| C10 | decide | a closed request closes again | closure, db |
+| Q02 | discovery | a ready scene offered | db |
+| Q07 | discovery | a pending request not offered | db |
+| Q08 | discovery | a closed request offered | db |
+| R25 | writes | the scene closed from a state derived from the decision | db |
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to GS-2a, an independent review
+agent reviewed `50b643e` against `ad535fd`, reading only git objects. It
+confirmed the candidate query mirrors every refusal, including the explicit
+`IS NULL` arm that `NOT IN` would otherwise let through; that every writer
+taking the cost-admission lock derives the same key from the job's one
+reservation; that the writers locking the job without that lock (Transaction
+F, media recovery, revision start) take job, scene, request and attempt in that
+order and never wait for the lock afterwards, so none closes a cycle with
+Transaction L; that every write checks its expected state under its lock; and
+that every edge is legal and satisfies the database's checks. Verdict:
+nothing blocking; three should-fix findings, four nits and a list of test
+gaps, answered in `3e5ae35`:
+
+| Finding | Answer |
+| --- | --- |
+| The job is locked, though the ADR, the API summary and the commit message said it is not | The documents now say it is locked for the lock order and never written. The commit message cannot change; this record names the error |
+| A cancelled attempt's legacy `state` column stays `QUEUED`, so the legacy executor's discovery would still offer it, and the ADR said no closed row is offered by any discovery | Corrected rather than patched: no orchestration writer moves the legacy column, so every orchestrated attempt has this exposure, and writing it here alone would cover one writer of many. The ADR and migration notes now say so, and a new TODO item makes it GS-7's: before any executor runs orchestrated attempts, the legacy discovery must stop offering them. Nothing in production constructs that executor |
+| An admitted request under a scene still `PENDING` was refused forever, since admission does not start the scene, leaving its queued attempt offered to the gate on every pass | Fixed: such a scene fails with its request, from `PENDING` (a legal edge), and the scene closes from the state read under its lock. The candidate query mirrors it. Tested through the real admission primitive. Transaction K's same assumption is a new TODO item for the start step (GS-4) |
+| Nit: the repository header said the reservation is neither read nor locked | It is read once, unlocked, for the advisory key; the header says so |
+| Nit: a generating request with no attempt closes but the ADR table omitted it | Added to the table: not a shape admission writes, and nothing of it is at the provider |
+| Nit: two items left open were not in the TODO | Added: what closes a cancelled job's open scenes, and the legacy discovery (GS-7) |
+| Nit: the ADR overstated who takes the advisory lock | It now also says the attempt rows are locked, so a writer that takes no advisory lock (the generic `recordSubmissionOutcome`) still cannot move one while L decides |
+| Test gaps: the real gate in the advisory race, a concurrent admission, the legacy column, an admitted request under a pending scene, H's `OBSOLETE` answer | The last two added (the legacy column is pinned unchanged in the cancellation test). The rest are listed under *Known limitations* |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the failed job scene closure row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *GS-2b*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above; the decision is ADR-0084 Decision 2 |
+| OpenAPI / API change summary | `docs/api-changes-gs-2b.md`: no HTTP change; the domain decision, the runner, Transaction L |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-2b*: no migration, and what rolling back means |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md`,
+ADR-0083's *Not decided here* (a pointer to ADR-0084), and
+`docs/decisions/TODO.md` (the permanent technical-failure item, and three new
+items: the legacy discovery, starting each scene with its first admission, and
+a cancelled job's open scenes).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+closure's runner or its repository: no worker, scheduler, credential,
+environment variable or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **An attempt that never ends** keeps its scene open (TODO).
+- **A cancelled job's open scenes** are not closed; nothing cancels a job
+  today (TODO).
+- **The legacy column.** A cancelled attempt stays legacy `QUEUED`, as every
+  orchestrated attempt does; GS-7 must stop the legacy discovery offering
+  them (TODO).
+- **Not tested here:** the real paid-submission gate racing the closure (the
+  tests hold the advisory lock by its formula, written out, as GS-2a's do), a
+  real admission racing it, and Transaction H's `OBSOLETE` answer for a closed
+  sibling (H's own suite covers a request no longer generating).
+
+### Remaining work
+
+GS-2b waits for the product owner's yes before merge. GS-3 (shared folder
+storage for development and CI, used by the web app and the worker) comes next.

@@ -1349,6 +1349,27 @@ them is **built**. Each item below records the settled decision and what remains
       and the customer's Unit stays held (ADR-0083, *Not decided here*).
       Whether such an attempt ends, after how long, and as which state, is not
       decided. Must be settled before generation is activated.
+- [ ] **Stop the legacy executor's discovery from offering orchestrated
+      attempts (GS-7).** `findNextQueuedForPreparation` and its claim read the
+      legacy `state` column, which no orchestration writer moves: every
+      orchestrated attempt stays legacy `QUEUED` from admission, including one
+      Transaction L cancelled before submission (ADR-0084, *Not decided
+      here*). Were that executor run, it would claim such a row and send it
+      outside the paid-submission gate. Nothing in production constructs it.
+      Before any executor runs orchestrated attempts, its discovery must
+      exclude them or read the orchestration state.
+- [ ] **Start each scene in the commit that admits its first attempt
+      (GS-4).** Admission (`admitAttemptWithin`) does not move the scene, and
+      Transaction K settles an initial request only under a `GENERATING`
+      scene, refusing one under a `PENDING` scene as `SHAPE_CONFLICT`
+      (ADR-0083 Decision 3). A start step that admitted attempts without
+      starting their scenes would leave such a failure unsettled and its
+      Unit held. Transaction L closes that shape either way (ADR-0084
+      Decision 2).
+- [ ] **Decide what closes a cancelled job's open scenes.** Transaction L
+      closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
+      job `CANCELLED` before it generated may leave `PENDING` scenes; nothing
+      cancels a job today.
 - [ ] **Move the execution preflight's failures onto the orchestration
       state.** `failQueuedPreflight` (Phase 4C-2B, ADR-0027) records a refused
       attempt in the legacy `state` column and leaves its orchestration state
@@ -1617,10 +1638,13 @@ them is **built**. Each item below records the settled decision and what remains
       failing an initial
       generation and releasing its Unit or rolling a regeneration back to the
       customer's video, identically whichever way the attempt ended.*
-      ***Still unbuilt:*** *the failed job's other scenes and their queued
-      attempts, left where they are by Transaction H and Transaction K alike
-      (GS-2b); an attempt that never ends and an attempt that fails preflight
-      (items below); the release of a paid regeneration's or a charged disclosure change's
+      *Built for the failed job's other scenes in GS-2b (ADR-0084): a sweep,
+      Transaction L, closes each open scene of a failed job once nothing of it
+      is at the provider, cancelling an attempt still waiting to be sent, for
+      Transactions H and K alike.*
+      ***Still unbuilt:*** *an attempt that never ends, which keeps its
+      request out of Transaction K and its scene open, and an attempt that
+      fails preflight (items below); the release of a paid regeneration's or a charged disclosure change's
       own reservation, and the disclosure-change count, built with them;
       Transaction G's defects and a claim refused as `UNSUPPORTED_TARGET`,
       which write no terminal row (ADR-0082, "Not decided here"). And a

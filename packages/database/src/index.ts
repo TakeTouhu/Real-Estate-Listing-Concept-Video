@@ -38,6 +38,7 @@ export { createDeliverableCompositionPlanRepository } from "./deliverable-compos
 export { createDeliverableCompositionExecutionRepository } from "./deliverable-composition-execution-repository";
 export { createDeliverableValidationRepository } from "./deliverable-validation-repository";
 export { createAttemptFailureSettlementRepository } from "./attempt-failure-settlement-repository";
+export { createFailedJobSceneClosureRepository } from "./failed-job-scene-closure-repository";
 export {
   ENTITLEMENT_AUDIT_ACTION,
   createUnitEntitlementRepository,

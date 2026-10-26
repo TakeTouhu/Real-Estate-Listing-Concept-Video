@@ -1678,3 +1678,30 @@ delivered job.
 
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the settlement's runner or repository. No new environment variable.
+
+## GS-2b — a failed job's other scenes close
+
+**No migration** (ADR-0084). A new transaction, Transaction L, closes an open
+scene of a `FAILED_TERMINAL` job once nothing of it is at the provider: a scene
+that never started becomes `CANCELLED` with its pending request; one that started,
+or whose request was admitted, becomes `FAILED_TERMINAL`, its request
+`FAILED_TERMINAL` (or `CANCELLED` if it was never admitted) and each of its
+`QUEUED` attempts `CANCELLED_PRE_SUBMISSION` (its legacy `state` column
+untouched).
+The job and its reservation are not written. Every state, column and edge
+already exists; no schema, enum, constraint or row changes at deploy.
+
+**Rows written before this build.** A sweep over durable facts, as for GS-2a:
+its first pass on a database that holds development data closes every open
+scene of a job already failed, with that pass's instant as `failedAt`. Nothing
+runs the pass in production, and production holds no such row: no attempt has
+ever been sent there.
+
+**Rolling back.** To GS-2a's build: safe. That build closes nothing. Every row
+this build closed is `CANCELLED`, `FAILED_TERMINAL` or
+`CANCELLED_PRE_SUBMISSION`, none of which has an outgoing edge or is offered by
+any orchestration discovery.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the closure's runner or repository. No new environment variable.
+

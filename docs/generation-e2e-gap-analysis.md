@@ -71,3 +71,19 @@ an attempt that fails preflight (the preflight writes the legacy `state` column,
 not the orchestration state), a job still `RESERVED` (GS-4's start step leaves none), and the internal
 service-recovery budget, which may later retry a failed attempt before it
 settles. All are recorded in `docs/decisions/TODO.md`.
+
+## GS-2b — a failed job's other scenes close
+
+The rest of the second gap. A job fails with the first scene that settles, and
+its other scenes stayed open: some never started, some held an attempt waiting
+to be sent that the paid-submission gate refuses once the Unit is released, some
+an attempt at the provider. GS-2b closes each with a bounded sweep, Transaction
+L, once nothing of it is at the provider, for Transactions H and K alike
+(ADR-0084). A scene waiting on an attempt the provider holds closes after that
+attempt ends. No migration.
+
+Left open: a cancelled job's open scenes (nothing cancels a job today), an
+attempt that never ends, which keeps its scene open, which executor runs
+orchestrated attempts and that the legacy discovery stops offering them (GS-7),
+and the start step starting each scene with its first admission, which
+Transaction K assumes (GS-4). Recorded in ADR-0084 and `docs/decisions/TODO.md`.
