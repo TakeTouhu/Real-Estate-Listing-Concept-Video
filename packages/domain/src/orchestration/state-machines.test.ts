@@ -43,6 +43,12 @@ describe("the customer video lifecycle", () => {
     // The revision rollback edge (Phase 4C-3B-2H-3B-6C). A failed regeneration
     // must be able to give the customer back the video they already had.
     ["GENERATING", "DELIVERABLE_READY"],
+    // The deliverable rollback edge (ADR-0082), for a replacement whose
+    // composition is blocked.
+    ["COMPOSING", "DELIVERABLE_READY"],
+    // And the failures a deliverable cycle settles into.
+    ["COMPOSING", "FAILED_TERMINAL"],
+    ["DELIVERABLE_VALIDATING", "FAILED_TERMINAL"],
   ] as const)("allows %s -> %s", (from, to) => {
     expect(canTransitionJob(from, to)).toBe(true);
   });
@@ -71,6 +77,10 @@ describe("the customer video lifecycle", () => {
     ["DELIVERABLE_READY", "CREATED"],
     ["DELIVERABLE_READY", "RESERVED"],
     ["SCENES_READY", "GENERATING"],
+    // A deliverable is rolled back to only from the cycle that failed to make
+    // its successor, never from one that has not started composing.
+    ["SCENES_READY", "DELIVERABLE_READY"],
+    ["COMPOSITION_PENDING", "DELIVERABLE_READY"],
     // Terminal is terminal.
     ["FAILED_TERMINAL", "GENERATING"],
     ["FAILED_TERMINAL", "CREATED"],

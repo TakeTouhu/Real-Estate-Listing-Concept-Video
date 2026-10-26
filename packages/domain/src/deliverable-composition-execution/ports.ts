@@ -259,13 +259,16 @@ export interface DeliverableCompositionRepository {
   deferComposition(input: DeferCompositionInput): Promise<DeferCompositionOutcome>;
 
   /**
-   * End automatic execution for this deliverable with a closed block code.
+   * End automatic execution for this deliverable with a closed block code, and
+   * settle its job in the same commit (ADR-0082).
    *
-   * Terminates *this phase's work only*. The job is not transitioned, no unit
-   * is consumed, no reservation is released and the deliverable pointer does
-   * not move, so a customer holding an earlier video keeps it. There is no
-   * unblock operation in this phase: an operator path is its own reviewed
-   * surface.
+   * An initial generation becomes `FAILED_TERMINAL` and its reservation is
+   * released. A replacement returns the job to `DELIVERABLE_READY` with the
+   * deliverable pointer unmoved, so a customer holding an earlier video keeps
+   * it. No unit is ever consumed. A replay of the recorded block answers
+   * `ALREADY_BLOCKED` only when that settlement is durable too, and otherwise
+   * throws `SETTLEMENT_INCOMPLETE`. There is no unblock operation: recovery is an
+   * internal operator action that starts a new cycle (ADR-0052 Decision 20).
    */
   blockComposition(input: BlockCompositionInput): Promise<BlockCompositionOutcome>;
 

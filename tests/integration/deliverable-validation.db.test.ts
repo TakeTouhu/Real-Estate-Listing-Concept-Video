@@ -163,6 +163,7 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
         claim: held,
         reason: "PROBE_REJECTED",
         validatedAt: NOW + 1_000,
+        context: ctx(),
       });
       // A settled answer. Re-offering it would re-claim and re-refuse it forever,
       // and the bounded batch would fill with work that can never progress.
@@ -290,7 +291,7 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
     it("never reopens a terminal non-VALID verdict", async () => {
       const composed = await seedComposedDeliverable(prisma);
       const held = await claimed(composed.organizationId, composed.deliverableVersionId);
-      await repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000 });
+      await repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000, context: ctx() });
       expect(
         (await claim(composed.organizationId, composed.deliverableVersionId, NOW + LEASE_MS))
           .kind,
@@ -371,7 +372,7 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
       expect(await eventsFor(prisma, composed.reservationId)).toEqual([]);
     });
 
-    it("records a terminal non-VALID verdict with no event anywhere", async () => {
+    it("records a terminal non-VALID verdict, failing the job and releasing its Unit", async () => {
       for (const verdict of ["INVALID_MEDIA", "INTEGRITY_MISMATCH"] as const) {
         await wipeOrchestration(prisma);
         await seedTenants(prisma);
@@ -386,27 +387,31 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
                 claim: held,
                 reason: "VIDEO_STREAM_MISSING",
                 validatedAt: NOW + 1_000,
+                context: ctx(),
               })
-            : await repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000 });
+            : await repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000, context: ctx() });
         expect(written.kind).toBe("FINALIZED");
 
-        // The job is untouched, the customer's pointer has not moved, the hold is
-        // neither consumed nor released, and the event stream says nothing. A
-        // recomposition that cannot be validated must not destroy the video the
-        // customer already has.
+        // An initial generation that produced no usable video: the job fails, the
+        // customer's Unit is released, never consumed, and the pointer stays
+        // empty (ADR-0082). Exactly the settlement's two events; none on the
+        // deliverable, which never became validated.
         const jobAfter = await jobOf(prisma, composed.jobId);
         expect([jobAfter.state, jobAfter.stateVersion]).toEqual([
-          "DELIVERABLE_VALIDATING",
-          jobBefore.stateVersion,
+          "FAILED_TERMINAL",
+          jobBefore.stateVersion + 1,
         ]);
         expect(jobAfter.currentDeliverableVersionId).toBeNull();
         const reservation = await reservationOf(prisma, composed.reservationId);
         expect([reservation.state, reservation.consumedAt, reservation.releasedAt]).toEqual([
-          "RESERVED",
+          "RELEASED",
           null,
-          null,
+          new Date(NOW + 1_000),
         ]);
-        expect(await eventCount(prisma)).toBe(before);
+        expect(await eventCount(prisma)).toBe(before + 2);
+        expect((await eventsFor(prisma, composed.deliverableVersionId)).at(-1)?.toState).toBe(
+          "OUTPUT_VERIFIED",
+        );
 
         const row = await validationOf(prisma, composed.deliverableVersionId);
         expect(row?.status).toBe(verdict);
@@ -478,6 +483,7 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
         claim: held,
         reason: "PROBE_REJECTED",
         validatedAt: NOW + 1_000,
+        context: ctx(),
       });
 
       // A different reason, and a different *kind* of verdict, are both
@@ -487,10 +493,11 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
           claim: held,
           reason: "DURATION_INVALID",
           validatedAt: NOW + 2_000,
+          context: ctx(),
         }),
       ).rejects.toBeInstanceOf(DeliverableValidationDefect);
       await expect(
-        repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 2_000 }),
+        repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 2_000, context: ctx() }),
       ).rejects.toBeInstanceOf(DeliverableValidationDefect);
     });
 
@@ -561,8 +568,9 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
                 claim: held,
                 reason: "PROBE_REJECTED",
                 validatedAt: NOW + 1_000,
+                context: ctx(),
               })
-            : repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000 }),
+            : repository.finalizeIntegrityMismatch({ claim: held, validatedAt: NOW + 1_000, context: ctx() }),
         ).rejects.toBeInstanceOf(DeliverableValidationDefect);
 
         // Fails closed: no terminal verdict was persisted, so the row is still
@@ -700,20 +708,23 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
       const first = await seedComposedDeliverable(prisma);
       await validateAndPublish(first.organizationId, first.deliverableVersionId);
       const second = await seedRecomposedDeliverable(prisma, first);
+      const reservationBefore = await reservationOf(prisma, first.reservationId);
 
       const held = await claimed(second.organizationId, second.deliverableVersionId);
       await repository.finalizeInvalidMedia({
         claim: held,
         reason: "CONTAINER_UNSUPPORTED",
         validatedAt: NOW + 1_000,
+        context: ctx(),
       });
 
-      // The replacement could not be validated. The customer keeps the video they
-      // already have, and nothing about their entitlement moves.
+      // The replacement could not be validated. The job returns to the video the
+      // customer already has (ADR-0082), and nothing about their entitlement
+      // moves: the reservation is not even version-bumped.
       const job = await jobOf(prisma, first.jobId);
       expect(job.currentDeliverableVersionId).toBe(first.deliverableVersionId);
-      expect(job.state).toBe("DELIVERABLE_VALIDATING");
-      expect((await reservationOf(prisma, first.reservationId)).state).toBe("CONSUMED");
+      expect(job.state).toBe("DELIVERABLE_READY");
+      expect(await reservationOf(prisma, first.reservationId)).toEqual(reservationBefore);
     });
 
     it("never moves the customer's pointer backwards", async () => {
@@ -1091,6 +1102,7 @@ RUN("Phase 5C — deliverable validation and Transaction G", () => {
         claim: again,
         reason: "DURATION_INVALID",
         validatedAt: NOW + 400_000,
+        context: ctx(),
       });
       expect(
         await repository.findValidationByVersionId(

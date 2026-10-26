@@ -197,6 +197,16 @@ defect, and discovery no longer offers one. The disclosure plan's six
 milestones are built, for Mode A; the terminal settlement of an unusable deliverable is
 not (ADR-0052 Decision 19, `docs/decisions/TODO.md`).
 
+**GS-1 — a failed deliverable settles its job** (ADR-0082, no migration): the
+first milestone of the generation-to-preview plan the product owner approved on
+2026-10-26. A composition `BLOCKED` and a terminal `INVALID_MEDIA` or
+`INTEGRITY_MISMATCH` verdict settle their job in the same commit: an initial
+generation becomes `FAILED_TERMINAL` and its reservation is released, and a
+failed replacement returns the job to the video the customer already holds,
+charging nothing. The three failure classes settle identically, and the
+generic transition API can no longer end a job that holds a Unit. Provider-side
+failures are GS-2's.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

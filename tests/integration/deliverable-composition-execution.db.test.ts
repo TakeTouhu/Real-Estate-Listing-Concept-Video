@@ -323,7 +323,7 @@ RUN("Phase 5B — durable composition execution", () => {
   // Block
   // -------------------------------------------------------------------------
 
-  describe("block ends automatic work and nothing else", () => {
+  describe("block ends automatic work and settles the job (ADR-0082)", () => {
     it("clears the retry code, the lease and the next attempt, and records the reason", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       const first = await claimed(ORG_A, planned.deliverableVersionId);
@@ -362,7 +362,7 @@ RUN("Phase 5B — durable composition execution", () => {
       expect(work?.version).toBe(4);
     });
 
-    it("appends no transition event, on either aggregate", async () => {
+    it("appends no deliverable event, only the settlement's job and reservation events", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       const result = await claimed(ORG_A, planned.deliverableVersionId);
       const deliverableEvents = (await eventsFor(prisma, planned.deliverableVersionId)).length;
@@ -377,11 +377,26 @@ RUN("Phase 5B — durable composition execution", () => {
       });
 
       expect((await eventsFor(prisma, planned.deliverableVersionId)).length).toBe(deliverableEvents);
-      expect((await eventsFor(prisma, planned.jobId)).length).toBe(jobEvents);
-      expect(await eventCount(prisma)).toBe(total);
+      const job = await eventsFor(prisma, planned.jobId);
+      expect(job.length).toBe(jobEvents + 1);
+      expect(job.map((e) => [e.fromState, e.toState, e.eventType, e.reasonCode]).at(-1)).toEqual([
+        "COMPOSING",
+        "FAILED_TERMINAL",
+        "job.deliverable_failed",
+        "DELIVERABLE_FAILURE_SETTLEMENT",
+      ]);
+      expect(
+        (await eventsFor(prisma, planned.reservationId)).map((e) => [
+          e.fromState,
+          e.toState,
+          e.eventType,
+          e.reasonCode,
+        ]),
+      ).toEqual([["RESERVED", "RELEASED", "reservation.released", "DELIVERABLE_FAILURE_SETTLEMENT"]]);
+      expect(await eventCount(prisma)).toBe(total + 2);
     });
 
-    it("leaves the job COMPOSING, its pointer, its units and its reservation untouched", async () => {
+    it("fails an initial generation's job and releases its Unit, pointer and units unmoved", async () => {
       const planned = await seedPlannedDeliverable(prisma);
       const jobBefore = await jobOf(prisma, planned.jobId);
       const reservationBefore = await prisma.generationReservation.findUniqueOrThrow({
@@ -397,17 +412,23 @@ RUN("Phase 5B — durable composition execution", () => {
       });
 
       const jobAfter = await jobOf(prisma, planned.jobId);
-      expect(jobAfter.state).toBe("COMPOSING");
-      expect(jobAfter.currentDeliverableVersionId).toBe(jobBefore.currentDeliverableVersionId);
+      expect(jobAfter.state).toBe("FAILED_TERMINAL");
+      expect(jobAfter.currentDeliverableVersionId).toBeNull();
       expect(jobAfter.requiredVideoUnits).toBe(jobBefore.requiredVideoUnits);
-      // The job moved COMPOSITION_PENDING -> COMPOSING at claim; blocking moved
-      // it no further, so its state version is the claim's and nothing else.
-      expect(jobAfter.stateVersion).toBe(jobBefore.stateVersion + 1);
-      expect(
-        await prisma.generationReservation.findUniqueOrThrow({
-          where: { id: planned.reservationId },
-        }),
-      ).toEqual(reservationBefore);
+      // COMPOSITION_PENDING -> COMPOSING at claim, COMPOSING -> FAILED_TERMINAL
+      // at the block, and nothing else.
+      expect(jobAfter.stateVersion).toBe(jobBefore.stateVersion + 2);
+      const reservationAfter = await prisma.generationReservation.findUniqueOrThrow({
+        where: { id: planned.reservationId },
+      });
+      expect(reservationAfter).toEqual({
+        ...reservationBefore,
+        state: "RELEASED",
+        stateVersion: reservationBefore.stateVersion + 1,
+        releasedAt: new Date(NOW + 1_000),
+        updatedAt: reservationAfter.updatedAt,
+      });
+      expect(reservationAfter.consumedAt).toBeNull();
     });
 
     for (const blockCode of [

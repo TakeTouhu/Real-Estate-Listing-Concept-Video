@@ -41,15 +41,16 @@
  * future instant — exactly as the scene-level lifecycle does. A storage hiccup
  * must never become a permanent record that a customer's deliverable is unusable.
  *
- * ## What a terminal non-`VALID` verdict does *not* do
+ * ## What a terminal non-`VALID` verdict settles
  *
- * It does not fail the job, consume a unit, release the reservation or move the
- * customer's pointer. Phase 5C publishes on `VALID` and otherwise leaves the
- * durable facts exactly where they were, for the same reason Phase 5B's `BLOCKED`
- * does: during a recomposition the customer may already hold a perfectly good
- * video, and terminalizing the job over a replacement that could not be validated
- * would destroy what they already have. A settlement policy for a permanently
- * unusable deliverable is a separate, reviewed decision and is not made here.
+ * It never consumes a unit or moves the customer's pointer. Since ADR-0082 it
+ * settles the job in the same commit, exactly as Phase 5B's `BLOCKED` does: an
+ * initial generation fails and its reservation is released, and a replacement
+ * returns the job to `DELIVERABLE_READY`, because during a recomposition the
+ * customer may already hold a perfectly good video and terminalizing the job over
+ * a replacement that could not be validated would destroy it. The decision is
+ * `settleFailedDeliverable`'s, shared with `BLOCKED`, so the failure class cannot
+ * change the bill (ADR-0052 Decision 19).
  */
 
 import { AppError } from "@app/shared";
@@ -369,15 +370,15 @@ export const RESERVATION_CONSUMED_EVENT_TYPE = "reservation.consumed";
 export const DELIVERABLE_VALIDATED_STATE = "VALIDATED";
 export const DELIVERABLE_PUBLISHED_STATE = "PUBLISHED";
 
-// A terminal non-`VALID` verdict appends **no** transition event, on any
-// aggregate, for exactly the reason Phase 5B's `BLOCKED` appends none.
-//
-// The job really does stay `DELIVERABLE_VALIDATING`, so a job event would assert
-// a state change that did not happen; and a `DELIVERABLE_INVALID` aggregate
-// state would put a customer-visible failure in the transition stream that no
-// reviewed state machine contains, which every later reader would then have to
+// A terminal non-`VALID` verdict appends **no** deliverable event, for exactly
+// the reason Phase 5B's `BLOCKED` appends none: a `DELIVERABLE_INVALID`
+// aggregate state would put a failure in the transition stream that no reviewed
+// state machine contains, which every later reader would then have to
 // interpret. The durable row already says it exactly — `INVALID_MEDIA` or
-// `INTEGRITY_MISMATCH`, with an instant and, where there is one, a closed reason.
+// `INTEGRITY_MISMATCH`, with an instant and, where there is one, a closed
+// reason. The settlement that follows in the same commit does move the job and,
+// for an initial generation, the reservation, and records those moves on their
+// own aggregates (ADR-0082).
 
 /** The reason code recorded on every Phase 5C transition. */
 export const DELIVERABLE_VALIDATION_REASON_CODE = "DELIVERABLE_VALIDATION";

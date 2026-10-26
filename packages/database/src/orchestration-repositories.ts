@@ -138,6 +138,23 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // deliverable pointer it returns to must be proved unchanged in the same
   // commit.
   "GENERATING->DELIVERABLE_READY",
+  // ADR-0082: a job that holds the customer's Unit ends only through a
+  // settlement that releases it in the same commit (ADR-0052 Decision 19). A
+  // generic move to a terminal state would strand the Unit in a hold nobody
+  // will ever settle. The media failure settlement owns GENERATING's edge, the
+  // deliverable failure settlement owns COMPOSING's and DELIVERABLE_VALIDATING's,
+  // and the rest have no owner yet, so they cannot be taken at all.
+  "RESERVED->CANCELLED",
+  "RESERVED->FAILED_TERMINAL",
+  "GENERATING->FAILED_TERMINAL",
+  "SCENES_READY->FAILED_TERMINAL",
+  "COMPOSITION_PENDING->FAILED_TERMINAL",
+  "COMPOSING->FAILED_TERMINAL",
+  "DELIVERABLE_VALIDATING->FAILED_TERMINAL",
+  // The deliverable failure settlement owns the replacement rollback edge, for
+  // the same reason Transaction H owns GENERATING's: it is only correct with the
+  // pointer proved unchanged in the same commit.
+  "COMPOSING->DELIVERABLE_READY",
 ];
 
 /**

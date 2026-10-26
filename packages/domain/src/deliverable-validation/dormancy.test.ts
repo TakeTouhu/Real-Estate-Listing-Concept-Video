@@ -35,6 +35,13 @@ const VALIDATION_REPOSITORY = join(
   "src",
   "deliverable-validation-repository.ts",
 );
+const SETTLEMENT_MODULE = join(
+  REPO_ROOT,
+  "packages",
+  "database",
+  "src",
+  "deliverable-failure-settlement.ts",
+);
 const MIGRATION_DIR = "00000000000016_phase5c_deliverable_validation";
 const MIGRATION = join(
   REPO_ROOT,
@@ -213,9 +220,19 @@ describe("the database boundary can reach nothing external", () => {
       expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
     }
     expect(imports(text).sort()).toEqual([
+      "./deliverable-failure-settlement",
       "./orchestration-repositories",
       "@app/domain",
       "@app/shared",
+      "@prisma/client",
+    ]);
+  });
+
+  it("settles through a module that reaches nothing external either (ADR-0082)", () => {
+    const text = code(readFileSync(SETTLEMENT_MODULE, "utf8"));
+    expect(imports(text).sort()).toEqual([
+      "./orchestration-repositories",
+      "@app/domain",
       "@prisma/client",
     ]);
   });

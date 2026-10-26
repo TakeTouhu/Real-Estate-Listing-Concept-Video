@@ -139,6 +139,8 @@ export interface FinalizeDeliverableValidationInvalidInput {
   readonly claim: DeliverableValidationClaim;
   readonly reason: ManagedOutputMediaInvalidReason;
   readonly validatedAt: number;
+  /** For the settlement's job and reservation events (ADR-0082). */
+  readonly context: TransitionContext;
 }
 
 /**
@@ -149,11 +151,13 @@ export interface FinalizeDeliverableValidationOffPlanInput {
   readonly claim: DeliverableValidationClaim;
   readonly facts: ManagedOutputMediaFacts;
   readonly validatedAt: number;
+  readonly context: TransitionContext;
 }
 
 export interface FinalizeDeliverableValidationMismatchInput {
   readonly claim: DeliverableValidationClaim;
   readonly validatedAt: number;
+  readonly context: TransitionContext;
 }
 
 /**
@@ -306,11 +310,14 @@ export interface DeliverableValidationRepository {
   ): Promise<FinalizeDeliverableValidOutcome>;
 
   /**
-   * `RUNNING` → `INVALID_MEDIA`. The job is untouched and no event is appended.
+   * `RUNNING` → `INVALID_MEDIA`, settling the job in the same commit
+   * (ADR-0082): an initial generation fails and its Unit is released; a
+   * replacement returns the job to `DELIVERABLE_READY` with the customer's
+   * video unchanged. The settlement appends the job and reservation events; the
+   * verdict itself appends none.
    *
-   * Not a customer-facing failure and not a settlement: during a recomposition
-   * the customer may already hold a perfectly good video, and terminalizing the
-   * job over a replacement that could not be validated would destroy it.
+   * A replay of the written verdict answers `ALREADY_FINALIZED` only when the
+   * settlement is durable too, and otherwise throws `SETTLEMENT_INCOMPLETE`.
    */
   finalizeInvalidMedia(
     input: FinalizeDeliverableValidationInvalidInput,
@@ -318,7 +325,7 @@ export interface DeliverableValidationRepository {
 
   /**
    * `RUNNING` → `INVALID_MEDIA` for a usable video that is not the planned one
-   * (ADR-0081). Same restraint as `finalizeInvalidMedia`.
+   * (ADR-0081). Settles like `finalizeInvalidMedia`.
    *
    * The reason is derived here, from the measured facts and this transaction's
    * own locked read of the plan, never taken from the caller: the verdict is
@@ -330,7 +337,7 @@ export interface DeliverableValidationRepository {
     input: FinalizeDeliverableValidationOffPlanInput,
   ): Promise<FinalizeDeliverableVerdictOutcome>;
 
-  /** `RUNNING` → `INTEGRITY_MISMATCH`. Same restraint as `INVALID_MEDIA`. */
+  /** `RUNNING` → `INTEGRITY_MISMATCH`. Settles like `finalizeInvalidMedia`. */
   finalizeIntegrityMismatch(
     input: FinalizeDeliverableValidationMismatchInput,
   ): Promise<FinalizeDeliverableVerdictOutcome>;

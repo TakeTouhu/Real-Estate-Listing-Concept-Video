@@ -9,7 +9,10 @@
  * ```text
  * claim     work created or reclaimed RUNNING, job untouched
  * --- external: read the canonical object, hash it, inspect it ---
- * finalize  work -> VALID | INVALID_MEDIA | INTEGRITY_MISMATCH, job untouched
+ * finalize  work -> VALID, job untouched
+ *           work -> INVALID_MEDIA | INTEGRITY_MISMATCH, and the job settled in
+ *           the same commit: FAILED_TERMINAL with its Unit released, or a
+ *           replacement back to DELIVERABLE_READY (ADR-0082)
  * defer     work -> PENDING with a future instant, job untouched
  * G         DELIVERABLE_VALIDATING -> DELIVERABLE_READY, the deliverable pointer,
  *           and the entitlement consume where one is owed -- one commit
@@ -18,7 +21,9 @@
  * ## Lock order
  *
  * ```text
- * validation lifecycle : GenerationJob -> version -> composition -> validation
+ * claim, VALID, defer : GenerationJob -> version -> composition -> validation
+ * terminal verdicts    : GenerationReservation -> GenerationJob -> version
+ *                        -> composition -> validation
  * Transaction G        : GenerationReservation -> GenerationJob -> version
  *                        -> composition -> validation
  * ```
@@ -28,12 +33,12 @@
  * here would close a deadlock cycle with settlement, which holds the reservation
  * and then waits for the Job.
  *
- * The lifecycle transactions do not lock the reservation *at all*, and that is
- * not an inconsistency with the rule: the rule constrains transactions that lock
- * **both** rows. Validation moves no entitlement, so locking the hold purely for
- * symmetry would serialize it against every cost workflow for a row this code
- * never reads. Because they never take it, they cannot form the inverse pair with
- * Transaction G either.
+ * The claim, the `VALID` verdict and the deferral do not lock the reservation *at
+ * all*, and that is not an inconsistency with the rule: the rule constrains
+ * transactions that lock **both** rows. They move no entitlement, so locking the
+ * hold purely for symmetry would serialize them against every cost workflow for
+ * a row they never read. A terminal verdict does lock it, first, because its
+ * commit may release it.
  */
 
 import {
@@ -78,9 +83,16 @@ import {
   type PlannedDeliverableMedia,
   type PublishValidatedDeliverableInput,
   type PublishValidatedDeliverableOutcome,
+  type TransitionContext,
 } from "@app/domain";
 import { randomId } from "@app/shared";
 import { Prisma, type PrismaClient } from "@prisma/client";
+import {
+  assertDeliverableFailureSettled,
+  lockReservationForDeliverable,
+  settleDeliverableFailure,
+  type FailedDeliverableCycle,
+} from "./deliverable-failure-settlement";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -452,20 +464,32 @@ export function createDeliverableValidationRepository(
     },
 
     async finalizeInvalidMedia(input: FinalizeDeliverableValidationInvalidInput) {
-      return finalizeTerminalVerdict(prisma, input.claim, "INVALID_MEDIA", input.validatedAt, {
-        invalidReason: input.reason,
-      });
+      return finalizeTerminalVerdict(
+        prisma,
+        input.claim,
+        "INVALID_MEDIA",
+        input.validatedAt,
+        { invalidReason: input.reason },
+        input.context,
+      );
     },
 
     async finalizeOffPlan(input: FinalizeDeliverableValidationOffPlanInput) {
       // The reason is this transaction's, from the facts and its own locked
       // read of the plan, never the caller's: an INVALID_MEDIA verdict is never
       // reopened, so a wrong plan in a caller must not condemn a correct video.
-      return finalizeTerminalVerdict(prisma, input.claim, "INVALID_MEDIA", input.validatedAt, (ctx) => {
-        const reason = deliverableOffPlanReason(input.facts, plannedMediaOf(ctx));
-        if (reason === null) throw new DeliverableValidationDefect("OFF_PLAN_VERDICT_ON_PLAN");
-        return { invalidReason: reason };
-      });
+      return finalizeTerminalVerdict(
+        prisma,
+        input.claim,
+        "INVALID_MEDIA",
+        input.validatedAt,
+        (ctx) => {
+          const reason = deliverableOffPlanReason(input.facts, plannedMediaOf(ctx));
+          if (reason === null) throw new DeliverableValidationDefect("OFF_PLAN_VERDICT_ON_PLAN");
+          return { invalidReason: reason };
+        },
+        input.context,
+      );
     },
 
     async finalizeIntegrityMismatch(input: FinalizeDeliverableValidationMismatchInput) {
@@ -475,6 +499,7 @@ export function createDeliverableValidationRepository(
         "INTEGRITY_MISMATCH",
         input.validatedAt,
         {},
+        input.context,
       );
     },
 
@@ -782,12 +807,15 @@ export function createDeliverableValidationRepository(
 // ---------------------------------------------------------------------------
 
 /**
- * `RUNNING` → `INVALID_MEDIA` or `INTEGRITY_MISMATCH`, in one short transaction.
+ * `RUNNING` → `INVALID_MEDIA` or `INTEGRITY_MISMATCH`, and the job's settlement,
+ * in one short transaction (ADR-0082).
  *
- * One function for both because the restraint is identical and must stay so: no
- * job transition, no unit consumed, no reservation released, no pointer move and
- * no transition event on any aggregate. Two copies of that restraint would be two
- * places for it to be relaxed in.
+ * One function for every terminal non-`VALID` verdict because what follows it is
+ * identical and must stay so: the cycle produced no usable video, so an initial
+ * generation fails and its Unit is released, and a replacement returns the job to
+ * the video the customer already holds. No unit is consumed and the pointer never
+ * moves. Two copies of that settlement would be two places for it to drift, and
+ * the failure class must not change the bill (ADR-0052 Decision 19).
  *
  * It proves the same three-way receipt agreement `finalizeValid` does, and for a
  * sharper reason. A verdict that a deliverable is *unusable* is terminal and is
@@ -816,8 +844,15 @@ async function finalizeTerminalVerdict(
   validatedAt: number,
   /** The verdict, or how to judge it from the locked chain (ADR-0081). */
   judged: TerminalVerdict | ((ctx: ValidationChainRow) => TerminalVerdict),
+  context: TransitionContext,
 ): Promise<FinalizeDeliverableVerdictOutcome> {
   return prisma.$transaction(async (tx): Promise<FinalizeDeliverableVerdictOutcome> => {
+    // Reservation before Job: this commit may release it (ADR-0082).
+    const reservation = await lockReservationForDeliverable(
+      tx,
+      claim.organizationId,
+      claim.deliverableVersionId,
+    );
     const ctx = await lockValidationChain(tx, claim.organizationId, claim.deliverableVersionId);
     if (ctx === null) return { kind: "LEASE_LOST" };
 
@@ -838,9 +873,17 @@ async function finalizeTerminalVerdict(
       ) {
         throw new DeliverableValidationDefect("VALIDATION_VERDICT_CONFLICT");
       }
+      // The verdict's commit settled the job; a replay finding it unsettled has
+      // found a row that commit never wrote.
+      assertDeliverableFailureSettled(failedCycleOf(ctx), reservation);
       return { kind: "ALREADY_FINALIZED" };
     }
     if (!holdsClaim(ctx, claim)) return { kind: "LEASE_LOST" };
+    // The job must still be validating this version, as `finalizeValid` asks.
+    // A verdict on a cycle the job has left would settle a cycle nobody runs.
+    if (ctx.jobState !== "DELIVERABLE_VALIDATING" || ctx.versionOrdinal !== ctx.highestOrdinal) {
+      return { kind: "LEASE_LOST" };
+    }
     // The same proof `finalizeValid` makes, through the same function rather than
     // a second comparison that could drift from it: the caller's receipt, the
     // row's frozen binding and the composition's current receipt must still
@@ -869,13 +912,11 @@ async function finalizeTerminalVerdict(
     });
     if (written.count !== 1) return { kind: "LEASE_LOST" };
 
-    // Deliberately no transition event, on any aggregate, and no job move. The
-    // job really does stay DELIVERABLE_VALIDATING, and inventing a customer-
-    // visible failure state to carry this would put a value in the event stream
-    // that no reviewed state machine contains. Nothing else moves either: during
-    // a recomposition the customer may already hold a perfectly good video, and
-    // settling an entitlement over a replacement that could not be validated
-    // charges the platform's problem to them.
+    // No deliverable event: the version simply never becomes validated. The
+    // settlement records the job's move and, for an initial generation, the
+    // Unit's release. The pointer is proved unmoved either way: a customer
+    // holding an earlier video keeps exactly that video.
+    await settleDeliverableFailure(tx, failedCycleOf(ctx), reservation, new Date(validatedAt), context);
     await assertPointerUnmoved(tx, ctx);
     return { kind: "FINALIZED" };
   });
@@ -914,8 +955,9 @@ async function finalizeTerminalVerdict(
  * between the read and the lock, because nothing can reach them without the job
  * lock this transaction already holds.
  *
- * The reservation is neither joined nor locked here. The lifecycle moves no
- * entitlement; Transaction G locks it separately, and first.
+ * The reservation is neither joined nor locked here. Transaction G and the
+ * terminal verdicts, the only writers here that move it, lock it separately,
+ * and first.
  *
  * A cross-tenant or unknown id matches no row, locks nothing, and is reported
  * exactly as a missing one — the caller's organization id is never trusted on its
@@ -1227,6 +1269,18 @@ function holdsClaim(
     ctx.validationStatus === "RUNNING" &&
     ctx.validationVersion === claim.version
   );
+}
+
+/** The chain as a failed cycle, for its settlement (ADR-0082). */
+function failedCycleOf(ctx: ValidationChainRow): FailedDeliverableCycle {
+  return {
+    organizationId: ctx.organizationId,
+    jobId: ctx.jobId,
+    jobState: ctx.jobState,
+    currentDeliverableVersionId: ctx.currentDeliverableVersionId,
+    failedIn: "DELIVERABLE_VALIDATING",
+    failedVersionIsNewest: ctx.versionOrdinal === ctx.highestOrdinal,
+  };
 }
 
 /** The customer's published deliverable must be exactly where it was. */

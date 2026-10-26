@@ -1612,3 +1612,44 @@ terminal under that build too.
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the validation runner or calls Transaction G. No new environment
 variable.
+
+## GS-1 — a failed deliverable settles its job in the same commit
+
+**No migration** (ADR-0082). A composition `BLOCKED` and a terminal non-`VALID`
+verdict now settle their job in their own commit: an initial generation becomes
+`FAILED_TERMINAL` with its reservation `RELEASED`, and a replacement returns to
+`DELIVERABLE_READY` with its pointer and its consumed reservation unchanged.
+Every state and column already exists; no schema, enum, constraint or row
+changes.
+
+**Before deploying to a database that holds development data**, find the
+terminal rows an earlier build wrote without settling. Discovery offers none of
+them, and a replay of one now throws `SETTLEMENT_INCOMPLETE` rather than
+settling it late (ADR-0082 Decision 5), so each keeps its job and, for an
+initial generation, its reservation where they are until an operator acts.
+
+```sql
+SELECT j."id" AS "jobId", j."state"::text AS "jobState",
+       res."state"::text AS "reservationState"
+  FROM "generation_jobs" j
+  JOIN "generation_deliverable_versions" v ON v."generationJobId" = j."id"
+  LEFT JOIN "generation_reservations" res ON res."generationJobId" = j."id"
+  LEFT JOIN "generation_deliverable_compositions" c ON c."deliverableVersionId" = v."id"
+  LEFT JOIN "generation_deliverable_validations" w ON w."deliverableVersionId" = v."id"
+ WHERE v."ordinal" = (SELECT MAX(sib."ordinal")
+                        FROM "generation_deliverable_versions" sib
+                       WHERE sib."generationJobId" = j."id")
+   AND ((j."state" = 'COMPOSING' AND c."status" = 'BLOCKED')
+     OR (j."state" = 'DELIVERABLE_VALIDATING'
+         AND w."status" IN ('INVALID_MEDIA', 'INTEGRITY_MISMATCH')));
+```
+
+Production holds none: nothing has ever composed there.
+
+**Rolling back.** To DS-6b's build: safe. That build settles nothing. A job this
+build failed is `FAILED_TERMINAL`, which has no outgoing edge and which no
+discovery offers; a replacement this build rolled back is `DELIVERABLE_READY`
+with the customer's video, which that build handles as any delivered job.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the composition or validation runner. No new environment variable.

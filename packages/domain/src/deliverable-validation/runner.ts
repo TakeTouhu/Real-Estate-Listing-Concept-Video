@@ -30,12 +30,12 @@
  *
  * ## What a non-`VALID` verdict does here
  *
- * Nothing further. The verdict is made durable and the pass moves on: the job is
- * not failed, no unit is consumed, no reservation is released and the customer's
- * pointer does not move. During a recomposition the customer may already hold a
- * perfectly good video, and terminalizing the job over a replacement that could
- * not be validated would destroy what they already have. A settlement policy for
- * a permanently unusable deliverable is a separate, reviewed decision.
+ * The repository settles the job in the verdict's own commit (ADR-0082): an
+ * initial generation fails and its Unit is released, so no Unit is consumed for a
+ * video that was never delivered; a replacement returns the job to
+ * `DELIVERABLE_READY` and the customer's pointer does not move, so a video they
+ * already hold is never lost to one that could not be validated. The runner hands
+ * over its transition context for those events and decides nothing about them.
  *
  * ## A usable video that is not the planned one
  *
@@ -94,7 +94,7 @@ export type DeliverableValidationRunOutcome =
   | { readonly kind: "ALREADY_PUBLISHED" }
   /** Validated, but the job moved on before publication. Ordinary. */
   | { readonly kind: "NOT_PUBLISHABLE" }
-  /** Terminal verdict written. Nothing published, nothing settled. */
+  /** Terminal verdict written and its job settled (ADR-0082). Nothing published. */
   | { readonly kind: "INVALID_MEDIA" }
   | { readonly kind: "INTEGRITY_MISMATCH" }
   /** Returned to `PENDING`. Not a verdict. */
@@ -295,6 +295,7 @@ export class DeliverableValidationRunner {
             claim,
             facts: outcome.facts,
             validatedAt,
+            context,
           });
           return refused.kind === "LEASE_LOST" ? { kind: "LOST" } : { kind: "INVALID_MEDIA" };
         }
@@ -313,11 +314,16 @@ export class DeliverableValidationRunner {
           claim,
           reason: outcome.reason,
           validatedAt,
+          context,
         });
         return written.kind === "LEASE_LOST" ? { kind: "LOST" } : { kind: "INVALID_MEDIA" };
       }
       case "INTEGRITY_MISMATCH": {
-        const written = await this.#repository.finalizeIntegrityMismatch({ claim, validatedAt });
+        const written = await this.#repository.finalizeIntegrityMismatch({
+          claim,
+          validatedAt,
+          context,
+        });
         return written.kind === "LEASE_LOST" ? { kind: "LOST" } : { kind: "INTEGRITY_MISMATCH" };
       }
       case "RETRYABLE_FAILURE": {

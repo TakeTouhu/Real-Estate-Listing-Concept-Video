@@ -735,3 +735,11 @@ Not applicable: no entity, relationship or column changes, and no migration
 `targetHeightPx`, `frameRateNumerator`, `frameRateDenominator` and
 `GenerationJob.requestedDurationSeconds`, and compare a verdict's facts with
 them.
+
+## GS-1 — a failed deliverable settles its job
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0082). `blockComposition` and the terminal verdicts now also write
+`GenerationJob.state` and `stateVersion`, and for an initial generation
+`GenerationReservation.state`, `stateVersion` and `releasedAt`, in the commit
+that records the failure.

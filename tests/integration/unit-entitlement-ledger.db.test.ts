@@ -937,6 +937,42 @@ RUN("Phase 6A — Transaction G spends the frozen funding", () => {
     expect(await prisma.generationReservationAllocation.count({ where: { reservationId: composed.reservationId } })).toBe(2);
   });
 
+  it("gives every frozen Unit back when the deliverable fails validation (ADR-0082)", async () => {
+    const period = await openPeriod("standard");
+    await grant(period.id, "NORMAL", 5, IN_NOVEMBER);
+    await spendNormalBase(14);
+    const unheld = await balance(period.id);
+    const composed = await seedComposedDeliverable(prisma, {
+      sceneCount: 7,
+      requestedDurationSeconds: 35,
+      fundFromLedgerAt: IN_NOVEMBER,
+    });
+    const allocations = await ledger.allocationsForReservation(ORG_A, composed.reservationId);
+    expect(await balance(period.id)).not.toEqual(unheld);
+
+    leaseSeq += 1;
+    const claim = await validation.claimDeliverableValidation({
+      organizationId: ORG_A,
+      deliverableVersionId: composed.deliverableVersionId,
+      now: NOW,
+      leaseToken: `vlease_ledger_${leaseSeq}`,
+      leaseExpiresAt: NOW + 15 * 60_000,
+    });
+    if (claim.kind !== "CLAIMED") throw new Error(`claim: ${claim.kind}`);
+    const rejected = await validation.finalizeInvalidMedia({
+      claim: claim.claim,
+      reason: "PROBE_REJECTED",
+      validatedAt: NOW + 1_000,
+      context: ctx(),
+    });
+    expect(rejected.kind).toBe("FINALIZED");
+
+    // The Base Unit and the block Unit both come back, and the frozen record of
+    // what funded the hold stays as it was.
+    expect(await balance(period.id)).toEqual(unheld);
+    expect(await ledger.allocationsForReservation(ORG_A, composed.reservationId)).toEqual(allocations);
+  });
+
   it("refuses to spend a hold whose frozen funding no longer covers it, and commits nothing", async () => {
     const { composed, allocations } = await splitFundedDeliverable();
     const { publication } = await validateAndPublish(ORG_A, composed.deliverableVersionId, 35);

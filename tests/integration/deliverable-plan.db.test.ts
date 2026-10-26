@@ -194,7 +194,12 @@ RUN("ADR-0081 — a deliverable must measure its planned size and length", () =>
     const FORGED_PLAN = { widthPx: 1280, heightPx: 720, durationMs: 5_000, durationToleranceMs: 34 };
 
     function finalizeOffPlan(validationClaim: DeliverableValidationClaim, facts: ManagedOutputMediaFacts) {
-      return repository.finalizeOffPlan({ claim: validationClaim, facts, validatedAt: NOW + 1_000 });
+      return repository.finalizeOffPlan({
+        claim: validationClaim,
+        facts,
+        validatedAt: NOW + 1_000,
+        context: ctx(),
+      });
     }
 
     it("derives the reason from its own read of the plan", async () => {
@@ -257,7 +262,7 @@ RUN("ADR-0081 — a deliverable must measure its planned size and length", () =>
     });
   });
 
-  it("records an off-plan video as INVALID_MEDIA through the runner, holding the job and its Unit", async () => {
+  it("records an off-plan video as INVALID_MEDIA through the runner, releasing its Unit", async () => {
     const cases = [
       { facts: { ...ON_PLAN, videoWidth: 1080, videoHeight: 1920 }, reason: "VIDEO_DIMENSIONS_INVALID" },
       { facts: { ...ON_PLAN, durationMs: 15_000 }, reason: "DURATION_INVALID" },
@@ -279,10 +284,10 @@ RUN("ADR-0081 — a deliverable must measure its planned size and length", () =>
 
       const after = await state(composed);
       expect(after.validation).toEqual(["INVALID_MEDIA", 2, reason]);
-      // A verdict, not a settlement: nothing reaches the customer and the hold
-      // stays where it was (ADR-0052 Decision 19 is the terminal path's, TODO).
-      expect(after.job).toEqual(["DELIVERABLE_VALIDATING", expect.any(Number), null]);
-      expect(after.reservation[0]).toBe("RESERVED");
+      // Nothing reaches the customer, and the Unit comes back: an off-plan
+      // video settles exactly as an unusable one does (ADR-0082).
+      expect(after.job).toEqual(["FAILED_TERMINAL", expect.any(Number), null]);
+      expect(after.reservation[0]).toBe("RELEASED");
       // And it is terminal: no later pass re-validates it.
       expect(
         (

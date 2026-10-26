@@ -316,8 +316,13 @@ RUN("composition execution under contention", () => {
         // The lost finalize recorded no master either: the record and the
         // receipt commit together or not at all.
         expect(await mastersOf(planned.deliverableVersionId)).toBe(0);
-        // Blocking moves no job, so a lost finalize leaves it composing.
-        expect((await jobOf(prisma, planned.jobId)).state).toBe("COMPOSING");
+        // The block settled the job (ADR-0082), and the lost finalize moved
+        // nothing: the job failed and its Unit came back.
+        expect((await jobOf(prisma, planned.jobId)).state).toBe("FAILED_TERMINAL");
+        expect(
+          (await prisma.generationReservation.findUniqueOrThrow({ where: { id: planned.reservationId } }))
+            .state,
+        ).toBe("RELEASED");
       }
     } finally {
       await a.$disconnect();
