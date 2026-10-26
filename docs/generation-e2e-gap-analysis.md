@@ -51,3 +51,23 @@ Deliberately left to later milestones or decisions: provider-side failures
 reservation of a paid regeneration or charged disclosure change (not built),
 and operator recovery (ADR-0052 Decision 20). All are recorded in
 `docs/decisions/TODO.md`.
+
+## GS-2a — a scene whose attempts ended without a video settles its job
+
+The second gap, split in two. GS-2a settles a scene request whose attempts all
+ended, the newest without a video (a refusal, a provider failure or an
+unresolved submission): an initial
+generation fails and its Unit is released; a scene regeneration returns to the
+video the customer already holds. It is a bounded sweep, Transaction K, rather
+than a change to each writer, because the failure is already a durable fact and
+one transaction with one lock order is reviewable where a change to every writer
+is not (ADR-0083 Decision 1). No
+migration.
+
+GS-2b ends the failed job's other scenes and cancels their queued attempts,
+for this settlement and Transaction H alike. Also left open: an attempt that
+never ends (a provider that never answers, an output copy that keeps failing),
+an attempt that fails preflight (the preflight writes the legacy `state` column,
+not the orchestration state), a job still `RESERVED` (GS-4's start step leaves none), and the internal
+service-recovery budget, which may later retry a failed attempt before it
+settles. All are recorded in `docs/decisions/TODO.md`.

@@ -133,17 +133,18 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // revising it, which nothing else in the system knows how to finish.
   "DELIVERABLE_READY->REVISING",
   "REVISING->GENERATING",
-  // Transaction H owns this: the revision rollback edge. It is only correct
-  // alongside failing the regeneration request and restoring the scene, and the
-  // deliverable pointer it returns to must be proved unchanged in the same
-  // commit.
+  // Transactions H and K own this: the revision rollback edge. It is only
+  // correct alongside failing the regeneration request and restoring the scene,
+  // and the deliverable pointer it returns to must be proved unchanged in the
+  // same commit.
   "GENERATING->DELIVERABLE_READY",
   // ADR-0082: a job that holds the customer's Unit ends only through a
   // settlement that releases it in the same commit (ADR-0052 Decision 19). A
   // generic move to a terminal state would strand the Unit in a hold nobody
-  // will ever settle. The media failure settlement owns GENERATING's edge, the
-  // deliverable failure settlement owns COMPOSING's and DELIVERABLE_VALIDATING's,
-  // and the rest have no owner yet, so they cannot be taken at all.
+  // will ever settle. The media and attempt failure settlements (Transactions H
+  // and K) own GENERATING's edge, the deliverable failure settlement owns
+  // COMPOSING's and DELIVERABLE_VALIDATING's, and the rest have no owner yet, so
+  // they cannot be taken at all.
   "RESERVED->CANCELLED",
   "RESERVED->FAILED_TERMINAL",
   "GENERATING->FAILED_TERMINAL",
@@ -160,9 +161,9 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
 /**
  * Scene edges an atomic primitive owns.
  *
- * `REVISING->READY` has two owners rather than one, and that is not a gap: a
- * revision ends either by delivering the new rendition (Transaction F) or by
- * rolling back to the previous one (Transaction H). Both write the scene's
+ * `REVISING->READY` has more than one owner, and that is not a gap: a revision
+ * ends either by delivering the new rendition (Transaction F) or by rolling back
+ * to the previous one (Transaction H or K). Both write the scene's
  * delivered pointer — one replaces it, one proves it unchanged — and a generic
  * caller reaching READY would do neither.
  */
@@ -171,8 +172,12 @@ const SCENE_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   "GENERATING->READY",
   // Revision start owns this.
   "READY->REVISING",
-  // Transaction F or Transaction H.
+  // Transaction F, H or K.
   "REVISING->READY",
+  // Transactions H and K (ADR-0083). A generating scene fails only with its job,
+  // and its job only with the release of its Unit; failing the scene alone would
+  // leave a job that can neither deliver nor be settled.
+  "GENERATING->FAILED_TERMINAL",
 ];
 
 const REQUEST_RESERVED_EDGES: readonly `${string}->${string}`[] = [
@@ -187,6 +192,9 @@ const REQUEST_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // Transaction F applies in the same commit. Reaching `DELIVERED` through the
   // generic API would write one of those facts without the others.
   "GENERATING->DELIVERED",
+  // Transactions H and K (ADR-0083), for the reason the scene's edge is theirs:
+  // a generating request fails only together with its scene and its job.
+  "GENERATING->FAILED_TERMINAL",
 ];
 
 const RESERVATION_RESERVED_EDGES: readonly `${string}->${string}`[] = [

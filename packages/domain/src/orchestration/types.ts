@@ -133,9 +133,11 @@ export const SCENE_GENERATION_REQUEST_KINDS: readonly SceneGenerationRequestKind
  *
  * There is no `FAILED_RETRYABLE` here, and its absence is load-bearing.
  * Retryability is a property of one provider invocation, not of the customer's
- * request: a request whose attempt failed retryably is still `GENERATING`,
- * because the platform is going to try again without telling the customer their
- * request failed.
+ * request: a request whose attempt failed retryably stays `GENERATING` while the
+ * platform may still try again without telling the customer their request
+ * failed. Nothing retries a provider-side failure today, so the attempt failure
+ * settlement fails such a request as it would a terminal one (ADR-0083
+ * Decision 2) until the internal service-recovery budget exists.
  */
 export type SceneGenerationRequestState =
   | "PENDING"

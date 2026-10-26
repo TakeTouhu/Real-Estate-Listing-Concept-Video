@@ -1653,3 +1653,28 @@ with the customer's video, which that build handles as any delivered job.
 
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the composition or validation runner. No new environment variable.
+
+## GS-2a — a scene whose attempts ended without a video settles its job
+
+**No migration** (ADR-0083). A new transaction, Transaction K, settles a scene
+request whose attempts have all ended, the newest without a video: an initial
+generation's request, scene and job become `FAILED_TERMINAL` and its reservation
+`RELEASED` (unless reconciliation already released it); a scene regeneration's
+request becomes `FAILED_TERMINAL` and its scene and job return to `READY` and
+`DELIVERABLE_READY` with the customer's video. Every state and column already
+exists; no schema, enum, constraint or row changes at deploy.
+
+**Rows written before this build.** Unlike ADR-0082's settlement, this one is a
+sweep over durable facts, so its first pass on a database that holds development
+data settles every request already in that shape, with that pass's instant as
+`failedAt` and `releasedAt`. Nothing runs the pass in production, and production
+holds no such row: no attempt has ever been sent there.
+
+**Rolling back.** To GS-1's build: safe. That build settles nothing. Every row
+this build settled is `FAILED_TERMINAL`, which has no outgoing edge and which no
+discovery offers, or a regeneration rolled back to `READY` and
+`DELIVERABLE_READY` with the customer's video, which that build handles as any
+delivered job.
+
+**What changes at deploy.** Nothing anyone can notice: nothing in production
+constructs the settlement's runner or repository. No new environment variable.

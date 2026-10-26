@@ -743,3 +743,11 @@ Not applicable: no entity, relationship or column changes, and no migration
 `GenerationJob.state` and `stateVersion`, and for an initial generation
 `GenerationReservation.state`, `stateVersion` and `releasedAt`, in the commit
 that records the failure.
+
+## GS-2a — a scene whose attempts ended without a video settles its job
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0083). Transaction K writes `SceneGenerationRequest.state`, `stateVersion`
+and `failedAt`, `GenerationScene.state` and `stateVersion`,
+`GenerationJob.state` and `stateVersion`, and for an initial generation
+`GenerationReservation.state`, `stateVersion` and `releasedAt`, in one commit.

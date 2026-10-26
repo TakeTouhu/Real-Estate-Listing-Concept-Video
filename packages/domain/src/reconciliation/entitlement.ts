@@ -104,7 +104,9 @@ export function reservationActionFor(input: {
       // Restoring rather than releasing is what keeps a retryable provider
       // failure actually retryable. Releasing here would hand the unit back and
       // leave a future SYSTEM_RECOVERY attempt with nothing to stand on — the
-      // customer's request would be quietly unfinishable.
+      // customer's request would be quietly unfinishable. Nothing retries one
+      // yet, so the attempt failure settlement later releases the restored unit
+      // and fails the job (ADR-0083 Decision 2).
       //
       // But only when this attempt was the last unknown one in its Job. The
       // hold is Job-level; lifting it while a sibling is still unaccounted for
