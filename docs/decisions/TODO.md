@@ -181,6 +181,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       safe) with a real adapter behind the same `ObjectStorage` port before
       production launch (ADR-0008). Still required — the guard blocks production
       use, it does not provide durable storage.
+      *GS-3 (ADR-0085) adds a shared folder for development and CI, refused in
+      production; it is not a step towards this adapter.*
       **Target settled (ADR-0054 Decision 1): a Google Cloud Storage adapter**,
       not S3 or Azure. The port is unchanged and the domain must not depend on
       Google Cloud SDK types. Note the carried-over work: Phase 5B solved
@@ -1370,6 +1372,16 @@ them is **built**. Each item below records the settled decision and what remains
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing
       cancels a job today.
+- [ ] **Serve the customer's video from storage (GS-12).** The download route
+      reads a whole object into memory and names its content type from the
+      key's extension; a deliverable's key has none, and a video may be
+      hundreds of megabytes (ADR-0085, *Not decided here*). Preview and
+      download need a streamed response with the video's own content type,
+      over the shared folder now and over Google Cloud Storage in production.
+- [ ] **Remove what a killed process leaves in the shared folder.** An upload
+      a crashed worker never completed or aborted, and a staged file a killed
+      process never moved, stay in the folder (ADR-0085, *Not decided here*).
+      Deleting the folder starts over; nothing in production uses it.
 - [ ] **Move the execution preflight's failures onto the orchestration
       state.** `failQueuedPreflight` (Phase 4C-2B, ADR-0027) records a refused
       attempt in the legacy `state` column and leaves its orchestration state

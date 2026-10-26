@@ -227,6 +227,15 @@ provider may hold waits until that attempt ends; a ready scene is left alone.
 Nothing moves money: the job's Unit was released when it failed. Dormant:
 nothing in production runs the sweep.
 
+**GS-3 — a shared folder holds development and CI objects** (ADR-0085, no
+migration): one folder on disk, named by `SHARED_STORAGE_DIR`, holds the
+objects the web app and the worker share in development and CI, and keeps them
+across restarts. The web app reads and writes it through the `ObjectStorage`
+port and the worker through its S3-shaped seam, both unchanged, so the staging
+sink, composition input and output and the Clean Master store run over it as
+they are. Refused in production; production storage stays Google Cloud Storage
+(Phase 7). The worker opens it with GS-9's pipeline command.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

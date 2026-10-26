@@ -76,6 +76,22 @@ curl -H "Authorization: Bearer $HEALTHCHECK_API_TOKEN" \
      http://localhost:3000/api/health/ready
 ```
 
+## 3b. Keep stored objects in a folder (optional)
+
+By default the web app keeps uploaded photos in its own memory, and a restart
+loses them. To keep them on disk instead, set `SHARED_STORAGE_DIR` in
+`.env.local` to an absolute folder (ADR-0085), for example:
+
+```bash
+SHARED_STORAGE_DIR=/absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-storage
+```
+
+The folder is created on first use, readable by your user alone; `.dev-storage/`
+is git-ignored. The path must be absolute, because the web app and the worker
+run from different folders, and the setting is refused in production. The
+worker will read the same folder once the pipeline command exists (GS-9).
+Delete the folder to start over.
+
 ## 4. Run the worker (optional)
 
 ```bash

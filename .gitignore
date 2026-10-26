@@ -20,6 +20,9 @@ coverage/
 .env.*
 !.env.example
 
+# Development storage folder (SHARED_STORAGE_DIR, ADR-0085)
+.dev-storage/
+
 # Logs
 *.log
 npm-debug.log*

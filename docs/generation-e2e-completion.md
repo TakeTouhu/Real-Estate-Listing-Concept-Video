@@ -3,7 +3,8 @@
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a),
-`docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b)
+`docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b),
+`docs/decisions/0085-a-shared-folder-holds-development-objects.md` (GS-3)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
