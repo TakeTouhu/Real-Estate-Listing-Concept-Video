@@ -142,7 +142,7 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // settlement that releases it in the same commit (ADR-0052 Decision 19). A
   // generic move to a terminal state would strand the Unit in a hold nobody
   // will ever settle. The media and attempt failure settlements (Transactions H
-  // and J) own GENERATING's edge, the deliverable failure settlement owns
+  // and K) own GENERATING's edge, the deliverable failure settlement owns
   // COMPOSING's and DELIVERABLE_VALIDATING's, and the rest have no owner yet, so
   // they cannot be taken at all.
   "RESERVED->CANCELLED",

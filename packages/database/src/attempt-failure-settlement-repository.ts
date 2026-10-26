@@ -104,6 +104,9 @@ export function createAttemptFailureSettlementRepository(
          WHERE r."state" = 'GENERATING'::"SceneGenerationRequestState"
            AND r."deliveredAt" IS NULL
            AND j."state" = 'GENERATING'::"GenerationJobState"
+           -- No attempt still open. An orchestrated row always has a state (the
+           -- all-or-none CHECK), so the NULL arm is defensive, matching the
+           -- decision's treatment of a row with none.
            AND NOT EXISTS (
                  SELECT 1 FROM "scene_generations" unended
                   WHERE unended."generationSceneRequestId" = r."id"

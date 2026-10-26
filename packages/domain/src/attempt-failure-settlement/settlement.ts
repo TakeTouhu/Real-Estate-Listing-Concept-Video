@@ -2,9 +2,9 @@
  * Settling a scene whose provider attempt ended without output (ADR-0083).
  *
  * A scene request generates through attempts. An attempt can end without ever
- * producing a video: the provider refused it, the provider failed it, nobody
+ * producing a video: the provider refused it, the provider failed it, or nobody
  * could find out whether it reached the provider before the reconciliation
- * deadline, or it failed or was cancelled before it was sent. Once every attempt of the request has ended and the newest
+ * deadline. Once every attempt of the request has ended and the newest
  * produced nothing, no actor will create another one: the only automatic retry
  * today is the media recovery of ADR-0047, which answers a usable-looking video
  * that failed its media check, not an attempt with no video at all.

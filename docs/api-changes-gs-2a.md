@@ -19,7 +19,8 @@ No change.
 | `AttemptFailureRefusal` | `REQUEST_NOT_GENERATING`, `ATTEMPT_NOT_FAILED`, `JOB_NOT_GENERATING`, `SHAPE_CONFLICT`, `RESERVATION_NOT_SETTLEABLE` |
 | `endedWithoutOutput(state)` | true for `FAILED_RETRYABLE`, `FAILED_TERMINAL`, `RECONCILIATION_EXHAUSTED`, `CANCELLED_PRE_SUBMISSION` |
 | `AttemptFailureSettlementRepository` | `findAttemptFailureCandidates({ limit })` → identifiers only; `settleAttemptFailure({ organizationId, generationSceneRequestId, settledAt, context })` → `SETTLED` (`INITIAL_FAILED` or `REGENERATION_ROLLED_BACK`, with `unitReleased`), `NOT_SETTLEABLE` with its reason, or `NOT_FOUND` |
-| `AttemptFailureSettlementRunner` | `runOnce(limit)`: one bounded pass, each candidate settled with its own instant and context; reports `settled`, `unitsReleased` and every outcome |
+| `AttemptFailureSettlementRunner` | `runOnce(limit)`: one bounded pass, each candidate settled with its own instant and context; a candidate whose settlement throws is reported `FAILED` (with its defect code, or `null`) and the pass goes on; reports `settled`, `unitsReleased`, `failed` and every outcome |
+| `AttemptFailureSettlementRunOutcome` | a settlement outcome, or `{ kind: "FAILED", code }` |
 | `MAX_ATTEMPT_FAILURE_SETTLEMENT_BATCH_SIZE`, `validateAttemptFailureSettlementBatchLimit` | 100; an integer from 1 to 100 or `VALIDATION_FAILED`, never clamped |
 | `AttemptFailureSettlementDefect` | codes `SETTLEMENT_LOST_UNDER_LOCK`, `STATE_OUTSIDE_VOCABULARY` |
 | event types | `scene_request.failed`, `scene.failed`, `scene.revision_rolled_back`, `job.scene_failed`, `job.revision_rolled_back` (and the existing `reservation.released`); reason code `ATTEMPT_FAILURE_SETTLEMENT` |
@@ -39,8 +40,9 @@ No change.
 
 ### Unchanged on purpose
 
-- The five writers that end an attempt: none settles anything itself
-  (ADR-0083 Decision 1).
+- The three writers that end an attempt without a video (submission outcome,
+  completion, reconciliation): none settles anything itself (ADR-0083
+  Decision 1).
 - Transaction H: it settles a newest attempt that produced a video and failed
   its media check, and this a newest attempt that produced none.
 - The state machines: every edge the settlement takes already exists.

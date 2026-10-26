@@ -98,23 +98,27 @@ function lastEvent(events: Awaited<ReturnType<typeof eventsOf>>) {
 }
 
 /**
- * How many backends are waiting on the lock a settlement takes first: the
- * cost-admission advisory lock, or a reservation row's.
+ * How many backends are waiting on a lock a settlement takes: the
+ * cost-admission advisory lock, a reservation row's, or the job chain's.
  */
-async function blockedBackends(on: "reservation" | "advisory"): Promise<number> {
+async function blockedBackends(on: "reservation" | "advisory" | "chain"): Promise<number> {
   const rows = await prisma.$queryRawUnsafe<{ wait_event: string | null; query: string }[]>(
     `SELECT wait_event, query FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid()
         AND wait_event_type = 'Lock'`,
   );
+  const statement = on === "chain" ? "FOR UPDATE OF j, s, r" : "FOR UPDATE OF res";
   return rows.filter((r) =>
     on === "advisory"
       ? r.wait_event === "advisory"
-      : r.wait_event !== "advisory" && r.query.includes("FOR UPDATE OF res"),
+      : r.wait_event !== "advisory" && r.query.includes(statement),
   ).length;
 }
 
-async function waitForBlocked(count: number, on: "reservation" | "advisory"): Promise<boolean> {
+async function waitForBlocked(
+  count: number,
+  on: "reservation" | "advisory" | "chain",
+): Promise<boolean> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if ((await blockedBackends(on)) >= count) return true;
@@ -613,11 +617,16 @@ RUN("ADR-0083 — a scene whose attempts ended without a video settles its job",
       });
 
       const first = await runner.runOnce(10);
-      expect([first.settled, first.unitsReleased]).toEqual([2, 1]);
+      expect([first.settled, first.unitsReleased, first.failed]).toEqual([2, 1, 0]);
       expect(new Set(first.outcomes.map((o) => o.generationSceneRequestId))).toEqual(
         new Set([released.requestId, rolledBack.requestId]),
       );
-      expect(await runner.runOnce(10)).toEqual({ settled: 0, unitsReleased: 0, outcomes: [] });
+      expect(await runner.runOnce(10)).toEqual({
+        settled: 0,
+        unitsReleased: 0,
+        failed: 0,
+        outcomes: [],
+      });
     });
   });
 
@@ -673,6 +682,78 @@ RUN("ADR-0083 — a scene whose attempts ended without a video settles its job",
       expect(
         (await eventsOf(prisma, chain.reservationId ?? "")).filter((e) => e.toState === "RELEASED"),
       ).toHaveLength(1);
+    });
+
+    it("releases the Unit once when two failed scenes of one job settle together", async () => {
+      const chain = await seedAttemptFailure(prisma);
+      const sibling = await addSiblingScene(prisma, chain, 1, "GENERATING");
+      await addAttempts(prisma, ORG_A, sibling.requestId, `${chain.tag}_s`, ["PROVIDER_FAILED"]);
+      const other = new PrismaClient();
+      try {
+        const rival = createAttemptFailureSettlementRepository(other);
+        const outcomes = await Promise.all([
+          settle(chain),
+          rival.settleAttemptFailure({
+            organizationId: ORG_A,
+            generationSceneRequestId: sibling.requestId,
+            settledAt: NOW,
+            context: ctx(),
+          }),
+        ]);
+        expect(outcomes.filter((o) => o.kind === "SETTLED")).toEqual([
+          { kind: "SETTLED", settlement: "INITIAL_FAILED", unitReleased: true },
+        ]);
+        expect(outcomes).toContainEqual({ kind: "NOT_SETTLEABLE", reason: "JOB_NOT_GENERATING" });
+      } finally {
+        await other.$disconnect();
+      }
+      expect(
+        (await eventsOf(prisma, chain.reservationId ?? "")).filter((e) => e.toState === "RELEASED"),
+      ).toHaveLength(1);
+      expect((await eventsOf(prisma, chain.jobId)).filter((e) => e.toState === "FAILED_TERMINAL")).toHaveLength(1);
+    });
+
+    // Transaction F, revision start and media recovery lock the job and take no
+    // reservation. The settlement, holding the reservation, waits for the job
+    // and then decides from what that writer committed.
+    it("waits behind a writer holding the job, then decides from what it committed", async () => {
+      const chain = await seedAttemptFailure(prisma);
+      const holder = new PrismaClient();
+      let mayCommit: () => void = () => undefined;
+      const commitTurn = new Promise<void>((resolve) => {
+        mayCommit = resolve;
+      });
+      let ready: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const holding = holder.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "generation_jobs" WHERE "id" = ${chain.jobId} FOR UPDATE`;
+          ready();
+          await commitTurn;
+          // What such a writer may commit meanwhile: here, the job leaves
+          // generating, so the settlement must find nothing to settle.
+          await tx.$executeRaw`UPDATE "generation_jobs" SET "state" = 'SCENES_READY'::"GenerationJobState" WHERE "id" = ${chain.jobId}`;
+        },
+        { timeout: 30_000 },
+      );
+      try {
+        await held;
+        const settling = settle(chain).then(
+          (outcome) => outcome,
+          (error: unknown) => `threw: ${String(error)}`,
+        );
+        expect(await waitForBlocked(1, "chain")).toBe(true);
+        mayCommit();
+        await holding;
+        expect(await settling).toEqual({ kind: "NOT_SETTLEABLE", reason: "JOB_NOT_GENERATING" });
+      } finally {
+        mayCommit();
+        await holding.catch(() => undefined);
+        await holder.$disconnect();
+      }
+      expect((await snapshot(chain)).reservation?.state).toBe("RESERVED");
     });
 
     // Every entitlement release takes the organization and billing-cycle lock

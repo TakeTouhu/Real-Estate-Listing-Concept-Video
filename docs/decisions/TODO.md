@@ -1349,6 +1349,15 @@ them is **built**. Each item below records the settled decision and what remains
       and the customer's Unit stays held (ADR-0083, *Not decided here*).
       Whether such an attempt ends, after how long, and as which state, is not
       decided. Must be settled before generation is activated.
+- [ ] **Move the execution preflight's failures onto the orchestration
+      state.** `failQueuedPreflight` (Phase 4C-2B, ADR-0027) records a refused
+      attempt in the legacy `state` column and leaves its orchestration state
+      `QUEUED`, so an orchestrated attempt that fails preflight has not ended
+      in the vocabulary Transaction K reads, its request is never settled, and
+      the customer's Unit stays held (ADR-0083, *Not decided here*). The state
+      machine already has `QUEUED -> FAILED_*` and
+      `QUEUED -> CANCELLED_PRE_SUBMISSION`. Must be built before generation is
+      activated.
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period
@@ -1604,13 +1613,14 @@ them is **built**. Each item below records the settled decision and what remains
       customer's video, in their own commit, identically.* *Built for the
       provider-side failure points in GS-2a (ADR-0083): a sweep, Transaction
       K, settles a scene request whose attempts all ended, the newest without
-      a video (a refusal, a provider failure, an unresolved submission, a
-      preflight failure, a cancellation before sending), failing an initial
+      a video (a refusal, a provider failure, an unresolved submission),
+      failing an initial
       generation and releasing its Unit or rolling a regeneration back to the
       customer's video, identically whichever way the attempt ended.*
       ***Still unbuilt:*** *the failed job's other scenes and their queued
       attempts, left where they are by Transaction H and Transaction K alike
-      (GS-2b); an attempt that never ends (an item below); the release of a paid regeneration's or a charged disclosure change's
+      (GS-2b); an attempt that never ends and an attempt that fails preflight
+      (items below); the release of a paid regeneration's or a charged disclosure change's
       own reservation, and the disclosure-change count, built with them;
       Transaction G's defects and a claim refused as `UNSUPPORTED_TARGET`,
       which write no terminal row (ADR-0082, "Not decided here"). And a

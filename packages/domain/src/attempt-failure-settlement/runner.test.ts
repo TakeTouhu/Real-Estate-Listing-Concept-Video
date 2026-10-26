@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import type { TransitionContext } from "../orchestration/ports";
 import { epochMillis, type EpochMillis } from "../pricing/units";
+import { AttemptFailureSettlementDefect } from "./settlement";
 import type {
   AttemptFailureCandidate,
   AttemptFailureSettlementOutcome,
@@ -21,7 +22,7 @@ class ScriptedRepository implements AttemptFailureSettlementRepository {
 
   constructor(
     private readonly candidates: readonly AttemptFailureCandidate[],
-    private readonly outcomes: Record<string, AttemptFailureSettlementOutcome>,
+    private readonly outcomes: Record<string, AttemptFailureSettlementOutcome | "DEFECT">,
   ) {}
 
   async findAttemptFailureCandidates(query: { readonly limit: number }) {
@@ -33,7 +34,8 @@ class ScriptedRepository implements AttemptFailureSettlementRepository {
     this.calls.push(`settle:${input.organizationId}:${input.generationSceneRequestId}`);
     this.inputs.push(input);
     const outcome = this.outcomes[input.generationSceneRequestId];
-    if (outcome === undefined) throw new Error("unscripted request");
+    if (outcome === undefined) throw new Error("unscripted request: SELECT secret");
+    if (outcome === "DEFECT") throw new AttemptFailureSettlementDefect("SETTLEMENT_LOST_UNDER_LOCK");
     return outcome;
   }
 }
@@ -103,8 +105,7 @@ describe("one pass", () => {
       [30, "corr-3"],
       [40, "corr-4"],
     ]);
-    expect(report.settled).toBe(3);
-    expect(report.unitsReleased).toBe(1);
+    expect([report.settled, report.unitsReleased, report.failed]).toEqual([3, 1, 0]);
     expect(report.outcomes).toEqual([
       { generationSceneRequestId: "req_1", outcome: RELEASED },
       {
@@ -127,6 +128,7 @@ describe("one pass", () => {
     expect(await runner(repository).runOnce(1)).toEqual({
       settled: 0,
       unitsReleased: 0,
+      failed: 0,
       outcomes: [],
     });
     expect(repository.calls).toEqual(["find:1"]);
@@ -140,15 +142,36 @@ describe("one pass", () => {
     expect(repository.calls).toEqual([]);
   });
 
-  it("lets a settlement's defect stop the pass rather than swallowing it", async () => {
+  it("isolates a settlement that throws and goes on to the next", async () => {
     const repository = new ScriptedRepository(
       [
+        { organizationId: "org_a", generationSceneRequestId: "req_defect" },
         { organizationId: "org_a", generationSceneRequestId: "req_missing" },
         { organizationId: "org_a", generationSceneRequestId: "req_1" },
       ],
-      { req_1: RELEASED },
+      { req_defect: "DEFECT", req_1: RELEASED },
     );
-    await expect(runner(repository).runOnce(5)).rejects.toThrow("unscripted request");
-    expect(repository.calls).toEqual(["find:5", "settle:org_a:req_missing"]);
+    const report = await runner(repository).runOnce(5);
+
+    expect(repository.calls).toEqual([
+      "find:5",
+      "settle:org_a:req_defect",
+      "settle:org_a:req_missing",
+      "settle:org_a:req_1",
+    ]);
+    // A defect keeps its code; any other error is reported without its text.
+    expect(report).toEqual({
+      settled: 1,
+      unitsReleased: 1,
+      failed: 2,
+      outcomes: [
+        {
+          generationSceneRequestId: "req_defect",
+          outcome: { kind: "FAILED", code: "SETTLEMENT_LOST_UNDER_LOCK" },
+        },
+        { generationSceneRequestId: "req_missing", outcome: { kind: "FAILED", code: null } },
+        { generationSceneRequestId: "req_1", outcome: RELEASED },
+      ],
+    });
   });
 });

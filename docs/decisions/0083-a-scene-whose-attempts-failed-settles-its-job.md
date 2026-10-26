@@ -4,8 +4,7 @@ Status: Accepted (GS-2a, 2026-10-26). Second milestone of the
 generation-to-preview plan the product owner approved on 2026-10-26
 (`/mnt/project-files/cto/generation-e2e-proposal.md`).
 Implements: ADR-0052 Decision 19 for the provider-side failure points: a
-refused submission, a provider failure, an unresolved submission, and an
-attempt that failed or was cancelled before it was sent.
+refused submission, a provider failure and an unresolved submission.
 Builds on: ADR-0036 (submission outcomes), ADR-0037 (reconciliation and its
 release on exhaustion), ADR-0038 (completion),
 ADR-0048 (the media failure settlement, Transaction H, this mirrors), ADR-0082
@@ -13,18 +12,22 @@ ADR-0048 (the media failure settlement, Transaction H, this mirrors), ADR-0082
 
 ## Context
 
-A scene request generates through attempts. Several writers can end an attempt
+A scene request generates through attempts. Three writers end an attempt
 without a video, each in its own transaction and under its own locks:
 
 | Writer | Ends the attempt as |
 | --- | --- |
-| execution preflight, before anything is sent | `FAILED_RETRYABLE` or `FAILED_TERMINAL` (the request cannot be reconstructed, storage is unreachable) |
 | submission outcome (ADR-0036) | `FAILED_RETRYABLE` or `FAILED_TERMINAL` when the provider refused it |
 | completion (ADR-0038) | `FAILED_RETRYABLE` or `FAILED_TERMINAL` when the provider gave up |
 | reconciliation (ADR-0037) | `FAILED_*` when it proves a rejection, `RECONCILIATION_EXHAUSTED` when its window ran out |
-| the generic attempt transition | `CANCELLED_PRE_SUBMISSION`, from `QUEUED` |
 
-None of these states has an outgoing edge, and nothing creates another attempt
+The state machine also has `QUEUED → FAILED_*` and
+`QUEUED → CANCELLED_PRE_SUBMISSION`, for an attempt that fails or is cancelled
+before it is sent, but no writer takes either edge yet: the execution
+preflight records its failures in the legacy `state` column, not in the
+orchestration state (see "Not decided here").
+
+None of these end states has an outgoing edge, and nothing creates another attempt
 for such a request: the only automatic retry is the media recovery of ADR-0047,
 which answers a video that failed its media check, not an attempt with no video
 (ADR-0037 Decision 1: no conclusion admits a replacement). So the scene can never
@@ -41,11 +44,11 @@ rule on 2026-10-26: a Unit is consumed only when a technically valid video is
 delivered, and every failure before delivery, on the AI side or VTaVision's,
 consumes none.
 
-## Decision 1 — A sweep over durable facts, not a sixth writer
+## Decision 1 — A sweep over durable facts, not another writer
 
 The settlement is **Transaction K**, its own short transaction, offered requests
-by a bounded candidate query. It is not added to the five writers, for three
-reasons:
+by a bounded candidate query. It is not added to the writers that end
+attempts, for three reasons:
 
 - **The failure is already durable.** An ended attempt never moves again, so
   the request's fate is fixed the moment its newest attempt ends. A settlement a
@@ -63,7 +66,9 @@ reasons:
 The sweep has no work row and no lease, as for Transaction F: a settled request
 is no longer a candidate, and the candidate query mirrors every condition the
 decision refuses on, so a request the settlement would refuse is never offered
-and cannot hold the head of a batch.
+and cannot hold the head of a batch. A candidate whose settlement throws (a
+defect, a lost connection) is reported as failed and the pass goes on to the
+next, so one bad row never stops the others from settling.
 
 The cost is the interval between the attempt ending and the next pass. During
 it the Unit is still held, and the paid-submission gate can still send another
@@ -95,8 +100,10 @@ any other, rather than holding the customer's Unit for a retry nobody makes.
 that failed its media check, and whose media recovery attempt then ended without
 one, is this settlement's, not Transaction H's: Transaction H answers an attempt
 that produced a video and failed its media check, and this only a request whose
-newest attempt produced none. The two take the same locks, and each refuses a
-request the other has failed.
+newest attempt produced none. Both take the cost-admission lock, the
+reservation and the job, scene and request in that order; Transaction H then
+also locks the attempt, its validation and its work row, which this does not
+need (Decision 4). Each refuses a request the other has failed.
 
 ## Decision 3 — Two arms, chosen by the request's kind
 
@@ -146,9 +153,12 @@ The attempts are read, not locked. Admission takes the request lock before it
 adds one, so none can appear while this holds it, and every attempt it settles on
 has ended, so none can move.
 
-The database suite proves the settlement waits for the cost-admission lock and
+The database suite proves the settlement waits for the cost-admission lock;
 waits behind a writer that holds the reservation and then needs the job, instead
-of deadlocking with it; and that two settlements of one request settle it once.
+of deadlocking with it; waits behind a writer holding the job and decides from
+what that writer committed; that two settlements of one request settle it once;
+and that two failed scenes of one job, settled together, release its Unit once
+and fail the job once.
 
 ## Decision 5 — Events
 
@@ -189,6 +199,19 @@ delivered job.
   sent. One already accepted by the provider still runs there. Ending those
   scenes, and cancelling their queued attempts, is GS-2b, for this settlement
   and Transaction H alike, which leaves the same shape (ADR-0048 Decision 6).
+- **An attempt that fails preflight.** The execution preflight fails an attempt
+  it cannot send (the request cannot be reconstructed, storage is unreachable)
+  by writing the legacy `state` column, and leaves the orchestration state
+  `QUEUED`. Such an attempt has not ended in the orchestration vocabulary, so
+  its request is never a candidate here. Moving that writer onto the
+  orchestration state is recorded in `docs/decisions/TODO.md`; nothing in
+  production runs the preflight against an orchestrated attempt yet.
+- **The side effects on the failed job's siblings**, until GS-2b ends them: the
+  paid-submission gate answers `RESERVATION_RELEASED` for a sibling's queued
+  attempt, which reads as an anomaly though it is expected; and a sibling's
+  Transaction H work row answers `NOT_EXHAUSTED` once the job has failed (H
+  requires the job `GENERATING` and the reservation held), so it is offered
+  again on every pass.
 - **An attempt that never ends.** One left `PROCESSING` by a provider that
   never answers, or `OUTPUT_INGESTING` by an output copy that keeps failing
   (that state is resumable on purpose, so a storage fault is never
@@ -212,9 +235,10 @@ delivered job.
   `GENERATING` or the customer's Unit held: an initial generation fails and its
   Unit is released, and a failed scene regeneration returns the customer to the
   video they already had, charging nothing and spending no regeneration right.
-- A refused submission, a provider failure, an unresolved submission, a failed
-  output copy and a pre-submission cancellation settle identically, and
-  identically to ADR-0048's and ADR-0082's failures.
+- A refused submission, a provider failure and an unresolved submission settle
+  identically, and identically to ADR-0048's and ADR-0082's failures. A failed
+  output copy does not end its attempt, which stays `OUTPUT_INGESTING` and
+  resumes, so it settles nothing.
 - The generic transition API can no longer fail a generating request or scene.
 - Activation is untouched: paid Provider Activation, production Provider
   credentials, production paid AI calls, production scheduler activation and

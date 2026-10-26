@@ -25,4 +25,8 @@ export type {
   SettleAttemptFailureInput,
 } from "./ports";
 export { AttemptFailureSettlementRunner } from "./runner";
-export type { AttemptFailureSettlementDeps, AttemptFailureSettlementReport } from "./runner";
+export type {
+  AttemptFailureSettlementDeps,
+  AttemptFailureSettlementReport,
+  AttemptFailureSettlementRunOutcome,
+} from "./runner";

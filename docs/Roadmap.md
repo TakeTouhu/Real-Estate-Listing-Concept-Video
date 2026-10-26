@@ -211,8 +211,7 @@ failures are GS-2's.
 **GS-2a — a scene whose attempts ended without a video settles its job**
 (ADR-0083, no migration): a bounded sweep, Transaction K, settles a scene request
 whose attempts all ended, the newest without a video (a provider refusal, a
-provider failure, an unresolved submission, a preflight failure or a
-cancellation before sending). An initial generation's request, scene and job fail
+provider failure or an unresolved submission). An initial generation's request, scene and job fail
 and its Unit is released; a failed scene regeneration returns to the video the
 customer already holds, charging nothing and spending no regeneration right. How
 the attempt ended never enters the decision. Dormant: nothing in production runs
