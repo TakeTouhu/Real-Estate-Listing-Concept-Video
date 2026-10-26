@@ -1,7 +1,8 @@
 # Completion — starting a video, and previewing and downloading it
 
 Branch: `claude/project-thread-az06z2`
-ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1)
+ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
+`docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -313,5 +314,314 @@ scheduler and live Stripe charges remain BLOCKED.
 
 ### Remaining work
 
-GS-1 waits for the product owner's yes before merge. GS-2 (provider-side
-failures settle the job) comes next.
+Merged as PR #105 with the product owner's yes (`e446548`; post-merge CI run
+670 green). GS-2 (provider-side failures settle the job) came next.
+
+## GS-2a — a scene whose attempts ended without a video settles its job
+
+Base: `e446548` (PR #105 merge commit on `main`; post-merge CI run 670 green).
+ADR: `docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md`
+
+GS-2 was split in two before implementation, to keep each pull request
+reviewable: GS-2a settles the failed scene's job, GS-2b will end that job's
+other scenes. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `2cd6cc1` | the domain decision, the runner, Transaction K, the reserved edges, the tests, ADR-0083 and the documentation |
+| `98e9969` | the review's answers: the runner isolates a failing candidate, two race tests, the documents corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-2a does
+
+- **One decision whichever way the attempt ended.**
+  `decideAttemptFailureSettlement` reads the request, every attempt's state,
+  the scene, the job and the reservation. A request whose attempts all ended,
+  the newest without a video, settles: an initial generation fails and its
+  Unit is released from `RESERVED` or `RECONCILIATION_HOLD` (or is left alone
+  when reconciliation already released it); a scene regeneration rolls back
+  to the video the customer holds. Anything else is refused with a closed
+  reason, and nothing is written.
+- **A sweep over durable facts.** Transaction K is its own short
+  transaction, offered requests by a bounded candidate query that mirrors
+  every refusal, so a refused request is never offered again and cannot hold
+  the head of a batch; a candidate whose settlement throws is reported and
+  passed over. The three writers that end attempts are unchanged.
+- **The cost-admission lock, then the reservation, then the chain**, as
+  Transaction H; the attempts are read, not locked, because admission takes
+  the request lock first.
+- **The generic API cannot fail a generating request or scene.**
+- **Still dormant.** Nothing in production constructs the runner or the
+  repository.
+
+```mermaid
+sequenceDiagram
+    participant P as Pass (runner)
+    participant Q as Candidate query
+    participant K as Transaction K
+    participant D as decideAttemptFailureSettlement
+    P->>Q: limit (1..100)
+    Q-->>P: request ids, oldest first
+    loop each candidate, once
+        P->>K: organization, request, instant, context
+        K->>K: cost-admission lock (organization, billing cycle)
+        K->>K: lock reservation, then job, scene, request (tenant-scoped)
+        K->>K: read attempts, sibling and regeneration counts
+        K->>D: facts
+        alt initial generation
+            D-->>K: FAIL_INITIAL (release from RESERVED / HOLD, or none)
+            K->>K: request, scene, job -> FAILED_TERMINAL
+            K->>K: reservation -> RELEASED, releasedAt (when held)
+        else scene regeneration
+            D-->>K: ROLL_BACK_REGENERATION
+            K->>K: request -> FAILED_TERMINAL
+            K->>K: scene -> READY, job -> DELIVERABLE_READY, pointers unchanged
+        else refused
+            D-->>K: NOT_SETTLEABLE (reason), nothing written
+        end
+    end
+```
+
+### Verification
+
+Measured locally on `98e9969` (PostgreSQL 16 configured like CI; FFmpeg
+6.1.1, the version CI's `media` job installs). This record's commit changes
+only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6053 / 6053**, 218 files (5976 on `e446548`) |
+| `pnpm test:db` | **1586 / 1586**, 59 files (1538 on `e446548`) |
+| `pnpm test:media` | **169 / 169**, 4 files: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New and changed tests:
+
+- `packages/domain/src/attempt-failure-settlement/settlement.test.ts` (new):
+  every way an attempt can end without a video settles alike; a held,
+  reserved and already released Unit for an initial generation, and a
+  consumed one for a regeneration; every other request, attempt, scene, job
+  and reservation shape refused with its closed reason; the batch bound; the
+  defects' fixed messages.
+- `packages/domain/src/attempt-failure-settlement/runner.test.ts` (new): each
+  candidate settled once, with its own instant and correlation; refusals and
+  releases counted honestly; the bound checked before the query; a settlement
+  that throws reported `FAILED` with its defect code, or `null`, and the pass
+  going on to the next candidate.
+- `packages/domain/src/attempt-failure-settlement/dormancy.test.ts` (new):
+  nothing in production constructs the runner or the repository, and neither
+  reaches past the database, the domain and Prisma; the repository updates
+  the request, scene, job and reservation only, inserts or deletes nothing,
+  moves the reservation only to `RELEASED` with its instant, never consumes a
+  Unit, writes a delivered pointer or touches an attempt, takes the
+  cost-admission lock, then the reservation, then the chain, and decides in
+  one place.
+- `tests/integration/attempt-failure-settlement.db.test.ts` (new, 48 tests,
+  on the fixture `tests/integration/attempt-failure-fixture.ts`): an initial
+  generation settled after a refusal, a retryable or terminal provider
+  failure and an exhausted reconciliation, its Unit released from `RESERVED`
+  or `RECONCILIATION_HOLD` or left alone when reconciliation released it; a
+  failed media recovery; a replay; a later scene of a failed job refused; a
+  regeneration rolled back to the customer's video, and every contradicting
+  shape refused, writing nothing; what is never offered; tenancy; discovery
+  offering exactly what settles, oldest first and bounded; the dormant runner;
+  the two reserved generic edges; and concurrency: two settlements of one
+  request settle it once, two failed scenes of one job release its Unit once
+  and fail it once, a writer holding the job is waited for and its commit
+  decides, the cost-admission lock of the organization and cycle is waited
+  for, and a writer holding the reservation and then needing the job is
+  waited behind without a deadlock.
+
+The lock-order test was checked against the inverted order by mutant R23
+(round 2): with the job locked before the reservation, the reservation-first
+writer and the settlement deadlock and the test fails.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass.
+
+**Round 1, on `2cd6cc1`: 72 mutants, 72 killed.** None survived, none broken.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| D01 | decide | a delivered request still settles | settlement |
+| D02 | decide | the newest attempt need not have ended without a video | settlement, db |
+| D03 | decide | an older attempt may still be open | settlement, db |
+| D04 | decide | the job's state is not asked | settlement, db |
+| D05 | decide | an initial scene need not be generating | settlement, db |
+| D06 | decide | an initial scene may already name a rendition | settlement, db |
+| D07 | decide | an initial job may already hold a video | settlement, db |
+| D08 | decide | a Unit held for reconciliation is not released | settlement, db |
+| D09 | decide | a job whose Unit reconciliation released is refused | settlement, db |
+| D10 | decide | a released Unit is released again | settlement, db |
+| D11 | decide | a held Unit's state not passed on | settlement, db |
+| D12 | decide | a regeneration's scene need not be revising | settlement, db |
+| D13 | decide | a regeneration's pointer need not name a delivered rendition | settlement, db |
+| D14 | decide | a regeneration's job need not hold a video | settlement, db |
+| D15 | decide | another scene may be not ready | settlement, db |
+| D16 | decide | another regeneration may be open | settlement, db |
+| D17 | decide | a regeneration's Unit need not be consumed | settlement, db |
+| D18 | decide | a verified output counts as ended without one | settlement |
+| D19 | bound | a batch of 101 accepted | settlement, runner, db |
+| D20 | bound | a fraction accepted | settlement, runner, db |
+| D21 | defect | a defect's message changed | settlement |
+| U01 | runner | a candidate settled twice | runner |
+| U02 | runner | every settlement stamped with one fixed instant | runner |
+| U06 | runner | every settlement given one correlation | runner |
+| U03 | runner | a refusal counted as settled | runner |
+| U04 | runner | every settlement counted as a release | runner, db |
+| U05 | runner | the bound not checked before the query | runner |
+| R01 | lock | no cost-admission lock | db, dormancy |
+| R02 | lock | the lock taken on another cycle | db |
+| R03 | lock | the reservation read without its lock | db, dormancy |
+| R04 | lock | the chain read without its lock | dormancy |
+| R05 | tenancy | the chain found in any organization | db |
+| R06 | settle | the request's failure instant not written | db, dormancy |
+| R07 | settle | no release instant | db, dormancy |
+| R08 | settle | the release stamped with the clock | db |
+| R09 | settle | the Unit not released | db |
+| R10 | settle | the Unit consumed instead | db, dormancy |
+| R11 | settle | the initial scene not failed | db |
+| R12 | settle | the initial job not failed | db |
+| R13 | settle | the rolled-back job left generating scenes | db |
+| R14 | settle | the rolled-back scene left revising | db |
+| R15 | settle | the attempts read newest first | db |
+| R16 | settle | a predecessor need not be delivered | db |
+| R17 | settle | ready siblings counted as not ready | db |
+| R18 | settle | open regenerations never counted | db |
+| R19 | events | no reason code | db |
+| R20 | events | no reservation event | db |
+| R21 | events | the scene's failure named as a rollback | db |
+| R22 | events | the caller's context dropped | db |
+| Q01 | discovery | a job that left generating offered | db |
+| Q02 | discovery | an older open attempt ignored | db |
+| Q03 | discovery | the oldest attempt taken as the newest | db |
+| Q04 | discovery | a verified output counts as ended without one | db |
+| Q05 | discovery | an initial scene that is not generating offered | db |
+| Q06 | discovery | an initial scene naming a rendition offered | db |
+| Q07 | discovery | an initial job holding a video offered | db |
+| Q08 | discovery | an initial job whose Unit reconciliation released not offered | db |
+| Q09 | discovery | a consumed initial job offered | db |
+| Q10 | discovery | a regeneration's scene need not be revising | db |
+| Q11 | discovery | a regeneration's job need not hold a video | db |
+| Q12 | discovery | a regeneration's Unit need not be consumed | db |
+| Q13 | discovery | a predecessor need not be delivered | db |
+| Q14 | discovery | a sibling not ready ignored | db |
+| Q15 | discovery | another open regeneration ignored | db |
+| Q16 | discovery | newest first | db |
+| Q17 | discovery | the bound ignored | db |
+| Q18 | discovery | the bound not validated | db |
+| Q19 | discovery | the organization taken from the wrong row | db |
+| E01 | edges | the generic API fails a generating request | db |
+| E02 | edges | the generic API fails a generating scene | db |
+| G01 | guard | the worker constructs the runner | dormancy |
+| G02 | guard | the repository inserts a row | dormancy |
+
+Suites: `settlement`, `runner` and `dormancy` = the three domain suites above;
+`db` = the new settlement database suite.
+
+**Round 2, on `98e9969`: the 72 again, with Q01 re-anchored on the query's new comment, and six
+added for the review's answers: 78 mutants, 78 killed.** None survived, none
+broken. R23 locks the job before the reservation: both lock-order tests fail,
+the reservation-first one with PostgreSQL's `deadlock detected` (`40P01`).
+R04, caught only by the dormancy guard in round 1, is now caught by the
+job-first race test too.
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| Q01 | discovery | a job that left generating offered | db |
+| R04 | lock | the chain read without its lock | db, dormancy |
+| U07 | runner | a throwing settlement stops the pass | runner |
+| U08 | runner | a defect's code dropped | runner |
+| U09 | runner | a failure not counted | runner |
+| U10 | runner | a failure counted as settled | runner |
+| U11 | runner | every error reported as a defect | runner |
+| R23 | lock | the job locked before the reservation | db |
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to GS-1, an independent review
+agent reviewed `2cd6cc1` against `e446548`, reading only git objects. It found
+no way to consume a Unit, release one twice, release a consumed one or deliver
+past a settlement. It confirmed that the candidate query and the decision agree
+on every predicate, so no request is starved or settled unoffered; that every
+writer taking both the reservation and the job takes the reservation first, and
+the writers taking the job first take neither the reservation nor the
+cost-admission lock, so none can close a cycle with Transaction K; that no
+attempt can appear while K holds the request; that K and Transaction H are
+disjoint; and that tenancy is proved in every locking statement. Verdict:
+nothing blocking; three should-fix findings, six nits and a list of test
+gaps, answered in
+`98e9969`:
+
+| Finding | Answer |
+| --- | --- |
+| ADR-0083 named two writers that do not move the orchestration state: the execution preflight writes the legacy `state` column, and no generic attempt transition exists. Several documents said preflight failures and pre-submission cancellations settle. An orchestrated attempt that failed preflight would stay `QUEUED` and its Unit held | Corrected everywhere: three writers end an attempt without a video; `QUEUED → FAILED_*` and `QUEUED → CANCELLED_PRE_SUBMISSION` are edges no writer takes yet. ADR-0083 *Not decided here* names the preflight gap, and a new TODO item says the preflight must move the orchestration state before generation is activated |
+| The ADR contradicted itself on a failed output copy | Corrected: a failed output copy does not end its attempt, which stays `OUTPUT_INGESTING` and resumes, so it settles nothing |
+| One throwing settlement stopped the whole pass, and with the oldest candidate first it would recur at the head of every pass, stopping every later release | Fixed: the runner reports such a candidate `FAILED`, with its defect code or `null`, counts it, and goes on (ADR-0083 Decision 1). Test: a defect and an unexpected error each isolated, the next candidate still released. Mutants U07 to U11 |
+| Nit: a comment said "Transactions H and J" | Now "H and K" |
+| Nit: two comments said a retryable failure stays retryable | Both now say nothing retries one yet, so this settlement ends it (ADR-0083 Decision 2) |
+| Nit: "the two take the same locks" was loose | ADR-0083 Decision 2 now says both take the cost-admission lock, the reservation and the chain, and H also locks the attempt, its validation and its work row |
+| Nit: no test reaches the candidate query's `orchestrationState IS NULL` arm | It is unreachable: the all-or-none CHECK gives every attempt linked to a request a state. The query now says the arm is defensive; a mutant removing it would be equivalent |
+| Nit: two side effects on a failed job's siblings | Named in ADR-0083 *Not decided here*: the gate's expected `RESERVATION_RELEASED` anomaly for a queued sibling, and a sibling's Transaction H work row answering `NOT_EXHAUSTED` on every pass. Both are GS-2b's |
+| Test gap: two failed scenes of one job; a writer that takes the job first | Both added: one release and one job failure; a job-first writer waited for, its commit deciding. The remaining gaps (a real admission racing the settlement, races against H and against Transaction F, the gate refusing a sibling, a hold kept for an unknown sibling) are listed under *Known limitations* |
+| Nit: about 830 production lines plus about 1,700 test lines against the ~500-line policy | About 865 are production code with its comments after these answers; the rest are tests (about 1,780) and documentation. GS-1 was a similar size. Splitting the decision from its transaction would leave a dormant module nothing calls in one PR |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md` status table: the attempt failure settlement row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *GS-2a*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above; the decision is ADR-0083 Decisions 2 and 3 |
+| OpenAPI / API change summary | `docs/api-changes-gs-2a.md`: no HTTP change; the domain decision, the runner, Transaction K, the reserved edges |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-2a*: no migration, and what rolling back means |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the permanent technical-failure item, the recovery
+budget item, the operator-tooling item, and two new items: bounding how long
+an attempt may run, and moving the preflight's failures onto the orchestration
+state).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Nothing in production constructs the
+attempt failure settlement runner or its repository: no worker, scheduler,
+credential, environment variable or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The failed job's other scenes** stay where they are: their requests stay
+  `GENERATING`, a queued sibling is refused by the paid-submission gate as
+  `RESERVATION_RELEASED` (read as an anomaly), and a sibling's Transaction H
+  work row is offered again on every pass. GS-2b ends them.
+- **An attempt that fails preflight** keeps its orchestration state `QUEUED`,
+  so its request is never settled (TODO). Nothing in production runs the
+  preflight against an orchestrated attempt yet.
+- **An attempt that never ends**, left `PROCESSING` or `OUTPUT_INGESTING`, is
+  never settled; how long one may run is not decided (TODO).
+- **A retryable failure settles** until the internal service-recovery budget
+  exists (ADR-0083 Decision 2).
+- **Not tested here:** a real admission racing the settlement, races against
+  Transaction H and Transaction F, the gate refusing a sibling once the Unit
+  is released (the gate's own suite covers a released Unit), and a hold
+  reconciliation keeps for an unknown sibling.
+- **Whether a video delivered by operator recovery consumes a Unit** is still
+  not decided (TODO).
+
+### Remaining work
+
+GS-2a waits for the product owner's yes before merge. GS-2b (ending the failed
+job's other scenes and cancelling their queued attempts) comes next.
