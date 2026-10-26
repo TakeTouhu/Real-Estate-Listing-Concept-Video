@@ -177,8 +177,9 @@ web app's wiring only, so the command's addition gets its own review.
   has none. Preview and download of the customer's video are GS-12's.
 - **Content type.** The folder keeps no metadata, so a content type given to
   `putObjectIfAbsent` is not stored.
-- **Leftovers after a crash.** Nothing removes an abandoned upload or a staged
-  file left by a killed process. In development, delete the folder.
+- **Leftovers.** Nothing removes an abandoned upload or a staged file left by a
+  killed process, or the empty folders a deleted key leaves. In development,
+  delete the folder.
 - **Retention.** Deleting scene videos after 30 days (ADR-0052 Decision 17) is
   not built for any store.
 - **More than one machine.** The folder serves the processes of one machine.

@@ -24,7 +24,10 @@ import {
   createDeliverableCompositionSourceMaterializer,
   createDeliverableOutputPublisher,
 } from "./managed-output/deliverable-composition-io";
-import { nodeManagedOutputTempFileFactory } from "./managed-output/media-validation";
+import {
+  S3ManagedOutputMediaValidator,
+  nodeManagedOutputTempFileFactory,
+} from "./managed-output/media-validation";
 import { S3ManagedOutputStagingSink, type S3ObjectBody } from "./managed-output/s3-staging-sink";
 import { NonProductionAdapterError } from "./production-guard";
 import {
@@ -799,6 +802,40 @@ describe("the worker's existing seams, over the folder", () => {
     } finally {
       await materialized.release();
     }
+  });
+
+  it("lets media validation read back what is stored, and only that", async () => {
+    const data = bytes(4, 4, 4, 4);
+    await store.objectStorage.putObject(OUTPUT, data);
+    const inspected: Uint8Array[] = [];
+    const validator = new S3ManagedOutputMediaValidator(
+      { bucket: BUCKET },
+      {
+        reader: store.objectClient,
+        probe: {
+          probe: (localPath) => {
+            inspected.push(new Uint8Array(readFileSync(localPath)));
+            return Promise.resolve({ kind: "INVALID", reason: "CONTAINER_UNSUPPORTED" });
+          },
+        },
+      },
+    );
+    const receipt = (d: Uint8Array) => ({
+      sha256: sha256Digest(hex(d)),
+      sizeBytes: safePositiveByteCount(d.byteLength),
+    });
+    expect(
+      await validator.validate({ destinationKey: OUTPUT, expectedReceipt: receipt(data) }),
+    ).toEqual({ kind: "INVALID_MEDIA", reason: "CONTAINER_UNSUPPORTED" });
+    expect(inspected).toEqual([data]);
+    expect(
+      await validator.validate({ destinationKey: OUTPUT, expectedReceipt: receipt(bytes(5)) }),
+    ).toEqual({ kind: "INTEGRITY_MISMATCH" });
+    const missing = managedGenerationOutputKey({ organizationId: "org_1", attemptId: "att_2" });
+    expect(
+      await validator.validate({ destinationKey: missing, expectedReceipt: receipt(data) }),
+    ).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(inspected).toHaveLength(1);
   });
 
   it("lets the Clean Master store publish and copy back what is stored, which no URL reaches", async () => {
