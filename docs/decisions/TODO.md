@@ -1617,10 +1617,13 @@ them is **built**. Each item below records the settled decision and what remains
       failing an initial
       generation and releasing its Unit or rolling a regeneration back to the
       customer's video, identically whichever way the attempt ended.*
-      ***Still unbuilt:*** *the failed job's other scenes and their queued
-      attempts, left where they are by Transaction H and Transaction K alike
-      (GS-2b); an attempt that never ends and an attempt that fails preflight
-      (items below); the release of a paid regeneration's or a charged disclosure change's
+      *Built for the failed job's other scenes in GS-2b (ADR-0084): a sweep,
+      Transaction L, closes each open scene of a failed job once nothing of it
+      is at the provider, cancelling an attempt still waiting to be sent, for
+      Transactions H and K alike.*
+      ***Still unbuilt:*** *an attempt that never ends, which keeps its
+      request out of Transaction K and its scene open, and an attempt that
+      fails preflight (items below); the release of a paid regeneration's or a charged disclosure change's
       own reservation, and the disclosure-change count, built with them;
       Transaction G's defects and a claim refused as `UNSUPPORTED_TARGET`,
       which write no terminal row (ADR-0082, "Not decided here"). And a

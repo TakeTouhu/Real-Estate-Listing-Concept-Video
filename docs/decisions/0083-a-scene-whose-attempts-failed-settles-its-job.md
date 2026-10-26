@@ -199,6 +199,7 @@ delivered job.
   sent. One already accepted by the provider still runs there. Ending those
   scenes, and cancelling their queued attempts, is GS-2b, for this settlement
   and Transaction H alike, which leaves the same shape (ADR-0048 Decision 6).
+  *Built in GS-2b: ADR-0084.*
 - **An attempt that fails preflight.** The execution preflight fails an attempt
   it cannot send (the request cannot be reconstructed, storage is unreachable)
   by writing the legacy `state` column, and leaves the orchestration state
