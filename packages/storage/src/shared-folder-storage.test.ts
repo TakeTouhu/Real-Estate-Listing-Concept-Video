@@ -4,20 +4,26 @@
  * opening the same folder sees, and what is never written.
  */
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import { chown, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   managedCleanMasterKey,
+  managedDeliverableOutputKey,
   managedGenerationOutputKey,
   sha256Digest,
   safePositiveByteCount,
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { createCleanMasterStore } from "./managed-output/clean-master-store";
+import {
+  createDeliverableCompositionSourceMaterializer,
+  createDeliverableOutputPublisher,
+} from "./managed-output/deliverable-composition-io";
 import { nodeManagedOutputTempFileFactory } from "./managed-output/media-validation";
 import { S3ManagedOutputStagingSink, type S3ObjectBody } from "./managed-output/s3-staging-sink";
 import { NonProductionAdapterError } from "./production-guard";
@@ -123,6 +129,28 @@ const complete = (
     ifNoneMatch: "*",
   });
 
+/** The open files below the test's folder, where the platform can list them. */
+const PROC_FD = "/proc/self/fd";
+function openFilesBelow(dir: string): number {
+  return readdirSync(PROC_FD).filter((fd) => {
+    try {
+      return readlinkSync(join(PROC_FD, fd)).startsWith(dir);
+    } catch {
+      return false;
+    }
+  }).length;
+}
+
+/** What a call rejected with, as an `AppError`'s message. */
+async function appRefusal(promise: Promise<unknown>): Promise<string> {
+  const error: unknown = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(AppError);
+  return (error as AppError).message;
+}
+
 async function refusal(
   promise: Promise<unknown>,
 ): Promise<{ status: number; name: string; message: string }> {
@@ -151,16 +179,30 @@ describe("opening the folder", () => {
     expect(await readdir(base)).toEqual(["root"]);
   });
 
+  it("is refused when the process runs in production, whatever it is told", async () => {
+    const ambient = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      expect(() =>
+        createSharedFolderStorage({ root: join(base, "prod"), secret: SECRET, nodeEnv: "test" }),
+      ).toThrow(NonProductionAdapterError);
+    } finally {
+      process.env.NODE_ENV = ambient;
+    }
+    expect(await readdir(base)).toEqual(["root"]);
+  });
+
   it("needs an absolute folder, so every process names the same one", async () => {
+    const relative = `vta-relative-${process.pid}`;
     let error: unknown;
     try {
-      createSharedFolderStorage({
-        root: "relative/storage",
-        secret: SECRET,
-        nodeEnv: "test",
-      });
+      createSharedFolderStorage({ root: `${relative}/storage`, secret: SECRET, nodeEnv: "test" });
     } catch (e) {
       error = e;
+    } finally {
+      // Refused before anything is made, so this finds nothing to remove.
+      expect(existsSync(resolve(relative))).toBe(false);
+      await rm(resolve(relative), { recursive: true, force: true });
     }
     expect(error).toBeInstanceOf(AppError);
     expect((error as AppError).code).toBe("CONFIGURATION_ERROR");
@@ -169,6 +211,62 @@ describe("opening the folder", () => {
 
   it("creates the folder with its objects, uploads and staging areas", async () => {
     expect((await readdir(root)).sort()).toEqual(["objects", "staging", "uploads"]);
+  });
+
+  it("names neither the folder nor the path when it cannot open it", async () => {
+    await writeFile(join(base, "file"), "");
+    let error: unknown;
+    try {
+      createSharedFolderStorage({ root: join(base, "file", "root"), secret: SECRET });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe("CONFIGURATION_ERROR");
+    expect((error as AppError).message).toBe(
+      "The shared storage folder could not be opened (ENOTDIR)",
+    );
+  });
+
+  it("adopts only real folders, never a link to one somewhere else", async () => {
+    const elsewhere = join(base, "elsewhere");
+    await mkdir(elsewhere);
+    const linked = join(base, "linked");
+    await mkdir(linked);
+    await symlink(elsewhere, join(linked, "objects"));
+    expect(() => createSharedFolderStorage({ root: linked, secret: SECRET })).toThrow(
+      "The shared storage folder could not be opened (FOLDER_NOT_PRIVATE)",
+    );
+    expect(await readdir(elsewhere)).toEqual([]);
+  });
+
+  it.runIf(process.getuid?.() === 0)("adopts only folders this user owns", async () => {
+    const theirs = join(base, "theirs");
+    await mkdir(theirs);
+    await chown(theirs, 65534, 65534);
+    expect(() => createSharedFolderStorage({ root: theirs, secret: SECRET })).toThrow(
+      "The shared storage folder could not be opened (FOLDER_NOT_PRIVATE)",
+    );
+  });
+
+  it("keeps every folder and every object readable by this user alone", async () => {
+    const chmodded = join(base, "open");
+    await mkdir(chmodded, { mode: 0o755 });
+    const opened = createSharedFolderStorage({ root: chmodded, secret: SECRET });
+    await opened.objectStorage.putObject(ASSET, bytes(1));
+    const local = join(base, "local");
+    await writeFile(local, bytes(2), { mode: 0o644 });
+    await opened.objectClient.putObjectIfAbsent({
+      ...target(MASTER),
+      localPath: local,
+      contentType: "video/mp4",
+    });
+    const mode = async (path: string) => (await stat(path)).mode & 0o777;
+    for (const dir of ["", "objects", "staging", "uploads", "objects/org/org_1"]) {
+      expect(await mode(join(chmodded, dir))).toBe(0o700);
+    }
+    expect(await mode(join(chmodded, "objects", ASSET))).toBe(0o600);
+    expect(await mode(join(chmodded, "objects", MASTER))).toBe(0o600);
   });
 });
 
@@ -197,7 +295,7 @@ describe("the web app's view", () => {
     expect(await store.objectStorage.getObject(ASSET)).toEqual(bytes(1, 2, 3));
   });
 
-  it("is seen by a second process opening the same folder, and by no other folder", async () => {
+  it("is seen by a second store opening the same folder, and by no other folder", async () => {
     await store.objectStorage.putObject(ASSET, bytes(4, 5));
     const again = createSharedFolderStorage({
       root,
@@ -219,6 +317,37 @@ describe("the web app's view", () => {
     expect(await store.objectStorage.exists(folder)).toBe(false);
     expect(await store.objectStorage.getObject(folder)).toBeNull();
     expect(await stored(folder)).toBeNull();
+    await store.objectStorage.deleteObject(folder);
+    expect(await store.objectStorage.exists(ASSET)).toBe(true);
+  });
+
+  it("finds nothing below a stored object", async () => {
+    await store.objectStorage.putObject(ASSET, bytes(1));
+    const below = `${ASSET}/below`;
+    expect(await store.objectStorage.exists(below)).toBe(false);
+    expect(await store.objectStorage.getObject(below)).toBeNull();
+    expect(await stored(below)).toBeNull();
+    await store.objectStorage.deleteObject(below);
+  });
+
+  it("refuses a key the file system cannot name, rather than calling it absent", async () => {
+    // Canonical, but one segment longer than any file name may be, below a
+    // folder that exists, so the file system reaches that segment.
+    await store.objectStorage.putObject(ASSET, bytes(1));
+    const long = `org/org_1/${"x".repeat(300)}`;
+    const error: unknown = await store.objectStorage.getObject(long).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).message).toBe(
+      "The shared storage folder could not read an object (ENAMETOOLONG)",
+    );
+    expect(await refusal(store.objectClient.getObject(target(long)))).toEqual({
+      status: 500,
+      name: "InternalError",
+      message: "InternalError (ENAMETOOLONG)",
+    });
   });
 
   it("refuses a key that is not canonical, and writes nothing outside the folder", async () => {
@@ -238,7 +367,57 @@ describe("the web app's view", () => {
       }
     }
     expect(await readdir(base)).toEqual(["root"]);
+    expect((await readdir(root)).sort()).toEqual(["objects", "staging", "uploads"]);
     expect(await readdir(join(root, "objects"))).toEqual([]);
+  });
+
+  it("refuses what is at a key but is no object, rather than calling it absent", async () => {
+    await mkdir(join(root, "objects", "org", "org_1"), { recursive: true });
+    const device = "org/org_1/device";
+    await symlink("/dev/null", join(root, "objects", device));
+    expect(await appRefusal(store.objectStorage.getObject(device))).toBe(
+      "The shared storage folder could not read an object (NOT_AN_OBJECT)",
+    );
+    expect(await appRefusal(store.objectStorage.exists(device))).toBe(
+      "The shared storage folder could not check an object (NOT_AN_OBJECT)",
+    );
+    expect((await refusal(store.objectClient.getObject(target(device)))).message).toBe(
+      "InternalError (NOT_AN_OBJECT)",
+    );
+    if (!existsSync("/usr/bin/mkfifo")) return;
+    // A pipe would hang a blocking open; this one is refused at once.
+    const pipe = "org/org_1/pipe";
+    execFileSync("/usr/bin/mkfifo", [join(root, "objects", pipe)]);
+    expect((await refusal(store.objectClient.getObject(target(pipe)))).message).toBe(
+      "InternalError (NOT_AN_OBJECT)",
+    );
+  });
+
+  it("calls nothing absent once the objects folder itself is gone", async () => {
+    await store.objectStorage.putObject(ASSET, bytes(1));
+    await rm(join(root, "objects"), { recursive: true });
+    for (const read of [
+      () => store.objectStorage.getObject(ASSET),
+      () => store.objectStorage.getObject(OUTPUT),
+    ]) {
+      expect(await appRefusal(read())).toBe(
+        "The shared storage folder could not read an object (FOLDER_MISSING)",
+      );
+    }
+    expect(await appRefusal(store.objectStorage.exists(ASSET))).toBe(
+      "The shared storage folder could not check an object (FOLDER_MISSING)",
+    );
+    expect((await refusal(store.objectClient.getObject(target(OUTPUT)))).message).toBe(
+      "InternalError (FOLDER_MISSING)",
+    );
+    // Nor once another folder stands in its place, empty as it is.
+    await mkdir(join(root, "objects"));
+    expect(await appRefusal(store.objectStorage.exists(ASSET))).toBe(
+      "The shared storage folder could not check an object (FOLDER_MISSING)",
+    );
+    expect((await refusal(store.objectClient.getObject(target(ASSET)))).message).toBe(
+      "InternalError (FOLDER_MISSING)",
+    );
   });
 
   it("signs URLs as every store does, and never for an internal key", async () => {
@@ -411,6 +590,8 @@ describe("the worker's view", () => {
       complete(OUTPUT, second.uploadId, second.parts),
     ]);
     expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const lost = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect((lost.reason as SharedFolderStorageError).$metadata.httpStatusCode).toBe(412);
     const winner = results[0]!.status === "fulfilled" ? bytes(1) : bytes(2);
     expect(await stored(OUTPUT)).toEqual(winner);
   });
@@ -502,6 +683,28 @@ describe("the worker's view", () => {
     expect(await stored(MASTER)).toBeNull();
     expect(await readdir(join(root, "staging"))).toEqual([]);
   });
+
+  it.runIf(existsSync(PROC_FD))("leaves no file open, however a read ends", async () => {
+    await store.objectStorage.putObject(OUTPUT, bytes(1, 2, 3));
+    await mkdir(join(root, "objects", "org", "org_1"), { recursive: true });
+    await symlink("/dev/null", join(root, "objects", "org", "org_1", "device"));
+    const { uploadId, parts } = await upload(MASTER, bytes(1), bytes(2));
+    const before = openFilesBelow(base);
+
+    const ended = await store.objectClient.getObject(target(OUTPUT));
+    await drain(ended.body!);
+    const cancelled = await store.objectClient.getObject(target(OUTPUT));
+    await cancelled.body!.read();
+    await cancelled.body!.cancel();
+    await store.objectStorage.getObject(OUTPUT);
+    await store.objectStorage.getObject("org/org_1");
+    await refusal(store.objectClient.getObject(target("org/org_1/device")));
+    const [first, second] = parts as [(typeof parts)[0], (typeof parts)[0]];
+    await refusal(complete(MASTER, uploadId, [first, { ...second, etag: first.etag }]));
+    await complete(MASTER, uploadId, parts);
+
+    expect(openFilesBelow(base)).toBe(before);
+  });
 });
 
 describe("the worker's existing seams, over the folder", () => {
@@ -527,6 +730,75 @@ describe("the worker's existing seams, over the folder", () => {
     });
     expect(await store.objectStorage.getObject(OUTPUT)).toEqual(bytes(1, 2, 3));
     expect(await readdir(join(root, "uploads"))).toEqual([]);
+  });
+
+  it("lets the S3 staging sink publish an object of several parts", async () => {
+    const partSizeBytes = 5 * 1024 * 1024;
+    const sink = new S3ManagedOutputStagingSink(
+      { bucket: BUCKET, partSizeBytes },
+      { client: store.objectClient },
+    );
+    const data = new Uint8Array(2 * partSizeBytes + 7).map((_, i) => i % 253);
+    const staged = await sink.begin({ destinationKey: OUTPUT });
+    for (let at = 0; at < data.byteLength; at += SHARED_FOLDER_READ_CHUNK_BYTES) {
+      await staged.write(data.subarray(at, at + SHARED_FOLDER_READ_CHUNK_BYTES));
+    }
+    const receipt = {
+      sha256: sha256Digest(hex(data)),
+      sizeBytes: safePositiveByteCount(data.byteLength),
+    };
+    expect(await staged.commit({ receipt })).toEqual({ kind: "PUBLISHED" });
+    const result = await store.objectClient.getObject(target(OUTPUT));
+    expect(result.contentLength).toBe(data.byteLength);
+    expect(hex((await drain(result.body!)).data)).toBe(hex(data));
+    expect(await readdir(join(root, "uploads"))).toEqual([]);
+  });
+
+  it("lets composition read its sources and publish the video first-wins", async () => {
+    const io = { client: store.objectClient, tempFiles: nodeManagedOutputTempFileFactory };
+    const scene = bytes(7, 7, 7);
+    await store.objectStorage.putObject(OUTPUT, scene);
+    const materialized = await createDeliverableCompositionSourceMaterializer(io, {
+      bucket: BUCKET,
+    }).materialize({
+      organizationId: "org_1",
+      scenes: [
+        {
+          position: 1,
+          generationSceneId: "gs_1",
+          sceneGenerationAttemptId: "att_1",
+          sourceStorageKey: OUTPUT,
+          sourceSha256: sha256Digest(hex(scene)),
+          sourceSizeBytes: safePositiveByteCount(scene.byteLength),
+          durationSeconds: 5,
+        },
+      ],
+    });
+    expect(materialized.kind).toBe("MATERIALIZED");
+    if (materialized.kind !== "MATERIALIZED") return;
+    try {
+      expect(new Uint8Array(readFileSync(materialized.sources[0]!.localPath))).toEqual(scene);
+      const publisher = createDeliverableOutputPublisher(io, { bucket: BUCKET });
+      const key = managedDeliverableOutputKey({
+        organizationId: "org_1",
+        deliverableVersionId: "gdv_1",
+      });
+      expect(await publisher.probeExistingOutput({ key })).toEqual({ kind: "ABSENT" });
+      const video = bytes(8, 8);
+      await writeFile(materialized.outputPath, video);
+      const receipt = {
+        kind: "PUBLISHED",
+        sha256: sha256Digest(hex(video)),
+        sizeBytes: safePositiveByteCount(video.byteLength),
+      };
+      expect(await publisher.publish({ key, localPath: materialized.outputPath })).toEqual(receipt);
+      await writeFile(materialized.outputPath, bytes(9));
+      expect(await publisher.publish({ key, localPath: materialized.outputPath })).toEqual(receipt);
+      expect(await publisher.probeExistingOutput({ key })).toEqual(receipt);
+      expect(await store.objectStorage.getObject(key)).toEqual(video);
+    } finally {
+      await materialized.release();
+    }
   });
 
   it("lets the Clean Master store publish and copy back what is stored, which no URL reaches", async () => {

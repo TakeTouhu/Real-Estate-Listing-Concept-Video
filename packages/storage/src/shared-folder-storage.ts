@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, mkdirSync, realpathSync } from "node:fs";
 import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  type Stats,
+} from "node:fs";
+import {
+  chmod,
   copyFile,
   link,
   mkdir,
@@ -59,13 +69,16 @@ import { signedStorageUrl, type SignedPurpose } from "./signing";
  *   `putObjectIfAbsent` publish with a hard link, which the file system refuses
  *   when the key is taken. A losing completion is refused with a `412`, as S3
  *   refuses it, so the existing sink reads the winner back unchanged.
+ * - **Absence is proved, never assumed.** A key reads as empty only when no file
+ *   is at it and the objects folder this store opened is still in place.
  * - **A refusal names no key and no path.** File system errors carry the full
  *   path in their message, so none is passed on; only its code is.
  *
  * It keeps no metadata, so a content type given to it is not stored.
  *
- * NOT PRODUCTION-SAFE: construction throws under NODE_ENV=production, with no
- * escape hatch, and the environment schema refuses its setting there too.
+ * NOT PRODUCTION-SAFE: construction throws when either the ambient or the given
+ * NODE_ENV is production, with no escape hatch, and the environment schema
+ * refuses its setting there too.
  */
 
 /** The one bucket the worker's seam may name. */
@@ -82,6 +95,9 @@ const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /** Codes that prove nothing is stored at a key. */
 const ABSENT_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
 
+/** Node's code for `rm` meeting a folder: one that holds other keys, not an object. */
+const RM_FOLDER_CODE = "ERR_FS_EISDIR";
+
 export interface SharedFolderStorageOptions {
   /** The shared folder. Absolute, so every process names the same one. */
   readonly root: string;
@@ -90,7 +106,7 @@ export interface SharedFolderStorageOptions {
   /** Base path that serves signed objects, e.g. "/api/storage". */
   readonly basePath?: string;
   readonly now?: () => Date;
-  /** Injectable for tests; defaults to the ambient NODE_ENV. */
+  /** Refused as production too, besides the ambient NODE_ENV; for tests. */
   readonly nodeEnv?: string;
 }
 
@@ -129,6 +145,46 @@ function isAbsent(error: unknown): boolean {
   return ABSENT_CODES.has(errorCode(error));
 }
 
+/** An error of the store's own, which leaves only as its code. */
+function failure(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
+async function removeQuietly(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true });
+  } catch {
+    // Best effort: a leftover file never replaces the caller's result.
+  }
+}
+
+/**
+ * Create or adopt one of the store's folders: a folder, not a link, that this
+ * user owns, readable by this user alone. Returns it open, as checked.
+ */
+function privateFolder(path: string): number {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch {
+    // A link, or anything else that is not a folder.
+    throw failure("FOLDER_NOT_PRIVATE");
+  }
+  try {
+    const stats = fstatSync(fd);
+    const uid = process.getuid?.();
+    if (!stats.isDirectory() || (uid !== undefined && stats.uid !== uid)) {
+      throw failure("FOLDER_NOT_PRIVATE");
+    }
+    fchmodSync(fd, 0o700);
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
 function sha256(bytes: Uint8Array, encoding: "hex" | "base64"): string {
   return createHash("sha256").update(bytes).digest(encoding);
 }
@@ -146,14 +202,35 @@ class Folder {
   readonly #objects: string;
   readonly #uploads: string;
   readonly #staging: string;
+  readonly #objectsDevice: number;
+  readonly #objectsInode: number;
 
   constructor(root: string) {
     this.#objects = join(root, "objects");
     this.#uploads = join(root, "uploads");
     this.#staging = join(root, "staging");
-    for (const dir of [this.#objects, this.#uploads, this.#staging]) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const dir of [root, this.#uploads, this.#staging]) closeSync(privateFolder(dir));
+    // Held open for the store's life, never closed: while it is open, no folder
+    // put in its place can have its identity, so `confirmAbsent` cannot be
+    // fooled by a file system that hands out a freed inode number again.
+    const objects = fstatSync(privateFolder(this.#objects));
+    this.#objectsDevice = objects.dev;
+    this.#objectsInode = objects.ino;
+  }
+
+  /**
+   * The answer for a key at which no file is found: nothing is stored there, as
+   * long as the objects folder this store opened is still in place. If it was
+   * deleted or replaced, the store no longer knows, and says so.
+   */
+  async confirmAbsent(): Promise<null> {
+    try {
+      const objects = await stat(this.#objects);
+      if (objects.dev === this.#objectsDevice && objects.ino === this.#objectsInode) return null;
+    } catch {
+      // Gone: answered below.
     }
+    throw failure("FOLDER_MISSING");
   }
 
   /** The key's file, or `null` for a key that is not canonical. */
@@ -168,7 +245,7 @@ class Folder {
     try {
       await write(path);
     } catch (error) {
-      await rm(path, { force: true });
+      await removeQuietly(path);
       throw error;
     }
     return path;
@@ -180,7 +257,7 @@ class Folder {
       await mkdir(dirname(file), { recursive: true, mode: 0o700 });
       await rename(staged, file);
     } catch (error) {
-      await rm(staged, { force: true });
+      await removeQuietly(staged);
       throw error;
     }
   }
@@ -195,7 +272,7 @@ class Folder {
       if (errorCode(error) === "EEXIST") return false;
       throw error;
     } finally {
-      await rm(staged, { force: true });
+      await removeQuietly(staged);
     }
   }
 
@@ -203,21 +280,44 @@ class Folder {
   async openRead(file: string): Promise<{ handle: FileHandle; size: number } | null> {
     let handle: FileHandle;
     try {
-      handle = await open(file, "r");
+      // Non-blocking, so a pipe left in the folder cannot hang the open.
+      handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
     } catch (error) {
-      if (isAbsent(error) || errorCode(error) === "EISDIR") return null;
+      if (isAbsent(error) || errorCode(error) === "EISDIR") return this.confirmAbsent();
       throw error;
     }
+    let isFile: boolean;
+    let isDirectory: boolean;
+    let size: number;
     try {
       const stats = await handle.stat();
-      if (stats.isFile()) return { handle, size: stats.size };
+      [isFile, isDirectory, size] = [stats.isFile(), stats.isDirectory(), stats.size];
     } catch (error) {
       await closeQuietly(handle);
       throw error;
     }
-    // A directory holds other keys; no object is stored at this one.
+    if (isFile) return { handle, size };
     await closeQuietly(handle);
-    return null;
+    // A folder holds other keys, so nothing is stored at this one. Anything
+    // else is nothing this store wrote, and proves nothing about the key.
+    if (isDirectory) return this.confirmAbsent();
+    throw failure("NOT_AN_OBJECT");
+  }
+
+  /** Whether an object is stored at the key's file, by `openRead`'s rules. */
+  async holds(file: string): Promise<boolean> {
+    let stats: Stats;
+    try {
+      stats = await stat(file);
+    } catch (error) {
+      if (!isAbsent(error)) throw error;
+      await this.confirmAbsent();
+      return false;
+    }
+    if (stats.isFile()) return true;
+    if (!stats.isDirectory()) throw failure("NOT_AN_OBJECT");
+    await this.confirmAbsent();
+    return false;
   }
 
   /** An upload's folder, or `null` for an id this folder never issued. */
@@ -265,17 +365,30 @@ function fileBody(handle: FileHandle): S3ObjectBody {
 export function createSharedFolderStorage(
   options: SharedFolderStorageOptions,
 ): SharedFolderStorage {
-  assertNotProduction(
-    "SharedFolderStorage",
-    "objects are kept in a folder on one machine's disk, for development and CI",
-    "configure the Google Cloud Storage adapter",
-    { nodeEnv: options.nodeEnv },
-  );
+  // The given value cannot vouch for the ambient one: either says production.
+  for (const nodeEnv of [options.nodeEnv, process.env.NODE_ENV]) {
+    assertNotProduction(
+      "SharedFolderStorage",
+      "objects are kept in a folder on one machine's disk, for development and CI",
+      "configure the Google Cloud Storage adapter",
+      { nodeEnv },
+    );
+  }
   if (typeof options.root !== "string" || !isAbsolute(options.root)) {
     throw new AppError("CONFIGURATION_ERROR", "The shared storage folder must be an absolute path");
   }
-  mkdirSync(options.root, { recursive: true, mode: 0o700 });
-  const folder = new Folder(realpathSync(options.root));
+  let folder: Folder;
+  try {
+    mkdirSync(options.root, { recursive: true, mode: 0o700 });
+    folder = new Folder(realpathSync(options.root));
+  } catch (error) {
+    // The web app opens the folder inside a request, so this message reaches
+    // its logs: the code, never the path.
+    throw new AppError(
+      "CONFIGURATION_ERROR",
+      `The shared storage folder could not be opened (${errorCode(error)})`,
+    );
+  }
   return {
     objectStorage: createObjectStorageView(folder, options),
     objectClient: createObjectClientView(folder),
@@ -360,16 +473,15 @@ function createObjectStorageView(
       try {
         await rm(file, { force: true });
       } catch (error) {
-        if (!isAbsent(error)) throw failed("delete", error);
+        if (!isAbsent(error) && errorCode(error) !== RM_FOLDER_CODE) throw failed("delete", error);
       }
     },
 
     async exists(key: string): Promise<boolean> {
       const file = fileOf(key);
       try {
-        return (await stat(file)).isFile();
+        return await folder.holds(file);
       } catch (error) {
-        if (isAbsent(error)) return false;
         throw failed("check", error);
       }
     },
@@ -470,41 +582,51 @@ function createObjectClientView(folder: Folder): SharedFolderObjectClient {
         if (dir === null) throw new SharedFolderStorageError(404, "NoSuchUpload");
         if (input.parts.length === 0) throw new SharedFolderStorageError(400, "MalformedXML");
 
-        const parts: Uint8Array[] = [];
         let previous = 0;
         for (const part of input.parts) {
-          if (part.partNumber <= previous)
+          if (part.partNumber <= previous) {
             throw new SharedFolderStorageError(400, "InvalidPartOrder");
+          }
           previous = part.partNumber;
-          let bytes: Uint8Array;
-          try {
-            bytes = await readFile(join(dir, `part-${part.partNumber}`));
-          } catch (error) {
-            if (isAbsent(error)) throw new SharedFolderStorageError(400, "InvalidPart");
-            throw error;
-          }
-          if (
-            part.etag !== `"${sha256(bytes, "hex")}"` ||
-            part.checksumSha256Base64 !== sha256(bytes, "base64")
-          ) {
-            throw new SharedFolderStorageError(400, "InvalidPart");
-          }
-          parts.push(bytes);
         }
 
+        // One part in memory at a time: each is read once, checked against the
+        // tag and checksum the caller holds, and those same bytes are appended.
         const staged = await folder.stage(async (path) => {
           const handle = await open(path, "wx", 0o600);
           try {
-            for (const bytes of parts) await handle.write(bytes);
-          } finally {
+            let written = 0;
+            for (const part of input.parts) {
+              let bytes: Uint8Array;
+              try {
+                bytes = await readFile(join(dir, `part-${part.partNumber}`));
+              } catch (error) {
+                if (isAbsent(error)) throw new SharedFolderStorageError(400, "InvalidPart");
+                throw error;
+              }
+              if (
+                part.etag !== `"${sha256(bytes, "hex")}"` ||
+                part.checksumSha256Base64 !== sha256(bytes, "base64")
+              ) {
+                throw new SharedFolderStorageError(400, "InvalidPart");
+              }
+              await handle.writeFile(bytes);
+              written += bytes.byteLength;
+            }
+            if ((await handle.stat()).size !== written) throw failure("SHORT_WRITE");
+          } catch (error) {
             await closeQuietly(handle);
+            throw error;
           }
+          // A close that fails may have lost the bytes, so it fails the completion.
+          await handle.close();
         });
         // The upload stays when it loses, as on S3; the sink aborts it.
         if (!(await folder.publishIfAbsent(file, staged))) {
           throw new SharedFolderStorageError(412, "PreconditionFailed");
         }
-        await rm(dir, { recursive: true, force: true });
+        // Published: a leftover part can no longer change what was stored.
+        await removeQuietly(dir);
       });
     },
 
@@ -513,7 +635,7 @@ function createObjectClientView(folder: Folder): SharedFolderObjectClient {
         fileOf(input);
         // Aborting an upload that is already gone changes nothing.
         const dir = await uploadOf(input.uploadId, input.key);
-        if (dir !== null) await rm(dir, { recursive: true, force: true });
+        if (dir !== null) await removeQuietly(dir);
       });
     },
 
@@ -529,9 +651,11 @@ function createObjectClientView(folder: Folder): SharedFolderObjectClient {
     putObjectIfAbsent(input): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
       return seam(async () => {
         const file = fileOf(input);
-        const staged = await folder.stage((path) =>
-          copyFile(input.localPath, path, constants.COPYFILE_EXCL),
-        );
+        const staged = await folder.stage(async (path) => {
+          await copyFile(input.localPath, path, constants.COPYFILE_EXCL);
+          // A copy takes its source's mode; a stored object is this user's alone.
+          await chmod(path, 0o600);
+        });
         return (await folder.publishIfAbsent(file, staged))
           ? { kind: "CREATED" as const }
           : { kind: "ALREADY_EXISTS" as const };
