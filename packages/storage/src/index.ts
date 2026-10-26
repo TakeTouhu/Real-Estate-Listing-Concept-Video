@@ -3,6 +3,17 @@ export { assertNotProduction, NonProductionAdapterError } from "./production-gua
 export type { ProductionGuardOptions } from "./production-guard";
 export { LocalObjectStorage } from "./local-storage";
 export type { LocalObjectStorageOptions } from "./local-storage";
+export {
+  SHARED_FOLDER_READ_CHUNK_BYTES,
+  SHARED_FOLDER_STORAGE_BUCKET,
+  SharedFolderStorageError,
+  createSharedFolderStorage,
+} from "./shared-folder-storage";
+export type {
+  SharedFolderObjectClient,
+  SharedFolderStorage,
+  SharedFolderStorageOptions,
+} from "./shared-folder-storage";
 export { SharpImageProcessor, averageHashHex } from "./image-processor";
 export type { SharpImageProcessorOptions } from "./image-processor";
 export { PassthroughMalwareScanner } from "./scanner";

@@ -1705,3 +1705,23 @@ any orchestration discovery.
 **What changes at deploy.** Nothing anyone can notice: nothing in production
 constructs the closure's runner or repository. No new environment variable.
 
+
+## GS-3 — a shared folder holds development and CI objects
+
+**No migration** (ADR-0085). No schema, enum, constraint or row changes.
+
+**A new optional environment variable, `SHARED_STORAGE_DIR`**: an absolute
+folder in which the web app keeps stored objects, to be shared with the worker.
+The schema refuses a relative path, and refuses the variable altogether when
+`NODE_ENV=production`. Unset, the web app keeps objects in its own memory, as
+before.
+
+**Objects stored before this build.** None move. Set for the first time, the
+variable starts the web app on an empty folder; what the in-memory store held,
+lost at every restart anyway, is not copied.
+
+**Rolling back.** To GS-2b's build: safe. That build ignores the variable and
+keeps objects in memory again; the folder stays on disk until deleted.
+
+**What changes at deploy.** Nothing in production: the variable is refused
+there, and unset it changes nothing.

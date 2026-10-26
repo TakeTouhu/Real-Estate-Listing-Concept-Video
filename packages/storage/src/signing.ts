@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { assertSignableStorageKey, isSignableStorageKey } from "@app/domain";
+import { assertSignableStorageKey, isSignableStorageKey, type SignedUrl } from "@app/domain";
 import { timingSafeEqualString } from "@app/shared";
 
 export type SignedPurpose = "upload" | "download";
@@ -34,6 +34,30 @@ export function signStorageToken(token: SignedKeyToken, secret: string): string 
   assertSignableStorageKey(token.key);
   const payload = payloadOf(token);
   return `${payload}.${sign(payload, secret)}`;
+}
+
+/**
+ * A signed URL for one key and one purpose, served under `basePath`. Every
+ * signing store makes its URLs here, so each refuses an internal-only key the
+ * same way.
+ */
+export function signedStorageUrl(input: {
+  readonly key: string;
+  readonly purpose: SignedPurpose;
+  readonly ttlSeconds: number;
+  readonly secret: string;
+  readonly basePath: string;
+  readonly now: Date;
+}): SignedUrl {
+  const expiresAtSeconds = Math.floor(input.now.getTime() / 1000) + input.ttlSeconds;
+  const token = signStorageToken(
+    { key: input.key, purpose: input.purpose, expiresAtSeconds },
+    input.secret,
+  );
+  return {
+    url: `${input.basePath}/${input.purpose}?token=${encodeURIComponent(token)}`,
+    expiresAt: new Date(expiresAtSeconds * 1000),
+  };
 }
 
 /**

@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 /**
@@ -48,6 +49,12 @@ export const serverEnvSchema = z
       .string()
       .min(16, "STORAGE_SIGNING_SECRET must be at least 16 characters"),
 
+    // A folder on disk the web app and the worker share for stored objects,
+    // in development and CI only (ADR-0085). Absolute, so both processes name
+    // the same folder whatever their working directory. Unset, the web app
+    // keeps objects in its own memory. Refused in production.
+    SHARED_STORAGE_DIR: z.string().min(1).optional(),
+
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
     // characters (ADR-0065). Optional because the worker shares this schema
     // and never needs it; the web app fails closed without it (Decision 14).
@@ -79,6 +86,23 @@ export const serverEnvSchema = z
     LOG_PRETTY: booleanish.default("false"),
   })
   .superRefine((env, ctx) => {
+    if (env.SHARED_STORAGE_DIR !== undefined) {
+      if (!isAbsolute(env.SHARED_STORAGE_DIR)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["SHARED_STORAGE_DIR"],
+          message: "SHARED_STORAGE_DIR must be an absolute path",
+        });
+      }
+      if (env.NODE_ENV === "production") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["SHARED_STORAGE_DIR"],
+          message: "SHARED_STORAGE_DIR is for development and CI only; it must not be set in production",
+        });
+      }
+    }
+
     if (env.VIDEO_PROVIDER === "wavespeed" && !env.WAVESPEED_API_KEY) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

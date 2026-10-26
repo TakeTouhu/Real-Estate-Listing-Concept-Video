@@ -181,6 +181,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       safe) with a real adapter behind the same `ObjectStorage` port before
       production launch (ADR-0008). Still required — the guard blocks production
       use, it does not provide durable storage.
+      *GS-3 (ADR-0085) adds a shared folder for development and CI, refused in
+      production; it is not a step towards this adapter.*
       **Target settled (ADR-0054 Decision 1): a Google Cloud Storage adapter**,
       not S3 or Azure. The port is unchanged and the domain must not depend on
       Google Cloud SDK types. Note the carried-over work: Phase 5B solved
@@ -1116,6 +1118,20 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       test-only change: hold both runners until each has loaded the attempt, or
       add this interleaving as its own deterministic case.
 
+## Found in GS-3 — a cross-phase lock test waits on a timer
+
+- [ ] **Make "serializes against a Phase 2F-1 cost admission holding the same
+      locks" deterministic** (`tests/integration/submission-outcome.db.test.ts`).
+      It opens the paid-submission gate's transaction, waits 100 ms
+      (`breathe(4)`) for it to take its locks, starts an outcome write and
+      asserts the write is still blocked. Under load the gate's transaction can
+      still be waiting for its first lock after 100 ms, so the write takes the
+      locks first and finishes: a legal interleaving, and the product's
+      serialization holds either way. Seen once in a full local run during
+      GS-3, which does not touch this code; the file then passed three runs
+      out of three. The fix is test-only: signal from inside the gate's
+      session once its facts are loaded, and start the write after that.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
@@ -1370,6 +1386,17 @@ them is **built**. Each item below records the settled decision and what remains
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing
       cancels a job today.
+- [ ] **Serve the customer's video from storage (GS-12).** The download route
+      reads a whole object into memory and names its content type from the
+      key's extension; a deliverable's key has none, and a video may be
+      hundreds of megabytes (ADR-0085, *Not decided here*). Preview and
+      download need a streamed response with the video's own content type,
+      over the shared folder now and over Google Cloud Storage in production.
+- [ ] **Remove what a killed process leaves in the shared folder.** An upload
+      a crashed worker never completed or aborted, a staged file a killed
+      process never moved, and the empty folders a deleted key leaves stay in
+      the folder (ADR-0085, *Not decided here*). Deleting the folder starts
+      over; nothing in production uses it.
 - [ ] **Move the execution preflight's failures onto the orchestration
       state.** `failQueuedPreflight` (Phase 4C-2B, ADR-0027) records a refused
       attempt in the legacy `state` column and leaves its orchestration state

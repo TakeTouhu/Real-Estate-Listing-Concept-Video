@@ -3,7 +3,8 @@
 Branch: `claude/project-thread-az06z2`
 ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a),
-`docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b)
+`docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b),
+`docs/decisions/0085-a-shared-folder-holds-development-objects.md` (GS-3)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -935,3 +936,276 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-2b waits for the product owner's yes before merge. GS-3 (shared folder
 storage for development and CI, used by the web app and the worker) comes next.
+
+## GS-3 — a shared folder holds development and CI objects
+
+Base: `705332b` (PR #107 merge commit on `main`; post-merge CI run 678 green).
+ADR: `docs/decisions/0085-a-shared-folder-holds-development-objects.md`
+
+The first milestone of stage B, the engine. **No migration.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `a0d441c` | the store and its two views, the shared signing helper, the setting, the web app's wiring, the tests |
+| `56ae952` | the review's answers: streamed completion, proved absence, private folders, the refusals that named a path, the production guard; the new tests |
+| `9556ca4` | an open error no supported platform raises dropped from the absence check |
+| `5d17774` | ADR-0085 and the documentation |
+| `9a72878` | media validation driven over the folder; ADR-0085 and the TODO name the empty folders a deleted key leaves; a TODO item for a timing-dependent lock test |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-3 does
+
+- **One folder, two views.** `createSharedFolderStorage({ root, secret })`
+  opens an absolute folder and hands out the domain's `ObjectStorage` port for
+  the web app and the S3-shaped seam for the worker, over the same objects.
+  Neither contract changes, so every caller runs over it unchanged.
+- **Object storage's guarantees from the file system's atomic steps.** Every
+  write is staged first; an unconditional write is renamed into place, and a
+  first-wins write (a multipart completion, `putObjectIfAbsent`) is
+  hard-linked, which the file system refuses when the key is taken. A losing
+  completion gets S3's `412`.
+- **Absence is proved.** A key reads as "nothing stored" only when no file is
+  at it and the objects folder the store opened, and holds open, is still in
+  place. Anything else at a key rejects.
+- **Private, and silent about paths.** Only canonical keys; the folder and
+  everything in it are this user's alone; no refusal names a key or a path.
+- **The web app takes it when `SHARED_STORAGE_DIR` is set**, and otherwise
+  keeps the in-memory store. The setting and the adapter are refused in
+  production. Nothing in the worker opens the folder yet (GS-9).
+
+```mermaid
+sequenceDiagram
+    participant W as Web app (ObjectStorage port)
+    participant F as Shared folder
+    participant K as Worker (S3-shaped seam)
+    W->>F: putObject(photo key): stage, then rename onto the key
+    K->>F: getObject(photo key): open, stream in 1 MiB chunks
+    K->>F: createMultipartUpload, uploadPart (SHA-256 checked)
+    K->>F: completeMultipartUpload(If-None-Match: *)
+    alt key free
+        F-->>K: linked into place (first wins)
+    else key taken
+        F-->>K: 412 PreconditionFailed; the sink reads the winner back
+    end
+    K->>F: putObjectIfAbsent(master or video): copy, chmod 0600, link
+    F-->>K: CREATED or ALREADY_EXISTS
+    W->>F: getObject(key): bytes, null only when proved absent
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI): lint, typecheck and the
+unit suite on `9a72878`; the database suite and the build on `5d17774`, whose
+code `9a72878` changes only by a unit test. This record's commit changes only
+this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6162 / 6162**, 223 files (6118 on `705332b`) |
+| `pnpm test:db` | **1622 / 1623**, 60 files: one timing-dependent lock test failed, then passed three runs out of three (below) |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/storage/src/shared-folder-storage.test.ts` (41 tests), against
+  real files in a fresh folder per test:
+  - opening: refused in production by the given and by the process's
+    `NODE_ENV`, creating nothing; a relative folder refused before anything
+    is made; the three areas created; an unopenable folder refused with a
+    code and no path; a link in place of a folder, and (as root) another
+    user's folder, refused; every folder `0700` and every object `0600`,
+    including a copy of a `0644` file;
+  - the web app's view: store, read, check and delete; copies in and out; a
+    second store on the same folder sees the objects and another folder does
+    not; a folder of keys, and a key below an object, are not objects; a key
+    the file system cannot name, and one that is not canonical, refused, with
+    nothing written outside `objects/`; a device and a pipe at a key refused;
+    a deleted or replaced objects folder refused rather than called absent;
+    signing as every store signs, never for an internal key; no staged
+    leftovers;
+  - the worker's view: the seam's one absence; 2.5 MiB streamed in 1 MiB
+    chunks; a cancelled body refused; another bucket, an owner check and a
+    key that is not canonical refused; a multipart upload invisible until it
+    completes, parts in order; a part replaced; a bad checksum or part number
+    refused; every unprovable completion refused; first completion wins and
+    the second gets a `412`, racing ones too; upload ids the folder issued,
+    for their key only; `putObjectIfAbsent` first-wins, racing too; a file
+    system failure named by its code only; no file left open after a read
+    ends, is cancelled or fails, or a completion fails;
+  - the worker's existing seams over the folder: the staging sink with one
+    part and with three (first-wins read-back included), the composition
+    source materializer and output publisher with the probe, media
+    validation, and the Clean Master store; a photo the web app stored read
+    by a second store;
+  - a static test pinning what opens the folder in production code: the web
+    app's wiring only.
+- `packages/shared/src/env.test.ts`: `SHARED_STORAGE_DIR` absolute only, and
+  never in production.
+- `apps/web/src/lib/property.test.ts`: the folder when the setting is present,
+  the in-memory store when it is not.
+- `packages/domain/src/clean-master/clean-master-shape.test.ts`: the signer is
+  called only by the signing helper, and the helper only by the two stores.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after the pass.
+
+**On `9556ca4`: 63 mutants, 61 killed, 2 survived (both equivalent), none
+broken.**
+
+| Mutant | Area | Change | Killed by |
+| --- | --- | --- | --- |
+| S01 | open | the given `NODE_ENV` is not checked | store |
+| S01b | open | the process's `NODE_ENV` is not checked | store |
+| K01 | open | an opening failure leaves with its path | store |
+| F01 | open | a link is adopted as a folder | store |
+| F02 | open | another user's folder is adopted | store |
+| F03 | open | an adopted folder stays open to others | store |
+| F04 | write | a key's folders are made open to others | store |
+| S02 | open | a relative folder is accepted | store |
+| S03 | key | a key that is not canonical is a path | store |
+| S04 | key | a NUL in a key reaches the file system | store |
+| S05 | write | an unconditional write keeps the first object | store |
+| S06 | write | a taken key fails instead of losing | store |
+| S07 | write | a staged file is left behind | store |
+| W02 | write | a stored object is open to others | store |
+| S08 | write | first-wins overwrites | store |
+| S09 | read | what is no object reads as absent | store |
+| S09b | read | a folder of other keys is refused | store |
+| S10 | read | every open failure is an absence | store |
+| N01 | read | a pipe hangs the open | store |
+| C01 | absent | absence is not proved | store |
+| C02 | absent | the objects folder is not held open | store |
+| C03 | absent | a check does not prove absence | store |
+| C04 | absent | a check calls what is no object absent | store |
+| C05 | absent | a check calls a folder an object | store |
+| D01 | files | a cancelled body keeps its file open | store |
+| D02 | files | a body read to its end keeps its file open | store |
+| D03 | files | the web app's read keeps its file open | store |
+| D04 | files | a folder or device opened by a read stays open | store |
+| D05 | files | a failed completion keeps its staged file open | store |
+| X01 | web | a check failure leaves with its path | store |
+| S11 | read | a key below an object is not absent | store |
+| S12 | read | the seam's absence carries a length | store |
+| S13 | read | a body reads past its end | store |
+| S14 | read | a read is not bounded | store |
+| S15 | seam | another bucket is accepted | store |
+| S16 | seam | an owner check is ignored | store |
+| S17 | seam | a refusal's status is lost | store |
+| S18 | seam | a file system error leaves with its path | store |
+| S19 | upload | an upload id is a path | store |
+| S20 | upload | an upload serves another key | store |
+| S21 | upload | an upload records no key | store |
+| S22 | part | a part's checksum is not checked | store |
+| S23 | part | part number zero is accepted | store |
+| S24 | part | a part number past S3's last is accepted | store |
+| S25 | part | a fractional part number is accepted | store |
+| S26 | complete | an unconditional completion is accepted | store |
+| S27 | complete | an empty completion is accepted | store |
+| S28 | complete | parts out of order are accepted | store |
+| S29 | complete | a part's tag is not checked | store |
+| S30 | complete | a part's checksum is not checked at completion | store |
+| Q01 | complete | a short staged file is published | **survived** |
+| Q02 | complete | a failing close is ignored | **survived** |
+| S31 | complete | a losing completion is not a `412` | store |
+| S32 | complete | a completed upload is left behind | store |
+| S33 | abort | an abort removes nothing | store |
+| P02 | write | a stored copy keeps its source's mode | store |
+| S34 | web | a read failure leaves with its path | store |
+| S35 | web | an upload URL is signed for download | store |
+| E01 | env | a relative folder is accepted | env |
+| E02 | env | the setting is accepted in production | env |
+| P01 | wiring | the web app ignores the folder | wiring |
+| G01 | signing | a URL expires before it is made | store |
+| W01 | pin | the worker opens the folder unreviewed | store |
+
+Suites: `store` = the shared-folder suite; `env` = the environment schema's;
+`wiring` = the web app's property wiring; `signing` = the signer's (run for
+G01, which it does not cover; the store suite does).
+
+The two survivors are equivalent without a file system that fails on demand:
+`FileHandle.writeFile` writes every byte or rejects, so the size check (Q01)
+cannot see a short file, and a close does not fail on a local disk (Q02). Both
+stay, because a full disk or a network mount is exactly where they would.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to GS-2b, an independent review
+agent reviewed `a0d441c` against `705332b`, reading only git objects. It
+confirmed that no key or upload id can name a path outside the folder, that
+the sink's `412`, abort and read-back path works over the folder, and that an
+unset setting leaves the web app exactly as before. Verdict: nothing blocking;
+four should-fix findings, documentation the commit lacked, and nits, answered
+in `56ae952`, `9556ca4`, `5d17774` and `9a72878`:
+
+| Finding | Answer |
+| --- | --- |
+| A completion wrote each part with one unchecked `write` and closed quietly, so a full disk could publish a short object first-wins; it also held every part in memory | Fixed: one part in memory at a time, appended with `writeFile`, the staged size checked against the bytes appended, and a failing close fails the completion (Q01, Q02 above) |
+| `getObject` answered "nothing stored" for a device, a pipe (whose open would hang) and a deleted objects folder | Fixed: only a folder of other keys is absent, anything else at a key is refused (`NOT_AN_OBJECT`), the open never waits on a pipe, and absence is proved against the objects folder the store holds open (`FOLDER_MISSING`). `exists` follows the same rules. The hold matters: without it, a replacement folder reused the deleted one's inode number on this machine's file system, and C02 shows the test catches it |
+| An opening failure's message carried the folder's path, and the web app opens the folder inside a request | Fixed: `CONFIGURATION_ERROR` with the code only (K01) |
+| Tests: the racing loser's `412`, the root after refused keys, the worker's other seams, a multipart sink, open files, refusals rather than absence | All added, and media validation too; an `EACCES` cannot be made as root, so the general refusal is shown with `ENAMETOOLONG` |
+| No ADR-0085, and the setting undocumented | ADR-0085, `.env.example`, local setup and the rest in `5d17774` |
+| Nit: cleanup after publishing could turn a success into a failure | Best effort now |
+| Nit: links and a squatted folder | The root and its three folders are adopted only as real folders this user owns, and made `0700`; a link inside `objects/` can only be this user's (ADR-0085 Decision 3) |
+| Nit: case-insensitive file systems | Recorded in ADR-0085: the application's keys are random identifiers and fixed names |
+| Nit: the injectable `NODE_ENV` was an escape hatch | Either value saying production refuses (S01, S01b) |
+| Nit: S3 differences (deleting a folder threw; a copy kept its source's mode; leftovers; a key naming a folder of keys) | Deleting a folder of keys does nothing; a copy is made `0600`; leftovers are a TODO item; no key the application builds names a folder of other keys |
+| Nit: "a second process" was a second store in one process | Renamed |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the storage node and the shared folder row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *GS-3*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0085 Decisions 2 to 4 |
+| OpenAPI / API change summary | `docs/api-changes-gs-3.md`: no HTTP change; the setting, the store, the shared signing helper |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-3*: no migration, one optional setting refused in production, and what rolling back means |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md`,
+`docs/local-setup.md`, `.env.example`, `.gitignore` (`.dev-storage/`), and
+`docs/decisions/TODO.md` (the in-memory store's item, and two new items:
+serving the customer's video, GS-12, and what a killed process leaves in the
+folder).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The folder is a development and CI
+store, refused in production; the worker does not open it. No scheduler,
+credential or payment integration. Paid Provider Activation, production
+Provider credentials, production paid AI calls, the production scheduler and
+live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Serving a video.** The download route reads a whole object into memory and
+  has no content type for a deliverable's key (GS-12, TODO).
+- **Leftovers.** An upload or staged file a killed process leaves stays in the
+  folder, as do empty folders a deleted key leaves (TODO).
+- **One machine, macOS or Linux,** one local file system with hard links.
+- **A lock test that waits on a timer.** In the full database run,
+  `submission-outcome.db.test.ts` "serializes against a Phase 2F-1 cost
+  admission holding the same locks" failed once: it waits 100 ms for the
+  gate's transaction to take its locks, and under load that was not enough.
+  GS-3 touches no database code; the file passed three runs out of three
+  afterwards. A test-only fix is a new TODO item.
+- **Not tested here:** a failing disk (Q01, Q02 above), `EACCES` (the tests run
+  as root), and two processes rather than two stores in one; the atomicity they
+  would show is the kernel's rename and link, not the store's.
+
+### Remaining work
+
+GS-3 waits for the product owner's yes before merge. GS-4 (the start step: a
+whole video's job, reservation, scenes and first attempts in one commit) comes
+next.

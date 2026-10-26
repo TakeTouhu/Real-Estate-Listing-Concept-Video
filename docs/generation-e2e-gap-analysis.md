@@ -87,3 +87,17 @@ attempt that never ends, which keeps its scene open, which executor runs
 orchestrated attempts and that the legacy discovery stops offering them (GS-7),
 and the start step starting each scene with its first admission, which
 Transaction K assumes (GS-4). Recorded in ADR-0084 and `docs/decisions/TODO.md`.
+
+## GS-3 — a shared folder holds development and CI objects
+
+The storage gap. The web app kept uploads in its own memory, which the worker
+cannot read and a restart loses. GS-3 adds one folder on disk that both
+processes open, with the web app's `ObjectStorage` port and the worker's
+S3-shaped seam over the same objects, so every existing caller runs unchanged
+(ADR-0085). The web app uses it when `SHARED_STORAGE_DIR` is set. Refused in
+production. No migration.
+
+Left open: the worker opening it (GS-9); serving the customer's video from it,
+since the download route reads a whole object into memory and has no content
+type for a deliverable's key (GS-12); and removing what a killed process leaves
+in it. Recorded in ADR-0085 and `docs/decisions/TODO.md`.

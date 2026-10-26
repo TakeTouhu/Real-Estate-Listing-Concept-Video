@@ -22,6 +22,7 @@ const MIGRATIONS = join(REPO_ROOT, "packages", "database", "prisma", "migrations
 const MIGRATION_DIR = "00000000000030_clean_master_record";
 const SIGNING = "packages/storage/src/signing.ts";
 const LOCAL_STORAGE = "packages/storage/src/local-storage.ts";
+const SHARED_FOLDER = "packages/storage/src/shared-folder-storage.ts";
 const DOWNLOAD_ROUTE = "apps/web/src/app/api/storage/download/route.ts";
 const UPLOAD_ROUTE = "apps/web/src/app/api/storage/upload/route.ts";
 
@@ -151,7 +152,13 @@ describe("DS-4 shape", () => {
     // that there is nothing else: a file that starts naming a signed URL, in
     // any syntax, fails here, and its author must route it through
     // `assertSignableStorageKey` and add it.
-    expect(matching(["packages", "apps"], /\bsignStorageToken\b/)).toEqual([LOCAL_STORAGE, SIGNING]);
+    expect(matching(["packages", "apps"], /\bsignStorageToken\b/)).toEqual([SIGNING]);
+    // Each store makes its URLs through the one helper that calls the signer.
+    expect(matching(["packages", "apps"], /\bsignedStorageUrl\b/)).toEqual([
+      LOCAL_STORAGE,
+      SHARED_FOLDER,
+      SIGNING,
+    ]);
     expect(matching(["packages", "apps"], /\bverifyStorageToken\b/)).toEqual([
       DOWNLOAD_ROUTE,
       UPLOAD_ROUTE,
@@ -162,6 +169,7 @@ describe("DS-4 shape", () => {
       "packages/domain/src/property/asset-service.ts",
       "packages/domain/src/property/ports.ts",
       LOCAL_STORAGE,
+      SHARED_FOLDER,
     ]);
     // No other way to make a URL to a stored object: no presigner, no SAS.
     expect(

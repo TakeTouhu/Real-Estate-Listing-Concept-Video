@@ -760,3 +760,8 @@ Not applicable: no entity, relationship or column changes, and no migration
 `SceneGenerationRequest.state`, `stateVersion` and, when it fails, `failedAt`,
 and `GenerationScene.state`, `stateVersion` and `updatedAt`, in one commit.
 
+
+## GS-3 — a shared folder holds development and CI objects
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0085). What changes is where development and CI keep stored objects.

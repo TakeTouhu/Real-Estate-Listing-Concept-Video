@@ -40,6 +40,27 @@ describe("serverEnvSchema", () => {
     }
   });
 
+  it("accepts SHARED_STORAGE_DIR only as an absolute path outside production", () => {
+    expect(serverEnvSchema.parse(base).SHARED_STORAGE_DIR).toBeUndefined();
+    const dir = "/var/tmp/vtavision-storage";
+    expect(serverEnvSchema.parse({ ...base, SHARED_STORAGE_DIR: dir }).SHARED_STORAGE_DIR).toBe(dir);
+    for (const NODE_ENV of ["development", "test"]) {
+      const env = { ...base, NODE_ENV, SHARED_STORAGE_DIR: dir };
+      expect(serverEnvSchema.safeParse(env).success).toBe(true);
+    }
+    for (const bad of [
+      { SHARED_STORAGE_DIR: "" },
+      { SHARED_STORAGE_DIR: "relative/storage" },
+      { SHARED_STORAGE_DIR: dir, NODE_ENV: "production" },
+    ]) {
+      const result = serverEnvSchema.safeParse({ ...base, ...bad });
+      expect(result.success).toBe(false);
+      const paths = result.success ? [] : result.error.issues.map((i) => i.path.join("."));
+      expect(new Set(paths)).toEqual(new Set(["SHARED_STORAGE_DIR"]));
+    }
+    expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production" }).success).toBe(true);
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
