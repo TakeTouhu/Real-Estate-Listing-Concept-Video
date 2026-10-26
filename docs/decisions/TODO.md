@@ -1335,7 +1335,20 @@ them is **built**. Each item below records the settled decision and what remains
       plan slots — **not** active users and **not** purchased additional seats —
       shared organization-wide, never exposed. On exhaustion: stop automatic
       recovery, charge no further Unit, release the reserved Unit, escalate
-      internally, allow one operator-granted manual free recovery.
+      internally, allow one operator-granted manual free recovery. *Until it
+      exists, nothing retries a provider-side failure, so Transaction K
+      settles a `FAILED_RETRYABLE` attempt like a terminal one (ADR-0083
+      Decision 2). When it is built, it decides first whether a failed attempt
+      gets another, and Transaction K's candidates must then exclude a request
+      the budget will still retry.*
+- [ ] **Bound how long an attempt may run before it is treated as failed.** An
+      attempt left `PROCESSING` by a provider that never answers, or
+      `OUTPUT_INGESTING` by an output copy that keeps failing (that state is
+      resumable on purpose, so a storage fault is never recorded as the
+      provider's), never ends, so Transaction K never settles its request
+      and the customer's Unit stays held (ADR-0083, *Not decided here*).
+      Whether such an attempt ends, after how long, and as which state, is not
+      decided. Must be settled before generation is activated.
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period
@@ -1588,9 +1601,16 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0082): a `BLOCKED` composition and an `INVALID_MEDIA` (on-plan or
       off-plan) or `INTEGRITY_MISMATCH` verdict fail an initial generation's
       job and release its reservation, or return a replacement to the
-      customer's video, in their own commit, identically. **Still unbuilt:**
-      provider refusal, provider failure and an unresolved submission (GS-2);
-      the release of a paid regeneration's or a charged disclosure change's
+      customer's video, in their own commit, identically.* *Built for the
+      provider-side failure points in GS-2a (ADR-0083): a sweep, Transaction
+      K, settles a scene request whose attempts all ended, the newest without
+      a video (a refusal, a provider failure, an unresolved submission, a
+      preflight failure, a cancellation before sending), failing an initial
+      generation and releasing its Unit or rolling a regeneration back to the
+      customer's video, identically whichever way the attempt ended.*
+      ***Still unbuilt:*** *the failed job's other scenes and their queued
+      attempts, left where they are by Transaction H and Transaction K alike
+      (GS-2b); an attempt that never ends (an item below); the release of a paid regeneration's or a charged disclosure change's
       own reservation, and the disclosure-change count, built with them;
       Transaction G's defects and a claim refused as `UNSUPPORTED_TARGET`,
       which write no terminal row (ADR-0082, "Not decided here"). And a
@@ -1640,7 +1660,12 @@ them is **built**. Each item below records the settled decision and what remains
       it must reach work whose failure cannot settle because its reservation
       contradicts its job (`RESERVATION_NOT_SETTLEABLE`, ADR-0082 Decision 2):
       the block or verdict rolls back, and the work is re-offered and repeated
-      every lease period, re-encoding or re-probing each time.
+      every lease period, re-encoding or re-probing each time. And it must
+      reach a scene request Transaction K refuses for its shape or its
+      reservation (`SHAPE_CONFLICT`, `RESERVATION_NOT_SETTLEABLE`, ADR-0083
+      Decision 3): the candidate query never offers it again, so its job stays
+      `GENERATING` and an initial generation's Unit held until an operator
+      acts. Nothing in production can produce one today.
 - [ ] **Make a composition defect findable before composition is activated.**
       The runner isolates a defect per candidate and reports only a `failed`
       count (ADR-0050); nothing durable names the row or the defect's code, so

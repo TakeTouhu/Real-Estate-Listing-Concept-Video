@@ -37,6 +37,7 @@ export { createMediaFailureResolutionRepository } from "./media-failure-resoluti
 export { createDeliverableCompositionPlanRepository } from "./deliverable-composition-repository";
 export { createDeliverableCompositionExecutionRepository } from "./deliverable-composition-execution-repository";
 export { createDeliverableValidationRepository } from "./deliverable-validation-repository";
+export { createAttemptFailureSettlementRepository } from "./attempt-failure-settlement-repository";
 export {
   ENTITLEMENT_AUDIT_ACTION,
   createUnitEntitlementRepository,
