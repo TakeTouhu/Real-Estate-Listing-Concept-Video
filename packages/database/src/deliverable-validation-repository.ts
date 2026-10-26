@@ -22,8 +22,8 @@
  *
  * ```text
  * claim, VALID, defer : GenerationJob -> version -> composition -> validation
- * terminal verdicts    : GenerationReservation -> GenerationJob -> version
- *                        -> composition -> validation
+ * terminal verdicts    : cost-admission lock -> GenerationReservation
+ *                        -> GenerationJob -> version -> composition -> validation
  * Transaction G        : GenerationReservation -> GenerationJob -> version
  *                        -> composition -> validation
  * ```
@@ -37,8 +37,9 @@
  * all*, and that is not an inconsistency with the rule: the rule constrains
  * transactions that lock **both** rows. They move no entitlement, so locking the
  * hold purely for symmetry would serialize them against every cost workflow for
- * a row they never read. A terminal verdict does lock it, first, because its
- * commit may release it.
+ * a row they never read. A terminal verdict does lock it, first, behind the
+ * cost-admission lock every entitlement release takes, because its commit may
+ * release it.
  */
 
 import {
@@ -847,7 +848,8 @@ async function finalizeTerminalVerdict(
   context: TransitionContext,
 ): Promise<FinalizeDeliverableVerdictOutcome> {
   return prisma.$transaction(async (tx): Promise<FinalizeDeliverableVerdictOutcome> => {
-    // Reservation before Job: this commit may release it (ADR-0082).
+    // The cost-admission lock and the reservation before the job: this commit
+    // may release the customer's Unit (ADR-0082).
     const reservation = await lockReservationForDeliverable(
       tx,
       claim.organizationId,

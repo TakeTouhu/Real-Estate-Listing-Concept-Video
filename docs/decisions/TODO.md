@@ -1596,9 +1596,8 @@ them is **built**. Each item below records the settled decision and what remains
       which write no terminal row (ADR-0082, "Not decided here"). And a
       replacement that fails after a scene regeneration was delivered leaves
       that scene's delivered pointer on the new rendition and its
-      regeneration right counted, while the customer keeps the earlier video;
-      whether the right comes back and the pointer returns must be decided
-      with the regeneration price gate below.* The
+      regeneration right counted, while the customer keeps the earlier video:
+      an open decision gate below.* The
       original item: A failed initial generation, paid regeneration or
       disclosure/logo recomposition must terminally settle and **RELEASE** the
       reservation, never `CONSUMED` and never left pending; a failed regeneration
@@ -1637,7 +1636,11 @@ them is **built**. Each item below records the settled decision and what remains
       and its reservation `RESERVED`. The same holds for a `VALID` verdict
       whose stored facts are off its plan, which discovery no longer offers
       and Transaction G refuses (ADR-0081 Decision 3); only a row altered by
-      hand, or one written by a fake validator before DS-6b, can be one.
+      hand, or one written by a fake validator before DS-6b, can be one. And
+      it must reach work whose failure cannot settle because its reservation
+      contradicts its job (`RESERVATION_NOT_SETTLEABLE`, ADR-0082 Decision 2):
+      the block or verdict rolls back, and the work is re-offered and repeated
+      every lease period, re-encoding or re-probing each time.
 - [ ] **Make a composition defect findable before composition is activated.**
       The runner isolates a defect per candidate and reports only a `failed`
       count (ADR-0050); nothing durable names the row or the defect's code, so
@@ -1646,7 +1649,9 @@ them is **built**. Each item below records the settled decision and what remains
       a storage key, signed URL or provider payload. *The same holds for the
       validation sweep, which isolates its candidates since DS-6a (ADR-0080)
       and reports a defect's code in that pass's report only: a version
-      Transaction G refuses is held, unnamed, until an operator acts.*
+      Transaction G refuses is held, unnamed, until an operator acts.* *Since
+      GS-1 the same holds for a settlement defect (ADR-0082): the validation
+      sweep reports its code, the composition sweep only counts it.*
 - [x] **Record which plan an organization is on, and renew its periods.**
       *Built in Phase 6B (ADR-0056): one `organization_subscriptions` row per
       organization (plan, channel, anchor, commercial reference; Enterprise
@@ -1774,10 +1779,29 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Three gates: one found by the Phase 6A gap analysis
-(`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), one by GS-1
+Four gates: one found by the Phase 6A gap analysis
+(`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), two by GS-1
 (ADR-0082). **None may be guessed.** Every other gate is closed and recorded
 below.
+
+- [ ] **Decide whether a failed replacement gives back the scene regeneration
+      right that started it** — does not block GS-1, whose rollback changes no
+      regeneration right. Transaction F counts the customer's right and moves
+      the scene's delivered pointer to the new rendition when the regenerated
+      scene is delivered. If the replacement video made from it then fails
+      composition or validation, GS-1 returns the customer to the earlier
+      video and leaves both: the right stays counted and the pointer stays on
+      the new rendition. When the failure came from that rendition's own bytes
+      (`SOURCE_INTEGRITY_MISMATCH`, `SOURCE_BYTES_LIMIT_EXCEEDED`), every later
+      revision plans it again and fails the same way, until the scene is
+      regenerated once more. A regeneration that fails before its scene is
+      delivered spends no right (its request ends `FAILED_TERMINAL`; "a right
+      is spent when a usable rendition reaches the customer",
+      `generation-regeneration-entitlement.db.test.ts`), so today whether the
+      right comes back depends on which stage failed, which ADR-0052 Decision
+      19 may forbid. Whether the right comes back and the
+      pointer returns must be settled before scene regeneration is offered to
+      customers, together with the regeneration price gate below.
 
 - [ ] **Decide whether a video delivered by operator recovery consumes a Unit**
       — does not block GS-1, which builds no recovery. ADR-0052 Decision 19

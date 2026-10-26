@@ -16,12 +16,14 @@
  * ## Lock order
  *
  * ```text
- * GenerationReservation -> GenerationJob -> version -> work rows
+ * cost-admission advisory lock -> GenerationReservation -> GenerationJob -> version -> work rows
  * ```
  *
- * The system-wide **Reservation before Job** order Transactions G, H and I take.
- * A caller locks the reservation with {@link lockReservationForDeliverable}
- * *first*, then its own chain, and only then calls {@link settleDeliverableFailure}.
+ * The order every entitlement release takes (`cost-admission-lock.ts`), as the
+ * media failure settlement (Transaction H) does, and whose **Reservation before
+ * Job** part Transactions G and I take too. A caller takes both with
+ * {@link lockReservationForDeliverable} *first*, then locks its own chain, and
+ * only then calls {@link settleDeliverableFailure}.
  */
 
 import {
@@ -40,6 +42,7 @@ import {
   type TransitionContext,
 } from "@app/domain";
 import type { PrismaClient } from "@prisma/client";
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -63,21 +66,40 @@ export interface FailedDeliverableCycle {
 }
 
 /**
- * Lock the reservation of the job a deliverable version belongs to.
+ * Take the cost-admission lock and then the reservation of the job a deliverable
+ * version belongs to.
+ *
+ * The settlement may release that reservation, and every entitlement release
+ * takes the organization and billing-cycle lock before the reservation row
+ * (`cost-admission-lock.ts`), so a cost decision for the same cycle never runs
+ * beside it. The cycle key is read first, without a lock: it is frozen on the
+ * reservation when the hold is taken.
  *
  * Reached through the version, whose job never changes, so the reservation this
  * locks belongs to the job the caller's chain lock will find. Only the
  * reservation row is locked here: the job is the caller's to lock, after this,
  * in the declared order.
  *
- * Tenant-scoped: a cross-tenant or unknown version locks nothing and reads
- * `null`, exactly as a job with no reservation does.
+ * Tenant-scoped: a cross-tenant or unknown version locks no row and reads
+ * `null`, exactly as a job with no reservation does, taking the lock other
+ * workflows take for a job with no reservation.
  */
 export async function lockReservationForDeliverable(
   tx: Tx,
   organizationId: string,
   deliverableVersionId: string,
 ): Promise<SettlementReservationRow | null> {
+  const cycles = await tx.$queryRaw<{ billingCycleKey: string }[]>`
+    SELECT res."billingCycleKey" AS "billingCycleKey"
+      FROM "generation_reservations" res
+      JOIN "generation_deliverable_versions" v ON v."generationJobId" = res."generationJobId"
+      JOIN "generation_jobs" j ON j."id" = v."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+     WHERE v."id" = ${deliverableVersionId}
+       AND p."organizationId" = ${organizationId}
+  `;
+  await acquireCostAdmissionLock(tx, organizationId, cycles[0]?.billingCycleKey ?? "unreserved");
+
   const rows = await tx.$queryRaw<SettlementReservationRow[]>`
     SELECT res."id"          AS "reservationId",
            res."state"::text AS "reservationState"

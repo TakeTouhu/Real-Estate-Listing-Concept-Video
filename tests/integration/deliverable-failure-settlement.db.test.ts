@@ -201,19 +201,28 @@ function lastEvent(events: Awaited<ReturnType<typeof eventsFor>>) {
   return [last?.fromState, last?.toState, last?.eventType, last?.reasonCode];
 }
 
-/** How many backends are currently waiting on a lock in this database. */
-async function blockedBackends(): Promise<number> {
-  const rows = await prisma.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
-    `SELECT wait_event_type FROM pg_stat_activity
-      WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+/**
+ * How many backends in this database are waiting on the lock a settlement takes
+ * first: a reservation row's (a statement over `generation_reservations` waiting
+ * on another transaction), or the cost-admission advisory lock.
+ */
+async function blockedBackends(on: "reservation" | "advisory"): Promise<number> {
+  const rows = await prisma.$queryRawUnsafe<{ wait_event: string | null; query: string }[]>(
+    `SELECT wait_event, query FROM pg_stat_activity
+      WHERE datname = current_database() AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'`,
   );
-  return rows.filter((r) => r.wait_event_type === "Lock").length;
+  return rows.filter((r) =>
+    on === "advisory"
+      ? r.wait_event === "advisory"
+      : r.wait_event !== "advisory" && r.query.includes("FOR UPDATE OF res"),
+  ).length;
 }
 
-async function waitForBlocked(count: number): Promise<boolean> {
+async function waitForBlocked(count: number, on: "reservation" | "advisory"): Promise<boolean> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if ((await blockedBackends()) >= count) return true;
+    if ((await blockedBackends(on)) >= count) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return false;
@@ -474,6 +483,27 @@ RUN("ADR-0082 — a failed deliverable settles its job in the same commit", () =
       ).toEqual(before);
     });
 
+    it("loses a block whose claim names another version's work", async () => {
+      // The version and its chain are one job's; the work row, its version and
+      // its lease are another job's, still RUNNING. Neither job is settled.
+      const mine = await seedPlannedDeliverable(prisma);
+      await claimComposition(ORG_A, mine.deliverableVersionId);
+      const other = await seedPlannedDeliverable(prisma);
+      const otherClaim = await claimComposition(ORG_A, other.deliverableVersionId);
+      const beforeMine = await snapshot(mine.jobId, mine.reservationId, mine.deliverableVersionId);
+      const beforeOther = await snapshot(other.jobId, other.reservationId, other.deliverableVersionId);
+
+      expect(
+        await block({ ...otherClaim, deliverableVersionId: mine.deliverableVersionId }),
+      ).toEqual({ kind: "LEASE_LOST" });
+      expect(await snapshot(mine.jobId, mine.reservationId, mine.deliverableVersionId)).toEqual(
+        beforeMine,
+      );
+      expect(await snapshot(other.jobId, other.reservationId, other.deliverableVersionId)).toEqual(
+        beforeOther,
+      );
+    });
+
     it("loses a verdict once a newer version exists", async () => {
       const composed = await seedComposedDeliverable(prisma);
       const claim = await claimValidation(composed.organizationId, composed.deliverableVersionId);
@@ -594,12 +624,81 @@ RUN("ADR-0082 — a failed deliverable settles its job in the same commit", () =
             (outcome) => outcome.kind,
             (error: unknown) => `threw: ${String(error)}`,
           );
-          expect(await waitForBlocked(1)).toBe(true);
+          expect(await waitForBlocked(1, "reservation")).toBe(true);
           mayLockJob();
           await holding;
           expect(await settling).toBe(kind === "block" ? "BLOCKED" : "FINALIZED");
         } finally {
           mayLockJob();
+          await holding.catch(() => undefined);
+          await holder.$disconnect();
+        }
+        expect((await reservationOf(prisma, target.reservationId)).state).toBe("RELEASED");
+      },
+    );
+
+    // Every entitlement release takes the organization and billing-cycle lock
+    // before the reservation (`cost-admission-lock.ts`), so no cost decision for
+    // the same cycle runs beside it.
+    it.each([["block"], ["verdict"]] as const)(
+      "a %s waits for the cost-admission lock of its organization and cycle",
+      async (kind) => {
+        const target =
+          kind === "block"
+            ? await (async () => {
+                const planned = await seedPlannedDeliverable(prisma);
+                const claim = await claimComposition(ORG_A, planned.deliverableVersionId);
+                return { reservationId: planned.reservationId, run: () => block(claim) };
+              })()
+            : await (async () => {
+                const composed = await seedComposedDeliverable(prisma);
+                const claim = await claimValidation(ORG_A, composed.deliverableVersionId);
+                return { reservationId: composed.reservationId, run: () => reject(claim) };
+              })();
+        const { billingCycleKey } = await prisma.generationReservation.findUniqueOrThrow({
+          where: { id: target.reservationId },
+          select: { billingCycleKey: true },
+        });
+
+        const holder = new PrismaClient();
+        let release: () => void = () => undefined;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let ready: () => void = () => undefined;
+        const held = new Promise<void>((resolve) => {
+          ready = resolve;
+        });
+        const holding = holder.$transaction(
+          async (tx) => {
+            // The formula every cost workflow derives, written out on purpose as
+            // the media failure settlement's race test does: if it ever changes,
+            // this barrier stops blocking and the test fails loudly.
+            await tx.$queryRaw`
+              SELECT pg_advisory_xact_lock(
+                hashtext(${`paid-submission:${ORG_A}`}),
+                hashtext(${`cycle:${billingCycleKey}`})
+              )::text AS locked
+            `;
+            ready();
+            await released;
+          },
+          { timeout: 30_000 },
+        );
+        try {
+          await held;
+          const settling = target.run().then(
+            (outcome) => outcome.kind,
+            (error: unknown) => `threw: ${String(error)}`,
+          );
+          expect(await waitForBlocked(1, "advisory")).toBe(true);
+          // Nothing settled while the lock is held.
+          expect((await reservationOf(prisma, target.reservationId)).state).toBe("RESERVED");
+          release();
+          await holding;
+          expect(await settling).toBe(kind === "block" ? "BLOCKED" : "FINALIZED");
+        } finally {
+          release();
           await holding.catch(() => undefined);
           await holder.$disconnect();
         }

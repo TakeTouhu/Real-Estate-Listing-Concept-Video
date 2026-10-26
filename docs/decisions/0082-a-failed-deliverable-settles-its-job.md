@@ -72,18 +72,44 @@ makes in the other direction when it consumes from it (ADR-0051).
 generation whose Unit is already consumed, released or never reserved, or a
 replacement whose earlier delivery was never paid for, cannot be settled
 honestly. The defect is thrown before any settlement write, and the caller's
-transaction rolls its terminal row back with it, so the work stays where it
-was for an operator.
+transaction rolls its terminal row back with it, so the work row stays
+`RUNNING` and the job where it was. Transaction G refuses the same reservations
+for a valid video, as `RESERVATION_NOT_CONSUMABLE` and
+`PARTIAL_PUBLICATION_STATE`.
 
-## Decision 3 — Lock order: Reservation before Job
+That is not a resting place. Once its lease expires, the work is offered again,
+and each pass repeats it: a composition re-encodes, a validation re-probes, and
+both fail the same way. ADR-0078 accepted the same cost for a stored video
+without its master. The validation sweep reports the defect's code; the
+composition sweep counts it as failed. Nothing in production can produce any
+of them today: every workflow that moves a reservation, the generic reservation
+API (which can still release a held Unit) and reconciliation included, is
+constructed by no production code. Making
+such work findable, and stopping the repetition, is part of the operator
+tooling recorded in `docs/decisions/TODO.md`; nothing runs these sweeps before
+then.
 
-Both writers now lock the job's reservation **first**, reached tenant-scoped
-through the deliverable version (whose job never changes), and only then their
-own chain: job, version, work rows. That is the system-wide order Transactions
-G, H and I take. Locking the job first would deadlock with a writer that holds
-the reservation and then needs the job; the database suite proves the
-settlement waits behind such a writer instead, for both writers, and that the
-inverted order deadlocks.
+## Decision 3 — Lock order: the cost-admission lock, then Reservation, then Job
+
+```text
+cost-admission advisory lock -> reservation -> job -> version -> work rows
+```
+
+Both writers now take, **first**, the organization and billing-cycle
+cost-admission lock, as every entitlement release does
+(`cost-admission-lock.ts`) and the media failure settlement (Transaction H)
+does. They then lock the job's reservation, reached tenant-scoped through the
+deliverable version (whose job never changes), and only then their own chain:
+job, version, work rows. The reservation's cycle key is read before the lock
+without one: it is frozen on the reservation when the hold is taken.
+
+**Reservation before Job** is the order Transactions G, H and I take. Locking
+the job first would deadlock with a writer that holds the reservation and then
+needs the job. The database suite proves that the settlement waits behind such
+a writer instead, for both writers, and that it waits for the cost-admission
+lock. That the inverted order deadlocks was checked by hand, by locking the job
+first in `blockComposition`: the lock-order test then fails with PostgreSQL's
+deadlock error.
 
 The other lifecycle transactions (the claims, `finalizeComposition`,
 `finalizeValid`, the deferrals) still lock no reservation: they move no
@@ -97,6 +123,13 @@ version is not the job's newest. `blockComposition` already asked the first;
 `finalizeTerminalVerdict` now asks it as `finalizeValid` does. Settling a cycle
 the job has left would fail or roll back a job for work nobody is running.
 
+`blockComposition` also answers `LEASE_LOST` when the claim's work row is not
+the version's own, as `finalizeComposition` asks. Its write names the row by
+id, so a claim pairing one version with another version's work would otherwise
+block work the transaction never locked, and settle a job whose own work is
+still running. The verdicts already ask it, through the claim's validation
+row.
+
 ## Decision 5 — A replay must find its settlement
 
 A replay of a recorded block or verdict (`ALREADY_BLOCKED`,
@@ -104,7 +137,8 @@ A replay of a recorded block or verdict (`ALREADY_BLOCKED`,
 
 - an initial generation: job `FAILED_TERMINAL` and reservation `RELEASED`;
 - a replacement: the job no longer sits in the failed cycle's state with that
-  version as its newest. It may have started a later revision since.
+  version as its newest, and its reservation is still `CONSUMED`. It may have
+  started a later revision since.
 
 Otherwise the replay throws `SETTLEMENT_INCOMPLETE` and writes nothing. Such a
 row was recorded before this build, or altered by hand; it is never settled late
@@ -158,9 +192,13 @@ settled are terminal or delivered states that build already handles.
   moved that scene's delivered pointer to the new rendition and counted the
   customer's regeneration right when the scene was delivered. The rollback
   leaves both: the customer keeps the earlier video, the right stays counted,
-  and the new rendition reaches a video only through a later revision. Whether
-  the right comes back and the pointer returns is decided with paid
-  regeneration (`docs/decisions/TODO.md`).
+  and the new rendition reaches a video only through a later revision. If the
+  block came from that rendition's own bytes (`SOURCE_INTEGRITY_MISMATCH`,
+  `SOURCE_BYTES_LIMIT_EXCEEDED`), every later revision plans it again and fails
+  the same way, until that scene is regenerated once more. A scene regeneration
+  that fails before its scene is delivered spends no right, so today whether
+  the right comes back depends on which stage failed. Whether it should come
+  back, and the pointer return, is an open decision (`docs/decisions/TODO.md`).
 - **Operator recovery** (ADR-0052 Decision 20) of a settled initial generation:
   its job is `FAILED_TERMINAL`, which has no outgoing edge, so a recovery is a
   new job. Whether a recovered video delivered to the customer consumes a Unit is
@@ -173,7 +211,8 @@ settled are terminal or delivered states that build already handles.
 - A deliverable cycle that ends without a usable video never leaves the
   customer's Unit held: an initial generation fails and its Unit is released in
   the same commit, and a failed replacement returns the customer to the video
-  they already had, charging nothing.
+  they already had, charging no Unit. A scene regeneration right it used stays
+  counted (*Not decided here*).
 - `BLOCKED`, `INVALID_MEDIA` (on-plan or off-plan) and `INTEGRITY_MISMATCH`
   settle identically.
 - The generic transition API can no longer end a Unit-holding job.

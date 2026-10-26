@@ -14,9 +14,13 @@ import { describe, expect, it } from "vitest";
  * 2. **No transaction spans external work.** The database boundary and the
  *    object-store, subprocess and filesystem boundaries are separate modules,
  *    and the repository can reach none of the others.
- * 3. **No billing, no publication.** Execution consumes no unit, touches no
- *    reservation, and never moves the job's current deliverable pointer.
- * 4. **No invented lifecycle state.** Blocking appends no transition event, and
+ * 3. **No billing of its own, no publication.** The repository consumes no
+ *    unit, writes no reservation and never moves the job's current deliverable
+ *    pointer. Since ADR-0082 a block settles its job through
+ *    `deliverable-failure-settlement.ts`, whose writes
+ *    `deliverable-settlement/settlement-shape.test.ts` holds.
+ * 4. **No invented lifecycle state.** Blocking appends no transition event of
+ *    its own (the settlement's are the job's and the reservation's), and
  *    neither state vocabulary grew a `COMPOSITION_BLOCKED` member.
  * 5. **Retry and block vocabularies stay disjoint.**
  * 6. **One migration, this phase's, and nothing rewritten.**
@@ -260,8 +264,8 @@ describe("the database boundary can reach nothing external", () => {
   });
 });
 
-describe("execution moves no money and publishes nothing", () => {
-  it("names no reservation, unit, credit or pointer write in the repository", () => {
+describe("execution moves money only through the failure settlement, and publishes nothing", () => {
+  it("names no reservation, unit, credit or pointer write in the repository itself", () => {
     const text = repositorySource();
     for (const banned of [
       "generationReservation",
@@ -299,10 +303,20 @@ describe("execution moves no money and publishes nothing", () => {
     }
   });
 
-  it("names no terminal job state", () => {
+  it("names no terminal job state itself: the settlement's decision chooses it", () => {
     const text = repositorySource();
     for (const banned of ["FAILED_TERMINAL", "FAILED", "DELIVERABLE_READY", "APPROVED"]) {
       expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
+    }
+  });
+
+  it("reaches the failure settlement from the block alone (ADR-0082)", () => {
+    const text = repositorySource();
+    const block = text.slice(text.indexOf("async blockComposition"));
+    const body = block.slice(0, block.indexOf("async findCompositionByVersionId"));
+    for (const call of ["lockReservationForDeliverable(", "settleDeliverableFailure("]) {
+      expect(text.split(call)).toHaveLength(2);
+      expect(`${call} in the block: ${body.includes(call)}`).toBe(`${call} in the block: true`);
     }
   });
 });
@@ -317,13 +331,14 @@ describe("blocking invents no lifecycle state", () => {
     }
   });
 
-  it("appends no event from the block transaction", () => {
+  it("appends no event of its own from the block transaction, only the settlement's", () => {
     const text = repositorySource();
     const block = text.slice(text.indexOf("async blockComposition"));
     const end = block.indexOf("async findCompositionByVersionId");
     const body = end === -1 ? block : block.slice(0, end);
     expect(body.length).toBeGreaterThan(0);
     expect(body.includes("appendGenerationEvent")).toBe(false);
+    expect(body.includes("settleDeliverableFailure(")).toBe(true);
   });
 
   it("adds no job state to the schema", () => {

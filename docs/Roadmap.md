@@ -203,7 +203,8 @@ first milestone of the generation-to-preview plan the product owner approved on
 `INTEGRITY_MISMATCH` verdict settle their job in the same commit: an initial
 generation becomes `FAILED_TERMINAL` and its reservation is released, and a
 failed replacement returns the job to the video the customer already holds,
-charging nothing. The three failure classes settle identically, and the
+charging no Unit (a scene regeneration right it used stays counted, an open
+decision). The three failure classes settle identically, and the
 generic transition API can no longer end a job that holds a Unit. Provider-side
 failures are GS-2's.
 

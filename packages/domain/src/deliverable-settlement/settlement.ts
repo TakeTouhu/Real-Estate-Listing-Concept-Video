@@ -94,15 +94,19 @@ export interface DeliverableFailureSettledInput {
  * - An initial generation is settled once its job is `FAILED_TERMINAL` and its
  *   Unit `RELEASED`. Neither has any way back.
  * - A replacement is settled once the job no longer sits in this cycle's state
- *   with this version as its newest. The job may have gone on to a later
- *   revision since, which is why its present state is not asked to be
+ *   with this version as its newest, and its Unit is still `CONSUMED`: the
+ *   rollback never touches it. The job may have gone on to a later revision
+ *   since, which is why its present state is not asked to be
  *   `DELIVERABLE_READY`.
  */
 export function isDeliverableFailureSettled(input: DeliverableFailureSettledInput): boolean {
   if (input.currentDeliverableVersionId === null) {
     return input.jobState === "FAILED_TERMINAL" && input.reservationState === "RELEASED";
   }
-  return !(input.failedVersionIsNewest && input.jobState === input.failedIn);
+  return (
+    input.reservationState === "CONSUMED" &&
+    !(input.failedVersionIsNewest && input.jobState === input.failedIn)
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -49,20 +49,40 @@ describe("settleFailedDeliverable", () => {
     },
   );
 
-  it("never consumes a Unit, whatever it is handed", () => {
+  it("answers exactly the two settlements, or the defect, whatever it is handed", () => {
+    // The whole table: the three legitimate rows settle, and every other pair
+    // is the defect. No answer consumes a Unit or names a third job state.
+    const settled: unknown[] = [];
     for (const reservationState of [...GENERATION_RESERVATION_STATES, null]) {
       for (const pointer of [null, "gdv_1"]) {
+        let answer: unknown;
         try {
-          const settled = settleFailedDeliverable({
-            currentDeliverableVersionId: pointer,
-            reservationState,
-          });
-          expect(JSON.stringify(settled)).not.toContain("CONSUMED");
+          answer = settleFailedDeliverable({ currentDeliverableVersionId: pointer, reservationState });
         } catch (error) {
           expect(error).toBeInstanceOf(DeliverableSettlementDefect);
+          expect((error as DeliverableSettlementDefect).code).toBe("RESERVATION_NOT_SETTLEABLE");
+          continue;
         }
+        settled.push({ pointer, reservationState, answer });
       }
     }
+    expect(settled).toEqual([
+      {
+        pointer: null,
+        reservationState: "RESERVED",
+        answer: { kind: "RELEASE", jobState: "FAILED_TERMINAL", releaseFrom: "RESERVED" },
+      },
+      {
+        pointer: null,
+        reservationState: "RECONCILIATION_HOLD",
+        answer: { kind: "RELEASE", jobState: "FAILED_TERMINAL", releaseFrom: "RECONCILIATION_HOLD" },
+      },
+      {
+        pointer: "gdv_1",
+        reservationState: "CONSUMED",
+        answer: { kind: "ROLL_BACK", jobState: "DELIVERABLE_READY" },
+      },
+    ]);
   });
 });
 
@@ -102,6 +122,21 @@ describe("isDeliverableFailureSettled", () => {
           ...replacement,
           failedIn,
           jobState: failedIn,
+          failedVersionIsNewest: true,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([[null], ["RESERVING"], ["RESERVED"], ["RECONCILIATION_HOLD"], ["RELEASED"]] as const)(
+    "holds a replacement unsettled whose Unit is %s, wherever the job went",
+    (reservationState) => {
+      expect(
+        isDeliverableFailureSettled({
+          ...replacement,
+          reservationState,
+          failedIn: "COMPOSING",
+          jobState: "DELIVERABLE_READY",
           failedVersionIsNewest: true,
         }),
       ).toBe(false);

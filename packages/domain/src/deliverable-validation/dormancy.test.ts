@@ -13,11 +13,15 @@ import { describe, expect, it } from "vitest";
  *    reaches it.
  * 2. **No transaction spans external work.** The database boundary is its own
  *    module and can reach no object store, subprocess, filesystem or HTTP client.
- * 3. **Only Transaction G moves money or the pointer.** Every claim, finalize and
- *    defer writes neither `consumedAt`, nor a reservation state, nor the job's
- *    current deliverable version.
+ * 3. **Only Transaction G moves money or the pointer here.** Every claim,
+ *    finalize and defer writes neither `consumedAt`, nor a reservation state,
+ *    nor the job's current deliverable version. Since ADR-0082 a terminal
+ *    non-`VALID` verdict settles its job through
+ *    `deliverable-failure-settlement.ts`, whose writes
+ *    `deliverable-settlement/settlement-shape.test.ts` holds.
  * 4. **No invented customer-visible failure state.** A terminal non-`VALID`
- *    verdict appends no transition event, and neither state vocabulary grew a
+ *    verdict appends no transition event of its own (the settlement's are the
+ *    job's and the reservation's), and neither state vocabulary grew a
  *    `DELIVERABLE_INVALID` member.
  * 5. **One migration, this phase's, adding one table and rewriting nothing.**
  * 6. **No paid provider, credential, scheduler or billing integration.**
@@ -231,10 +235,14 @@ describe("the database boundary can reach nothing external", () => {
   it("settles through a module that reaches nothing external either (ADR-0082)", () => {
     const text = code(readFileSync(SETTLEMENT_MODULE, "utf8"));
     expect(imports(text).sort()).toEqual([
+      "./cost-admission-lock",
       "./orchestration-repositories",
       "@app/domain",
       "@prisma/client",
     ]);
+    // The lock module is one SQL statement over Prisma's transaction type.
+    const lock = code(readFileSync(join(SETTLEMENT_MODULE, "..", "cost-admission-lock.ts"), "utf8"));
+    expect(imports(lock)).toEqual(["@prisma/client"]);
   });
 
   it("keeps the domain module free of persistence and infrastructure", () => {
@@ -248,15 +256,16 @@ describe("the database boundary can reach nothing external", () => {
   });
 });
 
-describe("only Transaction G moves the pointer or the unit", () => {
+describe("only Transaction G and the failure settlement move the pointer or the unit", () => {
   it("writes a reservation state in exactly one place, always with its instant", () => {
     const payloads = prismaWritePayloads(repositorySource());
     const consuming = payloads.filter((p) => p.includes('state: "CONSUMED"'));
     expect(consuming).toHaveLength(1);
     // A hold marked spent with no record of when is a hold nobody can audit.
     expect(consuming[0]).toContain("consumedAt:");
-    // And it never releases: refunding an entitlement is not this phase's
-    // decision, and a released hold behind a validated deliverable fails closed.
+    // And it never releases a hold itself: a terminal verdict's release is the
+    // failure settlement's (ADR-0082), and a released hold behind a validated
+    // deliverable fails closed.
     expect(payloads.some((p) => p.includes("releasedAt"))).toBe(false);
     expect(payloads.some((p) => p.includes('state: "RELEASED"'))).toBe(false);
   });
@@ -270,12 +279,20 @@ describe("only Transaction G moves the pointer or the unit", () => {
     expect(pointing[0]).toContain('state: "DELIVERABLE_READY"');
   });
 
-  it("terminalizes no job, ever", () => {
-    // A deliverable that cannot be validated is not a failed job. During a
-    // recomposition the customer may already hold a perfectly good video.
-    const payloads = prismaWritePayloads(repositorySource());
+  it("terminalizes no job itself, and settles only from the terminal verdict", () => {
+    // Whether an unusable deliverable fails the job is the settlement's
+    // decision (ADR-0082): during a recomposition the customer may already hold
+    // a perfectly good video, and the job returns to it instead.
+    const text = repositorySource();
+    const payloads = prismaWritePayloads(text);
     for (const banned of ['"FAILED_TERMINAL"', '"CANCELLED"']) {
       expect(`${banned}: ${payloads.some((p) => p.includes(banned))}`).toBe(`${banned}: false`);
+    }
+    const terminal = text.slice(text.indexOf("async function finalizeTerminalVerdict"));
+    const body = terminal.slice(0, terminal.indexOf("async function lockValidationChain"));
+    for (const call of ["lockReservationForDeliverable(", "settleDeliverableFailure("]) {
+      expect(text.split(call)).toHaveLength(2);
+      expect(`${call} in the verdict: ${body.includes(call)}`).toBe(`${call} in the verdict: true`);
     }
   });
 
@@ -308,12 +325,12 @@ describe("no customer-visible failure state was invented", () => {
     }
   });
 
-  it("appends a transition event only on the two paths that change something", () => {
+  it("appends a transition event of its own only on the two paths that change something", () => {
     const text = repositorySource();
     // Four appends in total: the VALID verdict, and Transaction G's three —
     // the deliverable, the job and the hold. Every other path (claim, defer,
-    // and both terminal non-VALID verdicts) changes nothing a reader of the
-    // event stream should be told about.
+    // and both terminal non-VALID verdicts) appends none here; a terminal
+    // verdict's job and hold events are the failure settlement's (ADR-0082).
     expect(text.match(/appendGenerationEvent\(/g)).toHaveLength(4);
     const finalizeTerminal = text.slice(text.indexOf("async function finalizeTerminalVerdict"));
     expect(

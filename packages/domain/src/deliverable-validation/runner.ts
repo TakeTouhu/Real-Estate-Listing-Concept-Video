@@ -72,6 +72,10 @@ import {
   validateDeliverableValidationRetryDelayMs,
 } from "./durable";
 import { deliverableOffPlanReason } from "./plan";
+import {
+  DeliverableSettlementDefect,
+  type DeliverableSettlementDefectCode,
+} from "../deliverable-settlement/settlement";
 import type {
   DeliverableMediaValidationPort,
   DeliverableValidationClaim,
@@ -109,11 +113,15 @@ export type DeliverableValidationRunOutcome =
   | { readonly kind: "LOST" }
   /**
    * `runOnce` only: something threw, the attempt stopped and the sweep went on.
-   * The code is kept when it was one of this module's defects, and nothing else
-   * about the error is: a database or adapter error's text is not this report's
-   * to carry. `runOne` throws instead, unchanged.
+   * The code is kept when it was one of this module's defects or a settlement
+   * defect of a terminal verdict (ADR-0082), and nothing else about the error
+   * is: a database or adapter error's text is not this report's to carry.
+   * `runOne` throws instead, unchanged.
    */
-  | { readonly kind: "FAILED"; readonly code: DeliverableValidationDefectCode | null };
+  | {
+      readonly kind: "FAILED";
+      readonly code: DeliverableValidationDefectCode | DeliverableSettlementDefectCode | null;
+    };
 
 export interface DeliverableValidationRunReport {
   readonly claimed: number;
@@ -206,7 +214,11 @@ export class DeliverableValidationRunner {
         // being published (ADR-0080).
         outcome = {
           kind: "FAILED",
-          code: error instanceof DeliverableValidationDefect ? error.code : null,
+          code:
+            error instanceof DeliverableValidationDefect ||
+            error instanceof DeliverableSettlementDefect
+              ? error.code
+              : null,
         };
       }
       if (!UNCLAIMED_KINDS.includes(outcome.kind)) claimed += 1;

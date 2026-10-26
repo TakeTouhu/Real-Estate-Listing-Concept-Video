@@ -24,15 +24,17 @@
  * ```text
  * claim, finalize, defer :                          GenerationJob
  *                          -> GenerationDeliverableVersion -> composition work
- * block                  : GenerationReservation -> GenerationJob
- *                          -> GenerationDeliverableVersion -> composition work
+ * block                  : cost-admission lock -> GenerationReservation
+ *                          -> GenerationJob -> GenerationDeliverableVersion
+ *                          -> composition work
  * ```
  *
  * The claim, the finalize and the deferral do **not** lock or read the
  * reservation. They move no entitlement, so they have no reason to serialize
  * against the workflows that do; the system-wide `Reservation -> Job` rule
  * constrains transactions that lock *both* rows. The block does lock it, first,
- * because its commit may release it.
+ * behind the cost-admission lock every entitlement release takes, because its
+ * commit may release it.
  */
 
 import {
@@ -601,7 +603,8 @@ export function createDeliverableCompositionExecutionRepository(
 
     async blockComposition(input: BlockCompositionInput): Promise<BlockCompositionOutcome> {
       return prisma.$transaction(async (tx): Promise<BlockCompositionOutcome> => {
-        // Reservation before Job: this commit may release it (ADR-0082).
+        // The cost-admission lock and the reservation before the job: this
+        // commit may release the customer's Unit (ADR-0082).
         const reservation = await lockReservationForDeliverable(
           tx,
           input.claim.organizationId,
@@ -640,6 +643,12 @@ export function createDeliverableCompositionExecutionRepository(
         if (ctx.jobState !== "COMPOSING" || ctx.versionOrdinal !== ctx.highestOrdinal) {
           return { kind: "LEASE_LOST" };
         }
+        // And the claim's work row must be this version's, the one locked above,
+        // as `finalizeComposition` asks. The write below names the row by id
+        // alone: a claim pairing this version with another version's work would
+        // block work this transaction never locked, and settle this job while
+        // its own work still runs.
+        if (ctx.workId !== input.claim.compositionId) return { kind: "LEASE_LOST" };
 
         const blocked = await tx.generationDeliverableComposition.updateMany({
           where: {
@@ -770,6 +779,12 @@ async function lockClaimChain(
   `;
   const row = rows[0];
   if (row === undefined) return null;
+  // Read in the locking statement, the work row and `highestOrdinal` come from
+  // the snapshot taken before any wait for the job lock, unlike the job and
+  // version rows PostgreSQL re-reads once it is granted. That is safe for every
+  // caller here: the work row's writes are compare-and-set on its version and
+  // lease, and the only writer of versions, Transaction I, holds the job's
+  // reservation, which the block takes before this statement starts.
   // The work row cannot be locked in the statement above: it is the nullable
   // side of an outer join, and PostgreSQL refuses `FOR UPDATE` there. It is
   // locked here instead, after the job and version, keeping the declared order.
