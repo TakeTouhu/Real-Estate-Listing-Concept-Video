@@ -14,19 +14,27 @@
  * J2  finalize  work -> OUTPUT_VERIFIED, the Clean Master's record,
  *               COMPOSING -> DELIVERABLE_VALIDATING
  *     defer     work -> PENDING with a closed retry code, job untouched
+ *     block     work -> BLOCKED with a closed block code, and the job settled
+ *               in the same commit: FAILED_TERMINAL with its Unit released, or
+ *               a replacement back to DELIVERABLE_READY (ADR-0082)
  * ```
  *
  * ## Lock order
  *
  * ```text
- * GenerationJob → GenerationDeliverableVersion → composition work
+ * claim, finalize, defer :                          GenerationJob
+ *                          -> GenerationDeliverableVersion -> composition work
+ * block                  : cost-admission lock -> GenerationReservation
+ *                          -> GenerationJob -> GenerationDeliverableVersion
+ *                          -> composition work
  * ```
  *
- * The reservation is **not** locked and not read. Composition execution moves no
- * entitlement, so it has no reason to serialize against the workflows that do.
- * The system-wide `Reservation -> Job` rule constrains transactions that lock
- * *both* rows; adding a reservation lock here purely for symmetry would create
- * contention with settlement over a row this code never touches.
+ * The claim, the finalize and the deferral do **not** lock or read the
+ * reservation. They move no entitlement, so they have no reason to serialize
+ * against the workflows that do; the system-wide `Reservation -> Job` rule
+ * constrains transactions that lock *both* rows. The block does lock it, first,
+ * behind the cost-admission lock every entitlement release takes, because its
+ * commit may release it.
  */
 
 import {
@@ -67,6 +75,12 @@ import {
 } from "@app/domain";
 import { randomId } from "@app/shared";
 import { Prisma, type PrismaClient } from "@prisma/client";
+import {
+  assertDeliverableFailureSettled,
+  lockReservationForDeliverable,
+  settleDeliverableFailure,
+  type FailedDeliverableCycle,
+} from "./deliverable-failure-settlement";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -106,6 +120,8 @@ interface ClaimContextRow {
   readonly requestedDurationSeconds: number;
   readonly versionId: string;
   readonly versionOrdinal: number;
+  /** The highest ordinal among the job's versions: its newest cycle's. */
+  readonly highestOrdinal: number;
   readonly disclosureMode: string;
   readonly workId: string | null;
   readonly workStatus: string | null;
@@ -587,6 +603,13 @@ export function createDeliverableCompositionExecutionRepository(
 
     async blockComposition(input: BlockCompositionInput): Promise<BlockCompositionOutcome> {
       return prisma.$transaction(async (tx): Promise<BlockCompositionOutcome> => {
+        // The cost-admission lock and the reservation before the job: this
+        // commit may release the customer's Unit (ADR-0082).
+        const reservation = await lockReservationForDeliverable(
+          tx,
+          input.claim.organizationId,
+          input.claim.deliverableVersionId,
+        );
         const ctx = await lockClaimChain(
           tx,
           input.claim.organizationId,
@@ -607,14 +630,25 @@ export function createDeliverableCompositionExecutionRepository(
           if (stored.blockCode !== input.blockCode) {
             throw new DeliverableCompositionExecutionDefect("COMPOSITION_BLOCK_CONFLICT");
           }
+          // The block's commit settled the job; a replay finding it unsettled
+          // has found a row that commit never wrote.
+          assertDeliverableFailureSettled(failedCycleOf(ctx), reservation);
           return { kind: "ALREADY_BLOCKED" };
         }
 
-        // The job must still be composing. Named rather than assumed from the
-        // work row: the two are written in different transactions, and a block
-        // recorded against a job that has moved on would terminate work for a
-        // cycle nobody is running.
-        if (ctx.jobState !== "COMPOSING") return { kind: "LEASE_LOST" };
+        // The job must still be composing this version. Named rather than
+        // assumed from the work row: the two are written in different
+        // transactions, and a block recorded against a job that has moved on
+        // would terminate work, and settle, a cycle nobody is running.
+        if (ctx.jobState !== "COMPOSING" || ctx.versionOrdinal !== ctx.highestOrdinal) {
+          return { kind: "LEASE_LOST" };
+        }
+        // And the claim's work row must be this version's, the one locked above,
+        // as `finalizeComposition` asks. The write below names the row by id
+        // alone: a claim pairing this version with another version's work would
+        // block work this transaction never locked, and settle this job while
+        // its own work still runs.
+        if (ctx.workId !== input.claim.compositionId) return { kind: "LEASE_LOST" };
 
         const blocked = await tx.generationDeliverableComposition.updateMany({
           where: {
@@ -644,16 +678,17 @@ export function createDeliverableCompositionExecutionRepository(
         });
         if (blocked.count !== 1) return { kind: "LEASE_LOST" };
 
-        // No transition event, on either aggregate, on purpose. The job really
-        // does stay COMPOSING, so a job event would assert a change that did not
-        // happen — and inventing a deliverable lifecycle state to carry the fact
-        // would put a value in the event stream that no reviewed state machine
-        // contains. The work row says it exactly: BLOCKED, with a code and an
-        // instant.
-        //
-        // Nothing else moves either: no unit is consumed, no reservation is read
-        // or released, and the job is not terminalized, because a customer may
-        // already hold a perfectly good video from an earlier cycle.
+        // No deliverable event: the work row says it exactly, BLOCKED with a
+        // code and an instant. The settlement records the job's move and, for
+        // an initial generation, the Unit's release. The pointer is proved
+        // unmoved either way: a customer holding an earlier video keeps it.
+        await settleDeliverableFailure(
+          tx,
+          failedCycleOf(ctx),
+          reservation,
+          new Date(input.blockedAt),
+          input.context,
+        );
         await assertPointerUnmoved(tx, ctx);
         return { kind: "BLOCKED" };
       });
@@ -688,7 +723,8 @@ export function createDeliverableCompositionExecutionRepository(
  *
  * `FOR UPDATE OF j, v, w` names the three rows this transaction writes. The
  * project is joined for tenancy and deliberately not locked. The reservation is
- * neither joined nor locked: composition moves no entitlement.
+ * neither joined nor locked here: only the block moves it, and the block locks
+ * it separately, and first.
  *
  * A cross-tenant or unknown id matches no row, locks nothing, and is reported
  * exactly as a missing one — the caller's organization id is never trusted on
@@ -710,6 +746,9 @@ async function lockClaimChain(
            j."requestedDurationSeconds"    AS "requestedDurationSeconds",
            v."id"                          AS "versionId",
            v."ordinal"                     AS "versionOrdinal",
+           (SELECT MAX(sib."ordinal")
+              FROM "generation_deliverable_versions" sib
+             WHERE sib."generationJobId" = j."id")  AS "highestOrdinal",
            v."disclosureMode"::text        AS "disclosureMode",
            w."id"                          AS "workId",
            w."status"::text                AS "workStatus",
@@ -740,6 +779,12 @@ async function lockClaimChain(
   `;
   const row = rows[0];
   if (row === undefined) return null;
+  // Read in the locking statement, the work row and `highestOrdinal` come from
+  // the snapshot taken before any wait for the job lock, unlike the job and
+  // version rows PostgreSQL re-reads once it is granted. That is safe for every
+  // caller here: the work row's writes are compare-and-set on its version and
+  // lease, and the only writer of versions, Transaction I, holds the job's
+  // reservation, which the block takes before this statement starts.
   // The work row cannot be locked in the statement above: it is the nullable
   // side of an outer join, and PostgreSQL refuses `FOR UPDATE` there. It is
   // locked here instead, after the job and version, keeping the declared order.
@@ -876,6 +921,18 @@ function persistedProfile(ctx: ClaimContextRow): CompositionProfile {
     encoderPreset: ctx.workPreset!,
     crf: ctx.workCrf!,
   });
+}
+
+/** The chain as a failed cycle, for its settlement (ADR-0082). */
+function failedCycleOf(ctx: ClaimContextRow): FailedDeliverableCycle {
+  return {
+    organizationId: ctx.organizationId,
+    jobId: ctx.jobId,
+    jobState: ctx.jobState,
+    currentDeliverableVersionId: ctx.currentDeliverableVersionId,
+    failedIn: "COMPOSING",
+    failedVersionIsNewest: ctx.versionOrdinal === ctx.highestOrdinal,
+  };
 }
 
 /** The customer's published deliverable must be exactly where it was. */

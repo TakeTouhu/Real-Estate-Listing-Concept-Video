@@ -7,6 +7,7 @@ import {
 import type { ManagedDeliverableOutputKey } from "../deliverable-composition-execution/durable";
 import type { TransitionContext } from "../orchestration/ports";
 import { ISO_BMFF_CONTAINER, type ManagedOutputMediaFacts } from "../provider-output/media-validation";
+import { DeliverableSettlementDefect } from "../deliverable-settlement/settlement";
 import { DeliverableValidationDefect } from "./durable";
 import type {
   ClaimDeliverableValidationOutcome,
@@ -623,6 +624,19 @@ describe("one bad candidate never poisons the batch", () => {
       { deliverableVersionId: "gdv_3", outcome: { kind: "PUBLISHED_AND_CONSUMED" } },
     ]);
     expect(report.claimed).toBe(2);
+  });
+
+  it("reports a settlement defect with its code (ADR-0082)", async () => {
+    // A terminal verdict raises it; thrown from this harness's one scripted call,
+    // since the code kept is the sweep's choice whichever call raised it.
+    const { runner } = sweepWith((call) =>
+      call === 1 ? new DeliverableSettlementDefect("RESERVATION_NOT_SETTLEABLE") : undefined,
+    );
+    const report = await runner.runOnce(3, CONTEXT);
+    expect(report.outcomes[0]).toEqual({
+      deliverableVersionId: "gdv_1",
+      outcome: { kind: "FAILED", code: "RESERVATION_NOT_SETTLEABLE" },
+    });
   });
 
   it("keeps nothing of an error that is not one of its defects", async () => {

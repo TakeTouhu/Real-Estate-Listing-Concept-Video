@@ -70,6 +70,13 @@
  * arithmetic that was already knowable wastes a worker; deferring the answer
  * instead of blocking on it produces an automatic infinite retry that fails
  * identically every five minutes and tells nobody.
+ *
+ * ## A block settles the job (ADR-0082)
+ *
+ * `BLOCKED` means this cycle will produce no video, so the repository settles
+ * the job in the block's own commit: an initial generation fails and its Unit is
+ * released, and a replacement returns to the video the customer already holds.
+ * This coordinator only reports the block; it never settles anything itself.
  */
 
 import { randomId } from "@app/shared";

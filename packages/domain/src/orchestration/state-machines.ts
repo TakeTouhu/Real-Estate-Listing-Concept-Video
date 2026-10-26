@@ -62,7 +62,14 @@ const JOB_TRANSITIONS: Readonly<Record<GenerationJobState, readonly GenerationJo
   GENERATING: ["SCENES_READY", "DELIVERABLE_READY", "FAILED_TERMINAL"],
   SCENES_READY: ["COMPOSITION_PENDING", "FAILED_TERMINAL"],
   COMPOSITION_PENDING: ["COMPOSING", "FAILED_TERMINAL"],
-  COMPOSING: ["DELIVERABLE_VALIDATING", "FAILED_TERMINAL"],
+  // `COMPOSING -> DELIVERABLE_READY` is the **deliverable rollback** edge
+  // (ADR-0082): a replacement whose composition is blocked gives the customer
+  // back the video they already hold, as `GENERATING -> DELIVERABLE_READY` does
+  // for a failed regeneration. Only the settlement in the blocking commit may
+  // persist it, and only while the pointer still names that earlier video.
+  // `DELIVERABLE_VALIDATING -> DELIVERABLE_READY` serves the same rollback after
+  // an unusable verdict, besides Transaction G's publication.
+  COMPOSING: ["DELIVERABLE_VALIDATING", "DELIVERABLE_READY", "FAILED_TERMINAL"],
   DELIVERABLE_VALIDATING: ["DELIVERABLE_READY", "FAILED_TERMINAL"],
   // Not terminal, and not failable. A delivered video stays delivered.
   DELIVERABLE_READY: ["REVISING"],

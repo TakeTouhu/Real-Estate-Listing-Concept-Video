@@ -37,20 +37,20 @@
  * deliberately does not reuse `ManagedOutputMediaValidation` — that record is
  * one-to-one with a *provider attempt*, and a composed deliverable is not one.
  *
- * ## `BLOCKED` is not customer failure
+ * ## What `BLOCKED` settles
  *
- * There is no `FAILED` here, and `BLOCKED` is not one. It terminates *this
- * phase's automatic work* and nothing else: the job does not become
- * `FAILED_TERMINAL`, no unit is consumed, no reservation is released, the
- * deliverable pointer does not move, and no customer-facing failure is recorded.
+ * There is no `FAILED` status here. `BLOCKED` terminates this work row's
+ * automatic execution, and since ADR-0082 the same commit settles its job: an
+ * initial generation becomes `FAILED_TERMINAL` and its reservation is released,
+ * so an encoder limit never costs the customer a unit; a replacement returns the
+ * job to `DELIVERABLE_READY`, because the customer may already hold a perfectly
+ * good video while a regeneration's replacement cannot be encoded, and
+ * terminalizing that job would destroy it. No unit is ever consumed and the
+ * deliverable pointer never moves.
  *
- * The reason is sharpest for recomposition: the customer may already hold a
- * perfectly good video while a regeneration's replacement cannot be encoded.
- * Terminalizing that job would destroy a deliverable they already have, and
- * settling an entitlement over an encoder limit charges the platform's problem
- * to them. A settlement policy for permanently uncomposable deliverables is a
- * separate, reviewed decision, and Phase 5B deliberately does not implement an
- * unblock operation either — an operator path is its own reviewed surface.
+ * There is still no unblock operation. Recovery from a terminal block is an
+ * internal operator action that starts a new cycle (ADR-0052 Decision 20), its
+ * own reviewed surface.
  */
 
 import { AppError } from "@app/shared";
@@ -427,16 +427,14 @@ export const JOB_DELIVERABLE_VALIDATING_EVENT_TYPE = "job.deliverable_validating
 export const DELIVERABLE_COMPOSING_STATE = "COMPOSING";
 export const DELIVERABLE_OUTPUT_VERIFIED_STATE = "OUTPUT_VERIFIED";
 
-// Blocking appends **no** transition event, and there is deliberately no
-// `COMPOSITION_BLOCKED` state in either vocabulary.
-//
-// The job really does stay `COMPOSING`, so a job event would assert a state
-// change that did not happen; and inventing a deliverable lifecycle state to
-// carry the fact would put a value in the transition-event stream that no
-// reviewed state machine contains, which every later reader would then have to
-// interpret. The durable work row already says it exactly — `status = BLOCKED`
-// with a `blockCode` and a `blockedAt` — and a future operator recovery
-// lifecycle can introduce a reviewed event model if it needs one.
+// Blocking appends **no** deliverable event, and there is deliberately no
+// `COMPOSITION_BLOCKED` state in either vocabulary: inventing a deliverable
+// lifecycle state to carry the fact would put a value in the transition-event
+// stream that no reviewed state machine contains, which every later reader
+// would then have to interpret. The durable work row already says it exactly —
+// `status = BLOCKED` with a `blockCode` and a `blockedAt`. The settlement in the
+// same commit records its own moves, on the job and, for an initial generation,
+// on the reservation (ADR-0082).
 
 /** The reason code recorded on every composition-execution transition. */
 export const COMPOSITION_EXECUTION_REASON_CODE = "DELIVERABLE_COMPOSITION_EXECUTION";
