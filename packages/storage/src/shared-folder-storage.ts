@@ -283,7 +283,7 @@ class Folder {
       // Non-blocking, so a pipe left in the folder cannot hang the open.
       handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
     } catch (error) {
-      if (isAbsent(error) || errorCode(error) === "EISDIR") return this.confirmAbsent();
+      if (isAbsent(error)) return this.confirmAbsent();
       throw error;
     }
     let isFile: boolean;
