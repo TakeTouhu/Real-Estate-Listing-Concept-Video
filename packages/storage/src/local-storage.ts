@@ -1,5 +1,5 @@
 import type { ObjectStorage, SignedUrl } from "@app/domain";
-import { signStorageToken } from "./signing";
+import { signedStorageUrl } from "./signing";
 import { assertNotProduction, type ProductionGuardOptions } from "./production-guard";
 
 export interface LocalObjectStorageOptions extends ProductionGuardOptions {
@@ -40,12 +40,8 @@ export class LocalObjectStorage implements ObjectStorage {
   }
 
   private signedUrl(key: string, purpose: "upload" | "download", ttlSeconds: number): SignedUrl {
-    const expiresAtSeconds = Math.floor(this.now().getTime() / 1000) + ttlSeconds;
-    const token = signStorageToken({ key, purpose, expiresAtSeconds }, this.secret);
-    return {
-      url: `${this.basePath}/${purpose}?token=${encodeURIComponent(token)}`,
-      expiresAt: new Date(expiresAtSeconds * 1000),
-    };
+    const { secret, basePath } = this;
+    return signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: this.now() });
   }
 
   // Both signed URLs go through `signStorageToken`, which refuses an
