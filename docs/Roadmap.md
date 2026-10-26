@@ -220,8 +220,9 @@ the sweep. Ending the failed job's other scenes is GS-2b's.
 **GS-2b — a failed job's other scenes close** (ADR-0084, no migration): a
 bounded sweep, Transaction L, closes each open scene of a failed job once
 nothing of it is at the provider. A scene that never started is cancelled with
-its pending request; one that started fails, an attempt still waiting to be sent
-is cancelled before submission and its request fails. A scene with an attempt the
+its pending request; one that started, or whose request was admitted, fails, an
+attempt still waiting to be sent is cancelled before submission and its request
+fails. A scene with an attempt the
 provider may hold waits until that attempt ends; a ready scene is left alone.
 Nothing moves money: the job's Unit was released when it failed. Dormant:
 nothing in production runs the sweep.

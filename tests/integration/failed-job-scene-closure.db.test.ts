@@ -213,6 +213,29 @@ RUN("ADR-0084 — a failed job's open scenes close", () => {
     });
   });
 
+  describe("a scene with no request", () => {
+    it.each([
+      ["PENDING", "CANCELLED", "scene.cancelled"],
+      ["GENERATING", "FAILED_TERMINAL", "scene.failed"],
+    ] as const)("closes alone from %s, and is not offered again", async (state, to, eventType) => {
+      const chain = await seedAttemptFailure(prisma);
+      const scene = await sibling(chain, state);
+      await prisma.sceneGenerationRequest.delete({ where: { id: scene.requestId } });
+      await failJob(chain);
+      const events = await prisma.generationTransitionEvent.count();
+
+      expect(await close(scene)).toEqual({ kind: "CLOSED", scene: to, attemptsCancelled: 0 });
+
+      expect((await prisma.generationScene.findUniqueOrThrow({ where: { id: scene.sceneId } })).state).toBe(to);
+      expect(await prisma.generationTransitionEvent.count()).toBe(events + 1);
+      expect(lastEvent(await eventsOf(prisma, scene.sceneId))).toEqual(
+        closureEvent(scene, state, to, eventType),
+      );
+      expect(await candidateIds()).toEqual([]);
+      expect(await close(scene)).toEqual({ kind: "NOT_CLOSABLE", reason: "SCENE_NOT_OPEN" });
+    });
+  });
+
   describe("a scene that started", () => {
     it("fails, cancelling the attempt still waiting to be sent", async () => {
       const chain = await seedAttemptFailure(prisma);
@@ -228,6 +251,8 @@ RUN("ADR-0084 — a failed job's open scenes close", () => {
 
       const after = await snapshot(scene);
       const [attemptBefore] = before.attempts;
+      // Only the orchestration state moves; the legacy `state` column is left
+      // as it was (ADR-0084, "Not decided here").
       expect(after.attempts).toEqual([
         {
           ...attemptBefore,
@@ -263,6 +288,34 @@ RUN("ADR-0084 — a failed job's open scenes close", () => {
       );
       expect(lastEvent(await eventsOf(prisma, scene.sceneId))).toEqual(
         closureEvent(scene, "GENERATING", "FAILED_TERMINAL", "scene.failed"),
+      );
+    });
+
+    // Admission does not move the scene, so an admitted request can sit under a
+    // scene still `PENDING`.
+    it("fails when its request was admitted, though the scene was never recorded as started", async () => {
+      const chain = await seedAttemptFailure(prisma);
+      const scene = await sibling(chain, "PENDING", ["QUEUED"]);
+      await failJob(chain);
+      const before = await snapshot(scene);
+      expect([before.scene.state, before.request.state]).toEqual(["PENDING", "GENERATING"]);
+      expect(await candidateIds()).toEqual([scene.sceneId]);
+
+      expect(await close(scene)).toEqual({
+        kind: "CLOSED",
+        scene: "FAILED_TERMINAL",
+        attemptsCancelled: 1,
+      });
+
+      const after = await snapshot(scene);
+      expect([
+        after.scene.state,
+        after.request.state,
+        after.request.failedAt,
+        after.attempts[0]?.orchestrationState,
+      ]).toEqual(["FAILED_TERMINAL", "FAILED_TERMINAL", new Date(NOW), "CANCELLED_PRE_SUBMISSION"]);
+      expect(lastEvent(await eventsOf(prisma, scene.sceneId))).toEqual(
+        closureEvent(scene, "PENDING", "FAILED_TERMINAL", "scene.failed"),
       );
     });
 
@@ -412,7 +465,6 @@ RUN("ADR-0084 — a failed job's open scenes close", () => {
     it.each([
       ["a second request", "SECOND_REQUEST"],
       ["a pointer naming a rendition", "POINTER"],
-      ["a generating request under a scene that never started", "SCENE_BEHIND"],
       ["a delivered request", "DELIVERED_REQUEST"],
       ["a regeneration request", "REGENERATION"],
       ["a request already failed", "CLOSED_REQUEST"],
@@ -437,8 +489,6 @@ RUN("ADR-0084 — a failed job's open scenes close", () => {
           where: { id: scene.sceneId },
           data: { currentDeliveredRequestId: scene.requestId },
         });
-      } else if (shape === "SCENE_BEHIND") {
-        await prisma.generationScene.update({ where: { id: scene.sceneId }, data: { state: "PENDING" } });
       } else if (shape === "DELIVERED_REQUEST") {
         await prisma.sceneGenerationRequest.update({
           where: { id: scene.requestId },

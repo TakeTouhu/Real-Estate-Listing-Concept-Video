@@ -103,6 +103,16 @@ describe("a scene that started", () => {
     });
   });
 
+  it("fails when its request was admitted, though the scene was never recorded as started", () => {
+    // Admission does not move the scene.
+    expect(decide({ ...STARTED, sceneState: "PENDING" })).toEqual({
+      kind: "CLOSE",
+      sceneTo: "FAILED_TERMINAL",
+      request: "FAIL",
+      attemptsToCancel: 1,
+    });
+  });
+
   it("fails with its request cancelled when the request was never admitted", () => {
     expect(decide({ ...NEVER_STARTED, sceneState: "GENERATING" })).toEqual({
       kind: "CLOSE",
@@ -198,13 +208,6 @@ describe("what is never closed", () => {
     },
   );
 
-  it("a generating request under a scene that never started", () => {
-    expect(decide({ ...STARTED, sceneState: "PENDING" })).toEqual({
-      kind: "NOT_CLOSABLE",
-      reason: "SHAPE_CONFLICT",
-    });
-  });
-
   // The database's all-or-none check forbids such a row under a request; read
   // anyway, it is refused, and ahead of an attempt in flight.
   it("an attempt with no orchestration state, before an attempt in flight", () => {
@@ -254,6 +257,13 @@ describe("the whole table", () => {
     expect(closed).toEqual([
       "PENDING - - CANCELLED NONE 0",
       "PENDING PENDING none CANCELLED CANCEL 0",
+      "PENDING GENERATING none FAILED_TERMINAL FAIL 0",
+      "PENDING GENERATING QUEUED FAILED_TERMINAL FAIL 1",
+      "PENDING GENERATING OUTPUT_VERIFIED FAILED_TERMINAL FAIL 0",
+      "PENDING GENERATING FAILED_RETRYABLE FAILED_TERMINAL FAIL 0",
+      "PENDING GENERATING FAILED_TERMINAL FAILED_TERMINAL FAIL 0",
+      "PENDING GENERATING RECONCILIATION_EXHAUSTED FAILED_TERMINAL FAIL 0",
+      "PENDING GENERATING CANCELLED_PRE_SUBMISSION FAILED_TERMINAL FAIL 0",
       "GENERATING - - FAILED_TERMINAL NONE 0",
       "GENERATING PENDING none FAILED_TERMINAL CANCEL 0",
       "GENERATING GENERATING none FAILED_TERMINAL FAIL 0",

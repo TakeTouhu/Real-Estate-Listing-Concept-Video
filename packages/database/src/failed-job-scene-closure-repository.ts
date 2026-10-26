@@ -3,9 +3,9 @@
  *
  * A failed job's open scenes can never be delivered. This closes one in one
  * transaction once nothing of it is at the provider: a scene that never started
- * is cancelled with its pending request; one that started fails, its attempt
- * still waiting to be sent is cancelled before submission, and its request
- * fails. The decision is the domain's (`decideFailedJobSceneClosure`); this
+ * is cancelled with its pending request; one that started, or whose request was
+ * admitted, fails, its attempt still waiting to be sent is cancelled before
+ * submission, and its request fails. The decision is the domain's (`decideFailedJobSceneClosure`); this
  * module reads the locked rows into it and writes what it answers.
  *
  * ## Lock order
@@ -19,9 +19,10 @@
  * provider may hold takes it first (the paid-submission gate, the submission
  * outcome, completion, reconciliation), so no attempt of this scene changes
  * state while this decides. The job, scene, request and attempt follow in the
- * order Transactions F, H and K and media recovery take them. The reservation
- * is neither read nor locked: the settlement that failed the job released it,
- * and nothing here moves money.
+ * order Transactions F, H and K and media recovery take them; the job is locked
+ * for that order and never written. The reservation is read once, unlocked, for
+ * the advisory key, and never written: the settlement that failed the job
+ * released it, and nothing here moves money.
  *
  * ## No sweep state
  *
@@ -96,16 +97,15 @@ export function createFailedJobSceneClosureRepository(
            AND s."currentDeliveredRequestId" IS NULL
            AND (SELECT COUNT(*) FROM "scene_generation_requests" cr
                  WHERE cr."generationSceneId" = s."id") <= 1
-           -- Its request, if any, is an undelivered initial one, pending or,
-           -- under a started scene, generating.
+           -- Its request, if any, is an undelivered initial one, pending or
+           -- generating.
            AND NOT EXISTS (
                  SELECT 1 FROM "scene_generation_requests" r
                   WHERE r."generationSceneId" = s."id"
                     AND NOT (r."kind" = 'INITIAL'::"SceneGenerationRequestKind"
                              AND r."deliveredAt" IS NULL
-                             AND (r."state" = 'PENDING'::"SceneGenerationRequestState"
-                                  OR (r."state" = 'GENERATING'::"SceneGenerationRequestState"
-                                      AND s."state" = 'GENERATING'::"GenerationSceneState"))))
+                             AND r."state" IN ('PENDING'::"SceneGenerationRequestState",
+                                               'GENERATING'::"SceneGenerationRequestState")))
            -- No attempt under a pending request, none without a state, and none
            -- the provider may hold.
            AND NOT EXISTS (
@@ -183,9 +183,10 @@ async function closeWithin(
   `;
 
   // ---- 2. The decision. ---------------------------------------------------
+  const sceneState = member(GENERATION_SCENE_STATES, scene.sceneState);
   const decision = decideFailedJobSceneClosure({
     jobState: member(GENERATION_JOB_STATES, scene.jobState),
-    sceneState: member(GENERATION_SCENE_STATES, scene.sceneState),
+    sceneState,
     sceneNamesRendition: scene.currentDeliveredRequestId !== null,
     requests: requests.map((request) => ({
       kind: member(SCENE_GENERATION_REQUEST_KINDS, request.kind),
@@ -277,7 +278,9 @@ async function closeWithin(
     await record("SCENE_REQUEST", request.id, "PENDING", "CANCELLED", SCENE_REQUEST_CANCELLED_EVENT_TYPE);
   }
 
-  const sceneFrom = decision.sceneTo === "CANCELLED" ? "PENDING" : "GENERATING";
+  // From the state read under its lock: an admitted request's scene fails from
+  // `PENDING` as well as from `GENERATING`.
+  const sceneFrom = sceneState;
   expectRows(
     await tx.$queryRaw<{ id: string }[]>`
       UPDATE "generation_scenes"

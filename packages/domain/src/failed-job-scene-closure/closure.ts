@@ -12,8 +12,10 @@
  * This closes each such scene once nothing of it is at the provider:
  *
  * - a scene that never started is **cancelled**, with its pending request;
- * - a scene that started **fails**: an attempt still waiting to be sent is
- *   cancelled before submission, and its request fails.
+ * - a scene that started, or whose request was admitted, **fails**: an attempt
+ *   still waiting to be sent is cancelled before submission, and its request
+ *   fails. Admission does not start the scene, so an admitted request under a
+ *   scene still `PENDING` is reachable, and it fails too.
  *
  * A scene with an attempt the provider may hold is not closed yet. A request
  * does not report itself finished while a provider may be working on it (the
@@ -71,7 +73,7 @@ export type FailedJobSceneRefusal =
 export type FailedJobSceneClosure =
   | {
       readonly kind: "CLOSE";
-      /** A scene that never started is cancelled; one that started fails. */
+      /** A scene that never started is cancelled; one that started, or whose request was admitted, fails. */
       readonly sceneTo: "CANCELLED" | "FAILED_TERMINAL";
       /** What its request becomes: a pending one is cancelled, a generating one fails. */
       readonly request: "NONE" | "CANCEL" | "FAIL";
@@ -103,17 +105,17 @@ export function decideFailedJobSceneClosure(facts: FailedJobSceneFacts): FailedJ
     if (request.attemptStates.length > 0) return refuse("SHAPE_CONFLICT");
     return { kind: "CLOSE", sceneTo, request: "CANCEL", attemptsToCancel: 0 };
   }
-  if (request.state !== "GENERATING" || facts.sceneState !== "GENERATING") {
-    return refuse("SHAPE_CONFLICT");
-  }
+  if (request.state !== "GENERATING") return refuse("SHAPE_CONFLICT");
 
+  // An admitted request fails, and its scene with it, whether or not the scene
+  // was recorded as started: admission does not move the scene.
   let attemptsToCancel = 0;
   for (const state of request.attemptStates) {
     if (state === null) return refuse("SHAPE_CONFLICT");
     if (state === "QUEUED") attemptsToCancel += 1;
     else if (!isTerminalAttemptState(state)) return refuse("ATTEMPT_IN_FLIGHT");
   }
-  return { kind: "CLOSE", sceneTo, request: "FAIL", attemptsToCancel };
+  return { kind: "CLOSE", sceneTo: "FAILED_TERMINAL", request: "FAIL", attemptsToCancel };
 }
 
 function refuse(reason: FailedJobSceneRefusal): FailedJobSceneClosure {

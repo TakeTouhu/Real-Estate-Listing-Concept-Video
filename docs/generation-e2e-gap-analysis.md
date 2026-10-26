@@ -83,6 +83,7 @@ L, once nothing of it is at the provider, for Transactions H and K alike
 attempt ends. No migration.
 
 Left open: a cancelled job's open scenes (nothing cancels a job today), an
-attempt that never ends, which keeps its scene open, and which executor runs
-orchestrated attempts and what it reads (GS-7). Recorded in ADR-0084 and
-`docs/decisions/TODO.md`.
+attempt that never ends, which keeps its scene open, which executor runs
+orchestrated attempts and that the legacy discovery stops offering them (GS-7),
+and the start step starting each scene with its first admission, which
+Transaction K assumes (GS-4). Recorded in ADR-0084 and `docs/decisions/TODO.md`.

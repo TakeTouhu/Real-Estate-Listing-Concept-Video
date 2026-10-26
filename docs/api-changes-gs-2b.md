@@ -34,7 +34,9 @@ No change.
 
 - Transactions H and K: each still fails the one scene it settles, with its
   job; the job's other scenes are this closure's (ADR-0084 Decision 1).
-- The job and its reservation: never written or locked here (Decision 3).
+- The job and its reservation: never written here; the job is locked for the
+  lock order only, and the reservation read, unlocked, for the advisory key
+  (Decision 3).
 - The generic transition API and the state machines: every edge the closure
   takes already exists, and it writes them itself, as H and K do.
 
