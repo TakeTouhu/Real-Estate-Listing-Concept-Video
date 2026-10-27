@@ -174,8 +174,10 @@ Split into pull requests:
   are passed in, production's when nothing is: `RoutePolicy`, the gate and the
   start's quality offer against the same policy, and the repository's
   catalog. Production behaves as before.
-- **GS-5a-2**: the test route's catalog entry, route (Normal and HQ), price
-  and fixed FX rate, built only by a factory that refuses production.
+- **GS-5a-2** (ADR-0090, no migration): the test route's catalog entry, route
+  (Normal at 720p and HQ at 1080p), price and fixed FX rate, built only by
+  `createFakeRouteKit`, which refuses production. Nothing builds it until
+  GS-9.
 - **GS-5b**: the billing cycle's revenue reader. The product owner decided
   on 2026-10-27 what revenue is: the plan's monthly price plus the period's
   Unit purchases, tax-exclusive (`docs/decisions/TODO.md`, decision gates

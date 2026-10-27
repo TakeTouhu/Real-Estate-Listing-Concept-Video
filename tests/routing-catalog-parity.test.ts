@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { H3_MAX_PROVIDER_MODEL_ID, authorizedRoutes } from "@app/domain";
+import { H3_MAX_PROVIDER_MODEL_ID, authorizedRoutes, planGenerationResolution } from "@app/domain";
 import {
+  FAKE_ROUTE_VERSION,
   MINIMAX_H3_MAX_MODEL_ID,
+  createFakeRouteKit,
   createVideoModelCatalog,
 } from "@app/video-providers";
 
@@ -63,5 +65,58 @@ describe("routing authorization and the executable model catalog agree", () => {
     expect(entry?.nativeGeneration?.byTarget["1080p"]?.nativeMeetsTarget).toBe(false);
     expect(entry?.nativeGeneration?.byTarget["1080p"]?.nativeGenerationResolution.providerValue)
       .toBe("768P");
+  });
+});
+
+/**
+ * The test route's three tables (ADR-0090) are written side by side in one
+ * file, and nothing else checks that they describe the same route: an attempt
+ * admitted on its catalog entry must be priced by its contract and authorized
+ * by its policy, or the gate refuses it.
+ */
+describe("the test route, its catalog entry and its prices agree", () => {
+  const kit = createFakeRouteKit({ NODE_ENV: "test", VIDEO_PROVIDER: "fake" });
+
+  it("routes only to the entry its catalog verifies, at the size the entry generates", () => {
+    expect(kit.routePolicy.routes.length).toBeGreaterThan(0);
+    for (const route of kit.routePolicy.routes) {
+      const entry = kit.models.find(route.requestModelKey);
+      expect(`${route.qualityTier}: ${entry?.availability.kind}`).toBe(`${route.qualityTier}: SELECTABLE`);
+      if (entry === undefined) continue;
+      expect(entry.providerName).toBe(route.providerName);
+      expect(entry.providerModelId).toBe(route.providerModelId);
+      for (const target of route.targetOutputResolutions) {
+        expect(planGenerationResolution(entry, target).nativeGenerationResolution.providerValue).toBe(
+          route.nativeGenerationResolution,
+        );
+      }
+    }
+  });
+
+  it("prices every route for every length its entry generates", () => {
+    for (const route of kit.routePolicy.routes) {
+      const contract = kit.pricing.findByIdentity({
+        provider: route.providerName,
+        pricingModelKey: route.requestModelKey,
+        generationMode: route.generationMode,
+        nativeTier: route.nativeGenerationResolution,
+        audioMode: route.audioMode,
+        durationBillingRuleId: "per-second",
+        pricingVersion: FAKE_ROUTE_VERSION,
+      });
+      expect(`${route.qualityTier}: ${contract !== undefined}`).toBe(`${route.qualityTier}: true`);
+      const duration = kit.models.find(route.requestModelKey)?.capability?.durationSeconds;
+      expect(contract?.billableDuration).toEqual({
+        kind: "CONTINUOUS",
+        minSeconds: duration?.kind === "RANGE" ? duration.minSeconds : undefined,
+        maxSeconds: duration?.kind === "RANGE" ? duration.maxSeconds : undefined,
+      });
+    }
+  });
+
+  it("generates the lengths production's default model does, so a storyboard fits either", () => {
+    expect(kit.models.default().capability.durationSeconds).toEqual(
+      createVideoModelCatalog().default().capability.durationSeconds,
+    );
   });
 });

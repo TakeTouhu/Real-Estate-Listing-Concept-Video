@@ -276,6 +276,15 @@ it is given, production's when none is. The authorization record names the
 policy's version. Production behaves exactly as before; GS-5a-2's factory,
 which refuses production, will pass the test route's.
 
+**GS-5a-2 — the test route is built only outside production** (ADR-0090, no
+migration): `createFakeRouteKit` hands out the test provider's model catalog,
+a route policy (Normal at 720p, HQ at 1080p, each generated natively, and no
+production route), the start's quality offer from the same policy, a nominal
+price added to a copy of production's catalog, and a fixed development
+exchange rate. It refuses production, given or ambient, and any provider but
+the fake one, with no override. Production's tables are unchanged, and nothing
+outside tests builds the kit until GS-9's pipeline command.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
