@@ -89,9 +89,9 @@ describe("the start commit", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // A start no period covers is refused before the job, so Transaction B
     // never takes a cost-admission lock under the project row.
-    expect(within.indexOf('if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };')).toBeLessThan(
-      within.indexOf("tx.generationJob.create("),
-    );
+    const noPeriod = within.indexOf('if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };');
+    expect(noPeriod).toBeGreaterThan(-1);
+    expect(noPeriod).toBeLessThan(within.indexOf("tx.generationJob.create("));
   });
 
   it("holds the project row FOR SHARE, scoped to the organization, before it reads or writes anything", () => {
