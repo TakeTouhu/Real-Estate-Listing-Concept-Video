@@ -42,9 +42,11 @@ Errors (`AppError`):
 | `NOT_FOUND` | another organization's or a missing project, a Property out of reach, or a deleted Property |
 | `INTERNAL_ERROR` | a period the plan did not open overlaps the current one; the commit refuses Mode A or finds no period |
 
-Only `STARTED` writes a job. Every other answer writes nothing a customer can
-see or is charged for; opening the current Unit period, idempotent, is the only
-write before the commit.
+Only `STARTED` writes a job, a reservation or a `generation.started` entry.
+Opening the current Unit period, idempotent, is the only write before the
+commit; it writes the period this month's first Unit action would open, with
+that period's own `entitlement.period_opened` entry, so a refusal the commit
+makes after it leaves those two.
 
 Also added: `StartQualityOffer` and `AUTHORIZED_ROUTE_QUALITY_OFFER` (the
 qualities `AUTHORIZED_QUALITY_TIERS` lists), `GENERATION_START_AUDIT_ACTION`
@@ -56,9 +58,16 @@ qualities `AUTHORIZED_QUALITY_TIERS` lists), `GENERATION_START_AUDIT_ACTION`
 - Added `findStarted(organizationId, videoProjectId, idempotencyKey):
   Promise<GenerationJob | null>`: the job a start key started on that project,
   scoped to the organization. A key that is not a string of 1 to 200
-  characters is refused (`VALIDATION_FAILED`) before it is read.
+  characters, or a missing organization or project, is refused
+  (`VALIDATION_FAILED`) before anything is read.
+- `GenerationStartOutcome` gains `PROPERTY_DELETED`: the commit reads the
+  project's Property with the project, both held `FOR SHARE`, and refuses a
+  deleted one, a replay included, before the replay read.
 
 ### Changed: `@app/database`, internal
 
 `createGenerationStartRepository(prisma)` implements `findStarted`, and its
 commit's key-conflict re-read uses it. The start key check is shared by both.
+The commit's project read joins `properties` and locks both rows `FOR SHARE`,
+so a Property deletion saving waits for a start, and a start waits for a
+deletion saving and then answers `PROPERTY_DELETED`.

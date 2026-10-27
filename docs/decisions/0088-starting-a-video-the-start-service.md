@@ -34,10 +34,13 @@ the Unit period containing now, opened if nothing has opened it  -> NO_PLAN
 the start commit (ADR-0087)                                      -> STARTED, or Decision 3
 ```
 
-- **A refusal writes nothing a customer can see or is charged for.** Every
-  check before the period only reads. Opening the period writes the period the
-  month's first Unit action would open (idempotent, as a Unit purchase opens
-  it, ADR-0067), never a job, reservation or audit entry.
+- **A refusal writes no job, no reservation and no `generation.started`
+  entry.** Every check before the period only reads. Opening the period writes
+  only the period this month's first Unit action would open, with that period's
+  own `entitlement.period_opened` audit entry (idempotent, as a Unit purchase
+  opens it, ADR-0067). So a refusal the commit makes after that step leaves the
+  period and its entry, which any later Unit action would have written the same
+  way, and nothing a customer is charged for.
 - **Permission first**, as single-scene admission does: nothing is read for a
   member who may not generate, or may not spend the organization's Units
   (`unit.consume` is its own permission, ADR-0052 Decision 10).
@@ -51,6 +54,16 @@ the start commit (ADR-0087)                                      -> STARTED, or 
   archived Property's project starts, as every other path allows. What the
   other paths (reading, composing, single-scene admission) should do with a
   deleted Property's project stays open (`docs/decisions/TODO.md`).
+- **The commit checks the Property again, under its lock.** The service's read
+  is not enough on its own: a deletion could save between it and the commit.
+  So the commit's project read joins the Property and holds both rows
+  `FOR SHARE`, and answers `PROPERTY_DELETED` before the replay read. A
+  deletion that saves first is seen; one in flight is waited for and then
+  refused; one that comes later waits for the start to commit, which is the
+  order the two happened in. No cycle: nothing that writes a Property (editing
+  it, assigning it, releasing it when a member or group goes) takes the
+  project row or the start's advisory locks, and a row inserted with a key to
+  the Property takes only `FOR KEY SHARE`, which `FOR SHARE` does not block.
 - **The replay is read before the storyboard is judged**, scoped to the
   organization through the project (ADR-0087 Decision 2). A retry still finds
   its job after the customer recomposed, the photos changed, or the project's
@@ -116,12 +129,12 @@ the start commit (ADR-0087)                                      -> STARTED, or 
 | `STORYBOARD_CHANGED`, `QUALITY_CHANGED` | the same |
 | `DURATION_NOT_SUPPORTED` | `LENGTH_NOT_SUPPORTED` |
 | `INSUFFICIENT_ENTITLEMENT` | `INSUFFICIENT_UNITS`, with `eligibleUnits` |
-| `PROJECT_NOT_FOUND` | `NOT_FOUND`, as before the commit |
+| `PROJECT_NOT_FOUND`, `PROPERTY_DELETED` | `NOT_FOUND`, as before the commit |
 | `DISCLOSURE_MODE_NOT_SUPPORTED`, `NO_ENTITLEMENT_PERIOD` | `INTERNAL_ERROR`: the service asked for Mode A and opened the period itself |
 
 The outcomes are what the start screen shows; the errors are the ones every
 service gives. Refusals are not audited, as single-scene admission's are not:
-nothing was done. The returned job is a domain entity; the route projects it
+nothing was started. The returned job is a domain entity; the route projects it
 (GS-10).
 
 ## Decision 4 — Dormant
@@ -144,12 +157,20 @@ approved plan's fifth default).
 - `GenerationStartRepository` gains `findStarted(organizationId,
   videoProjectId, idempotencyKey)`, the replay read, scoped through the project
   to the organization and refusing a key the column cannot hold, as `start`
-  does; the commit's own conflict re-read now uses it. No migration.
+  does, or a missing organization or project; the commit's own conflict
+  re-read now uses it. The commit gains `PROPERTY_DELETED`, and holds the
+  project's Property row `FOR SHARE` with the project's. No migration.
 - `@app/domain` exports `GenerationStartService`, `StartGenerationInput`,
   `StartGenerationOutcome`, `StartQualityOffer`,
   `AUTHORIZED_ROUTE_QUALITY_OFFER`, and the audit action and resource type.
-- The unit tests prove each refusal in its order and that none opens a period
-  or reaches the commit; the record the commit receives and its audit entry;
-  each commit outcome's mapping; and the dormancy. The database tests prove the
-  replay read's scoping.
+- The unit tests prove each refusal, that the members and project each read
+  are the ones the start names, that no refusal before the period opens one or
+  reaches the commit, and that the period is open when the commit runs; the
+  record the commit receives and its audit entry; each commit outcome's
+  mapping; and the dormancy. The database tests prove the replay read's
+  scoping, the commit's deleted-Property refusal and its wait for a deletion in
+  flight, and the service against the real commit
+  (`tests/integration/generation-start-service.db.test.ts`): a start, a
+  replay, short Units, and a commit refusal that leaves the period and its own
+  entry and nothing else.
 - No route, no page, and nothing a customer can see changes.

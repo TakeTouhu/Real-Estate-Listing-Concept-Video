@@ -69,10 +69,7 @@ export interface StartGenerationInput {
   };
 }
 
-/**
- * How a start ended. Only `STARTED` wrote a job; nothing else wrote anything a
- * customer can see or is charged for.
- */
+/** How a start ended. Only `STARTED` wrote a job or reserved a Unit. */
 export type StartGenerationOutcome =
   | {
       readonly kind: "STARTED";
@@ -101,8 +98,9 @@ export class GenerationStartService {
    * Start the video a project's storyboard describes, or answer why not.
    *
    * Every check before the Unit period is opened only reads, and opening it
-   * writes only the period this month's first action would open. So a refusal
-   * writes no job, no reservation and no audit entry.
+   * writes only the period this month's first Unit action would open, with
+   * that period's own audit entry. So a refusal writes no job, no reservation
+   * and no `generation.started` entry.
    *
    * @throws AppError VALIDATION_FAILED for an unusable start key, a project
    *   with no composed storyboard or a stale one, or a scene composed before
@@ -130,7 +128,8 @@ export class GenerationStartService {
 
     // The storyboard read answers a project out of reach as not found. A
     // deleted Property's photos await deletion and could not be generated
-    // from, so its project is answered the same way rather than started.
+    // from, so its project is answered the same way rather than started; the
+    // commit checks it again under its lock.
     const view = await this.deps.storyboard.getStoryboard(actorUserId, organizationId, input.videoProjectId);
     const project = view.project;
     const property = await findReachableProperty(this.deps.identity, this.deps.properties, actor, project.propertyId);
@@ -199,6 +198,7 @@ export class GenerationStartService {
       case "EXISTING":
         return { kind: "ALREADY_STARTED", job: outcome.job };
       case "PROJECT_NOT_FOUND":
+      case "PROPERTY_DELETED":
         throw new AppError("NOT_FOUND", "Video project not found");
       case "STORYBOARD_CHANGED":
       case "QUALITY_CHANGED":

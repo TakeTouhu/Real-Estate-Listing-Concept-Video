@@ -94,11 +94,14 @@ describe("the start commit", () => {
     expect(noPeriod).toBeLessThan(within.indexOf("tx.generationJob.create("));
   });
 
-  it("holds the project row FOR SHARE, scoped to the organization, before it reads or writes anything", () => {
+  it("holds the project and its Property FOR SHARE, scoped to the organization, before anything else", () => {
     const { within } = startSource();
     const lock = within.indexOf("FOR SHARE");
     expect(lock).toBeGreaterThan(-1);
     expect(within.slice(0, lock)).toContain('"organizationId" = ${organizationId}');
+    // Unqualified, so the joined Property row is held too (ADR-0088).
+    expect(within.slice(0, lock)).toContain('JOIN "properties" p ON p."id" = vp."propertyId"');
+    expect(within).not.toContain("FOR SHARE OF");
     for (const later of [
       "tx.generationJob.findFirst(",
       "tx.storyboardScene.findMany(",
@@ -109,9 +112,10 @@ describe("the start commit", () => {
     }
   });
 
-  it("answers a replay, checks the storyboard, writes the job, reserves, copies the scenes, then audits", () => {
+  it("refuses a deleted Property, answers a replay, checks the storyboard, writes, reserves, copies, then audits", () => {
     const { within } = startSource();
     const order = [
+      'if (project.propertyStatus === "DELETED") return { kind: "PROPERTY_DELETED" };',
       "tx.generationJob.findFirst(",
       "tx.storyboardScene.findMany(",
       '"STORYBOARD_CHANGED"',

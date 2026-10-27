@@ -563,6 +563,14 @@ describe.skipIf(!HAS_DB)("a start key", () => {
     for (const key of ["", "k".repeat(201), undefined as unknown as string]) {
       await expect(starts.findStarted(ORG_A, PROJECT_HQ, key)).rejects.toThrow("start key of 1 to 200 characters");
     }
+    // As would a missing organization or project, across tenants.
+    const missing = undefined as unknown as string;
+    const pairs = [[missing, PROJECT_HQ], [ORG_A, missing], [missing, missing], ["", PROJECT_HQ]];
+    for (const [organizationId, videoProjectId] of pairs) {
+      await expect(starts.findStarted(organizationId!, videoProjectId!, first.idempotencyKey)).rejects.toThrow(
+        "one organization and one project",
+      );
+    }
   });
 
   it("does not answer another organization's replay", async () => {
@@ -586,6 +594,15 @@ describe.skipIf(!HAS_DB)("a refused start", () => {
   it("refuses another organization's project, and one that does not exist", async () => {
     await refusedWritingNothing({ ...record(PROJECT_HQ, HQ_SCENES), organizationId: ORG_B }, "PROJECT_NOT_FOUND");
     await refusedWritingNothing(record("vpr_itest_start_missing", HQ_SCENES), "PROJECT_NOT_FOUND");
+  });
+
+  it("refuses a project whose Property is deleted, even a replay (ADR-0088)", async () => {
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    expect((await starts.start(first)).kind).toBe("STARTED");
+    await prisma.property.update({ where: { id: PROP_A }, data: { status: "DELETED" } });
+    await refusedWritingNothing(record(PROJECT_HQ, HQ_SCENES), "PROPERTY_DELETED");
+    const replay = { ...record(PROJECT_HQ, HQ_SCENES), idempotencyKey: first.idempotencyKey };
+    await refusedWritingNothing(replay, "PROPERTY_DELETED");
   });
 
   it("refuses a storyboard that is not the one the service judged current", async () => {
@@ -712,6 +729,23 @@ describe.skipIf(!HAS_DB)("a start and a composition", () => {
       await composition.release();
     }
     expect((await starting.value).kind).toBe("STARTED");
+  });
+
+  it("waits for a Property deletion already saving, then refuses its project (ADR-0088)", async () => {
+    const before = await written();
+    const deletion = await holdOpen(async (tx) => {
+      await tx.$executeRaw`UPDATE "properties" SET "status" = 'DELETED' WHERE "id" = ${PROP_A}`;
+    });
+    let start: ReturnType<typeof settled<Awaited<ReturnType<typeof starts.start>>>>;
+    try {
+      start = settled(starts.start(record(PROJECT_HQ, HQ_SCENES)));
+      expect(await waitForBlocked(1)).toBe(true);
+      expect(start.done()).toBe(false);
+    } finally {
+      await deletion.release();
+    }
+    expect(await start.value).toEqual({ kind: "PROPERTY_DELETED" });
+    expect(await written()).toEqual(before);
   });
 
   it("waits for the cost-admission lock before it holds the project row", async () => {

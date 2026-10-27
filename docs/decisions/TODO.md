@@ -1611,8 +1611,10 @@ them is **built**. Each item below records the settled decision and what remains
       refused too, or stay reachable until retention removes them. *Since
       GS-4c the whole-video start answers such a project as not found
       (ADR-0088 Decision 1): its photos could not be generated from, so a
-      start would only reserve Units for a job certain to fail. Reading,
-      composing and single-scene admission are unchanged.*
+      start would only reserve Units for a job certain to fail; the start
+      commit checks it again under its lock, so a deletion saving at the same
+      moment is not missed. Reading, composing and single-scene admission are
+      unchanged.*
 - [x] **Build authenticator-app MFA and recovery codes** (ADR-0052 Decision 18,
       ADR-0065), in four pull requests approved on 2026-10-15. *MFA-1 built the
       foundation: migration 25, TOTP, the sealed secret, recovery codes, who

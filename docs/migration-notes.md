@@ -1776,7 +1776,10 @@ no new environment variable.
 **What changes at deploy.** Nothing a customer sees. The start service and the
 replay read it adds to the start repository are constructed by tests only;
 GS-10's route will construct them. The replay read uses migration 32's index on
-`("videoProjectId", "idempotencyKey")`.
+`("videoProjectId", "idempotencyKey")`. The start commit, also unused in
+production, now holds the project's Property row `FOR SHARE` with the
+project's, so once GS-10 constructs it a Property deletion waits for a start
+committing on one of its projects (one short transaction).
 
 **Rolling back.** To GS-4b's build: safe, since nothing in production calls
 what GS-4c adds.

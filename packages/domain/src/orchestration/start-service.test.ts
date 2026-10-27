@@ -6,6 +6,7 @@ import type { GenerationReservationAllocation } from "../entitlement/ports";
 import type { OrganizationSubscription } from "../entitlement/subscription";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
+import { PermissionGrantService } from "../identity/permission-grant-service";
 import type { Role } from "../identity/roles";
 import type { Property } from "../property/types";
 import type { StoryboardView } from "../storyboard/storyboard-service";
@@ -49,7 +50,7 @@ let orgId: string;
 let ids: Record<Role | "outsider", string>;
 let property: Property;
 let view: StoryboardView;
-let storyboardReads: number;
+let storyboardReads: [string, string, string][];
 let starts: RecordingStarts;
 let qualities: StartQualityOffer;
 
@@ -71,7 +72,7 @@ function project(overrides: Partial<VideoProject> = {}): VideoProject {
     includeCaptions: false,
     brandTemplateId: null,
     compositionFingerprint: "sha256:composed",
-    createdBy: ids.OWNER,
+    createdBy: ids.CREATOR,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -158,6 +159,8 @@ function allocation(record: GenerationStartRecord): GenerationReservationAllocat
 class RecordingStarts implements GenerationStartRepository {
   readonly records: GenerationStartRecord[] = [];
   readonly replayReads: [string, string, string][] = [];
+  /** How many periods were open when each start reached the commit. */
+  readonly periodsAtStart: number[] = [];
   replay: GenerationJob | null = null;
   answer: GenerationStartOutcome | null = null;
 
@@ -168,6 +171,7 @@ class RecordingStarts implements GenerationStartRepository {
 
   start(record: GenerationStartRecord): Promise<GenerationStartOutcome> {
     this.records.push(record);
+    this.periodsAtStart.push(reader.periods.length);
     return Promise.resolve(
       this.answer ?? {
         kind: "STARTED",
@@ -189,8 +193,8 @@ function service(): GenerationStartService {
         Promise.resolve(organizationId === property.organizationId && id === property.id ? property : null),
     },
     storyboard: {
-      getStoryboard: () => {
-        storyboardReads += 1;
+      getStoryboard: (actorUserId, organizationId, videoProjectId) => {
+        storyboardReads.push([actorUserId, organizationId, videoProjectId]);
         return Promise.resolve(view);
       },
     },
@@ -280,7 +284,7 @@ beforeEach(async () => {
     updatedAt: NOW,
   };
   view = { project: project(), scenes: [scene("scn_1", 1), scene("scn_2", 2)], fresh: true };
-  storyboardReads = 0;
+  storyboardReads = [];
   starts = new RecordingStarts();
   qualities = AUTHORIZED_ROUTE_QUALITY_OFFER;
   subscribe();
@@ -330,7 +334,11 @@ describe("a start", () => {
       reservation: reservation(record!),
       allocations: [allocation(record!)],
     });
-    // The period the commit reserves from was opened first.
+    // The storyboard was read for this member, organization and project, and
+    // the period the commit reserves from was open before the commit ran.
+    expect(storyboardReads).toEqual([[ids.OWNER, orgId, PROJECT]]);
+    expect(starts.replayReads).toEqual([[orgId, PROJECT, KEY]]);
+    expect(starts.periodsAtStart).toEqual([1]);
     expect(reader.periods.map((p) => [p.startsAt.toISOString(), p.endsAt.toISOString()])).toEqual([
       ["2026-04-15T00:00:00.000Z", "2026-05-15T00:00:00.000Z"],
     ]);
@@ -395,8 +403,17 @@ describe("who may start", () => {
     for (const actor of [ids.VIEWER, ids.BILLING, ids.outsider]) {
       await refusedWith("FORBIDDEN", input(), actor);
     }
-    expect(storyboardReads).toBe(0);
+    expect(storyboardReads).toEqual([]);
     expect(starts.replayReads).toEqual([]);
+  });
+
+  it("refuses a member holding only one of video.generate and unit.consume", async () => {
+    const grants = new PermissionGrantService(deps);
+    await grants.grant(ids.OWNER, orgId, ids.VIEWER, "unit.consume");
+    await grants.grant(ids.OWNER, orgId, ids.BILLING, "video.generate");
+    await refusedWith("FORBIDDEN", input(), ids.VIEWER);
+    await refusedWith("FORBIDDEN", input(), ids.BILLING);
+    expect(storyboardReads).toEqual([]);
   });
 
   it("answers a Property out of the member's reach as a project that does not exist", async () => {
@@ -423,7 +440,7 @@ describe("who may start", () => {
     for (const idempotencyKey of ["", "k".repeat(201)]) {
       await refusedWith("VALIDATION_FAILED", input({ idempotencyKey }), ids.outsider);
     }
-    expect(storyboardReads).toBe(0);
+    expect(storyboardReads).toEqual([]);
   });
 });
 
@@ -449,6 +466,8 @@ describe("a replay", () => {
 describe("the storyboard", () => {
   it("refuses a project with no composed storyboard", async () => {
     view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false };
+    expect((await refusedWith("VALIDATION_FAILED")).message).toBe("This project has no composed storyboard");
+    view = { ...view, scenes: [scene("scn_1", 1), scene("scn_2", 2)] };
     expect((await refusedWith("VALIDATION_FAILED")).message).toBe("This project has no composed storyboard");
     view = { project: project(), scenes: [], fresh: true };
     expect((await refusedWith("VALIDATION_FAILED")).message).toBe("This project has no composed storyboard");
@@ -542,12 +561,15 @@ describe("the commit's answer", () => {
     }
   });
 
-  it("answers a project the commit no longer finds as one that does not exist", async () => {
-    starts.answer = { kind: "PROJECT_NOT_FOUND" };
-    const error = await service()
-      .start(ids.OWNER, input())
-      .then(() => null, (thrown: unknown) => thrown);
-    expect((error as AppError).code).toBe("NOT_FOUND");
+  it("answers a project the commit no longer finds, or whose Property it finds deleted, as not found", async () => {
+    for (const kind of ["PROJECT_NOT_FOUND", "PROPERTY_DELETED"] as const) {
+      starts.answer = { kind };
+      const error = await service()
+        .start(ids.OWNER, input())
+        .then(() => null, (thrown: unknown) => thrown);
+      expect((error as AppError).code).toBe("NOT_FOUND");
+      expect((error as AppError).message).toBe("Video project not found");
+    }
   });
 
   it("treats a refusal of what this service settled, Mode A or the period, as a defect", async () => {
@@ -572,7 +594,9 @@ describe("dormancy", () => {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".next") continue;
         found.push(...productionSources(full));
       } else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
-        found.push({ name: full.slice(REPO_ROOT.length + 1), text: readFileSync(full, "utf8") });
+        // Comments stripped, so prose naming the constructor is not mistaken for a call.
+        const text = readFileSync(full, "utf8").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+        found.push({ name: full.slice(REPO_ROOT.length + 1), text });
       }
     }
     return found;
