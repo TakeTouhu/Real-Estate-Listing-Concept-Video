@@ -771,3 +771,19 @@ Not applicable: no entity, relationship or column changes, and no migration
 Not applicable: no entity, relationship or column changes, and no migration
 (ADR-0086). What changes is that a project's scenes and its fingerprint are
 written in one commit.
+
+## GS-4b — the start key
+
+```mermaid
+erDiagram
+    VideoProject ||--o{ GenerationJob : "starts (RESTRICT)"
+    GenerationJob {
+        string idempotencyKey "nullable; 1 to 200 characters by CHECK; unique with videoProjectId"
+    }
+```
+
+Migration 32. `generation_jobs."idempotencyKey"` is the customer's start key. It
+is unique per project, not per organization: the job has no organization column
+and reaches its organization through its project, which belongs to exactly one
+(ADR-0087 Decision 2). Jobs created any other way, and every job created before
+migration 32, carry none. No new table or relationship.

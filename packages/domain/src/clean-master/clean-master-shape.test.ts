@@ -74,7 +74,7 @@ describe("DS-4 shape", () => {
       .sort();
     // No longer the newest: DS-5b-2a added migration 31 after it.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(30);
-    expect(dirs).toHaveLength(32);
+    expect(dirs).toHaveLength(33);
   });
 
   it("creates one table, its key and its two checks, and touches no existing row", () => {

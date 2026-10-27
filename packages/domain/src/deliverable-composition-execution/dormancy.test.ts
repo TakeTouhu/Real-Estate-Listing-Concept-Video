@@ -406,9 +406,10 @@ describe("durable shape", () => {
     // Phase 6D's migration 20, Phase 6F's migration 21, Phase 6G's migration 22,
     // Phase 6H's migration 23, the near-duplicate rule removal's migration 24,
     // MFA-1's migration 25, MFA-4's migration 26, UP-2's migration 27, UP-5's
-    // migration 28, DS-3's migration 29, DS-4's migration 30 and DS-5b-2a's
-    // migration 31 follow Phase 5C's, so it is now seventeenth from last.
-    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 17);
+    // migration 28, DS-3's migration 29, DS-4's migration 30, DS-5b-2a's
+    // migration 31 and GS-4b's migration 32 follow Phase 5C's, so it is now
+    // eighteenth from last.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 18);
   });
 
   it("creates one table and rewrites no existing row", () => {

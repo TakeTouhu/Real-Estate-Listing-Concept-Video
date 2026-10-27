@@ -79,6 +79,8 @@ describe("the database package's public surface", () => {
       "getPrismaClient",
       // Added by Phase 4C-3B-2H-3B-6C.
       "createMediaFailureResolutionRepository",
+      // Added by GS-4b (ADR-0087).
+      "createGenerationStartRepository",
     ]) {
       expect(`${name}: ${name in database}`).toBe(`${name}: true`);
     }
@@ -115,5 +117,20 @@ describe("the database package's public surface", () => {
       "packages/database/src/media-recovery-repository.ts",
       "packages/database/src/orchestration-repositories.ts",
     ]);
+  });
+
+  it("keeps Transaction B's body private to the module that runs it", () => {
+    // GS-4b (ADR-0087): `reserveJobWithin` runs Transaction B inside a
+    // transaction its caller opened. Both of its callers live beside it; one
+    // outside would be reserving Units with no idea which locks it already holds.
+    expect("reserveJobWithin" in database).toBe(false);
+    const callers = productionSources()
+      .filter(({ text }) => text.includes("reserveJobWithin"))
+      .map(({ name }) => name)
+      .sort();
+    expect(callers).toEqual(["packages/database/src/orchestration-repositories.ts"]);
+    const repo = readFileSync(join(DATABASE_SRC, "orchestration-repositories.ts"), "utf8");
+    expect(repo).toContain("\nasync function reserveJobWithin(");
+    expect(repo).not.toContain("export async function reserveJobWithin(");
   });
 });

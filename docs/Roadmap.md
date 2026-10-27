@@ -243,6 +243,16 @@ first locks the project row, so a project's scenes always belong to the
 fingerprint it carries, and two compositions of one project take turns. The
 start step (GS-4b, GS-4c) is to rely on it to copy a storyboard that is current.
 
+**GS-4b — a generation starts in one commit** (ADR-0087, migration 32): under
+the project row held `FOR SHARE`, one transaction checks that the project still
+holds the storyboard the service judged current, derives the quality from the
+project's resolution, creates the job and reserves its Units through
+Transaction B, copies the storyboard's scenes with their first requests, and
+records the audit entry; or writes nothing. A start key, unique per project,
+answers a replay, even one arriving at the same moment, with the job it
+started. The job stays `RESERVED`. Nothing outside tests constructs it until
+GS-4c's service and GS-10's route.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

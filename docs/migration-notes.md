@@ -1741,3 +1741,29 @@ again.
 
 **Rolling back.** To GS-3's build: safe. That build saves the scenes and the
 project in two commits again; the rows have the same shape either way.
+
+## GS-4b — the start key
+
+**Migration 32, `00000000000032_generation_start_key`** (ADR-0087). Adds
+`generation_jobs."idempotencyKey"` (`TEXT`, nullable), the unique index
+`generation_jobs_videoProjectId_idempotencyKey_key` on `("videoProjectId",
+"idempotencyKey")`, and the check `generation_jobs_idempotency_key_check`
+(`NULL`, or 1 to 200 characters). No row is written: every existing job keeps a
+`NULL` key, and PostgreSQL treats `NULL`s as distinct, so the index accepts them
+all. No new environment variable.
+
+**What changes at deploy.** Nothing a customer sees. The start commit that
+writes the key is constructed by tests only; GS-4c's service and GS-10's route
+will call it. Building the index scans `generation_jobs` once.
+
+**Rolling back.** To GS-4a's build: safe with the column left in place, since
+that build never reads or writes it. To remove it as well:
+
+```sql
+ALTER TABLE "generation_jobs" DROP CONSTRAINT "generation_jobs_idempotency_key_check";
+DROP INDEX "generation_jobs_videoProjectId_idempotencyKey_key";
+ALTER TABLE "generation_jobs" DROP COLUMN "idempotencyKey";
+```
+
+and delete migration 32's row from `_prisma_migrations`. Any key already written
+is lost with the column, so a replay of that start would no longer find its job.

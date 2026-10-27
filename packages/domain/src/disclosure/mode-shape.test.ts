@@ -81,7 +81,7 @@ describe("DS-3 shape", () => {
     // No longer the newest: DS-4 added migration 30 after it, and DS-5b-2a
     // migration 31.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(29);
-    expect(dirs).toHaveLength(32);
+    expect(dirs).toHaveLength(33);
   });
 
   it("creates the enum and two required columns, keeps no default, and rewrites no row", () => {
@@ -162,6 +162,8 @@ describe("DS-3 shape", () => {
     expect(source.match(/disclosureMode: [^,\n}]+/g)).toEqual([
       "disclosureMode: r.disclosureMode",
       "disclosureMode: job.disclosureMode",
+      // GS-4b (ADR-0087): the start commit creates the job the same way.
+      "disclosureMode: record.disclosureMode",
     ]);
     const create = source.slice(source.indexOf("async create("), source.indexOf("async findById("));
     const refusal = create.indexOf(`if (!isDisclosureMode(job.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };`);
@@ -170,6 +172,12 @@ describe("DS-3 shape", () => {
     expect(create.indexOf("disclosureMode: job.disclosureMode,")).toBeGreaterThan(
       create.indexOf("tx.generationJob.create({"),
     );
+    const startRepo = source.slice(source.indexOf("export function createGenerationStartRepository("));
+    const startRefusal = startRepo.indexOf(
+      `if (!isDisclosureMode(record.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };`,
+    );
+    expect(startRefusal).toBeGreaterThan(-1);
+    expect(startRefusal).toBeLessThan(startRepo.indexOf("prisma.$transaction("));
   });
 
   it("copies the job's mode onto the version it plans, and replays with the version's own", () => {
