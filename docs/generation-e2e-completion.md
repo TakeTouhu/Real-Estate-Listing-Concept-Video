@@ -1995,3 +1995,174 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 GS-5a-1 waits for the product owner's yes before merge. GS-5a-2 (the test
 route's catalog entry, routes, price and FX rate, built only outside
 production) and GS-5b (the revenue reader) follow.
+
+## GS-5a-2 — the test route is built only outside production
+
+Base: `18080af` (PR #113 merge commit on `main`; post-merge CI run 702 green).
+ADR: `docs/decisions/0090-the-test-route-is-built-only-outside-production.md`
+
+The second of GS-5's three pull requests. **No migration; no route, no page.**
+Production's route policy, model catalog and price catalog are unchanged, and
+nothing outside tests builds the test route until GS-9.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `feed81d` | the test route's factory, its tests, ADR-0090 and the documentation |
+| `046bc21` | the review's answers: each part of the kit frozen, the builders watched, the comments and the rate's record corrected, two tests widened |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-5a-2 does
+
+- **One factory.** `createFakeRouteKit(env)` in `@app/video-providers` hands
+  out the test provider's model catalog, a route policy, the start's quality
+  offer built from the same policy, a price catalog and an exchange rate, the
+  kit and each part frozen.
+- **Refused in production.** It throws `CONFIGURATION_ERROR` when the given or
+  the process's `NODE_ENV` is `production`, or `VIDEO_PROVIDER` is not `fake`,
+  with no override.
+- **Two routes.** Normal at 720p and HQ at 1080p, each recorded as generated
+  at its own size, image-to-video with no audio, under the version
+  `dev-test-route.1`. The policy holds no production route, so it can never
+  authorize a paid provider's.
+- **Its own catalog entry**, the default and only entry, selectable, 5 to 15
+  seconds like production's default model. The fake provider makes no clip
+  yet; GS-6 must make each at the route's size (`docs/decisions/TODO.md`).
+- **A nominal price and a named rate.** One cent a second per size, added to a
+  copy of production's catalog, and ¥150 per dollar under an id and source
+  that name it as a development rate. The fake provider is never paid.
+- **Nobody builds it yet.** A test lists every file outside tests that names
+  the factory or the two builders it uses, which have no production check of
+  their own.
+
+```mermaid
+flowchart LR
+    E{NODE_ENV production, given or ambient?<br/>VIDEO_PROVIDER not fake?} -- yes --> X[CONFIGURATION_ERROR]
+    E -- no --> K[createFakeRouteKit]
+    K --> M[models: the test entry alone]
+    K --> P[routePolicy: Normal 720p, HQ 1080p]
+    P --> O[qualityOffer, from the same policy]
+    K --> C[pricing: production's + two test contracts]
+    K --> F[fx: fixed development rate]
+    P -. GS-9 / GS-10 .-> G[Paid-submission gate]
+    O -. GS-10 .-> S[Start service]
+    C -. GS-9 .-> R[Authorization repository]
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `046bc21` |
+| `pnpm test` | 226 files, 6,242 tests passed on `046bc21` |
+| `pnpm test:db` | 62 files, 1,666 tests passed on `feed81d`; the one suite changed since, `paid-submission-authorization.db.test.ts`, 71 passed on `046bc21` |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded on `046bc21` |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/video-providers/src/fake/route-kit.test.ts` (new, 16): refused
+  for a given and an ambient production and for another provider; the
+  catalog; the policy serving each quality at its size only, and no production
+  route; both prices beside production's; the rate usable; a snapshot for
+  every length; production's tables unchanged; the kit and each part frozen;
+  who names the factory and the two builders.
+- `tests/routing-catalog-parity.test.ts` (3 more): each route goes to a
+  selectable entry at the size the entry generates, is priced for exactly the
+  entry's lengths, and the entry's lengths are production's default model's.
+- `tests/integration/paid-submission-authorization.db.test.ts` (4 more): an HQ
+  attempt on the test route is authorized with the kit and recorded under its
+  version; a Normal one on a 720p project too; production's catalog refuses
+  one, and production's policy refuses HQ for its quality and Normal for its
+  provider, leaving the attempt queued.
+
+### Mutation testing
+
+The same harness as GS-5a-1: each mutant applied, the suites run (the kit's
+unit tests and the parity test), the file restored and checked by SHA-256, and
+the repository's manifest identical before and after the pass. Run on
+`046bc21`.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| K1 / K2 / K3 | a given production, an ambient production, another provider accepted | killed |
+| K4 / K5 / K6 | HQ routed at 720p; a route serving both sizes; another generation mode | killed |
+| K7 | the start's offer built apart from the policy (Normal only) | killed |
+| K8 / K9 / K10 | one price missing; billed for other lengths; under another version | killed |
+| K11 / K12 / K13 | the entry, the kit, the rate not frozen | killed |
+| K14 | the rate unusable | killed |
+| K15 / K19 / K20 | the catalog finding any key; listing nothing; the entry not selectable | killed |
+| K16 / K21 | 1080p generated at 720p; claimed as upscaled | killed |
+| K17 / K18 | the entry's lengths changed; its provider changed | killed |
+| K22 / K26 | a production file naming the factory; naming `defineRoutePolicy` | killed |
+| K23 / K24 / K25 | the catalog, the offer, the price catalog not frozen | killed |
+| K27 | a file outside `src`, a URL earlier on its line, naming `extendProviderPricingCatalog` | killed |
+
+Result: 27 mutants, all killed (K7's anchor was corrected for the review's
+change and run again).
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`feed81d` against `18080af`, reading only git objects. It confirmed that
+nothing in the kit can change production's tables; that the refusal checks
+both the given and the ambient `NODE_ENV` and the provider, with no override;
+that an attempt admitted from the kit's catalog passes admission's pricing
+binding, the gate's route check and execution preflight for both qualities,
+with exactly one current contract per route; that the fixture resets the
+project's resolution before every test; and that the documents add no
+business rule. Verdict: nothing blocking. Its four should-fix findings and
+four nits, answered in `046bc21`:
+
+| Finding | Answer |
+| --- | --- |
+| ADR-0090 and the migration notes said the paid-submission repository records the rate, in `fx_snapshots` | Corrected: attempt admission records it (`bindFxSnapshot`) in `fx_rate_snapshots`; the repository loads and validates it |
+| The kit's comments said the fake provider makes clips at each size, which it does not yet | Reworded; making the clips at the route's sizes is recorded for GS-6 in `docs/decisions/TODO.md` and ADR-0090 Decision 4 |
+| The kit was frozen one level deep | The catalog, the offer and the price catalog are each frozen, and the test checks all three |
+| The caller test watched only the factory, while `defineRoutePolicy` and `extendProviderPricingCatalog` have no production check | The test lists their callers too, their definitions and the kit only, over every app and package (not only `src`), `infra` and `prisma` |
+| Nit: the error type differs from the storage guards; an unset `NODE_ENV` reads as development | Kept: `CONFIGURATION_ERROR` is what this package's provider factory throws, and the provider package does not depend on storage. The unset `NODE_ENV` is the storage guards' same assumption; ADR-0090 Decision 2 says a production deployment must set it |
+| Nit: a stale comment called a non-production policy production's plus the test route | Corrected: the test route's alone |
+| Nit: "no production route" checked only the first; the database test refused by policy at HQ only | Every production route and target is checked; a Normal attempt is refused by production's policy for its provider |
+| Nit: the scan missed files outside `src`, and a URL in a string hid the rest of its line | Both fixed, and K27 proves the second |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the test route kit row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0090 Decisions 1 to 6 |
+| OpenAPI / API change summary | `docs/api-changes-gs-5a-2.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-5a-2*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (the
+GS-5 split) and `docs/decisions/TODO.md` (the clips GS-6 must make).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the factory refuses production and nothing outside tests calls it.
+No scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Revenue is still unknown** to the guard, which therefore still pauses
+  every paid submission, the test route's included, until GS-5b's reader.
+- **The fake provider makes no clip** at the sizes its entry records (GS-6).
+- **Nothing builds the kit** until the pipeline command (GS-9) and the start
+  route (GS-10).
+
+### Remaining work
+
+GS-5a-2 waits for the product owner's yes before merge. GS-5b (the billing
+cycle's revenue reader) follows.
