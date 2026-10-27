@@ -367,6 +367,21 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       });
       expect(outcome.kind).toBe("AUTHORIZED");
     });
+
+    it("are the catalog given for the cycle's siblings too", async () => {
+      // The first attempt, once armed, is an in-flight sibling of the second.
+      // Its snapshot verifies only against the extended catalog; checked against
+      // production's, the cycle's cost would be unknown and the second refused.
+      const first = await seedAuthorizableChain(prisma, "sibfirst", { contract: added });
+      const second = await seedAuthorizableChain(prisma, "sibsecond", { contract: added });
+      const extended = extendProviderPricingCatalog([added]);
+      const gate = service(prisma, yen(49_800), createFixedAuthorizationClock(AT), extended);
+      const armed = await gate.authorize({ organizationId: ORG_A, attemptId: first.attempt.id, context: ctx() });
+      expect(armed.kind).toBe("AUTHORIZED");
+
+      const outcome = await gate.authorize({ organizationId: ORG_A, attemptId: second.attempt.id, context: ctx() });
+      expect(outcome.kind).toBe("AUTHORIZED");
+    });
   });
 
   describe("post-delivery user regeneration", () => {
