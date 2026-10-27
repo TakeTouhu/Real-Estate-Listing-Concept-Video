@@ -147,21 +147,38 @@ export function createPrismaStoryboardRepositories(
         return rows.map(toScene);
       },
 
-      async replaceForProject(organizationId, videoProjectId, scenes) {
-        const project = await prisma.videoProject.findFirst({
-          where: { id: videoProjectId, organizationId },
-        });
-        if (!project) throw new Error(`video project ${videoProjectId} not found`);
+      /**
+       * The project row is locked first, tenant-scoped, so two compositions of
+       * one project take turns rather than interleave their deletes and
+       * inserts, and a reader holding the row `FOR SHARE` (the start step,
+       * ADR-0086) sees one composition whole. `FOR NO KEY UPDATE`, the lock the
+       * project's own `UPDATE` takes anyway: it leaves the foreign-key checks
+       * of rows that reference the project unblocked.
+       */
+      async saveComposition(organizationId, videoProjectId, composition) {
         return prisma.$transaction(async (tx) => {
+          const locked = await tx.$queryRaw<{ id: string }[]>`
+            SELECT "id" FROM "video_projects"
+             WHERE "id" = ${videoProjectId} AND "organizationId" = ${organizationId}
+               FOR NO KEY UPDATE`;
+          if (locked.length === 0) throw new Error(`video project ${videoProjectId} not found`);
+
           await tx.storyboardScene.deleteMany({ where: { videoProjectId } });
-          for (const scene of scenes) {
+          for (const scene of composition.scenes) {
             await tx.storyboardScene.create({ data: scene });
           }
+          const project = await tx.videoProject.update({
+            where: { id: videoProjectId },
+            data: {
+              status: "STORYBOARD_READY",
+              compositionFingerprint: composition.compositionFingerprint,
+            },
+          });
           const rows = await tx.storyboardScene.findMany({
             where: { videoProjectId },
             orderBy: { position: "asc" },
           });
-          return rows.map(toScene);
+          return { project: toProject(project), scenes: rows.map(toScene) };
         });
       },
     },

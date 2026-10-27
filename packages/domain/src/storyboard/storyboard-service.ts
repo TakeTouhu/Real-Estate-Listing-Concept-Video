@@ -17,7 +17,7 @@ import type { PromptModerator } from "./moderation";
 import { orderScenes } from "./ordering";
 import { compileScenePrompt, type CompiledPrompt } from "./prompt";
 import { assertApprovedCameraMotion } from "./camera-motion";
-import type { StoryboardRepositories } from "./ports";
+import type { SavedComposition, StoryboardRepositories } from "./ports";
 import type { StoryboardScene, VideoProject } from "./types";
 
 /** Audit vocabulary for this module. One action, one event per composition. */
@@ -34,10 +34,7 @@ export interface StoryboardServiceDeps {
   readonly ids: { generate(prefix: string): string };
 }
 
-export interface ComposedStoryboard {
-  readonly project: VideoProject;
-  readonly scenes: readonly StoryboardScene[];
-}
+export type ComposedStoryboard = SavedComposition;
 
 /** Why a storyboard is or is not current. Internal to the freshness check. */
 type FreshnessState = "FRESH" | "STALE" | "NEVER_COMPOSED";
@@ -158,11 +155,12 @@ export class StoryboardService {
   /**
    * Compose a storyboard from the property's approved analyses.
    *
-   * Writes are ordered rather than wrapped in a transaction: scenes first, then
-   * the project. A failure between them leaves a project that is *not* marked
-   * ready, which the next composition overwrites wholesale — whereas marking it
-   * ready before the scenes existed would advertise a storyboard that is not
-   * there. No transaction abstraction buys anything the ordering does not.
+   * The scenes, the `STORYBOARD_READY` status and the fingerprint are saved in
+   * one commit (ADR-0086). Written apart, as they once were, two compositions
+   * racing an analysis change could leave one's scenes under the other's
+   * fingerprint: a storyboard that reads as current while its scenes come from
+   * photos the fingerprint does not describe, which a generation started from
+   * it would then render.
    *
    * `bounds` is supplied by the caller: this milestone defines no default and no
    * provider limit.
@@ -184,10 +182,8 @@ export class StoryboardService {
     const prompts = await this.compilePrompts(project, ordered, durations);
     const fingerprint = computeCompositionFingerprint(eligible);
 
-    const scenes = await this.deps.storyboards.scenes.replaceForProject(
-      organizationId,
-      videoProjectId,
-      ordered.map((input, index) => ({
+    const saved = await this.deps.storyboards.scenes.saveComposition(organizationId, videoProjectId, {
+      scenes: ordered.map((input, index) => ({
         id: this.deps.ids.generate("scn"),
         videoProjectId,
         propertyId: project.propertyId,
@@ -202,10 +198,6 @@ export class StoryboardService {
         compiledPrompt: JSON.stringify(prompts[index]),
         sourceAnalysisRevision: input.analysisRevision,
       })),
-    );
-
-    const updated = await this.deps.storyboards.projects.update(organizationId, videoProjectId, {
-      status: "STORYBOARD_READY",
       compositionFingerprint: fingerprint,
     });
 
@@ -215,10 +207,10 @@ export class StoryboardService {
       action: StoryboardAuditAction.StoryboardComposed,
       resourceType: "video_project",
       resourceId: videoProjectId,
-      metadata: { sceneCount: scenes.length, compositionFingerprint: fingerprint },
+      metadata: { sceneCount: saved.scenes.length, compositionFingerprint: fingerprint },
     });
 
-    return { project: updated, scenes };
+    return saved;
   }
 
   /**

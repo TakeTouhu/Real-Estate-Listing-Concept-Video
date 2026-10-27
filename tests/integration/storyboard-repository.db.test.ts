@@ -23,6 +23,8 @@ const ASSET_B1 = "ast_itest_sb_b1";
 const PROJECT_A = "vpr_itest_sb_a";
 
 const prisma = new PrismaClient();
+/** A second connection, to hold a lock while the code under test runs. */
+const holder = new PrismaClient();
 const repos = createPrismaStoryboardRepositories(prisma);
 
 function project(id: string, organizationId: string, propertyId: string) {
@@ -66,6 +68,14 @@ function scene(
     sourceAnalysisRevision: 1,
     ...overrides,
   };
+}
+
+/** One composition of `scenes`, from inputs whose fingerprint is `fingerprint`. */
+function composed(
+  scenes: ReturnType<typeof scene>[],
+  fingerprint = "sha256:first",
+): { scenes: ReturnType<typeof scene>[]; compositionFingerprint: string } {
+  return { scenes, compositionFingerprint: fingerprint };
 }
 
 async function seedProperty(organizationId: string, propertyId: string, assetIds: string[]) {
@@ -116,7 +126,44 @@ afterAll(async () => {
   if (!HAS_DB) return;
   await cleanup();
   await prisma.$disconnect();
+  await holder.$disconnect();
 });
+
+/** Resolves once, when `promise` settles; never rejects. */
+function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<T> } {
+  let finished = false;
+  const value = promise.finally(() => {
+    finished = true;
+  });
+  void value.catch(() => undefined);
+  return { done: () => finished, value };
+}
+
+/** Give a blocked call a real chance to finish, so "still blocked" means it. */
+async function breathe(times = 20): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/**
+ * Run `body` in a transaction on the second connection and keep it open until
+ * the returned `release` is called.
+ */
+function holdOpen(body: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<void>) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const done = holder.$transaction(
+    async (tx) => {
+      await body(tx);
+      await held;
+    },
+    { timeout: 20_000 },
+  );
+  return { release, done };
+}
 
 describe.skipIf(!HAS_DB)("video project persistence", () => {
   it("round-trips a project including its nullable settings and fingerprint", async () => {
@@ -172,39 +219,50 @@ describe.skipIf(!HAS_DB)("storyboard scene persistence", () => {
     await repos.projects.create(project(PROJECT_A, ORG_A, PROP_A));
   });
 
-  it("replaces a project's scenes wholesale and returns them in position order", async () => {
-    await repos.scenes.replaceForProject(ORG_A, PROJECT_A, [
-      scene("scn_1", 2, ASSET_A2),
-      scene("scn_2", 1, ASSET_A1),
-    ]);
+  it("replaces a project's scenes wholesale, returns them in position order, and marks the project", async () => {
+    const saved = await repos.scenes.saveComposition(
+      ORG_A,
+      PROJECT_A,
+      composed([scene("scn_1", 2, ASSET_A2), scene("scn_2", 1, ASSET_A1)]),
+    );
+    // What the commit left, as stored: in position order, with the database's
+    // timestamps, not the input echoed back.
+    expect(saved.scenes.map((s) => s.id)).toEqual(["scn_2", "scn_1"]);
     const first = await repos.scenes.listByProject(ORG_A, PROJECT_A);
     expect(first.map((s) => s.position)).toEqual([1, 2]);
+    expect(saved.scenes.map((s) => s.createdAt.getTime())).toEqual(first.map((s) => s.createdAt.getTime()));
 
     // Recomposition reuses position 1: the old rows must be gone, not merged.
-    const replaced = await repos.scenes.replaceForProject(ORG_A, PROJECT_A, [
-      scene("scn_3", 1, ASSET_A1, { sourceAnalysisRevision: 4 }),
-    ]);
-    expect(replaced.map((s) => s.id)).toEqual(["scn_3"]);
-    expect(replaced[0]!.sourceAnalysisRevision).toBe(4);
+    const replaced = await repos.scenes.saveComposition(
+      ORG_A,
+      PROJECT_A,
+      composed([scene("scn_3", 1, ASSET_A1, { sourceAnalysisRevision: 4 })], "sha256:second"),
+    );
+    expect(replaced.scenes.map((s) => s.id)).toEqual(["scn_3"]);
+    expect(replaced.scenes[0]!.sourceAnalysisRevision).toBe(4);
+    expect(replaced.project.status).toBe("STORYBOARD_READY");
+    expect(replaced.project.compositionFingerprint).toBe("sha256:second");
   });
 
   it("rejects two scenes at the same position in one project", async () => {
     await expect(
-      repos.scenes.replaceForProject(ORG_A, PROJECT_A, [
-        scene("scn_1", 1, ASSET_A1),
-        scene("scn_2", 1, ASSET_A2),
-      ]),
+      repos.scenes.saveComposition(
+        ORG_A,
+        PROJECT_A,
+        composed([scene("scn_1", 1, ASSET_A1), scene("scn_2", 1, ASSET_A2)]),
+      ),
     ).rejects.toThrow();
     expect(await repos.scenes.listByProject(ORG_A, PROJECT_A)).toEqual([]);
   });
 
   it("resolves tenant scope through the project, not a column on the scene", async () => {
-    await repos.scenes.replaceForProject(ORG_A, PROJECT_A, [scene("scn_1", 1, ASSET_A1)]);
+    await repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_1", 1, ASSET_A1)]));
     expect(await repos.scenes.listByProject(ORG_B, PROJECT_A)).toEqual([]);
     await expect(
-      repos.scenes.replaceForProject(ORG_B, PROJECT_A, [scene("scn_x", 1, ASSET_A1)]),
+      repos.scenes.saveComposition(ORG_B, PROJECT_A, composed([scene("scn_x", 1, ASSET_A1)], "sha256:x")),
     ).rejects.toThrow();
     expect(await repos.scenes.listByProject(ORG_A, PROJECT_A)).toHaveLength(1);
+    expect((await repos.projects.findById(ORG_A, PROJECT_A))!.compositionFingerprint).toBe("sha256:first");
   });
 
   it("cannot store a scene whose asset belongs to another property, and so another tenant", async () => {
@@ -219,14 +277,135 @@ describe.skipIf(!HAS_DB)("storyboard scene persistence", () => {
   });
 
   it("deletes scenes when their project is deleted", async () => {
-    await repos.scenes.replaceForProject(ORG_A, PROJECT_A, [scene("scn_1", 1, ASSET_A1)]);
+    await repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_1", 1, ASSET_A1)]));
     await prisma.videoProject.delete({ where: { id: PROJECT_A } });
     expect(await prisma.storyboardScene.count({ where: { videoProjectId: PROJECT_A } })).toBe(0);
   });
 
   it("deletes scenes when their source asset is deleted", async () => {
-    await repos.scenes.replaceForProject(ORG_A, PROJECT_A, [scene("scn_1", 1, ASSET_A1)]);
+    await repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_1", 1, ASSET_A1)]));
     await prisma.mediaAsset.delete({ where: { id: ASSET_A1 } });
     expect(await prisma.storyboardScene.count({ where: { videoProjectId: PROJECT_A } })).toBe(0);
+  });
+});
+
+/**
+ * ADR-0086: a composition's scenes, status and fingerprint are one commit, and
+ * the project row is the lock that orders compositions and the start step.
+ */
+describe.skipIf(!HAS_DB)("one composition, one commit", () => {
+  beforeEach(async () => {
+    await repos.projects.create(project(PROJECT_A, ORG_A, PROP_A));
+    await repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_1", 1, ASSET_A1)]));
+  });
+
+  it("leaves the previous composition whole when the next cannot be saved", async () => {
+    await expect(
+      repos.scenes.saveComposition(
+        ORG_A,
+        PROJECT_A,
+        composed([scene("scn_2", 1, ASSET_A1), scene("scn_3", 1, ASSET_A2)], "sha256:second"),
+      ),
+    ).rejects.toThrow();
+
+    expect((await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id)).toEqual(["scn_1"]);
+    const unchanged = await repos.projects.findById(ORG_A, PROJECT_A);
+    expect(unchanged!.status).toBe("STORYBOARD_READY");
+    expect(unchanged!.compositionFingerprint).toBe("sha256:first");
+  });
+
+  it("waits for a composition already saving, then replaces it whole", async () => {
+    // The holder is a composition half-way through: the project locked, its
+    // own scene inserted at position 1. Without the lock, the second would
+    // insert its own position 1 beside it and fail on the unique index once the
+    // first commits.
+    const first = holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR NO KEY UPDATE`;
+      await tx.storyboardScene.deleteMany({ where: { videoProjectId: PROJECT_A } });
+      await tx.storyboardScene.create({ data: scene("scn_held", 1, ASSET_A1) });
+      await tx.videoProject.update({ where: { id: PROJECT_A }, data: { compositionFingerprint: "sha256:held" } });
+    });
+    await breathe(4);
+    const second = settled(
+      repos.scenes.saveComposition(
+        ORG_A,
+        PROJECT_A,
+        composed([scene("scn_4", 1, ASSET_A2), scene("scn_5", 2, ASSET_A1)], "sha256:second"),
+      ),
+    );
+    await breathe();
+    expect(second.done()).toBe(false);
+
+    first.release();
+    await first.done;
+    const saved = await second.value;
+    expect(saved.scenes.map((s) => s.id)).toEqual(["scn_4", "scn_5"]);
+    expect(saved.project.compositionFingerprint).toBe("sha256:second");
+    expect((await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id)).toEqual(["scn_4", "scn_5"]);
+  });
+
+  it("lets two compositions of one project both save, one after the other", async () => {
+    // A reader holds the project, so both start before either can commit.
+    // Sharing the row, or not locking it, both would write their scenes at
+    // once: one fails on the position index or deadlocks with the other.
+    const reader = holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR SHARE`;
+    });
+    await breathe(4);
+    const saves = [
+      composed([scene("scn_b1", 1, ASSET_A1), scene("scn_b2", 2, ASSET_A2)], "sha256:b"),
+      composed([scene("scn_c1", 1, ASSET_A2), scene("scn_c2", 2, ASSET_A1)], "sha256:c"),
+    ].map((composition) => repos.scenes.saveComposition(ORG_A, PROJECT_A, composition));
+    await breathe(4);
+    reader.release();
+    await reader.done;
+
+    const outcomes = await Promise.allSettled(saves);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+    // Whichever committed last, the project carries its scenes and its
+    // fingerprint together.
+    const final = await repos.projects.findById(ORG_A, PROJECT_A);
+    const ids = (await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id);
+    expect(
+      final!.compositionFingerprint === "sha256:b" ? ["scn_b1", "scn_b2"] : ["scn_c1", "scn_c2"],
+    ).toEqual(ids);
+    expect(["sha256:b", "sha256:c"]).toContain(final!.compositionFingerprint);
+  });
+
+  it("waits for a reader holding the project FOR SHARE, as the start step does", async () => {
+    const reader = holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR SHARE`;
+    });
+    await breathe(4);
+    const saving = settled(
+      repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_6", 1, ASSET_A2)], "sha256:second")),
+    );
+    await breathe();
+    expect(saving.done()).toBe(false);
+    // Until the reader is done it still sees the composition it locked.
+    expect((await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id)).toEqual(["scn_1"]);
+
+    reader.release();
+    await reader.done;
+    expect((await saving.value).project.compositionFingerprint).toBe("sha256:second");
+  });
+
+  it("does not wait for a row that only references the project", async () => {
+    // A foreign-key check holds the project FOR KEY SHARE, as a job or an
+    // attempt being inserted against it does. The composition's lock must not
+    // conflict with it.
+    const referencing = holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR KEY SHARE`;
+    });
+    await breathe(4);
+    const saving = settled(
+      repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_7", 1, ASSET_A2)], "sha256:second")),
+    );
+    await breathe();
+    const finishedWhileHeld = saving.done();
+    referencing.release();
+    await referencing.done;
+    expect(finishedWhileHeld).toBe(true);
+    expect((await saving.value).scenes.map((s) => s.id)).toEqual(["scn_7"]);
   });
 });

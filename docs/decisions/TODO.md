@@ -1375,13 +1375,15 @@ them is **built**. Each item below records the settled decision and what remains
       Before any executor runs orchestrated attempts, its discovery must
       exclude them or read the orchestration state.
 - [ ] **Start each scene in the commit that admits its first attempt
-      (GS-4).** Admission (`admitAttemptWithin`) does not move the scene, and
+      (GS-7).** Admission (`admitAttemptWithin`) does not move the scene, and
       Transaction K settles an initial request only under a `GENERATING`
       scene, refusing one under a `PENDING` scene as `SHAPE_CONFLICT`
-      (ADR-0083 Decision 3). A start step that admitted attempts without
+      (ADR-0083 Decision 3). A step that admitted attempts without
       starting their scenes would leave such a failure unsettled and its
       Unit held. Transaction L closes that shape either way (ADR-0084
-      Decision 2).
+      Decision 2). *GS-4's start step admits no attempt: it leaves the job
+      `RESERVED` until the concurrent-job limit lets it run (ADR-0052
+      Decision 7), so the first admissions belong to GS-7's launch step.*
 - [ ] **Decide what closes a cancelled job's open scenes.** Transaction L
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing

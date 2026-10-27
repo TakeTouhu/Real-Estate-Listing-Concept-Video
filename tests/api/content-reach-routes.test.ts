@@ -137,10 +137,14 @@ beforeEach(async () => {
     },
     scenes: {
       listByProject: (_org, id) => Promise.resolve(sceneRows.get(id) ?? []),
-      replaceForProject: (_org, id, rows) => {
+      saveComposition: (org, id, { scenes: rows, compositionFingerprint }) => {
+        const row = projectRows.get(id);
+        if (!row || row.organizationId !== org) throw new Error("project not found");
         const stored = rows.map((r) => ({ ...r, createdAt: deps.clock.now(), updatedAt: deps.clock.now() }));
         sceneRows.set(id, stored);
-        return Promise.resolve(stored);
+        const project = { ...row, status: "STORYBOARD_READY" as const, compositionFingerprint };
+        projectRows.set(id, project);
+        return Promise.resolve({ project, scenes: stored });
       },
     },
   };

@@ -84,6 +84,8 @@ interface Harness {
   readonly audits: { action: string; metadata?: Record<string, unknown> }[];
   readonly stored: { scenes: StoryboardScene[]; project: VideoProject | null };
   readonly moderateCalls: string[];
+  /** How many times the project was changed outside a composition. */
+  readonly projectUpdates: () => number;
 }
 
 function harness(options: {
@@ -99,6 +101,7 @@ function harness(options: {
   const analyses = options.analyses ?? [analysis("ast_a"), analysis("ast_b"), analysis("ast_c")];
   const audits: Harness["audits"] = [];
   const moderateCalls: string[] = [];
+  let projectUpdates = 0;
   const stored: Harness["stored"] = {
     scenes: [],
     project: options.project === undefined ? project() : options.project,
@@ -169,20 +172,30 @@ function harness(options: {
               : [],
           ),
         update: (_org: string, _id: string, changes: Partial<VideoProject>) => {
+          projectUpdates += 1;
           stored.project = { ...stored.project!, ...changes };
           return Promise.resolve(stored.project);
         },
       },
       scenes: {
         listByProject: (_org: string, _id: string) => Promise.resolve(stored.scenes),
-        replaceForProject: (
+        saveComposition: (
           _org: string,
           _id: string,
-          scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[],
+          composition: {
+            scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[];
+            compositionFingerprint: string;
+          },
         ) => {
+          // One commit: a failure writes neither the scenes nor the project.
           if (options.failSceneWrite) return Promise.reject(new Error("scene write failed"));
-          stored.scenes = scenes.map((s) => ({ ...s, createdAt: NOW, updatedAt: NOW }));
-          return Promise.resolve(stored.scenes);
+          stored.scenes = composition.scenes.map((s) => ({ ...s, createdAt: NOW, updatedAt: NOW }));
+          stored.project = {
+            ...stored.project!,
+            status: "STORYBOARD_READY",
+            compositionFingerprint: composition.compositionFingerprint,
+          };
+          return Promise.resolve({ project: stored.project, scenes: stored.scenes });
         },
       },
     } as unknown as StoryboardServiceDeps["storyboards"],
@@ -190,7 +203,13 @@ function harness(options: {
     ids: { generate: (prefix: string) => `${prefix}_${stored.scenes.length}_${Math.random()}` },
   };
 
-  return { service: new StoryboardService(deps), audits, stored, moderateCalls };
+  return {
+    service: new StoryboardService(deps),
+    audits,
+    stored,
+    moderateCalls,
+    projectUpdates: () => projectUpdates,
+  };
 }
 
 describe("createProject", () => {
@@ -481,6 +500,25 @@ describe("persistence, ordering of writes, and audit", () => {
       computeCompositionFingerprint(selectEligibleAnalyses(analyses)),
     );
     expect(stored.project!.status).toBe("STORYBOARD_READY");
+  });
+
+  it("saves the scenes and the fingerprint in one write, and no other", async () => {
+    // ADR-0086: written apart, two compositions racing could leave one's
+    // scenes under the other's fingerprint.
+    const h = harness();
+    const composed = await h.service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+    expect(h.projectUpdates()).toBe(0);
+    expect(composed.project.compositionFingerprint).toBe(h.stored.project!.compositionFingerprint);
+    expect(composed.scenes.map((s) => s.id)).toEqual(h.stored.scenes.map((s) => s.id));
+  });
+
+  it("replaces an earlier composition's fingerprint with this one's", async () => {
+    const analyses = [analysis("ast_a"), analysis("ast_b"), analysis("ast_c")];
+    const h = harness({ analyses, project: project({ compositionFingerprint: "sha256:earlier" }) });
+    const composed = await h.service.compose(ACTOR, ORG, PROJECT, BOUNDS);
+    const current = computeCompositionFingerprint(selectEligibleAnalyses(analyses));
+    expect(h.stored.project!.compositionFingerprint).toBe(current);
+    expect(composed.project.compositionFingerprint).toBe(current);
   });
 
   it("records exactly one audit event on success", async () => {

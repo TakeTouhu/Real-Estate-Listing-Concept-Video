@@ -99,7 +99,7 @@ export interface GenerationRequestFacts {
  * understood **without dereferencing the storyboard scene it came from**.
  *
  * That is not defensive over-modelling. `StoryboardService.compose` replaces a
- * project's scenes wholesale — `replaceForProject` deletes every row and
+ * project's scenes wholesale — `saveComposition` deletes every row and
  * re-inserts with freshly generated ids — so an ordinary recomposition destroys
  * the scene a generation attempt was made from. An attempt may represent a paid
  * external call, so it has to outlive that. Hence no foreign key to

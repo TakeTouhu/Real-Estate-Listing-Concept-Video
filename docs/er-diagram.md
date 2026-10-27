@@ -765,3 +765,9 @@ and `GenerationScene.state`, `stateVersion` and `updatedAt`, in one commit.
 
 Not applicable: no entity, relationship or column changes, and no migration
 (ADR-0085). What changes is where development and CI keep stored objects.
+
+## GS-4a — a storyboard is saved in one commit
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0086). What changes is that a project's scenes and its fingerprint are
+written in one commit.

@@ -68,7 +68,8 @@ GS-2b ends the failed job's other scenes and cancels their queued attempts,
 for this settlement and Transaction H alike. Also left open: an attempt that
 never ends (a provider that never answers, an output copy that keeps failing),
 an attempt that fails preflight (the preflight writes the legacy `state` column,
-not the orchestration state), a job still `RESERVED` (GS-4's start step leaves none), and the internal
+not the orchestration state), a job still `RESERVED` (the start step leaves it so until GS-7's launch
+step admits its first attempts; see GS-4 below), and the internal
 service-recovery budget, which may later retry a failed attempt before it
 settles. All are recorded in `docs/decisions/TODO.md`.
 
@@ -85,8 +86,8 @@ attempt ends. No migration.
 Left open: a cancelled job's open scenes (nothing cancels a job today), an
 attempt that never ends, which keeps its scene open, which executor runs
 orchestrated attempts and that the legacy discovery stops offering them (GS-7),
-and the start step starting each scene with its first admission, which
-Transaction K assumes (GS-4). Recorded in ADR-0084 and `docs/decisions/TODO.md`.
+and starting each scene with its first admission, which
+Transaction K assumes (GS-7's launch step; see GS-4 below). Recorded in ADR-0084 and `docs/decisions/TODO.md`.
 
 ## GS-3 — a shared folder holds development and CI objects
 
@@ -101,3 +102,41 @@ Left open: the worker opening it (GS-9); serving the customer's video from it,
 since the download route reads a whole object into memory and has no content
 type for a deliverable's key (GS-12); and removing what a killed process leaves
 in it. Recorded in ADR-0085 and `docs/decisions/TODO.md`.
+
+## GS-4 — the whole-video start step
+
+The start gap. Nothing starts a whole video. On `b9513aa` the pieces exist as
+separate repository methods, each its own commit: create the job, move it to
+`RESERVING`, reserve its Units, create each scene, create each scene's first
+request. The plan needs them as one commit, so that a failure leaves nothing
+behind and a short balance writes nothing. Four more gaps sit around them:
+
+| Gap | On the base |
+| --- | --- |
+| Pressing start twice must start one job | No job carries an idempotency key, though `docs/DataModel.md` lists one and `docs/API.md` requires `Idempotency-Key` for generation commands |
+| The storyboard must be current when its scenes are copied | Freshness is derived (ADR-0012), but `compose` saved the scenes and the fingerprint in two commits, so two racing compositions could leave one's scenes under the other's fingerprint, reading as current |
+| Quality comes from the project's resolution (plan default 1) | The job takes a caller-supplied quality tier |
+| The start step's checks: permissions, reach, Mode A, the Unit period | Built as separate rules (`video.generate`, `unit.consume`, ADR-0064 reach, ADR-0073, period opening) with no caller that combines them |
+
+Split into three pull requests:
+
+- **GS-4a** (ADR-0086, no migration): a storyboard's scenes, status and
+  fingerprint are saved in one commit, after locking the project row.
+- **GS-4b**: the start commit in the database. Under the project row, held
+  `FOR SHARE`, it confirms the storyboard the service judged current is still
+  the project's, then creates the job, reserves its Units, copies its scenes and
+  their first requests, and records the audit entry; or it writes nothing. A
+  start key makes a replay answer with the job it started. Likely migration 32,
+  for the key.
+- **GS-4c**: the start service in the domain: `video.generate` and
+  `unit.consume`, reach, the start key, the storyboard's freshness, quality
+  from the project's resolution, Mode A, opening the Unit period first, and the
+  outcomes the start screen (GS-10) will show.
+
+The start step leaves the job `RESERVED`, with its scenes and requests
+`PENDING`. It admits no attempt: an organization runs at most 1, 3 or 5 jobs at
+once and extra jobs wait with their Units reserved (ADR-0052 Decision 7), so
+the first attempts are admitted when the job may run, by GS-7's launch step,
+which also starts each scene in that commit, the shape Transactions K and L
+expect (ADR-0083 Decision 3). An attempt also needs a route and a price, which
+GS-5 supplies.

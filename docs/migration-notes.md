@@ -1725,3 +1725,19 @@ keeps objects in memory again; the folder stays on disk until deleted.
 
 **What changes at deploy.** Nothing in production: the variable is refused
 there, and unset it changes nothing.
+
+## GS-4a — a storyboard is saved in one commit
+
+**No migration** (ADR-0086). No schema, enum, constraint or row changes, and
+no new environment variable.
+
+**What changes at deploy.** Composing a storyboard now saves its scenes, its
+`STORYBOARD_READY` status and its fingerprint in one transaction that first
+locks the project row (`FOR NO KEY UPDATE`). Two compositions of one project
+take turns instead of failing on the scene position index. Storyboards already
+saved are not rewritten; one whose scenes and fingerprint came from different
+compositions, if any exists, keeps reading as it does until it is composed
+again.
+
+**Rolling back.** To GS-3's build: safe. That build saves the scenes and the
+project in two commits again; the rows have the same shape either way.
