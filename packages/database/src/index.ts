@@ -26,7 +26,10 @@ export {
   createSceneGenerationAttemptRepository,
   createSceneGenerationRequestRepository,
 } from "./orchestration-repositories";
-export { createPaidSubmissionAuthorizationRepository } from "./paid-submission-authorization-repository";
+export {
+  createPaidSubmissionAuthorizationRepository,
+  type PaidSubmissionAuthorizationRepositoryOptions,
+} from "./paid-submission-authorization-repository";
 export { createSubmissionOutcomeRepository } from "./submission-outcome-repository";
 export { createReconciliationRepository } from "./reconciliation-repository";
 export { createCompletionRepository } from "./completion-repository";

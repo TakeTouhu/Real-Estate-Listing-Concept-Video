@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   AUTHORIZED_QUALITY_TIERS,
   H3_MAX_PROVIDER_MODEL_ID,
+  PRODUCTION_ROUTE_POLICY,
+  ROUTING_POLICY_VERSION,
   authorizeRoute,
   authorizedRoutes,
   type RouteAuthorizationFacts,
+  type RoutePolicy,
 } from "./routing";
 
 const H3_MAX: RouteAuthorizationFacts = {
@@ -17,6 +20,34 @@ const H3_MAX: RouteAuthorizationFacts = {
   generationMode: "image-to-video",
   audioMode: "none",
 };
+
+describe("route policies (ADR-0089)", () => {
+  it("makes production's from the table above and nothing else, frozen", () => {
+    expect(PRODUCTION_ROUTE_POLICY).toEqual({
+      version: ROUTING_POLICY_VERSION,
+      qualityTiers: AUTHORIZED_QUALITY_TIERS,
+      routes: authorizedRoutes(),
+    });
+    expect(Object.isFrozen(PRODUCTION_ROUTE_POLICY)).toBe(true);
+    expect(Object.isFrozen(PRODUCTION_ROUTE_POLICY.routes)).toBe(true);
+  });
+
+  it("authorizes against the policy given, its qualities and its routes", () => {
+    const hq: RoutePolicy = {
+      version: "itest-policy.1",
+      qualityTiers: ["HIGH_QUALITY"],
+      routes: authorizedRoutes().map((route) => ({ ...route, qualityTier: "HIGH_QUALITY" })),
+    };
+    expect(authorizeRoute({ ...H3_MAX, qualityTier: "HIGH_QUALITY" }, hq).ok).toBe(true);
+    expect(authorizeRoute(H3_MAX, hq)).toEqual({ ok: false, reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" });
+    // A quality listed with no route for it is refused the same way.
+    const listedOnly: RoutePolicy = { ...hq, routes: [] };
+    expect(authorizeRoute({ ...H3_MAX, qualityTier: "HIGH_QUALITY" }, listedOnly)).toEqual({
+      ok: false,
+      reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED",
+    });
+  });
+});
 
 describe("route authorization", () => {
   it("authorizes the Normal AI H3 Max route", () => {

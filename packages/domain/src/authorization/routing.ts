@@ -134,6 +134,29 @@ export const AUTHORIZED_QUALITY_TIERS: readonly GenerationQualityTier[] = deepFr
   "NORMAL",
 ] as const);
 
+/**
+ * A route table and the qualities it serves, under one version (GS-5a,
+ * ADR-0089).
+ *
+ * Production's is {@link PRODUCTION_ROUTE_POLICY}, built from the constants
+ * above and nothing else. A composition outside production may pass another,
+ * production's plus the test route, which only a factory that refuses
+ * production builds. Whoever forgets to pass one gets production's, which
+ * refuses every route it does not list.
+ */
+export interface RoutePolicy {
+  /** Persisted with every authorization event, as {@link ROUTING_POLICY_VERSION} is. */
+  readonly version: string;
+  readonly qualityTiers: readonly GenerationQualityTier[];
+  readonly routes: readonly AuthorizedRoute[];
+}
+
+export const PRODUCTION_ROUTE_POLICY: RoutePolicy = deepFreeze({
+  version: ROUTING_POLICY_VERSION,
+  qualityTiers: AUTHORIZED_QUALITY_TIERS,
+  routes: AUTHORIZED_ROUTES,
+});
+
 export type RouteAuthorizationResult =
   | { readonly ok: true; readonly route: AuthorizedRoute }
   | { readonly ok: false; readonly reason: RoutingAuthorizationFailure };
@@ -152,12 +175,15 @@ export type RouteAuthorizationResult =
  * or splits a model id on `/`: a renamed tier must become a lookup miss rather
  * than a silently reinterpreted one.
  */
-export function authorizeRoute(facts: RouteAuthorizationFacts): RouteAuthorizationResult {
-  if (!AUTHORIZED_QUALITY_TIERS.includes(facts.qualityTier)) {
+export function authorizeRoute(
+  facts: RouteAuthorizationFacts,
+  policy: RoutePolicy = PRODUCTION_ROUTE_POLICY,
+): RouteAuthorizationResult {
+  if (!policy.qualityTiers.includes(facts.qualityTier)) {
     return { ok: false, reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" };
   }
 
-  const byTier = AUTHORIZED_ROUTES.filter((r) => r.qualityTier === facts.qualityTier);
+  const byTier = policy.routes.filter((r) => r.qualityTier === facts.qualityTier);
   if (byTier.length === 0) {
     return { ok: false, reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" };
   }

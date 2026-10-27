@@ -1,7 +1,7 @@
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
 import type { TransitionContext } from "../orchestration/ports";
 import { evaluatePaidSubmissionGate, type PaidSubmissionAuthorizationAudit } from "./gate";
-import { ROUTING_POLICY_VERSION } from "./routing";
+import { PRODUCTION_ROUTE_POLICY } from "./routing";
 import type {
   AuthorizePaidSubmissionInput,
   PaidSubmissionAuthorizationDeps,
@@ -78,7 +78,7 @@ function withAuthorizationRecord(
       ...context.metadata,
       billingCycleKey,
       authorizationPolicyVersion: audit.authorizationPolicyVersion,
-      routingPolicyVersion: ROUTING_POLICY_VERSION,
+      routingPolicyVersion: audit.routingPolicyVersion,
       safetyGuardState: audit.safetyGuard.state,
       billingCycleRevenueYen: audit.billingCycleRevenueYen,
       knownActualCostYen: audit.exposure.knownActualCostYen,
@@ -124,18 +124,21 @@ export function createPaidSubmissionAuthorizationService(
                   billingCycleKey: facts.billingCycleKey,
                 });
 
-          const decision = evaluatePaidSubmissionGate({
-            authorizationInstant,
-            attempt: facts.attempt,
-            job: facts.job,
-            reservation: facts.reservation,
-            pricing: facts.pricing,
-            commercial: {
-              billingCycleRevenueYen,
-              exposure: facts.exposure,
-              exposureVerified: facts.exposureVerified,
+          const decision = evaluatePaidSubmissionGate(
+            {
+              authorizationInstant,
+              attempt: facts.attempt,
+              job: facts.job,
+              reservation: facts.reservation,
+              pricing: facts.pricing,
+              commercial: {
+                billingCycleRevenueYen,
+                exposure: facts.exposure,
+                exposureVerified: facts.exposureVerified,
+              },
             },
-          });
+            deps.routePolicy ?? PRODUCTION_ROUTE_POLICY,
+          );
           if (decision.kind === "REFUSED") return decision.outcome;
 
           // Only now, and only inside the same transaction and lock. The

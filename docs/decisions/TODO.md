@@ -1952,7 +1952,7 @@ below.
 
 ### Decision gates — CLOSED
 
-Thirty-one decisions: the two gates from the first PR review, eight recorded
+Thirty-two decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1962,9 +1962,25 @@ blocks, storage blocks on downgrade, Scope semantics, Property assignment
 authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
 protected group deletion — from the Phase 6A gap analysis, multi-Unit
-reservation funding, and, from the Unit purchase proposal, when an
-invoice-paid organization can use purchased Units. **Each is settled as policy**; the implementation work each
+reservation funding, from the Unit purchase proposal, when an
+invoice-paid organization can use purchased Units, and, from GS-5, what a
+billing cycle's revenue is. **Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
+
+- [x] **What a billing cycle's revenue is, for the Cost Safety Guard — CLOSED
+      (the plan's monthly price plus Unit purchases).** Chosen by the product
+      owner on 2026-10-27 (decision card, option "月額+Unit購入", the
+      recommendation). A cycle's revenue is the plan's monthly price plus the
+      Unit purchases approved in that period, both tax-exclusive; a cancelled
+      purchase counts nothing, since it is not invoiced. Seats and storage
+      blocks are not counted while they are not recorded. An Enterprise
+      organization's revenue stays unknown, so the guard keeps pausing, until
+      its contracted price is recorded. Payment fees were not part of the
+      question: no card payment exists yet. The paid-submission gate
+      (`safety-guard.ts`) compared revenue with cost but no ADR said what
+      counted, and the only reader answered unknown, pausing every cycle.
+      Built by GS-5b, the revenue reader; GS-5a-1's ADR-0089 notes the
+      question.
 
 - [x] **Multi-Unit reservation funding — CLOSED (Option A).** A reservation may
       span multiple funding sources. Allocation is eligibility-first across the

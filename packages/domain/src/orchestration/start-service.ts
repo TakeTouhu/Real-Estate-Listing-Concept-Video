@@ -1,5 +1,5 @@
 import { AppError } from "@app/shared";
-import { AUTHORIZED_QUALITY_TIERS } from "../authorization/routing";
+import { PRODUCTION_ROUTE_POLICY, type RoutePolicy } from "../authorization/routing";
 import { DEFAULT_DISCLOSURE_MODE } from "../disclosure/mode";
 import type { GenerationReservationAllocation, UnitEntitlementRepository } from "../entitlement/ports";
 import { renewEntitlementPeriod, type SubscriptionRepository } from "../entitlement/subscription";
@@ -37,13 +37,19 @@ export interface StartQualityOffer {
 }
 
 /**
- * Today's offer: the qualities the route table authorizes, which is Normal
- * only. An HQ start would reserve Units for attempts the paid-submission gate
- * refuses, so it is refused before anything is reserved.
+ * The qualities a route policy serves, the ones the paid-submission gate
+ * authorizes against the same policy (ADR-0089).
  */
-export const AUTHORIZED_ROUTE_QUALITY_OFFER: StartQualityOffer = {
-  offers: (qualityTier) => AUTHORIZED_QUALITY_TIERS.includes(qualityTier),
-};
+export function routeQualityOffer(policy: RoutePolicy): StartQualityOffer {
+  return { offers: (qualityTier) => policy.qualityTiers.includes(qualityTier) };
+}
+
+/**
+ * Today's offer: the qualities the production route table authorizes, which is
+ * Normal only. An HQ start would reserve Units for attempts the paid-submission
+ * gate refuses, so it is refused before anything is reserved.
+ */
+export const AUTHORIZED_ROUTE_QUALITY_OFFER: StartQualityOffer = routeQualityOffer(PRODUCTION_ROUTE_POLICY);
 
 export interface GenerationStartServiceDeps {
   /** Membership lookup for authorization and reach, the clock and ids. */

@@ -11,7 +11,12 @@ import type {
   SceneGenerationRequestKind,
   SubmissionCertainty,
 } from "../orchestration/types";
-import { authorizeRoute, type RouteAuthorizationFacts } from "./routing";
+import {
+  authorizeRoute,
+  PRODUCTION_ROUTE_POLICY,
+  type RouteAuthorizationFacts,
+  type RoutePolicy,
+} from "./routing";
 import { totalProviderCostExposureYen, type ProviderCostExposure } from "./exposure";
 import type {
   AttemptArmabilityFailure,
@@ -162,6 +167,8 @@ export interface PaidSubmissionGateFacts {
  */
 export interface PaidSubmissionAuthorizationAudit {
   readonly authorizationPolicyVersion: string;
+  /** The version of the route table the route was authorized against (ADR-0089). */
+  readonly routingPolicyVersion: string;
   readonly safetyGuard: SafetyGuardDecision;
   readonly billingCycleRevenueYen: Yen;
   readonly exposure: ProviderCostExposure;
@@ -286,6 +293,8 @@ const PRICING_ELIGIBILITY_REASON: Partial<
 
 export function evaluatePaidSubmissionGate(
   facts: PaidSubmissionGateFacts,
+  /** Production's unless a composition outside production passes another (ADR-0089). */
+  routePolicy: RoutePolicy = PRODUCTION_ROUTE_POLICY,
 ): PaidSubmissionGateDecision {
   const { attempt, job, reservation, pricing, commercial } = facts;
 
@@ -417,7 +426,7 @@ export function evaluatePaidSubmissionGate(
     generationMode: pricing.identityGenerationMode,
     audioMode: pricing.identityAudioMode,
   };
-  const route = authorizeRoute(routeFacts);
+  const route = authorizeRoute(routeFacts, routePolicy);
   if (!route.ok) {
     return refuse({ kind: "ROUTING_NOT_AUTHORIZED", reason: route.reason });
   }
@@ -467,6 +476,7 @@ export function evaluatePaidSubmissionGate(
     expectedStateVersion: attempt.stateVersion,
     audit: {
       authorizationPolicyVersion: AUTHORIZATION_POLICY_VERSION,
+      routingPolicyVersion: routePolicy.version,
       safetyGuard: guard,
       billingCycleRevenueYen: commercial.billingCycleRevenueYen,
       exposure: commercial.exposure,

@@ -23,6 +23,7 @@ import type {
 } from "./start";
 import {
   AUTHORIZED_ROUTE_QUALITY_OFFER,
+  routeQualityOffer,
   GenerationStartService,
   type StartGenerationInput,
   type StartQualityOffer,
@@ -514,6 +515,12 @@ describe("the quality", () => {
   it("offers today the qualities the route table authorizes: Normal only", () => {
     expect(AUTHORIZED_ROUTE_QUALITY_OFFER.offers("NORMAL")).toBe(true);
     expect(AUTHORIZED_ROUTE_QUALITY_OFFER.offers("HIGH_QUALITY")).toBe(false);
+  });
+
+  it("offers the qualities a route policy serves, as the gate authorizes them (ADR-0089)", () => {
+    const offer = routeQualityOffer({ version: "itest-policy.1", qualityTiers: ["HIGH_QUALITY"], routes: [] });
+    expect(offer.offers("HIGH_QUALITY")).toBe(true);
+    expect(offer.offers("NORMAL")).toBe(false);
   });
 });
 
