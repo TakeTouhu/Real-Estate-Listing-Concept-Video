@@ -548,6 +548,23 @@ describe.skipIf(!HAS_DB)("a start key", () => {
     expect(await written()).toMatchObject({ jobs: 1, reservations: 1, audits: 1 });
   });
 
+  it("finds the job a key started, for its own project and organization only (ADR-0088)", async () => {
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    expect((await starts.start(first)).kind).toBe("STARTED");
+    expect(await starts.findStarted(ORG_A, PROJECT_HQ, first.idempotencyKey)).toMatchObject({
+      id: first.jobId,
+      organizationId: ORG_A,
+      videoProjectId: PROJECT_HQ,
+    });
+    expect(await starts.findStarted(ORG_B, PROJECT_HQ, first.idempotencyKey)).toBeNull();
+    expect(await starts.findStarted(ORG_A, PROJECT_NORMAL, first.idempotencyKey)).toBeNull();
+    expect(await starts.findStarted(ORG_A, PROJECT_HQ, "start-key-never-sent")).toBeNull();
+    // A missing key would match every job of the project.
+    for (const key of ["", "k".repeat(201), undefined as unknown as string]) {
+      await expect(starts.findStarted(ORG_A, PROJECT_HQ, key)).rejects.toThrow("start key of 1 to 200 characters");
+    }
+  });
+
   it("does not answer another organization's replay", async () => {
     const first = record(PROJECT_HQ, HQ_SCENES);
     expect((await starts.start(first)).kind).toBe("STARTED");

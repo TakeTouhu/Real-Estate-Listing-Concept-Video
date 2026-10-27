@@ -160,10 +160,19 @@ describe("the start commit", () => {
     for (const refusal of [
       "if (!isDisclosureMode(record.disclosureMode))",
       'if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH)',
+      "requireStartKey(record.idempotencyKey);",
     ]) {
       expect(repository.indexOf(refusal)).toBeGreaterThan(-1);
       expect(repository.indexOf(refusal)).toBeLessThan(transaction);
     }
+  });
+
+  it("checks the key before the replay read, which a missing key would answer with any job (ADR-0088)", () => {
+    const { repository } = startSource();
+    const read = repository.slice(repository.indexOf("async function findStarted("), repository.indexOf("return {"));
+    expect(read.indexOf("requireStartKey(idempotencyKey);")).toBeGreaterThan(-1);
+    expect(read.indexOf("requireStartKey(idempotencyKey);")).toBeLessThan(read.indexOf("prisma.generationJob.findFirst("));
+    expect(read).toContain("...jobScope(organizationId)");
   });
 
   it("files the audit entry under the organization whose project it locked", () => {
@@ -173,7 +182,7 @@ describe("the start commit", () => {
     expect(check).toBeLessThan(within.indexOf("tx.auditLog.create("));
   });
 
-  it("is constructed by nothing yet: the start service (GS-4c) and route (GS-10) will", () => {
+  it("is constructed by nothing yet: the start route (GS-10) will", () => {
     const constructors = [
       ...productionSources(join(REPO_ROOT, "apps")),
       ...productionSources(join(REPO_ROOT, "packages")),

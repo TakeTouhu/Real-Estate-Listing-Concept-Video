@@ -119,4 +119,10 @@ export interface GenerationStartRepository {
    * it admits no attempt.
    */
   start(record: GenerationStartRecord): Promise<GenerationStartOutcome>;
+  /**
+   * The job a start with this key started on this project, or `null`. Read
+   * scoped to the organization, so another tenant's key is never answered
+   * (ADR-0088).
+   */
+  findStarted(organizationId: string, videoProjectId: string, idempotencyKey: string): Promise<GenerationJob | null>;
 }

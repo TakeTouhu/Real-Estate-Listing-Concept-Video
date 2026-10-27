@@ -253,6 +253,16 @@ answers a replay, even one arriving at the same moment, with the job it
 started. The job stays `RESERVED`. Nothing outside tests constructs it until
 GS-4c's service and GS-10's route.
 
+**GS-4c — the start service** (ADR-0088, no migration), the last of GS-4's
+three pull requests: `video.generate` and `unit.consume`, reach, and a deleted
+Property's project answered as not found; the replay read before the storyboard
+is judged; freshness; the quality and scenes the customer confirmed; the
+quality from the project's resolution, offered only where a verified route
+serves it (Normal today); scenes composed for generation; the length; the Unit
+period opened first; then the start commit, with Mode A, new ids, the server
+clock and the audit entry. Every refusal writes no job, reservation or audit
+entry. Nothing outside tests constructs it until GS-10's route.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
