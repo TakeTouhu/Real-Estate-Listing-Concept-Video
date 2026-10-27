@@ -1210,3 +1210,193 @@ live Stripe charges remain BLOCKED.
 GS-3 waits for the product owner's yes before merge. GS-4 (the start step: a
 whole video's job, reservation, scenes and first attempts in one commit) comes
 next.
+
+## GS-4a — a storyboard is saved in one commit
+
+Base: `b9513aa` (PR #108 merge commit on `main`; post-merge CI run 682 green).
+ADR: `docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md`
+
+The first of GS-4's three pull requests (the gap analysis's *GS-4* section has
+the split). **No migration, no route, no page.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `ed751a1` | the one-commit save under the project row lock, the port and the service, the tests, ADR-0086 and the documentation |
+| `38317ac` | the review's answers: a scene of another project refused, the project written first, lock-signalled tests released in `finally`, the documentation corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-4a does
+
+- **One composition, one commit.** `saveComposition` replaces the project's
+  scenes and marks the project `STORYBOARD_READY` with the composition's
+  fingerprint in one transaction, and returns both as that commit left them.
+  `compose` makes this one call where it made two. A failure writes nothing:
+  the previous composition stays whole.
+- **The project row orders them.** The transaction's first statement locks the
+  project row `FOR NO KEY UPDATE`, scoped to the organization. Two
+  compositions of one project take turns, so neither fails on the position
+  index, and a reader holding the row `FOR SHARE`, as the start step will,
+  sees one composition whole. Rows that only reference the project, which
+  check their foreign key `FOR KEY SHARE`, are not blocked.
+
+```mermaid
+sequenceDiagram
+    participant A as Composition A
+    participant B as Composition B
+    participant P as video_projects row
+    participant S as storyboard_scenes
+    A->>P: FOR NO KEY UPDATE (granted)
+    B->>P: FOR NO KEY UPDATE (waits)
+    A->>S: delete the old scenes, insert A's
+    A->>P: STORYBOARD_READY, fingerprint F_A
+    A-->>P: commit
+    P-->>B: granted
+    B->>S: delete A's scenes, insert B's
+    B->>P: STORYBOARD_READY, fingerprint F_B
+    B-->>P: commit: B's scenes under F_B, never A's
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI) on `38317ac`. This
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6164 / 6164**, 223 files (6162 on `b9513aa`) |
+| `pnpm test:db` | **1629 / 1629**, 60 files |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `tests/integration/storyboard-repository.db.test.ts`, against PostgreSQL:
+  - the save replaces the scenes wholesale, returns them in position order
+    with the database's timestamps, and marks the project with the new
+    fingerprint; another tenant's project is refused and its composition
+    left as it was; a scene of another project is refused, writing nothing;
+  - *one composition, one commit*: a save that fails leaves the previous
+    scenes, status and fingerprint whole; a save waits for a composition
+    already saving (holding the row and with its own scene at position 1)
+    and then replaces it whole, the case that failed on the unique index
+    before; two saves started together while a reader holds the row both
+    succeed, one after the other, and the project ends with one composition's
+    scenes under that composition's fingerprint; a save waits for a reader
+    holding the row `FOR SHARE`, which meanwhile still reads the composition
+    it locked; and a save finishes while a holder of `FOR KEY SHARE` is still
+    open. Each holder signals once its lock is held, "blocked" is read from
+    `pg_stat_activity`, and every holder is released in `finally`.
+- `tests/integration/generation-persistence.db.test.ts`: an attempt still
+  outlives recomposition, through `saveComposition`.
+- `packages/domain/src/storyboard/storyboard-service.test.ts`: composition
+  writes the project through `saveComposition` only, returns what it saved,
+  and replaces an earlier composition's fingerprint with its own.
+- The in-memory doubles in `storyboard-service.test.ts`,
+  `content-reach.test.ts`, `tests/api/storyboard-routes.test.ts` and
+  `tests/api/content-reach-routes.test.ts` implement the new method, refusing
+  another tenant's project and setting `updatedAt`.
+
+### Mutation testing
+
+Each mutant applied to the source, the relevant suites run, and the file
+restored and checked by SHA-256; the repository's manifest was identical
+before and after each pass. The harness is outside the repository.
+
+Two passes: the first on `ed751a1`, the second on the review's answers, which
+moved the project's write ahead of the scenes and added the scene check.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| L01 | the project row is not locked by the first read | first pass: killed. Second pass: **equivalent**, since the project's `UPDATE` now comes first and takes the same lock before any scene is touched; the explicit lock keeps the tenant-scoped read and the lock one statement |
+| L02 | `FOR UPDATE` instead of `FOR NO KEY UPDATE` | killed (the save cannot finish while a `FOR KEY SHARE` holder is open) |
+| L03 | `FOR SHARE` instead | killed (two saves deadlock or collide) |
+| T01 | the lock not scoped to the organization | killed |
+| T02 | another tenant's project not refused | killed |
+| O01 | a scene of another project accepted | killed (second pass; new test) |
+| W01 | the old scenes kept | killed |
+| W02 | the project not marked ready | killed |
+| W03 | the fingerprint not written | killed |
+| W04 | the project marked outside the transaction | killed |
+| W05 | the returned scenes echoed from the input | survived the first pass; killed after the position-order and timestamp assertions were added |
+| W06 | the project written after the scenes, as in the first commit | **equivalent**: a failure rolls either order back |
+| S01 | compose saves the project's earlier fingerprint | survived the first pass; killed after the earlier-fingerprint test was added |
+| S02 | compose returns the project as it read it | killed |
+| S03 | compose also writes the project through `update` | killed |
+
+Result: 15 mutants, 13 killed, 2 equivalent. One first-pass mutant was
+dropped with the order it mutated: refusing another tenant only after the
+scenes were written, equivalent because the refusal rolls the transaction
+back.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to GS-3, an independent review
+agent reviewed `ed751a1` against `b9513aa`, reading only git objects. It
+confirmed the save is atomic and tenant-scoped, that `FOR NO KEY UPDATE` is the
+right strength (the `UPDATE` changes no key column, so it takes that lock
+anyway), that no other lock cycle exists in `packages/database/src`, and that
+the race and the index collision ADR-0086 describes are real under READ
+COMMITTED, so the new tests fail on the old code. Verdict: nothing blocking;
+five should-fix findings and nits, answered in `38317ac`:
+
+| Finding | Answer |
+| --- | --- |
+| The lock tests waited 100 ms for the holder to take its lock, so they could flake or pass vacuously (the `FOR KEY SHARE` one would have passed with `FOR UPDATE` too) | Fixed: the holder signals once its lock is held; "blocked" is read from `pg_stat_activity`; the `FOR KEY SHARE` test requires the save to finish while the holder is still open |
+| A failing assertion left the holder open with the project locked | Fixed: every holder is released in `finally`, and its failure is delivered rather than left unhandled |
+| ADR-0086 said a stale composition is never presented as current, but the compose response always says `fresh: true` | Reworded: later reads show it stale; the response does not re-check, nothing starts from it, and the start step derives freshness again |
+| The gap analysis attributed "extra jobs wait with their Units reserved" to ADR-0052 Decision 7, and moved the first attempts to GS-7 without saying the plan allows it | The approved plan says both: its start step makes the job, the reservation and the scenes (Design 2), and extra jobs wait with their Units reserved, oldest first (Design 6). Cited; the base table's row corrected; and a new TODO item: a job that can never launch must still release its Unit (ADR-0052 Decision 19), decided in GS-7. Nothing launches a job or constructs the start step before then |
+| The save did not check that each scene belongs to the locked project | Fixed: a scene naming another project is refused before anything is written, and the composite foreign keys tie it to that project's Property (new test) |
+| Nit: the failing-save test would also have passed on the old code | The project is now written first, so the test proves its write rolls back with the scenes |
+| Nit: job creation now waits for a composition | Said in ADR-0086 Decision 2 |
+| Nit: "a failure anywhere writes nothing" was broader than true | Scoped to the save; the audit entry is written after the commit, as before |
+| Nit: the lock wait counts against Prisma's 5-second limit | Recorded in ADR-0086, *Not decided here*; GS-4b settles the start step's bound |
+| Nit: a misleading comment, a test double that ignored the organization, two that left `updatedAt`, future work written as present | Fixed |
+| Nit: `projects.update` has no production caller left | Recorded in ADR-0086; it stays for settings editing |
+| Nit: a future hard purge of photos could deadlock with a composition | Nothing hard-deletes a photo today (Property deletion is soft); left to the retention work in the TODO list |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the storyboard module's row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *GS-4a*: not applicable, no entity, relationship or column changes |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0086 Decisions 1 and 2 |
+| OpenAPI / API change summary | `docs/api-changes-gs-4a.md`: no HTTP change; the port method and its Prisma implementation |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-4a*: no migration, and what rolling back means |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (the
+GS-4 gap analysis and its split, and two forward references corrected), and
+`docs/decisions/TODO.md` (the first admissions move to GS-7's launch step).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The change is to how an existing
+screen's composition is saved. No scheduler, credential or payment
+integration. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **Analysis changes are not locked.** An approval or correction committed
+  while a composition reads the inputs makes it stale at once, and it shows
+  as stale (ADR-0086, *Not decided here*).
+- **Project settings** are not part of the fingerprint; no route edits them
+  yet (TODO).
+- **Storyboards saved before this build** are not rewritten; one left
+  inconsistent by the old race, if any exists, reads as before until composed
+  again.
+
+### Remaining work
+
+GS-4a waits for the product owner's yes before merge. GS-4b (the start commit:
+job, Unit reservation, scenes and first requests in one commit, with a start
+key) and GS-4c (the start service) follow.
