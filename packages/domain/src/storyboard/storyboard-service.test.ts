@@ -180,8 +180,8 @@ function harness(options: {
       scenes: {
         listByProject: (_org: string, _id: string) => Promise.resolve(stored.scenes),
         saveComposition: (
-          _org: string,
-          _id: string,
+          org: string,
+          id: string,
           composition: {
             scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[];
             compositionFingerprint: string;
@@ -189,11 +189,15 @@ function harness(options: {
         ) => {
           // One commit: a failure writes neither the scenes nor the project.
           if (options.failSceneWrite) return Promise.reject(new Error("scene write failed"));
+          if (stored.project?.organizationId !== org || stored.project.id !== id) {
+            return Promise.reject(new Error("project not found"));
+          }
           stored.scenes = composition.scenes.map((s) => ({ ...s, createdAt: NOW, updatedAt: NOW }));
           stored.project = {
             ...stored.project!,
             status: "STORYBOARD_READY",
             compositionFingerprint: composition.compositionFingerprint,
+            updatedAt: NOW,
           };
           return Promise.resolve({ project: stored.project, scenes: stored.scenes });
         },

@@ -21,6 +21,7 @@ const ASSET_A1 = "ast_itest_sb_a1";
 const ASSET_A2 = "ast_itest_sb_a2";
 const ASSET_B1 = "ast_itest_sb_b1";
 const PROJECT_A = "vpr_itest_sb_a";
+const PROJECT_A2 = "vpr_itest_sb_a2";
 
 const prisma = new PrismaClient();
 /** A second connection, to hold a lock while the code under test runs. */
@@ -139,30 +140,64 @@ function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<
   return { done: () => finished, value };
 }
 
-/** Give a blocked call a real chance to finish, so "still blocked" means it. */
-async function breathe(times = 20): Promise<void> {
-  for (let i = 0; i < times; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+/** How many other backends of this database are waiting on a lock. */
+async function blockedBackends(): Promise<number> {
+  const rows = await prisma.$queryRawUnsafe<{ wait_event_type: string | null }[]>(
+    `SELECT wait_event_type FROM pg_stat_activity
+      WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+  );
+  return rows.filter((row) => row.wait_event_type === "Lock").length;
 }
 
 /**
- * Run `body` in a transaction on the second connection and keep it open until
- * the returned `release` is called.
+ * Whether `count` backends are waiting on a lock within the deadline. No
+ * sleep stands in for "it has blocked": the database says so.
  */
-function holdOpen(body: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<void>) {
-  let release!: () => void;
+async function waitForBlocked(count: number, withinMs = 10_000): Promise<boolean> {
+  const deadline = Date.now() + withinMs;
+  while (Date.now() < deadline) {
+    if ((await blockedBackends()) >= count) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
+
+/**
+ * Run `body` in a transaction on the second connection and keep it open until
+ * `release` is called. Resolves once `body` has run, so its locks are held.
+ * `release` always ends it, and the tests call it in `finally`, so a failing
+ * assertion never leaves the project locked for the next test.
+ */
+async function holdOpen(body: (tx: Tx) => Promise<void>): Promise<{ release: () => Promise<void> }> {
+  let mayFinish!: () => void;
   const held = new Promise<void>((resolve) => {
-    release = resolve;
+    mayFinish = resolve;
   });
-  const done = holder.$transaction(
-    async (tx) => {
-      await body(tx);
-      await held;
+  let ready!: () => void;
+  let failed!: (error: unknown) => void;
+  const locked = new Promise<void>((resolve, reject) => {
+    ready = resolve;
+    failed = reject;
+  });
+  const done = holder
+    .$transaction(
+      async (tx) => {
+        await body(tx);
+        ready();
+        await held;
+      },
+      { timeout: 20_000 },
+    )
+    .catch((error: unknown) => failed(error));
+  await locked;
+  return {
+    release: async () => {
+      mayFinish();
+      await done;
     },
-    { timeout: 20_000 },
-  );
-  return { release, done };
+  };
 }
 
 describe.skipIf(!HAS_DB)("video project persistence", () => {
@@ -300,6 +335,8 @@ describe.skipIf(!HAS_DB)("one composition, one commit", () => {
   });
 
   it("leaves the previous composition whole when the next cannot be saved", async () => {
+    // The project is written before the scenes, so the failing second scene
+    // proves the project's write rolls back with them.
     await expect(
       repos.scenes.saveComposition(
         ORG_A,
@@ -314,30 +351,46 @@ describe.skipIf(!HAS_DB)("one composition, one commit", () => {
     expect(unchanged!.compositionFingerprint).toBe("sha256:first");
   });
 
+  it("refuses a scene of another project, writing nothing", async () => {
+    await repos.projects.create(project(PROJECT_A2, ORG_A, PROP_A));
+    await expect(
+      repos.scenes.saveComposition(
+        ORG_A,
+        PROJECT_A,
+        composed([scene("scn_8", 1, ASSET_A1), scene("scn_9", 2, ASSET_A2, { videoProjectId: PROJECT_A2 })], "sha256:x"),
+      ),
+    ).rejects.toThrow();
+    expect(await repos.scenes.listByProject(ORG_A, PROJECT_A2)).toEqual([]);
+    expect((await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id)).toEqual(["scn_1"]);
+    expect((await repos.projects.findById(ORG_A, PROJECT_A))!.compositionFingerprint).toBe("sha256:first");
+  });
+
   it("waits for a composition already saving, then replaces it whole", async () => {
     // The holder is a composition half-way through: the project locked, its
     // own scene inserted at position 1. Without the lock, the second would
     // insert its own position 1 beside it and fail on the unique index once the
     // first commits.
-    const first = holdOpen(async (tx) => {
+    const first = await holdOpen(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR NO KEY UPDATE`;
       await tx.storyboardScene.deleteMany({ where: { videoProjectId: PROJECT_A } });
       await tx.storyboardScene.create({ data: scene("scn_held", 1, ASSET_A1) });
       await tx.videoProject.update({ where: { id: PROJECT_A }, data: { compositionFingerprint: "sha256:held" } });
     });
-    await breathe(4);
-    const second = settled(
-      repos.scenes.saveComposition(
-        ORG_A,
-        PROJECT_A,
-        composed([scene("scn_4", 1, ASSET_A2), scene("scn_5", 2, ASSET_A1)], "sha256:second"),
-      ),
-    );
-    await breathe();
-    expect(second.done()).toBe(false);
+    let second: ReturnType<typeof settled<Awaited<ReturnType<typeof repos.scenes.saveComposition>>>>;
+    try {
+      second = settled(
+        repos.scenes.saveComposition(
+          ORG_A,
+          PROJECT_A,
+          composed([scene("scn_4", 1, ASSET_A2), scene("scn_5", 2, ASSET_A1)], "sha256:second"),
+        ),
+      );
+      expect(await waitForBlocked(1)).toBe(true);
+      expect(second.done()).toBe(false);
+    } finally {
+      await first.release();
+    }
 
-    first.release();
-    await first.done;
     const saved = await second.value;
     expect(saved.scenes.map((s) => s.id)).toEqual(["scn_4", "scn_5"]);
     expect(saved.project.compositionFingerprint).toBe("sha256:second");
@@ -348,17 +401,19 @@ describe.skipIf(!HAS_DB)("one composition, one commit", () => {
     // A reader holds the project, so both start before either can commit.
     // Sharing the row, or not locking it, both would write their scenes at
     // once: one fails on the position index or deadlocks with the other.
-    const reader = holdOpen(async (tx) => {
+    const reader = await holdOpen(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR SHARE`;
     });
-    await breathe(4);
-    const saves = [
-      composed([scene("scn_b1", 1, ASSET_A1), scene("scn_b2", 2, ASSET_A2)], "sha256:b"),
-      composed([scene("scn_c1", 1, ASSET_A2), scene("scn_c2", 2, ASSET_A1)], "sha256:c"),
-    ].map((composition) => repos.scenes.saveComposition(ORG_A, PROJECT_A, composition));
-    await breathe(4);
-    reader.release();
-    await reader.done;
+    let saves: Promise<unknown>[] = [];
+    try {
+      saves = [
+        composed([scene("scn_b1", 1, ASSET_A1), scene("scn_b2", 2, ASSET_A2)], "sha256:b"),
+        composed([scene("scn_c1", 1, ASSET_A2), scene("scn_c2", 2, ASSET_A1)], "sha256:c"),
+      ].map((composition) => repos.scenes.saveComposition(ORG_A, PROJECT_A, composition));
+      expect(await waitForBlocked(2)).toBe(true);
+    } finally {
+      await reader.release();
+    }
 
     const outcomes = await Promise.allSettled(saves);
     expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
@@ -366,46 +421,47 @@ describe.skipIf(!HAS_DB)("one composition, one commit", () => {
     // fingerprint together.
     const final = await repos.projects.findById(ORG_A, PROJECT_A);
     const ids = (await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id);
-    expect(
-      final!.compositionFingerprint === "sha256:b" ? ["scn_b1", "scn_b2"] : ["scn_c1", "scn_c2"],
-    ).toEqual(ids);
     expect(["sha256:b", "sha256:c"]).toContain(final!.compositionFingerprint);
+    expect(ids).toEqual(final!.compositionFingerprint === "sha256:b" ? ["scn_b1", "scn_b2"] : ["scn_c1", "scn_c2"]);
   });
 
-  it("waits for a reader holding the project FOR SHARE, as the start step does", async () => {
-    const reader = holdOpen(async (tx) => {
+  it("waits for a reader holding the project FOR SHARE, as the start step will", async () => {
+    const reader = await holdOpen(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR SHARE`;
     });
-    await breathe(4);
-    const saving = settled(
-      repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_6", 1, ASSET_A2)], "sha256:second")),
-    );
-    await breathe();
-    expect(saving.done()).toBe(false);
-    // Until the reader is done it still sees the composition it locked.
-    expect((await repos.scenes.listByProject(ORG_A, PROJECT_A)).map((s) => s.id)).toEqual(["scn_1"]);
-
-    reader.release();
-    await reader.done;
+    let saving: ReturnType<typeof settled<Awaited<ReturnType<typeof repos.scenes.saveComposition>>>>;
+    try {
+      saving = settled(
+        repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_6", 1, ASSET_A2)], "sha256:second")),
+      );
+      expect(await waitForBlocked(1)).toBe(true);
+      expect(saving.done()).toBe(false);
+    } finally {
+      await reader.release();
+    }
     expect((await saving.value).project.compositionFingerprint).toBe("sha256:second");
   });
 
   it("does not wait for a row that only references the project", async () => {
     // A foreign-key check holds the project FOR KEY SHARE, as a job or an
     // attempt being inserted against it does. The composition's lock must not
-    // conflict with it.
-    const referencing = holdOpen(async (tx) => {
+    // conflict with it: the save finishes while the holder is still open.
+    const referencing = await holdOpen(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_A} FOR KEY SHARE`;
     });
-    await breathe(4);
-    const saving = settled(
-      repos.scenes.saveComposition(ORG_A, PROJECT_A, composed([scene("scn_7", 1, ASSET_A2)], "sha256:second")),
-    );
-    await breathe();
-    const finishedWhileHeld = saving.done();
-    referencing.release();
-    await referencing.done;
-    expect(finishedWhileHeld).toBe(true);
-    expect((await saving.value).scenes.map((s) => s.id)).toEqual(["scn_7"]);
+    try {
+      const saving = repos.scenes.saveComposition(
+        ORG_A,
+        PROJECT_A,
+        composed([scene("scn_7", 1, ASSET_A2)], "sha256:second"),
+      );
+      const bounded = await Promise.race([
+        saving.then((saved) => saved.scenes.map((s) => s.id)),
+        new Promise<"still waiting">((resolve) => setTimeout(() => resolve("still waiting"), 3_000)),
+      ]);
+      expect(bounded).toEqual(["scn_7"]);
+    } finally {
+      await referencing.release();
+    }
   });
 });

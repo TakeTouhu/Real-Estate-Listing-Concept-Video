@@ -142,7 +142,7 @@ beforeEach(async () => {
         if (!row || row.organizationId !== org) throw new Error("project not found");
         const stored = rows.map((r) => ({ ...r, createdAt: deps.clock.now(), updatedAt: deps.clock.now() }));
         sceneRows.set(id, stored);
-        const project = { ...row, status: "STORYBOARD_READY" as const, compositionFingerprint };
+        const project = { ...row, status: "STORYBOARD_READY" as const, compositionFingerprint, updatedAt: deps.clock.now() };
         projectRows.set(id, project);
         return Promise.resolve({ project, scenes: stored });
       },

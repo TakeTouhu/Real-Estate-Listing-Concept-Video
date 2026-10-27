@@ -48,20 +48,28 @@ could get a server error.
 ## Decision 1 — The scenes, the status and the fingerprint are one commit
 
 `StoryboardSceneRepository.replaceForProject` becomes `saveComposition(org,
-project, { scenes, compositionFingerprint })`. In one transaction it replaces
-the project's scenes wholesale and marks the project `STORYBOARD_READY` with
-the fingerprint, and returns the project and the scenes as that commit left
-them. `compose` makes this one call in place of the former two.
+project, { scenes, compositionFingerprint })`. In one transaction it marks the
+project `STORYBOARD_READY` with the fingerprint and replaces its scenes
+wholesale, and returns the project and the scenes as that commit left them.
+`compose` makes this one call in place of the former two.
+
+Every scene must name the project being saved; the save refuses anything else
+before writing. The composite foreign keys then tie the scene to that
+project's Property, but on their own they would accept a scene of another
+project of the same Property, written under this one's lock.
 
 A project's scenes and fingerprint therefore always come from the same
 composition, whichever of two racing compositions commits last. In the example
 above the project ends with S1 and F1, or with S2 and F2. S1 under F1 reads as
-stale against I2, so the customer composes again; it is never presented as
-current.
+stale against I2 on every later read, so the customer composes again. (The
+response to the composition itself still says `fresh: true` without
+re-checking, as before; nothing starts from that response, and the start step
+derives freshness again.)
 
-A failure anywhere writes nothing: the previous composition, its scenes, status
+A save that fails writes nothing: the previous composition, its scenes, status
 and fingerprint, stays whole. Before, a failure after the scene write left the
-new scenes under the old fingerprint and status.
+new scenes under the old fingerprint and status. The audit entry is still
+written after the commit, as before.
 
 `projects.update` is unchanged and no longer used by composition.
 
@@ -77,10 +85,11 @@ SELECT "id" FROM "video_projects" WHERE "id" = $1 AND "organizationId" = $2 FOR 
 - **Two compositions take turns.** The second waits at the lock, then deletes
   the first's rows and inserts its own. The unique-index collision cannot
   happen.
-- **The start step sees one composition whole.** GS-4b's start step will hold
-  the same row `FOR SHARE` while it reads the fingerprint and the scenes, so a
-  composition waits for it, and it waits for a composition already saving. It
-  can never read one composition's scenes with another's fingerprint.
+- **The start step will see one composition whole.** GS-4b's start step is to
+  hold the same row `FOR SHARE` while it reads the fingerprint and the scenes,
+  so a composition waits for it, and it waits for a composition already
+  saving. It can never read one composition's scenes with another's
+  fingerprint.
 - **`FOR NO KEY UPDATE`, not `FOR UPDATE`.** It is the lock the project's own
   `UPDATE` takes anyway, taken earlier. Rows that only reference the project (a
   job, an attempt) check their foreign key with `FOR KEY SHARE`, which this
@@ -91,7 +100,9 @@ SELECT "id" FROM "video_projects" WHERE "id" = $1 AND "organizationId" = $2 FOR 
 No other writer locks `video_projects` and then waits for a lock this
 transaction holds: the job creation's `FOR SHARE` (Phase 4C) is taken first in
 its own transaction, and composition takes no advisory lock. So no cycle is
-added.
+added. Job creation and composition now take turns for the length of a
+composition's transaction, where before they overlapped except for the
+project's final `UPDATE`.
 
 ## Not decided here
 
@@ -102,6 +113,10 @@ added.
   shows as stale, and a start that read them first has started from the
   storyboard as it then was. This is the ordering ADR-0012 already accepts; the
   start step's own handling is GS-4b's.
+- **How long a composition may wait.** The wait counts against Prisma's
+  interactive-transaction limit (5 seconds), and exceeding it fails the
+  composition with a server error. The transactions it waits for are short;
+  GS-4b's start step, which holds the row longest, settles its own bound.
 - **Project settings.** No route edits a project's settings after creation
   (`docs/decisions/TODO.md`). The fingerprint covers the analysis inputs, not
   the duration, camera motion or prompt; when settings editing is built, it
@@ -112,8 +127,12 @@ added.
 - One port method changes name and shape; the four in-memory test doubles and
   the two database tests that used it follow.
 - The database tests prove: a failed save leaves the previous composition
-  whole; a save waits for a composition already saving and then replaces it
-  whole (the case that failed on the unique index before); it waits for a
-  reader holding the project `FOR SHARE`; and it does not wait for one holding
-  it `FOR KEY SHARE`.
+  whole, its project write included; a scene of another project is refused; a
+  save waits for a composition already saving and then replaces it whole (the
+  case that failed on the unique index before); two saves started together
+  both succeed, one after the other; a save waits for a reader holding the
+  project `FOR SHARE`; and it does not wait for one holding it `FOR KEY
+  SHARE`. Each waits on the lock the database reports held, not on a timer.
+- `projects.update` has no production caller left; it stays for the settings
+  editing the TODO list records.
 - No migration, no route, no page; the storyboard screens behave as before.

@@ -241,7 +241,7 @@ first of GS-4's three pull requests: a composition's scenes, its
 `STORYBOARD_READY` status and its fingerprint are saved in one transaction that
 first locks the project row, so a project's scenes always belong to the
 fingerprint it carries, and two compositions of one project take turns. The
-start step (GS-4b, GS-4c) relies on it to copy a storyboard that is current.
+start step (GS-4b, GS-4c) is to rely on it to copy a storyboard that is current.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

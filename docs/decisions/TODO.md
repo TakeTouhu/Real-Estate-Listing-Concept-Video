@@ -1384,6 +1384,12 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 2). *GS-4's start step admits no attempt: it leaves the job
       `RESERVED` until the concurrent-job limit lets it run (ADR-0052
       Decision 7), so the first admissions belong to GS-7's launch step.*
+- [ ] **Release a started job that can never launch (GS-7).** A job waiting
+      for the concurrent-job limit holds its Units `RESERVED` (the approved
+      plan's Design 6). One that can never run, for instance because no route
+      serves its quality any more, must not hold them indefinitely (ADR-0052
+      Decision 19). Nothing launches a job yet, and nothing constructs the start
+      step outside tests until GS-10.
 - [ ] **Decide what closes a cancelled job's open scenes.** Transaction L
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing

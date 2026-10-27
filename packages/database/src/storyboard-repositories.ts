@@ -150,10 +150,14 @@ export function createPrismaStoryboardRepositories(
       /**
        * The project row is locked first, tenant-scoped, so two compositions of
        * one project take turns rather than interleave their deletes and
-       * inserts, and a reader holding the row `FOR SHARE` (the start step,
-       * ADR-0086) sees one composition whole. `FOR NO KEY UPDATE`, the lock the
-       * project's own `UPDATE` takes anyway: it leaves the foreign-key checks
-       * of rows that reference the project unblocked.
+       * inserts, and a reader holding the row `FOR SHARE` sees one composition
+       * whole (ADR-0086). `FOR NO KEY UPDATE`, the lock the project's own
+       * `UPDATE` takes anyway: it leaves the foreign-key checks of rows that
+       * reference the project unblocked.
+       *
+       * Every scene must name the locked project. The composite foreign keys
+       * then tie it to the project's Property, but on their own they would
+       * accept a scene of another project of the same Property.
        */
       async saveComposition(organizationId, videoProjectId, composition) {
         return prisma.$transaction(async (tx) => {
@@ -162,11 +166,10 @@ export function createPrismaStoryboardRepositories(
              WHERE "id" = ${videoProjectId} AND "organizationId" = ${organizationId}
                FOR NO KEY UPDATE`;
           if (locked.length === 0) throw new Error(`video project ${videoProjectId} not found`);
-
-          await tx.storyboardScene.deleteMany({ where: { videoProjectId } });
-          for (const scene of composition.scenes) {
-            await tx.storyboardScene.create({ data: scene });
+          if (composition.scenes.some((scene) => scene.videoProjectId !== videoProjectId)) {
+            throw new Error(`a scene does not belong to video project ${videoProjectId}`);
           }
+
           const project = await tx.videoProject.update({
             where: { id: videoProjectId },
             data: {
@@ -174,6 +177,10 @@ export function createPrismaStoryboardRepositories(
               compositionFingerprint: composition.compositionFingerprint,
             },
           });
+          await tx.storyboardScene.deleteMany({ where: { videoProjectId } });
+          for (const scene of composition.scenes) {
+            await tx.storyboardScene.create({ data: scene });
+          }
           const rows = await tx.storyboardScene.findMany({
             where: { videoProjectId },
             orderBy: { position: "asc" },
