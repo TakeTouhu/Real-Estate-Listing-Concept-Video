@@ -100,7 +100,7 @@ flowchart TB
 | `@app/storage` object storage, signing, image pipeline, scan hook | Implemented (in-process storage; a shared folder for development and CI since GS-3) |
 | `@app/video-providers` Fake + WaveSpeed adapters | Implemented; WaveSpeed not invoked |
 | `@app/domain` analysis contracts, normalization, ordering/duplicate rules | Implemented (Phase 3A-1) |
-| `@app/domain` storyboard module: entities, persistence ports, eligibility, ordering, duration allocation, fingerprint, `CompiledPrompt`, `StoryboardService` | Implemented (Phase 3C) |
+| `@app/domain` storyboard module: entities, persistence ports, eligibility, ordering, duration allocation, fingerprint, `CompiledPrompt`, `StoryboardService` | Implemented (Phase 3C). Since GS-4a a composition's scenes, status and fingerprint are saved in one commit under the project row lock (ADR-0086) |
 | `PromptModerator` port + offline documented-rules default | Implemented (Phase 3C-3, ADR-0014); **no real moderation vendor** |
 | `@app/ai-providers` `ImageAnalysisProvider` + deterministic offline adapter | Implemented (Phase 3A-1); **no real vision vendor** (ADR-0009) |
 | `AnalysisService`, `AssetAnalysis` persistence | Implemented (Phase 3A-2) |

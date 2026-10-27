@@ -144,18 +144,30 @@ async function setup(): Promise<Context> {
       scenes: {
         listByProject: (org2: string, id: string) =>
           Promise.resolve(projects.get(id)?.organizationId === org2 ? (scenes.get(id) ?? []) : []),
-        replaceForProject: (
-          _org2: string,
+        saveComposition: (
+          org2: string,
           id: string,
-          rows: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[],
+          composition: {
+            scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[];
+            compositionFingerprint: string;
+          },
         ) => {
-          const stored = rows.map((r) => ({
+          const row = projects.get(id);
+          if (!row || row.organizationId !== org2) throw new Error("project not found");
+          const stored = composition.scenes.map((r) => ({
             ...r,
             createdAt: deps.clock.now(),
             updatedAt: deps.clock.now(),
           }));
           scenes.set(id, stored);
-          return Promise.resolve(stored);
+          const project = {
+            ...row,
+            status: "STORYBOARD_READY" as const,
+            compositionFingerprint: composition.compositionFingerprint,
+            updatedAt: deps.clock.now(),
+          };
+          projects.set(id, project);
+          return Promise.resolve({ project, scenes: stored });
         },
       },
     } as unknown as ConstructorParameters<typeof StoryboardService>[0]["storyboards"],

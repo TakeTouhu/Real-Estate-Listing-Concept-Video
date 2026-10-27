@@ -61,20 +61,40 @@ export interface VideoProjectRepository {
   ): Promise<VideoProject>;
 }
 
+/** One composition: the scenes, and the fingerprint of the inputs they were composed from. */
+export interface StoryboardComposition {
+  readonly scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[];
+  readonly compositionFingerprint: string;
+}
+
+/** A project as one composition left it, with that composition's scenes. */
+export interface SavedComposition {
+  readonly project: VideoProject;
+  readonly scenes: readonly StoryboardScene[];
+}
+
 export interface StoryboardSceneRepository {
   /** Scenes in position order, or empty when the project is not this tenant's. */
   listByProject(organizationId: string, videoProjectId: string): Promise<StoryboardScene[]>;
   /**
-   * Replace a project's scenes wholesale, in one transaction.
+   * Save one composition in one commit: the project's scenes replaced
+   * wholesale, and the project marked `STORYBOARD_READY` with the
+   * composition's fingerprint (ADR-0086).
    *
    * Composition regenerates the whole sequence rather than diffing it, and a
    * partial replacement would leave positions colliding with the unique index.
+   * The scenes and the fingerprint are one fact: written apart, two
+   * compositions racing could leave one's scenes under the other's
+   * fingerprint, a storyboard that reads as current while showing photos its
+   * fingerprint does not describe.
+   *
+   * @throws when the project is not this tenant's; nothing is written.
    */
-  replaceForProject(
+  saveComposition(
     organizationId: string,
     videoProjectId: string,
-    scenes: readonly Omit<StoryboardScene, "createdAt" | "updatedAt">[],
-  ): Promise<StoryboardScene[]>;
+    composition: StoryboardComposition,
+  ): Promise<SavedComposition>;
 }
 
 export interface StoryboardRepositories {

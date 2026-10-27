@@ -315,24 +315,29 @@ describe.skipIf(!HAS_DB)("provenance columns carry no foreign key", () => {
 });
 
 describe.skipIf(!HAS_DB)("survival of storyboard recomposition", () => {
-  it("outlives the real replaceForProject path with its provenance intact", async () => {
+  it("outlives the real saveComposition path with its provenance intact", async () => {
     // The headline acceptance test. Recomposition is routine, it deletes every
     // scene row and re-inserts with fresh ids, and an attempt that may have
     // been billed must not go with them.
-    const [original] = await storyboards.scenes.replaceForProject(ORG_A, PROJECT_A, [
-      {
-        id: "scn_original",
-        videoProjectId: PROJECT_A,
-        propertyId: PROP_A,
-        assetId: ASSET_A,
-        position: 1,
-        roomType: "KITCHEN",
-        durationSeconds: 5,
-        cameraMotion: null,
-        compiledPrompt: null,
-        sourceAnalysisRevision: 1,
-      },
-    ]);
+    const {
+      scenes: [original],
+    } = await storyboards.scenes.saveComposition(ORG_A, PROJECT_A, {
+      compositionFingerprint: "sha256:original",
+      scenes: [
+        {
+          id: "scn_original",
+          videoProjectId: PROJECT_A,
+          propertyId: PROP_A,
+          assetId: ASSET_A,
+          position: 1,
+          roomType: "KITCHEN",
+          durationSeconds: 5,
+          cameraMotion: null,
+          compiledPrompt: null,
+          sourceAnalysisRevision: 1,
+        },
+      ],
+    });
     expect(original?.id).toBe("scn_original");
 
     await prisma.sceneGeneration.create({
@@ -343,20 +348,23 @@ describe.skipIf(!HAS_DB)("survival of storyboard recomposition", () => {
     });
 
     // Recompose exactly as StoryboardService does: whole-sequence replacement.
-    await storyboards.scenes.replaceForProject(ORG_A, PROJECT_A, [
-      {
-        id: "scn_recomposed",
-        videoProjectId: PROJECT_A,
-        propertyId: PROP_A,
-        assetId: ASSET_A,
-        position: 1,
-        roomType: "LIVING_ROOM",
-        durationSeconds: 6,
-        cameraMotion: null,
-        compiledPrompt: null,
-        sourceAnalysisRevision: 2,
-      },
-    ]);
+    await storyboards.scenes.saveComposition(ORG_A, PROJECT_A, {
+      compositionFingerprint: "sha256:recomposed",
+      scenes: [
+        {
+          id: "scn_recomposed",
+          videoProjectId: PROJECT_A,
+          propertyId: PROP_A,
+          assetId: ASSET_A,
+          position: 1,
+          roomType: "LIVING_ROOM",
+          durationSeconds: 6,
+          cameraMotion: null,
+          compiledPrompt: null,
+          sourceAnalysisRevision: 2,
+        },
+      ],
+    });
 
     // The scene it referenced is genuinely gone.
     expect(await prisma.storyboardScene.count({ where: { id: "scn_original" } })).toBe(0);
