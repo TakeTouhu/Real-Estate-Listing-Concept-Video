@@ -21,6 +21,7 @@ export {
   createGenerationPricingSnapshotRepository,
   createGenerationReservationRepository,
   createGenerationSceneRepository,
+  createGenerationStartRepository,
   createGenerationTransitionEventRepository,
   createSceneGenerationAttemptRepository,
   createSceneGenerationRequestRepository,

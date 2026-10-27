@@ -855,6 +855,12 @@ model GenerationJob {
   /// by job plus highest ordinal; this pointer moves only when a validated
   /// deliverable is published, which is Transaction G's fact and is deferred.
   currentDeliverableVersionId String?
+  /// The customer's start key (GS-4b, ADR-0087): a second start with the same
+  /// key on the same project answers with this job. Null for a job made without
+  /// one, which is every job before migration 32 and every job the single-scene
+  /// path makes. Scoped to the project, which belongs to one organization. A
+  /// CHECK bounds it to 1-200 characters.
+  idempotencyKey              String?
   createdAt                   DateTime                       @default(now())
   updatedAt                   DateTime                       @updatedAt
   videoProject                VideoProject                   @relation(fields: [videoProjectId], references: [id], onDelete: Restrict)
@@ -863,6 +869,7 @@ model GenerationJob {
   deliverableVersions         GenerationDeliverableVersion[] @relation("JobDeliverableVersions")
   currentDeliverableVersion   GenerationDeliverableVersion?  @relation("JobCurrentDeliverable", fields: [currentDeliverableVersionId, id], references: [id, generationJobId], onDelete: Restrict)
 
+  @@unique([videoProjectId, idempotencyKey])
   @@index([videoProjectId])
   @@index([state])
   @@map("generation_jobs")

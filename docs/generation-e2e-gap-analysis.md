@@ -122,12 +122,12 @@ Split into three pull requests:
 
 - **GS-4a** (ADR-0086, no migration): a storyboard's scenes, status and
   fingerprint are saved in one commit, after locking the project row.
-- **GS-4b**: the start commit in the database. Under the project row, held
-  `FOR SHARE`, it confirms the storyboard the service judged current is still
-  the project's, then creates the job, reserves its Units, copies its scenes and
-  their first requests, and records the audit entry; or it writes nothing. A
-  start key makes a replay answer with the job it started. Likely migration 32,
-  for the key.
+- **GS-4b** (ADR-0087, migration 32): the start commit in the database. Under
+  the project row, held `FOR SHARE`, it confirms the storyboard the service
+  judged current is still the project's, then creates the job, reserves its
+  Units, copies its scenes and their first requests, and records the audit
+  entry; or it writes nothing. A start key, unique per project, makes a replay
+  answer with the job it started.
 - **GS-4c**: the start service in the domain: `video.generate` and
   `unit.consume`, reach, the start key, the storyboard's freshness, quality
   from the project's resolution, Mode A, opening the Unit period first, and the

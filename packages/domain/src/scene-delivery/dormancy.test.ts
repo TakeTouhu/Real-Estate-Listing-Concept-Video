@@ -303,9 +303,10 @@ describe("no new durable shape", () => {
     // authorized to add migration 28 for cancelling one, by DS-3 (ADR-0073),
     // which is authorized to add migration 29 to freeze the disclosure mode,
     // by DS-4 (ADR-0074), which is authorized to add migration 30 for the
-    // Clean Master record, and by DS-5b-2a (ADR-0077), which is authorized to
-    // add migration 31 for two Clean Master block codes.
-    expect(dirs.at(-1)).toBe("00000000000031_clean_master_block_codes");
+    // Clean Master record, by DS-5b-2a (ADR-0077), which is authorized to
+    // add migration 31 for two Clean Master block codes, and by GS-4b
+    // (ADR-0087), which is authorized to add migration 32 for the start key.
+    expect(dirs.at(-1)).toBe("00000000000032_generation_start_key");
     // "6a" here means Phase 4C-3B-2H-3B-6A. The top-level Phase 6A's ledger
     // migration shares the substring and is the one authorized exception.
     expect(

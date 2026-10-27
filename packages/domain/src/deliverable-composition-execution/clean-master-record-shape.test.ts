@@ -73,13 +73,14 @@ function method(name: string, next: string): string {
 }
 
 describe("DS-5b-2a shape", () => {
-  it("adds exactly one migration, the newest", () => {
+  it("adds exactly one migration, in place", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
-    expect(dirs.at(-1)).toBe(MIGRATION_DIR);
-    expect(dirs).toHaveLength(32);
+    // No longer the newest: GS-4b added migration 32 after it.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(31);
+    expect(dirs).toHaveLength(33);
   });
 
   it("adds two block codes and nothing else", () => {

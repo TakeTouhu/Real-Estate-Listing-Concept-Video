@@ -18,6 +18,9 @@ import type {
   GenerationScene,
   GenerationSceneRepository,
   GenerationSceneState,
+  GenerationStartOutcome,
+  GenerationStartRecord,
+  GenerationStartRepository,
   GenerationTransitionAggregateType,
   GenerationTransitionEventRecord,
   GenerationTransitionEventRepository,
@@ -50,14 +53,17 @@ import {
   computeGenerationRequestHash,
   isDisclosureMode,
   isTargetOutputResolution,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
   nextUserRegenerationOrdinal,
   planUnitAllocation,
+  qualityTierForResolution,
   requiredUnitsFor,
   riskProfileKeyForQualityTier,
   sanitizeTransitionMetadata,
   validateFxSnapshot,
 } from "@app/domain";
 import { AppError, randomId } from "@app/shared";
+import { auditLogData } from "./audit-log-data";
 import {
   acquireCostAdmissionLock,
   acquireReservationAdmissionLock,
@@ -1003,222 +1009,237 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
   };
 }
 
+/**
+ * Transaction B: fund the hold from the Unit ledger, create it and move the
+ * job, in one commit.
+ *
+ * Split into two commits — as an earlier version was — a crash between them
+ * leaves a reservation whose job never moved, or a moved job with no hold
+ * behind it, and neither row carries enough to tell which happened.
+ *
+ * The unit counts are **copied from the job**, never accepted. A
+ * reservation covering fewer units than the job it belongs to is an
+ * under-charge no reconciliation could detect, because both rows would look
+ * internally consistent.
+ *
+ * ## Funding (Phase 6A)
+ *
+ * The period is the organization's period containing `reservedAt`, and its
+ * billing cycle becomes the reservation's for life. The allocation set is
+ * planned by the domain — Base first, then eligible blocks oldest first, in
+ * the job's own quality only — and frozen in this commit. Consume and
+ * release never reselect it, and a later period or purchase never rebinds
+ * it.
+ *
+ * **All or nothing.** The balance is checked before any write, so a short
+ * entitlement returns with nothing written: no reservation, no allocation,
+ * no job move, no event.
+ *
+ * ## Locks
+ *
+ * ```text
+ * reservation-admission lock (job) -> cost-admission lock (organization + cycle) -> job, reservation rows
+ * ```
+ *
+ * The job-scoped reservation-admission lock comes first and serializes
+ * attempts on one job, whatever period their instants select. The
+ * cost-admission lock for the period's organization and cycle comes next,
+ * before the balance is read and before any row is written; it serializes
+ * this reservation against every other reservation, block grant and
+ * settlement on the same period, so two concurrent reservations cannot both
+ * spend the last Unit. Nothing that holds the cost-admission lock ever waits
+ * for the reservation-admission lock — only this function and the start
+ * commit take it, each before the cost-admission lock — so the two cannot
+ * form a cycle. The period lookup between them reads an immutable row and
+ * decides only which cost-admission lock to take.
+ *
+ * Within a transaction its caller opened: `reserve()` gives it a commit of its
+ * own, and the start commit (ADR-0087) runs it after creating the job, so a
+ * refusal there rolls the job back with it. The start has taken both locks
+ * already, before the project row, and here they are granted at once. Not
+ * exported.
+ */
+async function reserveJobWithin(
+  tx: Tx,
+  organizationId: string,
+  input: ReserveGenerationJobInput,
+  context: TransitionContext,
+): Promise<ReserveGenerationJobOutcome> {
+  // ---- One reservation attempt per job at a time. ---------------------
+  // Two calls for the same job may carry instants in different periods,
+  // or one in none, so they would take different cost-admission locks —
+  // or none — and could not otherwise see each other: the loser reported
+  // LOST or NO_ENTITLEMENT_PERIOD instead of ALREADY_RESERVED. Serialized
+  // here, the second always runs after the first has committed and is
+  // answered as a replay.
+  await acquireReservationAdmissionLock(tx, organizationId, input.generationJobId);
+
+  const job = await tx.generationJob.findFirst({
+    where: { id: input.generationJobId, ...jobScope(organizationId) },
+  });
+  // A cross-tenant or missing job is LOST, not a distinguishable error:
+  // telling a caller which of the two it was discloses existence.
+  if (job === null) return { kind: "LOST" };
+
+  // A replay is answered first, whenever it arrives: the answer must not
+  // depend on whether a period still covers the replay's instant.
+  const existing = await tx.generationReservation.findUnique({
+    where: { generationJobId: input.generationJobId },
+    select: { id: true },
+  });
+  if (existing !== null) return { kind: "ALREADY_RESERVED" };
+
+  const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
+  if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
+
+  // ---- The cost-admission lock, before the balance and every write. ---
+  await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
+
+  // ---- Plan the funding before anything is written. ------------------
+  const balance = await loadPeriodBalance(tx, period);
+  const funding = planUnitAllocation({
+    quality: job.qualityTier,
+    units: job.requiredVideoUnits,
+    balance,
+  });
+  if (!funding.ok) {
+    return { kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: funding.eligibleUnits };
+  }
+
+  const moved = await tx.generationJob.updateMany({
+    where: {
+      id: input.generationJobId,
+      state: "RESERVING",
+      stateVersion: input.expectedJobVersion,
+      ...jobScope(organizationId),
+    },
+    data: { state: "RESERVED", stateVersion: { increment: 1 } },
+  });
+  if (moved.count === 0) return { kind: "LOST" };
+
+  // The reservation is created RESERVING and then actually moved to
+  // RESERVED inside this same commit. An earlier version inserted it
+  // directly as RESERVED while writing history claiming a
+  // RESERVING -> RESERVED transition — the final row was right and the
+  // event stream described a state change that never happened, which is
+  // precisely the "event without an aggregate change" this phase forbids.
+  // Nothing observes the intermediate state: the transaction is atomic.
+  const created = await tx.generationReservation.create({
+    data: {
+      id: input.reservationId,
+      generationJobId: input.generationJobId,
+      // The period's cycle, never the caller's.
+      billingCycleKey: period.billingCycleKey,
+      billingCycleStartedAt: period.startsAt,
+      billingCycleEndsAt: period.endsAt,
+      funding: "ALLOCATED",
+      entitlementPeriodId: period.id,
+      // The instant that selected the period, so the row can never claim
+      // to have been reserved outside the interval it is bound to.
+      reservedAt: input.reservedAt,
+      // Copied from the job, which was itself derived at admission.
+      reservedTotalVideoUnits: job.requiredVideoUnits,
+      reservedHighQualityUnits: job.requiredHighQualityUnits,
+      state: "RESERVING",
+      stateVersion: 0,
+    },
+  });
+  await tx.generationReservationAllocation.createMany({
+    data: funding.allocations.map((allocation, index) => ({
+      id: `${created.id}_alloc_${index + 1}`,
+      reservationId: created.id,
+      organizationId,
+      entitlementPeriodId: period.id,
+      ordinal: index + 1,
+      sourceType: allocation.sourceType,
+      addOnBlockId: allocation.addOnBlockId,
+      quality: allocation.quality,
+      quantity: allocation.quantity,
+    })),
+  });
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "RESERVATION",
+    aggregateId: created.id,
+    fromState: null,
+    toState: "RESERVING",
+    context,
+  });
+
+  const held = await tx.generationReservation.updateMany({
+    where: { id: created.id, state: "RESERVING", stateVersion: 0 },
+    data: { state: "RESERVED", stateVersion: { increment: 1 } },
+  });
+  if (held.count === 0) {
+    throw new AppError("INTERNAL_ERROR", "Reservation vanished inside its own creation");
+  }
+  // The funding summary travels with the RESERVED event, so the append-only
+  // history names the period and the split without a join. The rows are
+  // the evidence; this is the index into them.
+  const baseUnits = funding.allocations
+    .filter((allocation) => allocation.sourceType === "BASE")
+    .reduce((total, allocation) => total + allocation.quantity, 0);
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "RESERVATION",
+    aggregateId: created.id,
+    fromState: "RESERVING",
+    toState: "RESERVED",
+    context: {
+      ...context,
+      metadata: sanitizeTransitionMetadata({
+        ...context.metadata,
+        entitlementPeriodId: period.id,
+        billingCycleKey: period.billingCycleKey,
+        qualityTier: job.qualityTier,
+        totalVideoUnits: job.requiredVideoUnits,
+        baseAllocatedUnits: baseUnits,
+        addOnAllocatedUnits: job.requiredVideoUnits - baseUnits,
+        allocationCount: funding.allocations.length,
+      }),
+    },
+  });
+  const reservation = await tx.generationReservation.findUniqueOrThrow({
+    where: { id: created.id },
+  });
+  const allocations = await tx.generationReservationAllocation.findMany({
+    where: { reservationId: created.id },
+    orderBy: { ordinal: "asc" },
+  });
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "JOB",
+    aggregateId: input.generationJobId,
+    fromState: "RESERVING",
+    toState: "RESERVED",
+    context,
+  });
+
+  const reloaded = await tx.generationJob.findFirst({
+    where: { id: input.generationJobId, ...jobScope(organizationId) },
+  });
+  if (reloaded === null) {
+    throw new AppError("INTERNAL_ERROR", "Job vanished inside its own reservation");
+  }
+  return {
+    kind: "RESERVED",
+    job: toJob(reloaded, organizationId),
+    reservation: toReservation(reservation),
+    allocations: allocations.map(toAllocation),
+  };
+}
+
 export function createGenerationReservationRepository(
   prisma: PrismaClient,
 ): GenerationReservationRepository {
   return {
-    /**
-     * Transaction B: fund the hold from the Unit ledger, create it and move the
-     * job, in one commit.
-     *
-     * Split into two commits — as an earlier version was — a crash between them
-     * leaves a reservation whose job never moved, or a moved job with no hold
-     * behind it, and neither row carries enough to tell which happened.
-     *
-     * The unit counts are **copied from the job**, never accepted. A
-     * reservation covering fewer units than the job it belongs to is an
-     * under-charge no reconciliation could detect, because both rows would look
-     * internally consistent.
-     *
-     * ## Funding (Phase 6A)
-     *
-     * The period is the organization's period containing `reservedAt`, and its
-     * billing cycle becomes the reservation's for life. The allocation set is
-     * planned by the domain — Base first, then eligible blocks oldest first, in
-     * the job's own quality only — and frozen in this commit. Consume and
-     * release never reselect it, and a later period or purchase never rebinds
-     * it.
-     *
-     * **All or nothing.** The balance is checked before any write, so a short
-     * entitlement returns with nothing written: no reservation, no allocation,
-     * no job move, no event.
-     *
-     * ## Locks
-     *
-     * ```text
-     * reservation-admission lock (job) -> cost-admission lock (organization + cycle) -> job, reservation rows
-     * ```
-     *
-     * The job-scoped reservation-admission lock comes first and serializes
-     * attempts on one job, whatever period their instants select. The
-     * cost-admission lock for the period's organization and cycle comes next,
-     * before the balance is read and before any row is written; it serializes
-     * this reservation against every other reservation, block grant and
-     * settlement on the same period, so two concurrent reservations cannot both
-     * spend the last Unit. Nothing that holds the cost-admission lock ever waits
-     * for the reservation-admission lock — only `reserve()` takes it, and takes
-     * it first — so the two cannot form a cycle. The period lookup between them
-     * reads an immutable row and decides only which cost-admission lock to take.
-     */
+    /** Transaction B, in a commit of its own: see `reserveJobWithin`. */
     async reserve(
       organizationId: string,
       input: ReserveGenerationJobInput,
       context: TransitionContext,
     ): Promise<ReserveGenerationJobOutcome> {
-      return prisma.$transaction(async (tx): Promise<ReserveGenerationJobOutcome> => {
-        // ---- One reservation attempt per job at a time. ---------------------
-        // Two calls for the same job may carry instants in different periods,
-        // or one in none, so they would take different cost-admission locks —
-        // or none — and could not otherwise see each other: the loser reported
-        // LOST or NO_ENTITLEMENT_PERIOD instead of ALREADY_RESERVED. Serialized
-        // here, the second always runs after the first has committed and is
-        // answered as a replay.
-        await acquireReservationAdmissionLock(tx, organizationId, input.generationJobId);
-
-        const job = await tx.generationJob.findFirst({
-          where: { id: input.generationJobId, ...jobScope(organizationId) },
-        });
-        // A cross-tenant or missing job is LOST, not a distinguishable error:
-        // telling a caller which of the two it was discloses existence.
-        if (job === null) return { kind: "LOST" };
-
-        // A replay is answered first, whenever it arrives: the answer must not
-        // depend on whether a period still covers the replay's instant.
-        const existing = await tx.generationReservation.findUnique({
-          where: { generationJobId: input.generationJobId },
-          select: { id: true },
-        });
-        if (existing !== null) return { kind: "ALREADY_RESERVED" };
-
-        const period = await findPeriodContaining(tx, organizationId, input.reservedAt);
-        if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
-
-        // ---- The cost-admission lock, before the balance and every write. ---
-        await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
-
-        // ---- Plan the funding before anything is written. ------------------
-        const balance = await loadPeriodBalance(tx, period);
-        const funding = planUnitAllocation({
-          quality: job.qualityTier,
-          units: job.requiredVideoUnits,
-          balance,
-        });
-        if (!funding.ok) {
-          return { kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: funding.eligibleUnits };
-        }
-
-        const moved = await tx.generationJob.updateMany({
-          where: {
-            id: input.generationJobId,
-            state: "RESERVING",
-            stateVersion: input.expectedJobVersion,
-            ...jobScope(organizationId),
-          },
-          data: { state: "RESERVED", stateVersion: { increment: 1 } },
-        });
-        if (moved.count === 0) return { kind: "LOST" };
-
-        // The reservation is created RESERVING and then actually moved to
-        // RESERVED inside this same commit. An earlier version inserted it
-        // directly as RESERVED while writing history claiming a
-        // RESERVING -> RESERVED transition — the final row was right and the
-        // event stream described a state change that never happened, which is
-        // precisely the "event without an aggregate change" this phase forbids.
-        // Nothing observes the intermediate state: the transaction is atomic.
-        const created = await tx.generationReservation.create({
-          data: {
-            id: input.reservationId,
-            generationJobId: input.generationJobId,
-            // The period's cycle, never the caller's.
-            billingCycleKey: period.billingCycleKey,
-            billingCycleStartedAt: period.startsAt,
-            billingCycleEndsAt: period.endsAt,
-            funding: "ALLOCATED",
-            entitlementPeriodId: period.id,
-            // The instant that selected the period, so the row can never claim
-            // to have been reserved outside the interval it is bound to.
-            reservedAt: input.reservedAt,
-            // Copied from the job, which was itself derived at admission.
-            reservedTotalVideoUnits: job.requiredVideoUnits,
-            reservedHighQualityUnits: job.requiredHighQualityUnits,
-            state: "RESERVING",
-            stateVersion: 0,
-          },
-        });
-        await tx.generationReservationAllocation.createMany({
-          data: funding.allocations.map((allocation, index) => ({
-            id: `${created.id}_alloc_${index + 1}`,
-            reservationId: created.id,
-            organizationId,
-            entitlementPeriodId: period.id,
-            ordinal: index + 1,
-            sourceType: allocation.sourceType,
-            addOnBlockId: allocation.addOnBlockId,
-            quality: allocation.quality,
-            quantity: allocation.quantity,
-          })),
-        });
-        await appendGenerationEvent(tx, {
-          organizationId,
-          aggregateType: "RESERVATION",
-          aggregateId: created.id,
-          fromState: null,
-          toState: "RESERVING",
-          context,
-        });
-
-        const held = await tx.generationReservation.updateMany({
-          where: { id: created.id, state: "RESERVING", stateVersion: 0 },
-          data: { state: "RESERVED", stateVersion: { increment: 1 } },
-        });
-        if (held.count === 0) {
-          throw new AppError("INTERNAL_ERROR", "Reservation vanished inside its own creation");
-        }
-        // The funding summary travels with the RESERVED event, so the append-only
-        // history names the period and the split without a join. The rows are
-        // the evidence; this is the index into them.
-        const baseUnits = funding.allocations
-          .filter((allocation) => allocation.sourceType === "BASE")
-          .reduce((total, allocation) => total + allocation.quantity, 0);
-        await appendGenerationEvent(tx, {
-          organizationId,
-          aggregateType: "RESERVATION",
-          aggregateId: created.id,
-          fromState: "RESERVING",
-          toState: "RESERVED",
-          context: {
-            ...context,
-            metadata: sanitizeTransitionMetadata({
-              ...context.metadata,
-              entitlementPeriodId: period.id,
-              billingCycleKey: period.billingCycleKey,
-              qualityTier: job.qualityTier,
-              totalVideoUnits: job.requiredVideoUnits,
-              baseAllocatedUnits: baseUnits,
-              addOnAllocatedUnits: job.requiredVideoUnits - baseUnits,
-              allocationCount: funding.allocations.length,
-            }),
-          },
-        });
-        const reservation = await tx.generationReservation.findUniqueOrThrow({
-          where: { id: created.id },
-        });
-        const allocations = await tx.generationReservationAllocation.findMany({
-          where: { reservationId: created.id },
-          orderBy: { ordinal: "asc" },
-        });
-        await appendGenerationEvent(tx, {
-          organizationId,
-          aggregateType: "JOB",
-          aggregateId: input.generationJobId,
-          fromState: "RESERVING",
-          toState: "RESERVED",
-          context,
-        });
-
-        const reloaded = await tx.generationJob.findFirst({
-          where: { id: input.generationJobId, ...jobScope(organizationId) },
-        });
-        if (reloaded === null) {
-          throw new AppError("INTERNAL_ERROR", "Job vanished inside its own reservation");
-        }
-        return {
-          kind: "RESERVED",
-          job: toJob(reloaded, organizationId),
-          reservation: toReservation(reservation),
-          allocations: allocations.map(toAllocation),
-        };
-      });
+      return prisma.$transaction((tx) => reserveJobWithin(tx, organizationId, input, context));
     },
 
     async findByJobId(organizationId, generationJobId) {
@@ -1283,6 +1304,271 @@ export function createGenerationReservationRepository(
         }
         return { kind: "APPLIED" as const, value: toReservation(row) };
       });
+    },
+  };
+}
+
+/**
+ * Thrown inside the start commit to roll back what it wrote, carrying the
+ * refusal `start()` returns. Never escapes `start()`.
+ */
+class StartRefused extends Error {
+  constructor(readonly outcome: GenerationStartOutcome) {
+    super(`generation start refused: ${outcome.kind}`);
+  }
+}
+
+/** The start key's unique index refusing a second job: another start committed first. */
+function isStartKeyConflict(error: unknown): boolean {
+  const { code, meta } = error as { code?: unknown; meta?: { target?: unknown } };
+  if (code !== "P2002" || !Array.isArray(meta?.target)) return false;
+  const fields = meta.target.map(String);
+  return fields.length === 2 && fields.includes("videoProjectId") && fields.includes("idempotencyKey");
+}
+
+/**
+ * The start commit (ADR-0087), inside the transaction `start()` opened.
+ *
+ * ```text
+ * reservation-admission lock (job) -> cost-admission lock (organization + cycle)
+ *   -> project row FOR SHARE -> replay -> storyboard -> job
+ *   -> Transaction B (its two locks already held) -> scenes, requests, audit
+ * ```
+ *
+ * Every refusal before the job is written returns with nothing written. One
+ * after it, from the reservation, is thrown as `StartRefused`, so the job and
+ * its events roll back with it.
+ */
+async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<GenerationStartOutcome> {
+  const { organizationId, videoProjectId, context } = record;
+
+  // ---- Transaction B's two locks, taken first (ADR-0087 Decision 3). ------
+  // The cost-admission lock is the outermost lock in the system: no row lock
+  // is held while it is acquired (`cost-admission-lock.ts`). The start holds
+  // the project row until it commits, so it takes both locks before that row,
+  // in Transaction B's order. Transaction B takes them again below, which a
+  // lock this transaction already holds grants at once, and finds the same
+  // period: periods never overlap and never change. With no period there is
+  // no cost-admission lock to take, and the start is refused before the job.
+  await acquireReservationAdmissionLock(tx, organizationId, record.jobId);
+  const period = await findPeriodContaining(tx, organizationId, record.startedAt);
+  if (period !== null) await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
+
+  // ---- The project row, held FOR SHARE until the commit (ADR-0086). -------
+  // A composition saving waits for this start, and this start waits for a
+  // composition already saving, so the fingerprint and the scenes read below
+  // are one composition's.
+  const projects = await tx.$queryRaw<
+    { resolution: string; aspectRatio: string; status: string; compositionFingerprint: string | null }[]
+  >`
+    SELECT "resolution", "aspectRatio", "status"::text AS "status", "compositionFingerprint"
+      FROM "video_projects"
+     WHERE "id" = ${videoProjectId} AND "organizationId" = ${organizationId}
+       FOR SHARE`;
+  const project = projects[0];
+  if (project === undefined) return { kind: "PROJECT_NOT_FOUND" };
+
+  // ---- A replay is answered first, whatever the storyboard is now. --------
+  const started = await tx.generationJob.findFirst({
+    where: { videoProjectId, idempotencyKey: record.idempotencyKey },
+  });
+  if (started !== null) return { kind: "EXISTING", job: toJob(started, organizationId) };
+
+  // ---- Exactly the composition the service judged current. ---------------
+  const scenes = await tx.storyboardScene.findMany({
+    where: { videoProjectId },
+    orderBy: { position: "asc" },
+  });
+  const expected = record.storyboard.scenes;
+  if (
+    project.status !== "STORYBOARD_READY" ||
+    project.compositionFingerprint !== record.storyboard.compositionFingerprint ||
+    scenes.length === 0 ||
+    scenes.length !== expected.length ||
+    scenes.some((scene, index) => scene.id !== expected[index]?.storyboardSceneId)
+  ) {
+    return { kind: "STORYBOARD_CHANGED" };
+  }
+
+  // ---- Quality and Units, from the rows this commit holds. ----------------
+  if (!isTargetOutputResolution(project.resolution)) return { kind: "PROJECT_NOT_FOUND" };
+  if (qualityTierForResolution(project.resolution) !== record.qualityTier) {
+    return { kind: "QUALITY_CHANGED" };
+  }
+  const durationSeconds = scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
+  const units = requiredUnitsFor(record.qualityTier, durationSeconds);
+  if (!units.ok) return { kind: "DURATION_NOT_SUPPORTED" };
+  // Not left to Transaction B: a period it found now, opened since the read
+  // above, would have it take the cost-admission lock under the project row.
+  if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
+
+  // ---- The job, CREATED and then RESERVING, as job creation writes it. ----
+  await tx.generationJob.create({
+    data: {
+      id: record.jobId,
+      videoProjectId,
+      requestedByUserId: record.requestedByUserId,
+      qualityTier: record.qualityTier,
+      targetOutputResolution: project.resolution,
+      targetAspectRatio: project.aspectRatio,
+      requestedDurationSeconds: durationSeconds,
+      disclosureMode: record.disclosureMode,
+      requiredVideoUnits: units.value.totalVideoUnits,
+      requiredHighQualityUnits: units.value.highQualityUnits,
+      idempotencyKey: record.idempotencyKey,
+      state: "CREATED",
+    },
+  });
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "JOB",
+    aggregateId: record.jobId,
+    fromState: null,
+    toState: "CREATED",
+    context,
+  });
+  await applyLockedTransition(tx, {
+    table: "generation_jobs",
+    id: record.jobId,
+    from: "CREATED",
+    to: "RESERVING",
+  });
+  await appendGenerationEvent(tx, {
+    organizationId,
+    aggregateType: "JOB",
+    aggregateId: record.jobId,
+    fromState: "CREATED",
+    toState: "RESERVING",
+    context,
+  });
+
+  // ---- Transaction B, in this commit. -------------------------------------
+  const reserved = await reserveJobWithin(
+    tx,
+    organizationId,
+    {
+      reservationId: record.reservationId,
+      generationJobId: record.jobId,
+      expectedJobVersion: 1,
+      reservedAt: record.startedAt,
+    },
+    context,
+  );
+  // Refused above for want of a period; kept, so a refusal here still rolls back.
+  if (reserved.kind === "NO_ENTITLEMENT_PERIOD") throw new StartRefused({ kind: reserved.kind });
+  if (reserved.kind === "INSUFFICIENT_ENTITLEMENT") {
+    throw new StartRefused({ kind: reserved.kind, eligibleUnits: reserved.eligibleUnits });
+  }
+  if (reserved.kind !== "RESERVED") {
+    // The job was created in this transaction: nothing else can hold or move it.
+    throw new AppError("INTERNAL_ERROR", `A new job's reservation answered ${reserved.kind}`);
+  }
+
+  // ---- The scenes, copied, and their first requests. ----------------------
+  const createdScenes: GenerationScene[] = [];
+  const createdRequests: SceneGenerationRequestRecord[] = [];
+  for (const [index, scene] of scenes.entries()) {
+    const ids = expected[index]!;
+    const sceneRow = await tx.generationScene.create({
+      data: {
+        id: ids.generationSceneId,
+        generationJobId: record.jobId,
+        position: scene.position,
+        sourceStoryboardSceneId: scene.id,
+        sourceAssetId: scene.assetId,
+        sourceAnalysisRevision: scene.sourceAnalysisRevision,
+        snapshotDurationSeconds: scene.durationSeconds,
+        snapshotCameraMotion: scene.cameraMotion,
+        snapshotCompiledPrompt: scene.compiledPrompt,
+        state: "PENDING",
+      },
+    });
+    await appendGenerationEvent(tx, {
+      organizationId,
+      aggregateType: "SCENE",
+      aggregateId: sceneRow.id,
+      fromState: null,
+      toState: "PENDING",
+      context,
+    });
+    const requestRow = await tx.sceneGenerationRequest.create({
+      data: {
+        id: ids.initialRequestId,
+        generationSceneId: sceneRow.id,
+        kind: "INITIAL",
+        userRegenerationOrdinal: null,
+        requestedByUserId: record.requestedByUserId,
+        state: "PENDING",
+      },
+    });
+    await appendGenerationEvent(tx, {
+      organizationId,
+      aggregateType: "SCENE_REQUEST",
+      aggregateId: requestRow.id,
+      fromState: null,
+      toState: "PENDING",
+      context,
+    });
+    createdScenes.push(toScene(sceneRow));
+    createdRequests.push(toRequest(requestRow));
+  }
+
+  const audit = record.audit({
+    job: reserved.job,
+    reservation: reserved.reservation,
+    allocations: reserved.allocations,
+    sceneCount: createdScenes.length,
+  });
+  // The entry is filed under the organization whose project this commit
+  // locked, or the start does not happen.
+  if (audit.organizationId !== organizationId) {
+    throw new AppError("INTERNAL_ERROR", "A start's audit entry names another organization");
+  }
+  await tx.auditLog.create({ data: auditLogData(audit) });
+  return {
+    kind: "STARTED",
+    job: reserved.job,
+    reservation: reserved.reservation,
+    allocations: reserved.allocations,
+    scenes: createdScenes,
+    requests: createdRequests,
+  };
+}
+
+/**
+ * The start commit's repository (GS-4b, ADR-0087). Nothing constructs it yet:
+ * the start service (GS-4c) and its route (GS-10) will.
+ */
+export function createGenerationStartRepository(prisma: PrismaClient): GenerationStartRepository {
+  return {
+    async start(record): Promise<GenerationStartOutcome> {
+      // The key the column's CHECK accepts. Checked here because the replay
+      // is read before anything is inserted: a missing key would match any
+      // job of the project, and answer with it.
+      const key: unknown = record.idempotencyKey;
+      if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+        throw new AppError("VALIDATION_FAILED", "A start needs a start key of 1 to 200 characters");
+      }
+      if (!isDisclosureMode(record.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };
+      try {
+        return await prisma.$transaction((tx) => startWithin(tx, record));
+      } catch (error) {
+        if (error instanceof StartRefused) return error.outcome;
+        // Two starts with one key: the second waited on the first's row in the
+        // unique index and was refused once the first committed. It answers as
+        // a replay, with the job the first one started.
+        if (isStartKeyConflict(error)) {
+          const row = await prisma.generationJob.findFirst({
+            where: {
+              videoProjectId: record.videoProjectId,
+              idempotencyKey: record.idempotencyKey,
+              ...jobScope(record.organizationId),
+            },
+          });
+          if (row !== null) return { kind: "EXISTING", job: toJob(row, record.organizationId) };
+        }
+        throw error;
+      }
     },
   };
 }

@@ -57,7 +57,7 @@ describe("UP-5 shape", () => {
       .sort();
     // No longer the newest: DS-3 added migration 29 after it.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(28);
-    expect(dirs).toHaveLength(32);
+    expect(dirs).toHaveLength(33);
   });
 
   it("creates the cancellation table, the type naming whose mistake it was and one unique index, and rewrites no existing row", () => {

@@ -5,7 +5,8 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0083-a-scene-whose-attempts-failed-settles-its-job.md` (GS-2a),
 `docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b),
 `docs/decisions/0085-a-shared-folder-holds-development-objects.md` (GS-3),
-`docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md` (GS-4a)
+`docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md` (GS-4a),
+`docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -1400,3 +1401,208 @@ remain BLOCKED.
 GS-4a waits for the product owner's yes before merge. GS-4b (the start commit:
 job, Unit reservation, scenes and first requests in one commit, with a start
 key) and GS-4c (the start service) follow.
+
+## GS-4b — a generation starts in one commit
+
+Base: `b746e59` (PR #109 merge commit on `main`; post-merge CI run 685 green).
+ADR: `docs/decisions/0087-a-generation-starts-in-one-commit.md`
+
+The second of GS-4's three pull requests. **Migration 32; no route, no page.**
+Nothing outside tests constructs the start commit until GS-4c's service and
+GS-10's route.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `05889d2` | the start commit, the start key (migration 32), the domain types, Transaction B moved into a private helper, the tests, ADR-0087 and the documentation |
+| `d720cb2` | the review's answers: Transaction B's two locks taken before the project row, the no-period refusal before the job, the start key and the audit entry's organization checked, deterministic same-key tests, the project-row lock inventory, the lock-order notes |
+| `c9507ee` | a static assertion the second mutation pass found vacuous |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-4b does
+
+- **One commit, or nothing.** `createGenerationStartRepository(prisma).start`
+  checks that the project still holds the storyboard the service judged
+  current, derives the quality from the project's resolution, creates the job
+  and reserves its Units through Transaction B, copies the storyboard's scenes
+  with their first requests, and records the audit entry. Every refusal writes
+  nothing; the one found after the job is written, a short entitlement, rolls
+  the job back with it.
+- **A start key.** `generation_jobs."idempotencyKey"`, unique per project
+  (migration 32), answers a replay with the job it started, before the
+  storyboard is judged again. Two starts with one key take turns at their
+  period's cost-admission lock; two in different periods are decided by the
+  key's index.
+- **The cost-admission lock stays outermost.** The start takes Transaction B's
+  two locks as its first statements, then holds the project row `FOR SHARE` to
+  the commit, so a composition cannot change the storyboard under it and no
+  row lock is held while the cost-admission lock is acquired.
+- **The job stays `RESERVED`.** No attempt is admitted; GS-7's launch step does
+  that.
+
+```mermaid
+sequenceDiagram
+    participant S as Start commit
+    participant L as Advisory locks
+    participant P as video_projects row
+    participant DB as Job, reservation, scenes, requests, audit
+    S->>L: reservation-admission lock (new job)
+    S->>L: cost-admission lock (organization + cycle)
+    S->>P: FOR SHARE (waits for a composition saving)
+    S->>DB: replay by start key? answer EXISTING
+    S->>P: storyboard, quality, Units checked under the lock
+    S->>DB: job CREATED, RESERVING
+    S->>DB: Transaction B: reservation, allocations, job RESERVED
+    S->>DB: scenes and INITIAL requests PENDING, events
+    S->>DB: audit entry (its organization checked)
+    S-->>P: commit: everything, or nothing
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI) on `c9507ee`. This
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6178 / 6178**, 224 files (6164 on `b746e59`) |
+| `pnpm test:db` | **1653 / 1653**, 61 files (1629 on `b746e59`), on `d720cb2`; `c9507ee` changes one unit test |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` (migrations against the schema) | no difference |
+
+New and changed tests:
+
+- `tests/integration/generation-start.db.test.ts` (new, 24 tests), against
+  PostgreSQL, with its own two tenants and Standard periods:
+  - a start writes the job (`RESERVED`, key, Units, snapshot), the reservation
+    and its allocation, the scenes and first requests copied from the
+    storyboard, every event under the organization, and one audit entry; a
+    720p project starts at Normal; one key may start two projects;
+  - a replay answers with the first job and writes nothing, even after
+    recomposition; two same-key starts in one period both wait at the
+    cost-admission lock and start one job; two in different periods are
+    decided by the key's index while the first is held at its audit entry, and
+    the second starts when the first's backend is cancelled; another
+    organization's replay is answered `PROJECT_NOT_FOUND`;
+  - each refusal writes nothing: another tenant's or a missing project; a
+    changed fingerprint, scene order, scene count or status; an empty
+    storyboard; a changed quality; a storyboard over 90 seconds; an unknown
+    disclosure mode; no period; the plan's one HQ Unit spent; a failing audit
+    builder; an audit entry naming another organization; a key of 0 or 201
+    characters, or none (and 200 starts);
+  - a start waits for the cost-admission lock holding no row, while a
+    composition saves, then refuses the storyboard it changed; it waits for a
+    composition already saving and then refuses or starts on what it left; it
+    does not wait for another reader of the project; a 90-scene storyboard
+    starts within the default limit (composition and start together about
+    0.7 s locally). Each wait is read from `pg_stat_activity`, and every
+    holder is released in `finally`.
+- `packages/domain/src/orchestration/start.test.ts` (new, 13 tests): the
+  quality mapping; migration 32's exact SQL; the start's lock and statement
+  order; refusals returned before the job and thrown after it; the key and
+  mode refused before the transaction; the audit entry's organization checked
+  before it is written; no attempt admitted; nothing constructs the
+  repository; and an inventory of every lock and write on a project row in the
+  database package, with composition and job creation taking no advisory lock.
+- `tests/database-public-surface.test.ts`: the start repository is exported;
+  `reserveJobWithin` is not, and only its module names it.
+- `durable-shape.test.ts` and `mode-shape.test.ts` follow Transaction B into
+  `reserveJobWithin` and the start's job write; eighteen migration-count pins
+  move from 32 to 33, and four dormancy pins name migration 32 as the newest.
+
+### Mutation testing
+
+Each mutant applied to the source, the start's database and static suites run
+(the ledger suite for the `reserve()` mutant), and the file restored and
+checked by SHA-256; the repository's manifest was identical before and after
+each pass. The harness is outside the repository.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| L01 | the project row not locked | killed |
+| L02 | the project locked `FOR UPDATE` | first pass: killed by the static test only; a test that a start does not wait for another reader was added, which kills it |
+| T01 | the project lock not scoped to the organization | killed |
+| R01 / R02 | no replay read; any job of the project taken as the replay | killed |
+| S01–S05 | fingerprint, status, scene order, scene count, empty storyboard not checked | killed |
+| Q01 / Q02 | the confirmed quality not checked; 720p mapped to HQ | killed |
+| U01 / U02 | the duration from the first scene only; an over-long storyboard not refused | killed |
+| J01–J04 | no key on the job; no move to `RESERVING`; the wrong job version; the wall clock for `startedAt` | killed |
+| B01 | no period: the refusal returned after the job is written | first pass: killed. Second pass: killed by the static test only, since the start now refuses a missing period before the job, so Transaction B cannot meet one |
+| B02 | short Units: the refusal returned after the job is written | killed |
+| C01–C04 | a scene not copied; its prompt not copied; its events mislabelled; no first request | killed |
+| A01 / A02 | no audit entry; an entry naming another organization written | killed (A02 second pass) |
+| V01 / V02 | the key's check removed; a 200-character key refused | killed (second pass) |
+| O01 | the cost-admission lock not taken before the project row | killed (second pass) |
+| O02 | the no-period refusal removed, leaving it to Transaction B | second pass: survived, because the static order assertion passed on a missing line; fixed in `c9507ee`, then killed. Behaviourally the same except when a period is opened mid-start |
+| O03 | the reservation-admission lock not taken first | killed by the static test only: the lock is uncontended for a new job |
+| K01 | a key conflict not recognised | killed |
+| D01 | an unknown disclosure mode reaching the transaction | killed |
+| X01 | `reserve()` running Transaction B outside a transaction | killed by the ledger suite |
+
+Result: first pass on `05889d2`, 28 mutants, 28 killed. Second pass on
+`d720cb2`, 34 mutants, 33 killed and one survivor, killed after `c9507ee`.
+
+### Review
+
+Codex is at its usage limit, so, as for DS-3 to GS-4a, an independent review
+agent reviewed `05889d2` against `b746e59`, reading only git objects. It
+confirmed Transaction B is unchanged for `reserve()`, that the start is atomic
+and every refusal writes nothing, that Prisma 5.22 reports the key's index by
+field names, that tenant isolation holds through the replay and the conflict
+re-read, and that no lock cycle exists today. Verdict: nothing blocking. Its
+findings, answered in `d720cb2`:
+
+| Finding | Answer |
+| --- | --- |
+| The start held the project row and then took the cost-admission lock, contradicting the documented rule that it is the outermost lock; a later author following that rule could add a deadlock | Fixed by obeying the rule: the start takes the reservation-admission and cost-admission locks first, and refuses a start no period covers before the job, so Transaction B never takes a cost-admission lock under the project row. The lock module's and the authorization repository's notes name the start, and a static inventory lists every lock and write on a project row |
+| The same-key test could pass without reaching the key's index | Rewritten: same-period starts are both seen waiting at the cost-admission lock; a cross-period pair is held at the first's audit entry so the second is seen waiting on the index, both when the first commits and when its backend is cancelled |
+| A missing key would match any job of the project | Refused before the transaction: a string of 1 to 200 characters, as the column's check |
+| The audit entry's organization was not enforced | An entry naming another organization rolls the start back |
+| The cross-tenant replay test did not prove the first start happened | Asserted |
+| ADR wording: a write to project rows left out, the job row's place in the lock order, "bounds its callers" | Corrected |
+| The project-scoped key departs from `docs/DataModel.md` | Kept, as ADR-0087 Decision 2 explains; the PR names it for the product owner |
+| A long storyboard against the 5-second limit | Measured locally (a 90-scene storyboard, now a test); the production timing is a TODO before activation |
+| Nits: a redundant index, two stale comments, `Promise` missing from the API summary, the timing of a differing replay, scene and request events' organization untested | Comments, summary and test fixed; the differing replay is described in ADR-0087; the redundant `videoProjectId` index is left, since dropping it is a schema change of its own |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start commit's row |
+| Entity-relationship diagram | `docs/er-diagram.md`, *GS-4b*: the start key |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0087 Decisions 1 to 3 |
+| OpenAPI / API change summary | `docs/api-changes-gs-4b.md`: no HTTP change; the port, its outcomes, the Prisma repository |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-4b*: migration 32, and how to roll it back |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md`,
+`docs/DataModel.md` (the key's scope), and `docs/decisions/TODO.md` (measure
+the start on the production database before activation).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the start commit is constructed by tests only. No scheduler,
+credential or payment integration. Paid Provider Activation, production
+Provider credentials, production paid AI calls, the production scheduler and
+live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing launches a started job** until GS-7, and a job that could never
+  launch must still release its Units (TODO).
+- **The start's time on the production database** is not measured (TODO).
+- **Analysis changes are not locked**, as ADR-0086 recorded.
+
+### Remaining work
+
+GS-4b waits for the product owner's yes before merge. GS-4c (the start
+service: permissions, reach, the start key, freshness, quality, Mode A and the
+Unit period) follows.
+

@@ -130,7 +130,10 @@ or settings branches for them.
 
 `id`, `organization_id`, `video_project_id`, `idempotency_key`, `status`, `attempt_count`, `progress_percent`, `estimated_credits`, `reserved_credits`, `settled_credits`, `estimated_cost`, `actual_cost`, `failure_code`, `failure_message_sanitized`, timestamps
 
-Unique constraint: `(organization_id, idempotency_key)`.
+Unique constraint: `(organization_id, idempotency_key)`. *Implemented as
+`generation_jobs."idempotencyKey"`, unique with `"videoProjectId"` (GS-4b,
+ADR-0087 Decision 2): the job reaches its organization through its project,
+which belongs to exactly one, so the key is scoped to the project.*
 
 **The admitted disclosure contract is immutable on the job** (ADR-0052
 Decision 10). At admission the job must capture, and never afterwards mutate: its

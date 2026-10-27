@@ -30,11 +30,15 @@ function migrationSql(): string {
   return readFileSync(join(MIGRATIONS, MIGRATION_DIR, "migration.sql"), "utf8").replace(/--[^\n]*/g, " ");
 }
 
-/** The body of `reserve(` in the orchestration repository, comments stripped. */
+/**
+ * The body of Transaction B in the orchestration repository, comments stripped.
+ * GS-4b (ADR-0087) moved it into `reserveJobWithin`, which both `reserve(` and
+ * the start commit run.
+ */
 function reserveBody(): string {
   const repo = code(readFileSync(join(DATABASE_SRC, "orchestration-repositories.ts"), "utf8"));
-  const start = repo.indexOf("async reserve(");
-  const end = repo.indexOf("async findByJobId(", start);
+  const start = repo.indexOf("async function reserveJobWithin(");
+  const end = repo.indexOf("export function createGenerationReservationRepository(", start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
   return repo.slice(start, end);
@@ -55,7 +59,7 @@ describe("durable shape", () => {
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(17);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(32);
+    expect(dirs).toHaveLength(33);
   });
 
   it("creates the three ledger tables and rewrites no existing row", () => {
