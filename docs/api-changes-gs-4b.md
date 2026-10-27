@@ -14,7 +14,7 @@ No change.
 
 - `qualityTierForResolution(resolution)`: `720p` is `NORMAL` and `1080p` is
   `HIGH_QUALITY` (ADR-0052 Decision 6).
-- `GenerationStartRepository.start(record): GenerationStartOutcome`, with the
+- `GenerationStartRepository.start(record): Promise<GenerationStartOutcome>`, with the
   types `GenerationStartRecord`, `GenerationStartScene`,
   `GenerationStartSummary`, `GenerationStartAudit` and
   `GenerationStartOutcome`.
@@ -35,11 +35,18 @@ what the commit wrote.
 | `QUALITY_CHANGED` | the project's resolution no longer gives the confirmed quality | nothing |
 | `DURATION_NOT_SUPPORTED` | the storyboard is longer than a generation may be | nothing |
 | `DISCLOSURE_MODE_NOT_SUPPORTED` | a mode a job cannot carry | nothing |
-| `NO_ENTITLEMENT_PERIOD` | no Unit period covers `startedAt` | nothing (the job rolls back) |
+| `NO_ENTITLEMENT_PERIOD` | no Unit period covers `startedAt` | nothing |
 | `INSUFFICIENT_ENTITLEMENT` | the eligible Units are short, with `eligibleUnits` | nothing (the job rolls back) |
 
-An `audit` builder that throws rolls the whole start back and the error
-propagates.
+A start key that is not a string of 1 to 200 characters is refused with a
+`VALIDATION_FAILED` error before anything is read. An `audit` builder that
+throws, or an entry naming another organization than the start's
+(`INTERNAL_ERROR`), rolls the whole start back and the error propagates.
+
+The start takes Transaction B's two advisory locks, the reservation-admission
+lock for its job and the cost-admission lock for its period, before it locks
+the project row, so the cost-admission lock stays the outermost lock
+(ADR-0087 Decision 3).
 
 ### Added: `@app/database`
 
@@ -50,6 +57,6 @@ propagates.
 
 Transaction B's body moved, unchanged, from `reserve()` into the module-private
 `reserveJobWithin`, which `reserve()` runs in a commit of its own and the start
-runs inside its commit. It is not exported, and a static test bounds its
-callers to `orchestration-repositories.ts`. `reserve()` answers exactly as
+runs inside its commit. It is not exported, and a static test keeps every
+mention of it in `orchestration-repositories.ts`. `reserve()` answers exactly as
 before.

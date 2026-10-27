@@ -43,6 +43,11 @@
  * transactions and are never held while this one is acquired, so there is no
  * cycle: nothing acquires a 2E lock and then waits for this one.
  *
+ * The start commit (ADR-0087) is the one transaction that holds this lock and
+ * then locks a `video_projects` row (`FOR SHARE`, to the commit). It takes this
+ * lock first, before the row, as the order requires. A transaction that locked
+ * a project row and then waited for this lock would deadlock with it.
+ *
  * ## Not exported from the package
  *
  * `packages/database/src/index.ts` does not re-export this. A caller outside the
@@ -116,9 +121,11 @@ export async function acquireEntitlementPeriodOpeningLock(
  * for one job may carry instants in different periods — or one in none — and
  * would otherwise take different cost-admission locks, or none, and never see
  * each other. It is the only lock ever taken before the cost-admission lock, and
- * it cannot form a cycle with it: only `reserve()` takes it, always as its first
- * statement, so no transaction holding the cost-admission lock or any row lock
- * ever waits for it.
+ * it cannot form a cycle with it: only Transaction B (`reserve()`) and the start
+ * commit (ADR-0087) take it, each as its first statement, so no transaction
+ * holding the cost-admission lock or any row lock ever waits for it. The start
+ * commit takes it for the job it is about to create, then runs Transaction B,
+ * which takes it again and is granted it at once.
  */
 export async function acquireReservationAdmissionLock(
   tx: Tx,

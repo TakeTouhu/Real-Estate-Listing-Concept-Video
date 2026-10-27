@@ -1390,6 +1390,14 @@ them is **built**. Each item below records the settled decision and what remains
       serves its quality any more, must not hold them indefinitely (ADR-0052
       Decision 19). Nothing launches a job yet, and nothing constructs the start
       step outside tests until GS-10.
+- [ ] **Measure the start commit on the production database before
+      activation.** The start copies a storyboard in one transaction under
+      Prisma's default 5-second limit, at about six statements per scene; a
+      90-scene storyboard starts in well under a second on the local test
+      database (ADR-0087 Decision 6). A start that overran because of its own
+      size would overrun again on every retry, so the time of the longest
+      storyboard must be measured where the database is reached over a
+      network, and the copies batched if it comes near the limit.
 - [ ] **Decide what closes a cancelled job's open scenes.** Transaction L
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing

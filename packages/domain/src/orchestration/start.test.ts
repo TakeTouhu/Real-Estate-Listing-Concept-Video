@@ -75,7 +75,26 @@ describe("the start key's migration", () => {
 });
 
 describe("the start commit", () => {
-  it("holds the project row FOR SHARE, scoped to the organization, before anything else", () => {
+  it("takes Transaction B's two locks before it holds the project row", () => {
+    // The cost-admission lock is the outermost lock in the system: no row lock
+    // may be held while it is acquired (cost-admission-lock.ts).
+    const { within } = startSource();
+    const order = [
+      "acquireReservationAdmissionLock(tx, organizationId, record.jobId)",
+      "findPeriodContaining(tx, organizationId, record.startedAt)",
+      "acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey)",
+      "FOR SHARE",
+    ].map((needle) => within.indexOf(needle));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // A start no period covers is refused before the job, so Transaction B
+    // never takes a cost-admission lock under the project row.
+    expect(within.indexOf('if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };')).toBeLessThan(
+      within.indexOf("tx.generationJob.create("),
+    );
+  });
+
+  it("holds the project row FOR SHARE, scoped to the organization, before it reads or writes anything", () => {
     const { within } = startSource();
     const lock = within.indexOf("FOR SHARE");
     expect(lock).toBeGreaterThan(-1);
@@ -135,11 +154,23 @@ describe("the start commit", () => {
     ]);
   });
 
-  it("refuses an unknown disclosure mode before the transaction opens", () => {
+  it("refuses an unknown disclosure mode and a key the column cannot hold before the transaction opens", () => {
     const { repository } = startSource();
-    const refusal = repository.indexOf("if (!isDisclosureMode(record.disclosureMode))");
-    expect(refusal).toBeGreaterThan(-1);
-    expect(refusal).toBeLessThan(repository.indexOf("prisma.$transaction("));
+    const transaction = repository.indexOf("prisma.$transaction(");
+    for (const refusal of [
+      "if (!isDisclosureMode(record.disclosureMode))",
+      'if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH)',
+    ]) {
+      expect(repository.indexOf(refusal)).toBeGreaterThan(-1);
+      expect(repository.indexOf(refusal)).toBeLessThan(transaction);
+    }
+  });
+
+  it("files the audit entry under the organization whose project it locked", () => {
+    const { within } = startSource();
+    const check = within.indexOf("if (audit.organizationId !== organizationId)");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(within.indexOf("tx.auditLog.create("));
   });
 
   it("is constructed by nothing yet: the start service (GS-4c) and route (GS-10) will", () => {
@@ -150,5 +181,51 @@ describe("the start commit", () => {
       .filter(({ text }) => text.includes("createGenerationStartRepository("))
       .map(({ name }) => name);
     expect(constructors).toEqual(["packages/database/src/orchestration-repositories.ts"]);
+  });
+});
+
+describe("the project row and the cost-admission lock", () => {
+  /** Each lock or write on a `video_projects` row in the database package, by file. */
+  function projectRowLocks(): Record<string, string[]> {
+    const found: Record<string, string[]> = {};
+    for (const name of readdirSync(DATABASE_SRC).filter((file) => file.endsWith(".ts") && !file.includes(".test."))) {
+      const text = code(readFileSync(join(DATABASE_SRC, name), "utf8"));
+      const locks: string[] = [];
+      for (const [query] of text.matchAll(/`[^`]*`/g)) {
+        if (!query.includes("video_projects")) continue;
+        // Unqualified, the lock covers every table the query joins.
+        for (const [lock] of query.matchAll(/FOR (?:NO KEY UPDATE|UPDATE|KEY SHARE|SHARE)(?! OF)/g)) locks.push(lock);
+        if (/UPDATE "video_projects"|DELETE FROM "video_projects"/.test(query)) locks.push("raw write");
+      }
+      for (const [write] of text.matchAll(/videoProject\.(?:update|updateMany|upsert|delete|deleteMany)\(/g)) {
+        locks.push(write);
+      }
+      if (locks.length > 0) found[name] = locks;
+    }
+    return found;
+  }
+
+  it("is locked or written only by job creation, composition and the start", () => {
+    // A new one must be checked against the lock order before it is added
+    // here: nothing may hold a project row while it acquires the
+    // cost-admission lock (ADR-0087 Decision 3).
+    expect(projectRowLocks()).toEqual({
+      // Job creation's snapshot read, then the start's.
+      "orchestration-repositories.ts": ["FOR SHARE", "FOR SHARE"],
+      // Composition's lock and write, and `projects.update`.
+      "storyboard-repositories.ts": ["FOR NO KEY UPDATE", "videoProject.updateMany(", "videoProject.update("],
+    });
+  });
+
+  it("is never held by composition or job creation while an advisory lock is taken", () => {
+    const storyboard = code(readFileSync(join(DATABASE_SRC, "storyboard-repositories.ts"), "utf8"));
+    expect(storyboard).not.toMatch(/acquire\w*Lock\(/);
+    const repo = code(readFileSync(join(DATABASE_SRC, "orchestration-repositories.ts"), "utf8"));
+    const jobs = repo.slice(
+      repo.indexOf("export function createGenerationJobRepository("),
+      repo.indexOf("async function reserveJobWithin("),
+    );
+    expect(jobs).toContain("lockProjectOutputConfig(");
+    expect(jobs).not.toMatch(/acquire\w*Lock\(/);
   });
 });

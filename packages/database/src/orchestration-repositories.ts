@@ -53,6 +53,7 @@ import {
   computeGenerationRequestHash,
   isDisclosureMode,
   isTargetOutputResolution,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
   nextUserRegenerationOrdinal,
   planUnitAllocation,
   qualityTierForResolution,
@@ -1047,14 +1048,16 @@ export function createGenerationJobRepository(prisma: PrismaClient): GenerationJ
  * this reservation against every other reservation, block grant and
  * settlement on the same period, so two concurrent reservations cannot both
  * spend the last Unit. Nothing that holds the cost-admission lock ever waits
- * for the reservation-admission lock — only this function takes it, and takes
- * it before the cost-admission lock — so the two cannot form a cycle. The
- * period lookup between them reads an immutable row and decides only which
- * cost-admission lock to take.
+ * for the reservation-admission lock — only this function and the start
+ * commit take it, each before the cost-admission lock — so the two cannot
+ * form a cycle. The period lookup between them reads an immutable row and
+ * decides only which cost-admission lock to take.
  *
  * Within a transaction its caller opened: `reserve()` gives it a commit of its
  * own, and the start commit (ADR-0087) runs it after creating the job, so a
- * refusal there rolls the job back with it. Not exported.
+ * refusal there rolls the job back with it. The start has taken both locks
+ * already, before the project row, and here they are granted at once. Not
+ * exported.
  */
 async function reserveJobWithin(
   tx: Tx,
@@ -1327,8 +1330,9 @@ function isStartKeyConflict(error: unknown): boolean {
  * The start commit (ADR-0087), inside the transaction `start()` opened.
  *
  * ```text
- * project row FOR SHARE -> replay -> storyboard -> job -> reservation-admission lock (job)
- *   -> cost-admission lock (organization + cycle) -> reservation -> scenes, requests, audit
+ * reservation-admission lock (job) -> cost-admission lock (organization + cycle)
+ *   -> project row FOR SHARE -> replay -> storyboard -> job
+ *   -> Transaction B (its two locks already held) -> scenes, requests, audit
  * ```
  *
  * Every refusal before the job is written returns with nothing written. One
@@ -1337,6 +1341,18 @@ function isStartKeyConflict(error: unknown): boolean {
  */
 async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<GenerationStartOutcome> {
   const { organizationId, videoProjectId, context } = record;
+
+  // ---- Transaction B's two locks, taken first (ADR-0087 Decision 3). ------
+  // The cost-admission lock is the outermost lock in the system: no row lock
+  // is held while it is acquired (`cost-admission-lock.ts`). The start holds
+  // the project row until it commits, so it takes both locks before that row,
+  // in Transaction B's order. Transaction B takes them again below, which a
+  // lock this transaction already holds grants at once, and finds the same
+  // period: periods never overlap and never change. With no period there is
+  // no cost-admission lock to take, and the start is refused before the job.
+  await acquireReservationAdmissionLock(tx, organizationId, record.jobId);
+  const period = await findPeriodContaining(tx, organizationId, record.startedAt);
+  if (period !== null) await acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey);
 
   // ---- The project row, held FOR SHARE until the commit (ADR-0086). -------
   // A composition saving waits for this start, and this start waits for a
@@ -1382,6 +1398,9 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
   const durationSeconds = scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
   const units = requiredUnitsFor(record.qualityTier, durationSeconds);
   if (!units.ok) return { kind: "DURATION_NOT_SUPPORTED" };
+  // Not left to Transaction B: a period it found now, opened since the read
+  // above, would have it take the cost-admission lock under the project row.
+  if (period === null) return { kind: "NO_ENTITLEMENT_PERIOD" };
 
   // ---- The job, CREATED and then RESERVING, as job creation writes it. ----
   await tx.generationJob.create({
@@ -1435,6 +1454,7 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
     },
     context,
   );
+  // Refused above for want of a period; kept, so a refusal here still rolls back.
   if (reserved.kind === "NO_ENTITLEMENT_PERIOD") throw new StartRefused({ kind: reserved.kind });
   if (reserved.kind === "INSUFFICIENT_ENTITLEMENT") {
     throw new StartRefused({ kind: reserved.kind, eligibleUnits: reserved.eligibleUnits });
@@ -1493,16 +1513,18 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
     createdRequests.push(toRequest(requestRow));
   }
 
-  await tx.auditLog.create({
-    data: auditLogData(
-      record.audit({
-        job: reserved.job,
-        reservation: reserved.reservation,
-        allocations: reserved.allocations,
-        sceneCount: createdScenes.length,
-      }),
-    ),
+  const audit = record.audit({
+    job: reserved.job,
+    reservation: reserved.reservation,
+    allocations: reserved.allocations,
+    sceneCount: createdScenes.length,
   });
+  // The entry is filed under the organization whose project this commit
+  // locked, or the start does not happen.
+  if (audit.organizationId !== organizationId) {
+    throw new AppError("INTERNAL_ERROR", "A start's audit entry names another organization");
+  }
+  await tx.auditLog.create({ data: auditLogData(audit) });
   return {
     kind: "STARTED",
     job: reserved.job,
@@ -1520,6 +1542,13 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
 export function createGenerationStartRepository(prisma: PrismaClient): GenerationStartRepository {
   return {
     async start(record): Promise<GenerationStartOutcome> {
+      // The key the column's CHECK accepts. Checked here because the replay
+      // is read before anything is inserted: a missing key would match any
+      // job of the project, and answer with it.
+      const key: unknown = record.idempotencyKey;
+      if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+        throw new AppError("VALIDATION_FAILED", "A start needs a start key of 1 to 200 characters");
+      }
       if (!isDisclosureMode(record.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };
       try {
         return await prisma.$transaction((tx) => startWithin(tx, record));

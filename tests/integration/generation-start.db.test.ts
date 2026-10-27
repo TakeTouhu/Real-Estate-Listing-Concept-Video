@@ -41,6 +41,8 @@ const FINGERPRINT = "sha256:start-first";
 
 const NOVEMBER = { startsAt: new Date("2026-11-01T00:00:00.000Z"), endsAt: new Date("2026-12-01T00:00:00.000Z") };
 const STARTED_AT = new Date("2026-11-10T00:00:00.000Z");
+const DECEMBER = { startsAt: new Date("2026-12-01T00:00:00.000Z"), endsAt: new Date("2027-01-01T00:00:00.000Z") };
+const IN_DECEMBER = new Date("2026-12-10T00:00:00.000Z");
 
 const prisma = new PrismaClient();
 /** A second connection, to hold the project while a start runs. */
@@ -216,6 +218,21 @@ async function seedTenant(
   if (opened.kind !== "OPENED") throw new Error(`period: ${opened.kind}`);
 }
 
+/** The next period, for a start key replayed across the boundary. */
+async function openDecember(): Promise<void> {
+  const opened = await createUnitEntitlementRepository(prisma).openPeriod({
+    id: `uep_itest_start_${ORG_A}_dec`,
+    organizationId: ORG_A,
+    planKey: "standard",
+    billingCycleKey: "2026-12",
+    startsAt: DECEMBER.startsAt,
+    endsAt: DECEMBER.endsAt,
+    commercialReference: null,
+    actorUserId: null,
+  });
+  if (opened.kind !== "OPENED") throw new Error(`period: ${opened.kind}`);
+}
+
 beforeEach(async () => {
   if (!HAS_DB) return;
   await cleanup();
@@ -265,6 +282,19 @@ async function waitForBlocked(count: number, withinMs = 10_000): Promise<boolean
 }
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
+
+/**
+ * Organization A's cost-admission lock for `billingCycleKey`, in the formula
+ * every cost workflow derives, written out on purpose: if it ever changes,
+ * this barrier stops blocking and the tests relying on it fail.
+ */
+async function holdCostAdmissionLock(tx: Tx, billingCycleKey: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtext(${`paid-submission:${ORG_A}`}),
+      hashtext(${`cycle:${billingCycleKey}`})
+    )::text AS locked`;
+}
 
 /** Run `body` on the second connection and keep its transaction open until `release`. */
 async function holdOpen(body: (tx: Tx) => Promise<void>): Promise<{ release: () => Promise<void> }> {
@@ -387,7 +417,9 @@ describe.skipIf(!HAS_DB)("the start commit", () => {
       const events = await prisma.generationTransitionEvent.findMany({
         where: { aggregateType, aggregateId: { in: [...ids] } },
       });
-      expect(events.map((e) => [e.fromState, e.toState]).sort()).toEqual(ids.map(() => [null, "PENDING"]));
+      expect(events.map((e) => [e.fromState, e.toState, e.organizationId]).sort()).toEqual(
+        ids.map(() => [null, "PENDING", ORG_A]),
+      );
     }
 
     const audits = await prisma.auditLog.findMany({ where: { organizationId: ORG_A, action: "generation.started" } });
@@ -430,21 +462,95 @@ describe.skipIf(!HAS_DB)("a start key", () => {
     expect(await written()).toEqual(after);
   });
 
-  it("lets two starts with one key arriving at once start one job", async () => {
+  it("lets two starts with one key in one period take turns, the second answering with the first's job", async () => {
+    // Both wait at their period's cost-admission lock, so whichever goes
+    // second reads the first's committed job as a replay.
     const key = "start-key-concurrent";
-    const outcomes = await Promise.all([
-      starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key })),
-      starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key })),
-    ]);
+    const lock = await holdOpen(async (tx) => {
+      await holdCostAdmissionLock(tx, "2026-11");
+    });
+    let both: Promise<Awaited<ReturnType<typeof starts.start>>[]>;
+    try {
+      both = Promise.all([
+        starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key })),
+        starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key })),
+      ]);
+      void both.catch(() => undefined);
+      expect(await waitForBlocked(2)).toBe(true);
+    } finally {
+      await lock.release();
+    }
+    const outcomes = await both;
     expect(outcomes.map((o) => o.kind).sort()).toEqual(["EXISTING", "STARTED"]);
     const ids = outcomes.map((o) => (o.kind === "STARTED" || o.kind === "EXISTING" ? o.job.id : null));
     expect(ids[0]).toBe(ids[1]);
     expect(await written()).toMatchObject({ jobs: 1, reservations: 1, scenes: 2, requests: 2, audits: 1 });
   });
 
+  it("lets the start key decide between two starts in different periods", async () => {
+    // A start made as one period ends and its replay made as the next begins
+    // take different cost-admission locks. The first is held at its audit
+    // entry, after its job is written; the second's job then waits on the
+    // first's entry in the key's index, and answers with the first's job.
+    await openDecember();
+    const key = "start-key-boundary";
+    const first = record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key });
+    const second = record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key, startedAt: IN_DECEMBER });
+    const organization = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${ORG_A} FOR UPDATE`;
+    });
+    let outcomes: Promise<Awaited<ReturnType<typeof starts.start>>[]>;
+    try {
+      const starting = starts.start(first);
+      void starting.catch(() => undefined);
+      expect(await waitForBlocked(1)).toBe(true);
+      const replaying = starts.start(second);
+      void replaying.catch(() => undefined);
+      expect(await waitForBlocked(2)).toBe(true);
+      outcomes = Promise.all([starting, replaying]);
+      void outcomes.catch(() => undefined);
+    } finally {
+      await organization.release();
+    }
+    const [started, replayed] = await outcomes;
+    expect(started).toMatchObject({ kind: "STARTED", job: { id: first.jobId } });
+    expect(replayed).toEqual({ kind: "EXISTING", job: expect.objectContaining({ id: first.jobId }) });
+    expect(await written()).toMatchObject({ jobs: 1, reservations: 1, audits: 1 });
+  });
+
+  it("lets the second of two such starts proceed when the first rolls back", async () => {
+    await openDecember();
+    const key = "start-key-rollback";
+    const first = record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key });
+    const second = record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key, startedAt: IN_DECEMBER });
+    const organization = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${ORG_A} FOR UPDATE`;
+    });
+    let replaying: Promise<Awaited<ReturnType<typeof starts.start>>> | undefined;
+    try {
+      const starting = starts.start(first);
+      void starting.catch(() => undefined);
+      expect(await waitForBlocked(1)).toBe(true);
+      replaying = starts.start(second);
+      void replaying.catch(() => undefined);
+      expect(await waitForBlocked(2)).toBe(true);
+      // The first start dies at its audit entry, as a lost connection would end it.
+      const cancelled = await prisma.$queryRaw<{ cancelled: boolean }[]>`
+        SELECT pg_cancel_backend("pid") AS "cancelled" FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock' AND "query" LIKE '%audit_logs%'`;
+      expect(cancelled.map((row) => row.cancelled)).toEqual([true]);
+      await expect(starting).rejects.toThrow();
+    } finally {
+      await organization.release();
+    }
+    expect(await replaying).toMatchObject({ kind: "STARTED", job: { id: second.jobId } });
+    expect(await prisma.generationJob.findUnique({ where: { id: first.jobId } })).toBeNull();
+    expect(await written()).toMatchObject({ jobs: 1, reservations: 1, audits: 1 });
+  });
+
   it("does not answer another organization's replay", async () => {
     const first = record(PROJECT_HQ, HQ_SCENES);
-    await starts.start(first);
+    expect((await starts.start(first)).kind).toBe("STARTED");
     const after = await written();
     const foreign = { ...record(PROJECT_HQ, HQ_SCENES), organizationId: ORG_B, idempotencyKey: first.idempotencyKey };
     expect(await starts.start(foreign)).toEqual({ kind: "PROJECT_NOT_FOUND" });
@@ -502,7 +608,7 @@ describe.skipIf(!HAS_DB)("a refused start", () => {
     );
   });
 
-  it("rolls the job back when no period covers the start", async () => {
+  it("refuses a start no period covers", async () => {
     await refusedWritingNothing(
       record(PROJECT_HQ, HQ_SCENES, { startedAt: new Date("2027-01-10T00:00:00.000Z") }),
       "NO_ENTITLEMENT_PERIOD",
@@ -516,6 +622,29 @@ describe.skipIf(!HAS_DB)("a refused start", () => {
     expect(await starts.start(start)).toEqual({ kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: 0 });
     expect(await written()).toEqual(before);
     expect(await prisma.generationJob.findUnique({ where: { id: start.jobId } })).toBeNull();
+  });
+
+  it("refuses a start key the column cannot hold, before anything is read", async () => {
+    for (const idempotencyKey of ["", "k".repeat(201), undefined as unknown as string]) {
+      const before = await written();
+      await expect(starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey }))).rejects.toThrow(
+        "start key of 1 to 200 characters",
+      );
+      expect(await written()).toEqual(before);
+    }
+    // The longest key the column holds starts a job.
+    expect((await starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: "k".repeat(200) }))).kind).toBe(
+      "STARTED",
+    );
+  });
+
+  it("rolls everything back when the audit entry names another organization", async () => {
+    const before = await written();
+    const start = record(PROJECT_HQ, HQ_SCENES);
+    const misfiled = { ...start, audit: (started: Parameters<typeof start.audit>[0]) => ({ ...start.audit(started), organizationId: ORG_B }) };
+    await expect(starts.start(misfiled)).rejects.toThrow("names another organization");
+    expect(await written()).toEqual(before);
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG_B, action: "generation.started" } })).toBe(0);
   });
 
   it("rolls everything back when the audit entry cannot be built", async () => {
@@ -566,5 +695,51 @@ describe.skipIf(!HAS_DB)("a start and a composition", () => {
       await composition.release();
     }
     expect((await starting.value).kind).toBe("STARTED");
+  });
+
+  it("waits for the cost-admission lock before it holds the project row", async () => {
+    // The cost-admission lock is the outermost lock: a start waiting for it
+    // holds no row, so a composition saves meanwhile, and the start then
+    // judges the storyboard that composition left.
+    const lock = await holdOpen(async (tx) => {
+      await holdCostAdmissionLock(tx, "2026-11");
+    });
+    let starting: ReturnType<typeof settled<Awaited<ReturnType<typeof starts.start>>>>;
+    try {
+      starting = settled(starts.start(record(PROJECT_HQ, HQ_SCENES)));
+      expect(await waitForBlocked(1)).toBe(true);
+      await compose(PROJECT_HQ, [storyboardScene("sbs_start_hq_4", PROJECT_HQ, 1, ASSET_A2)], "sha256:start-meanwhile");
+      expect(starting.done()).toBe(false);
+    } finally {
+      await lock.release();
+    }
+    expect(await starting.value).toEqual({ kind: "STORYBOARD_CHANGED" });
+  });
+
+  it("starts a ninety-scene storyboard within the default transaction limit", async () => {
+    // The most scenes a 90-second storyboard can hold, at one second each.
+    const scenes = Array.from({ length: 90 }, (_, index) =>
+      storyboardScene(`sbs_start_many_${index + 1}`, PROJECT_NORMAL, index + 1, index % 2 === 0 ? ASSET_A1 : ASSET_A2, {
+        durationSeconds: 1,
+      }),
+    );
+    await compose(PROJECT_NORMAL, scenes);
+    const outcome = await starts.start(record(PROJECT_NORMAL, scenes.map((scene) => scene.id)));
+    expect(outcome).toMatchObject({ kind: "STARTED", job: { requestedDurationSeconds: 90, requiredVideoUnits: 3 } });
+    expect(await written()).toMatchObject({ jobs: 1, scenes: 90, requests: 90 });
+  });
+
+  it("does not wait for another reader of the project, as another start or a job creation is", async () => {
+    // Both hold the row FOR SHARE. A start that locked it any stronger would
+    // queue behind every other start of the project; this one finishes while
+    // the reader is still open.
+    const reader = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "video_projects" WHERE "id" = ${PROJECT_HQ} FOR SHARE`;
+    });
+    try {
+      expect((await starts.start(record(PROJECT_HQ, HQ_SCENES))).kind).toBe("STARTED");
+    } finally {
+      await reader.release();
+    }
   });
 });

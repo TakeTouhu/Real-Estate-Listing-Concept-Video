@@ -28,15 +28,17 @@ GS-10 its route. Nothing outside tests constructs it until then.
 `createGenerationStartRepository(prisma).start(record)` runs one transaction:
 
 ```text
-project row FOR SHARE (scoped to the organization)
-  -> replay: a job of this project with this start key?           -> EXISTING
+reservation-admission lock (the new job's)
+  -> the period containing startedAt; its cost-admission lock (organization + cycle)
+  -> project row FOR SHARE (scoped to the organization)              -> PROJECT_NOT_FOUND
+  -> replay: a job of this project with this start key?             -> EXISTING
   -> the storyboard the service judged current, still the project's? -> STORYBOARD_CHANGED
   -> the quality the project's resolution gives, the one confirmed?  -> QUALITY_CHANGED
   -> Units for the storyboard's length                              -> DURATION_NOT_SUPPORTED
+  -> a period found above?                                          -> NO_ENTITLEMENT_PERIOD
   -> job CREATED, then RESERVING, with its events
-  -> Transaction B on that job: reservation-admission lock, period,
-     cost-admission lock, funding plan, reservation, allocations,
-     job RESERVED                          -> NO_ENTITLEMENT_PERIOD / INSUFFICIENT_ENTITLEMENT
+  -> Transaction B on that job (its two locks already held): funding plan,
+     reservation, allocations, job RESERVED                         -> INSUFFICIENT_ENTITLEMENT
   -> each storyboard scene copied PENDING, and its INITIAL request PENDING, with events
   -> the audit entry
 ```
@@ -71,15 +73,19 @@ written nothing.
 - **Transaction B is the same code.** Its body moved, unchanged, into a
   module-private function both `reserve()` and the start run. The start calls it
   on the job it just created, at its first version and at the record's
-  `startedAt`, which must come from the server clock.
+  `startedAt`, which must come from the server clock. It takes its two advisory
+  locks again, which a transaction already holding them is granted at once, and
+  finds the same period: periods never overlap and never change.
 - **Scenes and requests are copied, not referenced.** Each generation scene
   takes its storyboard scene's position, asset, analysis revision, duration,
   camera motion and compiled prompt (ADR-0016: generation history outlives
   recomposition), and its first request is `INITIAL`, `PENDING`, by the
   requesting user. The ids are the record's, so the service decides them.
 - **The audit entry is the caller's, written in the commit.** The record's
-  `audit` builds it from what the commit wrote. A builder that throws rolls
-  everything back, so a start is never committed without its audit entry.
+  `audit` builds it from what the commit wrote. A builder that throws, or an
+  entry naming another organization than the start's, rolls everything back,
+  so a start is never committed without its audit entry or with one filed
+  under another tenant.
 
 ## Decision 2 — The start key
 
@@ -87,15 +93,28 @@ Migration 32 adds `generation_jobs."idempotencyKey"`, nullable, unique with
 `"videoProjectId"`, and checked to 1 to 200 characters when present. Jobs
 created any other way carry none.
 
+- **Checked before the transaction.** A key that is not a string of 1 to 200
+  characters is refused with a validation error before anything is read: the
+  replay is read before anything is inserted, so the column's check would come
+  too late, and a missing key would match any job of the project. The service
+  validates the key first (GS-4c); this guards a caller that is not
+  type-checked, as the disclosure mode's refusal does.
 - **A replay is answered first.** Right after the project lock, a job of this
   project with this key answers `EXISTING` with that job, whatever the
   storyboard, the quality or the balance are now. A retry after the customer
   recomposed still finds the job it started instead of failing as stale.
-- **Two at once start one job.** Both pass the replay read; the second's job
-  insert waits on the first's entry in the unique index. When the first
-  commits, the second is refused by the index, its transaction rolls back, and
-  it answers `EXISTING` with the first's job, read again scoped to the
-  organization. When the first rolls back, the second proceeds.
+- **Two at once start one job.** Two starts with one key in one period take
+  turns at that period's cost-admission lock, so the second reads the first's
+  committed job as a replay. Two in different periods, a start as one period
+  ends and its retry as the next begins, take different cost-admission locks:
+  the second's job insert waits on the first's entry in the unique index. When
+  the first commits, the second is refused by the index, rolls back, and
+  answers `EXISTING` with the first's job, read again scoped to the
+  organization. When the first rolls back, the second proceeds and starts.
+- **What a second start is answered depends on when it reads.** One that reads
+  before the first commits is judged on its own record, so a retry that
+  differs (in quality, say) can be refused for that difference while the first
+  is still in flight, and is answered `EXISTING` once it has committed.
 - **Scoped to the project, not the organization.** `docs/DataModel.md` sketches
   `(organization_id, idempotency_key)`. The job has no organization column; it
   belongs to its organization through its project, and a project to exactly
@@ -103,39 +122,58 @@ created any other way carry none.
   replay names the same project as the start it repeats. Another
   organization naming the project, key or not, matches no project row and is
   answered `PROJECT_NOT_FOUND` before the replay is read, so a key never
-  reveals another tenant's job.
+  reveals another tenant's job. The same key sent for two different projects
+  starts two jobs; a client makes one key per start, so this only happens when
+  a caller reuses a key on purpose.
 
 ## Decision 3 — Lock order
 
 ```text
-video_projects row FOR SHARE
-  -> reservation-admission lock (the new job's)
+reservation-admission lock (the new job's)
   -> cost-admission lock (organization + billing cycle)
-  -> period, reservation, allocation and job rows
+  -> video_projects row FOR SHARE
+  -> the job row (created here), then the reservation and allocation rows
 ```
 
+- **The cost-admission lock stays the outermost lock.** Every workflow that
+  takes it takes it before any row lock (`cost-admission-lock.ts`), and no row
+  lock is held while it is acquired. The start holds the project row until it
+  commits, so it takes the cost-admission lock, and the reservation-admission
+  lock before it, as its first statements, in Transaction B's order. A start
+  no period covers takes no cost-admission lock, and is refused before the job
+  is written, so Transaction B never takes one under the project row.
+- **The reservation-admission lock is uncontended.** It is keyed by the job,
+  and the job id is new, so nothing else can name it. It is taken anyway, so
+  Transaction B keeps one lock order however it is entered.
 - **Composition and start take turns.** Composition locks the row
   `FOR NO KEY UPDATE` (ADR-0086), which conflicts with `FOR SHARE`: a start
   waits for a composition already saving and then judges the storyboard it
-  left; a composition waits for a start. Starts and job creation share the row.
-- **No cycle.** Only three transactions lock a `video_projects` row: job
-  creation (`FOR SHARE`), composition and the start. Composition and job
-  creation take no advisory lock. Every other transaction that takes the
-  cost-admission lock and also joins the project row locks only the rows it
-  names (`FOR UPDATE OF ...`), so nothing that holds an advisory lock waits on
-  a project row. Rows that only reference the project check their foreign key
-  `FOR KEY SHARE`, which `FOR SHARE` does not block.
-- **The reservation-admission lock is uncontended.** It is keyed by the job,
-  and the job was created in this transaction, so nothing else can name it. It
-  is taken anyway, so Transaction B keeps one lock order however it is entered.
+  left; a composition waits for a start. A start waiting for the cost-admission
+  lock holds no row, so compositions save meanwhile. Starts and job creation
+  share the row.
+- **No cycle.** A `video_projects` row is locked or written only by job
+  creation (`FOR SHARE`), composition (`FOR NO KEY UPDATE`, then its
+  `UPDATE`), the start, and `projects.update`, a single statement with no
+  production caller. Composition and job creation take no advisory lock.
+  Every transaction that takes the cost-admission lock and joins the project
+  row locks only the rows it names (`FOR UPDATE OF ...`). Rows that only
+  reference the project check their foreign key `FOR KEY SHARE`, which
+  `FOR SHARE` does not block. A static test lists every lock and write on a
+  project row in the database package, so a new one is checked against this
+  order before it is added.
+- **The organization's other cost decisions wait for a start.** Holding the
+  cost-admission lock for the whole start serializes it with the
+  organization's reservations, block grants, settlements and paid-submission
+  checks for that cycle, for the length of the start's transaction.
 
 ## Decision 4 — Every refusal writes nothing
 
-Refusals found before the job is written return with nothing written. The two
-found after it, in Transaction B, are thrown inside the transaction, so the job
-and its events roll back with it, and answered once it has. Any other answer
-from Transaction B on a job this transaction just created is a defect and
-throws.
+Refusals found before the job is written return with nothing written. The one
+found after it, a short entitlement in Transaction B, is thrown inside the
+transaction, so the job and its events roll back with it, and answered once it
+has. A missing period would be handled the same way, though the start refuses
+it earlier. Any other answer from Transaction B on a job this transaction just
+created is a defect and throws.
 
 ## Decision 5 — The start stops at `RESERVED`
 
@@ -149,11 +187,15 @@ launch step.
 ## Decision 6 — The default transaction limit stands
 
 The start runs under Prisma's default interactive-transaction limits (2 seconds
-to begin, 5 to finish). Its work grows with the storyboard's scene count, which
-the 90-second limit and composition bound. A start that overruns, or waits on a
-composition past the limit, rolls back whole and fails; the start key makes the
-retry safe. A composition waiting on a start counts against its own limit, as
-ADR-0086 recorded.
+to begin, 5 to finish). Its work grows with the storyboard's scene count: about
+six statements per scene, and a 90-second storyboard of one-second scenes has
+90. Measured on the local test database, composing and starting such a
+storyboard together take under a second. A start that overruns, or waits on a
+composition past the limit, rolls back whole and fails, and the start key makes
+the retry safe; but a start that overruns because of its own size would overrun
+again, so its time on the production database is to be measured before
+activation (`docs/decisions/TODO.md`). A composition waiting on a start counts
+against its own limit, as ADR-0086 recorded.
 
 ## Not decided here
 
@@ -173,15 +215,23 @@ ADR-0086 recorded.
   changes.
 - `@app/database` exports `createGenerationStartRepository`; the
   within-transaction body of Transaction B stays private to its module, and a
-  static test bounds its callers.
+  static test keeps every mention of it in that module.
+- The lock module's and the authorization repository's notes on lock order now
+  name the start.
 - The database tests prove: a start writes the job, reservation, allocations,
-  scenes, requests, events and audit entry together; a replay, and a second
-  start with the same key at the same moment, answer with the first job and
-  write nothing; a key may start two projects; another organization's replay
-  is not answered; each refusal writes nothing, including the two after the
-  job is written and a failing audit builder; and a start waits for a
-  composition already saving, then refuses the storyboard it changed or starts
-  from the one it left. Each wait is observed on the lock the database reports,
-  not on a timer.
+  scenes, requests, events and audit entry together; a 720p project starts at
+  Normal; a key may start two projects; a replay answers with the first job and
+  writes nothing, even after recomposition; two starts with one key in one
+  period take turns and start one job; two in different periods are decided by
+  the key's index, and the second starts when the first dies; another
+  organization's replay is not answered; each refusal writes nothing, including
+  a short entitlement after the job is written, a failing audit builder, an
+  audit entry naming another organization, and a key the column cannot hold; a
+  start waits for the cost-admission lock holding no row, while a composition
+  saves; it waits for a composition already saving, then refuses the
+  storyboard it changed or starts from the one it left; it does not wait for
+  another reader of the project; and a 90-scene storyboard starts within the
+  default limit. Each wait is observed on the lock the database reports, not
+  on a timer.
 - Nothing outside tests constructs the repository. No route, no page, and
   nothing a customer can see changes.

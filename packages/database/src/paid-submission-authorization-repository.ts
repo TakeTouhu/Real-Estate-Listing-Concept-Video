@@ -49,6 +49,8 @@ import { armProviderBoundaryWithin } from "./orchestration-repositories";
  * `generation_scenes` (regeneration admission) and `video_projects`
  * (job creation) — are all taken *inside* their own transactions and are never
  * held while this one is acquired, because authorization never admits anything.
+ * (The start commit, ADR-0087, takes this lock and then locks a project row
+ * `FOR SHARE`, the order this lock requires.)
  * The one nesting that exists is this lock around `armProviderBoundaryWithin`,
  * which takes no row lock of its own beyond the CAS it performs. There is
  * therefore no cycle: nothing acquires a 2E lock and then waits for this one.
