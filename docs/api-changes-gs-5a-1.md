@@ -15,7 +15,9 @@ No change.
 | --- | --- |
 | `RoutePolicy` | `{ version, qualityTiers, routes }`: a route table and the qualities it serves |
 | `PRODUCTION_ROUTE_POLICY` | production's: `ROUTING_POLICY_VERSION`, `AUTHORIZED_QUALITY_TIERS` and the authorized routes, frozen |
-| `routeQualityOffer(policy)` | the start's quality offer for a policy: the qualities it serves |
+| `defineRoutePolicy(policy)` | a policy outside production, as a frozen copy; throws on an empty or production's version, a quality listed with no route, a route whose quality is not listed, or a quality listed twice |
+| `servesQualityTier(policy, tier)` | whether a policy lists a quality and has a route for it |
+| `routeQualityOffer(policy)` | the start's quality offer for a policy: the qualities it serves (`servesQualityTier`) |
 | `extendProviderPricingCatalog(added)` | a new catalog holding production's contracts and `added`, frozen; throws on a duplicate identity |
 
 ### Changed: `@app/domain`

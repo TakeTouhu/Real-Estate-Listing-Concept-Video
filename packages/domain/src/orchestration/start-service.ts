@@ -1,5 +1,5 @@
 import { AppError } from "@app/shared";
-import { PRODUCTION_ROUTE_POLICY, type RoutePolicy } from "../authorization/routing";
+import { PRODUCTION_ROUTE_POLICY, servesQualityTier, type RoutePolicy } from "../authorization/routing";
 import { DEFAULT_DISCLOSURE_MODE } from "../disclosure/mode";
 import type { GenerationReservationAllocation, UnitEntitlementRepository } from "../entitlement/ports";
 import { renewEntitlementPeriod, type SubscriptionRepository } from "../entitlement/subscription";
@@ -37,11 +37,11 @@ export interface StartQualityOffer {
 }
 
 /**
- * The qualities a route policy serves, the ones the paid-submission gate
- * authorizes against the same policy (ADR-0089).
+ * The qualities a route policy serves: listed, with a route, as the
+ * paid-submission gate checks them against the same policy (ADR-0089).
  */
 export function routeQualityOffer(policy: RoutePolicy): StartQualityOffer {
-  return { offers: (qualityTier) => policy.qualityTiers.includes(qualityTier) };
+  return { offers: (qualityTier) => servesQualityTier(policy, qualityTier) };
 }
 
 /**

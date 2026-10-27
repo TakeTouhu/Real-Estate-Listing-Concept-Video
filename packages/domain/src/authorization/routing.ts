@@ -157,6 +157,46 @@ export const PRODUCTION_ROUTE_POLICY: RoutePolicy = deepFreeze({
   routes: AUTHORIZED_ROUTES,
 });
 
+/**
+ * A route policy other than production's, checked and frozen (ADR-0089).
+ *
+ * Throws, as production's tables refuse a malformed entry at load, when the
+ * version is empty or production's (the record would name the wrong table),
+ * when a quality is listed with no route for it (the start would offer what the
+ * gate refuses) or a route's quality is not listed, or when a quality repeats.
+ */
+export function defineRoutePolicy(policy: RoutePolicy): RoutePolicy {
+  if (policy.version.trim() === "" || policy.version === ROUTING_POLICY_VERSION) {
+    throw new Error("A route policy outside production needs a version of its own");
+  }
+  if (new Set(policy.qualityTiers).size !== policy.qualityTiers.length) {
+    throw new Error("A route policy lists a quality twice");
+  }
+  for (const tier of policy.qualityTiers) {
+    if (!policy.routes.some((r) => r.qualityTier === tier)) {
+      throw new Error(`A route policy lists ${tier} with no route for it`);
+    }
+  }
+  for (const route of policy.routes) {
+    if (!policy.qualityTiers.includes(route.qualityTier)) {
+      throw new Error(`A route policy has a ${route.qualityTier} route but does not list ${route.qualityTier}`);
+    }
+  }
+  return deepFreeze({
+    version: policy.version,
+    qualityTiers: [...policy.qualityTiers],
+    routes: policy.routes.map((r) => ({ ...r, targetOutputResolutions: [...r.targetOutputResolutions] })),
+  });
+}
+
+/**
+ * Whether a policy serves a quality: lists it and has a route for it, the two
+ * checks `authorizeRoute` makes before it looks at the route's own facts.
+ */
+export function servesQualityTier(policy: RoutePolicy, qualityTier: GenerationQualityTier): boolean {
+  return policy.qualityTiers.includes(qualityTier) && policy.routes.some((r) => r.qualityTier === qualityTier);
+}
+
 export type RouteAuthorizationResult =
   | { readonly ok: true; readonly route: AuthorizedRoute }
   | { readonly ok: false; readonly reason: RoutingAuthorizationFailure };

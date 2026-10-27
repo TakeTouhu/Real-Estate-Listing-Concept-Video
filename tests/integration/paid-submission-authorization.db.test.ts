@@ -381,6 +381,11 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
       const outcome = await gate.authorize({ organizationId: ORG_A, attemptId: second.attempt.id, context: ctx() });
       expect(outcome.kind).toBe("AUTHORIZED");
+      // And the sibling was counted, not missed: its cost is the second's in-flight cost.
+      const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
+        where: { aggregateType: "ATTEMPT", aggregateId: second.attempt.id, toState: "SUBMITTING" },
+      });
+      expect(boundary.safeMetadata).toMatchObject({ inFlightCostYen: FIVE_SECOND_YEN });
     });
   });
 

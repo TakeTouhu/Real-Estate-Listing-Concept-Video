@@ -40,6 +40,12 @@ none is.
 - **Forgetting it fails closed.** The default is production's, which refuses
   every route it does not list, so a caller that forgets to pass the test
   route's policy refuses the test route rather than authorizing anything.
+- **A policy outside production is checked.** `defineRoutePolicy` returns a
+  frozen copy, and refuses a version that is empty or production's (the
+  record would name the wrong table), a quality listed with no route for it
+  (the start would offer what the gate refuses), a route whose quality is not
+  listed, and a quality listed twice. GS-5a-2's factory builds the test
+  route's policy through it.
 
 ## Decision 2 — The gate and the service
 
@@ -53,10 +59,17 @@ through.
 
 ## Decision 3 — The start's quality offer
 
-`routeQualityOffer(policy)` offers the qualities a policy serves.
-`AUTHORIZED_ROUTE_QUALITY_OFFER` is production's, unchanged: Normal only. A
-composition that passes one policy to both the start and the gate answers HQ
-the same way in both.
+`routeQualityOffer(policy)` offers the qualities a policy serves: those it
+lists and has a route for (`servesQualityTier`), the two checks the gate makes
+before it looks at an attempt's own route. `AUTHORIZED_ROUTE_QUALITY_OFFER` is
+production's, unchanged: Normal only.
+
+The start takes its offer and the gate takes its policy separately, so a
+composition must build both from one policy for them to agree. GS-5a-2's
+factory hands out both. A composition that passed the test route's offer to
+the start and forgot the gate's policy would spend nothing, since the gate
+refuses, but the started job would hold its Units until the work that releases
+a job that can never launch (`docs/decisions/TODO.md`, GS-7).
 
 ## Decision 4 — The price catalog
 
@@ -78,6 +91,12 @@ before.
 
 - **The test route itself**: its catalog entry, route, price, FX rate and the
   factory that refuses production (GS-5a-2).
+- **Whether an added contract may re-price one of production's routes.** The
+  duplicate check compares the whole identity, so an added contract cannot
+  shadow one of production's, but one under a new pricing version can sit
+  beside it; the media recovery planner would then find two current contracts
+  for that route and refuse (`AMBIGUOUS_CURRENT_PRICING`). The test route's
+  contract names its own provider, so GS-5a-2 adds no such pair.
 - **A billing cycle's revenue** (GS-5b). No ADR defined it; the product owner
   decided it on 2026-10-27 (`docs/decisions/TODO.md`, decision gates closed),
   and GS-5b's reader will build it.
@@ -85,7 +104,8 @@ before.
 ## Consequences
 
 - `@app/domain` exports `RoutePolicy`, `PRODUCTION_ROUTE_POLICY`,
-  `routeQualityOffer` and `extendProviderPricingCatalog`. `authorizeRoute`,
+  `defineRoutePolicy`, `servesQualityTier`, `routeQualityOffer` and
+  `extendProviderPricingCatalog`. `authorizeRoute`,
   `evaluatePaidSubmissionGate` and `PaidSubmissionAuthorizationDeps` gain the
   optional policy; `PaidSubmissionAuthorizationAudit` gains
   `routingPolicyVersion`.

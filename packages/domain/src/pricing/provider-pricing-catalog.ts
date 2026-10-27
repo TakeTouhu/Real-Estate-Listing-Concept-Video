@@ -176,6 +176,8 @@ export function createProviderPricingCatalog(): ProviderPricingCatalog {
 export function extendProviderPricingCatalog(
   added: readonly ProviderPricingContract[],
 ): ProviderPricingCatalog {
+  // Freezes the added contracts in place too: once the catalog holds a
+  // contract, its caller cannot change the price under it.
   const contracts = deepFreeze([...CONTRACTS, ...added]);
   return catalogOf(contracts, indexByKey(contracts));
 }

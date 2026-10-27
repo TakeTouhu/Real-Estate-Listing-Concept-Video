@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
+import { authorizedRoutes } from "../authorization/routing";
 import type { GenerationReservationAllocation } from "../entitlement/ports";
 import type { OrganizationSubscription } from "../entitlement/subscription";
 import { AuthService } from "../identity/auth-service";
@@ -518,9 +519,13 @@ describe("the quality", () => {
   });
 
   it("offers the qualities a route policy serves, as the gate authorizes them (ADR-0089)", () => {
-    const offer = routeQualityOffer({ version: "itest-policy.1", qualityTiers: ["HIGH_QUALITY"], routes: [] });
+    const hq = authorizedRoutes().map((route) => ({ ...route, qualityTier: "HIGH_QUALITY" as const }));
+    const offer = routeQualityOffer({ version: "itest-policy.1", qualityTiers: ["HIGH_QUALITY"], routes: hq });
     expect(offer.offers("HIGH_QUALITY")).toBe(true);
     expect(offer.offers("NORMAL")).toBe(false);
+    // Listed with no route: the gate would refuse every attempt, so not offered.
+    const listedOnly = routeQualityOffer({ version: "itest-policy.1", qualityTiers: ["HIGH_QUALITY"], routes: [] });
+    expect(listedOnly.offers("HIGH_QUALITY")).toBe(false);
   });
 });
 
