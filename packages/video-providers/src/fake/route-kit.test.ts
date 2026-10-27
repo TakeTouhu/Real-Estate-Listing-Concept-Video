@@ -136,24 +136,27 @@ describe("the test route's policy", () => {
   });
 
   it("holds no production route", () => {
-    const production = PRODUCTION_ROUTE_POLICY.routes[0];
-    if (production === undefined) throw new Error("expected a production route");
-    const target = production.targetOutputResolutions[0];
-    if (target === undefined) throw new Error("expected a production target");
-    const result = authorizeRoute(
-      {
-        qualityTier: production.qualityTier,
-        providerName: production.providerName,
-        providerModelId: production.providerModelId,
-        requestModelKey: production.requestModelKey,
-        nativeGenerationResolution: production.nativeGenerationResolution,
-        targetOutputResolution: target,
-        generationMode: production.generationMode,
-        audioMode: production.audioMode,
-      },
-      kit.routePolicy,
-    );
-    expect(result).toEqual({ ok: false, reason: "PROVIDER_NOT_AUTHORIZED" });
+    expect(PRODUCTION_ROUTE_POLICY.routes.length).toBeGreaterThan(0);
+    for (const production of PRODUCTION_ROUTE_POLICY.routes) {
+      for (const target of production.targetOutputResolutions) {
+        const result = authorizeRoute(
+          {
+            qualityTier: production.qualityTier,
+            providerName: production.providerName,
+            providerModelId: production.providerModelId,
+            requestModelKey: production.requestModelKey,
+            nativeGenerationResolution: production.nativeGenerationResolution,
+            targetOutputResolution: target,
+            generationMode: production.generationMode,
+            audioMode: production.audioMode,
+          },
+          kit.routePolicy,
+        );
+        expect(`${production.requestModelKey} ${target}: ${result.ok}`).toBe(
+          `${production.requestModelKey} ${target}: false`,
+        );
+      }
+    }
   });
 });
 
@@ -211,6 +214,9 @@ describe("the kit", () => {
   it("cannot be changed by the composition it is handed to", () => {
     const kit = createFakeRouteKit(DEV);
     expect(Object.isFrozen(kit)).toBe(true);
+    expect(Object.isFrozen(kit.models)).toBe(true);
+    expect(Object.isFrozen(kit.qualityOffer)).toBe(true);
+    expect(Object.isFrozen(kit.pricing)).toBe(true);
     expect(Object.isFrozen(kit.routePolicy)).toBe(true);
     expect(Object.isFrozen(kit.routePolicy.routes[0])).toBe(true);
     expect(Object.isFrozen(kit.fx)).toBe(true);
@@ -222,42 +228,60 @@ describe("the kit", () => {
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
-/** Production source naming the factory, comments stripped, tests and the kit itself left out. */
-function callers(): string[] {
+const SKIPPED_DIRECTORIES = new Set(["node_modules", ".next", "dist", "coverage"]);
+
+/**
+ * Source outside tests naming `name`, comments stripped (a `//` after a colon
+ * is kept, so a URL in a string does not hide the rest of its line).
+ */
+function callers(name: string): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== "node_modules" && entry.name !== ".next") walk(full);
-      } else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
+        if (!SKIPPED_DIRECTORIES.has(entry.name)) walk(full);
+      } else if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name) && !entry.name.includes(".test.")) {
         const text = readFileSync(full, "utf8")
           .replace(/\/\*[\s\S]*?\*\//g, " ")
-          .replace(/\/\/[^\n]*/g, " ");
-        if (text.includes("createFakeRouteKit")) found.push(full.slice(REPO_ROOT.length + 1));
+          .replace(/(^|[^:])\/\/[^\n]*/gm, "$1 ");
+        if (text.includes(name)) found.push(full.slice(REPO_ROOT.length + 1));
       }
     }
   };
   for (const root of ["apps", "packages"]) {
     const base = join(REPO_ROOT, root);
     if (!existsSync(base)) continue;
-    for (const pkg of readdirSync(base)) {
-      const src = join(base, pkg, "src");
-      if (existsSync(src)) walk(src);
-    }
+    for (const pkg of readdirSync(base)) walk(join(base, pkg));
+  }
+  for (const root of ["infra", "prisma"]) {
+    if (existsSync(join(REPO_ROOT, root))) walk(join(REPO_ROOT, root));
   }
   return found.sort();
 }
 
-describe("who builds the kit", () => {
+describe("who builds the kit, or a policy or catalog like it", () => {
   /**
    * Nobody yet. The pipeline command (GS-9) and the start route (GS-10) will be
-   * its first callers, and each adds itself here when it is reviewed.
+   * the factory's first callers, and each adds itself here when it is
+   * reviewed. The two builders the factory uses have no production check of
+   * their own, so nothing else may call them.
    */
-  it("is only the package that defines it, until the pipeline command", () => {
-    expect(callers()).toEqual([
+  it("is only the package that defines the factory, until the pipeline command", () => {
+    expect(callers("createFakeRouteKit")).toEqual([
       "packages/video-providers/src/fake/route-kit.ts",
       "packages/video-providers/src/index.ts",
+    ]);
+  });
+
+  it("leaves the policy and catalog builders to the factory", () => {
+    expect(callers("defineRoutePolicy")).toEqual([
+      "packages/domain/src/authorization/routing.ts",
+      "packages/video-providers/src/fake/route-kit.ts",
+    ]);
+    expect(callers("extendProviderPricingCatalog")).toEqual([
+      "packages/domain/src/pricing/provider-pricing-catalog.ts",
+      "packages/video-providers/src/fake/route-kit.ts",
     ]);
   });
 });

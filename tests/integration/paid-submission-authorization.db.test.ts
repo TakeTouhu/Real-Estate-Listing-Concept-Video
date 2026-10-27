@@ -493,6 +493,20 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
       expect(row.orchestrationState).toBe("QUEUED");
     });
+
+    it("is refused by production's route policy at Normal too, which routes no test provider", async () => {
+      // Production serves Normal, so the refusal is the provider, not the quality.
+      await prisma.videoProject.update({ where: { id: PROJECT_A }, data: { targetOutputResolution: "720p" } });
+      const { attempt } = await seedFake("fakeprodnormal", "NORMAL", "720p");
+      const unrouted = await kitService(PRODUCTION_ROUTE_POLICY).authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        context: ctx(),
+      });
+      expect(unrouted).toMatchObject({ kind: "ROUTING_NOT_AUTHORIZED", reason: "PROVIDER_NOT_AUTHORIZED" });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
   });
 
   describe("post-delivery user regeneration", () => {

@@ -38,7 +38,9 @@ vouch for the ambient one), and when `VIDEO_PROVIDER` is not `fake`. There is
 no flag that lifts either check, as for the shared folder storage (ADR-0085).
 
 `VIDEO_PROVIDER` defaults to `fake` everywhere, production included, so it is
-checked as well as `NODE_ENV`, never instead of it.
+checked as well as `NODE_ENV`, never instead of it. An unset `NODE_ENV` reads
+as development, the same assumption the storage guards make (ADR-0085): a
+production deployment must set it.
 
 ## Decision 3 — Two routes, each generated at its own size
 
@@ -63,10 +65,15 @@ Decision 3).
 ## Decision 4 — Its own model catalog
 
 The kit's catalog holds the test provider's entry alone, as its default. It is
-selectable, generates each target natively (no upscale, so nothing claims a
-size it was not generated at), and takes 5 to 15 seconds, production's default
-model's range, so a storyboard composed for one fits the other.
-Production's catalog (`createVideoModelCatalog()`) does not list it.
+selectable, records each target as generated at its own size (no upscale), and
+takes 5 to 15 seconds, production's default model's range, so a storyboard
+composed for one fits the other. Production's catalog
+(`createVideoModelCatalog()`) does not list it.
+
+The fake provider makes no clip yet: it answers with a made-up address and no
+bytes. The entry's sizes are therefore what GS-6 must make, a 720p clip for
+Normal and a 1080p one for HQ, and until then they are a statement about the
+route, not about any clip (`docs/decisions/TODO.md`).
 
 ## Decision 5 — A nominal price, and a rate named as no market rate
 
@@ -82,15 +89,19 @@ own provider, so no production route gains a second current contract
 (ADR-0089, *Not decided here*).
 
 The exchange rate is fixed at ¥150 per dollar, with an id and a source that
-name it as a development rate, not a market one. The paid-submission
-repository records it on first use and compares it field by field after, so
-the one id always carries the one rate.
+name it as a development rate, not a market one. Attempt admission records it
+in `fx_rate_snapshots` on first use and compares it field by field after
+(`bindFxSnapshot`), so the one id always carries the one rate; the
+paid-submission repository loads and validates it.
 
 ## Decision 6 — Nothing builds it yet
 
 The pipeline command (GS-9) and the start route (GS-10) will be its first
-callers. A test lists every production source file that names the factory,
-today only its own package, and each caller adds itself when it is reviewed.
+callers. A test lists every source file outside tests that names the factory,
+`defineRoutePolicy` or `extendProviderPricingCatalog` (the last two have no
+production check of their own), across the apps, the packages, `infra` and
+`prisma`: today only their definitions, the provider package's export and the
+kit. Each caller adds itself when it is reviewed.
 
 ## Not decided here
 

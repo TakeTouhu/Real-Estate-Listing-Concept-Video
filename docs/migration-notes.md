@@ -1805,8 +1805,8 @@ no new environment variable.
 
 **What changes at deploy.** Nothing. The test route's factory refuses
 production and nothing outside tests calls it. Where it is used, in
-development and CI, the paid-submission repository records its fixed exchange
-rate (`fx_dev_fixed_usd_jpy_150`) in `fx_snapshots` on first use, as it does
+development and CI, attempt admission records its fixed exchange rate
+(`fx_dev_fixed_usd_jpy_150`) in `fx_rate_snapshots` on first use, as it does
 any rate.
 
 **Rolling back.** To GS-5a-1's build: safe, since nothing in production calls

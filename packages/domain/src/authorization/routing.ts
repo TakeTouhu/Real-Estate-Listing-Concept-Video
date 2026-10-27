@@ -140,9 +140,9 @@ export const AUTHORIZED_QUALITY_TIERS: readonly GenerationQualityTier[] = deepFr
  *
  * Production's is {@link PRODUCTION_ROUTE_POLICY}, built from the constants
  * above and nothing else. A composition outside production may pass another,
- * production's plus the test route, which only a factory that refuses
- * production builds. Whoever forgets to pass one gets production's, which
- * refuses every route it does not list.
+ * the test route's alone, which only a factory that refuses production builds
+ * (ADR-0090). Whoever forgets to pass one gets production's, which refuses
+ * every route it does not list.
  */
 export interface RoutePolicy {
   /** Persisted with every authorization event, as {@link ROUTING_POLICY_VERSION} is. */

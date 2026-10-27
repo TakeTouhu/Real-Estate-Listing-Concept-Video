@@ -28,16 +28,18 @@ import { deepFreeze } from "../deep-freeze";
  * catalog to the authorization repository (ADR-0089).
  */
 
-/** Never a real endpoint: the fake provider makes its clips on this machine. */
+/** Never a real endpoint: the fake provider calls no service. */
 export const FAKE_VIDEO_MODEL_ID = "fake/zoom-pan/image-to-video";
 export const FAKE_VIDEO_MODEL_KEY = "fake-zoom-pan";
 /** The version the kit's routes and prices are recorded under. */
 export const FAKE_ROUTE_VERSION = "dev-test-route.1";
 
 /**
- * The test provider's catalog entry. It renders each target natively, so
- * nothing is upscaled; the duration range is production's default model's, so
- * a storyboard composed for one fits the other.
+ * The test provider's catalog entry. It records each target as generated at
+ * its own size, so nothing is upscaled; the fake provider makes no clip yet,
+ * and GS-6's must be made at that size (`docs/decisions/TODO.md`). The duration
+ * range is production's default model's, so a storyboard composed for one fits
+ * the other.
  */
 const FAKE_VIDEO_MODEL: VerifiedModelEntry = deepFreeze({
   key: FAKE_VIDEO_MODEL_KEY,
@@ -158,15 +160,16 @@ export function createFakeRouteKit(env: Pick<ServerEnv, "NODE_ENV" | "VIDEO_PROV
     qualityTiers: ["NORMAL", "HIGH_QUALITY"],
     routes: FAKE_ROUTES,
   });
+  // The kit and each part, so no composition it is handed to can swap a lookup.
   return Object.freeze({
-    models: {
+    models: Object.freeze({
       list: () => [FAKE_VIDEO_MODEL],
       default: () => FAKE_VIDEO_MODEL,
       find: (key: string) => (key === FAKE_VIDEO_MODEL_KEY ? FAKE_VIDEO_MODEL : undefined),
-    },
+    }),
     routePolicy,
-    qualityOffer: routeQualityOffer(routePolicy),
-    pricing: extendProviderPricingCatalog([fakeContract("720p"), fakeContract("1080p")]),
+    qualityOffer: Object.freeze(routeQualityOffer(routePolicy)),
+    pricing: Object.freeze(extendProviderPricingCatalog([fakeContract("720p"), fakeContract("1080p")])),
     fx: FAKE_FX_SNAPSHOT,
   });
 }
