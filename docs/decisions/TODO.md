@@ -1103,8 +1103,12 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Found in Phase 6F — a provider-output race test asserts too much
 
-- [ ] **Make "gives two PROCESSING runners one history and at most one
+- [x] **Make "gives two PROCESSING runners one history and at most one
       transfer" deterministic** (`tests/integration/provider-output-orchestration.db.test.ts`).
+      Done after GS-4b, whose CI it failed twice: each runner's poll now waits
+      until both have polled, and a runner loads the attempt before it polls,
+      so both runners load it as `PROCESSING`. Run alone, it had failed 14 of
+      15 runs on main and then passed 30 of 30.
       It races two runners with `Promise.all` and asserts the loser answers
       `INGESTION_ALREADY_CLAIMED` or `ALREADY_VERIFIED`, and that exactly one
       transfer ran. A legal interleaving breaks both: when the second runner
@@ -1120,8 +1124,10 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Found in GS-3 — a cross-phase lock test waits on a timer
 
-- [ ] **Make "serializes against a Phase 2F-1 cost admission holding the same
+- [x] **Make "serializes against a Phase 2F-1 cost admission holding the same
       locks" deterministic** (`tests/integration/submission-outcome.db.test.ts`).
+      Done after GS-4b: the gate's session signals once its facts are loaded,
+      and the write starts after that signal instead of after 100 ms.
       It opens the paid-submission gate's transaction, waits 100 ms
       (`breathe(4)`) for it to take its locks, starts an outcome write and
       asserts the write is still blocked. Under load the gate's transaction can
@@ -1131,6 +1137,12 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       GS-3, which does not touch this code; the file then passed three runs
       out of three. The fix is test-only: signal from inside the gate's
       session once its facts are loaded, and start the write after that.
+- [ ] **Thirteen more waits of 100 ms for a transaction to take its locks**
+      (`breathe(4)` in `generation-concurrency`, `paid-submission-authorization`,
+      `reconciliation` and `submission-outcome` `.db.test.ts`). None has been
+      seen failing. Each can fail the same way under load, and each has the
+      same test-only fix: signal from inside the transaction once it holds its
+      locks.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
