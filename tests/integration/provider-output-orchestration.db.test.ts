@@ -1031,11 +1031,26 @@ describe.skipIf(!HAS_DB)("dormant provider output orchestration", () => {
       const { attemptId } = await seedAcceptedProcessingAttempt("racestart");
       const t1 = fakeTransfer(VERIFIED_A);
       const t2 = fakeTransfer(VERIFIED_A);
+      // Each runner loads the attempt before it polls, so holding each poll
+      // until both have polled keeps both runners PROCESSING. Unheld, a runner
+      // that loads the attempt after the other's ingestion began is a resume,
+      // which transfers by design.
+      let polled = 0;
+      let bothPolled!: () => void;
+      const meet = new Promise<void>((resolve) => {
+        bothPolled = resolve;
+      });
+      const succeedOnceBothPolled = async () => {
+        polled += 1;
+        if (polled === 2) bothPolled();
+        await meet;
+        return SUCCEEDED_WITH();
+      };
 
       const results = await Promise.all([
-        runner({ client: prisma, source: fakeSource(SUCCEEDED_WITH), transfer: t1 })
+        runner({ client: prisma, source: fakeSource(succeedOnceBothPolled), transfer: t1 })
           .runProviderOutputAttemptOnce({ ...BASE, attemptId }),
-        runner({ client: other, source: fakeSource(SUCCEEDED_WITH), transfer: t2 })
+        runner({ client: other, source: fakeSource(succeedOnceBothPolled), transfer: t2 })
           .runProviderOutputAttemptOnce({ ...BASE, attemptId }),
       ]);
 

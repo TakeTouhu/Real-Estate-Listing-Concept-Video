@@ -1378,12 +1378,19 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      // Resolved inside the gate's transaction once its facts are read, when it
+      // already holds the advisory lock and the reservation row.
+      let factsLoaded!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        factsLoaded = resolve;
+      });
       const authorization = createPaidSubmissionAuthorizationRepository(blocker).withCostAdmission(
         { organizationId: ORG_A, attemptId: attempt.id },
         async (session) => {
           // Read facts inside the held locks, exactly as the gate does, then
           // stay in the transaction without arming.
           await session.loadFacts();
+          factsLoaded();
           await held;
           return null;
         },
@@ -1391,7 +1398,10 @@ describe.skipIf(!HAS_DB)("submission outcome persistence", () => {
 
       let stillBlocked: boolean;
       try {
-        await breathe(4);
+        // The write starts only once the gate holds its locks. A gate that
+        // failed before that settles `authorization` instead, and the test
+        // fails on it rather than waiting.
+        await Promise.race([holding, authorization]);
         const blocked = settled(
           service(prisma).recordObservation({
             organizationId: ORG_A,
