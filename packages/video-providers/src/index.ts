@@ -11,6 +11,18 @@ export type {
   FakeVideoProviderOptions,
 } from "./fake/fake-provider";
 
+/**
+ * The test provider's route, price, catalog entry and exchange rate, refused
+ * in production and without `VIDEO_PROVIDER=fake` (ADR-0090).
+ */
+export {
+  FAKE_ROUTE_VERSION,
+  FAKE_VIDEO_MODEL_ID,
+  FAKE_VIDEO_MODEL_KEY,
+  createFakeRouteKit,
+} from "./fake/route-kit";
+export type { FakeRouteKit } from "./fake/route-kit";
+
 export { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
 export type { WaveSpeedProviderDeps } from "./wavespeed/wavespeed-provider";
 export type { WaveSpeedConfig, WaveSpeedPollConfig } from "./wavespeed/config";

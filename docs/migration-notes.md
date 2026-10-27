@@ -1797,3 +1797,17 @@ is the same `ROUTING_POLICY_VERSION` as before.
 
 **Rolling back.** To GS-4c's build: safe, since nothing in production calls
 what GS-5a-1 adds.
+
+## GS-5a-2 — the test route is built only outside production
+
+**No migration** (ADR-0090). No schema, enum, constraint or row changes, and
+no new environment variable.
+
+**What changes at deploy.** Nothing. The test route's factory refuses
+production and nothing outside tests calls it. Where it is used, in
+development and CI, the paid-submission repository records its fixed exchange
+rate (`fx_dev_fixed_usd_jpy_150`) in `fx_snapshots` on first use, as it does
+any rate.
+
+**Rolling back.** To GS-5a-1's build: safe, since nothing in production calls
+what GS-5a-2 adds.

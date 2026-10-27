@@ -9,17 +9,25 @@ import {
   epochMillisFromDate,
   extendProviderPricingCatalog,
   PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
+  PRODUCTION_ROUTE_POLICY,
   ROUTING_POLICY_VERSION,
   yen,
   type AuthorizationClock,
   type BillingCycleRevenueReader,
   type FxSnapshot,
+  type GenerationQualityTier,
   type PricingSnapshot,
   type ProviderPricingCatalog,
   type ProviderPricingContract,
   type Yen,
 } from "@app/domain";
 import { createPaidSubmissionAuthorizationRepository } from "@app/database";
+import {
+  createFakeRouteKit,
+  FAKE_ROUTE_VERSION,
+  FAKE_VIDEO_MODEL_ID,
+  FAKE_VIDEO_MODEL_KEY,
+} from "@app/video-providers";
 import {
   ASSET_A,
   ctx,
@@ -108,17 +116,36 @@ function openVideoContract(): ProviderPricingContract {
 }
 
 /** The OpenVideo snapshot, priced in USD and convertible through `FX`. */
-function snapshotFor(seconds: number, contract: ProviderPricingContract = openVideoContract()): PricingSnapshot {
+function snapshotFor(
+  seconds: number,
+  contract: ProviderPricingContract = openVideoContract(),
+  riskProfileKey: "NORMAL_AI" | "HIGH_QUALITY_AI" = "NORMAL_AI",
+  fx: FxSnapshot = FX,
+): PricingSnapshot {
   const taken = createPricingSnapshot({
     contract,
-    riskProfileKey: "NORMAL_AI",
+    riskProfileKey,
     requestedSeconds: seconds,
     pricingEffectiveAt: epochMillisFromDate(new Date("2026-09-04T00:00:00.000Z")),
-    fx: FX,
+    fx,
   });
   if (!taken.ok) throw new Error("expected a pricing snapshot");
   return taken.value;
 }
+
+interface AttemptRoute {
+  readonly providerName: string;
+  readonly providerModelId: string;
+  readonly requestModelKey: string;
+  readonly requestNativeGenerationResolution: string;
+}
+
+const OPEN_VIDEO_ROUTE: AttemptRoute = {
+  providerName: "wavespeed",
+  providerModelId: "wavespeed-ai/open-video/image-to-video",
+  requestModelKey: "wavespeed-open-video",
+  requestNativeGenerationResolution: "1080p",
+};
 
 /**
  * A complete NORMAL-tier chain whose route is authorized.
@@ -139,6 +166,10 @@ async function seedAuthorizableChain(
     readonly reservedAt?: Date;
     /** The contract the attempt is priced against; production's OpenVideo unless given. */
     readonly contract?: ProviderPricingContract;
+    readonly qualityTier?: GenerationQualityTier;
+    /** The attempt's route and the rate its price converts at; OpenVideo's and `FX` unless given. */
+    readonly route?: AttemptRoute;
+    readonly fx?: FxSnapshot;
   } = {},
 ) {
   const organizationId = options.organizationId ?? ORG_A;
@@ -152,7 +183,7 @@ async function seedAuthorizableChain(
       id: `genjob_${suffix}`,
       videoProjectId,
       requestedByUserId: "usr_itest",
-      qualityTier: "NORMAL",
+      qualityTier: options.qualityTier ?? "NORMAL",
       requestedDurationSeconds: 30,
       disclosureMode: "THROUGHOUT",
     },
@@ -215,16 +246,18 @@ async function seedAuthorizableChain(
     {
       id: `sgen_${suffix}`,
       generationSceneRequestId: request.id,
-      providerName: "wavespeed",
-      providerModelId: "wavespeed-ai/open-video/image-to-video",
-      requestModelKey: "wavespeed-open-video",
+      ...(options.route ?? OPEN_VIDEO_ROUTE),
       requestRenderedPrompt: "a sunlit living room, cinematic, slow pan",
-      requestNativeGenerationResolution: "1080p",
       requestResolutionNormalization: "NONE",
       requestNativeMeetsTarget: true,
       pricingSnapshotId: `price_sgen_${suffix}`,
-      pricingSnapshot: snapshotFor(seconds, options.contract),
-      fxSnapshot: FX,
+      pricingSnapshot: snapshotFor(
+        seconds,
+        options.contract,
+        options.qualityTier === "HIGH_QUALITY" ? "HIGH_QUALITY_AI" : "NORMAL_AI",
+        options.fx ?? FX,
+      ),
+      fxSnapshot: options.fx ?? FX,
     },
     ctx(),
   );
@@ -386,6 +419,79 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         where: { aggregateType: "ATTEMPT", aggregateId: second.attempt.id, toState: "SUBMITTING" },
       });
       expect(boundary.safeMetadata).toMatchObject({ inFlightCostYen: FIVE_SECOND_YEN });
+    });
+  });
+
+  describe("the test provider's route (ADR-0090)", () => {
+    const kit = createFakeRouteKit({ NODE_ENV: "test", VIDEO_PROVIDER: "fake" });
+
+    function fakeContract(nativeTier: "720p" | "1080p"): ProviderPricingContract {
+      const contract = kit.pricing.findByIdentity({
+        provider: "fake",
+        pricingModelKey: FAKE_VIDEO_MODEL_KEY,
+        generationMode: "image-to-video",
+        nativeTier,
+        audioMode: "none",
+        durationBillingRuleId: "per-second",
+        pricingVersion: FAKE_ROUTE_VERSION,
+      });
+      if (contract === undefined) throw new Error("expected the kit's contract");
+      return contract;
+    }
+
+    async function seedFake(suffix: string, qualityTier: GenerationQualityTier, size: "720p" | "1080p") {
+      return seedAuthorizableChain(prisma, suffix, {
+        qualityTier,
+        contract: fakeContract(size),
+        fx: kit.fx,
+        route: {
+          providerName: "fake",
+          providerModelId: FAKE_VIDEO_MODEL_ID,
+          requestModelKey: FAKE_VIDEO_MODEL_KEY,
+          requestNativeGenerationResolution: size,
+        },
+      });
+    }
+
+    function kitService(routePolicy = kit.routePolicy, pricing = kit.pricing) {
+      return createPaidSubmissionAuthorizationService({
+        authorization: createPaidSubmissionAuthorizationRepository(prisma, { pricing }),
+        billingCycleRevenue: revenueReader(yen(49_800)),
+        clock: createFixedAuthorizationClock(AT),
+        routePolicy,
+      });
+    }
+
+    it("authorizes an HQ attempt, given the kit's policy and catalog, and records the kit's version", async () => {
+      // The fixture's project is 1080p, which is HQ.
+      const { attempt } = await seedFake("fakehq", "HIGH_QUALITY", "1080p");
+      const outcome = await kitService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      expect(outcome.kind).toBe("AUTHORIZED");
+      const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
+        where: { aggregateType: "ATTEMPT", aggregateId: attempt.id, toState: "SUBMITTING" },
+      });
+      expect(boundary.safeMetadata).toMatchObject({ routingPolicyVersion: FAKE_ROUTE_VERSION });
+    });
+
+    it("authorizes a Normal attempt on a 720p project", async () => {
+      await prisma.videoProject.update({ where: { id: PROJECT_A }, data: { targetOutputResolution: "720p" } });
+      const { attempt } = await seedFake("fakenormal", "NORMAL", "720p");
+      const outcome = await kitService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      expect(outcome.kind).toBe("AUTHORIZED");
+    });
+
+    it("is refused by production's catalog, and by production's route policy", async () => {
+      const { attempt } = await seedFake("fakeprod", "HIGH_QUALITY", "1080p");
+      const unpriced = await service(prisma).authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      expect(unpriced.kind).toBe("PRICING_INELIGIBLE");
+      const unrouted = await kitService(PRODUCTION_ROUTE_POLICY).authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        context: ctx(),
+      });
+      expect(unrouted).toMatchObject({ kind: "ROUTING_NOT_AUTHORIZED", reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
     });
   });
 

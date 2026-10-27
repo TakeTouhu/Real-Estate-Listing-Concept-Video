@@ -8,7 +8,8 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md` (GS-4a),
 `docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b),
 `docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c),
-`docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md` (GS-5a-1)
+`docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md` (GS-5a-1),
+`docs/decisions/0090-the-test-route-is-built-only-outside-production.md` (GS-5a-2)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
