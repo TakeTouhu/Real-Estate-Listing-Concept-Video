@@ -8,6 +8,7 @@ import type {
 } from "./gate";
 import type { AuthorizationClock } from "./clock";
 import type { ProviderCostExposure } from "./exposure";
+import type { RoutePolicy } from "./routing";
 import type { PaidSubmissionAuthorizationOutcome } from "./types";
 
 /**
@@ -115,6 +116,12 @@ export interface PaidSubmissionAuthorizationDeps {
   readonly billingCycleRevenue: BillingCycleRevenueReader;
   /** Read inside the lock. See {@link AuthorizationClock}. */
   readonly clock: AuthorizationClock;
+  /**
+   * The routes an attempt may be authorized against. Production's when left
+   * out; only a composition outside production passes the test route's
+   * (ADR-0089).
+   */
+  readonly routePolicy?: RoutePolicy;
 }
 
 /**

@@ -152,3 +152,31 @@ Until GS-7 nothing launches a job, and until GS-10 nothing constructs the start
 service, so no job can be left waiting. A job that waits must still never hold
 its Unit indefinitely (ADR-0052 Decision 19): GS-7 decides what releases one
 that can never launch (`docs/decisions/TODO.md`).
+
+## GS-5 — the test route, and a cycle's revenue
+
+The paid-submission gap. An attempt crosses into `SUBMITTING` only through the
+paid-submission gate, and on `90f0be6` the gate refuses every attempt a
+development start could make:
+
+| Gap | On the base |
+| --- | --- |
+| The test provider has no route | `authorizeRoute` reads production's route table, a module constant, and the test provider is not in it |
+| HQ has no route anywhere | `AUTHORIZED_QUALITY_TIERS` is Normal only, and the start's offer (ADR-0088) reads the same constant |
+| The test provider has no price | The paid-submission repository verifies snapshots against production's price catalog, called inside it |
+| The test provider has no catalog entry | `createVideoModelCatalog()` lists four production models; its default has no adapter |
+| No exchange rate | A snapshot priced in US dollars needs an FX snapshot, and no production process makes one |
+| No cycle revenue | The revenue reader returns `null`, so the Safety Guard hard-pauses every attempt; no ADR defines what a cycle's revenue is |
+
+Split into pull requests:
+
+- **GS-5a-1** (ADR-0089, no migration): the route table and the price catalog
+  are passed in, production's when nothing is: `RoutePolicy`, the gate and the
+  start's quality offer against the same policy, and the repository's
+  catalog. Production behaves as before.
+- **GS-5a-2**: the test route's catalog entry, route (Normal and HQ), price
+  and fixed FX rate, built only by a factory that refuses production.
+- **GS-5b**: the billing cycle's revenue reader. The product owner decided
+  on 2026-10-27 what revenue is: the plan's monthly price plus the period's
+  Unit purchases, tax-exclusive (`docs/decisions/TODO.md`, decision gates
+  closed).

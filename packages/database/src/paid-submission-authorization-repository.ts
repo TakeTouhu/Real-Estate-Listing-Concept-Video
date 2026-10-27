@@ -23,6 +23,7 @@ import {
   type PricingAuthorizationFailure,
   type PricingGateFacts,
   type ProviderCostExposure,
+  type ProviderPricingCatalog,
   type ProviderPricingContract,
   type ReservationGateFacts,
   type SceneGenerationRequestKind,
@@ -485,7 +486,10 @@ async function loadFxSnapshot(tx: Tx, id: string): Promise<FxSnapshot | null> {
  * is found in the first place. Resolving by the *attempt's* provider and model
  * instead would hand the verifier whatever the catalog sells today.
  */
-function contractFor(snapshot: SnapshotRow): {
+function contractFor(
+  pricing: ProviderPricingCatalog,
+  snapshot: SnapshotRow,
+): {
   contract: ProviderPricingContract | null;
   generationMode: string;
   audioMode: string;
@@ -517,7 +521,7 @@ function contractFor(snapshot: SnapshotRow): {
   ) {
     return { contract: null, generationMode: "", audioMode: "" };
   }
-  const contract = createProviderPricingCatalog().findByIdentity({
+  const contract = pricing.findByIdentity({
     provider,
     pricingModelKey,
     generationMode,
@@ -575,14 +579,18 @@ type VerifiedCost =
  * situation — a provider price change mid-incident — where the guard matters
  * most.
  */
-async function verifiedPlanningCostYen(tx: Tx, snapshot: SnapshotRow): Promise<VerifiedCost> {
+async function verifiedPlanningCostYen(
+  tx: Tx,
+  pricing: ProviderPricingCatalog,
+  snapshot: SnapshotRow,
+): Promise<VerifiedCost> {
   if (snapshot.fxSnapshotId === null) {
     return { ok: false, reason: "PRICING_FX_SNAPSHOT_MISSING" };
   }
   const fx = await loadFxSnapshot(tx, snapshot.fxSnapshotId);
   if (fx === null) return { ok: false, reason: "PRICING_FX_SNAPSHOT_INVALID" };
 
-  const { contract } = contractFor(snapshot);
+  const { contract } = contractFor(pricing, snapshot);
   const verified = verifyPersistedPricingSnapshot({
     persisted: persistedFacts(snapshot),
     contract,
@@ -596,9 +604,20 @@ async function verifiedPlanningCostYen(tx: Tx, snapshot: SnapshotRow): Promise<V
   return { ok: true, yen: converted.value };
 }
 
+export interface PaidSubmissionAuthorizationRepositoryOptions {
+  /**
+   * The contracts a snapshot is verified against. Production's when left out;
+   * only a composition outside production passes one with the test route's
+   * contract (ADR-0089).
+   */
+  readonly pricing?: ProviderPricingCatalog;
+}
+
 export function createPaidSubmissionAuthorizationRepository(
   prisma: PrismaClient,
+  options: PaidSubmissionAuthorizationRepositoryOptions = {},
 ): PaidSubmissionAuthorizationRepository {
+  const contracts = options.pricing ?? createProviderPricingCatalog();
   return {
     async withCostAdmission(input, run) {
       return prisma.$transaction(async (tx) => {
@@ -701,10 +720,10 @@ export function createPaidSubmissionAuthorizationRepository(
                 pricingSnapshotId: null,
               };
             } else {
-              const { contract, generationMode, audioMode } = contractFor(snapshot);
+              const { contract, generationMode, audioMode } = contractFor(contracts, snapshot);
               // The same verifier every sibling goes through: the whole row
               // re-derived, and the re-derived amount used.
-              const verified = await verifiedPlanningCostYen(tx, snapshot);
+              const verified = await verifiedPlanningCostYen(tx, contracts, snapshot);
 
               // FX failures keep their own field so the gate can report them
               // with their own reasons; everything else is an integrity verdict.
@@ -754,7 +773,7 @@ export function createPaidSubmissionAuthorizationRepository(
                 cycle,
                 input.attemptId,
                 async (sibling) => {
-                  const verified = await verifiedPlanningCostYen(tx, sibling);
+                  const verified = await verifiedPlanningCostYen(tx, contracts, sibling);
                   return verified.ok ? verified.yen : null;
                 },
               );

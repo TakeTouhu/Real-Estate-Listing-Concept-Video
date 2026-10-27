@@ -10,7 +10,7 @@ import {
   createPaidSubmissionAuthorizationService,
   PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
 } from "./paid-submission-service";
-import { ROUTING_POLICY_VERSION } from "./routing";
+import { authorizedRoutes, ROUTING_POLICY_VERSION, type RoutePolicy } from "./routing";
 import type {
   ArmResult,
   BillingCycleRevenueReader,
@@ -111,6 +111,7 @@ function serviceWith(
     facts?: PaidSubmissionFactsSnapshot | null;
     cycleYen?: Yen | null;
     clock?: AuthorizationClock;
+    routePolicy?: RoutePolicy;
     /** Called after the lock is taken and before facts are loaded. */
     onLock?: () => void;
   } = {},
@@ -154,6 +155,7 @@ function serviceWith(
       authorization,
       billingCycleRevenue,
       clock,
+      ...(options.routePolicy === undefined ? {} : { routePolicy: options.routePolicy }),
     }),
   };
 }
@@ -342,6 +344,26 @@ describe("the durable authorization record", () => {
       hardPauseFloorYen: 15_000,
       pricingSnapshotId: "gps_svc",
     });
+  });
+
+  it("authorizes against the route policy it was given, and records that policy's version (ADR-0089)", async () => {
+    const armed = async (): Promise<ArmResult> => ({ kind: "ARMED", stateVersion: 4 });
+    const listing: RoutePolicy = {
+      version: "itest-policy.1",
+      qualityTiers: ["NORMAL"],
+      routes: authorizedRoutes(),
+    };
+    const withRoute = serviceWith(armed, { routePolicy: listing });
+    expect((await authorize(withRoute.service)).kind).toBe("AUTHORIZED");
+    expect(withRoute.armedContexts[0]!.metadata).toMatchObject({ routingPolicyVersion: "itest-policy.1" });
+
+    // A policy without the attempt's route refuses it, so the policy given is the one used.
+    const without = serviceWith(armed, { routePolicy: { ...listing, routes: [] } });
+    expect(await authorize(without.service)).toEqual({
+      kind: "ROUTING_NOT_AUTHORIZED",
+      reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED",
+    });
+    expect(without.calls.arm).toBe(0);
   });
 
   it("labels the event itself, rather than trusting the caller's label", async () => {

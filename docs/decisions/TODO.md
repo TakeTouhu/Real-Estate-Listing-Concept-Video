@@ -1896,6 +1896,11 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 11) — enough inquiry tracking to measure an initial response
       against staffed hours and business days, without attaching the uptime SLA
       credit schedule to it.
+- [ ] **Build the billing-cycle revenue reader for the Cost Safety Guard**
+      (decided 2026-10-27, *Decision gates — CLOSED*): the plan's monthly price
+      plus the period's uncancelled Unit purchases, tax-exclusive; Enterprise
+      unknown until its contracted price is recorded. Today's only reader
+      answers unknown, so the guard pauses every paid submission. GS-5b.
 
 ### Decision gates — OPEN
 
@@ -1952,7 +1957,7 @@ below.
 
 ### Decision gates — CLOSED
 
-Thirty-one decisions: the two gates from the first PR review, eight recorded
+Thirty-two decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1962,9 +1967,25 @@ blocks, storage blocks on downgrade, Scope semantics, Property assignment
 authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
 protected group deletion — from the Phase 6A gap analysis, multi-Unit
-reservation funding, and, from the Unit purchase proposal, when an
-invoice-paid organization can use purchased Units. **Each is settled as policy**; the implementation work each
+reservation funding, from the Unit purchase proposal, when an
+invoice-paid organization can use purchased Units, and, from GS-5, what a
+billing cycle's revenue is. **Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
+
+- [x] **What a billing cycle's revenue is, for the Cost Safety Guard — CLOSED
+      (the plan's monthly price plus Unit purchases).** Chosen by the product
+      owner on 2026-10-27 (decision card, option "月額+Unit購入", the
+      recommendation). A cycle's revenue is the plan's monthly price plus the
+      Unit purchases approved in that period, both tax-exclusive (the card's
+      words). Seats and storage blocks are not counted while they are not
+      recorded, and an Enterprise organization's revenue stays unknown, so the
+      guard keeps pausing, until its contracted price is recorded (both on the
+      card). A cancelled purchase counts nothing: ADR-0070 withdraws it and
+      invoices nothing for it. Payment fees were not part of the question: no
+      card payment exists yet. The paid-submission gate (`safety-guard.ts`)
+      compared revenue with cost but no ADR said what counted, and the only
+      reader answered unknown, pausing every cycle. To be built by GS-5b, the
+      revenue reader (*Implementation work* above).
 
 - [x] **Multi-Unit reservation funding — CLOSED (Option A).** A reservation may
       span multiple funding sources. Allocation is eligibility-first across the

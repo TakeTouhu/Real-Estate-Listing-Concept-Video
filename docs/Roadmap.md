@@ -265,6 +265,17 @@ lock. Every refusal writes no job, reservation or `generation.started` entry;
 one after the period step leaves only the period and its own entry. Nothing
 outside tests constructs it until GS-10's route.
 
+**GS-5a-1 — the route table and price catalog are passed in** (ADR-0089, no
+migration): a `RoutePolicy` (version, qualities, routes) that the
+paid-submission gate authorizes against, production's when none is passed,
+and from which the start's quality offer is built (the start always takes an
+offer; production's is Normal only). A policy outside production is built by
+`defineRoutePolicy`, which refuses production's version and a quality with no
+route. The paid-submission repository verifies snapshots against the catalog
+it is given, production's when none is. The authorization record names the
+policy's version. Production behaves exactly as before; GS-5a-2's factory,
+which refuses production, will pass the test route's.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

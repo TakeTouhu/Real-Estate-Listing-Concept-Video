@@ -134,18 +134,21 @@ const CONTRACTS: readonly ProviderPricingContract[] = deepFreeze([
 /**
  * Two contracts sharing a key would make lookup return whichever came first,
  * which is precisely the wrong-price failure the full identity exists to
- * prevent. A duplicate is a defect in this table, so it fails at module load
- * rather than at the first mispriced request.
+ * prevent. A duplicate is a defect in the table, so it fails when the table is
+ * built (for production's, at module load) rather than at the first mispriced
+ * request.
  */
-const BY_KEY: ReadonlyMap<string, ProviderPricingContract> = (() => {
+function indexByKey(contracts: readonly ProviderPricingContract[]): ReadonlyMap<string, ProviderPricingContract> {
   const map = new Map<string, ProviderPricingContract>();
-  for (const contract of CONTRACTS) {
+  for (const contract of contracts) {
     const key = providerPricingContractKey(contract.identity);
     if (map.has(key)) throw new Error("Duplicate provider pricing contract identity");
     map.set(key, contract);
   }
   return map;
-})();
+}
+
+const BY_KEY = indexByKey(CONTRACTS);
 
 export interface ProviderPricingCatalog {
   /**
@@ -160,10 +163,32 @@ export interface ProviderPricingCatalog {
   all(): readonly ProviderPricingContract[];
 }
 
+/** Production's catalog: the contracts above and nothing else. */
 export function createProviderPricingCatalog(): ProviderPricingCatalog {
+  return catalogOf(CONTRACTS, BY_KEY);
+}
+
+/**
+ * Production's contracts plus others, for a composition outside production
+ * (ADR-0089): only the test route's factory, which refuses production, calls
+ * it. An added contract may not share an identity with one of production's.
+ */
+export function extendProviderPricingCatalog(
+  added: readonly ProviderPricingContract[],
+): ProviderPricingCatalog {
+  // Freezes the added contracts in place too: once the catalog holds a
+  // contract, its caller cannot change the price under it.
+  const contracts = deepFreeze([...CONTRACTS, ...added]);
+  return catalogOf(contracts, indexByKey(contracts));
+}
+
+function catalogOf(
+  contracts: readonly ProviderPricingContract[],
+  byKey: ReadonlyMap<string, ProviderPricingContract>,
+): ProviderPricingCatalog {
   return {
-    findByIdentity: (identity) => BY_KEY.get(providerPricingContractKey(identity)),
-    findByKey: (key) => BY_KEY.get(key),
-    all: () => CONTRACTS,
+    findByIdentity: (identity) => byKey.get(providerPricingContractKey(identity)),
+    findByKey: (key) => byKey.get(key),
+    all: () => contracts,
   };
 }

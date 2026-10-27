@@ -1783,3 +1783,17 @@ committing on one of its projects (one short transaction).
 
 **Rolling back.** To GS-4b's build: safe, since nothing in production calls
 what GS-4c adds.
+
+## GS-5a-1 — the route table and price catalog are passed in
+
+**No migration** (ADR-0089). No schema, enum, constraint or row changes, and
+no new environment variable.
+
+**What changes at deploy.** Nothing. Every caller that passes no route policy
+or price catalog gets production's, which are the same tables as before, and
+nothing outside tests passes another. The authorization record's
+`routingPolicyVersion` is the version of the policy used, which for production
+is the same `ROUTING_POLICY_VERSION` as before.
+
+**Rolling back.** To GS-4c's build: safe, since nothing in production calls
+what GS-5a-1 adds.

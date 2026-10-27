@@ -15,7 +15,7 @@ import {
   evaluatePaidSubmissionGate,
   type PaidSubmissionGateFacts,
 } from "./gate";
-import { H3_MAX_PROVIDER_MODEL_ID } from "./routing";
+import { H3_MAX_PROVIDER_MODEL_ID, ROUTING_POLICY_VERSION, type RoutePolicy } from "./routing";
 
 /**
  * The paid submission gate, as a pure decision.
@@ -601,6 +601,7 @@ describe("the paid submission gate", () => {
       );
       if (decision.kind !== "PERMITTED") throw new Error("expected PERMITTED");
       expect(decision.audit.authorizationPolicyVersion).toBe(AUTHORIZATION_POLICY_VERSION);
+      expect(decision.audit.routingPolicyVersion).toBe(ROUTING_POLICY_VERSION);
       expect(decision.audit.billingCycleRevenueYen).toBe(49_800);
       expect(decision.audit.pricingSnapshotId).toBe("gps_gate");
       expect(decision.audit.exposure).toEqual({
@@ -960,6 +961,57 @@ describe("the paid submission gate", () => {
       expect(decision.outcome).toEqual({
         kind: "ROUTING_NOT_AUTHORIZED",
         reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED",
+      });
+    });
+
+    describe("against the route policy it is given (ADR-0089)", () => {
+      // A policy that is not production's: one route, at both qualities.
+      const policy: RoutePolicy = {
+        version: "itest-policy.1",
+        qualityTiers: ["NORMAL", "HIGH_QUALITY"],
+        routes: (["NORMAL", "HIGH_QUALITY"] as const).map((qualityTier) => ({
+          qualityTier,
+          providerName: "itest",
+          providerModelId: "itest/video",
+          requestModelKey: "itest-video",
+          nativeGenerationResolution: "720p",
+          targetOutputResolutions: ["720p", "1080p"],
+          generationMode: "image-to-video",
+          audioMode: "none",
+        })),
+      };
+      const onPolicyRoute = {
+        providerName: "itest",
+        providerModelId: "itest/video",
+        requestModelKey: "itest-video",
+        requestNativeGenerationResolution: "720p",
+      };
+      const hq = {
+        job: { qualityTier: "HIGH_QUALITY", requiredHighQualityUnits: 1 },
+        reservation: { reservedHighQualityUnits: 1 },
+      } as const;
+
+      it("authorizes a route only that policy lists, and records its version", () => {
+        const decision = evaluatePaidSubmissionGate(facts({ attempt: onPolicyRoute }), policy);
+        if (decision.kind !== "PERMITTED") throw new Error("expected PERMITTED");
+        expect(decision.audit.routingPolicyVersion).toBe("itest-policy.1");
+      });
+
+      it("serves the qualities that policy lists", () => {
+        const decision = evaluatePaidSubmissionGate(facts({ ...hq, attempt: onPolicyRoute }), policy);
+        expect(decision.kind).toBe("PERMITTED");
+      });
+
+      it("is production's when none is given", () => {
+        const decision = evaluatePaidSubmissionGate(facts({ attempt: onPolicyRoute }));
+        if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+        expect(decision.outcome).toEqual({ kind: "ROUTING_NOT_AUTHORIZED", reason: "PROVIDER_NOT_AUTHORIZED" });
+      });
+
+      it("is the whole table: production's routes are not added to it", () => {
+        const decision = evaluatePaidSubmissionGate(facts(), policy);
+        if (decision.kind !== "REFUSED") throw new Error("expected REFUSED");
+        expect(decision.outcome).toEqual({ kind: "ROUTING_NOT_AUTHORIZED", reason: "PROVIDER_NOT_AUTHORIZED" });
       });
     });
 

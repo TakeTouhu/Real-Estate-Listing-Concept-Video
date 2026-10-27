@@ -134,6 +134,69 @@ export const AUTHORIZED_QUALITY_TIERS: readonly GenerationQualityTier[] = deepFr
   "NORMAL",
 ] as const);
 
+/**
+ * A route table and the qualities it serves, under one version (GS-5a,
+ * ADR-0089).
+ *
+ * Production's is {@link PRODUCTION_ROUTE_POLICY}, built from the constants
+ * above and nothing else. A composition outside production may pass another,
+ * production's plus the test route, which only a factory that refuses
+ * production builds. Whoever forgets to pass one gets production's, which
+ * refuses every route it does not list.
+ */
+export interface RoutePolicy {
+  /** Persisted with every authorization event, as {@link ROUTING_POLICY_VERSION} is. */
+  readonly version: string;
+  readonly qualityTiers: readonly GenerationQualityTier[];
+  readonly routes: readonly AuthorizedRoute[];
+}
+
+export const PRODUCTION_ROUTE_POLICY: RoutePolicy = deepFreeze({
+  version: ROUTING_POLICY_VERSION,
+  qualityTiers: AUTHORIZED_QUALITY_TIERS,
+  routes: AUTHORIZED_ROUTES,
+});
+
+/**
+ * A route policy other than production's, checked and frozen (ADR-0089).
+ *
+ * Throws, as production's tables refuse a malformed entry at load, when the
+ * version is empty or production's (the record would name the wrong table),
+ * when a quality is listed with no route for it (the start would offer what the
+ * gate refuses) or a route's quality is not listed, or when a quality repeats.
+ */
+export function defineRoutePolicy(policy: RoutePolicy): RoutePolicy {
+  if (policy.version.trim() === "" || policy.version === ROUTING_POLICY_VERSION) {
+    throw new Error("A route policy outside production needs a version of its own");
+  }
+  if (new Set(policy.qualityTiers).size !== policy.qualityTiers.length) {
+    throw new Error("A route policy lists a quality twice");
+  }
+  for (const tier of policy.qualityTiers) {
+    if (!policy.routes.some((r) => r.qualityTier === tier)) {
+      throw new Error(`A route policy lists ${tier} with no route for it`);
+    }
+  }
+  for (const route of policy.routes) {
+    if (!policy.qualityTiers.includes(route.qualityTier)) {
+      throw new Error(`A route policy has a ${route.qualityTier} route but does not list ${route.qualityTier}`);
+    }
+  }
+  return deepFreeze({
+    version: policy.version,
+    qualityTiers: [...policy.qualityTiers],
+    routes: policy.routes.map((r) => ({ ...r, targetOutputResolutions: [...r.targetOutputResolutions] })),
+  });
+}
+
+/**
+ * Whether a policy serves a quality: lists it and has a route for it, the two
+ * checks `authorizeRoute` makes before it looks at the route's own facts.
+ */
+export function servesQualityTier(policy: RoutePolicy, qualityTier: GenerationQualityTier): boolean {
+  return policy.qualityTiers.includes(qualityTier) && policy.routes.some((r) => r.qualityTier === qualityTier);
+}
+
 export type RouteAuthorizationResult =
   | { readonly ok: true; readonly route: AuthorizedRoute }
   | { readonly ok: false; readonly reason: RoutingAuthorizationFailure };
@@ -152,12 +215,15 @@ export type RouteAuthorizationResult =
  * or splits a model id on `/`: a renamed tier must become a lookup miss rather
  * than a silently reinterpreted one.
  */
-export function authorizeRoute(facts: RouteAuthorizationFacts): RouteAuthorizationResult {
-  if (!AUTHORIZED_QUALITY_TIERS.includes(facts.qualityTier)) {
+export function authorizeRoute(
+  facts: RouteAuthorizationFacts,
+  policy: RoutePolicy = PRODUCTION_ROUTE_POLICY,
+): RouteAuthorizationResult {
+  if (!policy.qualityTiers.includes(facts.qualityTier)) {
     return { ok: false, reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" };
   }
 
-  const byTier = AUTHORIZED_ROUTES.filter((r) => r.qualityTier === facts.qualityTier);
+  const byTier = policy.routes.filter((r) => r.qualityTier === facts.qualityTier);
   if (byTier.length === 0) {
     return { ok: false, reason: "QUALITY_TIER_ROUTE_NOT_AUTHORIZED" };
   }

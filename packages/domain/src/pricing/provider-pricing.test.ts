@@ -8,7 +8,11 @@ import {
   resolveBillableDurationSeconds,
   validateFxSnapshot,
 } from "./provider-cost-calculator";
-import { costRiskProfile, createProviderPricingCatalog } from "./provider-pricing-catalog";
+import {
+  costRiskProfile,
+  createProviderPricingCatalog,
+  extendProviderPricingCatalog,
+} from "./provider-pricing-catalog";
 import {
   providerPricingContractFingerprint,
   providerPricingContractKey,
@@ -189,6 +193,35 @@ describe("lookup distinguishes every material billing dimension", () => {
   it("resolves by key exactly as it resolves by identity", () => {
     const key = providerPricingContractKey(VEO_FAST_IDENTITY);
     expect(catalog.findByKey(key)).toBe(catalog.findByIdentity(VEO_FAST_IDENTITY));
+  });
+});
+
+describe("a catalog extended outside production (ADR-0089)", () => {
+  const added: ProviderPricingContract = {
+    ...openVideo(),
+    identity: { ...OPEN_VIDEO_IDENTITY, provider: "itest", pricingModelKey: "itest-video" },
+  };
+
+  it("finds the added contract and every one of production's", () => {
+    const extended = extendProviderPricingCatalog([added]);
+    expect(extended.findByIdentity(added.identity)).toEqual(added);
+    expect(extended.findByKey(providerPricingContractKey(added.identity))).toEqual(added);
+    for (const contract of catalog.all()) {
+      expect(extended.findByIdentity(contract.identity)).toBe(contract);
+    }
+    expect(extended.all()).toHaveLength(catalog.all().length + 1);
+    expect(Object.isFrozen(extended.all())).toBe(true);
+  });
+
+  it("leaves production's catalog as it was", () => {
+    extendProviderPricingCatalog([added]);
+    expect(createProviderPricingCatalog().findByIdentity(added.identity)).toBeUndefined();
+    expect(createProviderPricingCatalog().all()).toHaveLength(3);
+  });
+
+  it("refuses an added contract with one of production's identities, or two alike", () => {
+    expect(() => extendProviderPricingCatalog([openVideo()])).toThrow("Duplicate provider pricing contract identity");
+    expect(() => extendProviderPricingCatalog([added, added])).toThrow("Duplicate provider pricing contract identity");
   });
 });
 

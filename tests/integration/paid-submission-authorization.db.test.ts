@@ -7,6 +7,7 @@ import {
   createPricingSnapshot,
   createProviderPricingCatalog,
   epochMillisFromDate,
+  extendProviderPricingCatalog,
   PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
   ROUTING_POLICY_VERSION,
   yen,
@@ -14,6 +15,8 @@ import {
   type BillingCycleRevenueReader,
   type FxSnapshot,
   type PricingSnapshot,
+  type ProviderPricingCatalog,
+  type ProviderPricingContract,
   type Yen,
 } from "@app/domain";
 import { createPaidSubmissionAuthorizationRepository } from "@app/database";
@@ -89,18 +92,23 @@ function service(
   client: PrismaClient,
   cycleYen: Yen | null = yen(49_800),
   clock: AuthorizationClock = createFixedAuthorizationClock(AT),
+  pricing?: ProviderPricingCatalog,
 ) {
   return createPaidSubmissionAuthorizationService({
-    authorization: createPaidSubmissionAuthorizationRepository(client),
+    authorization: createPaidSubmissionAuthorizationRepository(client, pricing === undefined ? {} : { pricing }),
     billingCycleRevenue: revenueReader(cycleYen),
     clock,
   });
 }
 
-/** The OpenVideo snapshot, priced in USD and convertible through `FX`. */
-function snapshotFor(seconds: number): PricingSnapshot {
+function openVideoContract(): ProviderPricingContract {
   const contract = createProviderPricingCatalog().findByIdentity(OPEN_VIDEO_IDENTITY);
   if (contract === undefined) throw new Error("expected a pricing contract");
+  return contract;
+}
+
+/** The OpenVideo snapshot, priced in USD and convertible through `FX`. */
+function snapshotFor(seconds: number, contract: ProviderPricingContract = openVideoContract()): PricingSnapshot {
   const taken = createPricingSnapshot({
     contract,
     riskProfileKey: "NORMAL_AI",
@@ -129,6 +137,8 @@ async function seedAuthorizableChain(
     readonly reserve?: boolean;
     /** When the hold is made; it selects the entitlement period and with it the cycle. */
     readonly reservedAt?: Date;
+    /** The contract the attempt is priced against; production's OpenVideo unless given. */
+    readonly contract?: ProviderPricingContract;
   } = {},
 ) {
   const organizationId = options.organizationId ?? ORG_A;
@@ -213,7 +223,7 @@ async function seedAuthorizableChain(
       requestResolutionNormalization: "NONE",
       requestNativeMeetsTarget: true,
       pricingSnapshotId: `price_sgen_${suffix}`,
-      pricingSnapshot: snapshotFor(seconds),
+      pricingSnapshot: snapshotFor(seconds, options.contract),
       fxSnapshot: FX,
     },
     ctx(),
@@ -329,6 +339,53 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       expect(after.stateVersion).toBe(before.stateVersion);
       expect(after.reservedTotalVideoUnits).toBe(before.reservedTotalVideoUnits);
       expect(after.reservedHighQualityUnits).toBe(before.reservedHighQualityUnits);
+    });
+  });
+
+  describe("the contracts a snapshot is verified against (ADR-0089)", () => {
+    // OpenVideo's route at a price production's catalog does not hold.
+    const added: ProviderPricingContract = {
+      ...openVideoContract(),
+      identity: { ...OPEN_VIDEO_IDENTITY, pricingVersion: "itest-extended.1" },
+    };
+
+    it("are production's unless given: an attempt priced against another contract is refused", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "notprod", { contract: added });
+      const outcome = await service(prisma).authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      expect(outcome.kind).toBe("PRICING_INELIGIBLE");
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("are the catalog given, which verifies that attempt", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "extended", { contract: added });
+      const extended = extendProviderPricingCatalog([added]);
+      const outcome = await service(prisma, yen(49_800), createFixedAuthorizationClock(AT), extended).authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        context: ctx(),
+      });
+      expect(outcome.kind).toBe("AUTHORIZED");
+    });
+
+    it("are the catalog given for the cycle's siblings too", async () => {
+      // The first attempt, once armed, is an in-flight sibling of the second.
+      // Its snapshot verifies only against the extended catalog; checked against
+      // production's, the cycle's cost would be unknown and the second refused.
+      const first = await seedAuthorizableChain(prisma, "sibfirst", { contract: added });
+      const second = await seedAuthorizableChain(prisma, "sibsecond", { contract: added });
+      const extended = extendProviderPricingCatalog([added]);
+      const gate = service(prisma, yen(49_800), createFixedAuthorizationClock(AT), extended);
+      const armed = await gate.authorize({ organizationId: ORG_A, attemptId: first.attempt.id, context: ctx() });
+      expect(armed.kind).toBe("AUTHORIZED");
+
+      const outcome = await gate.authorize({ organizationId: ORG_A, attemptId: second.attempt.id, context: ctx() });
+      expect(outcome.kind).toBe("AUTHORIZED");
+      // And the sibling was counted, not missed: its cost is the second's in-flight cost.
+      const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
+        where: { aggregateType: "ATTEMPT", aggregateId: second.attempt.id, toState: "SUBMITTING" },
+      });
+      expect(boundary.safeMetadata).toMatchObject({ inFlightCostYen: FIVE_SECOND_YEN });
     });
   });
 
