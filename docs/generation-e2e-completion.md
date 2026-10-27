@@ -7,7 +7,8 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0085-a-shared-folder-holds-development-objects.md` (GS-3),
 `docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md` (GS-4a),
 `docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b),
-`docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c)
+`docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c),
+`docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md` (GS-5a-1)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -1811,3 +1812,185 @@ scheduler and live Stripe charges remain BLOCKED.
 GS-4c waits for the product owner's yes before merge. GS-5 (the test
 provider's route, price and catalog entry outside production, and the billing
 cycle's revenue for the paid-call gate) follows.
+
+## GS-5a-1 — the route table and price catalog are passed in
+
+Base: `90f0be6` (PR #112 merge commit on `main`; post-merge CI run 696 green).
+ADR: `docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md`
+
+The first of GS-5's three pull requests. **No migration; no route, no page.**
+Production passes nothing new and behaves exactly as before; nothing outside
+tests builds another policy or catalog until GS-5a-2.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `a4e9ad7` | the route policy, the start's quality offer for a policy, the extended price catalog, the repository's catalog option, the tests, ADR-0089 and the documentation, and the product owner's revenue decision recorded |
+| `9a44693` | the test that a cycle's siblings are verified against the catalog given |
+| `9419390` | the review's answers: `defineRoutePolicy`, the offer requiring a route, the sibling's cost asserted, the documents corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-5a-1 does
+
+- **A route policy.** `RoutePolicy` is a route table and the qualities it
+  serves, under one version. `PRODUCTION_ROUTE_POLICY` is the existing table,
+  frozen. `authorizeRoute` and the paid-submission gate authorize against the
+  policy given, and production's when none is, so forgetting to pass one
+  refuses the route rather than authorizing it. A policy outside production is
+  built by `defineRoutePolicy`, which refuses production's version, a quality
+  listed with no route, a route whose quality is not listed and a repeated
+  quality, and returns a frozen copy.
+- **The record names its table.** The authorization record's
+  `routingPolicyVersion` is the version of the policy the route was authorized
+  against, carried out of the gate in its audit block.
+- **The start's offer follows a policy.** `routeQualityOffer(policy)` offers a
+  quality the policy lists and has a route for, the gate's first two checks;
+  production's is Normal only, as before.
+- **The price catalog is passed in.** The paid-submission repository verifies
+  the candidate's snapshot and every cost-bearing sibling's against the catalog
+  it is given, production's when none is. `extendProviderPricingCatalog(added)`
+  builds a new catalog with production's contracts and the added ones, and
+  refuses a duplicate identity; production's is never changed.
+- **The revenue question is closed.** The product owner chose on 2026-10-27
+  that a cycle's revenue is the plan's monthly price plus the period's Unit
+  purchases, tax-exclusive (`docs/decisions/TODO.md`, decision gates closed).
+  GS-5b builds it.
+
+```mermaid
+flowchart LR
+    C[Composition] -- routePolicy? --> S[Paid-submission service]
+    C -- pricing? --> R[Authorization repository]
+    S --> G[Gate: authorizeRoute against the policy]
+    R --> V[Candidate and siblings verified against the catalog]
+    D[(PRODUCTION_ROUTE_POLICY / production catalog)] -. default .-> G
+    D -. default .-> V
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI) on `9419390`. This
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | 225 files, 6,223 tests passed |
+| `pnpm test:db` | 62 files, 1,662 tests passed on `a4e9ad7`; the one suite changed since, `paid-submission-authorization.db.test.ts`, 67 passed on `9419390` |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/domain/src/authorization/routing.test.ts`: production's policy is
+  the existing constants and frozen; a route is authorized against the policy
+  given; a quality is served only when listed and routed; `defineRoutePolicy`
+  copies and freezes, and refuses each malformed policy.
+- `packages/domain/src/authorization/gate.test.ts`: the gate against a policy it
+  is given (permitted and recorded with that policy's version, HQ served, the
+  default refusing the provider, the policy as the whole table), and the audit
+  carrying production's version by default.
+- `packages/domain/src/authorization/paid-submission-service.test.ts`: the
+  service passing its policy to the gate and recording its version; an empty
+  policy refusing without arming.
+- `packages/domain/src/pricing/provider-pricing.test.ts`: an extended catalog
+  finds the added and production's contracts, leaves production's unchanged,
+  and refuses a duplicate.
+- `packages/domain/src/orchestration/start-service.test.ts`: the offer for a
+  policy, and no offer for a quality listed with no route.
+- `tests/integration/paid-submission-authorization.db.test.ts` (3 more): an
+  attempt priced on a contract production's catalog lacks is refused by
+  default and authorized with the extended catalog, and a sibling priced on it
+  is verified against the catalog given and counted as the next attempt's
+  in-flight cost.
+
+### Mutation testing
+
+The same harness as GS-4c: each mutant applied, the suites run, the file
+restored and checked by SHA-256, and the repository's manifest identical before
+and after each pass.
+
+The domain mutants ran against the authorization, pricing and start-service
+suites; the repository's against the paid-submission database suite.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R1 / R2 | `authorizeRoute` ignoring the policy's qualities; its routes | killed |
+| R3 / R4 | production's policy not frozen; serving HQ | killed |
+| G1 / G2 | the gate ignoring the policy; the audit naming another version | killed |
+| S1 / S2 | the service not passing its policy; the record naming production's version | killed |
+| Q1 | the start's offer ignoring the policy | killed |
+| P1–P4 | the extended catalog dropping production's contracts, accepting a duplicate, not frozen; the duplicate check removed | killed |
+| D1 / D2 | the repository ignoring the catalog given; the contract lookup ignoring it | killed |
+| D3 | the siblings verified against production's catalog | killed, by the sibling test added in `9a44693` |
+| D4 / D5 | the candidate's contract looked up, or its snapshot verified, in production's catalog | killed |
+| V1 / V2 | `defineRoutePolicy` accepting an empty version; production's | killed |
+| V3–V5 | accepting a repeated quality, a quality with no route, a route whose quality is not listed | killed |
+| V6 | returning the input frozen rather than a copy | killed |
+| V7 / V8 | `servesQualityTier` ignoring the routes; the listed qualities | killed |
+| V9 | the start's offer reading only the listed qualities, as before the review | killed |
+| D6 | an in-flight sibling's cost not counted | killed |
+
+Result: first pass on `9a44693`, 18 mutants, all killed. Second pass on
+`9419390`, for the review's answers: 10 mutants and D3 again, all killed.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`9a44693` against `90f0be6`, reading only git objects. It confirmed that
+production's policy reuses the same frozen tables, so the default is
+identical and the record's version unchanged; that every default falls back to
+production's and refuses anything else; that the candidate and every sibling
+are verified against the same catalog; that nothing passed in can change
+production's tables; and that the sibling test catches the regression it
+targets. Verdict: nothing blocking. Its two should-fix findings and four nits,
+answered in `9419390`:
+
+| Finding | Answer |
+| --- | --- |
+| A policy is not checked: one listing HQ with no HQ route makes the start offer HQ and reserve Units the gate then refuses; one reusing production's version would make the record name the wrong table; the start's offer and the gate's policy are passed separately | `defineRoutePolicy` refuses both, and the offer requires a route for the quality. ADR-0089 records that a composition must build the offer and the policy from one policy, that GS-5a-2's factory hands out both, and that a job started on a mismatched pair holds its Units until the GS-7 release work |
+| The revenue decision's TODO entry: no unbuilt-work item, "built by GS-5b" reads as done, and the sub-rules should be checked against the card | The reader is listed as unbuilt work and the entry says "to be built". The card's own words were tax-exclusive, seats and storage not counted, and Enterprise paused until its contracted price is recorded; that a cancelled purchase counts nothing is ADR-0070's (a cancelled purchase is withdrawn and not invoiced), and the entry says so |
+| Nit: an added contract can re-price a production route under a new pricing version, which the media recovery planner would refuse as ambiguous | Recorded in ADR-0089 *Not decided here*; the test route's contract names its own provider |
+| Nit: the extended catalog freezes the caller's added contracts in place | A comment says so, and why: the caller cannot change a price the catalog holds |
+| Nit: the Roadmap and architecture said every dependency defaults to production's, but the start's offer has no default | Corrected |
+| Nit: the sibling test relied on the fixture putting both chains in one cycle | It now also asserts the sibling's cost as the second attempt's in-flight cost |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the route policy and catalog row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0089 Decisions 1 to 5 |
+| OpenAPI / API change summary | `docs/api-changes-gs-5a-1.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-5a-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (the GS-5
+gap table and split) and `docs/decisions/TODO.md` (the revenue decision and
+the reader as unbuilt work).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: production passes no policy or catalog of its own and the defaults
+are production's tables. No scheduler, credential or payment integration. Paid
+Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No test route exists yet**: nothing builds a policy or catalog other than
+  production's until GS-5a-2's factory, which refuses production.
+- **Revenue is still unknown** to the guard, which therefore still pauses
+  every paid submission, until GS-5b's reader.
+
+### Remaining work
+
+GS-5a-1 waits for the product owner's yes before merge. GS-5a-2 (the test
+route's catalog entry, routes, price and FX rate, built only outside
+production) and GS-5b (the revenue reader) follow.
