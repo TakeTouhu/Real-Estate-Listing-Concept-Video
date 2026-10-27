@@ -6,7 +6,8 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0084-a-failed-jobs-other-scenes-close.md` (GS-2b),
 `docs/decisions/0085-a-shared-folder-holds-development-objects.md` (GS-3),
 `docs/decisions/0086-a-storyboard-is-saved-in-one-commit.md` (GS-4a),
-`docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b)
+`docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b),
+`docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -1606,3 +1607,207 @@ GS-4b waits for the product owner's yes before merge. GS-4c (the start
 service: permissions, reach, the start key, freshness, quality, Mode A and the
 Unit period) follows.
 
+## GS-4c — the start service
+
+Base: `e7a04b5` (PR #111 merge commit on `main`; post-merge CI run 691 green).
+ADR: `docs/decisions/0088-starting-a-video-the-start-service.md`
+
+The last of GS-4's three pull requests. **No migration; no route, no page.**
+Nothing outside tests constructs the service until GS-10's route.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `3446ce8` | `GenerationStartService`, the replay read `findStarted`, the deleted-Property outcome, the tests, ADR-0088 and the documentation |
+| `884a835` | the review's answers: the commit re-checks the Property under its lock, the replay read's ids checked, the one-permission and stub-argument tests, the service against the real commit, the audit wording corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-4c does
+
+- **Who may start.** `video.generate` and `unit.consume` together, before
+  anything is read; a project out of the member's reach, or under a deleted
+  Property, is answered as not found.
+- **A replay first.** The start key's job is read, scoped to the organization,
+  before the storyboard is judged, so a retry finds its job after the customer
+  recomposed.
+- **What the customer confirmed.** The storyboard must be composed and current,
+  and be the scenes the start screen showed, in order; the quality the
+  project's resolution gives must be the one shown, and one a verified route
+  serves (Normal today, so a 1080p project is answered not offered); every
+  scene must have a compiled prompt and an approved camera motion; the length
+  must be one the product sells.
+- **The Unit period, then the commit.** The period containing the server
+  clock's instant is opened if nothing has opened it, then the start commit
+  (ADR-0087) receives a record with new ids, that instant, Mode A, the member's
+  transition context and the `generation.started` audit entry. Its outcomes
+  are mapped to the ones the start screen will show.
+- **The commit re-checks the Property.** Its project read joins the Property
+  and holds both rows `FOR SHARE`, so a deletion saving at the same moment is
+  waited for and then refused (`PROPERTY_DELETED`).
+
+```mermaid
+sequenceDiagram
+    participant C as Caller (GS-10's route)
+    participant S as GenerationStartService
+    participant R as Reads (members, Property, storyboard)
+    participant U as Unit ledger
+    participant T as Start commit
+    C->>S: start(member, project, key, confirmed quality and scenes)
+    S->>S: key 1 to 200 characters
+    S->>R: video.generate and unit.consume
+    S->>R: storyboard (video.view, reach), Property not deleted
+    S->>T: findStarted(org, project, key)? ALREADY_STARTED
+    S->>S: fresh, confirmed scenes and quality, offered, composed, length
+    S->>U: open the period containing now (its own audit entry)
+    S->>T: start(record: ids, now, Mode A, context, audit)
+    T->>T: locks, project and Property FOR SHARE, Property deleted? replay?
+    T-->>S: STARTED, or a refusal writing nothing
+    S-->>C: STARTED, ALREADY_STARTED or a refusal the screen shows
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI) on `884a835`. This
+record's commit changes only this file.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | **6207 / 6207**, 225 files |
+| `pnpm test:db` | **1660 / 1660**, 62 files |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/domain/src/orchestration/start-service.test.ts` (new, 28 tests),
+  with a real organization and its six roles, real grants, the in-memory Unit
+  ledger and a recording start repository: a start's record (ids, the server
+  clock, Mode A, the context, the scenes in order) and its audit entry; HQ
+  where offered; ninety seconds; a 200-character key; who may start, including
+  a member holding only one of the two permissions; reach, a deleted Property
+  (even to a replay) and an archived one; each refusal, with no period opened
+  and the commit not reached; the period open when the commit runs; each
+  commit outcome's mapping; and nothing outside tests constructing it.
+- `tests/integration/generation-start-service.db.test.ts` (new, 4 tests): the
+  service against the real commit: a start reserving from the period it
+  opened; a replay writing nothing more; short Units with the real eligible
+  count; and a commit refusal that leaves the period and its own audit entry
+  and nothing else.
+- `tests/integration/generation-start.db.test.ts` (3 more, 27): the replay
+  read's scoping and its refusals; a deleted Property refused, a replay
+  included; and a start that waits for a deletion saving, then refuses.
+- `packages/domain/src/orchestration/start.test.ts`: the key checked before
+  the replay read, the Property joined and locked, and its refusal before the
+  replay read.
+
+### Mutation testing
+
+The same harness as GS-4b: each mutant applied, the suites run, the file
+restored and checked by SHA-256, and the repository's manifest identical before
+and after each pass.
+
+The service's mutants ran against `start-service.test.ts`; the commit's
+against both start database suites, and separately against the static suite
+(`start.test.ts`) to see which it alone catches.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| K01–K03 | an empty key accepted; a 200-character key refused; a 201-character key accepted | killed |
+| P01 / P02 | `unit.consume` not required; `video.generate` not required | first pass: survived; the one-permission test was added, which kills both |
+| H01–H03 | a deleted Property starts; reach not checked; an archived Property refused instead | killed |
+| R01 / R02 | the replay not answered; the replay read with another key | killed |
+| F01 | a project with scenes but no fingerprint accepted | first pass: survived; a test of exactly that was added, which kills it |
+| F02 / F03 | an empty or stale storyboard accepted | killed |
+| C01–C03 | the confirmed scenes' count, order or ids not compared | killed |
+| Q01–Q03 | the confirmed quality not compared; the offer not checked; today's offer offering HQ | killed |
+| S01 / S02 | a scene with no prompt, or an unapproved camera motion, accepted | killed |
+| L01 / L02 | the length not checked; the length from the longest scene | killed |
+| N01–N04 | no subscription or one not started not `NO_PLAN`; a period conflict started around; the wall clock | killed |
+| D01 | the requester taken from the project's creator | first pass: survived, since the fixture's creator was the member starting; the fixture's project is now created by another member, which kills it |
+| D02–D05 | the request id's prefix; actor type `SYSTEM`; the context without the actor; the event type | killed |
+| A01–A03 | the audit entry on the project; without the scene count; without the block | killed |
+| A04 | the audit entry's organization taken from the project row | survived: **equivalent**, since the storyboard read returns only a project of the organization asked for |
+| O01–O07 | each commit outcome mapped wrongly (the length, the eligible count, the replay, a missing project, the no-period defect, the allocations, a deleted Property) | killed (O07 second pass) |
+| X01 | the period opened before the storyboard is judged | killed |
+| DB01–DB06 | the replay read not scoped to the organization, the key or the project; no key check on it or on the commit; the conflict re-read not a replay | killed |
+| DB07 / DB08 | the commit's deleted-Property refusal removed; moved after the replay read | killed by the database suites (and the static suite) |
+| DB09 | only the project row locked, not its Property | killed by the database suites (and the static suite) |
+| DB10 / DB11 | the replay read accepting an empty or a missing id | killed by the database suites |
+| DB12 | an archived Property refused instead of a deleted one | killed |
+
+Result: first pass on `3446ce8`, 49 mutants, 44 killed and five survivors.
+Second pass on `884a835`: the service's 44 mutants, 43 killed and A04
+equivalent; the commit's 12, all killed by the database suites.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed `3446ce8`
+against `e7a04b5`, reading only git objects. It confirmed that the checks run
+in ADR-0088's order and every refusal before the period step only reads; that
+no refusal can leave a Unit reserved; that the replay read is scoped to the
+organization; that a project out of reach and a deleted Property's project are
+answered alike; that the service and the commit cannot disagree in a way that
+charges the customer; and that the audit entry is an explicit allowlist.
+Verdict: correct and tenant-safe, nothing blocking; fix the audit-entry
+wording and close three test gaps before merge, and fix or document the
+deleted-Property race. Its four should-fix findings and three nits, answered
+in `884a835`:
+
+| Finding | Answer |
+| --- | --- |
+| The documents said a refusal writes no audit entry, but opening the period writes `entitlement.period_opened` | Corrected in ADR-0088, the service's comments, the API summary and the Roadmap: a refusal writes no job, reservation or `generation.started` entry, and one after the period step leaves the period and its own entry. A database test proves it |
+| No test caught dropping `unit.consume` | A member holding only one of the two permissions is refused (this also kills two mutants that survived the first pass) |
+| The storyboard stub ignored its arguments, and the service never met the real commit and ledger | The stub records its arguments and the tests assert them; a database suite runs the service against the real commit: a start, a replay, short Units, and a commit refusal |
+| A deletion could save between the service's Property read and the commit | Fixed in the commit: it joins the Property and holds both rows `FOR SHARE`, and answers `PROPERTY_DELETED` before the replay read. No cycle: nothing that writes a Property takes the project row or the start's advisory locks. Database tests prove a deleted Property refused and a deletion in flight waited for, then refused |
+| Nit: the replay read did not check its organization and project ids | A missing or empty one is refused before anything is read |
+| Nit: ADR-0088 claimed the tests prove each refusal "in its order", and the period was checked only after the call | Reworded to what the tests prove; the period is now checked open at the moment the commit runs |
+| Nit: a comment naming the constructor would fail the dormancy test | Comments are stripped before the search |
+
+The choice to answer a deleted Property's project as not found, rather than
+let it start, is ADR-0088's; the pull request asks the product owner to
+confirm it.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start service's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0088 Decisions 1 to 4 |
+| OpenAPI / API change summary | `docs/api-changes-gs-4c.md`: no HTTP change; the service, its outcomes and errors, `findStarted`, `PROPERTY_DELETED` |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-4c*: no migration; the Property row the start now holds |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the deleted-Property item).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the service and the start commit are constructed by tests only. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **HQ cannot start** while no verified route serves it; how the test route
+  offers HQ outside production is GS-5's.
+- **Nothing launches a started job** until GS-7, and a job that could never
+  launch must still release its Units (TODO).
+- **A deleted Property's project** is refused only by the start; reading,
+  composing and single-scene admission are unchanged (TODO).
+- **A refusal after the period step leaves the period**, with its own audit
+  entry, as any later Unit action would have written it.
+
+### Remaining work
+
+GS-4c waits for the product owner's yes before merge. GS-5 (the test
+provider's route, price and catalog entry outside production, and the billing
+cycle's revenue for the paid-call gate) follows.

@@ -1331,7 +1331,7 @@ function isStartKeyConflict(error: unknown): boolean {
  *
  * ```text
  * reservation-admission lock (job) -> cost-admission lock (organization + cycle)
- *   -> project row FOR SHARE -> replay -> storyboard -> job
+ *   -> project and Property rows FOR SHARE -> replay -> storyboard -> job
  *   -> Transaction B (its two locks already held) -> scenes, requests, audit
  * ```
  *
@@ -1357,16 +1357,28 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
   // ---- The project row, held FOR SHARE until the commit (ADR-0086). -------
   // A composition saving waits for this start, and this start waits for a
   // composition already saving, so the fingerprint and the scenes read below
-  // are one composition's.
+  // are one composition's. Its Property's row is held too, so a deletion
+  // saving waits for this start, and this start waits for a deletion already
+  // saving and then refuses it (ADR-0088).
   const projects = await tx.$queryRaw<
-    { resolution: string; aspectRatio: string; status: string; compositionFingerprint: string | null }[]
+    {
+      resolution: string;
+      aspectRatio: string;
+      status: string;
+      compositionFingerprint: string | null;
+      propertyStatus: string;
+    }[]
   >`
-    SELECT "resolution", "aspectRatio", "status"::text AS "status", "compositionFingerprint"
-      FROM "video_projects"
-     WHERE "id" = ${videoProjectId} AND "organizationId" = ${organizationId}
+    SELECT vp."resolution", vp."aspectRatio", vp."status"::text AS "status", vp."compositionFingerprint",
+           p."status"::text AS "propertyStatus"
+      FROM "video_projects" vp
+      JOIN "properties" p ON p."id" = vp."propertyId"
+     WHERE vp."id" = ${videoProjectId} AND vp."organizationId" = ${organizationId}
        FOR SHARE`;
   const project = projects[0];
   if (project === undefined) return { kind: "PROJECT_NOT_FOUND" };
+  // Its photos await deletion and could not be generated from.
+  if (project.propertyStatus === "DELETED") return { kind: "PROPERTY_DELETED" };
 
   // ---- A replay is answered first, whatever the storyboard is now. --------
   const started = await tx.generationJob.findFirst({
@@ -1536,19 +1548,41 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
 }
 
 /**
- * The start commit's repository (GS-4b, ADR-0087). Nothing constructs it yet:
- * the start service (GS-4c) and its route (GS-10) will.
+ * The start commit's repository (GS-4b, ADR-0087), and the replay read the
+ * start service makes first (GS-4c, ADR-0088). Nothing constructs it yet: the
+ * start route (GS-10) will.
  */
 export function createGenerationStartRepository(prisma: PrismaClient): GenerationStartRepository {
+  // The key the column's CHECK accepts. Checked before any read of it: a
+  // missing key would match any job of the project, and answer with it.
+  function requireStartKey(key: unknown): void {
+    if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      throw new AppError("VALIDATION_FAILED", "A start needs a start key of 1 to 200 characters");
+    }
+  }
+
+  async function findStarted(
+    organizationId: string,
+    videoProjectId: string,
+    idempotencyKey: string,
+  ): Promise<GenerationJob | null> {
+    requireStartKey(idempotencyKey);
+    // Missing, either would widen the read past one project or one tenant.
+    const ids: unknown[] = [organizationId, videoProjectId];
+    if (ids.some((id) => typeof id !== "string" || id.length === 0)) {
+      throw new AppError("VALIDATION_FAILED", "A replay read names one organization and one project");
+    }
+    const row = await prisma.generationJob.findFirst({
+      where: { videoProjectId, idempotencyKey, ...jobScope(organizationId) },
+    });
+    return row === null ? null : toJob(row, organizationId);
+  }
+
   return {
+    findStarted,
+
     async start(record): Promise<GenerationStartOutcome> {
-      // The key the column's CHECK accepts. Checked here because the replay
-      // is read before anything is inserted: a missing key would match any
-      // job of the project, and answer with it.
-      const key: unknown = record.idempotencyKey;
-      if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
-        throw new AppError("VALIDATION_FAILED", "A start needs a start key of 1 to 200 characters");
-      }
+      requireStartKey(record.idempotencyKey);
       if (!isDisclosureMode(record.disclosureMode)) return { kind: "DISCLOSURE_MODE_NOT_SUPPORTED" };
       try {
         return await prisma.$transaction((tx) => startWithin(tx, record));
@@ -1558,14 +1592,8 @@ export function createGenerationStartRepository(prisma: PrismaClient): Generatio
         // unique index and was refused once the first committed. It answers as
         // a replay, with the job the first one started.
         if (isStartKeyConflict(error)) {
-          const row = await prisma.generationJob.findFirst({
-            where: {
-              videoProjectId: record.videoProjectId,
-              idempotencyKey: record.idempotencyKey,
-              ...jobScope(record.organizationId),
-            },
-          });
-          if (row !== null) return { kind: "EXISTING", job: toJob(row, record.organizationId) };
+          const job = await findStarted(record.organizationId, record.videoProjectId, record.idempotencyKey);
+          if (job !== null) return { kind: "EXISTING", job };
         }
         throw error;
       }

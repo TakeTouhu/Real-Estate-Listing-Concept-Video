@@ -103,6 +103,8 @@ export type GenerationStartOutcome =
   | { readonly kind: "EXISTING"; readonly job: GenerationJob }
   /** No such project in this organization. */
   | { readonly kind: "PROJECT_NOT_FOUND" }
+  /** The project's Property is deleted, so its photos cannot be generated from (ADR-0088). */
+  | { readonly kind: "PROPERTY_DELETED" }
   /** The project no longer holds the composition the service judged current. */
   | { readonly kind: "STORYBOARD_CHANGED" }
   /** The project's resolution no longer gives the quality the customer confirmed. */
@@ -119,4 +121,10 @@ export interface GenerationStartRepository {
    * it admits no attempt.
    */
   start(record: GenerationStartRecord): Promise<GenerationStartOutcome>;
+  /**
+   * The job a start with this key started on this project, or `null`. Read
+   * scoped to the organization, so another tenant's key is never answered
+   * (ADR-0088).
+   */
+  findStarted(organizationId: string, videoProjectId: string, idempotencyKey: string): Promise<GenerationJob | null>;
 }

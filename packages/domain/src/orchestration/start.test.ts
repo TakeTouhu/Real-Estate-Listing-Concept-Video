@@ -94,11 +94,14 @@ describe("the start commit", () => {
     expect(noPeriod).toBeLessThan(within.indexOf("tx.generationJob.create("));
   });
 
-  it("holds the project row FOR SHARE, scoped to the organization, before it reads or writes anything", () => {
+  it("holds the project and its Property FOR SHARE, scoped to the organization, before anything else", () => {
     const { within } = startSource();
     const lock = within.indexOf("FOR SHARE");
     expect(lock).toBeGreaterThan(-1);
     expect(within.slice(0, lock)).toContain('"organizationId" = ${organizationId}');
+    // Unqualified, so the joined Property row is held too (ADR-0088).
+    expect(within.slice(0, lock)).toContain('JOIN "properties" p ON p."id" = vp."propertyId"');
+    expect(within).not.toContain("FOR SHARE OF");
     for (const later of [
       "tx.generationJob.findFirst(",
       "tx.storyboardScene.findMany(",
@@ -109,9 +112,10 @@ describe("the start commit", () => {
     }
   });
 
-  it("answers a replay, checks the storyboard, writes the job, reserves, copies the scenes, then audits", () => {
+  it("refuses a deleted Property, answers a replay, checks the storyboard, writes, reserves, copies, then audits", () => {
     const { within } = startSource();
     const order = [
+      'if (project.propertyStatus === "DELETED") return { kind: "PROPERTY_DELETED" };',
       "tx.generationJob.findFirst(",
       "tx.storyboardScene.findMany(",
       '"STORYBOARD_CHANGED"',
@@ -160,10 +164,19 @@ describe("the start commit", () => {
     for (const refusal of [
       "if (!isDisclosureMode(record.disclosureMode))",
       'if (typeof key !== "string" || key.length < 1 || key.length > MAX_IDEMPOTENCY_KEY_LENGTH)',
+      "requireStartKey(record.idempotencyKey);",
     ]) {
       expect(repository.indexOf(refusal)).toBeGreaterThan(-1);
       expect(repository.indexOf(refusal)).toBeLessThan(transaction);
     }
+  });
+
+  it("checks the key before the replay read, which a missing key would answer with any job (ADR-0088)", () => {
+    const { repository } = startSource();
+    const read = repository.slice(repository.indexOf("async function findStarted("), repository.indexOf("return {"));
+    expect(read.indexOf("requireStartKey(idempotencyKey);")).toBeGreaterThan(-1);
+    expect(read.indexOf("requireStartKey(idempotencyKey);")).toBeLessThan(read.indexOf("prisma.generationJob.findFirst("));
+    expect(read).toContain("...jobScope(organizationId)");
   });
 
   it("files the audit entry under the organization whose project it locked", () => {
@@ -173,7 +186,7 @@ describe("the start commit", () => {
     expect(check).toBeLessThan(within.indexOf("tx.auditLog.create("));
   });
 
-  it("is constructed by nothing yet: the start service (GS-4c) and route (GS-10) will", () => {
+  it("is constructed by nothing yet: the start route (GS-10) will", () => {
     const constructors = [
       ...productionSources(join(REPO_ROOT, "apps")),
       ...productionSources(join(REPO_ROOT, "packages")),

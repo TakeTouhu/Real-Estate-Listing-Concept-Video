@@ -1767,3 +1767,19 @@ ALTER TABLE "generation_jobs" DROP COLUMN "idempotencyKey";
 
 and delete migration 32's row from `_prisma_migrations`. Any key already written
 is lost with the column, so a replay of that start would no longer find its job.
+
+## GS-4c — the start service
+
+**No migration** (ADR-0088). No schema, enum, constraint or row changes, and
+no new environment variable.
+
+**What changes at deploy.** Nothing a customer sees. The start service and the
+replay read it adds to the start repository are constructed by tests only;
+GS-10's route will construct them. The replay read uses migration 32's index on
+`("videoProjectId", "idempotencyKey")`. The start commit, also unused in
+production, now holds the project's Property row `FOR SHARE` with the
+project's, so once GS-10 constructs it a Property deletion waits for a start
+committing on one of its projects (one short transaction).
+
+**Rolling back.** To GS-4b's build: safe, since nothing in production calls
+what GS-4c adds.

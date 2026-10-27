@@ -128,10 +128,15 @@ Split into three pull requests:
   Units, copies its scenes and their first requests, and records the audit
   entry; or it writes nothing. A start key, unique per project, makes a replay
   answer with the job it started.
-- **GS-4c**: the start service in the domain: `video.generate` and
-  `unit.consume`, reach, the start key, the storyboard's freshness, quality
-  from the project's resolution, Mode A, opening the Unit period first, and the
-  outcomes the start screen (GS-10) will show.
+- **GS-4c** (ADR-0088, no migration): the start service in the domain:
+  `video.generate` and `unit.consume`, reach, the start key, the storyboard's
+  freshness, quality from the project's resolution, Mode A, opening the Unit
+  period first, and the outcomes the start screen (GS-10) will show. Three
+  gaps the commit did not cover are closed here: the customer confirms the
+  scenes as well as the quality, by their ids, since the fingerprint stays
+  internal; a quality no verified route serves (HQ, today) is refused before
+  Units are reserved; and a deleted Property's project, whose photos cannot be
+  generated from, does not start.
 
 The start step leaves the job `RESERVED`, with its scenes and requests
 `PENDING`. It admits no attempt. The approved plan's start step creates the
