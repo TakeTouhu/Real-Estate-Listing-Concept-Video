@@ -275,9 +275,9 @@ Self-service **Standard ↔ Premium** plan changes, each requiring
 
 > **Amended on 2026-10-28 by ADR-0093 Decision 1:** the product owner decided
 > that for the month of the switch the upgraded plan is charged by the day, which
-> replaces the two charging bullets below. Whether the old plan's unused days
-> are credited, and whether the Base-Unit ceiling is pro-rated too, are open
-> gates in `docs/decisions/TODO.md`.
+> replaces the two charging bullets below, and that the old plan's unused days
+> are not credited. Whether the Base-Unit ceiling is pro-rated too is an open
+> gate in `docs/decisions/TODO.md`.
 
 - effective **immediately**;
 - charge the **full difference** between the current plan's monthly price and the
