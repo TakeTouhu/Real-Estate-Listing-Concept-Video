@@ -16,6 +16,7 @@ import {
   epochMillisFromDate,
   sanitizeTransitionMetadata,
   type AdmitGenerationAttemptInput,
+  type PreparedSourceIdentity,
   type PricingSnapshot,
   type ProviderPricingIdentity,
   type TransitionContext,
@@ -40,6 +41,20 @@ export const PROJECT_A = "vpr_itest_orch_a";
 export const PROJECT_B = "vpr_itest_orch_b";
 export const ASSET_A = "ast_itest_orch_a";
 export const ASSET_B = "ast_itest_orch_b";
+
+/**
+ * The source each fixture asset is: a normalized JPEG with a canonical digest,
+ * which preparation would sign and the paid-submission gate checks under its
+ * lock (ADR-0096).
+ */
+export function fixtureSource(organizationId: string): PreparedSourceIdentity {
+  const asset = organizationId === ORG_A ? ASSET_A : ASSET_B;
+  return {
+    storageKey: `org/${organizationId}/a/${asset}/normalized.jpg`,
+    mimeType: "image/jpeg",
+    sha256: (organizationId === ORG_A ? "a1" : "b2").repeat(32),
+  };
+}
 /** Deliberately points at a storyboard scene that does not exist. */
 export const STORYBOARD_SCENE = "sbs_itest_orch_gone";
 
@@ -212,7 +227,9 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
     await seedFixtureEntitlement(prisma, org);
     await prisma.property.upsert({
       where: { id: prop },
-      update: {},
+      // Restored, as the asset is: a test that deletes the Property leaves the
+      // next one a standing Property.
+      update: { status: "ACTIVE" },
       create: {
         id: prop,
         organizationId: org,
@@ -221,14 +238,19 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
         createdBy: "usr_itest",
       },
     });
+    const { storageKey, mimeType, sha256 } = fixtureSource(org);
     await prisma.mediaAsset.upsert({
       where: { id: asset },
-      update: {},
+      // Restored, so a test that changes the source leaves the next one the
+      // source every other test signs.
+      update: { storageKey, mimeType, sha256, status: "READY", deletionRequestedAt: null },
       create: {
         id: asset,
         organizationId: org,
         propertyId: prop,
-        storageKey: `org/${org}/a/${asset}/normalized.jpg`,
+        storageKey,
+        mimeType,
+        sha256,
         originalFilename: "a.jpg",
         status: "READY",
         createdBy: "usr_itest",

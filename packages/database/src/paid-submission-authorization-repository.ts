@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { AppError } from "@app/shared";
 import {
   ALWAYS_COST_EXPOSED_ATTEMPT_STATES,
   COST_BEARING_SUBMISSION_CERTAINTIES,
@@ -17,6 +18,7 @@ import {
   type FxSnapshot,
   type GenerationAttemptState,
   type JobGateFacts,
+  type LockedPaidSubmissionSource,
   type PaidSubmissionAuthorizationRepository,
   type PaidSubmissionAuthorizationSession,
   type PaidSubmissionFactsSnapshot,
@@ -31,7 +33,12 @@ import {
   type SubmissionCertainty,
   type Yen,
 } from "@app/domain";
+import { auditLogData } from "./audit-log-data";
 import { readBillingCycleRevenueWithin } from "./billing-cycle-revenue-reader";
+import {
+  toExecutionSourceObservation,
+  type RawLockedAssetRow,
+} from "./generation-execution-repository";
 import { armProviderBoundaryWithin } from "./orchestration-repositories";
 /**
  * The organization + billing-cycle cost-admission lock.
@@ -54,9 +61,11 @@ import { armProviderBoundaryWithin } from "./orchestration-repositories";
  * held while this one is acquired, because authorization never admits anything.
  * (The start commit, ADR-0087, takes this lock and then locks a project row
  * `FOR SHARE`, the order this lock requires.)
- * The one nesting that exists is this lock around `armProviderBoundaryWithin`,
- * which takes no row lock of its own beyond the CAS it performs. There is
- * therefore no cycle: nothing acquires a 2E lock and then waits for this one.
+ * Under this lock the gate takes the reservation `FOR SHARE`, then the
+ * attempt's asset `FOR NO KEY UPDATE` and its Property `FOR SHARE`
+ * (ADR-0096), then `armProviderBoundaryWithin`'s CAS on the attempt. There is
+ * therefore no cycle as long as nothing acquires a 2E lock, an asset or a
+ * Property and then waits for this one.
  */
 import { acquireCostAdmissionLock } from "./cost-admission-lock";
 
@@ -135,9 +144,10 @@ async function billingCycleKeyForAttempt(
  * attempt's job, and a cross-tenant id locks nothing and returns nothing.
  *
  * **Lock ordering.** `cost-admission advisory lock → reservation row lock →
- * attempt CAS`. Every future workflow that mutates reservation state as part of
- * submission reconciliation or entitlement release must take these in the same
- * order.
+ * source asset and Property (ADR-0096) → attempt CAS`. Every future workflow
+ * that mutates reservation state as part of submission reconciliation or
+ * entitlement release must take these in the same order, and none may lock an
+ * asset or a Property and then wait for the cost-admission lock.
  */
 async function lockReservationForAttempt(
   tx: Tx,
@@ -157,6 +167,59 @@ async function lockReservationForAttempt(
        FOR SHARE OF res
   `;
   return rows.length > 0;
+}
+
+/**
+ * The attempt's source asset, locked against its writers, and its project's
+ * Property held against deletion (ADR-0096).
+ *
+ * The asset `FOR NO KEY UPDATE`, as the legacy claim takes it (ADR-0030): it
+ * conflicts with a deletion request and every status write, each one statement
+ * on this row alone, and not with the `FOR KEY SHARE` a storyboard scene or an
+ * analysis row takes for its foreign key. The Property `FOR SHARE`, as the
+ * start and the launch hold it (ADR-0088, ADR-0095): a Property deletion, one
+ * statement, waits for the commit, and one already committed is seen.
+ *
+ * Taken after the reservation and before the attempt's compare-and-set. No
+ * transaction that holds an asset or a Property lock waits for the
+ * cost-admission lock or a reservation, so the order adds no cycle; one that
+ * did would deadlock with this gate (see `cost-admission-lock.ts`).
+ *
+ * Tenant-scoped three times: the attempt through its project's organization,
+ * and the asset and the Property in that same organization. A row of another
+ * tenant is not found.
+ */
+async function lockSourceForAttempt(
+  tx: Tx,
+  organizationId: string,
+  attemptId: string,
+): Promise<LockedPaidSubmissionSource | null> {
+  const rows = await tx.$queryRaw<(RawLockedAssetRow & { readonly propertyStatus: unknown })[]>`
+    SELECT ma."id",
+           ma."organizationId",
+           ma."status",
+           ma."storageKey",
+           ma."mimeType",
+           ma."sha256",
+           ma."deletionRequestedAt",
+           pr."status"::text AS "propertyStatus"
+      FROM "scene_generations" a
+      JOIN "video_projects" p ON p."id" = a."videoProjectId"
+      JOIN "properties" pr ON pr."id" = p."propertyId"
+      JOIN "media_assets" ma ON ma."id" = a."assetId"
+     WHERE a."id" = ${attemptId}
+       AND p."organizationId" = ${organizationId}
+       AND pr."organizationId" = ${organizationId}
+       AND ma."organizationId" = ${organizationId}
+       FOR NO KEY UPDATE OF ma
+       FOR SHARE OF pr
+  `;
+  const row = rows[0];
+  if (row === undefined) return null;
+  if (typeof row.propertyStatus !== "string") {
+    throw new AppError("INTERNAL_ERROR", "The locked source Property row could not be read");
+  }
+  return { asset: toExecutionSourceObservation(row), propertyDeleted: row.propertyStatus === "DELETED" };
 }
 
 interface AttemptRow {
@@ -823,7 +886,11 @@ export function createPaidSubmissionAuthorizationRepository(
               : options.revenue.revenueYen(read);
           },
 
-          async arm({ expectedVersion, context }): Promise<ArmResult> {
+          async lockSource() {
+            return lockSourceForAttempt(tx, input.organizationId, input.attemptId);
+          },
+
+          async arm({ expectedVersion, context, audit }): Promise<ArmResult> {
             const armed = await armProviderBoundaryWithin(tx, {
               organizationId: input.organizationId,
               id: input.attemptId,
@@ -831,6 +898,9 @@ export function createPaidSubmissionAuthorizationRepository(
               context,
             });
             if (armed.kind === "ARMED") {
+              // In the move's own commit: no provider call is ever unaudited,
+              // and no audit entry ever describes a move that did not commit.
+              await tx.auditLog.create({ data: auditLogData(audit) });
               return { kind: "ARMED", stateVersion: armed.attempt.stateVersion };
             }
             if (armed.kind === "LOST") return { kind: "LOST" };

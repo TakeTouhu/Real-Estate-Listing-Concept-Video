@@ -4,15 +4,18 @@ import type { TransitionContext } from "../orchestration/ports";
 import { createProviderPricingCatalog } from "../pricing/provider-pricing-catalog";
 import type { ProviderPricingContract } from "../pricing/provider-pricing-contract";
 import { epochMillisFromDate, yen, type EpochMillis, type Yen } from "../pricing/units";
+import type { ExecutionSourceObservation, PreparedSourceIdentity } from "../generation/execution-source";
 import { createFixedAuthorizationClock, type AuthorizationClock } from "./clock";
 import { AUTHORIZATION_POLICY_VERSION } from "./gate";
 import {
   createPaidSubmissionAuthorizationService,
+  PAID_SUBMISSION_AUDIT_ACTION,
   PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE,
 } from "./paid-submission-service";
 import { authorizedRoutes, ROUTING_POLICY_VERSION, type RoutePolicy } from "./routing";
 import type {
   ArmResult,
+  PaidSubmissionAudit,
   PaidSubmissionAuthorizationRepository,
   PaidSubmissionFactsSnapshot,
 } from "./ports";
@@ -42,6 +45,18 @@ const CONTRACT_LOOKUP = createProviderPricingCatalog().findByIdentity({
 });
 if (CONTRACT_LOOKUP === undefined) throw new Error("expected the OpenVideo contract");
 const CONTRACT: ProviderPricingContract = CONTRACT_LOOKUP;
+
+/** The source preparation signed for the attempt. */
+const SOURCE: PreparedSourceIdentity = {
+  storageKey: "org/org_svc/p/prop/a/ast_svc/normalized.jpg",
+  mimeType: "image/jpeg",
+  sha256: "0123456789abcdef".repeat(4),
+};
+
+/** The locked asset as it reads when it is still that source. */
+function sameSource(): ExecutionSourceObservation {
+  return { status: "READY", deletionRequestedAt: null, ...SOURCE };
+}
 
 /** Facts that would authorize, so only the arm's answer decides the outcome. */
 function permittingFacts(): PaidSubmissionFactsSnapshot {
@@ -101,6 +116,7 @@ function permittingFacts(): PaidSubmissionFactsSnapshot {
 interface Harness {
   readonly calls: { arm: number; clock: number; factsLoaded: number };
   readonly armedContexts: TransitionContext[];
+  readonly armedAudits: PaidSubmissionAudit[];
   readonly service: ReturnType<typeof createPaidSubmissionAuthorizationService>;
 }
 
@@ -115,12 +131,18 @@ function serviceWith(
     onLock?: () => void;
     /** Each step the session is asked for, in order. */
     order?: string[];
+    /** The locked source asset; the prepared source, usable, unless given. */
+    source?: ExecutionSourceObservation | null;
+    /** Whether the locked source's Property is deleted; standing unless given. */
+    propertyDeleted?: boolean;
   } = {},
 ): Harness {
   const facts = options.facts === undefined ? permittingFacts() : options.facts;
   const cycleYen = options.cycleYen === undefined ? yen(49_800) : options.cycleYen;
   const calls = { arm: 0, clock: 0, factsLoaded: 0 };
   const armedContexts: TransitionContext[] = [];
+  const armedAudits: PaidSubmissionAudit[] = [];
+  const source = options.source === undefined ? sameSource() : options.source;
   const baseClock = options.clock ?? createFixedAuthorizationClock(AT);
   const clock: AuthorizationClock = {
     now() {
@@ -142,10 +164,15 @@ function serviceWith(
           options.order?.push("revenue");
           return cycleYen;
         },
+        async lockSource() {
+          options.order?.push("source");
+          return source === null ? null : { asset: source, propertyDeleted: options.propertyDeleted ?? false };
+        },
         async arm(input) {
           calls.arm += 1;
           options.order?.push("arm");
           armedContexts.push(input.context);
+          armedAudits.push(input.audit);
           return arm();
         },
       });
@@ -156,6 +183,7 @@ function serviceWith(
   return {
     calls,
     armedContexts,
+    armedAudits,
     service: createPaidSubmissionAuthorizationService({
       authorization,
       clock,
@@ -181,6 +209,7 @@ function authorize(
   return service.authorize({
     organizationId: "org_svc",
     attemptId: "sgen_svc",
+    source: SOURCE,
     context,
   });
 }
@@ -259,7 +288,7 @@ describe("the billing cycle's revenue (ADR-0091)", () => {
     const order: string[] = [];
     const { service } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), { order });
     expect((await authorize(service)).kind).toBe("AUTHORIZED");
-    expect(order).toEqual(["lock", "facts", "revenue", "arm", "unlock"]);
+    expect(order).toEqual(["lock", "facts", "revenue", "source", "arm", "unlock"]);
   });
 
   it("is not read for an attempt with no cycle, which is refused", async () => {
@@ -454,5 +483,113 @@ describe("the durable authorization record", () => {
       safetyGuardState: "WARNING",
       billingCycleRevenueYen: 19_900,
     });
+  });
+});
+
+describe("the source the attempt sends (ADR-0096)", () => {
+  const armed = async (): Promise<ArmResult> => ({ kind: "ARMED", stateVersion: 4 });
+
+  it("is locked after the gate permits and before the move", async () => {
+    const order: string[] = [];
+    const { service } = serviceWith(armed, { order });
+    expect((await authorize(service)).kind).toBe("AUTHORIZED");
+    expect(order.indexOf("source")).toBe(order.indexOf("arm") - 1);
+  });
+
+  it("is not locked for an attempt the gate refuses", async () => {
+    const order: string[] = [];
+    const { service } = serviceWith(armed, { order, cycleYen: null });
+    expect((await authorize(service)).kind).toBe("SAFETY_GUARD_HARD_PAUSE");
+    expect(order).not.toContain("source");
+  });
+
+  it("refuses an asset that is gone, without moving the attempt", async () => {
+    const { service, calls } = serviceWith(armed, { source: null });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_FOUND" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it("refuses an asset whose deletion was asked for", async () => {
+    const { service, calls } = serviceWith(armed, {
+      source: { ...sameSource(), deletionRequestedAt: new Date("2026-09-09T00:00:00.000Z") },
+    });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_UNRECOVERABLE" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it("refuses an asset that is no longer usable, with the classifier's reason", async () => {
+    const { service, calls } = serviceWith(armed, {
+      source: { ...sameSource(), status: "PROCESSING" },
+    });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_READY" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it("refuses an asset that is no longer the normalized JPEG", async () => {
+    const { service, calls } = serviceWith(armed, { source: { ...sameSource(), mimeType: "image/png" } });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_FORMAT_UNSUPPORTED" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it.each([
+    ["still reads usable", sameSource()],
+    ["is already asked to be deleted", { ...sameSource(), deletionRequestedAt: new Date("2026-09-09T00:00:00.000Z") }],
+  ] as const)("refuses an attempt whose Property is deleted, while its photo %s", async (_case, source) => {
+    const { service, calls } = serviceWith(armed, { source, propertyDeleted: true });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "PROPERTY_DELETED" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it.each([
+    ["digest", { sha256: "f".repeat(64) }],
+    ["storage key", { storageKey: "org/org_svc/p/prop/a/ast_other/normalized.jpg" }],
+  ] as const)("refuses a usable asset whose %s is not the one prepared", async (_field, change) => {
+    const { service, calls } = serviceWith(armed, { source: { ...sameSource(), ...change } });
+    expect(await authorize(service)).toEqual({
+      kind: "SOURCE_INVALID",
+      reason: "ASSET_SOURCE_CHANGED",
+    });
+    expect(calls.arm).toBe(0);
+  });
+});
+
+describe("the paid call's audit entry (ADR-0096)", () => {
+  it("is handed to the move, naming the attempt and its job and nothing about the provider", async () => {
+    const { service, armedAudits } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }));
+    expect((await authorize(service)).kind).toBe("AUTHORIZED");
+    expect(armedAudits).toEqual([
+      {
+        organizationId: "org_svc",
+        actorUserId: null,
+        action: PAID_SUBMISSION_AUDIT_ACTION,
+        resourceType: "scene_generation",
+        resourceId: "sgen_svc",
+        metadata: {
+          generationJobId: "genjob_svc",
+          requestKind: "INITIAL",
+          pricingSnapshotId: "gps_svc",
+          correlationId: "corr_svc",
+        },
+      },
+    ]);
+    expect(PAID_SUBMISSION_AUDIT_ACTION).toBe("generation.submission_started");
+  });
+
+  it("names the caller's actor", async () => {
+    const { service, armedAudits } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }));
+    await authorize(service, { ...CONTEXT, actorType: "USER", actorUserId: "usr_operator" });
+    expect(armedAudits[0]?.actorUserId).toBe("usr_operator");
+  });
+
+  it("names the request's kind", async () => {
+    const facts = permittingFacts();
+    const { service, armedAudits } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
+      facts: {
+        ...facts,
+        attempt: { ...facts.attempt, requestKind: "USER_REGENERATION", requestUserRegenerationOrdinal: 1 },
+      },
+    });
+    expect((await authorize(service)).kind).toBe("AUTHORIZED");
+    expect(armedAudits[0]?.metadata).toMatchObject({ requestKind: "USER_REGENERATION" });
   });
 });

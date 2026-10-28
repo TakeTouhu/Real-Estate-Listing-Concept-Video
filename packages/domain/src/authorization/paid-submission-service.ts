@@ -1,12 +1,24 @@
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
 import type { TransitionContext } from "../orchestration/ports";
-import { evaluatePaidSubmissionGate, type PaidSubmissionAuthorizationAudit } from "./gate";
+import { GENERATION_AUDIT_RESOURCE_TYPE, GenerationAuditAction } from "../generation/audit";
+import {
+  classifyExecutionSource,
+  sameSourceIdentity,
+  type PreparedSourceIdentity,
+} from "../generation/execution-source";
+import {
+  evaluatePaidSubmissionGate,
+  type AttemptGateFacts,
+  type PaidSubmissionAuthorizationAudit,
+} from "./gate";
 import { PRODUCTION_ROUTE_POLICY } from "./routing";
 import type {
   AuthorizePaidSubmissionInput,
+  LockedPaidSubmissionSource,
+  PaidSubmissionAudit,
   PaidSubmissionAuthorizationDeps,
 } from "./ports";
-import type { PaidSubmissionAuthorizationOutcome } from "./types";
+import type { PaidSubmissionAuthorizationOutcome, SourceAuthorizationFailure } from "./types";
 
 /**
  * May this one persisted attempt cross `QUEUED → SUBMITTING`?
@@ -24,8 +36,11 @@ import type { PaidSubmissionAuthorizationOutcome } from "./types";
  *   → load every fact from the persistence graph
  *   → read the authorization instant from the clock
  *   → evaluate the pure gate
- *   → if permitted, compare-and-set QUEUED → SUBMITTING
- *     with the authorization record attached to its event
+ *   → if permitted, lock the source asset and its Property,
+ *     and find it the source prepared, its Property standing
+ *   → compare-and-set QUEUED → SUBMITTING
+ *     with the authorization record attached to its event,
+ *     and the paid call's audit entry beside it
  *   → commit
  * → return AUTHORIZED
  * ```
@@ -56,6 +71,57 @@ import type { PaidSubmissionAuthorizationOutcome } from "./types";
  * enough.
  */
 export const PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE = "PAID_SUBMISSION_AUTHORIZED";
+
+/**
+ * The audit action the arm writes with the move, so no provider call is ever
+ * unaudited (ADR-0096). Fixed here, as the event type is.
+ */
+export const PAID_SUBMISSION_AUDIT_ACTION = GenerationAuditAction.SubmissionStarted;
+
+/**
+ * The locked source against the one preparation signed: `null` when it is
+ * still that source and usable, the refusal otherwise. The classifier
+ * preparation used, so the two cannot disagree about what a usable source is.
+ *
+ * A deleted Property is answered first: its photos are asked to be deleted one
+ * statement each after it, so a photo may still read usable (ADR-0096), as the
+ * start and the launch refuse its project (ADR-0088, ADR-0095).
+ */
+function sourceFailure(
+  locked: LockedPaidSubmissionSource | null,
+  prepared: PreparedSourceIdentity,
+): SourceAuthorizationFailure | null {
+  if (locked === null) return "ASSET_NOT_FOUND";
+  if (locked.propertyDeleted) return "PROPERTY_DELETED";
+  const classified = classifyExecutionSource(locked.asset);
+  if (classified.kind === "REFUSED") return classified.reason;
+  return sameSourceIdentity(classified.identity, prepared) ? null : "ASSET_SOURCE_CHANGED";
+}
+
+/**
+ * The paid call's audit entry. An allowlist of internal ids: no provider,
+ * model, prompt, storage key or price, since an audit trail may one day be
+ * shown to the customer.
+ */
+function submissionAudit(
+  input: AuthorizePaidSubmissionInput,
+  attempt: AttemptGateFacts,
+  pricingSnapshotId: string | null,
+): PaidSubmissionAudit {
+  return {
+    organizationId: input.organizationId,
+    actorUserId: input.context.actorUserId,
+    action: PAID_SUBMISSION_AUDIT_ACTION,
+    resourceType: GENERATION_AUDIT_RESOURCE_TYPE,
+    resourceId: attempt.attemptId,
+    metadata: {
+      generationJobId: attempt.generationJobId,
+      requestKind: attempt.requestKind,
+      pricingSnapshotId,
+      correlationId: input.context.correlationId,
+    },
+  };
+}
 
 /**
  * Attach the authorization record to the caller's context.
@@ -137,10 +203,17 @@ export function createPaidSubmissionAuthorizationService(
           );
           if (decision.kind === "REFUSED") return decision.outcome;
 
+          // The source is locked last, after every refusal that needs no
+          // lock, and held to the commit with its Property: a deletion
+          // committed before the lock is seen here, and one made after it
+          // waits for the arm (ADR-0096, as ADR-0030 for the legacy claim).
+          const sourceRefusal = sourceFailure(await session.lockSource(), input.source);
+          if (sourceRefusal !== null) return { kind: "SOURCE_INVALID", reason: sourceRefusal };
+
           // Only now, and only inside the same transaction and lock. The
-          // authorization record commits atomically with the state change, so
-          // there is no window in which the boundary is crossed and the reason
-          // it was allowed is not yet written down.
+          // authorization record and the audit entry commit atomically with the
+          // state change, so there is no window in which the boundary is
+          // crossed and the reason it was allowed is not yet written down.
           const armed = await session.arm({
             expectedVersion: decision.expectedStateVersion,
             context: withAuthorizationRecord(
@@ -148,6 +221,7 @@ export function createPaidSubmissionAuthorizationService(
               decision.audit,
               facts.billingCycleKey,
             ),
+            audit: submissionAudit(input, facts.attempt, decision.audit.pricingSnapshotId),
           });
           if (armed.kind === "LOST") return { kind: "LOST_CONCURRENCY" };
           if (armed.kind === "REFUSED_BY_BOUNDARY") {

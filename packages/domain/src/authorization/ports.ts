@@ -1,5 +1,7 @@
 import type { Yen } from "../pricing/units";
 import type { TransitionContext } from "../orchestration/ports";
+import type { ExecutionSourceObservation, PreparedSourceIdentity } from "../generation/execution-source";
+import type { AuditLog } from "../identity/types";
 import type {
   AttemptGateFacts,
   JobGateFacts,
@@ -105,12 +107,37 @@ export interface PaidSubmissionAuthorizationSession {
    * unknown, which fails the gate closed.
    */
   readBillingCycleRevenue(): Promise<Yen | null>;
-  /** The Phase 4C-3B-2E compare-and-set, inside this same transaction. */
+  /**
+   * The attempt's own source asset, locked against its writers until commit,
+   * and its project's Property held against deletion (ADR-0096): a deletion
+   * request or a re-processing waits for the arm, and the arm sees one already
+   * committed. `null` when the organization has no such asset.
+   */
+  lockSource(): Promise<LockedPaidSubmissionSource | null>;
+  /**
+   * The Phase 4C-3B-2E compare-and-set, inside this same transaction, and the
+   * paid call's audit entry with it when the attempt moves (ADR-0096).
+   */
   arm(input: {
     readonly expectedVersion: number;
     readonly context: TransitionContext;
+    readonly audit: PaidSubmissionAudit;
   }): Promise<ArmResult>;
 }
+
+/** What {@link PaidSubmissionAuthorizationSession.lockSource} found, locked. */
+export interface LockedPaidSubmissionSource {
+  readonly asset: ExecutionSourceObservation;
+  /**
+   * The attempt's project's Property is deleted. Its photos await deletion,
+   * one statement each after the Property's, so the asset may still read
+   * usable (ADR-0096 Decision 2).
+   */
+  readonly propertyDeleted: boolean;
+}
+
+/** The audit entry the arm writes in its own commit. */
+export type PaidSubmissionAudit = Omit<AuditLog, "id" | "createdAt">;
 
 export type ArmResult =
   | { readonly kind: "ARMED"; readonly stateVersion: number }
@@ -142,6 +169,11 @@ export interface PaidSubmissionAuthorizationDeps {
 export interface AuthorizePaidSubmissionInput {
   readonly organizationId: string;
   readonly attemptId: string;
+  /**
+   * The source preparation signed a URL for. The attempt moves only while its
+   * asset, locked, is still this source (ADR-0096).
+   */
+  readonly source: PreparedSourceIdentity;
   readonly context: TransitionContext;
 }
 

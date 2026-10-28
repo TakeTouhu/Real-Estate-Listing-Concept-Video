@@ -164,6 +164,10 @@ export interface SceneGenerationExecutionRepository {
    *
    * Scans across all tenants by design: the queue is global, and the row's own
    * `state` is what makes it eligible (ADR-0024).
+   *
+   * Legacy rows only, here and in the claim and the park: an orchestrated
+   * attempt reads `QUEUED` in this column for life, and only the paid-submission
+   * gate may send it (ADR-0096).
    */
   findNextQueuedForPreparation(): Promise<SystemGenerationCandidate | null>;
 

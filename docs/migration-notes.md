@@ -1860,3 +1860,16 @@ runner or its repository, and no existing caller's behaviour changes:
 
 **Rolling back.** To GS-7a's build: safe, since nothing in production calls
 what GS-7b adds.
+
+## GS-7c-1 — the boundary an orchestrated attempt crosses
+
+**No migration** (ADR-0096). No schema, enum, constraint or row changes, and
+no new environment variable. The gate's audit entry uses the existing
+`audit_logs` table; its source lock is a row lock, released at commit.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+paid-submission gate or the legacy executor. The legacy executor's queries now
+also require `orchestrationState IS NULL`, which every legacy row already has.
+
+**Rolling back.** To GS-7b's build: safe, since nothing in production calls
+either.

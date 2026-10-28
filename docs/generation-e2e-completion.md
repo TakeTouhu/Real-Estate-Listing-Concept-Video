@@ -3057,3 +3057,199 @@ production scheduler and live Stripe charges remain BLOCKED.
 
 GS-7b waits for the product owner's yes before merge. Then GS-7c, sending an
 admitted attempt through the paid-submission gate.
+
+## GS-7c-1 — the boundary an orchestrated attempt crosses
+
+Base: `a8fa555` (PR #119 merge commit on `main`; post-merge CI run 729 green).
+ADR: `docs/decisions/0096-the-gate-moves-only-the-source-it-locked-and-audits-the-paid-call.md`
+
+The first of GS-7c's two pull requests (GS-7 is now five: 7a, 7b, 7c-1, 7c-2,
+7d). **No migration; no route, no page.** Nothing outside tests constructs the
+paid-submission gate or the legacy executor, and nothing sends an attempt
+until GS-7c-2.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `e3b26a3` | the legacy executor kept to legacy rows, the gate's source lock and audit entry, their tests, ADR-0096 and the documentation |
+| `2f84ceb` | the review's answers: the gate also refuses a deleted Property, the lock-order notes, a static guard on the attempt repository's own arm, the audit action in the generation vocabulary, and the tests and documents the review asked for |
+| this commit | this record, and a test of the Property's tenant predicate that mutation testing asked for |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7c-1 does
+
+- **The legacy executor is legacy-only.** Its discovery, its claim (before
+  the asset lock, after it, and at its compare-and-swap) and its park act
+  only on a `QUEUED` row with no orchestration state. An orchestrated
+  attempt, which reads `QUEUED` in the legacy column for life, is never
+  offered, claimed, waited on or parked.
+- **The gate moves only the source it locked.** After its pure rules permit
+  the move, the gate locks the attempt's photo (`FOR NO KEY UPDATE`) and its
+  project's Property (`FOR SHARE`) in the caller's organization, and answers
+  `SOURCE_INVALID` unless the Property stands and the photo is still the
+  source preparation signed, judged by preparation's own classifier.
+- **The paid call is audited in the move's commit.** The move to
+  `SUBMITTING` writes `generation.submission_started` with internal ids only;
+  a failed insert rolls the move back, and no refusal or lost move writes one.
+- **Only the gate moves an attempt to `SUBMITTING` in production**, proved
+  by a static test over every production source.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller (GS-7c-2 sends)
+    participant S as Gate service
+    participant D as Gate session (one transaction)
+    C->>S: authorize(attempt, prepared source, context)
+    S->>D: cost-admission lock, reservation FOR SHARE
+    S->>D: loadFacts, revenue, the instant
+    S->>S: pure gate
+    S->>D: lockSource: asset FOR NO KEY UPDATE, Property FOR SHARE
+    S->>S: Property standing? classifier? the prepared source?
+    S->>D: arm: compare-and-set QUEUED to SUBMITTING
+    D->>D: audit generation.submission_started
+    D-->>S: commit
+    S-->>C: AUTHORIZED, or a refusal with nothing written
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI). CI runs 40674009392 and
+40674099402 passed on `e3b26a3`, and 40677098895 and 40677105535 on `2f84ceb`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `2f84ceb`'s code, each exit status read |
+| `pnpm test` | 236 files, 6,443 tests passed on `2f84ceb`'s code (235 files, 6,438 on `e3b26a3`'s) |
+| `pnpm test:db` | 65 files, 1,719 tests passed on `2f84ceb`'s code (1,713 on `e3b26a3`'s before its last two tests); this commit's one more test passes with the gate suite's other 86 |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job passed on both heads |
+| `pnpm build` | not run locally; CI's verify job builds, and passed on both heads |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New and changed tests:
+
+- `tests/integration/legacy-executor-orchestrated.db.test.ts` (new, 6):
+  discovery passes over an orchestrated attempt that is the oldest row and
+  offers the legacy row behind it; the claim and the park refuse one and write
+  nothing; the claim does not wait on its asset; a row made orchestrated
+  underneath the claim, after its asset wait or at its compare-and-swap, is
+  not moved.
+- `tests/integration/paid-submission-authorization.db.test.ts` (14 new, in
+  *the source and the paid call's audit*): the audit entry written in the
+  move's commit, none on a refusal, a lost compare-and-set or a failed insert
+  (which moves nothing); a photo whose deletion was asked for, whose bytes
+  changed, or of another organization; a Property deleted while its photo
+  still reads usable; a photo deletion and a Property deletion in flight each
+  waited for, then refused; the photo held against a deletion until the
+  commit; the lock modes, by `NOWAIT` (a foreign key's share lock on the
+  photo and a reader's on the Property free, a writer's on either not);
+  another organization's attempt, or another organization's Property behind
+  the project, finding no source. Every existing call
+  passes the prepared source.
+- `packages/domain/src/authorization/paid-submission-service.test.ts` (12
+  new): the source locked after the gate permits and before the move, and not
+  for a refusal; each refusal reason, a deleted Property first; the audit
+  entry's fields, actor and request kind.
+- `packages/domain/src/authorization/submission-boundary.test.ts` (new, 2):
+  no production caller of the attempt repository's own arm, and the
+  within-transaction arm called only by the gate's session and that method.
+- `tests/integration/orchestration-fixture.ts`: the prepared source, and the
+  fixture's photo and Property restored on every seed.
+
+### Mutation testing
+
+The same harness as GS-7b: each mutant applied alone, the named suite run, the
+file restored and its digest checked.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| U01 to U04 | no asset accepted; the classifier's refusal, a changed source or the refusal itself ignored | killed |
+| U05 | the source locked before the facts and the gate's refusals | killed |
+| U06 | the refusal's reason replaced | killed |
+| U07 to U12, U14 | the audit entry's action, resource, actor, snapshot, correlation, resource type or organization wrong | killed |
+| U13 | the audit entry's request kind fixed | survived pass 1; killed by a regeneration's entry |
+| D01 | discovery offering orchestrated attempts | killed |
+| D02 to D06 | the claim's first check, its re-read, its compare-and-swap, the park's, or the shared predicate on the legacy column only | killed |
+| D07 / D08 | the asset's or the attempt's tenant predicate dropped from the source lock | D07 killed; D08, mis-anchored in pass 1, survived its re-run (the gate's facts already prove the attempt's tenant), killed by the session asked as the wrong organization |
+| D09 / D10 | the source not locked, or locked `FOR KEY SHARE` | killed |
+| D11 / D12 | the audit entry not written; written for a lost move | D11 killed; D12 survived pass 1, killed by a lost compare-and-set |
+| D13 | the source lock finding nothing | killed |
+| P01 / P09 | a deleted Property not refused; refused after the classifier | killed |
+| P02 | the Property's tenant predicate dropped | survived pass 1; killed by a project pointed at another organization's Property |
+| P03 to P05 | the Property not locked, locked `FOR KEY SHARE`, or its status ignored | killed |
+| P06 | the asset locked `FOR UPDATE` | killed by the `NOWAIT` test |
+| P08 | a failed audit insert swallowed | killed |
+| S01 / S02 | a production caller of the repository's own arm, or of the within-transaction form | killed by the static test |
+
+Result: 27 mutants against `e3b26a3`, 24 killed in the first pass and the
+other 3 (one mis-anchored and re-run) after three tests; 12 against `2f84ceb`,
+11 killed in the first pass and the last after one test. D09 and D10 ran
+against both, so 39 runs of 37 mutants, every one killed.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`e3b26a3` against `a8fa555`, reading only git objects. It walked every
+transaction that writes or locks a photo (the asset writes and deletion
+requests, Property removal, the analysis review, the legacy claim, storyboard
+and analysis inserts) and every one that takes the cost-admission lock or a
+reservation (F, H, K, L, settlement, release, reconciliation, media recovery,
+the launch commit, Unit purchase) and found no cycle; confirmed a deletion
+committed before, during and after the gate behaves as the ADR says, that
+refusals write nothing, that the audit entry is written only on a committed
+move with internal ids only, that both tenant predicates hold, and that the
+held-Unit gap is recorded. Verdict: nothing blocking. Its findings, answered
+in `2f84ceb`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: the gate never checks the attempt's Property, while a Property deletion asks for its photos' deletion one statement each after it, so a photo can read usable under a deleted Property, for good if the deletion stops part way | Fixed: `lockSource` holds the project's Property `FOR SHARE` in the same statement and the gate answers `SOURCE_INVALID` `PROPERTY_DELETED` before judging the photo, as the start and the launch refuse it; tests for a deleted Property and one being deleted; ADR-0096 Decision 2 |
+| Should-fix: the attempt repository's own `armProviderBoundary` still moves an attempt to `SUBMITTING` with no lock, source check or audit entry | Ten integration suites build fixtures with it, so it stays; a static test now allows no production caller of it, and no caller of the within-transaction form but the gate's session and that method. ADR-0096 Decision 3 says so |
+| Should-fix: the lock-order notes in `cost-admission-lock.ts` and the gate's repository did not name the new edge, which a park copying the legacy claim's order would deadlock against | All three notes now name the asset and Property under the cost-admission lock and the rule that nothing locks either and then waits for that lock; ADR-0096 states the rule and that GS-7c-2's park takes the lock first |
+| Nit: a TODO still said `failQueuedPreflight` records orchestrated refusals; the audit vocabulary still said one action; a changed photo was called refused for good; the residual deletion race was not stated | All fixed: the TODO notes the park now writes nothing for one; `generation.submission_started` joins `GenerationAuditAction`; a changed but usable photo is prepared again; a deletion asked for after the gate's commit does not stop the send, as ADR-0030 accepted |
+| Nit: the discovery test passed with the filter removed; two lock tests proved blocking by elapsed time; no test of a failed audit insert, of the lock modes, or of a MIME mismatch | All added or changed: the orchestrated attempt is the oldest row; the waits are read from `pg_stat_activity`; the failed insert, the lock modes by `NOWAIT`, and a PNG refused as the wrong format |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the paid-submission gate row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0096 Decision 2 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7c-1.md`: no HTTP change; the changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7c-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (GS-7c
+split in two) and `docs/decisions/TODO.md` (*Stop the legacy executor's
+discovery from offering orchestrated attempts* done; progress noted on
+auditing the paid call, the Phase 4C-3 sequence, failing closed on a missing
+source and the preflight's failures; one new item: ending an attempt the gate
+will never authorize, for GS-7d).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the gate or the legacy executor,
+and nothing sends an attempt. No scheduler, credential or payment
+integration. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **Nothing sends an attempt yet.** GS-7c-2 prepares, gates and sends one.
+- **An attempt the gate refuses for good keeps its Unit**: a deleted
+  Property, a photo deleted or unrecoverable, or a price no contract will
+  cover again leaves it `QUEUED` until GS-7d decides what ends it.
+- **A deletion asked for after the gate's commit does not stop the send**,
+  the race ADR-0030 accepted for the legacy claim.
+- **The attempt repository's own arm remains** for test fixtures; only a
+  static test keeps production from calling it.
+
+### Remaining work
+
+GS-7c-1 waits for the product owner's yes before merge. Then GS-7c-2, sending
+an admitted attempt through the gate and recording the answer.
