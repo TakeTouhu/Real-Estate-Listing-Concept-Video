@@ -1396,12 +1396,14 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 2). *GS-4's start step admits no attempt: it leaves the job
       `RESERVED` until the concurrent-job limit lets it run (ADR-0052
       Decision 7), so the first admissions belong to GS-7's launch step.*
-- [ ] **Make the test provider's clips at its route's sizes (GS-6).** The
+- [x] **Make the test provider's clips at its route's sizes (GS-6).** The
       test route's catalog entry records Normal as generated at 720p and HQ at
       1080p, with no upscale (ADR-0090 Decision 4), but the fake provider makes
       no clip yet: it answers with a made-up address and no bytes. GS-6's clip
       must be made at the attempt's native size, or the entry claims a size
-      nothing was generated at.
+      nothing was generated at. *Done in GS-6 (ADR-0092, no migration): the
+      test provider's studio makes each clip at the request's aspect ratio and
+      native size, from the composition profile's raster table.*
 - [ ] **Release a started job that can never launch (GS-7).** A job waiting
       for the concurrent-job limit holds its Units `RESERVED` (the approved
       plan's Design 6). One that can never run, for instance because no route

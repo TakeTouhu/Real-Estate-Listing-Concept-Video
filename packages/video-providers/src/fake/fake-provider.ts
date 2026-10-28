@@ -9,6 +9,7 @@ import type {
   ProviderSubmissionOutcome,
   VideoModelPricing,
 } from "../types";
+import type { FakeClipStudio } from "./clip-studio";
 
 /**
  * Which submission outcome the fake produces, chosen up front.
@@ -37,6 +38,16 @@ export interface FakeVideoProviderOptions {
    * deterministically and without a network.
    */
   readonly submissionOutcome?: FakeSubmissionOutcomeKind;
+  /**
+   * The studio that makes each accepted request's clip (ADR-0092). Without one,
+   * the fake accepts and makes nothing, as before.
+   */
+  readonly studio?: Pick<FakeClipStudio, "make">;
+}
+
+/** The fake's prediction id for a request: its studio names the clip by it too. */
+export function fakePredictionIdFor(requestHash: string): string {
+  return `fake_${requestHash}`;
 }
 
 const DEFAULT_PRICING: VideoModelPricing = { currency: "USD", costPerSecondMinor: 5 };
@@ -53,12 +64,14 @@ export class FakeVideoProvider implements VideoGenerationProvider {
   private readonly now: () => Date;
   private readonly outputUrlBase: string;
   private readonly submissionOutcome: FakeSubmissionOutcomeKind;
+  private readonly studio: Pick<FakeClipStudio, "make"> | undefined;
 
   constructor(options: FakeVideoProviderOptions = {}) {
     this.pricing = options.pricing ?? DEFAULT_PRICING;
     this.now = options.now ?? (() => new Date());
     this.outputUrlBase = options.outputUrlBase ?? "https://fake-provider.internal/outputs";
     this.submissionOutcome = options.submissionOutcome ?? "ACCEPTED";
+    this.studio = options.studio;
   }
 
   /**
@@ -68,10 +81,13 @@ export class FakeVideoProvider implements VideoGenerationProvider {
    * `retryable` values are chosen to make the orthogonality visible: the
    * ambiguous one is `retryable: true`, which is exactly the combination a
    * caller must **not** read as permission to submit again.
+   *
+   * With a studio, a request is accepted only once its clip is made, and one
+   * whose clip could not be made is refused: the fake then holds nothing.
    */
-  createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
+  async createGeneration(input: ProviderGenerationInput): Promise<ProviderSubmissionOutcome> {
     if (this.submissionOutcome === "DEFINITIVELY_REJECTED") {
-      return Promise.resolve({
+      return {
         kind: "DEFINITIVELY_REJECTED",
         error: providerError({
           kind: "INVALID_INPUT",
@@ -79,10 +95,10 @@ export class FakeVideoProvider implements VideoGenerationProvider {
           messageSanitized: "Fake provider rejected the submission",
           retryable: false,
         }),
-      });
+      };
     }
     if (this.submissionOutcome === "SUBMISSION_UNKNOWN") {
-      return Promise.resolve({
+      return {
         kind: "SUBMISSION_UNKNOWN",
         error: providerError({
           kind: "TIMEOUT",
@@ -93,17 +109,28 @@ export class FakeVideoProvider implements VideoGenerationProvider {
           // re-POST (ADR-0035).
           retryable: true,
         }),
-      });
+      };
     }
-    return Promise.resolve({
+    if (this.studio !== undefined && (await this.studio.make(input)) !== "MADE") {
+      return {
+        kind: "DEFINITIVELY_REJECTED",
+        error: providerError({
+          kind: "INVALID_INPUT",
+          code: "FAKE_CLIP_NOT_MADE",
+          messageSanitized: "Fake provider could not make the clip",
+          retryable: false,
+        }),
+      };
+    }
+    return {
       kind: "ACCEPTED",
       ref: {
         provider: this.name,
         modelId: input.modelId,
-        predictionId: `fake_${input.requestHash}`,
+        predictionId: fakePredictionIdFor(input.requestHash),
         submittedAt: this.now().toISOString(),
       },
-    });
+    };
   }
 
   getStatus(ref: ProviderGenerationRef): Promise<ProviderGenerationStatus> {

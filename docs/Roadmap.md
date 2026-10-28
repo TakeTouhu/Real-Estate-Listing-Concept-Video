@@ -294,6 +294,16 @@ reads the period, its purchases and their cancellations in one statement on
 the gate's own transaction, while the cycle's cost-admission lock is held. Nothing outside tests
 constructs the paid-submission service until GS-9.
 
+**GS-6 — the test provider makes a real clip from the photo** (ADR-0092, no
+migration): `createFakeClipStudio` reads the scene's photo through its signed
+URL, makes a clip that slowly zooms into the whole photo and pans across it,
+at the request's aspect ratio and native size (720p or 1080p) and length, and
+keeps it; the fake provider accepts a request only once its clip is made and
+refuses it otherwise. The studio's status source answers for the clips it
+keeps, and its byte source streams them to the transfer core. The FFmpeg clip
+maker is in `@app/storage`. Both refuse production, and nothing outside tests
+builds them until GS-9.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

@@ -25,7 +25,7 @@ valid video is delivered, the reserved Unit is released (ADR-0052 Decision 19).
 | Settlement of a provider refusal, a provider failure, an unresolved submission | **missing** | submission and reconciliation repositories |
 | A start step for a whole video (job, reservation, scenes; the first attempts once the job may run) | **missing**; only a single-scene admission exists, and nothing calls it | `generation` domain |
 | Sending work to a provider and recording the answer | **missing** | |
-| A test provider that produces video bytes | **missing**: the fake answers "succeeded" with no bytes, and has no catalog, route or price entry | `video-providers` |
+| A test provider that produces video bytes | **missing**: the fake answers "succeeded" with no bytes, and has no catalog, route or price entry (*route, price and catalog since GS-5a-2; real clips since GS-6, ADR-0092*) | `video-providers` |
 | Storage shared by the web app and the worker | **missing**: uploads live in process memory | `@app/storage` |
 | Anything that runs the steps | **none, by design** (ADR-0054 Decision 7) | static dormancy tests |
 | Start screen, progress, preview, download | **none** | `apps/web` |
@@ -183,3 +183,16 @@ Split into pull requests:
   price plus the period's Unit purchases, tax-exclusive
   (`docs/decisions/TODO.md`, decision gates closed). It is read from the
   cycle's entitlement period; Enterprise stays unknown.
+
+## GS-6 — the test provider's clips
+
+On `22f7099` the fake provider accepts a request and answers its status with a
+made-up address and no bytes, so nothing after submission can run on it: the
+provider-output runner needs a status source and a byte source, and the fake
+has neither. Its catalog entry (GS-5a-2) records clips at 720p and 1080p that
+nothing makes.
+
+GS-6 (ADR-0092, no migration) adds the fake's studio: it makes a real clip
+from the scene's photo, read through the signed URL as a provider reads it,
+at the request's native frame and length, and its status source and byte
+source hand the clip to the transfer core. Nothing composes them until GS-9.

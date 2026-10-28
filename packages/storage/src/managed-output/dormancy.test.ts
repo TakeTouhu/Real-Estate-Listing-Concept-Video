@@ -208,13 +208,17 @@ describe("no production composition", () => {
     }
   });
 
-  it("has exactly one production byte source (fal) and exactly one durable staging sink (S3)", () => {
+  it("has two concrete byte sources (fal and the test provider's) and exactly one durable staging sink (S3)", () => {
     // The dormancy truth changed in Phase 4C-3B-2H-3B-3: a concrete durable
-    // `ManagedOutputStagingSink` now exists too. Exactly one production file may
-    // implement each port — the authorized fal adapter for the byte source and
-    // the S3 sink for the staging sink — and nothing else, so a second concrete
-    // implementation of either gets the review it needs.
-    const AUTHORIZED_BYTE_SOURCE = "packages/video-providers/src/fal/provider-output-byte-source.ts";
+    // `ManagedOutputStagingSink` now exists too. Only the authorized files may
+    // implement each port, so a further concrete implementation of either gets
+    // the review it needs. GS-6 authorized the test provider's byte source,
+    // which streams the clips its studio made and is refused in production
+    // (ADR-0092).
+    const AUTHORIZED_BYTE_SOURCES = [
+      "packages/video-providers/src/fake/clip-studio.ts",
+      "packages/video-providers/src/fal/provider-output-byte-source.ts",
+    ];
     const AUTHORIZED_SINK = "packages/storage/src/managed-output/s3-staging-sink.ts";
     const byteSourceImplementers: string[] = [];
     const sinkImplementers: string[] = [];
@@ -222,7 +226,7 @@ describe("no production composition", () => {
       if (text.includes("implements ProviderOutputByteSource")) byteSourceImplementers.push(name);
       if (text.includes("implements ManagedOutputStagingSink")) sinkImplementers.push(name);
     }
-    expect(byteSourceImplementers).toEqual([AUTHORIZED_BYTE_SOURCE]);
+    expect(byteSourceImplementers.sort()).toEqual(AUTHORIZED_BYTE_SOURCES);
     expect(sinkImplementers).toEqual([AUTHORIZED_SINK]);
   });
 

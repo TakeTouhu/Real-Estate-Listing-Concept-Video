@@ -2361,3 +2361,242 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-5b waits for the product owner's yes before merge. GS-6 (the test
 provider's status and real clip bytes at the route's sizes) follows.
+
+## GS-6 — the test provider makes a real clip from the photo
+
+Base: `22f7099` (PR #115 merge commit on `main`; post-merge CI run 708 green).
+ADR: `docs/decisions/0092-the-test-provider-makes-a-real-clip-from-the-photo.md`
+
+**No migration; no route, no page.** Nothing outside tests builds the studio
+or the clip maker until the pipeline command (GS-9).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `fc2c470` | the studio, the FFmpeg clip maker, the fake provider's studio option, their tests, the media suite, ADR-0092 and the documentation |
+| `cba54d3` | the review's and the first mutation pass's answers, and FFmpeg given the photo decoded by sharp; the 2026-10-28 billing decisions taken out of this pull request |
+| `d5869f2` | the second mutation pass's answers: one branch fewer at the link, the byte source held to its declared size by two more tests |
+| `7a35bc1` | this record |
+| `31b4b83` | a test fixture's type, which CI's typecheck caught on `7a35bc1` |
+| this commit | this record's verification restated |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-6 does
+
+- **A studio behind the fake provider.** `createFakeClipStudio` in
+  `@app/video-providers`, refused in production (given or ambient
+  `NODE_ENV`) and unless `VIDEO_PROVIDER=fake`. `make` reads the scene's
+  photo through its signed URL, as a provider does, and makes and keeps the
+  clip; `statusSource` answers `SUCCEEDED` with a locator for a kept clip;
+  `byteSource` streams it to the transfer core.
+- **Made before acceptance.** With a studio, `FakeVideoProvider` accepts a
+  request only once its clip is made, and refuses one it could not make
+  (`FAKE_CLIP_NOT_MADE`, not retryable), so an accepted request always has
+  its clip and a refusal is settled by GS-2 (ADR-0083).
+- **The request's frame and length.** The native size of the request's
+  aspect ratio from the composition profile's raster table (720p at 16:9 is
+  1280×720, 1080p at 9:16 is 1080×1920), the size the test route's catalog
+  entry records, and the requested whole seconds at 30 frames a second.
+- **What it shows.** The whole photo, never cropped, zooming in by 8 % and
+  drifting from left to right; H.264, `yuv420p`, no audio, no metadata. The
+  FFmpeg clip maker in `@app/storage` decodes the photo with sharp into a PNG
+  and runs FFmpeg on it through the no-shell process runner, bounded.
+- **Kept by a name no request controls, handed over by a locator that names
+  nothing.** A clip's file is the SHA-256 of its prediction id, linked into
+  place from a private work folder. A locator's value is random; the studio
+  remembers which clip each locator it issued stands for, and its byte source
+  opens only those, never more or fewer bytes than it declared.
+
+```mermaid
+sequenceDiagram
+    participant P as FakeVideoProvider
+    participant St as Studio
+    participant R as Photo reader
+    participant F as FFmpeg clip maker
+    participant Ru as Provider-output runner
+    participant T as Streaming transfer
+    P->>St: make(request)
+    St->>R: read(signed URL)
+    R-->>St: the normalized photo
+    St->>F: render(photo.jpg, clip.mp4, frame, length)
+    F->>F: sharp decodes the photo to a PNG
+    F->>F: ffmpeg zoompan, H.264, no audio
+    F-->>St: RENDERED
+    St->>St: link clip.mp4 to clips/sha256(prediction id).mp4
+    St-->>P: MADE
+    P-->>P: ACCEPTED as fake_<request hash>
+    Ru->>St: statusSource.poll(identity)
+    St-->>Ru: SUCCEEDED, a new random locator
+    Ru->>T: transferAndVerify(locator)
+    T->>St: byteSource.open(locator)
+    St-->>T: the clip, in pieces of at most 1 MiB, its size declared
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI, FFmpeg 6.1.1 as CI
+installs it), on `d5869f2` and, for lint, typecheck and the fake provider's
+tests, again on `31b4b83`; the database suite ran on `cba54d3` (the commits
+after it change only the studio, its unit tests and this record, which no
+database test reaches). The unit suite also passed on `fc2c470` (6,307 tests) and
+`cba54d3` (6,321).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `31b4b83`. On `7a35bc1` CI's typecheck failed on a test fixture in `clip-studio.test.ts` (a `NODE_ENV` widened to `string`), added in `cba54d3`: the local runs' exit status had not been read. Reproduced locally, fixed, and both checks rerun with their exit status checked |
+| `pnpm test` | 229 files, 6,322 tests passed |
+| `pnpm test:db` | 63 files, 1,675 tests passed |
+| `pnpm test:media` (`tests/media/fake-clip.media.test.ts`) | 3 tests passed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/storage/src/fake-clip-renderer.test.ts` (new, 25): the argument
+  vector pinned; odd, oversized, fractional and empty sides and lengths
+  refused; the photo decoded to a PNG beside the clip and FFmpeg run on it
+  once, bounded; a photo that cannot be decoded is not made and runs nothing;
+  a frame it does not make refused before anything is decoded; each runner
+  outcome other than a clean exit not made; the timeout's bounds; production
+  refused, given or ambient.
+- `packages/video-providers/src/fake/clip-studio.test.ts` (new, 45): building
+  refused in production, for any other provider and for a folder that is not
+  absolute or cannot be opened; making at each raster, once, with the photo
+  written for the renderer alone; two makes at once both made with one clip
+  kept; a kept file that is not a clip, and a folder that cannot keep one;
+  each request it does not make, and each renderer that fails, throws, writes
+  nothing, writes an empty clip or fails after writing, keeping nothing; the
+  observation accepted by the domain parser; a new locator at each answer,
+  naming no file; foreign providers, models and predictions answered with
+  nothing; streaming in pieces of at most 1 MiB; a locator it did not issue,
+  a clip gone or emptied, a clip that ends before its declared size (only the
+  bytes it has handed over), one that grew (no more than declared) and a read
+  that fails; each file let go of once.
+- `packages/video-providers/src/fake/route-kit.test.ts` (1 more): who builds
+  the studio and the clip maker.
+- `packages/storage/src/managed-output/dormancy.test.ts` (changed): the
+  studio's byte source authorized by name beside fal's.
+- `tests/media/fake-clip.media.test.ts` (new, 3, real FFmpeg): a 5-second
+  720p clip with 150 frames, no audio, the whole photo in its first frame and
+  the zoom and pan in its last, read from single pixels; a photo that cannot
+  be read not made; a photo stored as an upload stores it, through the signed
+  URL, the provider, the status source, the byte source, the streaming
+  transfer and the media validator, to a valid 1080×1920 five-second video.
+
+### Mutation testing
+
+The same harness as GS-5b, against the clip maker's and the studio's unit
+suites. The first pass ran on `fc2c470`; the second on `cba54d3`, with the
+first pass's survivors answered and the new code's mutants added.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R01 to R03 | a side of 0, past 1920, or odd allowed | killed |
+| R04 | a fractional side allowed past the integer check | equivalent: the even-side check refuses every fraction |
+| R05 to R07 | a fractional length, no length, or 61 seconds allowed | killed |
+| R08 | the zoom and pan reaching their end one frame late | killed |
+| R09 / R10 | the photo cropped to fill; the padding not centred | killed |
+| R11 / R12 | no pan; no zoom | killed |
+| R13 / R14 / R15 | audio, metadata, or an unbounded frame count kept | killed |
+| R16 | FFmpeg left to guess the input's format | killed |
+| R17 / R18 | production refused only when given, or only when ambient | killed |
+| R19 to R21 | the timeout's bounds, and a fractional timeout (pass 1 survivor, a test added) | killed |
+| R22 / R23 | a failed exit, or a missing program, reported as made | killed |
+| R24 / R25 | the program path ignored; the quality changed | killed |
+| R26 to R29 | the photo not decoded; a decode failure ignored; the PNG outside the work folder; FFmpeg given the JPEG | killed |
+| S01 / S02 | production refused only when given, or only when ambient | killed |
+| S03 | only one other provider refused (pass 1 survivor, cases added) | killed |
+| S04 | a relative folder allowed | killed |
+| S05 | the folder's real path not resolved | equivalent: a symlinked folder is resolved once at construction, which no test can tell from resolving it at each use |
+| S06 to S11 | another model made; the length's bounds; an unknown raster made at 720p; the sides swapped | killed |
+| S12 | an empty photo rendered | killed |
+| S13 / S14 | a renderer that wrote an empty clip, or wrote one and failed, counted as made (pass 1 survivors, renderers added) | killed |
+| S15 / S38 | the second of two makes refused; an existing entry trusted unchecked (pass 1 survivor, the race test added; S38 added) | killed |
+| S16 | a link failure other than an existing clip ignored | pass 2 survivor: the branch could not change the answer, so it was removed in `d5869f2` |
+| S17 / S18 / S19 | the work folder kept; a kept clip made again; a throw escaping `make` | killed |
+| S20 | the photo written readable by others (pass 1 survivor, its mode recorded) | killed |
+| S21 / S23 | a foreign provider, or a foreign model, answered | killed (pass 1's S23, the prediction-id prefix check, survived as redundant with the kept-clip check and was removed in `cba54d3`) |
+| S24 / S25 / S26 | a missing clip answered; a locator not remembered; a locator naming the file | killed |
+| S27 | locators shared between studios | killed |
+| S28 | an empty clip opened (pass 1 survivor, a test added) | killed |
+| S29 / S30 | larger pieces; a clip that ends early accepted | killed |
+| S31 / S41 | the whole read buffer handed over; reads not bounded by what remains (pass 2 survivors, tests added in `d5869f2`) | killed |
+| S32 | a failed read thrown unbranded (pass 1 survivor, a test added) | killed |
+| S33 | no size declared | killed |
+| S34 / S35 | a stream's file closed twice; a refused file left open (pass 1 survivors, each file's closes counted) | killed |
+| S36 / S37 | the prediction id as the file name; a missing clip throwing at open | killed |
+| S39 / S40 | reading past the declared size; never reaching it | killed |
+| P01 to P05 | the studio ignored or not kept; the refusal's code or retryability changed; the prediction id's prefix | killed |
+
+Result: 53 of 67 killed in the first pass on `fc2c470`; 69 of 74 in the
+second on `cba54d3`; the third, on `d5869f2`, killed all 4 of the second
+pass's answered survivors (S15, S31, S38, S41 re-anchored). Two survivors
+remain, both equivalent (R04, S05).
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`fc2c470` against `22f7099`, reading only git objects. It confirmed that the
+observation has exactly the keys the domain parser accepts and keeps the
+locator object the WeakMap is keyed by; that the stream passes the runner's
+inspection and every refusal closes its file; that a prediction id reaches no
+path; that both constructors refuse production and nothing outside tests
+builds them; and it worked the media suite's pixel checks by hand. Verdict:
+nothing blocking. Its five should-fix findings and its nits, answered in
+`cba54d3`:
+
+| Finding | Answer |
+| --- | --- |
+| The locator's raw value named the clip's file, which the comment and ADR said it did not | Fixed: the value is random, new at each answer; a test proves two answers differ and a locator naming the file opens nothing |
+| No test checked the observation against the domain parser | Added: the status source's answer is parsed by `parseProviderPollObservation` |
+| The race between two makes of one request was untested | Added: two makes held at once both say made and keep one clip, with no work folder left |
+| A clip lost after acceptance leaves its attempt `PROCESSING` | Kept as it is, and said in ADR-0092 Decision 6: the studio cannot tell a deleted folder from a status source built over another folder, and `FAILED` would end accepted attempts on a configuration mistake. Ending an attempt that never finishes is the existing open item *Bound how long an attempt may run before it is treated as failed* (`docs/decisions/TODO.md`), which applies to a real provider that stops answering too; the folder must not be deleted while attempts are in flight |
+| The two billing decisions of 2026-10-28 were mixed into this pull request, with ADR-0053 Decision 3B left contradicting one and two readings recorded as decided | Taken out of this pull request. They come in their own documentation pull request after this one merges, with an ADR amending ADR-0053 Decision 3B, and the readings nobody decided (whether the old plan's unused days are credited, whether the Enterprise amount is entered tax-exclusive) as open gates |
+| Nit: `route-kit.ts` still said the fake makes no clip | Corrected |
+| Nit: the byte source did not hold the stream to its declared size | Fixed: it reads exactly that many bytes, and a clip that ends early is the retryable interruption |
+| Nit: a crash leaves `work-` folders behind | ADR-0092 *Not decided here*: the same deletion as the clips clears them |
+| Nit: a status source and a byte source from two studios never transfer | ADR-0092 Decision 7: one studio serves both, and GS-9 builds one |
+| Nit: on `EEXIST` the existing entry was trusted unchecked | Fixed: it counts as made only if it is a clip, and a test proves an empty one is not |
+| Nit: the media suite's photo was FFmpeg's JPEG, not the image pipeline's | Fixed, and it found a real failure: FFmpeg 6.1 refused the pipeline's mozjpeg JPEG of the flat test photo (and of a white wall with one dark square). The clip maker now decodes the photo with sharp and gives FFmpeg a PNG; the media suite stores its photo through `SharpImageProcessor`, as an upload does |
+| Nit: the first frame's checks would accept a starting zoom near 1.07 | The checks now sit 10 pixels either side of both edges of the unzoomed photo |
+| Nit: the dormancy test called the test provider's byte source a production one; the 60-second limit is written in both packages | The test's name corrected. The limit stays in both: `@app/video-providers` does not depend on `@app/storage`, and the studio's comment names the renderer's |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the test provider studio row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0092 Decisions 1 to 7 |
+| OpenAPI / API change summary | `docs/api-changes-gs-6.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-6*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the GS-6 item done).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests builds the studio or the clip maker, and both
+refuse production. No scheduler, credential or payment integration. Paid
+Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **A clip deleted after acceptance leaves its attempt `PROCESSING`** until
+  an attempt's running time is bounded (ADR-0092 Decision 6).
+- **Clips and interrupted work folders stay** until a person deletes the
+  studio's folder.
+- **The fake never fails after accepting**; the end-to-end failure test
+  (GS-13) uses the configured refusal.
+
+### Remaining work
+
+GS-6 waits for the product owner's yes before merge. Then the documentation
+pull request for the 2026-10-28 billing decisions, and GS-7 (sending work to
+the provider and recording the answer, with the concurrent-job limit).
