@@ -318,13 +318,34 @@ describe("a route qualifies only when it can run the whole job", () => {
 
   it("needs the route to serve the job's resolution", async () => {
     expect(await codeFor({}, job({ targetOutputResolution: "1080p" }))).toBe("NO_ROUTE");
+    // A 720p route at a native tier the catalog would reach 1080p from too.
+    const native1080 = route("alpha", { nativeGenerationResolution: "1080p" });
+    const pricing = prices([contract("alpha", {}, "1080p")]);
+    const facts = job({ targetOutputResolution: "1080p" });
+    expect(await codeFor({ routes: policy([native1080]), pricing }, facts)).toBe("NO_ROUTE");
+    const serving = route("alpha", { nativeGenerationResolution: "1080p", targetOutputResolutions: ["720p", "1080p"] });
+    expect(await codeFor({ routes: policy([serving]), pricing }, facts)).toBe("PLANNED");
+  });
+
+  it("takes only a route sold at the job's quality", async () => {
+    // A Normal route serving 1080p beside the HQ route for the same model: an
+    // HQ job is sent by the HQ route alone, not offered a choice of two.
+    const normal = route("alpha", { nativeGenerationResolution: "1080p", targetOutputResolutions: ["720p", "1080p"] });
+    const facts = job({ qualityTier: "HIGH_QUALITY", targetOutputResolution: "1080p" });
+    expect(await codeFor({ routes: policy([normal, HQ_ROUTE]) }, facts)).toBe("PLANNED");
   });
 
   it("needs the model in the catalog, verified, under the route's provider and model id", async () => {
     expect(await codeFor({ models: catalog([model("beta")]) })).toBe("NO_ROUTE");
-    expect(await codeFor({ models: catalog([model("alpha", { availability: { kind: "UNVERIFIED" } })]) })).toBe(
-      "NO_ROUTE",
-    );
+    const unverified = {
+      key: "alpha",
+      providerName: "test",
+      displayName: "alpha",
+      tier: "ECONOMY",
+      recommended: false,
+      availability: { kind: "UNVERIFIED", missing: ["capability"] },
+    } as const;
+    expect(await codeFor({ models: catalog([unverified]) })).toBe("NO_ROUTE");
     expect(await codeFor({ models: catalog([model("alpha", { providerName: "other" })]) })).toBe("NO_ROUTE");
     expect(await codeFor({ models: catalog([model("alpha", { providerModelId: "test/other" })]) })).toBe("NO_ROUTE");
   });
@@ -402,10 +423,36 @@ describe("the route must have one verified price in force now", () => {
     return { code: plan.kind === "NO_PLAN" ? plan.code : "PLANNED", reads: fx.reads };
   }
 
-  it("refuses a route with no contract, or only one for another tier or model", async () => {
+  it("refuses a route with no contract, or only one for something else", async () => {
     expect(await codeFor([])).toEqual({ code: "NO_CURRENT_PRICING", reads: 0 });
     expect(await codeFor([contract("alpha", {}, "1080p")])).toEqual({ code: "NO_CURRENT_PRICING", reads: 0 });
     expect(await codeFor([contract("beta")])).toEqual({ code: "NO_CURRENT_PRICING", reads: 0 });
+    const base = contract("alpha");
+    for (const identity of [
+      { ...base.identity, provider: "other" },
+      { ...base.identity, generationMode: "text-to-video" },
+      { ...base.identity, audioMode: "with-audio" },
+    ]) {
+      expect(await codeFor([{ ...base, identity }])).toEqual({ code: "NO_CURRENT_PRICING", reads: 0 });
+    }
+  });
+
+  it("prices the route by its own generation and audio mode", async () => {
+    const modes = { generationMode: "text-to-video", audioMode: "with-audio" };
+    const routes = policy([route("alpha", modes)]);
+    const base = contract("alpha");
+    const own = { ...base, identity: { ...base.identity, ...modes } };
+    for (const [contracts, code] of [
+      [[own], "PLANNED"],
+      [[base], "NO_CURRENT_PRICING"],
+    ] as const) {
+      const plan = await planner({ routes, pricing: prices(contracts) }).plan(job());
+      expect(plan.kind === "NO_PLAN" ? plan.code : "PLANNED").toBe(code);
+    }
+  });
+
+  it("counts one contract listed twice as one", async () => {
+    expect(await codeFor([contract("alpha"), contract("alpha")])).toEqual({ code: "PLANNED", reads: 1 });
   });
 
   it("refuses a contract that has expired, has not begun or is unverified", async () => {

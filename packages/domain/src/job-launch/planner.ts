@@ -186,8 +186,8 @@ export class JobLaunchPlanner {
   #qualifyingRoutes(facts: JobLaunchFacts, target: TargetOutputResolution): RouteChoice[] {
     const choices: RouteChoice[] = [];
     for (const route of this.#routes.routes) {
+      // Whether the route sells the job's resolution is the gate's check below.
       if (route.qualityTier !== facts.qualityTier) continue;
-      if (!route.targetOutputResolutions.includes(target)) continue;
 
       const entry = this.#models.find(route.requestModelKey);
       if (entry === undefined || !isSelectableModel(entry)) continue;
