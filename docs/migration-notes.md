@@ -1811,3 +1811,15 @@ any rate.
 
 **Rolling back.** To GS-5a-1's build: safe, since nothing in production calls
 what GS-5a-2 adds.
+
+## GS-5b — a billing cycle's revenue is read from its period
+
+**No migration** (ADR-0091). No schema, enum, constraint or row changes, and
+no new environment variable. The reader reads `unit_entitlement_periods`,
+`unit_purchases` and `unit_purchase_cancellations` and writes nothing.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+paid-submission service, so no production code calls the reader.
+
+**Rolling back.** To GS-5a-2's build: safe, since nothing in production calls
+what GS-5b adds.

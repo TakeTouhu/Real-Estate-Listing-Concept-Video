@@ -36,15 +36,14 @@ export interface PaidSubmissionFactsSnapshot {
 /**
  * The billing-cycle revenue the Safety Guard measures against.
  *
- * A port rather than a table read, because **no authoritative billing-cycle
- * revenue exists yet**. Nothing persists a subscription, a plan assignment or
- * an invoice, and the customer plan catalog prices plans without saying which
- * organization is on one. Inferring a plan from unrelated metadata — seat
- * counts, usage, an organization name — would hard-pause real customers
- * against an invented number.
+ * A port rather than a table read, so the gate stays free of persistence. The
+ * rule is `billingCycleRevenueYen` (ADR-0091): the period's plan price plus its
+ * uncancelled Unit purchases, and unknown for Enterprise. The database's reader
+ * reads it from the cycle's entitlement period; inferring a plan from unrelated
+ * metadata (seat counts, usage, an organization name) would hard-pause real
+ * customers against an invented number.
  *
- * So the gate asks, and the default implementation answers "unknown", which
- * fails closed. Production activation must supply this from the billing layer.
+ * `null` means unknown, which fails the gate closed.
  */
 export interface BillingCycleRevenueReader {
   /** `null` when no authoritative figure exists for this organization/cycle. */

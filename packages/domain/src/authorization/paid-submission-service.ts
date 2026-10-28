@@ -113,8 +113,8 @@ export function createPaidSubmissionAuthorizationService(
           // of this decision. Two reads could straddle a contract's expiry.
           const authorizationInstant = deps.clock.now();
 
-          // Revenue is read through a port because nothing persists it yet, and
-          // it is `null` today — which fails closed inside the gate rather than
+          // Revenue is read through a port, inside the lock (ADR-0091). `null`
+          // (Enterprise, or no period) fails closed inside the gate rather than
           // defaulting to a number nobody published.
           const billingCycleRevenueYen =
             facts.billingCycleKey === null

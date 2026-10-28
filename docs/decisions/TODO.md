@@ -1902,17 +1902,21 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 11) — enough inquiry tracking to measure an initial response
       against staffed hours and business days, without attaching the uptime SLA
       credit schedule to it.
-- [ ] **Build the billing-cycle revenue reader for the Cost Safety Guard**
+- [x] **Build the billing-cycle revenue reader for the Cost Safety Guard**
       (decided 2026-10-27, *Decision gates — CLOSED*): the plan's monthly price
       plus the period's uncancelled Unit purchases, tax-exclusive; Enterprise
-      unknown until its contracted price is recorded. Today's only reader
-      answers unknown, so the guard pauses every paid submission. GS-5b.
+      unknown until its contracted price is recorded. *Done in GS-5b
+      (ADR-0091, no migration): `billingCycleRevenueYen` is the rule and
+      `createBillingCycleRevenueReader` reads it from the cycle's entitlement
+      period. Plan prices are not versioned, so a price change would change
+      an open period's revenue (ADR-0091 Decision 4); recording an Enterprise
+      contracted price is not decided.*
 
 ### Decision gates — OPEN
 
-Four gates: one found by the Phase 6A gap analysis
+Five gates: one found by the Phase 6A gap analysis
 (`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), two by GS-1
-(ADR-0082). **None may be guessed.** Every other gate is closed and recorded
+(ADR-0082), one by GS-5b (ADR-0091). **None may be guessed.** Every other gate is closed and recorded
 below.
 
 - [ ] **Decide whether a failed replacement gives back the scene regeneration
@@ -1960,6 +1964,16 @@ below.
       charge withholds the new period's Units, grants them during a grace window,
       or suspends generation, and when the subscription ends. Must be settled
       before self-service Stripe billing is built.
+- [ ] **Decide where an Enterprise organization's contracted price is
+      recorded, and whether plan prices are versioned** — from GS-5b
+      (ADR-0091); does not block the test route. The Cost Safety Guard counts
+      an Enterprise cycle's revenue as unknown, so every Enterprise paid
+      submission pauses, until its contracted price is recorded somewhere the
+      reader can trust; no table holds one. And the reader prices a period's
+      plan at the catalog's current price, so a future price change would
+      change the revenue of a period already open. Both must be settled before
+      paid generation is activated for an Enterprise customer or a plan price
+      changes.
 
 ### Decision gates — CLOSED
 

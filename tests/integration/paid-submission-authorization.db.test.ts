@@ -21,7 +21,7 @@ import {
   type ProviderPricingContract,
   type Yen,
 } from "@app/domain";
-import { createPaidSubmissionAuthorizationRepository } from "@app/database";
+import { createBillingCycleRevenueReader, createPaidSubmissionAuthorizationRepository } from "@app/database";
 import {
   createFakeRouteKit,
   FAKE_ROUTE_VERSION,
@@ -506,6 +506,88 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       expect(unrouted).toMatchObject({ kind: "ROUTING_NOT_AUTHORIZED", reason: "PROVIDER_NOT_AUTHORIZED" });
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
       expect(row.orchestrationState).toBe("QUEUED");
+    });
+  });
+
+  describe("the database's revenue reader (ADR-0091)", () => {
+    function readerService() {
+      return createPaidSubmissionAuthorizationService({
+        authorization: createPaidSubmissionAuthorizationRepository(prisma),
+        billingCycleRevenue: createBillingCycleRevenueReader(prisma),
+        clock: createFixedAuthorizationClock(AT),
+      });
+    }
+
+    it("hard-pauses the fixture's Enterprise cycle, whose revenue is unknown", async () => {
+      const { attempt } = await seedAuthorizableChain(prisma, "readerent");
+      const outcome = await readerService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      expect(outcome).toMatchObject({ kind: "SAFETY_GUARD_HARD_PAUSE", reason: "BILLING_CYCLE_REVENUE_UNAVAILABLE" });
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
+      expect(row.orchestrationState).toBe("QUEUED");
+    });
+
+    it("authorizes in a Standard cycle and records its plan price plus its purchase", async () => {
+      // A month no other suite opens for this organization, removed afterwards.
+      const periodId = "uep_itest_paid_revenue_2027_05";
+      const blockId = "uab_itest_paid_revenue";
+      const entitlements = repositories(prisma).entitlements;
+      try {
+        const opened = await entitlements.openPeriod({
+          id: periodId,
+          organizationId: ORG_A,
+          planKey: "standard",
+          billingCycleKey: "2027-05",
+          startsAt: new Date("2027-05-01T00:00:00.000Z"),
+          endsAt: new Date("2027-06-01T00:00:00.000Z"),
+          commercialReference: null,
+          actorUserId: null,
+        });
+        expect(opened.kind).toBe("OPENED");
+        const granted = await entitlements.grantAddOnBlock({
+          id: blockId,
+          organizationId: ORG_A,
+          entitlementPeriodId: periodId,
+          quality: "NORMAL",
+          quantity: 5,
+          commercialReference: "unit-purchase:upur_itest_paid_revenue",
+          purchasedAt: new Date("2027-05-02T00:00:00.000Z"),
+          actorUserId: "usr_billing",
+        });
+        expect(granted.kind).toBe("GRANTED");
+        await prisma.unitPurchase.create({
+          data: {
+            id: "upur_itest_paid_revenue",
+            organizationId: ORG_A,
+            entitlementPeriodId: periodId,
+            addOnBlockId: blockId,
+            quality: "NORMAL",
+            priceYenExTax: 19_900,
+            channel: "SALES_ASSISTED",
+            contractReference: "VT-PAID-REVENUE-1",
+            idempotencyKey: "paid-revenue-key",
+            approvedByUserId: "usr_billing",
+            approvedAt: new Date("2027-05-02T00:00:00.000Z"),
+          },
+        });
+
+        const { attempt } = await seedAuthorizableChain(prisma, "readerstd", {
+          reservedAt: new Date("2027-05-10T00:00:00.000Z"),
+        });
+        const outcome = await readerService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+        expect(outcome.kind).toBe("AUTHORIZED");
+        const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
+          where: { aggregateType: "ATTEMPT", aggregateId: attempt.id, toState: "SUBMITTING" },
+        });
+        expect(boundary.safeMetadata).toMatchObject({
+          billingCycleKey: "2027-05",
+          billingCycleRevenueYen: 49_800 + 19_900,
+        });
+      } finally {
+        await wipeOrchestration(prisma);
+        await prisma.unitPurchase.deleteMany({ where: { id: "upur_itest_paid_revenue" } });
+        await prisma.unitAddOnBlock.deleteMany({ where: { id: blockId } });
+        await prisma.unitEntitlementPeriod.deleteMany({ where: { id: periodId } });
+      }
     });
   });
 
