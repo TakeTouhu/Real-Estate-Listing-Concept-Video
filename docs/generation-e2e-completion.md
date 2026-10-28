@@ -2377,7 +2377,9 @@ Commits, oldest first:
 | `fc2c470` | the studio, the FFmpeg clip maker, the fake provider's studio option, their tests, the media suite, ADR-0092 and the documentation |
 | `cba54d3` | the review's and the first mutation pass's answers, and FFmpeg given the photo decoded by sharp; the 2026-10-28 billing decisions taken out of this pull request |
 | `d5869f2` | the second mutation pass's answers: one branch fewer at the link, the byte source held to its declared size by two more tests |
-| this commit | this record |
+| `7a35bc1` | this record |
+| `31b4b83` | a test fixture's type, which CI's typecheck caught on `7a35bc1` |
+| this commit | this record's verification restated |
 
 The exact head SHA is reported with the pull request.
 
@@ -2435,14 +2437,15 @@ sequenceDiagram
 ### Verification
 
 Measured locally (PostgreSQL 16 configured like CI, FFmpeg 6.1.1 as CI
-installs it), on `d5869f2`, except the database suite, run on `cba54d3`
-(`d5869f2` changes only the studio and its unit tests, which no database
-test reaches). The unit suite also passed on `fc2c470` (6,307 tests) and
+installs it), on `d5869f2` and, for lint, typecheck and the fake provider's
+tests, again on `31b4b83`; the database suite ran on `cba54d3` (the commits
+after it change only the studio, its unit tests and this record, which no
+database test reaches). The unit suite also passed on `fc2c470` (6,307 tests) and
 `cba54d3` (6,321).
 
 | Check | Result |
 | --- | --- |
-| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm lint` / `pnpm typecheck` | clean on `31b4b83`. On `7a35bc1` CI's typecheck failed on a test fixture in `clip-studio.test.ts` (a `NODE_ENV` widened to `string`), added in `cba54d3`: the local runs' exit status had not been read. Reproduced locally, fixed, and both checks rerun with their exit status checked |
 | `pnpm test` | 229 files, 6,322 tests passed |
 | `pnpm test:db` | 63 files, 1,675 tests passed |
 | `pnpm test:media` (`tests/media/fake-clip.media.test.ts`) | 3 tests passed |
