@@ -196,3 +196,23 @@ GS-6 (ADR-0092, no migration) adds the fake's studio: it makes a real clip
 from the scene's photo, read through the signed URL as a provider reads it,
 at the request's native frame and length, and its status source and byte
 source hand the clip to the transfer core. Nothing composes them until GS-9.
+
+## GS-7 — launching a waiting job, and sending its work
+
+On `9830804` a started job stays `RESERVED` with no attempt: nothing launches
+it, nothing sends an attempt to a provider, and no plan records how many jobs
+may run at once. Attempt admission takes the route, the rendered prompt and the
+price from its caller, and moves neither the scene nor the job.
+
+GS-7 is split into four pull requests (ADR-0094):
+
+- **GS-7a** (ADR-0094, no migration): each plan's concurrent-job limit (1 / 3 /
+  5), which job states hold a place under it, and the launch planner: one route
+  for the whole job, and each scene's rendered prompt and fresh price.
+- **GS-7b**: the launch commit, under one organization-wide lock: a free
+  place, the oldest waiting job, the job and its scenes started and each first
+  attempt admitted, together.
+- **GS-7c**: an admitted attempt sent to the provider through the
+  paid-submission gate, and the answer recorded; the legacy executor's
+  discovery kept off orchestrated attempts.
+- **GS-7d**: a job that can never launch released, with its Units.

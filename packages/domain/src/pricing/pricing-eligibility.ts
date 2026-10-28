@@ -1,5 +1,10 @@
 import { pricingFailure, pricingOk, type PricingResult } from "./errors";
-import type { ProviderPricingContract } from "./provider-pricing-contract";
+import type { ProviderPricingCatalog } from "./provider-pricing-catalog";
+import {
+  providerPricingContractKey,
+  type ProviderPricingContract,
+  type ProviderPricingIdentity,
+} from "./provider-pricing-contract";
 import type { EpochMillis } from "./units";
 
 /**
@@ -51,4 +56,46 @@ export function evaluatePaidSubmissionPricingEligibility(
     return pricingFailure("PRICING_CONTRACT_EXPIRED");
   }
   return pricingOk(contract);
+}
+
+/** The five dimensions of a route that say *what is being bought*. */
+export type CommercialPricingRoute = Pick<
+  ProviderPricingIdentity,
+  "provider" | "pricingModelKey" | "generationMode" | "nativeTier" | "audioMode"
+>;
+
+/**
+ * Every currently eligible contract for one commercial route.
+ *
+ * Matches the five dimensions that describe *what is being bought* and leaves
+ * `pricingVersion` and `durationBillingRuleId` free, because those are exactly
+ * what a new rate card changes. Eligibility is then the existing authority —
+ * verified, stable, in force at this instant. Shared by the planners that price
+ * a new attempt: a media recovery's (Phase 4C) and a launching job's (GS-7a).
+ */
+export function currentlyEligibleContractsForRoute(
+  pricing: ProviderPricingCatalog,
+  route: CommercialPricingRoute,
+  at: EpochMillis,
+): readonly ProviderPricingContract[] {
+  const matches = pricing
+    .all()
+    .filter(
+      (contract) =>
+        contract.identity.provider === route.provider &&
+        contract.identity.pricingModelKey === route.pricingModelKey &&
+        contract.identity.generationMode === route.generationMode &&
+        contract.identity.nativeTier === route.nativeTier &&
+        contract.identity.audioMode === route.audioMode,
+    )
+    .filter((contract) => evaluatePaidSubmissionPricingEligibility(contract, at).ok);
+
+  // Two catalog entries sharing a complete identity key are the same contract
+  // listed twice; the catalog already refuses that at construction. De-duping
+  // by key keeps this honest if that ever changes.
+  const byKey = new Map<string, ProviderPricingContract>();
+  for (const contract of matches) {
+    byKey.set(providerPricingContractKey(contract.identity), contract);
+  }
+  return [...byKey.values()];
 }

@@ -304,6 +304,15 @@ keeps, and its byte source streams them to the transfer core. The FFmpeg clip
 maker is in `@app/storage`. Both refuse production, and nothing outside tests
 builds them until GS-9.
 
+**GS-7a — the concurrent-job limit and a waiting job's launch plan** (ADR-0094,
+no migration): each plan records how many jobs may run at once (Standard 1,
+Premium 3, Enterprise 5), and a job holds a place from launch until it is
+delivered or fails. `JobLaunchPlanner` plans a waiting job whole: one route for
+every scene, chosen from the route policy and the model catalog and never
+guessed between two, each scene's prompt rendered and priced at one instant
+against the one contract in force. Nothing outside tests builds it until the
+launch commit (GS-7b) and the pipeline command (GS-9).
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

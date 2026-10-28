@@ -39,6 +39,12 @@ export interface CustomerPlan {
   readonly normalAddOnPackagePriceYenExTax: Yen;
   /** The approved price of one HQ package, or `null` where the plan sells none. */
   readonly highQualityAddOnPackagePriceYenExTax: Yen | null;
+  /**
+   * How many customer video Jobs may run at once (ADR-0052 Decision 7). It
+   * counts jobs, not the provider requests inside them, and HQ shares it. A job
+   * beyond it waits, its Units reserved, rather than being refused.
+   */
+  readonly concurrentJobs: number;
 }
 
 /*
@@ -72,6 +78,7 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnPackageUnits: null,
     normalAddOnPackagePriceYenExTax: yen(19_900),
     highQualityAddOnPackagePriceYenExTax: null,
+    concurrentJobs: 1,
   },
   {
     key: "premium",
@@ -84,6 +91,7 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnPackageUnits: 2,
     normalAddOnPackagePriceYenExTax: yen(35_900),
     highQualityAddOnPackagePriceYenExTax: yen(9_000),
+    concurrentJobs: 3,
   },
   {
     key: "enterprise",
@@ -96,6 +104,7 @@ const PLANS: readonly CustomerPlan[] = deepFreeze([
     highQualityAddOnPackageUnits: 5,
     normalAddOnPackagePriceYenExTax: yen(89_400),
     highQualityAddOnPackagePriceYenExTax: yen(22_400),
+    concurrentJobs: 5,
   },
 ] as const);
 
