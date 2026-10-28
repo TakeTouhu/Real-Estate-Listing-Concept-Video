@@ -209,9 +209,11 @@ GS-7 is split into four pull requests (ADR-0094):
 - **GS-7a** (ADR-0094, no migration): each plan's concurrent-job limit (1 / 3 /
   5), which job states hold a place under it, and the launch planner: one route
   for the whole job, and each scene's rendered prompt and fresh price.
-- **GS-7b**: the launch commit, under one organization-wide lock: a free
-  place, the oldest waiting job, the job and its scenes started and each first
-  attempt admitted, together.
+- **GS-7b** (ADR-0095, no migration): the launch commit, under one
+  organization-wide lock: a free place under the current subscription's limit,
+  the oldest waiting job past a deleted Property's, its rows found as planned,
+  and the job and its scenes started and each first attempt admitted,
+  together.
 - **GS-7c**: an admitted attempt sent to the provider through the
   paid-submission gate, and the answer recorded; the legacy executor's
   discovery kept off orchestrated attempts.

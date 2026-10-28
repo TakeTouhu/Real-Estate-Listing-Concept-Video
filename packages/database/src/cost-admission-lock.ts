@@ -139,3 +139,23 @@ export async function acquireReservationAdmissionLock(
     )::text AS locked
   `;
 }
+
+/**
+ * The job-launch lock (GS-7b, ADR-0095): one launch decision per organization
+ * at a time.
+ *
+ * Taken by the launch commit **first**, before any row. Its count of the jobs
+ * holding a place, its choice of the oldest waiting job and the job's start
+ * become one decision, so two launches of one organization can never both see
+ * the last free place. Only the launch commit takes it, as its first
+ * statement, and it takes no cost-admission lock, so it sits outside the
+ * cost-admission order: nothing holding another lock ever waits for it.
+ */
+export async function acquireJobLaunchLock(tx: Tx, organizationId: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtext(${`job-launch:${organizationId}`}),
+      hashtext('launch')
+    )::text AS locked
+  `;
+}

@@ -415,8 +415,12 @@ function alreadyRolledBack(
  * `state` predicate stays because it costs nothing and turns a logic error here
  * into zero rows rather than a silent overwrite — and zero rows is a defect,
  * because inside a held lock it cannot happen.
+ *
+ * Exported for the launch commit (GS-7b), which starts a job and its scenes
+ * under locks it took itself, so this write exists once. Not published from the
+ * package: a caller holding no lock would be writing state unguarded.
  */
-async function applyLockedTransition(
+export async function applyLockedTransition(
   tx: Tx,
   input: {
     readonly table: "generation_jobs" | "generation_scenes";

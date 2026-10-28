@@ -1847,3 +1847,16 @@ planner, and the media-recovery planner prices exactly as before.
 
 **Rolling back.** To GS-6's build: safe, since nothing in production calls
 what GS-7a adds.
+
+## GS-7b — the launch commit
+
+**No migration** (ADR-0095). No schema, enum, constraint or row changes, and
+no new environment variable. The launch lock is a transaction-scoped advisory
+lock, which leaves nothing behind.
+
+**What changes at deploy.** Nothing. Nothing outside tests builds the launch
+runner or its repository, and no existing caller's behaviour changes:
+`applyLockedTransition` is only exported within the package.
+
+**Rolling back.** To GS-7a's build: safe, since nothing in production calls
+what GS-7b adds.

@@ -43,6 +43,7 @@ export { createDeliverableCompositionExecutionRepository } from "./deliverable-c
 export { createDeliverableValidationRepository } from "./deliverable-validation-repository";
 export { createAttemptFailureSettlementRepository } from "./attempt-failure-settlement-repository";
 export { createFailedJobSceneClosureRepository } from "./failed-job-scene-closure-repository";
+export { createJobLaunchRepository } from "./job-launch-repository";
 export {
   ENTITLEMENT_AUDIT_ACTION,
   createUnitEntitlementRepository,

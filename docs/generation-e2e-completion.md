@@ -2828,3 +2828,232 @@ remain BLOCKED.
 
 GS-7a waits for the product owner's yes before merge. Then GS-7b, the launch
 commit.
+
+## GS-7b — the launch commit
+
+Base: `c932aa1` (PR #118 merge commit on `main`; post-merge CI run 725 green).
+ADR: `docs/decisions/0095-launching-a-waiting-job-under-the-organizations-limit.md`
+
+The second of GS-7's four pull requests (ADR-0094's table). **No migration; no
+route, no page.** Nothing outside tests builds the runner or the launch
+repository until the pipeline command (GS-9), and the attempts it admits are
+not sent until GS-7c.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `60698a5` | the launch decision, the runner, the launch commit and its lock, their tests, ADR-0095 and the documentation |
+| `7cdf28d` | the review's answers: a plan's rendered prompt checked against the renderer's answer for the compiled one, a test of the candidate window, and the documents on what holds back a queue, on revision start and on a concurrent exchange-rate snapshot |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7b does
+
+- **One launch decision per organization.** The commit takes the
+  organization's launch lock first, so counting the jobs holding a place,
+  choosing the oldest waiting job and starting it are one decision.
+- **The current subscription's limit.** Read inside the commit, so an upgrade
+  raises it for the next launch; no subscription launches nothing.
+- **Oldest first, past a deleted Property's job.** Any other job is refused
+  (`NOT_NEXT`); a deleted Property's job is never launched and holds no other
+  job back.
+- **Found as planned.** The project and Property (`FOR SHARE`), the
+  reservation (`FOR SHARE`), the job, scenes and requests (`FOR UPDATE`) are
+  locked in that order and judged by `decideJobLaunch`: still waiting, its
+  Property standing, of the start's shape, and every fact the plan was made
+  from unchanged. A refusal writes nothing.
+- **One commit.** The job and every scene move to `GENERATING`, and each
+  scene's first attempt is admitted through attempt admission with the plan's
+  route, rendered prompt and price, which starts its request. Any refused
+  admission rolls back the whole job.
+- **The same video twice waits.** The active-request index's refusal is the
+  launch's `SAME_REQUEST_RUNNING`, and the job waits for the first.
+- **A dormant runner.** `JobLaunchRunner.runOnce(limit)` offers each
+  organization one launch per pass, plans it and commits it, and reports each
+  candidate's outcome, keeping only a defect's code.
+
+```mermaid
+sequenceDiagram
+    participant W as JobLaunchRunner (GS-9 runs it)
+    participant Q as Candidate query
+    participant P as JobLaunchPlanner
+    participant C as Launch commit
+    participant A as Attempt admission
+    W->>Q: each organization's oldest waiting job with a place
+    Q-->>W: candidates, with the job's facts
+    W->>P: plan(facts)
+    P-->>W: PLANNED (route, prompt and price per scene) or NO_PLAN
+    W->>C: launchJob(facts, plan, attempt ids, context)
+    C->>C: launch lock (organization), subscription limit, places held, oldest waiting
+    C->>C: lock project and Property, reservation, job, scenes, requests
+    C->>C: decideJobLaunch(locked rows, facts, plan)
+    C->>C: job and each scene to GENERATING
+    C->>A: admit each scene's first attempt (request to GENERATING)
+    A-->>C: ADMITTED, PRIMARY
+    C-->>W: LAUNCHED, or a refusal with nothing written
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI). CI run 726 passed on
+`60698a5`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `7cdf28d`'s code, each exit status read |
+| `pnpm test` | 235 files, 6,428 tests passed on `7cdf28d`'s code (the same count on `60698a5`'s) |
+| `pnpm test:db` | 64 files, 1,700 tests passed on `7cdf28d`'s code (1,696 before the launch suite's last four tests) |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded on `60698a5`'s code; `7cdf28d` changes one domain function, typechecked |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/domain/src/job-launch/launch.test.ts` (new, 33): a waiting
+  job as the start wrote it launches; any other job state is `NOT_WAITING`,
+  answered before the Property or the shape; a deleted Property's job is
+  refused whatever else holds; each shape conflict (the reservation released,
+  on hold or missing, no scene, a scene started, no request or two, a first
+  request of another kind, started or attempted); each fact the plan was made
+  from changed, scene order included; a plan for other facts a defect before
+  any row is judged, a rendered prompt the renderer does not make of the
+  compiled one included; the batch bound; the defects' fixed messages.
+- `packages/domain/src/job-launch/runner.test.ts` (new, 7): the
+  commit handed the facts, the plan, fresh ids and its own correlation; one
+  launch per organization per pass; the limit refused before anything is read;
+  a job with no plan or not of the start's shape left uncommitted; each
+  refusal passed through; a throw that candidate's `FAILED`, with only a
+  defect's code.
+- `tests/integration/job-launch.db.test.ts` (new, 25): a full launch (the
+  states and versions, the reservation untouched, the attempts' route,
+  rendered prompt and price, the snapshots, the events), accepted as priced by
+  the provider boundary; nothing left to launch; the Standard and Premium
+  limits, oldest first, a place freed, an upgrade raising the limit, one
+  organization's running job leaving another's place free, no subscription;
+  the same video twice; `NOT_NEXT`; the candidate window by oldest job, up to
+  the pass's limit; a deleted Property's job
+  passed over and never launched, and a deletion in flight waited for; facts
+  changed, a scene moved, the Units released, a request already attempted, a
+  second request (whose facts are never read); another tenant's job; an admission refused rolling back the
+  whole job; ids for another plan; two launches at once; the launch lock
+  waited for.
+- `packages/domain/src/job-launch/dormancy.test.ts` (3 more, 7): the runner
+  and the repository constructed nowhere in production; the runner and the
+  decision open no transaction and schedule nothing; the commit creates
+  attempts only through admission and writes no reservation, takes no
+  cost-admission lock; and its locks in the declared order, the launch lock
+  first.
+- `tests/database-public-surface.test.ts` (1 more): the locked transition and
+  the launch lock unpublished, and the locked transition's callers bounded;
+  the launch commit added to admission's callers.
+
+### Mutation testing
+
+The same harness as GS-7a: the job-launch unit suite for the domain, and the
+launch commit's database suite for the repository.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| D01 to D03 | the job state or the Property not checked; the Property answered before the job state | killed |
+| D04 / D05 | the reservation not checked; one on hold accepted | killed |
+| D06 to D11 | no scene, a started scene, two requests, a regeneration request, a started request or an attempted one accepted | killed |
+| D12 to D20 | the quality, resolution, aspect ratio, scene count, a scene's id, first request, length, camera motion or compiled prompt not compared | killed |
+| D21, D23 to D25 | the plan not checked against the facts, or its scene ids, requests or compiled prompts not | killed |
+| D22 | the plan's scene count not checked | survived pass 1 (a plan dropping its first scene failed on ids); killed by a plan of only the first scene and one with an extra scene |
+| D26 to D28 | the batch bound one over, zero or a fraction accepted | killed |
+| D29 | changed facts reported as a shape conflict | killed |
+| D30 / D31 | the rendered prompt not checked; a compiled prompt the renderer refuses matching anything | killed, after the review's answer added the check (D31 by a test added for it) |
+| N01, N02, N04 to N09 | an organization offered twice; null facts mislabelled; snapshot ids drawn from attempt ids; a thrown message kept; failures or launches not counted; one correlation for all; the limit not validated | killed |
+| N03 | the planner's code replaced | invalid in pass 1 (replaced by the code the test uses); killed with another code |
+| R01 / R02 | the launch lock not taken; no subscription answered as at the limit | killed |
+| R03 / R05 | every job counted as holding a place; the limit not enforced | killed |
+| R04 | every organization's jobs counted | survived pass 1; killed by a test that one organization's running job leaves another's place free |
+| R06 to R08 | the commit's oldest-first choice ignoring a deleted Property, not enforced, or newest first | killed |
+| R09 to R13 | the project read across tenants; the project and Property not locked; the Property's status, the reservation's state or the attempts ignored | killed |
+| R14 to R16 | the job or a scene not moved; the job's event without the launch type and reason | killed |
+| R17 | a non-`PRIMARY` admission accepted | equivalent: every request is locked with no attempt, so admission can only derive `PRIMARY`; kept as a defect check |
+| R18 to R20 | an admission refusal ignored; attempt ids not matched to the plan; the duplicate request thrown | killed |
+| R21 | any `requestHash` conflict taken for the active-request index | equivalent: no other unique index on attempts includes `requestHash` |
+| R22 to R25, R27, R31 | candidates including a deleted Property's job, one at the limit, the newest first, a limit one higher, every job counted, running jobs offered | killed |
+| R26 | facts read for a scene with two requests | survived pass 1 (the commit refused it the same way); killed by asserting the candidate's facts are `null` |
+| R28 | candidates counting every organization's jobs | survived pass 1; killed by the same test as R04 |
+| R29 / R30 | Standard read as Premium; scenes locked in reverse order | killed |
+| S01 to S04 | the reservation, job, scenes or requests not locked | killed by the lock-order test |
+| S05 | the locked transition published | killed by the public-surface test |
+
+Result: the domain's 38 mutants, 36 killed in the first pass and the other 2
+after a test case and a corrected mutant; the repository's 31, 26 killed in the
+first pass against the database suite and 3 more after two tests; 5 lock and
+surface mutants against the static tests, all killed; and the review answer's
+2, killed. 76 in all: 74 killed, 2 equivalent (R17, R21).
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`60698a5` against `c932aa1`, reading only git objects. It checked the lock
+order against Transactions F, G, H, I, K and L, media recovery, composition,
+the paid-submission gate, reconciliation, the start, storyboard saving and
+Property deletion and found no cycle; found the limit correct under concurrent
+launches (the count is a fresh statement after the lock is granted); found a
+stale attempt count after a request-lock wait caught twice, by the request's
+re-read state and by admission's own re-read; and confirmed that refusals only
+read, the reservation is never written, tenant scope is proved before any
+unscoped read, the candidate query mirrors the commit, nothing in production
+builds the runner or the repository, and no line of code exceeds 120 columns.
+Verdict: nothing blocking. Its findings, answered in `7cdf28d`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: a waiting job that can never launch holds back its organization's later jobs, and once a pass's window (at most 100 organizations, oldest first) fills with such organizations, no other organization is offered a launch | Recorded in ADR-0095 Decisions 3 and 7 and *Not decided here*, and in the GS-7d item of `docs/decisions/TODO.md` as requirements on GS-7d (remove such a job from the head) and GS-9 (refused jobs must not use up the window). Nothing runs the launch before both; a test now pins the window's order |
+| Should-fix: revision start never checks the limit, so it can exceed it by any number, not by one during a launch | Reworded in ADR-0095 and `docs/decisions/TODO.md` |
+| Nit: the refusal table read as unconditional, though the limit and the order are answered first | ADR-0095 Decision 4 now says the table follows Decisions 2 and 3, and that another organization's job id is answered only from the caller's own rows |
+| Nit: the rendered prompt was never checked against the compiled one, and nothing later renders it again | Fixed: `assertPlanForFacts` compares each rendered prompt with the renderer's answer for its compiled prompt, and a prompt the renderer refuses matches nothing; tests and mutants D30, D31 |
+| Nit: two launches of different organizations binding the same new exchange-rate snapshot fail the second | Recorded in ADR-0095 Decision 7: it rolls back, is `FAILED` with no code, and the next pass launches it |
+| Nit: no test of a Property deletion waiting for a launch, of a reservation release waiting on the launch's share lock, or of the candidate window; the concurrent-launch test proves the over-limit interleaving only with the lock-wait test | The window test is added. The two waits are the database's own `FOR SHARE` semantics, which the lock-order test pins in the code; the opposite direction of each is tested. Recorded here that the over-limit interleaving rests on the lock-wait test and the two-runner test together |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the launch commit row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0095 Decision 4 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7b.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (*Start each scene in the commit that admits its
+first attempt* done; the deleted Property's waiting job noted under GS-7d's
+item; revision start and the launch lock noted under the regeneration item;
+two new items: whether a duplicate job blocks its organization's queue, and
+reserving the launch's generic edges).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the runner or the launch
+repository, and the attempts they admit wait `QUEUED`, sent by nothing until
+GS-7c. No scheduler, credential or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Admitted attempts are not sent.** They wait `QUEUED` for GS-7c.
+- **A job that can never launch keeps its Units**, a deleted Property's job
+  included, until GS-7d.
+- **A waiting job that cannot launch holds back its organization's queue**: a
+  duplicate until the first one's attempts end (ADR-0095 Decision 6), any
+  other until GS-7d releases it. Enough such organizations fill a pass's
+  candidate window (Decision 7). Both are open in `docs/decisions/TODO.md`.
+- **Revision start never checks the limit**, so a revision started at the
+  limit holds a place beyond it; nothing runs revision start today.
+
+### Remaining work
+
+GS-7b waits for the product owner's yes before merge. Then GS-7c, sending an
+admitted attempt through the paid-submission gate.

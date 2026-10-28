@@ -1388,7 +1388,7 @@ them is **built**. Each item below records the settled decision and what remains
       Before any executor runs orchestrated attempts, its discovery must
       exclude them or read the orchestration state. *Planned for GS-7c, the
       pull request that sends orchestrated attempts (ADR-0094).*
-- [ ] **Start each scene in the commit that admits its first attempt
+- [x] **Start each scene in the commit that admits its first attempt
       (GS-7).** Admission (`admitAttemptWithin`) does not move the scene, and
       Transaction K settles an initial request only under a `GENERATING`
       scene, refusing one under a `PENDING` scene as `SHAPE_CONFLICT`
@@ -1399,7 +1399,10 @@ them is **built**. Each item below records the settled decision and what remains
       `RESERVED` until the concurrent-job limit lets it run (ADR-0052
       Decision 7), so the first admissions belong to GS-7's launch step,
       planned for GS-7b. GS-7a (ADR-0094) builds what that commit admits: one
-      route for the job, and each scene's prompt and price.*
+      route for the job, and each scene's prompt and price. Done in GS-7b
+      (ADR-0095 Decision 5, no migration): the launch commit moves the job and
+      every scene to `GENERATING` and admits each scene's first attempt in the
+      same transaction, or writes nothing.*
 - [x] **Make the test provider's clips at its route's sizes (GS-6).** The
       test route's catalog entry records Normal as generated at 720p and HQ at
       1080p, with no upscale (ADR-0090 Decision 4), but the fake provider makes
@@ -1416,7 +1419,17 @@ them is **built**. Each item below records the settled decision and what remains
       step outside tests until GS-10. *Planned for GS-7d. The launch planner
       (GS-7a, ADR-0094) names why a job cannot be planned with a fixed code;
       some pass, such as a rate that cannot be read now, and some never will,
-      such as a scene with no prompt. GS-7d decides which release the Units.*
+      such as a scene with no prompt. GS-7d decides which release the Units.
+      Since GS-7b (ADR-0095 Decision 3) a waiting job whose Property was
+      deleted is never launched and is passed over in the order, so it no
+      longer holds back its organization's other jobs, but it still holds its
+      Units until GS-7d. Any other job that cannot launch does hold them back,
+      since the launch is strict oldest-first, and the candidate query offers
+      organizations by their oldest waiting job, so once a pass's window is
+      filled by organizations whose oldest job cannot launch, no other
+      organization's job is offered (ADR-0095 Decision 7). GS-7d must remove a
+      job that can never launch from the head of its queue, and GS-9's pass
+      must keep refused jobs from using up its window.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a
@@ -1426,7 +1439,28 @@ them is **built**. Each item below records the settled decision and what remains
       after a revision, is counted today because its state cannot be told
       apart from a first generation's; that counting is provisional (ADR-0094
       Decision 2). Nothing runs revision start today; decide before paid
-      regeneration is wired.
+      regeneration is wired. Revision start neither checks the limit nor takes
+      the launch lock (ADR-0095 Decision 1), so every revision started while
+      its organization is at the limit holds a place beyond it; if a
+      regeneration counts, revision start must check the limit under the
+      launch lock.
+- [ ] **Decide whether a duplicate job blocks its organization's queue.** One
+      project may not have two identical requests at work at once (the
+      active-request index), so a job of the same storyboard as one still
+      generating is refused at launch (`SAME_REQUEST_RUNNING`, ADR-0095
+      Decision 6) and waits for the first to end. The launch is strict
+      oldest-first, so the organization's later jobs wait behind it. Decide
+      whether such a job is passed over, or whether the start refuses a second
+      start of a storyboard already generating, before the launch runs for
+      customers.
+- [ ] **Reserve the launch's generic edges.** The generic job and scene
+      transitions still allow `RESERVED → GENERATING` and `PENDING → GENERATING`,
+      which the launch commit owns since GS-7b (ADR-0095 Decision 8): a generic
+      caller could start a job with no attempt, or a scene whose request never
+      started. Nothing in production constructs those repositories, but
+      integration tests build fixtures with the two edges. Move those fixtures
+      to the launch commit or direct seeding, then add both edges to the
+      reserved lists.
 - [ ] **Decide which route a job takes when more than one could serve it.**
       The launch planner sends a whole job by one route and plans nothing
       (`AMBIGUOUS_ROUTE`) when several qualify (ADR-0094 Decision 3). With
