@@ -235,10 +235,9 @@ export function createFakeClipStudio(
       if (rendered.kind !== "RENDERED" || !(await isClip(outputPath))) return "NOT_MADE";
       try {
         await link(outputPath, clipPath);
-      } catch (error) {
+      } catch {
         // Another make of the same request linked its clip first: that one
-        // stands, if it is a clip.
-        if ((error as { code?: unknown } | null)?.code !== "EEXIST") throw error;
+        // stands, if it is a clip. Any other failure kept nothing.
         return (await isClip(clipPath)) ? "MADE" : "NOT_MADE";
       }
       return "MADE";

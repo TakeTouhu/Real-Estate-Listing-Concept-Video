@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -389,13 +389,25 @@ describe("the byte source", () => {
     expect(handleCloses.slice(before)).toEqual([1]);
   });
 
-  it("interrupts, retryably, a clip that ends before its declared size", async () => {
+  it("interrupts, retryably, a clip that ends before its declared size, after only the bytes it has", async () => {
     const made = studio();
     await made.make(request());
     const opened = await made.byteSource.open(await locatorFor(made));
     if (opened.kind !== "OPEN") throw new Error("expected the clip to open");
     await truncate(join(root, "clips", CLIP_NAME), 3);
-    await expect(collect(opened.stream.body)).rejects.toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    const chunks = opened.stream.body[Symbol.asyncIterator]();
+    expect((await chunks.next()).value).toEqual(CLIP.subarray(0, 3));
+    await expect(chunks.next()).rejects.toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    await opened.stream.close();
+  });
+
+  it("hands over no more than its declared size, even of a clip that grew", async () => {
+    const made = studio();
+    await made.make(request());
+    const opened = await made.byteSource.open(await locatorFor(made));
+    if (opened.kind !== "OPEN") throw new Error("expected the clip to open");
+    await appendFile(join(root, "clips", CLIP_NAME), new Uint8Array([1, 2, 3, 4, 5]));
+    expect(Buffer.concat(await collect(opened.stream.body))).toEqual(Buffer.from(CLIP));
     await opened.stream.close();
   });
 
