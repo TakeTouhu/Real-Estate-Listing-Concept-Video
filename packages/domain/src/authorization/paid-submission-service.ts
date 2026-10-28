@@ -1,10 +1,9 @@
 import { sanitizeTransitionMetadata } from "../orchestration/transition-metadata";
 import type { TransitionContext } from "../orchestration/ports";
-import { GENERATION_AUDIT_RESOURCE_TYPE } from "../generation/audit";
+import { GENERATION_AUDIT_RESOURCE_TYPE, GenerationAuditAction } from "../generation/audit";
 import {
   classifyExecutionSource,
   sameSourceIdentity,
-  type ExecutionSourceObservation,
   type PreparedSourceIdentity,
 } from "../generation/execution-source";
 import {
@@ -15,6 +14,7 @@ import {
 import { PRODUCTION_ROUTE_POLICY } from "./routing";
 import type {
   AuthorizePaidSubmissionInput,
+  LockedPaidSubmissionSource,
   PaidSubmissionAudit,
   PaidSubmissionAuthorizationDeps,
 } from "./ports";
@@ -36,7 +36,8 @@ import type { PaidSubmissionAuthorizationOutcome, SourceAuthorizationFailure } f
  *   → load every fact from the persistence graph
  *   → read the authorization instant from the clock
  *   → evaluate the pure gate
- *   → if permitted, lock the source asset and find it the source prepared
+ *   → if permitted, lock the source asset and its Property,
+ *     and find it the source prepared, its Property standing
  *   → compare-and-set QUEUED → SUBMITTING
  *     with the authorization record attached to its event,
  *     and the paid call's audit entry beside it
@@ -73,21 +74,26 @@ export const PAID_SUBMISSION_AUTHORIZED_EVENT_TYPE = "PAID_SUBMISSION_AUTHORIZED
 
 /**
  * The audit action the arm writes with the move, so no provider call is ever
- * unaudited (ADR-0096). `<module>.<verb>`, like `generation.requested`.
+ * unaudited (ADR-0096). Fixed here, as the event type is.
  */
-export const PAID_SUBMISSION_AUDIT_ACTION = "generation.submission_started";
+export const PAID_SUBMISSION_AUDIT_ACTION = GenerationAuditAction.SubmissionStarted;
 
 /**
  * The locked source against the one preparation signed: `null` when it is
  * still that source and usable, the refusal otherwise. The classifier
  * preparation used, so the two cannot disagree about what a usable source is.
+ *
+ * A deleted Property is answered first: its photos are asked to be deleted one
+ * statement each after it, so a photo may still read usable (ADR-0096), as the
+ * start and the launch refuse its project (ADR-0088, ADR-0095).
  */
 function sourceFailure(
-  locked: ExecutionSourceObservation | null,
+  locked: LockedPaidSubmissionSource | null,
   prepared: PreparedSourceIdentity,
 ): SourceAuthorizationFailure | null {
   if (locked === null) return "ASSET_NOT_FOUND";
-  const classified = classifyExecutionSource(locked);
+  if (locked.propertyDeleted) return "PROPERTY_DELETED";
+  const classified = classifyExecutionSource(locked.asset);
   if (classified.kind === "REFUSED") return classified.reason;
   return sameSourceIdentity(classified.identity, prepared) ? null : "ASSET_SOURCE_CHANGED";
 }
@@ -198,9 +204,9 @@ export function createPaidSubmissionAuthorizationService(
           if (decision.kind === "REFUSED") return decision.outcome;
 
           // The source is locked last, after every refusal that needs no
-          // lock, and held to the commit: a deletion request committed before
-          // the lock is seen here, and one made after it waits for the arm
-          // (ADR-0096, as ADR-0030 for the legacy claim).
+          // lock, and held to the commit with its Property: a deletion
+          // committed before the lock is seen here, and one made after it
+          // waits for the arm (ADR-0096, as ADR-0030 for the legacy claim).
           const sourceRefusal = sourceFailure(await session.lockSource(), input.source);
           if (sourceRefusal !== null) return { kind: "SOURCE_INVALID", reason: sourceRefusal };
 

@@ -326,9 +326,9 @@ waits for the first. Nothing outside tests runs it until the pipeline command
 migration): the legacy executor's discovery, claim and park act only on legacy
 rows, so it never claims an orchestrated attempt, which reads `QUEUED` in the
 legacy column for life. The paid-submission gate, once its pure rules permit,
-locks the attempt's photo and moves the attempt only while it is still the
-source preparation signed, neither deleted nor changed (`SOURCE_INVALID`
-otherwise), and writes the paid call's `generation.submission_started` audit
+locks the attempt's photo and its Property and moves the attempt only while
+the Property stands and the photo is still the source preparation signed,
+neither deleted nor changed (`SOURCE_INVALID` otherwise), and writes the paid call's `generation.submission_started` audit
 entry in the commit that moves it to `SUBMITTING`. Nothing outside tests
 constructs either, and nothing sends an attempt until GS-7c-2.
 

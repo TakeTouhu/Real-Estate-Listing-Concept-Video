@@ -150,9 +150,15 @@ describe.skipIf(!HAS_DB)("the legacy executor passes over orchestrated attempts 
   });
 
   it("does not offer an orchestrated attempt, and offers the legacy row behind it", async () => {
+    // The orchestrated attempt is the oldest `QUEUED` row in the table, so
+    // only the filter can put the legacy row first.
     const attemptId = await admitted("lex_find");
+    await prisma.sceneGeneration.update({
+      where: { id: attemptId },
+      data: { createdAt: new Date("1999-01-01T00:00:00.000Z") },
+    });
     expect((await row(attemptId)).state).toBe("QUEUED");
-    const legacyId = await legacy("gen_itest_legacy_find", new Date("2000-01-01T00:00:00.000Z"));
+    const legacyId = await legacy("gen_itest_legacy_find", new Date("1999-01-02T00:00:00.000Z"));
     expect((await execution.findNextQueuedForPreparation())?.generation.id).toBe(legacyId);
     await prisma.sceneGeneration.delete({ where: { id: legacyId } });
     expect((await execution.findNextQueuedForPreparation())?.generation.id).not.toBe(attemptId);

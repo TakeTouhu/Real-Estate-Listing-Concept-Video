@@ -41,6 +41,7 @@ import {
   ORG_B,
   PROJECT_A,
   PROJECT_B,
+  PROP_A,
   repositories,
   seedTenants,
   STORYBOARD_SCENE,
@@ -61,6 +62,8 @@ const prisma = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 const other = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 /** A third pool, used only to hold a lock while the other two contend for it. */
 const blocker = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
+/** A fourth, to see a statement waiting on a lock without queuing behind it. */
+const observer = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 
 const AT = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 
@@ -297,6 +300,24 @@ function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<
   return { done: () => finished, value };
 }
 
+/**
+ * Resolve once a statement containing `fragment` is waiting on a row lock.
+ * Proves a wait from the database's own account, not from elapsed time.
+ */
+async function waitUntilLockWaiting(fragment: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const waiting = await observer.$queryRaw<{ pid: number }[]>`
+      SELECT a.pid
+        FROM pg_stat_activity AS a
+       WHERE a.datname = current_database()
+         AND a.wait_event_type = 'Lock'
+         AND a.query LIKE ${`%${fragment}%`}`;
+    if (waiting.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`no statement containing ${fragment} waited on a lock`);
+}
+
 async function breathe(times = 20): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -316,6 +337,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     await prisma.$disconnect();
     await other.$disconnect();
     await blocker.$disconnect();
+    await observer.$disconnect();
   });
 
   describe("the authorized path", () => {
@@ -2195,18 +2217,16 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         },
         { timeout: 20_000 },
       );
-      let stillBlocked: boolean;
       let blocked!: ReturnType<typeof settled<Awaited<ReturnType<typeof authorize>>>>;
       try {
         await breathe(4);
         blocked = settled(authorize(prisma, chain.attempt.id));
-        await breathe();
-        stillBlocked = !blocked.done();
+        await waitUntilLockWaiting("FOR NO KEY UPDATE OF ma");
+        expect(blocked.done()).toBe(false);
       } finally {
         release();
       }
       await deletion;
-      expect(stillBlocked).toBe(true);
       expect(await blocked.value).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_UNRECOVERABLE" });
       await unmoved(chain.attempt.id);
     });
@@ -2232,7 +2252,6 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           return source;
         },
       );
-      let stillBlocked: boolean;
       let writer!: ReturnType<typeof settled<number>>;
       try {
         await sourceLocked;
@@ -2243,14 +2262,108 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
              WHERE "id" = ${ASSET_A} AND "deletionRequestedAt" IS NULL
           `,
         );
-        await breathe();
-        stillBlocked = !writer.done();
+        await waitUntilLockWaiting(`UPDATE "media_assets"`);
+        expect(writer.done()).toBe(false);
       } finally {
         finish();
       }
-      expect(await holder).toMatchObject({ status: "READY", deletionRequestedAt: null, ...fixtureSource(ORG_A) });
-      expect(stillBlocked).toBe(true);
+      expect(await holder).toEqual({
+        asset: { status: "READY", deletionRequestedAt: null, ...fixtureSource(ORG_A) },
+        propertyDeleted: false,
+      });
       expect(await writer.value).toBe(1);
+    });
+
+    it("holds the asset against its writers and the Property against deletion, and no more", async () => {
+      // NOWAIT answers at once whether a lock is free: a foreign key's share
+      // lock on the asset and a reader's share lock on the Property are, a
+      // writer's lock on either is not.
+      const chain = await seedAuthorizableChain(prisma, "srcmode");
+      let finish!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let locked!: () => void;
+      const sourceLocked = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holder = createPaidSubmissionAuthorizationRepository(prisma).withCostAdmission(
+        { organizationId: ORG_A, attemptId: chain.attempt.id },
+        async (session) => {
+          await session.lockSource();
+          locked();
+          await holding;
+        },
+      );
+      const free = async (query: Promise<unknown>) => query.then(() => true, () => false);
+      try {
+        await sourceLocked;
+        expect(await free(other.$queryRaw`
+          SELECT "id" FROM "media_assets" WHERE "id" = ${ASSET_A} FOR KEY SHARE NOWAIT`)).toBe(true);
+        expect(await free(other.$queryRaw`
+          SELECT "id" FROM "media_assets" WHERE "id" = ${ASSET_A} FOR NO KEY UPDATE NOWAIT`)).toBe(false);
+        expect(await free(other.$queryRaw`
+          SELECT "id" FROM "properties" WHERE "id" = ${PROP_A} FOR SHARE NOWAIT`)).toBe(true);
+        expect(await free(other.$queryRaw`
+          SELECT "id" FROM "properties" WHERE "id" = ${PROP_A} FOR NO KEY UPDATE NOWAIT`)).toBe(false);
+      } finally {
+        finish();
+      }
+      await holder;
+    });
+
+    it("refuses an attempt whose Property is deleted, while its photo still reads usable", async () => {
+      // The Property is deleted first and its photos one statement each after
+      // it, so this state is real for as long as the deletion takes.
+      const chain = await seedAuthorizableChain(prisma, "srcprop");
+      await prisma.property.update({ where: { id: PROP_A }, data: { status: "DELETED" } });
+      expect(await authorize(prisma, chain.attempt.id)).toEqual({
+        kind: "SOURCE_INVALID",
+        reason: "PROPERTY_DELETED",
+      });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("waits for a Property deletion already being written, and then refuses", async () => {
+      const chain = await seedAuthorizableChain(prisma, "srcpropwait");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const deletion = other.$transaction(
+        async (tx) => {
+          await tx.property.update({ where: { id: PROP_A }, data: { status: "DELETED" } });
+          await held;
+        },
+        { timeout: 20_000 },
+      );
+      let blocked!: ReturnType<typeof settled<Awaited<ReturnType<typeof authorize>>>>;
+      try {
+        await breathe(4);
+        blocked = settled(authorize(prisma, chain.attempt.id));
+        await waitUntilLockWaiting("FOR SHARE OF pr");
+        expect(blocked.done()).toBe(false);
+      } finally {
+        release();
+      }
+      await deletion;
+      expect(await blocked.value).toEqual({ kind: "SOURCE_INVALID", reason: "PROPERTY_DELETED" });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("moves nothing when the audit entry cannot be written", async () => {
+      const chain = await seedAuthorizableChain(prisma, "auditfail");
+      const failing = prisma.$extends({
+        query: {
+          auditLog: {
+            async create() {
+              throw new Error("audit sink unavailable");
+            },
+          },
+        },
+      }) as unknown as PrismaClient;
+      await expect(authorize(failing, chain.attempt.id)).rejects.toThrow("audit sink unavailable");
+      await unmoved(chain.attempt.id);
     });
   });
 });

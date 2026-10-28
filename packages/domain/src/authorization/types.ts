@@ -161,12 +161,13 @@ export type PaidSubmissionAuthorizationOutcome =
   | { readonly kind: "LOST_CONCURRENCY" };
 
 /**
- * Why the locked source asset cannot be sent (ADR-0096): gone, no longer
- * usable, or no longer the source preparation signed.
+ * Why the locked source asset cannot be sent (ADR-0096): gone, its Property
+ * deleted, no longer usable, or no longer the source preparation signed.
  */
 export type SourceAuthorizationFailure =
   | ExecutionSourceRefusalReason
   | "ASSET_NOT_FOUND"
+  | "PROPERTY_DELETED"
   | "ASSET_SOURCE_CHANGED";
 
 /** Why an attempt is not in a shape that could cross the boundary. */

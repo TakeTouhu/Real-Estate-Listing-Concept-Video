@@ -644,10 +644,13 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       rediscovered, because no request was ever sent (ADR-0027).
       **Required before any provider charge is possible.**
       *For orchestrated attempts, steps 2 to 5 are done at the gate in GS-7c-1
-      (ADR-0096): it locks the source asset after the reservation, refuses one
-      deleted, changed or no longer the prepared source (`SOURCE_INVALID`),
-      moves the attempt and writes the audit entry in one commit. Steps 1 and
-      6, the URL's freshness and the POST, are GS-7c-2.*
+      (ADR-0096): it locks the source asset and its Property after the
+      reservation, refuses one deleted, changed or no longer the prepared
+      source, or a deleted Property (`SOURCE_INVALID`), moves the attempt and
+      writes the audit entry in one commit. What remains of the deletion
+      race is the one ADR-0030 accepted: a deletion requested after the
+      gate's commit does not stop the send. Steps 1 and 6, the URL's
+      freshness and the POST, are GS-7c-2.*
 - [ ] **A preflight-failure audit event, if wanted, belongs to orchestration.**
       Phase 4C-2B deliberately emits none: there is no provider POST in it, and
       coupling audit I/O into the persistence CAS would put a second failure mode
@@ -678,9 +681,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       retention policy. A generation whose photo is gone is genuinely
       unexecutable and needs a normalized reason rather than a silent failure or
       a substituted image. **Required before Phase 4C ships.**
-      *The paid-submission gate refuses such a source with a normalized reason
-      (`SOURCE_INVALID`, ADR-0096 Decision 2). Ending the attempt for it is
-      GS-7c-2 and GS-7d.*
+      *The paid-submission gate refuses such a source, and one whose
+      Property is deleted, with a normalized reason (`SOURCE_INVALID`,
+      ADR-0096 Decision 2). Ending the attempt for it is GS-7c-2 and GS-7d.*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1449,12 +1452,14 @@ them is **built**. Each item below records the settled decision and what remains
       must keep refused jobs from using up its window.*
 - [ ] **End an orchestrated attempt the gate will never authorize (GS-7d).**
       A gate refusal writes nothing, so an attempt refused for good, such as
-      a source deleted or changed since preparation (`SOURCE_INVALID`,
-      ADR-0096) or a price no contract will cover again, stays `QUEUED` under
-      a `GENERATING` job, and Transaction K never settles its request: the
-      customer's Unit stays held (ADR-0052 Decision 19). Which refusals end
-      the attempt, as which state, and under which lock, is not decided.
-      *Planned for GS-7d; GS-7c-2 parks preparation's terminal refusals.*
+      one whose Property was deleted or whose photo was deleted or is
+      unrecoverable (`SOURCE_INVALID`, ADR-0096), or a price no contract will
+      cover again, stays `QUEUED` under a `GENERATING` job, and Transaction K
+      never settles its request: the customer's Unit stays held (ADR-0052
+      Decision 19). A photo changed but still usable is prepared again and
+      passes, so it is not such a case. Which refusals end the attempt, as
+      which state, and under which lock, is not decided. *Planned for GS-7d;
+      GS-7c-2 parks preparation's terminal refusals.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a
@@ -1526,7 +1531,10 @@ them is **built**. Each item below records the settled decision and what remains
       the customer's Unit stays held (ADR-0083, *Not decided here*). The state
       machine already has `QUEUED -> FAILED_*` and
       `QUEUED -> CANCELLED_PRE_SUBMISSION`. Must be built before generation is
-      activated.
+      activated. *Since GS-7c-1 (ADR-0096 Decision 1) `failQueuedPreflight`
+      leaves an orchestrated attempt alone: it writes nothing and answers
+      `null`. Ending an orchestrated attempt's terminal preparation refusal in
+      its orchestration state is planned for GS-7c-2.*
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period

@@ -43,10 +43,19 @@
  * transactions and are never held while this one is acquired, so there is no
  * cycle: nothing acquires a 2E lock and then waits for this one.
  *
- * The start commit (ADR-0087) is the one transaction that holds this lock and
- * then locks a `video_projects` row (`FOR SHARE`, to the commit). It takes this
- * lock first, before the row, as the order requires. A transaction that locked
- * a project row and then waited for this lock would deadlock with it.
+ * Two transactions hold this lock and then lock a row of that kind:
+ *
+ * - the start commit (ADR-0087) locks a `video_projects` row and its Property
+ *   (`FOR SHARE`, to the commit);
+ * - the paid-submission gate (ADR-0096) locks the attempt's `media_assets` row
+ *   (`FOR NO KEY UPDATE`) and its project's Property (`FOR SHARE`), after the
+ *   reservation and before the attempt's compare-and-set.
+ *
+ * Each takes this lock first, before the row, as the order requires. A
+ * transaction that locked a project, an asset or a Property and then waited
+ * for this lock would deadlock with them: a preparation refusal parked under
+ * this lock must take it before it touches the asset, never after the legacy
+ * claim's asset lock.
  *
  * ## Not exported from the package
  *

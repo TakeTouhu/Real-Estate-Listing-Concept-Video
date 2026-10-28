@@ -227,7 +227,9 @@ export async function seedTenants(prisma: PrismaClient): Promise<void> {
     await seedFixtureEntitlement(prisma, org);
     await prisma.property.upsert({
       where: { id: prop },
-      update: {},
+      // Restored, as the asset is: a test that deletes the Property leaves the
+      // next one a standing Property.
+      update: { status: "ACTIVE" },
       create: {
         id: prop,
         organizationId: org,

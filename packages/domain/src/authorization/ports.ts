@@ -108,12 +108,12 @@ export interface PaidSubmissionAuthorizationSession {
    */
   readBillingCycleRevenue(): Promise<Yen | null>;
   /**
-   * The attempt's own source asset, locked against its writers until commit
-   * (ADR-0096): a deletion request or a re-processing waits for the arm, and
-   * the arm sees one already committed. `null` when the organization has no
-   * such asset.
+   * The attempt's own source asset, locked against its writers until commit,
+   * and its project's Property held against deletion (ADR-0096): a deletion
+   * request or a re-processing waits for the arm, and the arm sees one already
+   * committed. `null` when the organization has no such asset.
    */
-  lockSource(): Promise<ExecutionSourceObservation | null>;
+  lockSource(): Promise<LockedPaidSubmissionSource | null>;
   /**
    * The Phase 4C-3B-2E compare-and-set, inside this same transaction, and the
    * paid call's audit entry with it when the attempt moves (ADR-0096).
@@ -123,6 +123,17 @@ export interface PaidSubmissionAuthorizationSession {
     readonly context: TransitionContext;
     readonly audit: PaidSubmissionAudit;
   }): Promise<ArmResult>;
+}
+
+/** What {@link PaidSubmissionAuthorizationSession.lockSource} found, locked. */
+export interface LockedPaidSubmissionSource {
+  readonly asset: ExecutionSourceObservation;
+  /**
+   * The attempt's project's Property is deleted. Its photos await deletion,
+   * one statement each after the Property's, so the asset may still read
+   * usable (ADR-0096 Decision 2).
+   */
+  readonly propertyDeleted: boolean;
 }
 
 /** The audit entry the arm writes in its own commit. */

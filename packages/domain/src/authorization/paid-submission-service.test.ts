@@ -133,6 +133,8 @@ function serviceWith(
     order?: string[];
     /** The locked source asset; the prepared source, usable, unless given. */
     source?: ExecutionSourceObservation | null;
+    /** Whether the locked source's Property is deleted; standing unless given. */
+    propertyDeleted?: boolean;
   } = {},
 ): Harness {
   const facts = options.facts === undefined ? permittingFacts() : options.facts;
@@ -164,7 +166,7 @@ function serviceWith(
         },
         async lockSource() {
           options.order?.push("source");
-          return source;
+          return source === null ? null : { asset: source, propertyDeleted: options.propertyDeleted ?? false };
         },
         async arm(input) {
           calls.arm += 1;
@@ -520,6 +522,21 @@ describe("the source the attempt sends (ADR-0096)", () => {
       source: { ...sameSource(), status: "PROCESSING" },
     });
     expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_READY" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it("refuses an asset that is no longer the normalized JPEG", async () => {
+    const { service, calls } = serviceWith(armed, { source: { ...sameSource(), mimeType: "image/png" } });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_FORMAT_UNSUPPORTED" });
+    expect(calls.arm).toBe(0);
+  });
+
+  it.each([
+    ["still reads usable", sameSource()],
+    ["is already asked to be deleted", { ...sameSource(), deletionRequestedAt: new Date("2026-09-09T00:00:00.000Z") }],
+  ] as const)("refuses an attempt whose Property is deleted, while its photo %s", async (_case, source) => {
+    const { service, calls } = serviceWith(armed, { source, propertyDeleted: true });
+    expect(await authorize(service)).toEqual({ kind: "SOURCE_INVALID", reason: "PROPERTY_DELETED" });
     expect(calls.arm).toBe(0);
   });
 

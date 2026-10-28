@@ -219,9 +219,9 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
   paid-submission gate, and the answer recorded; the legacy executor's
   discovery kept off orchestrated attempts.
   - **GS-7c-1** (ADR-0096, no migration): the legacy executor kept off
-    orchestrated attempts; the gate locks the attempt's photo and moves it
-    only while it is the prepared source, and audits the paid call in the
-    same commit.
+    orchestrated attempts; the gate locks the attempt's photo and its
+    Property and moves it only while the Property stands and the photo is
+    the prepared source, and audits the paid call in the same commit.
   - **GS-7c-2**: discovery and preparation of an orchestrated attempt, its
     terminal preparation refusals ended in its orchestration state, the
     signed URL's freshness, the gate, one POST through the provider port, and
