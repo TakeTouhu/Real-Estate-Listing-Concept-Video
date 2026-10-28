@@ -178,7 +178,8 @@ Split into pull requests:
   (Normal at 720p and HQ at 1080p), price and fixed FX rate, built only by
   `createFakeRouteKit`, which refuses production. Nothing builds it until
   GS-9.
-- **GS-5b**: the billing cycle's revenue reader. The product owner decided
-  on 2026-10-27 what revenue is: the plan's monthly price plus the period's
-  Unit purchases, tax-exclusive (`docs/decisions/TODO.md`, decision gates
-  closed).
+- **GS-5b** (ADR-0091, no migration): the billing cycle's revenue reader.
+  The product owner decided on 2026-10-27 what revenue is: the plan's monthly
+  price plus the period's Unit purchases, tax-exclusive
+  (`docs/decisions/TODO.md`, decision gates closed). It is read from the
+  cycle's entitlement period; Enterprise stays unknown.

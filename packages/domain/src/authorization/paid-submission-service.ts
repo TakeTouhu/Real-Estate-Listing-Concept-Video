@@ -113,16 +113,12 @@ export function createPaidSubmissionAuthorizationService(
           // of this decision. Two reads could straddle a contract's expiry.
           const authorizationInstant = deps.clock.now();
 
-          // Revenue is read through a port because nothing persists it yet, and
-          // it is `null` today — which fails closed inside the gate rather than
-          // defaulting to a number nobody published.
+          // Revenue is read on the session, inside the lock, which a purchase
+          // and a cancellation also take (ADR-0091). `null` (Enterprise, or no
+          // period) fails closed inside the gate rather than defaulting to a
+          // number nobody published.
           const billingCycleRevenueYen =
-            facts.billingCycleKey === null
-              ? null
-              : await deps.billingCycleRevenue.revenueYen({
-                  organizationId: input.organizationId,
-                  billingCycleKey: facts.billingCycleKey,
-                });
+            facts.billingCycleKey === null ? null : await session.readBillingCycleRevenue();
 
           const decision = evaluatePaidSubmissionGate(
             {

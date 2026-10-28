@@ -34,17 +34,17 @@ export interface PaidSubmissionFactsSnapshot {
 }
 
 /**
- * The billing-cycle revenue the Safety Guard measures against.
+ * A source of billing-cycle revenue other than the cycle's own period.
  *
- * A port rather than a table read, because **no authoritative billing-cycle
- * revenue exists yet**. Nothing persists a subscription, a plan assignment or
- * an invoice, and the customer plan catalog prices plans without saying which
- * organization is on one. Inferring a plan from unrelated metadata — seat
- * counts, usage, an organization name — would hard-pause real customers
- * against an invented number.
+ * The gate reads revenue from its session (ADR-0091), and the database's
+ * session reads it from the cycle's entitlement period on the gate's own
+ * transaction. A composition passes one of these instead only to fix the
+ * figure: a test steering the Safety Guard, or the unavailable reader where
+ * the gate must fail closed whatever the database holds. Inferring a plan from
+ * unrelated metadata (seat counts, usage, an organization name) would
+ * hard-pause real customers against an invented number.
  *
- * So the gate asks, and the default implementation answers "unknown", which
- * fails closed. Production activation must supply this from the billing layer.
+ * `null` means unknown, which fails the gate closed.
  */
 export interface BillingCycleRevenueReader {
   /** `null` when no authoritative figure exists for this organization/cycle. */
@@ -93,12 +93,18 @@ export interface PaidSubmissionAuthorizationRepository {
 /**
  * The operations available inside a held cost-admission lock.
  *
- * `loadFacts` and `arm` share one transaction, so the facts the gate decided on
- * are still the facts when the attempt moves.
+ * `loadFacts`, `readBillingCycleRevenue` and `arm` share one transaction, so
+ * the facts the gate decided on are still the facts when the attempt moves.
  */
 export interface PaidSubmissionAuthorizationSession {
   /** `null` when the attempt is missing, cross-tenant, or not orchestrated. */
   loadFacts(): Promise<PaidSubmissionFactsSnapshot | null>;
+  /**
+   * The revenue of the cycle this session holds the lock for (ADR-0091):
+   * `billingCycleRevenueYen` over the cycle's entitlement period. `null` when
+   * unknown, which fails the gate closed.
+   */
+  readBillingCycleRevenue(): Promise<Yen | null>;
   /** The Phase 4C-3B-2E compare-and-set, inside this same transaction. */
   arm(input: {
     readonly expectedVersion: number;
@@ -113,7 +119,6 @@ export type ArmResult =
 
 export interface PaidSubmissionAuthorizationDeps {
   readonly authorization: PaidSubmissionAuthorizationRepository;
-  readonly billingCycleRevenue: BillingCycleRevenueReader;
   /** Read inside the lock. See {@link AuthorizationClock}. */
   readonly clock: AuthorizationClock;
   /**

@@ -55,14 +55,13 @@ const NOW = Date.UTC(2026, 8, 20, 12, 0, 0);
 const LEASE_MS = 5 * 60 * 1000;
 const AT = epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z"));
 
-/** Stands in for a revenue layer that does not exist yet. Deterministic. */
+/** A fixed figure, so the test controls the guard. Deterministic. */
 const revenue: BillingCycleRevenueReader = { async revenueYen() { return yen(49_800); } };
 
 /** The real gate, so the policy that refuses a released hold is the one tested. */
 function gate(client: PrismaClient) {
   return createPaidSubmissionAuthorizationService({
-    authorization: createPaidSubmissionAuthorizationRepository(client),
-    billingCycleRevenue: revenue,
+    authorization: createPaidSubmissionAuthorizationRepository(client, { revenue }),
     clock: createFixedAuthorizationClock(AT),
   });
 }
