@@ -313,6 +313,15 @@ guessed between two, each scene's prompt rendered and priced at one instant
 against the one contract in force. Nothing outside tests builds it until the
 launch commit (GS-7b) and the pipeline command (GS-9).
 
+**GS-7b — the launch commit** (ADR-0095, no migration): a waiting job starts
+under its organization's limit, read from the current subscription, oldest
+first and past a deleted Property's job. Under one launch lock per organization
+its rows are locked and found as the start wrote them and as the plan was made
+from, and the job and every scene start and each scene's first attempt is
+admitted in one commit, or nothing is written. The same video started twice
+waits for the first. Nothing outside tests runs it until the pipeline command
+(GS-9), and the attempts it admits are not sent until GS-7c.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

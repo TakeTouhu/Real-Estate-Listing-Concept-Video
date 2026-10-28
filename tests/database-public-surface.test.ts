@@ -81,6 +81,8 @@ describe("the database package's public surface", () => {
       "createMediaFailureResolutionRepository",
       // Added by GS-4b (ADR-0087).
       "createGenerationStartRepository",
+      // Added by GS-7b (ADR-0095).
+      "createJobLaunchRepository",
     ]) {
       expect(`${name}: ${name in database}`).toBe(`${name}: true`);
     }
@@ -108,13 +110,31 @@ describe("the database package's public surface", () => {
     expect(index).not.toContain('export * from "./orchestration-repositories"');
   });
 
-  it("bounds the helper's production call sites to the two intended users", () => {
+  it("bounds the helper's production call sites to the intended users", () => {
+    // GS-7b (ADR-0095): the launch commit admits each scene's first attempt
+    // under the request locks it took itself.
     const callers = productionSources()
       .filter(({ text }) => text.includes("admitAttemptWithin"))
       .map(({ name }) => name)
       .sort();
     expect(callers).toEqual([
+      "packages/database/src/job-launch-repository.ts",
       "packages/database/src/media-recovery-repository.ts",
+      "packages/database/src/orchestration-repositories.ts",
+    ]);
+  });
+
+  it("does not export the locked transition or the launch lock", () => {
+    // Each writes or locks on the assumption that its caller holds what makes
+    // it safe; published, either would be reachable without that.
+    expect("applyLockedTransition" in database).toBe(false);
+    expect("acquireJobLaunchLock" in database).toBe(false);
+    const callers = productionSources()
+      .filter(({ text }) => text.includes("applyLockedTransition("))
+      .map(({ name }) => name)
+      .sort();
+    expect(callers).toEqual([
+      "packages/database/src/job-launch-repository.ts",
       "packages/database/src/orchestration-repositories.ts",
     ]);
   });

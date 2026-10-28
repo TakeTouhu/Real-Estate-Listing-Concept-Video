@@ -1,5 +1,6 @@
 /**
- * The launch planner's ports (GS-7a, ADR-0094).
+ * The job launch's ports: the planner's (GS-7a, ADR-0094) and the launch
+ * commit's (GS-7b, ADR-0095).
  *
  * The planner turns a waiting job's frozen facts into one admission per scene:
  * the route every scene is sent by, the provider prompt, and a fresh price. It
@@ -8,10 +9,12 @@
  */
 
 import type { ResolutionNormalization } from "../generation/model-catalog";
+import type { TransitionContext } from "../orchestration/ports";
 import type { GenerationQualityTier } from "../orchestration/types";
 import type { FxSnapshot } from "../pricing/provider-pricing-contract";
 import type { PricingSnapshot } from "../pricing/pricing-snapshot";
 import type { EpochMillis } from "../pricing/units";
+import type { JobLaunchRefusal } from "./launch";
 
 /** One scene of the waiting job, as the start copied it (ADR-0087). */
 export interface JobLaunchSceneFacts {
@@ -100,3 +103,82 @@ export type JobLaunchPlan =
       readonly plannedAt: EpochMillis;
     }
   | { readonly kind: "NO_PLAN"; readonly code: JobLaunchNoPlanCode };
+
+// ---------------------------------------------------------------------------
+// The launch commit (GS-7b, ADR-0095)
+// ---------------------------------------------------------------------------
+
+/**
+ * An organization's next waiting job, while a place looks free. A hint: the
+ * commit re-decides all of it under its own locks.
+ */
+export interface JobLaunchCandidate {
+  readonly organizationId: string;
+  readonly generationJobId: string;
+  /**
+   * Read without a lock, for the planner. `null` when a scene does not have
+   * exactly one first request, a shape only another writer could have made;
+   * the commit would refuse it as `SHAPE_CONFLICT`.
+   */
+  readonly facts: JobLaunchFacts | null;
+}
+
+export interface JobLaunchCandidateQuery {
+  /** At most this many organizations, one candidate each. */
+  readonly limit: number;
+}
+
+/** Ids for one scene's first attempt. Opaque and fresh, never derived. */
+export interface JobLaunchAttemptIds {
+  readonly attemptId: string;
+  readonly pricingSnapshotId: string;
+}
+
+export interface LaunchJobInput {
+  /**
+   * The tenant the caller believes owns the job. Never trusted on its own:
+   * every read and lock proves it through the job's project.
+   */
+  readonly organizationId: string;
+  readonly generationJobId: string;
+  /** The facts the plan was made from; the commit compares them with the rows it locks. */
+  readonly facts: JobLaunchFacts;
+  readonly plan: Extract<JobLaunchPlan, { kind: "PLANNED" }>;
+  /** One per planned scene, in the plan's order. */
+  readonly attemptIds: readonly JobLaunchAttemptIds[];
+  readonly context: TransitionContext;
+}
+
+/** How a launch commit ended. Only `LAUNCHED` wrote anything. */
+export type LaunchJobOutcome =
+  | {
+      readonly kind: "LAUNCHED";
+      readonly generationJobId: string;
+      /** The first attempts admitted, one per scene, in position order. */
+      readonly attemptIds: readonly string[];
+    }
+  /** The organization has no subscription, so no limit to launch under. The job waits. */
+  | { readonly kind: "NO_SUBSCRIPTION" }
+  /** Every place is taken. The job waits. */
+  | { readonly kind: "AT_LIMIT" }
+  /** An older waiting job of the organization launches first. */
+  | { readonly kind: "NOT_NEXT" }
+  /**
+   * An identical request of the same project is still at work: the same video
+   * started twice. One project never has two identical requests at the provider
+   * at once (the active-request index), so the job waits until it ends.
+   */
+  | { readonly kind: "SAME_REQUEST_RUNNING" }
+  | { readonly kind: "NOT_LAUNCHABLE"; readonly reason: JobLaunchRefusal };
+
+export interface JobLaunchRepository {
+  /** Bounded, deterministic, one per organization, oldest waiting job first. A hint only. */
+  findJobLaunchCandidates(query: JobLaunchCandidateQuery): Promise<readonly JobLaunchCandidate[]>;
+
+  /**
+   * Launch the job, in one short database transaction with no external I/O:
+   * the job and its scenes start and each scene's first attempt is admitted,
+   * or nothing is written.
+   */
+  launchJob(input: LaunchJobInput): Promise<LaunchJobOutcome>;
+}
