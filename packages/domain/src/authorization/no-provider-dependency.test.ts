@@ -137,6 +137,9 @@ describe("the authorization module has no provider or network dependency", () =>
                 billingCycleKey: "2026-09",
               };
             },
+            async readBillingCycleRevenue() {
+              return null;
+            },
             async arm() {
               armCalls += 1;
               return { kind: "ARMED", stateVersion: 1 };
@@ -147,7 +150,6 @@ describe("the authorization module has no provider or network dependency", () =>
 
       const service = createPaidSubmissionAuthorizationService({
         authorization,
-        billingCycleRevenue: createUnavailableBillingCycleRevenueReader(),
         clock: createFixedAuthorizationClock(
           epochMillisFromDate(new Date("2026-09-10T00:00:00.000Z")),
         ),
@@ -167,7 +169,7 @@ describe("the authorization module has no provider or network dependency", () =>
         },
       });
 
-      // The default revenue readers report "unknown", so this refuses — which
+      // The attempt has no contract and its revenue is unknown, so this refuses — which
       // is itself the point: the dormant gate authorizes nothing today, and it
       // reached that answer without touching the network.
       expect(outcome.kind).toBe("PRICING_INELIGIBLE");

@@ -29,7 +29,7 @@ once:
   plan catalog, tax-exclusive;
 - plus the price of every Unit purchase approved on the period, tax-exclusive;
 - a cancelled purchase counts nothing (ADR-0070);
-- seats and storage blocks are not counted;
+- seats and storage blocks are not counted while they are not recorded;
 - **Enterprise is unknown**, `null`, until its contracted price is recorded:
   its catalog price is a list price, not what any customer agreed to pay;
 - a plan the catalog does not hold is unknown too.
@@ -47,24 +47,32 @@ answers which plan and which purchases; no subscription row, invoice or
 "current plan" is read.
 
 A cycle with no period for the asking organization is unknown. A purchase
-counts on its own period, never on a later one.
+counts on its own period, never on a later one. A legacy reservation with no
+allocated period carries a cycle key no foreign key ties to a period; the
+lookup by organization and key then finds the period of that key or none, and
+none is unknown, so it fails closed.
 
-## Decision 3 — One statement, while the gate holds the cycle's lock
+## Decision 3 — One statement, on the gate's own transaction
 
-`createBillingCycleRevenueReader(prisma)` in `@app/database` reads the period,
-its purchases and their cancellations in one SQL statement, so they are one
-snapshot, and leaves the arithmetic to Decision 1's rule. Every join is
-scoped by organization as well as by id.
+The gate asks its session for the revenue
+(`PaidSubmissionAuthorizationSession.readBillingCycleRevenue`), after loading
+its facts and before arming, so the read happens only while the cycle's
+cost-admission lock is held. A purchase's block grant (ADR-0067) and a
+cancellation (ADR-0070) take that same lock, so neither can commit between
+this read and the decision it feeds.
 
-The gate calls the reader while holding the cycle's cost-admission lock. A
-purchase's block grant (ADR-0067) and a cancellation (ADR-0070) take that same
-lock, so neither can commit between this read and the decision it feeds.
+The database's session runs `readBillingCycleRevenueWithin(tx, …)` on the
+gate's transaction: one SQL statement reading the period, its purchases and
+their cancellations, so they are one snapshot, with the arithmetic left to
+Decision 1's rule. Every join is scoped by organization as well as by id.
+Reading on the transaction rather than on another pooled connection means an
+authorization never holds one connection while waiting for a second.
 
-The read runs on a connection of its own from the client's pool, not on the
-gate's transaction, because the port carries no transaction. A pool with no
-free connection makes the read wait and the gate's transaction time out: an
-error, never an authorization. The concurrent-job limit planned for GS-7
-will bound how many authorizations hold a connection at once.
+The paid-submission repository takes an optional `revenue` source. A test
+passes a fixed figure to steer the Safety Guard, and a composition that must
+fail closed whatever the database holds passes
+`createUnavailableBillingCycleRevenueReader`. Left out, the revenue is the
+cycle's period's. The gate's dependencies no longer carry a revenue reader.
 
 ## Decision 4 — Today's catalog price
 
@@ -75,9 +83,7 @@ guard reads for a period already open. Versioning prices is not decided here.
 ## Decision 5 — Nothing in production builds it yet
 
 The paid-submission service is constructed only in tests until the pipeline
-command (GS-9) composes it with this reader and the test route (ADR-0090).
-`createUnavailableBillingCycleRevenueReader` stays for compositions and tests
-that must fail closed whatever the database holds.
+command (GS-9) composes it with the test route (ADR-0090).
 
 ## Not decided here
 
@@ -85,15 +91,18 @@ that must fail closed whatever the database holds.
   revenue. Until then an Enterprise cycle keeps pausing; the development
   organizations GS-9 uses need a Standard or Premium period.
 - **Versioned plan prices** (Decision 4).
-- **Seats, storage blocks and payment fees**, which the decision left out.
+- **Seats, storage blocks and payment fees**, which the decision left out;
+  seats and storage are to be revisited once they are recorded.
 
 ## Consequences
 
 - `@app/domain` exports `billingCycleRevenueYen` and
-  `BillingCycleRevenueFacts`; `@app/database` exports
-  `createBillingCycleRevenueReader`.
-- With this reader and the test route, an attempt in a Standard or Premium
-  cycle can cross the gate in a test; an Enterprise one still hard-pauses with
+  `BillingCycleRevenueFacts`; the session gains `readBillingCycleRevenue`, and
+  `PaidSubmissionAuthorizationDeps` loses `billingCycleRevenue`.
+- `@app/database` exports `readBillingCycleRevenueWithin`, and the
+  paid-submission repository's options gain `revenue`.
+- Reading the cycle's period, an attempt in a Standard or Premium cycle can
+  cross the gate in a test; an Enterprise one still hard-pauses with
   `BILLING_CYCLE_REVENUE_UNAVAILABLE`.
 - No migration, no route, no page. Paid provider activation stays BLOCKED
   (ADR-0054 Decision 7).

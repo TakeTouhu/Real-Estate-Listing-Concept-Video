@@ -11,8 +11,8 @@ import type { BillingCycleRevenueReader } from "./ports";
  *
  * It returns `null` for every cycle. Written when Phase 4C-3B-2E persisted no
  * subscription, no plan assignment and no invoice, it was the only reader until
- * GS-5b (ADR-0091); it remains for compositions and tests that must fail closed
- * whatever the database holds.
+ * GS-5b (ADR-0091); it remains, as the paid-submission repository's `revenue`,
+ * for compositions and tests that must fail closed whatever the database holds.
  *
  * When nothing else was known, the alternatives were all worse. Assuming
  * Standard would hard-pause an Enterprise customer at a quarter of their real
@@ -47,7 +47,7 @@ export interface BillingCycleRevenueFacts {
  *
  * - A cancelled purchase counts nothing: it is withdrawn and not invoiced
  *   (ADR-0070).
- * - Seats and storage blocks are not counted.
+ * - Seats and storage blocks are not counted while they are not recorded.
  * - Enterprise is `null`, unknown, until its contracted price is recorded:
  *   its catalog price is a list price, not what any customer agreed to pay.
  *

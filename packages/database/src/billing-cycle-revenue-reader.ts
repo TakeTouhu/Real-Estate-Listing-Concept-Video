@@ -8,18 +8,14 @@
  * storage block, no invoice.
  *
  * One statement, so the period, its purchases and their cancellations are one
- * snapshot. The gate calls it while holding the cycle's cost-admission lock,
- * which a purchase's block grant and a cancellation also take, so neither can
- * commit between this read and the decision it feeds.
+ * snapshot. The paid-submission gate runs it on its own transaction while
+ * holding the cycle's cost-admission lock, which a purchase's block grant and a
+ * cancellation also take, so neither can commit between this read and the
+ * decision it feeds.
  */
 
-import type { PrismaClient } from "@prisma/client";
-import {
-  billingCycleRevenueYen,
-  yen,
-  type BillingCycleRevenueReader,
-  type CustomerPlanKey,
-} from "@app/domain";
+import type { Prisma } from "@prisma/client";
+import { billingCycleRevenueYen, yen, type CustomerPlanKey, type Yen } from "@app/domain";
 
 const PLAN_KEY_FROM_ROW: Readonly<Record<string, CustomerPlanKey>> = {
   STANDARD: "standard",
@@ -34,30 +30,30 @@ interface RevenueRow {
   readonly cancelled: boolean;
 }
 
-export function createBillingCycleRevenueReader(prisma: PrismaClient): BillingCycleRevenueReader {
-  return {
-    async revenueYen({ organizationId, billingCycleKey }) {
-      const rows = await prisma.$queryRaw<RevenueRow[]>`
-        SELECT p."planKey"::text AS "planKey",
-               u."priceYenExTax" AS "priceYenExTax",
-               (c."purchaseId" IS NOT NULL) AS "cancelled"
-          FROM "unit_entitlement_periods" p
-          LEFT JOIN "unit_purchases" u
-            ON u."entitlementPeriodId" = p."id" AND u."organizationId" = p."organizationId"
-          LEFT JOIN "unit_purchase_cancellations" c
-            ON c."purchaseId" = u."id" AND c."organizationId" = u."organizationId"
-         WHERE p."organizationId" = ${organizationId}
-           AND p."billingCycleKey" = ${billingCycleKey}
-      `;
-      const first = rows[0];
-      // No period for this organization and cycle: nothing is known.
-      if (first === undefined) return null;
-      const planKey = PLAN_KEY_FROM_ROW[first.planKey];
-      if (planKey === undefined) return null;
-      const purchases = rows.flatMap((row) =>
-        row.priceYenExTax === null ? [] : [{ priceYenExTax: yen(row.priceYenExTax), cancelled: row.cancelled }],
-      );
-      return billingCycleRevenueYen({ planKey, purchases });
-    },
-  };
+/** `null` when the organization has no period for the cycle, or its plan's revenue is unknown. */
+export async function readBillingCycleRevenueWithin(
+  db: Prisma.TransactionClient,
+  input: { readonly organizationId: string; readonly billingCycleKey: string },
+): Promise<Yen | null> {
+  const rows = await db.$queryRaw<RevenueRow[]>`
+    SELECT p."planKey"::text AS "planKey",
+           u."priceYenExTax" AS "priceYenExTax",
+           (c."purchaseId" IS NOT NULL) AS "cancelled"
+      FROM "unit_entitlement_periods" p
+      LEFT JOIN "unit_purchases" u
+        ON u."entitlementPeriodId" = p."id" AND u."organizationId" = p."organizationId"
+      LEFT JOIN "unit_purchase_cancellations" c
+        ON c."purchaseId" = u."id" AND c."organizationId" = u."organizationId"
+     WHERE p."organizationId" = ${input.organizationId}
+       AND p."billingCycleKey" = ${input.billingCycleKey}
+  `;
+  const first = rows[0];
+  // No period for this organization and cycle: nothing is known.
+  if (first === undefined) return null;
+  const planKey = PLAN_KEY_FROM_ROW[first.planKey];
+  if (planKey === undefined) return null;
+  const purchases = rows.flatMap((row) =>
+    row.priceYenExTax === null ? [] : [{ priceYenExTax: yen(row.priceYenExTax), cancelled: row.cancelled }],
+  );
+  return billingCycleRevenueYen({ planKey, purchases });
 }

@@ -1906,9 +1906,9 @@ them is **built**. Each item below records the settled decision and what remains
       (decided 2026-10-27, *Decision gates — CLOSED*): the plan's monthly price
       plus the period's uncancelled Unit purchases, tax-exclusive; Enterprise
       unknown until its contracted price is recorded. *Done in GS-5b
-      (ADR-0091, no migration): `billingCycleRevenueYen` is the rule and
-      `createBillingCycleRevenueReader` reads it from the cycle's entitlement
-      period. Plan prices are not versioned, so a price change would change
+      (ADR-0091, no migration): `billingCycleRevenueYen` is the rule, and the
+      gate's session reads it from the cycle's entitlement period on the
+      gate's own transaction (`readBillingCycleRevenueWithin`). Plan prices are not versioned, so a price change would change
       an open period's revenue (ADR-0091 Decision 4); recording an Enterprise
       contracted price is not decided.*
 

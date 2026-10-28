@@ -21,9 +21,15 @@ No change.
 
 | Export | What it is |
 | --- | --- |
-| `createBillingCycleRevenueReader(prisma)` | a `BillingCycleRevenueReader` reading the organization's entitlement period for the cycle key, its Unit purchases and their cancellations in one statement; `null` when the organization has no period for the cycle |
+| `readBillingCycleRevenueWithin(tx, { organizationId, billingCycleKey })` | the cycle's revenue, reading the organization's entitlement period for the cycle key, its Unit purchases and their cancellations in one statement on the given transaction; `null` when the organization has no period for the cycle and for an Enterprise period |
 
 ### Changed
 
-Nothing. `BillingCycleRevenueReader` and `createUnavailableBillingCycleRevenueReader`
+| Where | Change |
+| --- | --- |
+| `PaidSubmissionAuthorizationSession` (`@app/domain`) | gains `readBillingCycleRevenue()`: the revenue of the cycle the session holds the lock for, `null` when unknown |
+| `PaidSubmissionAuthorizationDeps` (`@app/domain`) | loses `billingCycleRevenue`: the gate reads revenue from its session |
+| `createPaidSubmissionAuthorizationRepository(prisma, options)` (`@app/database`) | `options.revenue`, a `BillingCycleRevenueReader`, replaces the read of the cycle's period: a fixed figure in a test, or the unavailable reader where the gate must fail closed. Left out, the session reads the period on the gate's transaction |
+
+`BillingCycleRevenueReader` and `createUnavailableBillingCycleRevenueReader`
 keep their signatures; only their documentation changed.

@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { CustomerPlanKey, GenerationQualityTier } from "@app/domain";
-import { createBillingCycleRevenueReader, createUnitEntitlementRepository } from "@app/database";
+import { createUnitEntitlementRepository, readBillingCycleRevenueWithin } from "@app/database";
 import { HAS_DB } from "./orchestration-fixture";
 
 /**
@@ -21,9 +21,6 @@ const prisma = HAS_DB ? new PrismaClient() : (null as unknown as PrismaClient);
 const ledger = HAS_DB
   ? createUnitEntitlementRepository(prisma)
   : (null as unknown as ReturnType<typeof createUnitEntitlementRepository>);
-const reader = HAS_DB
-  ? createBillingCycleRevenueReader(prisma)
-  : (null as unknown as ReturnType<typeof createBillingCycleRevenueReader>);
 
 const ORG_A = "org_itest_revenue_a";
 const ORG_B = "org_itest_revenue_b";
@@ -108,7 +105,7 @@ async function bought(
 }
 
 const revenueOf = (organizationId: string, billingCycleKey: string) =>
-  reader.revenueYen({ organizationId, billingCycleKey });
+  readBillingCycleRevenueWithin(prisma, { organizationId, billingCycleKey });
 
 RUN("GS-5b — a billing cycle's revenue from its period", () => {
   beforeEach(async () => {

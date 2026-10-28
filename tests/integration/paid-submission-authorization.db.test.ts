@@ -21,7 +21,7 @@ import {
   type ProviderPricingContract,
   type Yen,
 } from "@app/domain";
-import { createBillingCycleRevenueReader, createPaidSubmissionAuthorizationRepository } from "@app/database";
+import { createPaidSubmissionAuthorizationRepository } from "@app/database";
 import {
   createFakeRouteKit,
   FAKE_ROUTE_VERSION,
@@ -87,7 +87,7 @@ const FX: FxSnapshot = {
   sourceReference: "itest",
 };
 
-/** The billing-cycle revenue reader standing in for a layer that does not exist. */
+/** A fixed billing-cycle revenue, so the test controls the guard. */
 function revenueReader(cycleYen: Yen | null): BillingCycleRevenueReader {
   return {
     async revenueYen() {
@@ -103,8 +103,10 @@ function service(
   pricing?: ProviderPricingCatalog,
 ) {
   return createPaidSubmissionAuthorizationService({
-    authorization: createPaidSubmissionAuthorizationRepository(client, pricing === undefined ? {} : { pricing }),
-    billingCycleRevenue: revenueReader(cycleYen),
+    authorization: createPaidSubmissionAuthorizationRepository(client, {
+      revenue: revenueReader(cycleYen),
+      ...(pricing === undefined ? {} : { pricing }),
+    }),
     clock,
   });
 }
@@ -455,8 +457,10 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
     function kitService(routePolicy = kit.routePolicy, pricing = kit.pricing) {
       return createPaidSubmissionAuthorizationService({
-        authorization: createPaidSubmissionAuthorizationRepository(prisma, { pricing }),
-        billingCycleRevenue: revenueReader(yen(49_800)),
+        authorization: createPaidSubmissionAuthorizationRepository(prisma, {
+          pricing,
+          revenue: revenueReader(yen(49_800)),
+        }),
         clock: createFixedAuthorizationClock(AT),
         routePolicy,
       });
@@ -509,13 +513,21 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     });
   });
 
-  describe("the database's revenue reader (ADR-0091)", () => {
-    function readerService() {
+  describe("the revenue read from the cycle's period (ADR-0091)", () => {
+    /** No revenue given: the repository reads the cycle's period on the gate's transaction. */
+    function readerService(client: PrismaClient = prisma) {
       return createPaidSubmissionAuthorizationService({
-        authorization: createPaidSubmissionAuthorizationRepository(prisma),
-        billingCycleRevenue: createBillingCycleRevenueReader(prisma),
+        authorization: createPaidSubmissionAuthorizationRepository(client),
         clock: createFixedAuthorizationClock(AT),
       });
+    }
+
+    /** A client with one connection, which the gate's transaction holds while it decides. */
+    function singleConnectionClient(): PrismaClient {
+      const url = new URL(process.env.DATABASE_URL ?? "");
+      url.searchParams.set("connection_limit", "1");
+      url.searchParams.set("pool_timeout", "2");
+      return new PrismaClient({ datasources: { db: { url: url.toString() } } });
     }
 
     it("hard-pauses the fixture's Enterprise cycle, whose revenue is unknown", async () => {
@@ -531,6 +543,9 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const periodId = "uep_itest_paid_revenue_2027_05";
       const blockId = "uab_itest_paid_revenue";
       const entitlements = repositories(prisma).entitlements;
+      // A read on any connection but the gate's own transaction would wait for
+      // one that never frees, and the authorization would fail.
+      const single = singleConnectionClient();
       try {
         const opened = await entitlements.openPeriod({
           id: periodId,
@@ -573,7 +588,11 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         const { attempt } = await seedAuthorizableChain(prisma, "readerstd", {
           reservedAt: new Date("2027-05-10T00:00:00.000Z"),
         });
-        const outcome = await readerService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+        const outcome = await readerService(single).authorize({
+          organizationId: ORG_A,
+          attemptId: attempt.id,
+          context: ctx(),
+        });
         expect(outcome.kind).toBe("AUTHORIZED");
         const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
           where: { aggregateType: "ATTEMPT", aggregateId: attempt.id, toState: "SUBMITTING" },
@@ -583,6 +602,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
           billingCycleRevenueYen: 49_800 + 19_900,
         });
       } finally {
+        await single.$disconnect();
         await wipeOrchestration(prisma);
         await prisma.unitPurchase.deleteMany({ where: { id: "upur_itest_paid_revenue" } });
         await prisma.unitAddOnBlock.deleteMany({ where: { id: blockId } });

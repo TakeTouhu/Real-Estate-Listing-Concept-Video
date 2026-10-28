@@ -13,7 +13,6 @@ import {
 import { authorizedRoutes, ROUTING_POLICY_VERSION, type RoutePolicy } from "./routing";
 import type {
   ArmResult,
-  BillingCycleRevenueReader,
   PaidSubmissionAuthorizationRepository,
   PaidSubmissionFactsSnapshot,
 } from "./ports";
@@ -114,6 +113,8 @@ function serviceWith(
     routePolicy?: RoutePolicy;
     /** Called after the lock is taken and before facts are loaded. */
     onLock?: () => void;
+    /** Each step the session is asked for, in order. */
+    order?: string[];
   } = {},
 ): Harness {
   const facts = options.facts === undefined ? permittingFacts() : options.facts;
@@ -130,22 +131,26 @@ function serviceWith(
   const authorization: PaidSubmissionAuthorizationRepository = {
     async withCostAdmission(_input, run) {
       options.onLock?.();
-      return run({
+      options.order?.push("lock");
+      const outcome = await run({
         async loadFacts() {
           calls.factsLoaded += 1;
+          options.order?.push("facts");
           return facts;
+        },
+        async readBillingCycleRevenue() {
+          options.order?.push("revenue");
+          return cycleYen;
         },
         async arm(input) {
           calls.arm += 1;
+          options.order?.push("arm");
           armedContexts.push(input.context);
           return arm();
         },
       });
-    },
-  };
-  const billingCycleRevenue: BillingCycleRevenueReader = {
-    async revenueYen() {
-      return cycleYen;
+      options.order?.push("unlock");
+      return outcome;
     },
   };
   return {
@@ -153,7 +158,6 @@ function serviceWith(
     armedContexts,
     service: createPaidSubmissionAuthorizationService({
       authorization,
-      billingCycleRevenue,
       clock,
       ...(options.routePolicy === undefined ? {} : { routePolicy: options.routePolicy }),
     }),
@@ -245,6 +249,27 @@ describe("the authorization service's translation of the boundary result", () =>
     const outcome = await authorize(service);
     if (outcome.kind !== "AUTHORIZED") throw new Error("expected AUTHORIZED");
     expect(outcome.safetyGuardWarning?.state).toBe("WARNING");
+  });
+});
+
+describe("the billing cycle's revenue (ADR-0091)", () => {
+  it("is read on the session, after the facts and before arming, inside the lock", async () => {
+    // A purchase or a cancellation takes the same lock, so a read anywhere
+    // else could feed the decision a figure that changed before it committed.
+    const order: string[] = [];
+    const { service } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), { order });
+    expect((await authorize(service)).kind).toBe("AUTHORIZED");
+    expect(order).toEqual(["lock", "facts", "revenue", "arm", "unlock"]);
+  });
+
+  it("is not read for an attempt with no cycle, which is refused", async () => {
+    const order: string[] = [];
+    const { service } = serviceWith(async () => ({ kind: "ARMED", stateVersion: 4 }), {
+      order,
+      facts: { ...permittingFacts(), billingCycleKey: null },
+    });
+    expect((await authorize(service)).kind).toBe("SAFETY_GUARD_HARD_PAUSE");
+    expect(order).toEqual(["lock", "facts", "unlock"]);
   });
 });
 

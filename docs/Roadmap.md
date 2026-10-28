@@ -289,9 +289,9 @@ outside tests builds the kit until GS-9's pipeline command.
 migration): the Cost Safety Guard's revenue is the monthly price of the plan
 the cycle's entitlement period was opened on plus the period's uncancelled
 Unit purchases, tax-exclusive, as the product owner decided on 2026-10-27;
-Enterprise stays unknown, so its cycles keep pausing. The database reader
-reads the period, its purchases and their cancellations in one statement,
-while the gate holds the cycle's cost-admission lock. Nothing outside tests
+Enterprise stays unknown, so its cycles keep pausing. The gate's session
+reads the period, its purchases and their cancellations in one statement on
+the gate's own transaction, while the cycle's cost-admission lock is held. Nothing outside tests
 constructs the paid-submission service until GS-9.
 
 Completion criteria as met: a composed deliverable is proved technically valid,

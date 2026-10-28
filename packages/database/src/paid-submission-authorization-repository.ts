@@ -13,6 +13,7 @@ import {
   yen,
   type ArmResult,
   type AttemptGateFacts,
+  type BillingCycleRevenueReader,
   type FxSnapshot,
   type GenerationAttemptState,
   type JobGateFacts,
@@ -30,6 +31,7 @@ import {
   type SubmissionCertainty,
   type Yen,
 } from "@app/domain";
+import { readBillingCycleRevenueWithin } from "./billing-cycle-revenue-reader";
 import { armProviderBoundaryWithin } from "./orchestration-repositories";
 /**
  * The organization + billing-cycle cost-admission lock.
@@ -611,6 +613,13 @@ export interface PaidSubmissionAuthorizationRepositoryOptions {
    * contract (ADR-0089).
    */
   readonly pricing?: ProviderPricingCatalog;
+  /**
+   * Where the cycle's revenue comes from. The cycle's entitlement period, read
+   * on the gate's transaction, when left out (ADR-0091); a test steering the
+   * Safety Guard passes a fixed figure, and a composition that must fail closed
+   * the unavailable reader.
+   */
+  readonly revenue?: BillingCycleRevenueReader;
 }
 
 export function createPaidSubmissionAuthorizationRepository(
@@ -803,6 +812,15 @@ export function createPaidSubmissionAuthorizationRepository(
               exposureVerified,
               billingCycleKey: cycle,
             };
+          },
+
+          async readBillingCycleRevenue(): Promise<Yen | null> {
+            // The cycle the lock was taken for; with no reservation there is none.
+            if (cycleKey === null) return null;
+            const read = { organizationId: input.organizationId, billingCycleKey: cycleKey };
+            return options.revenue === undefined
+              ? readBillingCycleRevenueWithin(tx, read)
+              : options.revenue.revenueYen(read);
           },
 
           async arm({ expectedVersion, context }): Promise<ArmResult> {
