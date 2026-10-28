@@ -176,7 +176,7 @@ describe("building the studio", () => {
   });
 
   it.each(["wavespeed", "fal", ""])("is refused unless the test provider is the configured provider: %j", (name) => {
-    const configured = { NODE_ENV: "test", VIDEO_PROVIDER: name as "wavespeed" };
+    const configured = { NODE_ENV: "test" as const, VIDEO_PROVIDER: name as "wavespeed" };
     expect(refusal(() => createFakeClipStudio(configured, { root }, deps)).code).toBe("CONFIGURATION_ERROR");
   });
 
