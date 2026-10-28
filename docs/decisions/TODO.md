@@ -1798,7 +1798,9 @@ them is **built**. Each item below records the settled decision and what remains
       exceptions that remain owed; immediate upgrade charging the full unprorated
       difference (*since 2026-10-28 the upgraded plan is charged pro-rata for
       the month and the old plan's unused days are not credited, ADR-0093*)
-      with the base-Unit ceiling **replaced minus Base Units consumed**;
+      with the base-Unit ceiling **replaced minus Base Units consumed** (*for
+      the month of the switch, since 2026-10-28, the old plan's plus the new
+      plan's for the days charged, rounded down, ADR-0093*);
       downgrade at renewal, schedulable only once membership fits, with no
       deletion of content or users and no automatic seat purchase; and
       sales-assisted Enterprise transitions represented without
@@ -1927,10 +1929,9 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Six gates: one found by the Phase 6A gap analysis
+Five gates: one found by the Phase 6A gap analysis
 (`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), two by GS-1
-(ADR-0082), one by GS-5b (ADR-0091), and one left by the decisions of
-2026-10-28 (ADR-0093). **None may be guessed.** Every other gate is closed and recorded
+(ADR-0082), one by GS-5b (ADR-0091). **None may be guessed.** Every other gate is closed and recorded
 below.
 
 - [ ] **Decide whether a failed replacement gives back the scene regeneration
@@ -1985,19 +1986,10 @@ below.
       plan price changes. *Where an Enterprise organization's contracted price
       comes from, the other half of this gate, was decided on 2026-10-28
       (ADR-0093 Decision 2, CLOSED below).*
-- [ ] **Decide whether an upgrade's Base-Unit ceiling is pro-rated too** —
-      left by ADR-0093 Decision 1. ADR-0053 Decision 3B gives the new plan's
-      whole Base-Unit ceiling at once, minus Base Units consumed; with the
-      charge now pro-rated, an upgrade late in the month would buy a whole
-      month's Units for a few days' price. Put to the product owner on
-      2026-10-28 with the recommendation to pro-rate it the way the charge is:
-      the old plan's Base Units kept, since its month is not credited, and the
-      new plan's added for the days left, rounded down, its HQ ceiling alike.
-      Must be settled before plan upgrade is built.
 
 ### Decision gates — CLOSED
 
-Thirty-six decisions: the two gates from the first PR review, eight recorded
+Thirty-seven decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -2010,8 +2002,9 @@ protected group deletion — from the Phase 6A gap analysis, multi-Unit
 reservation funding, from the Unit purchase proposal, when an
 invoice-paid organization can use purchased Units, from GS-5, what a
 billing cycle's revenue is, and, on 2026-10-28, how a mid-month upgrade is
-charged, that it credits nothing, where an Enterprise organization's revenue
-comes from and that its amount is entered tax-exclusive (ADR-0093).
+charged, that it credits nothing, that its Base-Unit ceiling is pro-rated,
+where an Enterprise organization's revenue comes from and that its amount is
+entered tax-exclusive (ADR-0093).
 **Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
 
@@ -2023,15 +2016,26 @@ one creates is listed in the section above.
       upgraded plan is charged by the day. This replaces ADR-0053 Decision
       3B's "full difference … do not prorate" for upgrades (ADR-0093
       Decision 1); the rest of Decision 3B, downgrade included, stands.
-      The old plan's unused days are not credited (next entry); whether the
-      Base-Unit ceiling is pro-rated too is an open gate above. Nothing builds
-      plan upgrade yet.
+      The old plan's unused days are not credited, and the Base-Unit ceiling
+      is pro-rated alike (the next two entries). Nothing builds plan upgrade
+      yet.
 
 - [x] **Whether an upgrade credits the old plan's unused days — CLOSED (it
       does not).** Decided by the product owner on 2026-10-28 in the CTO
       thread: 「アップグレードした月は前のプランの残り日数は差し引きません。」
       The old plan's price for the month, already billed, stands in full; the
       upgraded plan's pro-rated days are charged on top (ADR-0093 Decision 1).
+
+- [x] **Whether an upgrade's Base-Unit ceiling is pro-rated — CLOSED (it is,
+      added to the old plan's).** Chosen by the product owner on 2026-10-28
+      (decision card, option 「日割り」, which read: 「前のプランの Unit はそのまま、
+      新プランの Unit を残り日数で日割りして足します(端数は切り捨て、HQ 上限も
+      同じ)。」). For the month of the switch the ceiling is the old plan's Base
+      Units plus the new plan's for the days charged, rounded down, less the
+      Base Units consumed this period; the included HQ ceiling alike; from the
+      next renewal the new plan's ceiling applies whole. This replaces ADR-0053
+      Decision 3B's "replaced, not stacked" for that month (ADR-0093 Decision
+      1). How a day is counted is to be proposed when plan upgrade is built.
 
 - [x] **Where an Enterprise organization's revenue comes from, for the Cost
       Safety Guard — CLOSED (the contracted amount the operator records).**
@@ -2276,8 +2280,9 @@ one creates is listed in the section above.
       no silent user deletion and no automatic seat purchase — and, as closed
       later, schedulable only once membership fits (ADR-0053 Decision 3B).
       *The upgrade charge is pro-rata for the month, with the old plan's
-      unused days not credited, since 2026-10-28 (ADR-0093 Decision 1,
-      above).*
+      unused days not credited, and that month's Base-Unit ceiling is the old
+      plan's plus the new plan's for the days charged, since 2026-10-28
+      (ADR-0093 Decision 1, above).*
 - [x] **Permanent technical-failure settlement — CLOSED.** No technically valid
       Deliverable delivered ⇒ reservation **RELEASED**, never `CONSUMED`, never
       left pending; VTaVision bears the incurred cost; failure class does not
