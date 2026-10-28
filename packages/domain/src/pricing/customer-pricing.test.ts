@@ -73,6 +73,15 @@ describe("the customer plan catalog carries the frozen commercial contract", () 
     expect(entry.highQualityAddOnPackagePriceYenExTax).toBe(hq);
   });
 
+  it.each([
+    ["standard", 1],
+    ["premium", 3],
+    ["enterprise", 5],
+  ] as const)("%s: %i job(s) at once", (key, jobs) => {
+    // ADR-0052 Decision 7: customer video Jobs, not provider requests.
+    expect(plan(key).concurrentJobs).toBe(jobs);
+  });
+
   it("agrees with the package price formula for every package a plan sells", () => {
     for (const entry of catalog.all()) {
       const normal = addOnPackagePrice(entry, "NORMAL", entry.normalAddOnPackageUnits, NO_FLOOR);

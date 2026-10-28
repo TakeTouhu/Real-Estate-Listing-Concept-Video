@@ -1835,3 +1835,15 @@ or the FFmpeg clip maker, and both refuse production.
 
 **Rolling back.** To GS-5b's build: safe, since nothing in production calls
 what GS-6 adds.
+
+## GS-7a — the concurrent-job limit and the launch plan
+
+**No migration** (ADR-0094). No schema, enum, constraint or row changes, and
+no new environment variable. The limit is a field of the plan catalog, which is
+code.
+
+**What changes at deploy.** Nothing. Nothing outside tests builds the launch
+planner, and the media-recovery planner prices exactly as before.
+
+**Rolling back.** To GS-6's build: safe, since nothing in production calls
+what GS-7a adds.

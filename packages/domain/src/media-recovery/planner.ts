@@ -26,9 +26,8 @@
 
 import {
   createPricingSnapshot,
-  evaluatePaidSubmissionPricingEligibility,
+  currentlyEligibleContractsForRoute,
   parseProviderPricingIdentity,
-  providerPricingContractKey,
   validateFxSnapshot,
   type EpochMillis,
   type ProviderPricingCatalog,
@@ -97,7 +96,7 @@ export class AutomaticMediaRecoveryPricingPlanner implements AutomaticMediaRecov
     // *commercial* dimensions are what must match; `pricingVersion` and
     // `durationBillingRuleId` may legitimately have moved on.
     const at = this.#clock() as EpochMillis;
-    const eligible = currentContractsForRoute(this.#pricing, identity.value, at);
+    const eligible = currentlyEligibleContractsForRoute(this.#pricing, identity.value, at);
     if (eligible.length === 0) return { kind: "NO_PLAN", code: "NO_SAFE_CURRENT_PRICING" };
     // Two eligible contracts for one route is a catalog the platform cannot
     // bill against unambiguously. Taking the first would silently pick a price.
@@ -197,39 +196,4 @@ function routeIsStillSafe(
     (delivery.normalization as string) === candidate.route.requestResolutionNormalization &&
     delivery.nativeMeetsTarget === candidate.route.requestNativeMeetsTarget
   );
-}
-
-/**
- * Every currently eligible contract for one commercial route.
- *
- * Matches the five dimensions that describe *what is being bought* and leaves
- * `pricingVersion` and `durationBillingRuleId` free, because those are exactly
- * what a new rate card changes. Eligibility is then the existing authority —
- * verified, stable, in force at this instant.
- */
-function currentContractsForRoute(
-  pricing: ProviderPricingCatalog,
-  identity: ProviderPricingIdentity,
-  at: EpochMillis,
-): readonly ProviderPricingContract[] {
-  const matches = pricing
-    .all()
-    .filter(
-      (contract) =>
-        contract.identity.provider === identity.provider &&
-        contract.identity.pricingModelKey === identity.pricingModelKey &&
-        contract.identity.generationMode === identity.generationMode &&
-        contract.identity.nativeTier === identity.nativeTier &&
-        contract.identity.audioMode === identity.audioMode,
-    )
-    .filter((contract) => evaluatePaidSubmissionPricingEligibility(contract, at).ok);
-
-  // Two catalog entries sharing a complete identity key are the same contract
-  // listed twice; the catalog already refuses that at construction. De-duping
-  // by key keeps this honest if that ever changes.
-  const byKey = new Map<string, ProviderPricingContract>();
-  for (const contract of matches) {
-    byKey.set(providerPricingContractKey(contract.identity), contract);
-  }
-  return [...byKey.values()];
 }

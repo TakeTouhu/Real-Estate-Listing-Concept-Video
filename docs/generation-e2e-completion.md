@@ -10,7 +10,9 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c),
 `docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md` (GS-5a-1),
 `docs/decisions/0090-the-test-route-is-built-only-outside-production.md` (GS-5a-2),
-`docs/decisions/0091-a-billing-cycles-revenue-is-read-from-its-period.md` (GS-5b)
+`docs/decisions/0091-a-billing-cycles-revenue-is-read-from-its-period.md` (GS-5b),
+`docs/decisions/0092-the-test-provider-makes-a-real-clip-from-the-photo.md` (GS-6),
+`docs/decisions/0094-the-concurrent-job-limit-and-a-waiting-jobs-launch-plan.md` (GS-7a)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -2600,3 +2602,229 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 GS-6 waits for the product owner's yes before merge. Then the documentation
 pull request for the 2026-10-28 billing decisions, and GS-7 (sending work to
 the provider and recording the answer, with the concurrent-job limit).
+
+*Since: GS-6 merged as PR #116 and the billing decisions as PR #117 (ADR-0093,
+documentation only); GS-7 is split in four, below.*
+
+## GS-7a — the concurrent-job limit and a waiting job's launch plan
+
+Base: `94ac595` (PR #117 merge commit on `main`, a documentation pull request; GS-6's
+merge `9830804` had post-merge CI run 715 green).
+ADR: `docs/decisions/0094-the-concurrent-job-limit-and-a-waiting-jobs-launch-plan.md`
+
+The first of GS-7's four pull requests (ADR-0094's table). **No migration; no
+route, no page.** Nothing outside tests builds the planner until the launch
+commit (GS-7b) and the pipeline command (GS-9).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `29a0327` | the limit on each plan, the states that hold a place, the launch planner, the shared lookup of a route's contracts in force, their tests, ADR-0094 and the documentation |
+| `bd06933` | the first mutation pass's answers: the route's own resolution filter removed as redundant with the gate's check, and a test of a route's modes |
+| `f058c80` | the review's answers: every scene's settings checked, routes of a mode admission does not price skipped, no tie-break between two routes, the compiled prompt carried with each rendered one, the rate copied, the plan tested against what consumes it and against the real tables, and two undecided rules recorded |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7a does
+
+- **The limit is a plan fact.** `CustomerPlan.concurrentJobs`: Standard 1,
+  Premium 3, Enterprise 5 (ADR-0052 Decision 7).
+- **Which jobs hold a place.** `JOB_STATES_HOLDING_A_PLACE`: a job holds one
+  from launch until it is delivered or fails, composition and the final check
+  included; `RESERVED` is the one state a job waits in.
+  `decideJobLaunchCapacity` answers `PLACE_FREE` or `AT_LIMIT`, and throws on a
+  limit below one or a count that is not a whole number. Whether a regeneration
+  counts is not decided; counting `REVISING` is provisional.
+- **One route for the whole job.** `JobLaunchPlanner.plan` takes the one route
+  that the route policy sells for the job's quality and resolution, of the one
+  generation and audio mode admission prices, whose model the catalog holds as
+  selectable under the same provider and model id and reaches the resolution
+  from the route's own native tier, that accepts every scene's settings by
+  admission's own check (`assertSettingsSupported`), and that the
+  paid-submission gate's own route check authorizes. Two plan nothing
+  (`AMBIGUOUS_ROUTE`).
+- **A prompt and a price per scene.** Each scene's frozen compiled prompt is
+  rendered once and carried with the rendered one; each scene is priced for its
+  own length at one instant, against the one verified contract in force, at a
+  copy of the rate the FX source gives last.
+- **A fixed code for every reason it plans nothing**, carrying no prompt, no
+  provider text and no identifier.
+- **One lookup of a route's contracts in force.**
+  `currentlyEligibleContractsForRoute` moves from the media-recovery planner
+  into the pricing domain; both planners call it.
+
+```mermaid
+sequenceDiagram
+    participant C as Launch commit (GS-7b)
+    participant P as JobLaunchPlanner
+    participant R as Route policy and gate check
+    participant M as Model catalog
+    participant Pr as Price catalog
+    participant F as FX source
+    C->>P: plan(the waiting job's frozen facts)
+    P->>P: target known, scenes present, each prompt rendered
+    P->>R: routes for the job's quality, of the priced modes
+    P->>M: model selectable, same provider and model id, native tier, every scene's settings
+    P->>R: authorizeRoute(the route's facts)
+    P->>P: exactly one route, or NO_ROUTE / AMBIGUOUS_ROUTE
+    P->>Pr: the one verified contract in force now
+    P->>F: current()
+    P->>P: one snapshot per scene, at one instant, at a copy of the rate
+    P-->>C: PLANNED (route, one admission per scene) or NO_PLAN (code)
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI). The checks ran on the
+commits before they were carried onto `94ac595` (`acd24c7`, `8daaabd` and
+`a2c7b4d`, on `9830804`); `94ac595` adds only PR #117's three documents, so
+the code each check ran on is the code here.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `f058c80`'s code, each exit status read |
+| `pnpm test` | 233 files, 6,384 tests passed (6,371 on `29a0327`'s code, 6,374 on `bd06933`'s) |
+| `pnpm test:db` | 63 files, 1,675 tests passed on `bd06933`'s code; `f058c80` changes only the planner, its tests and documents, which no database test reaches |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/domain/src/job-launch/limit.test.ts` (new, 18): every job state
+  classified exactly once, so a new state must be placed before it is counted;
+  the capacity table at and below each plan's limit; a limit below one, a
+  negative count and fractions refused as defects.
+- `packages/domain/src/job-launch/planner.test.ts` (new, 33): a job planned
+  whole, with each scene's own prompt, compiled prompt and price at one
+  instant; an HQ job at its own tier and buffer; the delivery plan recorded as
+  the catalog states it; the plan frozen and the source's rate left alone; the
+  job's own facts checked before any catalog; every route condition, including
+  each scene's length, the native tier, the aspect ratio and camera motion, the
+  priced modes, the gate's own refusal of a second route for one model, and two
+  qualifying routes planning nothing whichever model is the default; one
+  verified price in force, de-duplicated, and a length it cannot bill; the rate
+  read last and only once there is a price; and each admission accepted by
+  admission's pricing binding, the gate's re-derivation of the stored snapshot
+  and the gate's route check.
+- `packages/domain/src/job-launch/dormancy.test.ts` (new, 4): nothing in
+  production constructs the planner; its imports stay inside the domain's
+  catalogs, renderer and pricing; it reaches no provider, HTTP client, storage,
+  database or timer; the contract lookup is defined once and called by exactly
+  the two planners.
+- `packages/video-providers/src/launch-plan.test.ts` (new, 4): with
+  production's tables a Normal job plans H3 Max, and an HQ job plans nothing;
+  with the test route's kit each quality plans its one route.
+- `packages/domain/src/pricing/customer-pricing.test.ts` (3 more): the three
+  plans' limits.
+
+### Mutation testing
+
+The same harness as GS-6, against the job-launch, pricing and media-recovery
+unit suites, and after the review's answers the new table test too.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| L01 to L04 | `REVISING` or `COMPOSING` holding no place; `RESERVED` holding one; another waiting state | killed |
+| L05 to L09 | one over the limit; a limit of 0, a count of -1, a fractional limit or count allowed | killed |
+| L10 | the states' list not frozen | killed |
+| C01 to C03 | each plan's limit changed | killed |
+| E01 to E07 | the shared lookup not matching provider, model key, generation mode, native tier or audio mode; eligibility ignored; duplicates not merged | killed |
+| P01 to P04 | an unknown resolution, no scenes, or a missing prompt not refused first; a render failure thrown | killed |
+| P05 / P06 / P30 | the catalog default's tie-break changed | killed in pass 1; the tie-break was removed after review (Decision 3), so they are gone |
+| P07 / P08 / P14 | no contract, two contracts, or a length that cannot be billed accepted | killed |
+| P09 / P10 | an FX failure thrown; an invalid rate accepted | killed |
+| P11 to P13 | an HQ job at the Normal buffer; every scene at the first's length; another instant | killed |
+| P15 / P16 | every scene sent the first prompt; the wrong request id | killed |
+| P17 to P19 | the plan not frozen; the normalization or meets-target fact assumed | killed |
+| P20 | the quality filter removed | killed |
+| P21 | the route's own resolution filter removed | survived a trial run: the gate's route check makes the same refusal, so the filter was removed in `bd06933` |
+| P22 | an unverified model allowed | equivalent: an unverified entry's type forbids a model id (`providerModelId?: never`), so the next check skips it |
+| P23 / P24 | a provider or model id mismatch allowed | killed |
+| P25 / P26 | the length check removed; one scene's length enough | killed in pass 1; the check is now part of the settings check (F03, F11) |
+| P27 / P28 / P29 | an unsupported target thrown; a native tier mismatch allowed; the gate's check ignored | killed |
+| P31 / P32 | priced at 720p always; priced by model id | killed |
+| P33 / P34 / P35 | a different rate recorded; a snapshot without the rate; the clock shifted | killed |
+| P36 / P37 | the price looked up at an assumed generation or audio mode | pass 1 survivors, killed by a test in `bd06933`; after review only the priced modes qualify (F01, F02), so both are equivalent |
+| F01 / F02 | a route of another generation or audio mode taken | killed |
+| F03 / F04 / F11 | settings not checked; a refused setting accepted; one scene's settings enough | killed |
+| F05 / F06 / F07 / F12 | the aspect ratio, camera motion, native tier or negative prompt assumed | killed |
+| F08 | of two routes, the first taken | killed |
+| F09 | the source's rate frozen | killed |
+| F10 | every scene carrying the first scene's compiled prompt | killed |
+
+Result: 53 of 56 killed in the first pass on `29a0327`'s code (P21 was tried
+before it and its filter removed); the second, on `bd06933`'s, killed both of
+its answered survivors (P36, P37); the third, on `f058c80`'s, killed all 12
+new mutants (F01 to F12) and 48 of the first pass's 51 re-anchored. Three
+survivors remain, all equivalent (P22, P36, P37).
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+the first commit as `acd24c7` against `9830804` (the same change, before it was
+carried onto PR #117's merge), reading only git objects. It confirmed that the
+plan agrees with the gate (the route facts, the contract by the route's own
+dimensions, the risk profile and length, and an FX snapshot always named), that
+policy order plays no part, that the lookup's move changes no behaviour, that
+the limit's classification matches the state machine, and that no line exceeds
+120 columns, no `any` is used and nothing is logged. Verdict: nothing blocking.
+Its four should-fix findings and its nits, answered in `f058c80`:
+
+| Finding | Answer |
+| --- | --- |
+| The route check was narrower than admission's settings check: a catalog entry whose capability lacks the native tier it reaches the target from, or a job's aspect ratio or a scene's camera motion the model does not honour, would be planned and then refused by the preflight, or sent with nothing refusing it | Fixed: every scene is checked by `assertSettingsSupported` (length, native tier, aspect ratio, camera motion); the facts now carry the job's aspect ratio and each scene's camera motion, as admission binds them; tests for each |
+| A route of another generation or audio mode would be planned and then refused at admission (`PRICING_BINDING_INVALID`) | Fixed: only routes of `AUTHORIZED_GENERATION_MODE` and `AUTHORIZED_AUDIO_MODE` qualify; a test proves a route of either other mode is skipped even with a price for it |
+| No test connected the plan to what consumes it, nor ran the planner against the real tables | Added: each admission is fed to admission's pricing binding, the gate's re-derivation of the stored snapshot and the gate's route check, for Normal, HQ and a downscaling route; and the planner runs against production's tables and the test route's kit |
+| ADR-0094 settled whether a regeneration counts against the limit, which nobody decided | Recorded as open in `docs/decisions/TODO.md`, and the counting of `REVISING` marked provisional in the ADR and the code |
+| Nit: the catalog's default as the tie-break between two routes is a preference nobody decided | Removed: two qualifying routes plan nothing, and which to prefer is recorded as open. With production's tables only Normal at 1080p is ambiguous, a pairing the start never makes |
+| Nit: freezing the plan froze the FX source's own object | Fixed: the plan holds a copy |
+| Nit: admission stores the rendered prompt without comparing it with the compiled one | The plan now carries each scene's compiled prompt, for the launch commit (GS-7b) to compare with the scene it locks |
+| Nit: a failed job frees its place while attempts may still be at the provider | Said in Decision 2 and in `limit.ts` |
+| Nit: the legacy executor's discovery fix was not on ADR-0094's GS-7c row | Added |
+| Nit: a GS-7b choice was worded as decided inside *Not decided here*; Decision 1 read as implemented | Reworded |
+| Nit: `JobLaunchFacts.generationJobId` was never read | Removed |
+| Nit: test fixtures cast past the model entry's type | Kept: they build entries the type forbids on purpose, to prove the planner refuses them |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the concurrent-job limit and launch planner row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0094 Decisions 1 to 6 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7a.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the plan-definitions note, the GS-7 items planned
+for GS-7b to GS-7d, and two new open decisions: whether a regeneration counts
+against the limit, and which route a job takes when several could serve it).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the planner, and it reaches no
+provider, storage or database. No scheduler, credential or payment
+integration. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **Nothing launches a job yet.** A started job stays `RESERVED` until the
+  launch commit (GS-7b).
+- **Two open decisions** bound what the planner and the limit do: a
+  regeneration is counted provisionally, and two qualifying routes plan
+  nothing.
+- **A job that can never be planned keeps its Units** until GS-7d decides
+  which codes release them.
+
+### Remaining work
+
+GS-7a waits for the product owner's yes before merge. Then GS-7b, the launch
+commit.

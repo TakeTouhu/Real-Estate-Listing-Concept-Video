@@ -805,7 +805,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       (concurrency 1/3/5, retention lifecycle, logo on all plans). One figure is
       explicitly provisional: additional storage at ¥1,500 / +50 GB must be
       validated against measured production cost and egress before Commercial
-      Launch.
+      Launch. *The concurrent-job limit is recorded on each plan as
+      `concurrentJobs` since GS-7a (ADR-0094).*
 - [x] **Asset/output retention windows and deletion recovery period.**
       **Settled by ADR-0052 Decision 17:** source and normalized images while the
       property/project exists; scene videos 30 days after final completion;
@@ -1385,7 +1386,8 @@ them is **built**. Each item below records the settled decision and what remains
       here*). Were that executor run, it would claim such a row and send it
       outside the paid-submission gate. Nothing in production constructs it.
       Before any executor runs orchestrated attempts, its discovery must
-      exclude them or read the orchestration state.
+      exclude them or read the orchestration state. *Planned for GS-7c, the
+      pull request that sends orchestrated attempts (ADR-0094).*
 - [ ] **Start each scene in the commit that admits its first attempt
       (GS-7).** Admission (`admitAttemptWithin`) does not move the scene, and
       Transaction K settles an initial request only under a `GENERATING`
@@ -1395,7 +1397,9 @@ them is **built**. Each item below records the settled decision and what remains
       Unit held. Transaction L closes that shape either way (ADR-0084
       Decision 2). *GS-4's start step admits no attempt: it leaves the job
       `RESERVED` until the concurrent-job limit lets it run (ADR-0052
-      Decision 7), so the first admissions belong to GS-7's launch step.*
+      Decision 7), so the first admissions belong to GS-7's launch step,
+      planned for GS-7b. GS-7a (ADR-0094) builds what that commit admits: one
+      route for the job, and each scene's prompt and price.*
 - [x] **Make the test provider's clips at its route's sizes (GS-6).** The
       test route's catalog entry records Normal as generated at 720p and HQ at
       1080p, with no upscale (ADR-0090 Decision 4), but the fake provider makes
@@ -1409,7 +1413,29 @@ them is **built**. Each item below records the settled decision and what remains
       plan's Design 6). One that can never run, for instance because no route
       serves its quality any more, must not hold them indefinitely (ADR-0052
       Decision 19). Nothing launches a job yet, and nothing constructs the start
-      step outside tests until GS-10.
+      step outside tests until GS-10. *Planned for GS-7d. The launch planner
+      (GS-7a, ADR-0094) names why a job cannot be planned with a fixed code;
+      some pass, such as a rate that cannot be read now, and some never will,
+      such as a scene with no prompt. GS-7d decides which release the Units.*
+- [ ] **Decide whether a regeneration counts against the concurrent-job
+      limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
+      concurrent customer video Jobs; nothing decides whether regenerating a
+      video already delivered is one, though the customer already has a video
+      then. Revision start moves a delivered job to `GENERATING` in one commit
+      without consulting the limit. A job in `REVISING`, or in `GENERATING`
+      after a revision, is counted today because its state cannot be told
+      apart from a first generation's; that counting is provisional (ADR-0094
+      Decision 2). Nothing runs revision start today; decide before paid
+      regeneration is wired.
+- [ ] **Decide which route a job takes when more than one could serve it.**
+      The launch planner sends a whole job by one route and plans nothing
+      (`AMBIGUOUS_ROUTE`) when several qualify (ADR-0094 Decision 3). With
+      production's tables this happens only for Normal at 1080p, a pairing the
+      start never makes (H3 Max and OpenVideo both serve it); the test route
+      has one route per quality. ADR-0033's default model is one candidate
+      answer, but being the default was not decided as being the preference
+      between two executable routes. Decide before a second route serves a
+      pairing the start makes.
 - [ ] **Measure the start commit on the production database before
       activation.** The start copies a storyboard in one transaction under
       Prisma's default 5-second limit, at about six statements per scene; a
