@@ -14,8 +14,8 @@ No change.
 
 | Export | What it is |
 | --- | --- |
-| `JobLaunchPlanner({ routes, models, pricing, fx, clock })` | `plan(facts)` plans a waiting job whole: one route for every scene, qualified against the route policy, the model catalog, every scene's length and the paid-submission gate's own check, with the catalog's default deciding between several and `AMBIGUOUS_ROUTE` when it cannot; each scene's prompt rendered once and priced at one instant against the one contract in force, at the rate the FX source gives last. `PLANNED` with the route and one admission per scene, or `NO_PLAN` with a fixed code. Writes nothing |
-| `JobLaunchFacts`, `JobLaunchSceneFacts` | the waiting job's frozen facts the planner reads |
+| `JobLaunchPlanner({ routes, models, pricing, fx, clock })` | `plan(facts)` plans a waiting job whole: one route for every scene, qualified against the route policy, the one generation and audio mode admission prices, the model catalog, every scene's settings (`assertSettingsSupported`) and the paid-submission gate's own check, and `AMBIGUOUS_ROUTE` when more than one qualifies; each scene's prompt rendered once, carried with the compiled prompt it came from, and priced at one instant against the one contract in force, at a copy of the rate the FX source gives last. `PLANNED` with the route and one admission per scene, or `NO_PLAN` with a fixed code. Writes nothing |
+| `JobLaunchFacts`, `JobLaunchSceneFacts` | the waiting job's frozen facts the planner reads: quality, resolution and aspect ratio; each scene's length, camera motion and compiled prompt |
 | `JobLaunchPlan`, `JobLaunchRoute`, `JobLaunchSceneAdmission`, `JobLaunchNoPlanCode` | its answer |
 | `JOB_STATES_HOLDING_A_PLACE`, `JOB_STATE_WAITING_FOR_A_PLACE`, `holdsAPlace(state)` | which job states hold one of the organization's places (launched, not ended), and the one a job waits in (`RESERVED`) |
 | `decideJobLaunchCapacity({ concurrentJobs, jobsHoldingAPlace })` | `PLACE_FREE` or `AT_LIMIT`; throws on a limit below one or a count that is not a whole number |

@@ -1417,12 +1417,25 @@ them is **built**. Each item below records the settled decision and what remains
       (GS-7a, ADR-0094) names why a job cannot be planned with a fixed code;
       some pass, such as a rate that cannot be read now, and some never will,
       such as a scene with no prompt. GS-7d decides which release the Units.*
-- [ ] **Bring revision start under the concurrent-job limit.** Revision start
-      moves a delivered job to `GENERATING` in one commit without consulting
-      the plan's limit (ADR-0052 Decision 7), so a regeneration could run
-      beyond it. Under the limit's rule a job holds a place while it
-      regenerates (ADR-0094 Decision 2). Nothing runs revision start today;
-      settle before paid regeneration is wired.
+- [ ] **Decide whether a regeneration counts against the concurrent-job
+      limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
+      concurrent customer video Jobs; nothing decides whether regenerating a
+      video already delivered is one, though the customer already has a video
+      then. Revision start moves a delivered job to `GENERATING` in one commit
+      without consulting the limit. A job in `REVISING`, or in `GENERATING`
+      after a revision, is counted today because its state cannot be told
+      apart from a first generation's; that counting is provisional (ADR-0094
+      Decision 2). Nothing runs revision start today; decide before paid
+      regeneration is wired.
+- [ ] **Decide which route a job takes when more than one could serve it.**
+      The launch planner sends a whole job by one route and plans nothing
+      (`AMBIGUOUS_ROUTE`) when several qualify (ADR-0094 Decision 3). With
+      production's tables this happens only for Normal at 1080p, a pairing the
+      start never makes (H3 Max and OpenVideo both serve it); the test route
+      has one route per quality. ADR-0033's default model is one candidate
+      answer, but being the default was not decided as being the preference
+      between two executable routes. Decide before a second route serves a
+      pairing the start makes.
 - [ ] **Measure the start commit on the production database before
       activation.** The start copies a storyboard in one transaction under
       Prisma's default 5-second limit, at about six statements per scene; a

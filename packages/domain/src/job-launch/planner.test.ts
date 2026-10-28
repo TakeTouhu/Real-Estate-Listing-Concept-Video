@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { defineRoutePolicy, type AuthorizedRoute, type RoutePolicy } from "../authorization/routing";
+import { verifyPersistedPricingSnapshot } from "../authorization/pricing-integrity";
+import { authorizeRoute, defineRoutePolicy, type AuthorizedRoute, type RoutePolicy } from "../authorization/routing";
 import type { VerifiedModelEntry, VideoModelCatalog, VideoModelEntry } from "../generation/model-catalog";
 import { renderPrompt } from "../generation/prompt-render";
 import type { FxRateSource } from "../media-recovery/ports";
+import { AUTHORIZED_AUDIO_MODE, AUTHORIZED_GENERATION_MODE } from "../orchestration/entitlement";
 import {
   epochMillisFromDate,
   microUsd,
@@ -35,7 +37,11 @@ const RATE: FxSnapshot = {
   sourceReference: null,
 };
 
-function compiled(roomType: string, durationSeconds: number): string {
+function compiled(
+  roomType: string,
+  durationSeconds: number,
+  cameraMotion: string | null = "SLOW_DOLLY_FORWARD",
+): string {
   const prompt: CompiledPrompt = {
     preservation: [...PRESERVATION_RULES],
     sceneFacts: {
@@ -43,7 +49,7 @@ function compiled(roomType: string, durationSeconds: number): string {
       position: 1,
       roomType: roomType as CompiledPrompt["sceneFacts"]["roomType"],
       durationSeconds,
-      cameraMotion: "SLOW_DOLLY_FORWARD",
+      cameraMotion: cameraMotion as CompiledPrompt["sceneFacts"]["cameraMotion"],
     },
     userCustomization: null,
     negativeConstraints: { system: [...SYSTEM_NEGATIVE_CONSTRAINTS], user: null },
@@ -56,15 +62,16 @@ function scene(n: number, durationSeconds: number, prompt?: string | null): JobL
     generationSceneId: `gscn_${n}`,
     initialRequestId: `greq_${n}`,
     durationSeconds,
+    cameraMotion: "SLOW_DOLLY_FORWARD",
     compiledPrompt: prompt === undefined ? compiled(n === 1 ? "LIVING_ROOM" : "KITCHEN", durationSeconds) : prompt,
   };
 }
 
 function job(overrides: Partial<JobLaunchFacts> = {}): JobLaunchFacts {
   return {
-    generationJobId: "gjob_1",
     qualityTier: "NORMAL",
     targetOutputResolution: "720p",
+    aspectRatio: "16:9",
     scenes: [scene(1, 5), scene(2, 12)],
     ...overrides,
   };
@@ -224,6 +231,8 @@ describe("a waiting job is planned whole", () => {
       renderPrompt(compiled("LIVING_ROOM", 5)),
       renderPrompt(compiled("KITCHEN", 12)),
     ]);
+    // And the compiled prompt each came from, for the launch commit to compare.
+    expect(plan.scenes.map((s) => s.compiledPrompt)).toEqual([compiled("LIVING_ROOM", 5), compiled("KITCHEN", 12)]);
     // Each scene priced for its own length, at the one instant, at the one rate.
     expect(plan.scenes.map((s) => s.pricingSnapshot.requestedSeconds)).toEqual([5, 12]);
     expect(plan.scenes.map((s) => s.pricingSnapshot.estimatedStableCostMicroUsd)).toEqual([50_000, 120_000]);
@@ -267,10 +276,14 @@ describe("a waiting job is planned whole", () => {
     expect(plan.route.requestNativeMeetsTarget).toBe(false);
   });
 
-  it("hands out a plan no caller can change", async () => {
-    const plan = planned(await planner().plan(job()));
+  it("hands out a plan no caller can change, and leaves the rate source's own object alone", async () => {
+    const kept: FxSnapshot = { ...RATE };
+    const plan = planned(await planner({ fx: rates(async () => kept) }).plan(job()));
     expect(Object.isFrozen(plan)).toBe(true);
     expect(Object.isFrozen(plan.scenes[0])).toBe(true);
+    expect(Object.isFrozen(plan.scenes[0]?.fxSnapshot)).toBe(true);
+    expect(Object.isFrozen(kept)).toBe(false);
+    expect(plan.scenes[0]?.fxSnapshot).toEqual(kept);
   });
 });
 
@@ -356,6 +369,35 @@ describe("a route qualifies only when it can run the whole job", () => {
     expect(await codeFor({}, job({ scenes: [scene(1, 15), scene(2, 5)] }))).toBe("PLANNED");
   });
 
+  it("needs the model to generate at the native tier the catalog reaches the target from", async () => {
+    const narrowed = model("alpha");
+    const only1080 = { ...narrowed, capability: { ...narrowed.capability, nativeGenerationResolutions: ["1080p"] } };
+    expect(await codeFor({ models: catalog([only1080]) })).toBe("NO_ROUTE");
+  });
+
+  it("needs the model to deliver the job's aspect ratio", async () => {
+    const withRatios = (aspectRatios: unknown) => {
+      const entry = model("alpha");
+      return catalog([{ ...entry, capability: { ...entry.capability, aspectRatios } } as VerifiedModelEntry]);
+    };
+    expect(await codeFor({ models: withRatios({ kind: "UNSUPPORTED" }) })).toBe("NO_ROUTE");
+    expect(await codeFor({ models: withRatios({ kind: "PROVIDER_HONORED", ratios: ["9:16"] }) })).toBe("NO_ROUTE");
+    expect(await codeFor({ models: withRatios({ kind: "PROVIDER_HONORED", ratios: ["16:9"] }) })).toBe("PLANNED");
+    expect(await codeFor({}, job({ aspectRatio: "wide" }))).toBe("NO_ROUTE");
+  });
+
+  it("needs the model to honour a scene's camera motion, and only when one is set", async () => {
+    const entry = model("alpha");
+    const unsupported = { kind: "UNSUPPORTED" } as const;
+    const models = catalog([{ ...entry, capability: { ...entry.capability, cameraMotion: unsupported } }]);
+    const still = (n: number): JobLaunchSceneFacts => ({
+      ...scene(n, 5, compiled("BEDROOM", 5, null)),
+      cameraMotion: null,
+    });
+    expect(await codeFor({ models }, job({ scenes: [still(1), scene(2, 5)] }))).toBe("NO_ROUTE");
+    expect(await codeFor({ models }, job({ scenes: [still(1), still(2)] }))).toBe("PLANNED");
+  });
+
   it("needs the catalog to deliver the resolution, from the route's own native tier", async () => {
     const no720 = model("alpha", {
       nativeGeneration: {
@@ -394,19 +436,21 @@ describe("a route qualifies only when it can run the whole job", () => {
     expect(await codeFor({ routes, models: catalog([downscaled]) })).toBe("NO_ROUTE");
   });
 
-  it("lets the catalog's default decide between two, and plans nothing when it cannot", async () => {
+  it("plans nothing when two qualify, whichever model the catalog names its default", async () => {
     const routes = policy([route("alpha"), route("beta")]);
     const pricing = prices([contract("alpha"), contract("beta")]);
     const both = [model("alpha"), model("beta")];
+    for (const defaultKey of ["alpha", "beta"]) {
+      expect(await codeFor({ routes, pricing, models: catalog(both, defaultKey) })).toBe("AMBIGUOUS_ROUTE");
+    }
+  });
 
-    const toBeta = planned(await planner({ routes, pricing, models: catalog(both, "beta") }).plan(job()));
-    expect(toBeta.route.requestModelKey).toBe("beta");
-    const toAlpha = planned(await planner({ routes, pricing, models: catalog(both, "alpha") }).plan(job()));
-    expect(toAlpha.route.requestModelKey).toBe("alpha");
-
-    expect(await codeFor({ routes, pricing, models: catalog([...both, model("gamma")], "gamma") })).toBe(
-      "AMBIGUOUS_ROUTE",
-    );
+  it("takes no route of a mode admission does not price, even with a price for it", async () => {
+    const base = contract("alpha");
+    for (const modes of [{ generationMode: "text-to-video" }, { audioMode: "with-audio" }]) {
+      const pricing = prices([{ ...base, identity: { ...base.identity, ...modes } }]);
+      expect(await codeFor({ routes: policy([route("alpha", modes)]), pricing })).toBe("NO_ROUTE");
+    }
   });
 
   it("takes the one qualifying route even when it is not the default", async () => {
@@ -434,20 +478,6 @@ describe("the route must have one verified price in force now", () => {
       { ...base.identity, audioMode: "with-audio" },
     ]) {
       expect(await codeFor([{ ...base, identity }])).toEqual({ code: "NO_CURRENT_PRICING", reads: 0 });
-    }
-  });
-
-  it("prices the route by its own generation and audio mode", async () => {
-    const modes = { generationMode: "text-to-video", audioMode: "with-audio" };
-    const routes = policy([route("alpha", modes)]);
-    const base = contract("alpha");
-    const own = { ...base, identity: { ...base.identity, ...modes } };
-    for (const [contracts, code] of [
-      [[own], "PLANNED"],
-      [[base], "NO_CURRENT_PRICING"],
-    ] as const) {
-      const plan = await planner({ routes, pricing: prices(contracts) }).plan(job());
-      expect(plan.kind === "NO_PLAN" ? plan.code : "PLANNED").toBe(code);
     }
   });
 
@@ -499,5 +529,92 @@ describe("the rate is read last, and a rate that cannot be read plans nothing", 
     const fx = rates();
     await planner({ fx, models: catalog([model("beta")]) }).plan(job());
     expect(fx.reads).toBe(0);
+  });
+});
+
+describe("a plan is one its consumers accept", () => {
+  // What admission's pricing binding, the gate's snapshot re-derivation and the
+  // gate's route check ask of each attempt, asked of each admission the plan
+  // hands out, with the attempt's facts taken from the plan as the launch
+  // commit will take them.
+  async function consumersAccept(facts: JobLaunchFacts, deps: Partial<JobLaunchPlannerDeps> = {}) {
+    const routes = deps.routes ?? policy([route("alpha"), HQ_ROUTE]);
+    const pricing = deps.pricing ?? prices([contract("alpha"), contract("alpha", {}, "1080p")]);
+    const plan = planned(await planner({ ...deps, routes, pricing }).plan(facts));
+    for (const [index, admission] of plan.scenes.entries()) {
+      const snapshot = admission.pricingSnapshot;
+      // Admission's binding.
+      expect(snapshot.provider).toBe(plan.route.providerName);
+      expect(snapshot.identity.pricingModelKey).toBe(plan.route.requestModelKey);
+      expect(snapshot.requestedSeconds).toBe(facts.scenes[index]?.durationSeconds);
+      expect(snapshot.identity.nativeTier).toBe(plan.route.requestNativeGenerationResolution);
+      expect(snapshot.identity.generationMode).toBe(AUTHORIZED_GENERATION_MODE);
+      expect(snapshot.identity.audioMode).toBe(AUTHORIZED_AUDIO_MODE);
+      // The gate's re-derivation, from the snapshot as it is stored.
+      const verified = verifyPersistedPricingSnapshot({
+        persisted: {
+          sceneGenerationId: `sgen_${index}`,
+          pricingVersion: snapshot.pricingVersion,
+          provider: snapshot.provider,
+          contractKey: snapshot.contractKey,
+          contractFingerprint: snapshot.contractFingerprint,
+          identityJson: JSON.parse(JSON.stringify(snapshot.identity)) as unknown,
+          stablePriceReferenceJson: JSON.parse(JSON.stringify(snapshot.stablePriceReference)) as unknown,
+          riskProfileKey: snapshot.riskProfileKey,
+          riskBufferBps: snapshot.riskBufferBps,
+          requestedSeconds: snapshot.requestedSeconds,
+          billableSeconds: snapshot.billableSeconds,
+          estimatedStableCostMicroUsd: BigInt(snapshot.estimatedStableCostMicroUsd),
+          estimatedPlanningCostMicroUsd: BigInt(snapshot.estimatedPlanningCostMicroUsd),
+          pricingEffectiveAtEpochMs: BigInt(snapshot.pricingEffectiveAt),
+          fxSnapshotId: snapshot.fxSnapshotId,
+        },
+        contract: pricing.findByKey(snapshot.contractKey) ?? null,
+        fx: admission.fxSnapshot,
+      });
+      expect(verified.ok).toBe(true);
+      // The gate's route check, with the modes it reads from the snapshot.
+      const authorized = authorizeRoute(
+        {
+          qualityTier: facts.qualityTier,
+          providerName: plan.route.providerName,
+          providerModelId: plan.route.providerModelId,
+          requestModelKey: plan.route.requestModelKey,
+          nativeGenerationResolution: plan.route.requestNativeGenerationResolution,
+          targetOutputResolution: facts.targetOutputResolution as "720p" | "1080p",
+          generationMode: snapshot.identity.generationMode,
+          audioMode: snapshot.identity.audioMode,
+        },
+        routes,
+      );
+      expect(authorized.ok).toBe(true);
+    }
+  }
+
+  it("for a Normal job", async () => {
+    await consumersAccept(job());
+  });
+
+  it("for an HQ job", async () => {
+    await consumersAccept(job({ qualityTier: "HIGH_QUALITY", targetOutputResolution: "1080p" }));
+  });
+
+  it("for a route that downscales", async () => {
+    const downscaled = model("alpha", {
+      nativeGeneration: {
+        byTarget: {
+          "720p": {
+            nativeGenerationResolution: { providerValue: "1080p" },
+            normalization: "DOWNSCALE",
+            nativeMeetsTarget: false,
+          },
+        },
+      },
+    });
+    await consumersAccept(job(), {
+      routes: policy([route("alpha", { nativeGenerationResolution: "1080p" })]),
+      models: catalog([downscaled]),
+      pricing: prices([contract("alpha", {}, "1080p")]),
+    });
   });
 });

@@ -18,9 +18,14 @@ import type { GenerationJobState } from "../orchestration/types";
  * ```
  *
  * A job holds its place from launch until it ends, composition and the final
- * check included: until then the customer is still waiting for that video.
- * `REVISING` holds one too. Revision start passes through it in one commit, so
- * no job rests there today, and a job that did would be mid-revision.
+ * check included: until then the customer is still waiting for that video. A
+ * job that fails frees its place at once, though attempts it closed may still
+ * be finishing at the provider: the limit counts jobs, not provider requests.
+ *
+ * `REVISING` holds one too, and so does a revised job back in `GENERATING`,
+ * whose state cannot be told from a first generation's. Whether a regeneration
+ * counts at all is not decided (`docs/decisions/TODO.md`), so this is
+ * provisional; nothing runs revision start today.
  */
 
 /** A launched job that has not ended. Each holds one of its organization's places. */

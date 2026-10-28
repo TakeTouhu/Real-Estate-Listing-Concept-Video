@@ -19,16 +19,19 @@ export interface JobLaunchSceneFacts {
   /** The scene's first request, which the start made with it. */
   readonly initialRequestId: string;
   readonly durationSeconds: number;
+  /** As frozen on the scene; admission binds it into the request. */
+  readonly cameraMotion: string | null;
   /** The frozen compiled prompt, or `null` when the scene has none. Never logged. */
   readonly compiledPrompt: string | null;
 }
 
 /** The waiting job's frozen facts. Read without locks: a hint, re-checked at commit. */
 export interface JobLaunchFacts {
-  readonly generationJobId: string;
   readonly qualityTier: GenerationQualityTier;
   /** The job's snapshot of the project's resolution, as stored. */
   readonly targetOutputResolution: string;
+  /** The job's snapshot of the project's aspect ratio; admission binds it into the request. */
+  readonly aspectRatio: string;
   /** In position order. */
   readonly scenes: readonly JobLaunchSceneFacts[];
 }
@@ -47,6 +50,12 @@ export interface JobLaunchRoute {
 export interface JobLaunchSceneAdmission {
   readonly generationSceneId: string;
   readonly generationSceneRequestId: string;
+  /**
+   * The compiled prompt the rendered one came from. Admission stores the
+   * rendered prompt as given, so the launch commit compares this with the
+   * scene it locks before admitting. Never logged.
+   */
+  readonly compiledPrompt: string;
   /** Rendered once, here; the provider is sent exactly this. */
   readonly requestRenderedPrompt: string;
   readonly pricingSnapshot: PricingSnapshot;
@@ -68,9 +77,12 @@ export type JobLaunchNoPlanCode =
   | "SCENE_PROMPT_MISSING"
   /** The stored compiled prompt does not render: it is corrupt or of an old shape. */
   | "SCENE_PROMPT_UNRENDERABLE"
-  /** No authorized route serves the job's quality and resolution and every scene's length. */
+  /**
+   * No authorized route serves the job's quality and resolution, every scene's
+   * settings, and the generation and audio mode admission prices.
+   */
   | "NO_ROUTE"
-  /** More than one does, and the model catalog's default is not exactly one of them. */
+  /** More than one does. Which to prefer is not decided (`docs/decisions/TODO.md`). */
   | "AMBIGUOUS_ROUTE"
   /** No verified price is in force for the route, or one scene's length cannot be priced. */
   | "NO_CURRENT_PRICING"
