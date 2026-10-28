@@ -1823,3 +1823,15 @@ paid-submission service, so no production code calls the reader.
 
 **Rolling back.** To GS-5a-2's build: safe, since nothing in production calls
 what GS-5b adds.
+
+## GS-6 — the test provider makes a real clip from the photo
+
+**No migration** (ADR-0092). No schema, enum, constraint or row changes, and
+no new environment variable. The studio keeps its clips in a folder it is
+given, outside the database and outside the shared storage's objects.
+
+**What changes at deploy.** Nothing. Nothing outside tests builds the studio
+or the FFmpeg clip maker, and both refuse production.
+
+**Rolling back.** To GS-5b's build: safe, since nothing in production calls
+what GS-6 adds.

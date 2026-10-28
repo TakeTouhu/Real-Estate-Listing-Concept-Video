@@ -23,6 +23,20 @@ export {
 } from "./fake/route-kit";
 export type { FakeRouteKit } from "./fake/route-kit";
 
+/**
+ * The test provider's back end, which makes a real clip from the scene's photo,
+ * refused in production and without `VIDEO_PROVIDER=fake` (ADR-0092).
+ */
+export { createFakeClipStudio } from "./fake/clip-studio";
+export type {
+  FakeClipMakeOutcome,
+  FakeClipRenderer,
+  FakeClipStudio,
+  FakeClipStudioDeps,
+  FakeClipStudioOptions,
+  FakeSourcePhotoReader,
+} from "./fake/clip-studio";
+
 export { WaveSpeedVideoProvider } from "./wavespeed/wavespeed-provider";
 export type { WaveSpeedProviderDeps } from "./wavespeed/wavespeed-provider";
 export type { WaveSpeedConfig, WaveSpeedPollConfig } from "./wavespeed/config";

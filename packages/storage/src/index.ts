@@ -14,6 +14,19 @@ export type {
   SharedFolderStorage,
   SharedFolderStorageOptions,
 } from "./shared-folder-storage";
+/**
+ * The test provider's clip maker, refused in production (ADR-0092). Nothing in
+ * either application constructs it yet.
+ */
+export {
+  DEFAULT_FAKE_CLIP_TIMEOUT_MS,
+  FAKE_CLIP_FRAME_RATE,
+  FAKE_CLIP_MAX_DURATION_SECONDS,
+  FAKE_CLIP_ZOOM_IN,
+  createFfmpegFakeClipRenderer,
+  ffmpegFakeClipArgsFor,
+} from "./fake-clip-renderer";
+export type { FakeClipRenderInput, FakeClipRenderOutcome, FakeClipRendererConfig } from "./fake-clip-renderer";
 export { SharpImageProcessor, averageHashHex } from "./image-processor";
 export type { SharpImageProcessorOptions } from "./image-processor";
 export { PassthroughMalwareScanner } from "./scanner";

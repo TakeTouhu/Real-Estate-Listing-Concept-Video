@@ -285,3 +285,17 @@ describe("who builds the kit, or a policy or catalog like it", () => {
     ]);
   });
 });
+
+describe("who builds the test provider's studio and its clip maker", () => {
+  /** Nobody yet, as with the kit: the pipeline command (GS-9) will be first. */
+  it("is only the packages that define them", () => {
+    expect(callers("createFakeClipStudio")).toEqual([
+      "packages/video-providers/src/fake/clip-studio.ts",
+      "packages/video-providers/src/index.ts",
+    ]);
+    expect(callers("createFfmpegFakeClipRenderer")).toEqual([
+      "packages/storage/src/fake-clip-renderer.ts",
+      "packages/storage/src/index.ts",
+    ]);
+  });
+});
