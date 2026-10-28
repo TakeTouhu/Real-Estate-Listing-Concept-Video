@@ -1796,7 +1796,11 @@ them is **built**. Each item below records the settled decision and what remains
       Decisions 1A, 3A and 3B: monthly Stripe recurring billing with automatic
       renewal; cancellation effective at period end with no proration; the refund
       exceptions that remain owed; immediate upgrade charging the full unprorated
-      difference with the base-Unit ceiling **replaced minus Base Units consumed**;
+      difference (*since 2026-10-28 the upgraded plan is charged pro-rata for
+      the month and the old plan's unused days are not credited, ADR-0093*)
+      with the base-Unit ceiling **replaced minus Base Units consumed** (*for
+      the month of the switch, since 2026-10-28, the old plan's plus the new
+      plan's for the days charged, rounded down, ADR-0093*);
       downgrade at renewal, schedulable only once membership fits, with no
       deletion of content or users and no automatic seat purchase; and
       sales-assisted Enterprise transitions represented without
@@ -1911,8 +1915,17 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0091, no migration): `billingCycleRevenueYen` is the rule, and the
       gate's session reads it from the cycle's entitlement period on the
       gate's own transaction (`readBillingCycleRevenueWithin`). Plan prices are not versioned, so a price change would change
-      an open period's revenue (ADR-0091 Decision 4); recording an Enterprise
-      contracted price is not decided.*
+      an open period's revenue (ADR-0091 Decision 4). Where an Enterprise
+      contracted price comes from was decided on 2026-10-28 (ADR-0093) and is
+      listed next.*
+- [ ] **Record an Enterprise organization's contracted monthly amount, and
+      count it as its cycle's revenue** (ADR-0093 Decision 2). The
+      plan-provisioning command (ADR-0066) takes the agreed monthly amount for
+      an Enterprise plan and records it with the subscription, audited; the
+      revenue reader counts it as the cycle's plan revenue. The amount is
+      entered tax-exclusive (decided 2026-10-28, *Decision gates — CLOSED*).
+      Needs a migration. Planned as a small PR after the generation-to-preview
+      plan.
 
 ### Decision gates — OPEN
 
@@ -1966,20 +1979,17 @@ below.
       charge withholds the new period's Units, grants them during a grace window,
       or suspends generation, and when the subscription ends. Must be settled
       before self-service Stripe billing is built.
-- [ ] **Decide where an Enterprise organization's contracted price is
-      recorded, and whether plan prices are versioned** — from GS-5b
-      (ADR-0091); does not block the test route. The Cost Safety Guard counts
-      an Enterprise cycle's revenue as unknown, so every Enterprise paid
-      submission pauses, until its contracted price is recorded somewhere the
-      reader can trust; no table holds one. And the reader prices a period's
-      plan at the catalog's current price, so a future price change would
-      change the revenue of a period already open. Both must be settled before
-      paid generation is activated for an Enterprise customer or a plan price
-      changes.
+- [ ] **Decide whether plan prices are versioned** — from GS-5b (ADR-0091);
+      does not block the test route. The reader prices a period's plan at the
+      catalog's current price, so a future change to a plan's list price would
+      change the revenue of a period already open. Must be settled before a
+      plan price changes. *Where an Enterprise organization's contracted price
+      comes from, the other half of this gate, was decided on 2026-10-28
+      (ADR-0093 Decision 2, CLOSED below).*
 
 ### Decision gates — CLOSED
 
-Thirty-two decisions: the two gates from the first PR review, eight recorded
+Thirty-seven decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -1990,9 +2000,60 @@ authority, role-fixed Scope, and the three closed last — the `property.create`
 capability ceiling, fixed `MANAGER`/`CREATOR` creation-time assignments and
 protected group deletion — from the Phase 6A gap analysis, multi-Unit
 reservation funding, from the Unit purchase proposal, when an
-invoice-paid organization can use purchased Units, and, from GS-5, what a
-billing cycle's revenue is. **Each is settled as policy**; the implementation work each
+invoice-paid organization can use purchased Units, from GS-5, what a
+billing cycle's revenue is, and, on 2026-10-28, how a mid-month upgrade is
+charged, that it credits nothing, that its Base-Unit ceiling is pro-rated,
+where an Enterprise organization's revenue comes from and that its amount is
+entered tax-exclusive (ADR-0093).
+**Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
+
+- [x] **How a mid-month plan upgrade is charged — CLOSED (the upgraded plan
+      by the day, for that month).** Decided by the product owner on
+      2026-10-28 in the CTO thread:
+      「月の途中で切り替えた場合は、その月はアップデートしたプランを日割りで請求。」
+      From the day of the switch to the end of that billing month the
+      upgraded plan is charged by the day. This replaces ADR-0053 Decision
+      3B's "full difference … do not prorate" for upgrades (ADR-0093
+      Decision 1); the rest of Decision 3B, downgrade included, stands.
+      The old plan's unused days are not credited, and the Base-Unit ceiling
+      is pro-rated alike (the next two entries). Nothing builds plan upgrade
+      yet.
+
+- [x] **Whether an upgrade credits the old plan's unused days — CLOSED (it
+      does not).** Decided by the product owner on 2026-10-28 in the CTO
+      thread: 「アップグレードした月は前のプランの残り日数は差し引きません。」
+      The old plan's price for the month, already billed, stands in full; the
+      upgraded plan's pro-rated days are charged on top (ADR-0093 Decision 1).
+
+- [x] **Whether an upgrade's Base-Unit ceiling is pro-rated — CLOSED (it is,
+      added to the old plan's).** Chosen by the product owner on 2026-10-28
+      (decision card, option 「日割り」, which read: 「前のプランの Unit はそのまま、
+      新プランの Unit を残り日数で日割りして足します(端数は切り捨て、HQ 上限も
+      同じ)。」). For the month of the switch the ceiling is the old plan's Base
+      Units plus the new plan's for the days charged, rounded down, less the
+      Base Units consumed this period; the included HQ ceiling alike; from the
+      next renewal the new plan's ceiling applies whole. This replaces ADR-0053
+      Decision 3B's "replaced, not stacked" for that month (ADR-0093 Decision
+      1). How a day is counted is to be proposed when plan upgrade is built.
+
+- [x] **Where an Enterprise organization's revenue comes from, for the Cost
+      Safety Guard — CLOSED (the contracted amount the operator records).**
+      Decided by the product owner on 2026-10-28 (typed 「１、２はそれで決定。」,
+      answering two questions in the CTO thread; the second's recommendation,
+      「契約額を登録」, read: 「Enterprise を登録するときに合意した月額も入力し、
+      安全装置はその額で計算します。」). When an operator provisions an
+      Enterprise plan, the agreed monthly amount is recorded with it, and the
+      Cost Safety Guard counts that amount as the cycle's plan revenue
+      (ADR-0093 Decision 2). An Enterprise cycle with no recorded amount stays
+      unknown and keeps pausing. The amount is entered tax-exclusive (next
+      entry); implementation is listed above (*Record an Enterprise
+      organization's contracted monthly amount*).
+
+- [x] **How an Enterprise organization's contracted amount is entered —
+      CLOSED (tax-exclusive).** Decided by the product owner on 2026-10-28 in
+      the CTO thread: 「税抜で入力」. It is entered tax-exclusive, as the
+      revenue rule counts every other figure (ADR-0091; ADR-0093 Decision 2).
 
 - [x] **What a billing cycle's revenue is, for the Cost Safety Guard — CLOSED
       (the plan's monthly price plus Unit purchases).** Chosen by the product
@@ -2218,6 +2279,10 @@ one creates is listed in the section above.
       original period. Downgrade at next renewal, no refund, no content deletion,
       no silent user deletion and no automatic seat purchase — and, as closed
       later, schedulable only once membership fits (ADR-0053 Decision 3B).
+      *The upgrade charge is pro-rata for the month, with the old plan's
+      unused days not credited, and that month's Base-Unit ceiling is the old
+      plan's plus the new plan's for the days charged, since 2026-10-28
+      (ADR-0093 Decision 1, above).*
 - [x] **Permanent technical-failure settlement — CLOSED.** No technically valid
       Deliverable delivered ⇒ reservation **RELEASED**, never `CONSUMED`, never
       left pending; VTaVision bears the incurred cost; failure class does not

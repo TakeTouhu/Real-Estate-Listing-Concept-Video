@@ -273,6 +273,13 @@ Self-service **Standard ↔ Premium** plan changes, each requiring
 
 ### Upgrade — immediate
 
+> **Amended on 2026-10-28 by ADR-0093 Decision 1:** the product owner decided
+> that for the month of the switch the upgraded plan is charged by the day, which
+> replaces the two charging bullets below, that the old plan's unused days are
+> not credited, and that for that month the Base-Unit ceiling is the old plan's
+> plus the new plan's for the days charged, rounded down, which replaces the
+> "replaced, not stacked" rule below for that month.
+
 - effective **immediately**;
 - charge the **full difference** between the current plan's monthly price and the
   new plan's monthly price for the current billing period;
