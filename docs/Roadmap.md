@@ -322,6 +322,16 @@ admitted in one commit, or nothing is written. The same video started twice
 waits for the first. Nothing outside tests runs it until the pipeline command
 (GS-9), and the attempts it admits are not sent until GS-7c.
 
+**GS-7c-1 — the boundary an orchestrated attempt crosses** (ADR-0096, no
+migration): the legacy executor's discovery, claim and park act only on legacy
+rows, so it never claims an orchestrated attempt, which reads `QUEUED` in the
+legacy column for life. The paid-submission gate, once its pure rules permit,
+locks the attempt's photo and moves the attempt only while it is still the
+source preparation signed, neither deleted nor changed (`SOURCE_INVALID`
+otherwise), and writes the paid call's `generation.submission_started` audit
+entry in the commit that moves it to `SUBMITTING`. Nothing outside tests
+constructs either, and nothing sends an attempt until GS-7c-2.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

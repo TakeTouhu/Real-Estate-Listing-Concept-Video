@@ -55,6 +55,18 @@ function inState<S extends SceneGeneration["state"]>(
 
 const NOT_CLAIMABLE: SubmissionClaimOutcome = { kind: "NOT_CLAIMABLE" };
 
+/**
+ * Whether a row is this executor's to move: legacy `QUEUED` work.
+ *
+ * An orchestrated attempt (one with an orchestration state) also reads
+ * `QUEUED` in the legacy column, because no orchestration writer moves it. It
+ * is never this executor's: only the paid-submission gate may send it, and
+ * every discovery, claim and park here leaves it alone (ADR-0096).
+ */
+function isLegacyQueued(row: DbSceneGeneration): boolean {
+  return row.state === "QUEUED" && row.orchestrationState === null;
+}
+
 function sourceInvalid(reason: PreflightRefusalReason): SubmissionClaimOutcome {
   return { kind: "SOURCE_INVALID", reason };
 }
@@ -70,7 +82,7 @@ function sourceInvalid(reason: PreflightRefusalReason): SubmissionClaimOutcome {
  * be handed to the domain until {@link toExecutionSourceObservation} has looked
  * at it.
  */
-interface RawLockedAssetRow {
+export interface RawLockedAssetRow {
   readonly id: unknown;
   readonly organizationId: unknown;
   readonly status: unknown;
@@ -103,9 +115,11 @@ function isNullableInstant(value: unknown): value is Date | null {
  * verdict about the customer's photo, and would durably park their work for it.
  *
  * The thrown error names nothing: no key, digest, MIME type or id. It is raised
- * inside the claim transaction, so the claim rolls back.
+ * inside the claim transaction, so the claim rolls back. The paid-submission
+ * gate reads its locked source through the same function (ADR-0096); neither is
+ * published from the package.
  */
-function toExecutionSourceObservation(raw: RawLockedAssetRow): ExecutionSourceObservation {
+export function toExecutionSourceObservation(raw: RawLockedAssetRow): ExecutionSourceObservation {
   if (
     typeof raw.id !== "string" ||
     typeof raw.organizationId !== "string" ||
@@ -152,7 +166,10 @@ export function createPrismaSceneGenerationExecutionRepository(
   return {
     async findNextQueuedForPreparation() {
       const row = await prisma.sceneGeneration.findFirst({
-        where: { state: "QUEUED" },
+        // Legacy rows only. An orchestrated attempt keeps the legacy column at
+        // its default `QUEUED` for life, and only the paid-submission gate may
+        // send one (ADR-0096).
+        where: { state: "QUEUED", orchestrationState: null },
         // Oldest first, with `id` breaking ties so two rows written in the same
         // millisecond still order deterministically — the same convention
         // `findLatestSucceededByRequestIdentity` uses, inverted.
@@ -184,7 +201,7 @@ export function createPrismaSceneGenerationExecutionRepository(
           where: { id: generationId },
           include: { videoProject: { select: { organizationId: true } } },
         });
-        if (!before?.videoProject || before.state !== "QUEUED") return NOT_CLAIMABLE;
+        if (!before?.videoProject || !isLegacyQueued(before)) return NOT_CLAIMABLE;
 
         const organizationId = before.videoProject.organizationId;
         const { assetId, videoProjectId } = before;
@@ -235,7 +252,7 @@ export function createPrismaSceneGenerationExecutionRepository(
           where: { id: generationId },
           include: { videoProject: { select: { organizationId: true } } },
         });
-        if (!during?.videoProject || during.state !== "QUEUED") return NOT_CLAIMABLE;
+        if (!during?.videoProject || !isLegacyQueued(during)) return NOT_CLAIMABLE;
 
         // Still `QUEUED`, so the addressing facts this claim already used must
         // still hold. They are immutable by construction — nothing writes
@@ -286,7 +303,7 @@ export function createPrismaSceneGenerationExecutionRepository(
         // row to `QUEUED` still carrying diagnostics from an earlier attempt,
         // and silently clearing them here would erase that history.
         const { count } = await tx.sceneGeneration.updateMany({
-          where: { id: generationId, state: "QUEUED" },
+          where: { id: generationId, state: "QUEUED", orchestrationState: null },
           data: { state: "SUBMITTING" },
         });
         if (count === 0) return NOT_CLAIMABLE;
@@ -386,7 +403,7 @@ export function createPrismaSceneGenerationExecutionRepository(
         // previous one — a diagnostic that is worse than none, because it reads
         // as authoritative.
         const { count } = await tx.sceneGeneration.updateMany({
-          where: { id: generationId, state: "QUEUED" },
+          where: { id: generationId, state: "QUEUED", orchestrationState: null },
           data: { state: target, normalizedErrorCode: reason, normalizedErrorMessage: null },
         });
         if (count === 0) return null;

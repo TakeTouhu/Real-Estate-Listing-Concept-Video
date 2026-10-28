@@ -1,4 +1,5 @@
 import type { SafetyGuardDecision } from "../pricing/safety-guard";
+import type { ExecutionSourceRefusalReason } from "../generation/execution-source";
 import type { RoutingAuthorizationFailure } from "./routing";
 
 /**
@@ -153,7 +154,20 @@ export type PaidSubmissionAuthorizationOutcome =
       readonly kind: "ROUTING_NOT_AUTHORIZED";
       readonly reason: RoutingAuthorizationFailure;
     }
+  | {
+      readonly kind: "SOURCE_INVALID";
+      readonly reason: SourceAuthorizationFailure;
+    }
   | { readonly kind: "LOST_CONCURRENCY" };
+
+/**
+ * Why the locked source asset cannot be sent (ADR-0096): gone, no longer
+ * usable, or no longer the source preparation signed.
+ */
+export type SourceAuthorizationFailure =
+  | ExecutionSourceRefusalReason
+  | "ASSET_NOT_FOUND"
+  | "ASSET_SOURCE_CHANGED";
 
 /** Why an attempt is not in a shape that could cross the boundary. */
 export type AttemptArmabilityFailure =

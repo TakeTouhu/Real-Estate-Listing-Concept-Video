@@ -140,6 +140,9 @@ describe("the authorization module has no provider or network dependency", () =>
             async readBillingCycleRevenue() {
               return null;
             },
+            async lockSource() {
+              return null;
+            },
             async arm() {
               armCalls += 1;
               return { kind: "ARMED", stateVersion: 1 };
@@ -158,6 +161,7 @@ describe("the authorization module has no provider or network dependency", () =>
       const outcome = await service.authorize({
         organizationId: "org_no_net",
         attemptId: "sgen_no_net",
+        source: { storageKey: "org/o/a/normalized.jpg", mimeType: "image/jpeg", sha256: "a".repeat(64) },
         context: {
           actorType: "SYSTEM",
           actorUserId: null,

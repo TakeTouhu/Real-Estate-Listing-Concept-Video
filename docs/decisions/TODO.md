@@ -530,6 +530,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       unaudited** regardless of what happened at admission. Until it does, an
       unaudited generation is a paid call waiting to be untraceable.
       **Required before any provider submission ships.**
+      *Done for orchestrated attempts in GS-7c-1 (ADR-0096 Decision 3): the
+      paid-submission gate writes `generation.submission_started` in the commit
+      that moves the attempt to `SUBMITTING`, the only state anything is sent
+      from, and a failed insert rolls the move back. What remains is the legacy
+      executor's claim, which writes no such entry: nothing constructs it, and
+      it must not send until it does.*
 - [x] **Phase 4C-1b MUST define a separate, trusted, system-scoped execution
       persistence boundary.** **Closed in Phase 4C-1b** (ADR-0025).
       `SceneGenerationExecutionRepository` discovers eligible `QUEUED` rows
@@ -637,6 +643,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       explicitly **not** — a failed park leaves the row `QUEUED` to be
       rediscovered, because no request was ever sent (ADR-0027).
       **Required before any provider charge is possible.**
+      *For orchestrated attempts, steps 2 to 5 are done at the gate in GS-7c-1
+      (ADR-0096): it locks the source asset after the reservation, refuses one
+      deleted, changed or no longer the prepared source (`SOURCE_INVALID`),
+      moves the attempt and writes the audit entry in one commit. Steps 1 and
+      6, the URL's freshness and the POST, are GS-7c-2.*
 - [ ] **A preflight-failure audit event, if wanted, belongs to orchestration.**
       Phase 4C-2B deliberately emits none: there is no provider POST in it, and
       coupling audit I/O into the persistence CAS would put a second failure mode
@@ -667,6 +678,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       retention policy. A generation whose photo is gone is genuinely
       unexecutable and needs a normalized reason rather than a silent failure or
       a substituted image. **Required before Phase 4C ships.**
+      *The paid-submission gate refuses such a source with a normalized reason
+      (`SOURCE_INVALID`, ADR-0096 Decision 2). Ending the attempt for it is
+      GS-7c-2 and GS-7d.*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1378,7 +1392,7 @@ them is **built**. Each item below records the settled decision and what remains
       and the customer's Unit stays held (ADR-0083, *Not decided here*).
       Whether such an attempt ends, after how long, and as which state, is not
       decided. Must be settled before generation is activated.
-- [ ] **Stop the legacy executor's discovery from offering orchestrated
+- [x] **Stop the legacy executor's discovery from offering orchestrated
       attempts (GS-7).** `findNextQueuedForPreparation` and its claim read the
       legacy `state` column, which no orchestration writer moves: every
       orchestrated attempt stays legacy `QUEUED` from admission, including one
@@ -1387,7 +1401,10 @@ them is **built**. Each item below records the settled decision and what remains
       outside the paid-submission gate. Nothing in production constructs it.
       Before any executor runs orchestrated attempts, its discovery must
       exclude them or read the orchestration state. *Planned for GS-7c, the
-      pull request that sends orchestrated attempts (ADR-0094).*
+      pull request that sends orchestrated attempts (ADR-0094). Done in
+      GS-7c-1 (ADR-0096 Decision 1, no migration): discovery, the claim
+      (before the asset lock, after it, and at its compare-and-swap) and the
+      park act only on a `QUEUED` row with no orchestration state.*
 - [x] **Start each scene in the commit that admits its first attempt
       (GS-7).** Admission (`admitAttemptWithin`) does not move the scene, and
       Transaction K settles an initial request only under a `GENERATING`
@@ -1430,6 +1447,14 @@ them is **built**. Each item below records the settled decision and what remains
       organization's job is offered (ADR-0095 Decision 7). GS-7d must remove a
       job that can never launch from the head of its queue, and GS-9's pass
       must keep refused jobs from using up its window.*
+- [ ] **End an orchestrated attempt the gate will never authorize (GS-7d).**
+      A gate refusal writes nothing, so an attempt refused for good, such as
+      a source deleted or changed since preparation (`SOURCE_INVALID`,
+      ADR-0096) or a price no contract will cover again, stays `QUEUED` under
+      a `GENERATING` job, and Transaction K never settles its request: the
+      customer's Unit stays held (ADR-0052 Decision 19). Which refusals end
+      the attempt, as which state, and under which lock, is not decided.
+      *Planned for GS-7d; GS-7c-2 parks preparation's terminal refusals.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

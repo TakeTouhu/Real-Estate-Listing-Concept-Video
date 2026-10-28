@@ -30,8 +30,10 @@ import {
 } from "@app/video-providers";
 import {
   ASSET_A,
+  ASSET_B,
   ctx,
   dropTenants,
+  fixtureSource,
   FIXTURE_RESERVED_AT,
   HAS_DB,
   OPEN_VIDEO_IDENTITY,
@@ -278,6 +280,7 @@ async function authorize(
   return service(client, cycleYen, clock).authorize({
     organizationId,
     attemptId,
+    source: fixtureSource(organizationId),
     // Deliberately a label the service must overwrite: the event type on a paid
     // authorization is not the caller's to choose.
     context: ctx({ eventType: "CALLER_CHOSEN" }),
@@ -386,7 +389,12 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
     it("are production's unless given: an attempt priced against another contract is refused", async () => {
       const { attempt } = await seedAuthorizableChain(prisma, "notprod", { contract: added });
-      const outcome = await service(prisma).authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      const outcome = await service(prisma).authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(outcome.kind).toBe("PRICING_INELIGIBLE");
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
       expect(row.orchestrationState).toBe("QUEUED");
@@ -397,6 +405,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const extended = extendProviderPricingCatalog([added]);
       const outcome = await service(prisma, yen(49_800), createFixedAuthorizationClock(AT), extended).authorize({
         organizationId: ORG_A,
+        source: fixtureSource(ORG_A),
         attemptId: attempt.id,
         context: ctx(),
       });
@@ -411,10 +420,20 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const second = await seedAuthorizableChain(prisma, "sibsecond", { contract: added });
       const extended = extendProviderPricingCatalog([added]);
       const gate = service(prisma, yen(49_800), createFixedAuthorizationClock(AT), extended);
-      const armed = await gate.authorize({ organizationId: ORG_A, attemptId: first.attempt.id, context: ctx() });
+      const armed = await gate.authorize({
+        organizationId: ORG_A,
+        attemptId: first.attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(armed.kind).toBe("AUTHORIZED");
 
-      const outcome = await gate.authorize({ organizationId: ORG_A, attemptId: second.attempt.id, context: ctx() });
+      const outcome = await gate.authorize({
+        organizationId: ORG_A,
+        attemptId: second.attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(outcome.kind).toBe("AUTHORIZED");
       // And the sibling was counted, not missed: its cost is the second's in-flight cost.
       const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
@@ -469,7 +488,12 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     it("authorizes an HQ attempt, given the kit's policy and catalog, and records the kit's version", async () => {
       // The fixture's project is 1080p, which is HQ.
       const { attempt } = await seedFake("fakehq", "HIGH_QUALITY", "1080p");
-      const outcome = await kitService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      const outcome = await kitService().authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(outcome.kind).toBe("AUTHORIZED");
       const boundary = await prisma.generationTransitionEvent.findFirstOrThrow({
         where: { aggregateType: "ATTEMPT", aggregateId: attempt.id, toState: "SUBMITTING" },
@@ -480,16 +504,27 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
     it("authorizes a Normal attempt on a 720p project", async () => {
       await prisma.videoProject.update({ where: { id: PROJECT_A }, data: { targetOutputResolution: "720p" } });
       const { attempt } = await seedFake("fakenormal", "NORMAL", "720p");
-      const outcome = await kitService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      const outcome = await kitService().authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(outcome.kind).toBe("AUTHORIZED");
     });
 
     it("is refused by production's catalog, and by production's route policy", async () => {
       const { attempt } = await seedFake("fakeprod", "HIGH_QUALITY", "1080p");
-      const unpriced = await service(prisma).authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      const unpriced = await service(prisma).authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(unpriced.kind).toBe("PRICING_INELIGIBLE");
       const unrouted = await kitService(PRODUCTION_ROUTE_POLICY).authorize({
         organizationId: ORG_A,
+        source: fixtureSource(ORG_A),
         attemptId: attempt.id,
         context: ctx(),
       });
@@ -504,6 +539,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
       const { attempt } = await seedFake("fakeprodnormal", "NORMAL", "720p");
       const unrouted = await kitService(PRODUCTION_ROUTE_POLICY).authorize({
         organizationId: ORG_A,
+        source: fixtureSource(ORG_A),
         attemptId: attempt.id,
         context: ctx(),
       });
@@ -532,7 +568,12 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
 
     it("hard-pauses the fixture's Enterprise cycle, whose revenue is unknown", async () => {
       const { attempt } = await seedAuthorizableChain(prisma, "readerent");
-      const outcome = await readerService().authorize({ organizationId: ORG_A, attemptId: attempt.id, context: ctx() });
+      const outcome = await readerService().authorize({
+        organizationId: ORG_A,
+        attemptId: attempt.id,
+        source: fixtureSource(ORG_A),
+        context: ctx(),
+      });
       expect(outcome).toMatchObject({ kind: "SAFETY_GUARD_HARD_PAUSE", reason: "BILLING_CYCLE_REVENUE_UNAVAILABLE" });
       const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attempt.id } });
       expect(row.orchestrationState).toBe("QUEUED");
@@ -590,6 +631,7 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         });
         const outcome = await readerService(single).authorize({
           organizationId: ORG_A,
+          source: fixtureSource(ORG_A),
           attemptId: attempt.id,
           context: ctx(),
         });
@@ -2025,6 +2067,190 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         },
       });
       expect(armed).toBe(1);
+    });
+  });
+
+  describe("the source and the paid call's audit (ADR-0096)", () => {
+    async function auditsFor(attemptId: string) {
+      return prisma.auditLog.findMany({ where: { resourceId: attemptId } });
+    }
+
+    async function unmoved(attemptId: string) {
+      const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: attemptId } });
+      expect(row.orchestrationState).toBe("QUEUED");
+      expect(row.stateVersion).toBe(0);
+      expect(row.submissionBoundaryEnteredAt).toBeNull();
+      expect(await auditsFor(attemptId)).toEqual([]);
+    }
+
+    it("writes the paid call's audit entry in the move's own commit", async () => {
+      const chain = await seedAuthorizableChain(prisma, "auditok");
+      expect((await authorize(prisma, chain.attempt.id)).kind).toBe("AUTHORIZED");
+      const audits = await auditsFor(chain.attempt.id);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        organizationId: ORG_A,
+        actorUserId: null,
+        action: "generation.submission_started",
+        resourceType: "scene_generation",
+        metadata: {
+          generationJobId: chain.job.id,
+          requestKind: "INITIAL",
+          pricingSnapshotId: `price_sgen_auditok`,
+        },
+      });
+    });
+
+    it("writes no audit entry when the move loses its compare-and-set", async () => {
+      const chain = await seedAuthorizableChain(prisma, "auditlost");
+      const armed = await createPaidSubmissionAuthorizationRepository(prisma).withCostAdmission(
+        { organizationId: ORG_A, attemptId: chain.attempt.id },
+        (session) =>
+          session.arm({
+            expectedVersion: 99,
+            context: ctx(),
+            audit: {
+              organizationId: ORG_A,
+              actorUserId: null,
+              action: "generation.submission_started",
+              resourceType: "scene_generation",
+              resourceId: chain.attempt.id,
+              metadata: {},
+            },
+          }),
+      );
+      expect(armed).toEqual({ kind: "LOST" });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("writes no audit entry for an attempt the gate refuses", async () => {
+      const chain = await seedAuthorizableChain(prisma, "auditno");
+      expect((await authorize(prisma, chain.attempt.id, ORG_A, null)).kind).toBe("SAFETY_GUARD_HARD_PAUSE");
+      await unmoved(chain.attempt.id);
+    });
+
+    it("refuses an asset whose deletion was asked for, and moves nothing", async () => {
+      const chain = await seedAuthorizableChain(prisma, "srcdel");
+      await prisma.mediaAsset.update({
+        where: { id: ASSET_A },
+        data: { status: "DELETION_PENDING", deletionRequestedAt: new Date() },
+      });
+      expect(await authorize(prisma, chain.attempt.id)).toEqual({
+        kind: "SOURCE_INVALID",
+        reason: "ASSET_UNRECOVERABLE",
+      });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("refuses an asset whose bytes are no longer the ones prepared", async () => {
+      const chain = await seedAuthorizableChain(prisma, "srcchg");
+      await prisma.mediaAsset.update({ where: { id: ASSET_A }, data: { sha256: "c3".repeat(32) } });
+      expect(await authorize(prisma, chain.attempt.id)).toEqual({
+        kind: "SOURCE_INVALID",
+        reason: "ASSET_SOURCE_CHANGED",
+      });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("does not find an asset of another organization behind the attempt", async () => {
+      // Written underneath the application, which never moves an attempt's
+      // asset: the lock's tenant predicate is what answers, not the asset id.
+      const chain = await seedAuthorizableChain(prisma, "srcorg");
+      await prisma.sceneGeneration.update({ where: { id: chain.attempt.id }, data: { assetId: ASSET_B } });
+      const outcome = await service(prisma).authorize({
+        organizationId: ORG_A,
+        attemptId: chain.attempt.id,
+        source: fixtureSource(ORG_B),
+        context: ctx(),
+      });
+      expect(outcome).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_NOT_FOUND" });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("does not lock the source behind another organization's attempt", async () => {
+      // Organization B's attempt, pointed at organization A's asset underneath
+      // the application: the session, asked as A, finds neither.
+      const b = await seedAuthorizableChain(prisma, "srcorgb", { organizationId: ORG_B, videoProjectId: PROJECT_B });
+      await prisma.sceneGeneration.update({ where: { id: b.attempt.id }, data: { assetId: ASSET_A } });
+      const locked = await createPaidSubmissionAuthorizationRepository(prisma).withCostAdmission(
+        { organizationId: ORG_A, attemptId: b.attempt.id },
+        (session) => session.lockSource(),
+      );
+      expect(locked).toBeNull();
+    });
+
+    it("waits for a deletion request already being written, and then refuses", async () => {
+      const chain = await seedAuthorizableChain(prisma, "srcwait");
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const deletion = other.$transaction(
+        async (tx) => {
+          await tx.mediaAsset.update({
+            where: { id: ASSET_A, organizationId: ORG_A, deletionRequestedAt: null },
+            data: { status: "DELETION_PENDING", deletionRequestedAt: new Date() },
+          });
+          await held;
+        },
+        { timeout: 20_000 },
+      );
+      let stillBlocked: boolean;
+      let blocked!: ReturnType<typeof settled<Awaited<ReturnType<typeof authorize>>>>;
+      try {
+        await breathe(4);
+        blocked = settled(authorize(prisma, chain.attempt.id));
+        await breathe();
+        stillBlocked = !blocked.done();
+      } finally {
+        release();
+      }
+      await deletion;
+      expect(stillBlocked).toBe(true);
+      expect(await blocked.value).toEqual({ kind: "SOURCE_INVALID", reason: "ASSET_UNRECOVERABLE" });
+      await unmoved(chain.attempt.id);
+    });
+
+    it("holds the asset against a deletion request until it commits", async () => {
+      // Driven through the real session: the source is locked, then held open
+      // while a deletion request on another connection tries the same row.
+      const chain = await seedAuthorizableChain(prisma, "srchold");
+      let finish!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let locked!: () => void;
+      const sourceLocked = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holder = createPaidSubmissionAuthorizationRepository(prisma).withCostAdmission(
+        { organizationId: ORG_A, attemptId: chain.attempt.id },
+        async (session) => {
+          const source = await session.lockSource();
+          locked();
+          await holding;
+          return source;
+        },
+      );
+      let stillBlocked: boolean;
+      let writer!: ReturnType<typeof settled<number>>;
+      try {
+        await sourceLocked;
+        writer = settled(
+          other.$executeRaw`
+            UPDATE "media_assets"
+               SET "status" = 'DELETION_PENDING'::"MediaAssetStatus", "deletionRequestedAt" = NOW()
+             WHERE "id" = ${ASSET_A} AND "deletionRequestedAt" IS NULL
+          `,
+        );
+        await breathe();
+        stillBlocked = !writer.done();
+      } finally {
+        finish();
+      }
+      expect(await holder).toMatchObject({ status: "READY", deletionRequestedAt: null, ...fixtureSource(ORG_A) });
+      expect(stillBlocked).toBe(true);
+      expect(await writer.value).toBe(1);
     });
   });
 });

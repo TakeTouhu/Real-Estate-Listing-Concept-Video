@@ -16,6 +16,7 @@ import {
   attemptInput,
   ctx,
   dropTenants,
+  fixtureSource,
   HAS_DB,
   ORG_A,
   repositories,
@@ -189,6 +190,7 @@ RUN("settlement under contention", () => {
       const authorization = gate(workerA)
         .authorize({
           organizationId: ORG_A,
+          source: fixtureSource(ORG_A),
           attemptId: queuedId,
           context: ctx({ correlationId: "corr_auth_race" }),
         })
@@ -290,6 +292,7 @@ RUN("settlement under contention", () => {
 
       const auth = await gate(prisma).authorize({
         organizationId: ORG_A,
+        source: fixtureSource(ORG_A),
         attemptId: queuedId,
         context: ctx(),
       });

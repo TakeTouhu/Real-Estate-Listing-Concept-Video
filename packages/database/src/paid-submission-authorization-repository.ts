@@ -31,7 +31,12 @@ import {
   type SubmissionCertainty,
   type Yen,
 } from "@app/domain";
+import { auditLogData } from "./audit-log-data";
 import { readBillingCycleRevenueWithin } from "./billing-cycle-revenue-reader";
+import {
+  toExecutionSourceObservation,
+  type RawLockedAssetRow,
+} from "./generation-execution-repository";
 import { armProviderBoundaryWithin } from "./orchestration-repositories";
 /**
  * The organization + billing-cycle cost-admission lock.
@@ -157,6 +162,43 @@ async function lockReservationForAttempt(
        FOR SHARE OF res
   `;
   return rows.length > 0;
+}
+
+/**
+ * The attempt's source asset, locked against its writers (ADR-0096).
+ *
+ * `FOR NO KEY UPDATE`, as the legacy claim takes it (ADR-0030): it conflicts
+ * with a deletion request and every status write, each one statement on this
+ * row alone, and not with the `FOR KEY SHARE` a storyboard scene or an
+ * analysis row takes for its foreign key. Taken after the reservation and
+ * before the attempt's compare-and-set; nothing that holds an asset lock waits
+ * for the cost-admission lock or a reservation, so the order adds no cycle.
+ *
+ * Tenant-scoped twice: the attempt through its project's organization, and
+ * the asset in that same organization. A row of another tenant is not found.
+ */
+async function lockSourceForAttempt(
+  tx: Tx,
+  organizationId: string,
+  attemptId: string,
+): Promise<RawLockedAssetRow | null> {
+  const rows = await tx.$queryRaw<RawLockedAssetRow[]>`
+    SELECT ma."id",
+           ma."organizationId",
+           ma."status",
+           ma."storageKey",
+           ma."mimeType",
+           ma."sha256",
+           ma."deletionRequestedAt"
+      FROM "scene_generations" a
+      JOIN "video_projects" p ON p."id" = a."videoProjectId"
+      JOIN "media_assets" ma ON ma."id" = a."assetId"
+     WHERE a."id" = ${attemptId}
+       AND p."organizationId" = ${organizationId}
+       AND ma."organizationId" = ${organizationId}
+       FOR NO KEY UPDATE OF ma
+  `;
+  return rows[0] ?? null;
 }
 
 interface AttemptRow {
@@ -823,7 +865,12 @@ export function createPaidSubmissionAuthorizationRepository(
               : options.revenue.revenueYen(read);
           },
 
-          async arm({ expectedVersion, context }): Promise<ArmResult> {
+          async lockSource() {
+            const row = await lockSourceForAttempt(tx, input.organizationId, input.attemptId);
+            return row === null ? null : toExecutionSourceObservation(row);
+          },
+
+          async arm({ expectedVersion, context, audit }): Promise<ArmResult> {
             const armed = await armProviderBoundaryWithin(tx, {
               organizationId: input.organizationId,
               id: input.attemptId,
@@ -831,6 +878,9 @@ export function createPaidSubmissionAuthorizationRepository(
               context,
             });
             if (armed.kind === "ARMED") {
+              // In the move's own commit: no provider call is ever unaudited,
+              // and no audit entry ever describes a move that did not commit.
+              await tx.auditLog.create({ data: auditLogData(audit) });
               return { kind: "ARMED", stateVersion: armed.attempt.stateVersion };
             }
             if (armed.kind === "LOST") return { kind: "LOST" };
