@@ -79,6 +79,13 @@ minutes; anything but a clean exit is a clip not made. A 5-second 720p clip
 took about two seconds and a 1080p one about four on a four-core development
 container.
 
+FFmpeg is not given the JPEG. The photo is first decoded by sharp, the library
+that encoded it on upload, and handed over as a PNG in the clip's work folder:
+FFmpeg 6.1, the version CI installs, refuses some of the image pipeline's own
+JPEGs (mozjpeg's encoding of an image with large flat areas: one flat colour,
+or a white wall with one dark square, failed), which a provider reads without
+complaint. A photo sharp cannot decode is a clip not made.
+
 ## Decision 6 — Kept by a name no request controls
 
 Each clip is a file in the studio's folder named by the SHA-256 of its
@@ -93,18 +100,33 @@ test model whose clip is kept. For anything else it throws the fixed
 without changing the attempt: it never reports a provider failure it did not
 see. It never answers `IN_PROGRESS`, since the clip exists before acceptance.
 
+That includes a clip gone after acceptance, because its folder was deleted or
+the status source was built over another folder: the studio cannot tell those
+apart, and answering `FAILED` for the second would end accepted attempts on a
+configuration mistake. Such an attempt stays `PROCESSING`, as one does when a
+real provider stops answering, until an attempt's running time is bounded (the
+open item *Bound how long an attempt may run before it is treated as failed*
+in `docs/decisions/TODO.md`, which must be settled before generation is
+activated). The folder must therefore not be deleted while attempts are in
+flight.
+
 ## Decision 7 — A locator names no file, and is never read
 
 A locator is a credential everywhere else (ADR-0038), so the studio does not
-put a file in one. It remembers which clip each locator it issued stands for,
-and its byte source opens only those: a locator it did not issue, even one
-built from the same text or issued by another studio over the same folder,
-opens nothing (`RETRYABLE_FAILURE`), as does a clip that is gone. The byte
-source never reads a locator's raw value, so the access capability keeps its
-one authorized importer, the fal byte source.
+put a file in one: its value is random, new at each answer. The studio
+remembers which clip each locator it issued stands for, and its byte source
+opens only those: a locator it did not issue, even one naming the clip's file
+or issued by another studio over the same folder, opens nothing
+(`RETRYABLE_FAILURE`), as does a clip that is gone or empty. One studio must
+therefore serve both the status source and the byte source; GS-9 builds one.
+The byte source never reads a locator's raw value, so the access capability
+keeps its one authorized importer, the fal byte source.
 
-The clip is streamed in pieces of at most 1 MiB with its size declared; a
-failed read is the branded retryable interruption the transfer core expects.
+The clip is streamed in pieces of at most 1 MiB, never more or fewer bytes than
+the size it declared; a failed read, or a clip that ends early, is the branded
+retryable interruption the transfer core expects. A file it opened and then
+refused is closed at once, and a stream's file is closed once however often
+the stream is.
 The storage dormancy test now authorizes this second `ProviderOutputByteSource`
 by name, beside fal's.
 
@@ -113,7 +135,9 @@ by name, beside fal's.
 - **What runs the steps.** Submission (GS-7) and the pipeline command (GS-9)
   compose the studio, the renderer and the photo reader; nothing does yet.
 - **Clearing the studio's folder.** Clips stay until a person deletes the
-  folder. A development database reset should delete it too.
+  folder, which a development database reset should do too, never while
+  attempts are in flight (Decision 6). A process stopped in the middle of a
+  render leaves its `work-` folder behind, which the same deletion clears.
 - **A fake that fails after accepting.** The end-to-end failure test (GS-13)
   can use the configured refusal; a failure reported by the status source is
   added only if a test needs one.

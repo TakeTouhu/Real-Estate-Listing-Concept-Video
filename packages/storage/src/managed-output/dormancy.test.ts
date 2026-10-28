@@ -208,7 +208,7 @@ describe("no production composition", () => {
     }
   });
 
-  it("has two production byte sources (fal and the test provider's) and exactly one durable staging sink (S3)", () => {
+  it("has two concrete byte sources (fal and the test provider's) and exactly one durable staging sink (S3)", () => {
     // The dormancy truth changed in Phase 4C-3B-2H-3B-3: a concrete durable
     // `ManagedOutputStagingSink` now exists too. Only the authorized files may
     // implement each port, so a further concrete implementation of either gets

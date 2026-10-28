@@ -23,6 +23,7 @@ import {
   S3ManagedOutputMediaValidator,
   S3ManagedOutputStagingSink,
   SHARED_FOLDER_STORAGE_BUCKET,
+  SharpImageProcessor,
   StreamingManagedOutputTransfer,
   createFfmpegFakeClipRenderer,
   createSharedFolderStorage,
@@ -111,10 +112,13 @@ describe("the FFmpeg clip maker", () => {
     const first = await decodeFrame(dir, clip, 0);
     const last = await decodeFrame(dir, clip, 149);
     expect(first.byteLength).toBe(1280 * 720 * 3);
-    // The 4:3 photo fitted whole: 960 wide, black either side of it.
-    expect(isBlack(pixel(first, 1280, 100, 360))).toBe(true);
+    // The 4:3 photo fitted whole, not zoomed yet: 960 wide from x = 160, black
+    // either side of it.
+    expect(isBlack(pixel(first, 1280, 150, 360))).toBe(true);
+    expect(isPhoto(pixel(first, 1280, 170, 360))).toBe(true);
     expect(isPhoto(pixel(first, 1280, 640, 360))).toBe(true);
-    expect(isBlack(pixel(first, 1280, 1200, 360))).toBe(true);
+    expect(isPhoto(pixel(first, 1280, 1110, 360))).toBe(true);
+    expect(isBlack(pixel(first, 1280, 1130, 360))).toBe(true);
     // Zoomed in and drifted right: the photo now covers where the black was.
     expect(isPhoto(pixel(last, 1280, 100, 360))).toBe(true);
     expect(isBlack(pixel(last, 1280, 1200, 360))).toBe(true);
@@ -142,7 +146,9 @@ describe("a clip from the photo in storage to a checked copy in storage", () => 
       variant: "normalized",
       extension: "jpg",
     });
-    await storage.objectStorage.putObject(photoKey, new Uint8Array(await readFile(photo)));
+    // Stored as an upload's normalized photo is: re-encoded by the image pipeline.
+    const normalized = await new SharpImageProcessor().process(new Uint8Array(await readFile(photo)));
+    await storage.objectStorage.putObject(photoKey, normalized.normalized);
     const signed = await storage.objectStorage.createSignedDownloadUrl(photoKey, 300);
 
     // The provider reads the photo the way the download route serves it.

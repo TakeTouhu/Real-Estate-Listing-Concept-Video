@@ -36,8 +36,8 @@ export const FAKE_ROUTE_VERSION = "dev-test-route.1";
 
 /**
  * The test provider's catalog entry. It records each target as generated at
- * its own size, so nothing is upscaled; the fake provider makes no clip yet,
- * and GS-6's must be made at that size (`docs/decisions/TODO.md`). The duration
+ * its own size, so nothing is upscaled; the test provider's studio makes each
+ * clip at that size (ADR-0092). The duration
  * range is production's default model's, so a storyboard composed for one fits
  * the other.
  */

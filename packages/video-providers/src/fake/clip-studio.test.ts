@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ProviderOutputByteStreamRetryableFailure,
   TransientProviderOutputLocator,
+  parseProviderPollObservation,
   type ProviderCompletionStatusSource,
   type ProviderOutputByteSource,
   type ProviderStatusLookupRef,
@@ -21,31 +23,63 @@ import {
 import { FakeVideoProvider } from "./fake-provider";
 import { FAKE_VIDEO_MODEL_ID } from "./route-kit";
 
+/**
+ * How often each file the studio opened was let go of. Its handles are not
+ * reachable from outside, so `open` is passed through and each handle counted.
+ */
+const handleCloses = vi.hoisted((): number[] => []);
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const close = handle.close.bind(handle);
+      const at = handleCloses.push(0) - 1;
+      handle.close = () => {
+        handleCloses[at] = (handleCloses[at] ?? 0) + 1;
+        return close();
+      };
+      return handle;
+    },
+  };
+});
+
 const DEV = { NODE_ENV: "test", VIDEO_PROVIDER: "fake" } as const;
 const URL = "/api/storage/download?token=signed";
 const PHOTO = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
 const CLIP = new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 9, 8, 7]);
 const HASH = `sha256:v2:${"a".repeat(64)}`;
 
-type Behaviour = "RENDER" | "FAIL" | "THROW" | "WRITE_NOTHING";
+type Behaviour = "RENDER" | "FAIL" | "THROW" | "WRITE_NOTHING" | "WRITE_EMPTY" | "FAIL_AFTER_WRITING";
 
 class RecordingRenderer implements FakeClipRenderer {
   readonly jobs: { widthPx: number; heightPx: number; durationSeconds: number; photo: Uint8Array }[] = [];
+  readonly photoModes: number[] = [];
 
   constructor(
     private readonly behaviour: Behaviour = "RENDER",
     private readonly clip: Uint8Array = CLIP,
+    /** Waited on before the clip is written, so a test can hold two renders at once. */
+    private readonly hold: () => Promise<void> = () => Promise.resolve(),
   ) {}
 
   async render(job: Parameters<FakeClipRenderer["render"]>[0]) {
     const { widthPx, heightPx, durationSeconds } = job;
     this.jobs.push({ widthPx, heightPx, durationSeconds, photo: new Uint8Array(await readFile(job.photoPath)) });
+    this.photoModes.push((await stat(job.photoPath)).mode & 0o777);
+    await this.hold();
     if (this.behaviour === "THROW") throw new Error("renderer broke");
     if (this.behaviour === "FAIL") return { kind: "FAILED" } as const;
-    if (this.behaviour === "RENDER") await writeFile(job.outputPath, this.clip);
-    return { kind: "RENDERED" } as const;
+    if (this.behaviour === "RENDER" || this.behaviour === "FAIL_AFTER_WRITING") {
+      await writeFile(job.outputPath, this.clip);
+    }
+    if (this.behaviour === "WRITE_EMPTY") await writeFile(job.outputPath, new Uint8Array());
+    return this.behaviour === "FAIL_AFTER_WRITING" ? ({ kind: "FAILED" } as const) : ({ kind: "RENDERED" } as const);
   }
 }
+
+const CLIP_NAME = `${createHash("sha256").update(`fake_${HASH}`).digest("hex")}.mp4`;
 
 function photosAt(url: string, photo: Uint8Array | null = PHOTO): FakeSourcePhotoReader & { urls: string[] } {
   const urls: string[] = [];
@@ -141,9 +175,9 @@ describe("building the studio", () => {
     expect(refusal(() => createFakeClipStudio(DEV, { root }, deps)).code).toBe("CONFIGURATION_ERROR");
   });
 
-  it("is refused unless the test provider is the configured provider", () => {
-    const wavespeed = { NODE_ENV: "test", VIDEO_PROVIDER: "wavespeed" } as const;
-    expect(refusal(() => createFakeClipStudio(wavespeed, { root }, deps)).code).toBe("CONFIGURATION_ERROR");
+  it.each(["wavespeed", "fal", ""])("is refused unless the test provider is the configured provider: %j", (name) => {
+    const configured = { NODE_ENV: "test", VIDEO_PROVIDER: name as "wavespeed" };
+    expect(refusal(() => createFakeClipStudio(configured, { root }, deps)).code).toBe("CONFIGURATION_ERROR");
   });
 
   it("is refused a folder that is not absolute, or cannot be opened", async () => {
@@ -161,9 +195,10 @@ describe("making a clip", () => {
     expect(await studio(renderer, photos).make(request())).toBe("MADE");
     expect(photos.urls).toEqual([URL]);
     expect(renderer.jobs).toEqual([{ widthPx: 1280, heightPx: 720, durationSeconds: 5, photo: PHOTO }]);
-    const name = `${createHash("sha256").update(`fake_${HASH}`).digest("hex")}.mp4`;
-    expect(await kept()).toEqual({ clips: [name], others: [] });
-    expect(new Uint8Array(await readFile(join(root, "clips", name)))).toEqual(CLIP);
+    // The photo is written for the renderer alone.
+    expect(renderer.photoModes).toEqual([0o600]);
+    expect(await kept()).toEqual({ clips: [CLIP_NAME], others: [] });
+    expect(new Uint8Array(await readFile(join(root, "clips", CLIP_NAME)))).toEqual(CLIP);
   });
 
   it.each([
@@ -182,6 +217,35 @@ describe("making a clip", () => {
     expect(await made.make(request())).toBe("MADE");
     expect(await made.make(request())).toBe("MADE");
     expect(renderer.jobs).toHaveLength(1);
+  });
+
+  it("lets the first of two makes of one request stand, and both say made", async () => {
+    let release: () => void = () => undefined;
+    const bothRendering = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const renderer: RecordingRenderer = new RecordingRenderer("RENDER", CLIP, async () => {
+      if (renderer.jobs.length === 2) release();
+      await bothRendering;
+    });
+    const made = studio(renderer);
+    expect(await Promise.all([made.make(request()), made.make(request())])).toEqual(["MADE", "MADE"]);
+    expect(renderer.jobs).toHaveLength(2);
+    expect(await kept()).toEqual({ clips: [CLIP_NAME], others: [] });
+  });
+
+  it("does not count a kept file that is not a clip as made", async () => {
+    const made = studio();
+    await writeFile(join(root, "clips", CLIP_NAME), new Uint8Array());
+    expect(await made.make(request())).toBe("NOT_MADE");
+    expect(await kept()).toEqual({ clips: [CLIP_NAME], others: [] });
+  });
+
+  it("makes nothing when the clip cannot be kept", async () => {
+    const made = studio();
+    await rm(join(root, "clips"), { recursive: true });
+    expect(await made.make(request())).toBe("NOT_MADE");
+    expect(await readdir(root)).toEqual([]);
   });
 
   it.each<[string, Partial<ProviderGenerationInput>]>([
@@ -206,12 +270,15 @@ describe("making a clip", () => {
     expect(await kept()).toEqual({ clips: [], others: [] });
   });
 
-  it.each<Behaviour>(["FAIL", "THROW", "WRITE_NOTHING"])("keeps nothing when the renderer answers %s", async (how) => {
-    const renderer = new RecordingRenderer(how);
-    expect(await studio(renderer).make(request())).toBe("NOT_MADE");
-    expect(renderer.jobs).toHaveLength(1);
-    expect(await kept()).toEqual({ clips: [], others: [] });
-  });
+  it.each<Behaviour>(["FAIL", "THROW", "WRITE_NOTHING", "WRITE_EMPTY", "FAIL_AFTER_WRITING"])(
+    "keeps nothing when the renderer answers %s",
+    async (how) => {
+      const renderer = new RecordingRenderer(how);
+      expect(await studio(renderer).make(request())).toBe("NOT_MADE");
+      expect(renderer.jobs).toHaveLength(1);
+      expect(await kept()).toEqual({ clips: [], others: [] });
+    },
+  );
 });
 
 describe("the status source", () => {
@@ -224,12 +291,26 @@ describe("the status source", () => {
     expect(typeof ports.status.poll).toBe("function");
   });
 
-  it("answers SUCCEEDED, with a redacted locator, for a clip it keeps", async () => {
+  it("answers SUCCEEDED, with a redacted locator, for a clip it keeps, in the shape the runner accepts", async () => {
     const made = studio();
     await made.make(request());
     const observation = await made.statusSource.poll(ref());
-    expect(observation.kind).toBe("SUCCEEDED");
+    expect(parseProviderPollObservation(observation)).toEqual({
+      kind: "SUCCEEDED",
+      outputLocator: expect.any(TransientProviderOutputLocator) as unknown,
+    });
     expect(JSON.stringify(observation)).not.toContain("fake-clip");
+  });
+
+  it("issues a new locator each time it is asked, naming no file", async () => {
+    const made = studio();
+    await made.make(request());
+    const first = await locatorFor(made);
+    const second = await locatorFor(made);
+    expect(first.equals(second)).toBe(false);
+    const named = TransientProviderOutputLocator.fromUnknown(`fake-clip:${CLIP_NAME}`);
+    if (!named.ok) throw new Error("fixture");
+    expect(named.value.equals(first)).toBe(false);
   });
 
   it.each<[string, Partial<ProviderStatusLookupRef>]>([
@@ -276,23 +357,58 @@ describe("the byte source", () => {
     const made = studio();
     await made.make(request());
     const issued = await locatorFor(made);
-    const name = `${createHash("sha256").update(`fake_${HASH}`).digest("hex")}.mp4`;
-    const lookalike = TransientProviderOutputLocator.fromUnknown(`fake-clip:${name}`);
+    const lookalike = TransientProviderOutputLocator.fromUnknown(`fake-clip:${CLIP_NAME}`);
     if (!lookalike.ok) throw new Error("fixture");
-    expect(lookalike.value.equals(issued)).toBe(true);
     expect(await made.byteSource.open(lookalike.value)).toEqual({ kind: "RETRYABLE_FAILURE" });
     // Another studio over the same folder keeps the same clip, but did not issue this locator.
     expect(await studio().byteSource.open(issued)).toEqual({ kind: "RETRYABLE_FAILURE" });
   });
 
-  it("opens nothing once the clip is gone", async () => {
+  it("opens nothing once the clip is gone, or empty, and lets go of the file", async () => {
     const made = studio();
     await made.make(request());
     const issued = await locatorFor(made);
+    await truncate(join(root, "clips", CLIP_NAME), 0);
+    const before = handleCloses.length;
+    expect(await made.byteSource.open(issued)).toEqual({ kind: "RETRYABLE_FAILURE" });
+    expect(handleCloses.slice(before)).toEqual([1]);
     await rm(join(root, "clips"), { recursive: true });
     expect(await made.byteSource.open(issued)).toEqual({ kind: "RETRYABLE_FAILURE" });
   });
+
+  it("lets go of the file once, however often the stream is closed", async () => {
+    const made = studio();
+    await made.make(request());
+    const issued = await locatorFor(made);
+    const before = handleCloses.length;
+    const opened = await made.byteSource.open(issued);
+    if (opened.kind !== "OPEN") throw new Error("expected the clip to open");
+    expect(handleCloses.slice(before)).toEqual([0]);
+    await opened.stream.close();
+    await opened.stream.close();
+    expect(handleCloses.slice(before)).toEqual([1]);
+  });
+
+  it("interrupts, retryably, a clip that ends before its declared size", async () => {
+    const made = studio();
+    await made.make(request());
+    const opened = await made.byteSource.open(await locatorFor(made));
+    if (opened.kind !== "OPEN") throw new Error("expected the clip to open");
+    await truncate(join(root, "clips", CLIP_NAME), 3);
+    await expect(collect(opened.stream.body)).rejects.toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+    await opened.stream.close();
+  });
+
+  it("interrupts, retryably, a read that fails", async () => {
+    const made = studio();
+    await made.make(request());
+    const opened = await made.byteSource.open(await locatorFor(made));
+    if (opened.kind !== "OPEN") throw new Error("expected the clip to open");
+    await opened.stream.close();
+    await expect(collect(opened.stream.body)).rejects.toBeInstanceOf(ProviderOutputByteStreamRetryableFailure);
+  });
 });
+
 
 describe("the fake provider with a studio", () => {
   it("accepts a request once its clip is made, under the prediction id the status source answers for", async () => {

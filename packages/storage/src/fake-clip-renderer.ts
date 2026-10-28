@@ -8,6 +8,12 @@
  * going through the same copy, checks and composition as a real provider's clip.
  * Construction refuses production, given or ambient, with no override.
  *
+ * The photo is first decoded by sharp, the library that encoded it on upload,
+ * and handed to FFmpeg as a PNG beside the clip. FFmpeg 6.1's JPEG decoder
+ * refuses some of the image pipeline's own JPEGs (mozjpeg's encoding of an
+ * image with large flat areas, such as a white wall), which a provider reads
+ * without complaint.
+ *
  * It runs FFmpeg through the injected `ProcessRunner`, the seam the composer
  * uses, so no shell parses anything: every argument is a path this process made
  * or a number checked here.
@@ -30,6 +36,8 @@
  * No audio, and nothing from the photo's own metadata.
  */
 
+import { dirname, join } from "node:path";
+import sharp from "sharp";
 import { AppError } from "@app/shared";
 import type { ProcessRunner } from "./managed-output/process-runner";
 import { assertNotProduction } from "./production-guard";
@@ -49,6 +57,16 @@ const MAX_STDOUT_BYTES = 65_536;
 export interface FakeClipRenderInput {
   /** A JPEG this process wrote. */
   readonly photoPath: string;
+  /** In a folder of the caller's own, which the renderer also works in. */
+  readonly outputPath: string;
+  readonly widthPx: number;
+  readonly heightPx: number;
+  readonly durationSeconds: number;
+}
+
+/** What FFmpeg is given: the photo already decoded, as a PNG. */
+export interface FakeClipFfmpegInput {
+  readonly picturePath: string;
   readonly outputPath: string;
   readonly widthPx: number;
   readonly heightPx: number;
@@ -74,7 +92,7 @@ function isEvenSide(value: number): boolean {
  * running anything. The input's reader is stated rather than guessed from the
  * path, and so is the container written.
  */
-export function ffmpegFakeClipArgsFor(input: FakeClipRenderInput): readonly string[] {
+export function ffmpegFakeClipArgsFor(input: FakeClipFfmpegInput): readonly string[] {
   const { widthPx: w, heightPx: h, durationSeconds } = input;
   if (!isEvenSide(w) || !isEvenSide(h)) {
     throw new AppError("INTERNAL_ERROR", "A test clip's frame must have even sides no larger than 1920");
@@ -105,9 +123,9 @@ export function ffmpegFakeClipArgsFor(input: FakeClipRenderInput): readonly stri
     "-v",
     "error",
     "-f",
-    "jpeg_pipe",
+    "png_pipe",
     "-i",
-    input.photoPath,
+    input.picturePath,
     "-filter_complex",
     `[0:v]${picture}[out]`,
     "-map",
@@ -155,7 +173,14 @@ export function createFfmpegFakeClipRenderer(
   }
   return {
     async render(input: FakeClipRenderInput): Promise<FakeClipRenderOutcome> {
-      const args = ffmpegFakeClipArgsFor(input);
+      const { photoPath, ...shape } = input;
+      const picturePath = join(dirname(input.outputPath), "picture.png");
+      const args = ffmpegFakeClipArgsFor({ picturePath, ...shape });
+      try {
+        await sharp(photoPath).png({ compressionLevel: 1 }).toFile(picturePath);
+      } catch {
+        return { kind: "FAILED" };
+      }
       // Only a clean exit made the clip. Every other outcome, a missing binary
       // included, is a clip not made: the test provider then refuses the
       // request, which is true, since it holds nothing (ADR-0092).

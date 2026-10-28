@@ -26,7 +26,12 @@ export {
   createFfmpegFakeClipRenderer,
   ffmpegFakeClipArgsFor,
 } from "./fake-clip-renderer";
-export type { FakeClipRenderInput, FakeClipRenderOutcome, FakeClipRendererConfig } from "./fake-clip-renderer";
+export type {
+  FakeClipFfmpegInput,
+  FakeClipRenderInput,
+  FakeClipRenderOutcome,
+  FakeClipRendererConfig,
+} from "./fake-clip-renderer";
 export { SharpImageProcessor, averageHashHex } from "./image-processor";
 export type { SharpImageProcessorOptions } from "./image-processor";
 export { PassthroughMalwareScanner } from "./scanner";

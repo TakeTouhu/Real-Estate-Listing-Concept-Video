@@ -1,27 +1,50 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import sharp from "sharp";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
-import { createFfmpegFakeClipRenderer, ffmpegFakeClipArgsFor, type FakeClipRenderInput } from "./fake-clip-renderer";
+import {
+  createFfmpegFakeClipRenderer,
+  ffmpegFakeClipArgsFor,
+  type FakeClipFfmpegInput,
+  type FakeClipRenderInput,
+} from "./fake-clip-renderer";
 import type { ProcessRunOutcome } from "./managed-output/process-runner";
 import { NonProductionAdapterError } from "./production-guard";
 import { FakeProcessRunner } from "./testing/media-fakes";
 
-const INPUT: FakeClipRenderInput = {
-  photoPath: "/work/photo.jpg",
+const INPUT: FakeClipFfmpegInput = {
+  picturePath: "/work/picture.png",
   outputPath: "/work/clip.mp4",
   widthPx: 1280,
   heightPx: 720,
   durationSeconds: 5,
 };
 
-afterEach(() => {
+let work: string;
+/** A real photo in a folder of the test's own, as the studio hands one over. */
+let photo: FakeClipRenderInput;
+
+beforeEach(async () => {
+  work = await mkdtemp(join(tmpdir(), "fake-clip-renderer-"));
+  const photoPath = join(work, "photo.jpg");
+  await sharp({ create: { width: 8, height: 6, channels: 3, background: "#c87832" } })
+    .jpeg({ mozjpeg: true })
+    .toFile(photoPath);
+  photo = { photoPath, outputPath: join(work, "clip.mp4"), widthPx: 1280, heightPx: 720, durationSeconds: 5 };
+});
+
+afterEach(async () => {
   vi.unstubAllEnvs();
+  await rm(work, { recursive: true, force: true });
 });
 
 describe("the test clip's argument vector", () => {
   it("fits the whole photo, zooms 8 % and pans across, for exactly duration × 30 frames", () => {
     expect(ffmpegFakeClipArgsFor(INPUT)).toEqual([
       "-nostdin", "-y", "-v", "error",
-      "-f", "jpeg_pipe", "-i", "/work/photo.jpg",
+      "-f", "png_pipe", "-i", "/work/picture.png",
       "-filter_complex",
       "[0:v]scale=2560:1440:force_original_aspect_ratio=decrease,pad=2560:1440:(ow-iw)/2:(oh-ih)/2:black,setsar=1," +
         "zoompan=z='1+0.08*on/149':x='(iw-iw/zoom)*on/149':y='(ih-ih/zoom)/2':d=150:s=1280x720:fps=30," +
@@ -59,22 +82,38 @@ describe("the test clip's argument vector", () => {
 });
 
 describe("rendering", () => {
-  it("runs ffmpeg once, bounded, and reports a clean exit as the clip made", async () => {
+  it("decodes the photo to a PNG beside the clip, runs ffmpeg on it once, bounded; a clean exit is made", async () => {
     const runner = new FakeProcessRunner({ outcome: { kind: "EXITED", exitCode: 0, stdout: "" } });
     const renderer = createFfmpegFakeClipRenderer({ runner }, { nodeEnv: "test" });
-    expect(await renderer.render(INPUT)).toEqual({ kind: "RENDERED" });
+    expect(await renderer.render(photo)).toEqual({ kind: "RENDERED" });
     expect(runner.runs).toHaveLength(1);
+    const picturePath = join(work, "picture.png");
     expect(runner.lastRun).toMatchObject({
       program: "ffmpeg",
-      args: ffmpegFakeClipArgsFor(INPUT),
+      args: ffmpegFakeClipArgsFor({ ...INPUT, picturePath, outputPath: photo.outputPath }),
       timeoutMs: 300_000,
       maxStdoutBytes: 65_536,
     });
+    expect(await sharp(await readFile(picturePath)).metadata()).toMatchObject({ format: "png", width: 8, height: 6 });
+  });
+
+  it("reports a photo it cannot decode as the clip not made, without running ffmpeg", async () => {
+    const runner = new FakeProcessRunner({ outcome: { kind: "EXITED", exitCode: 0, stdout: "" } });
+    const renderer = createFfmpegFakeClipRenderer({ runner });
+    expect(await renderer.render({ ...photo, photoPath: join(work, "missing.jpg") })).toEqual({ kind: "FAILED" });
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it("refuses a frame it does not make before decoding anything", async () => {
+    const runner = new FakeProcessRunner();
+    const renderer = createFfmpegFakeClipRenderer({ runner });
+    await expect(renderer.render({ ...photo, widthPx: 1279 })).rejects.toThrow(AppError);
+    await expect(readFile(join(work, "picture.png"))).rejects.toThrow();
   });
 
   it("takes another program and a shorter timeout", async () => {
     const runner = new FakeProcessRunner({ outcome: { kind: "EXITED", exitCode: 0, stdout: "" } });
-    await createFfmpegFakeClipRenderer({ runner }, { programPath: "/opt/ffmpeg", timeoutMs: 1_000 }).render(INPUT);
+    await createFfmpegFakeClipRenderer({ runner }, { programPath: "/opt/ffmpeg", timeoutMs: 1_000 }).render(photo);
     expect(runner.lastRun).toMatchObject({ program: "/opt/ffmpeg", timeoutMs: 1_000 });
   });
 
@@ -86,10 +125,10 @@ describe("rendering", () => {
     ["a missing program", { kind: "LAUNCH_FAILED" }],
   ])("reports %s as the clip not made", async (_, outcome) => {
     const renderer = createFfmpegFakeClipRenderer({ runner: new FakeProcessRunner({ outcome }) });
-    expect(await renderer.render(INPUT)).toEqual({ kind: "FAILED" });
+    expect(await renderer.render(photo)).toEqual({ kind: "FAILED" });
   });
 
-  it.each([999, 300_001, 1.5])("refuses a timeout of %s", (timeoutMs) => {
+  it.each([999, 300_001, 1.5, 1_000.5])("refuses a timeout of %s", (timeoutMs) => {
     expect(() => createFfmpegFakeClipRenderer({ runner: new FakeProcessRunner() }, { timeoutMs })).toThrow(AppError);
   });
 });

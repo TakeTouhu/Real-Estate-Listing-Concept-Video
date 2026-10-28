@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { link, mkdtemp, open, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -40,9 +40,10 @@ import { FAKE_VIDEO_MODEL_ID } from "./route-kit";
  *
  * Clips are kept as files in the studio's own folder, named by a hash of the
  * prediction id, so a prediction id never becomes a path. A locator names no
- * file either: the studio remembers which clip each locator it issued stands
- * for, so its byte source never reads a locator's raw value, and opens nothing
- * for a locator it did not issue.
+ * file either: its value is random, the studio remembers which clip each
+ * locator it issued stands for, so its byte source never reads a locator's raw
+ * value, and opens nothing for a locator it did not issue. One studio must
+ * therefore serve both the status source and the byte source.
  *
  * Refused in production, given or ambient, with no override, and unless
  * `VIDEO_PROVIDER` is `fake`.
@@ -130,19 +131,25 @@ function clipShape(
   return { widthPx: frame.profile.targetWidthPx, heightPx: frame.profile.targetHeightPx, durationSeconds };
 }
 
-/** Pulled in chunks of at most 1 MiB; a failed read is a retryable interruption. */
+/**
+ * Pulled in chunks of at most 1 MiB, and never more or fewer bytes than were
+ * declared: a failed read, or a clip that ends early, is a retryable
+ * interruption.
+ */
 function clipStream(handle: FileHandle, sizeBytes: number): ProviderOutputByteStream {
   let closed = false;
   async function* chunks(): AsyncGenerator<Uint8Array> {
-    for (;;) {
-      const buffer = new Uint8Array(CHUNK_BYTES);
+    let remaining = sizeBytes;
+    while (remaining > 0) {
+      const buffer = new Uint8Array(Math.min(CHUNK_BYTES, remaining));
       let bytesRead: number;
       try {
-        ({ bytesRead } = await handle.read(buffer, 0, CHUNK_BYTES, null));
+        ({ bytesRead } = await handle.read(buffer, 0, buffer.byteLength, null));
       } catch {
         throw new ProviderOutputByteStreamRetryableFailure();
       }
-      if (bytesRead === 0) return;
+      if (bytesRead === 0) throw new ProviderOutputByteStreamRetryableFailure();
+      remaining -= bytesRead;
       yield buffer.subarray(0, bytesRead);
     }
   }
@@ -229,8 +236,10 @@ export function createFakeClipStudio(
       try {
         await link(outputPath, clipPath);
       } catch (error) {
-        // Another make of the same request linked its clip first: that one stands.
+        // Another make of the same request linked its clip first: that one
+        // stands, if it is a clip.
         if ((error as { code?: unknown } | null)?.code !== "EEXIST") throw error;
+        return (await isClip(clipPath)) ? "MADE" : "NOT_MADE";
       }
       return "MADE";
     } finally {
@@ -256,16 +265,14 @@ export function createFakeClipStudio(
       async poll(ref: ProviderStatusLookupRef): Promise<ProviderPollObservation> {
         // The persisted identity decides, and only this provider's own. A
         // prediction id is hashed into a file name, never used as a path.
-        if (
-          ref.providerName !== "fake" ||
-          ref.providerModelId !== FAKE_VIDEO_MODEL_ID ||
-          !ref.providerPredictionId.startsWith("fake_")
-        ) {
+        if (ref.providerName !== "fake" || ref.providerModelId !== FAKE_VIDEO_MODEL_ID) {
           throw new ProviderErrorException(NO_SUCH_CLIP);
         }
         const fileName = clipFileName(ref.providerPredictionId);
+        // A clip that is gone is not a provider failure this studio saw: the
+        // folder may be another process's. The attempt is left as it is.
         if (!(await isClip(join(clips, fileName)))) throw new ProviderErrorException(NO_SUCH_CLIP);
-        const built = TransientProviderOutputLocator.fromUnknown(`fake-clip:${fileName}`);
+        const built = TransientProviderOutputLocator.fromUnknown(`fake-clip:${randomUUID()}`);
         if (!built.ok) throw new ProviderErrorException(NO_SUCH_CLIP);
         issued.set(built.value, fileName);
         return { kind: "SUCCEEDED", outputLocator: built.value };
