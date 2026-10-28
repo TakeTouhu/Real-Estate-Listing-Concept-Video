@@ -55,6 +55,11 @@ GS-7d decides how a job that can never launch is released (`docs/decisions/TODO.
 "Oldest" is among the jobs committed when the launch looks. A start
 committing at that moment is launched in the next pass.
 
+Only a deleted Property's job is passed over. Any other waiting job that cannot
+launch, because it plans nothing, is not of the start's shape, or is a
+duplicate (Decision 6), holds back its organization's later jobs until it
+launches or GS-7d releases it.
+
 ## Decision 4 — The rows are locked in the declared order and found as planned
 
 ```text
@@ -76,7 +81,8 @@ job-launch advisory lock (organization)
 - The job, its scenes and their requests follow in the order Transactions F, H,
   K and L and media recovery take them.
 
-The locked rows decide (`decideJobLaunch`), in this order:
+After the limit and the order (Decisions 2 and 3), the locked rows decide
+(`decideJobLaunch`), in this order:
 
 | Found | Answer |
 | --- | --- |
@@ -86,8 +92,15 @@ The locked rows decide (`decideJobLaunch`), in this order:
 | the quality, resolution, aspect ratio, or any scene's id, order, first request, length, camera motion or compiled prompt other than the plan was made from | `FACTS_CHANGED` |
 | otherwise | launch |
 
+The limit and the order are answered from the caller's own organization's
+rows, so another organization's job id is answered `NO_SUBSCRIPTION`,
+`AT_LIMIT` or `NOT_NEXT` when one of those holds for the caller, and
+`NOT_WAITING` otherwise: never anything about the other organization.
+
 A plan whose scenes are not the facts' scenes, in order, with their requests
-and compiled prompts, is a defect before any row is judged. Refusals write
+and compiled prompts, or whose rendered prompt is not what the renderer makes
+of the compiled one, is a defect before any row is judged: admission stores the
+rendered prompt as given, and nothing later renders it again. Refusals write
 nothing.
 
 ## Decision 5 — The job, its scenes and their first attempts start in one commit
@@ -142,6 +155,15 @@ There is no work row: a launched job is no longer waiting, so it is no longer a
 candidate. Nothing outside tests constructs the runner or the repository; the
 pipeline command (GS-9) is what will.
 
+The candidates are ordered by each organization's oldest waiting job, so a
+pass's window can fill with organizations whose oldest job cannot launch, and
+then no other organization's job is offered. GS-7d's release and GS-9's pass
+are to keep refused jobs from using up the window.
+
+Two launches of different organizations are not serialized. When both bind the
+same new exchange-rate snapshot, the second fails on its insert, rolls back,
+and is that job's `FAILED` outcome with no code; the next pass launches it.
+
 ## Decision 8 — The generic edges stay open for fixtures
 
 The generic job and scene transitions still allow `RESERVED → GENERATING` and
@@ -156,10 +178,13 @@ to the launch commit is recorded in `docs/decisions/TODO.md`.
 - **Releasing a job that can never launch** (GS-7d): a deleted Property's job,
   or one whose plan will never succeed.
 - **Whether a duplicate job blocks its organization's queue** (Decision 6).
-- **Revision start and the limit.** Revision start takes no launch lock, so a
-  revision started during a launch can make one more job hold a place than the
-  limit. Whether a regeneration counts at all is already open (ADR-0094
-  Decision 2); nothing runs revision start today.
+- **Revision start and the limit.** Revision start neither checks the limit
+  nor takes the launch lock, so every revision started while its organization
+  is at the limit holds a place beyond it. Whether a regeneration counts at all
+  is already open (ADR-0094 Decision 2); nothing runs revision start today.
+- **A waiting job that can never launch, and the candidate window**
+  (Decisions 3 and 7): it holds back its organization's queue, and enough of
+  them fill a pass's window. GS-7d and GS-9.
 
 ## Consequences
 

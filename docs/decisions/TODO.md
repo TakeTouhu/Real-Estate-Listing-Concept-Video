@@ -1423,7 +1423,13 @@ them is **built**. Each item below records the settled decision and what remains
       Since GS-7b (ADR-0095 Decision 3) a waiting job whose Property was
       deleted is never launched and is passed over in the order, so it no
       longer holds back its organization's other jobs, but it still holds its
-      Units until GS-7d.*
+      Units until GS-7d. Any other job that cannot launch does hold them back,
+      since the launch is strict oldest-first, and the candidate query offers
+      organizations by their oldest waiting job, so once a pass's window is
+      filled by organizations whose oldest job cannot launch, no other
+      organization's job is offered (ADR-0095 Decision 7). GS-7d must remove a
+      job that can never launch from the head of its queue, and GS-9's pass
+      must keep refused jobs from using up its window.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a
@@ -1433,10 +1439,11 @@ them is **built**. Each item below records the settled decision and what remains
       after a revision, is counted today because its state cannot be told
       apart from a first generation's; that counting is provisional (ADR-0094
       Decision 2). Nothing runs revision start today; decide before paid
-      regeneration is wired. Revision start also takes no launch lock (ADR-0095
-      Decision 1), so a revision started during a launch can leave one more job
-      holding a place than the limit; whichever way this is decided, revision
-      start must then take the launch lock or not count.
+      regeneration is wired. Revision start neither checks the limit nor takes
+      the launch lock (ADR-0095 Decision 1), so every revision started while
+      its organization is at the limit holds a place beyond it; if a
+      regeneration counts, revision start must check the limit under the
+      launch lock.
 - [ ] **Decide whether a duplicate job blocks its organization's queue.** One
       project may not have two identical requests at work at once (the
       active-request index), so a job of the same storyboard as one still

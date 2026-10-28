@@ -607,6 +607,12 @@ describe.skipIf(!HAS_DB)("oldest first", () => {
     expect((await runner().runOnce(10)).outcomes.map((entry) => entry.generationJobId)).toEqual([older]);
   });
 
+  it("offers organizations by their oldest waiting job, as many as the pass's limit", async () => {
+    const older = await startJob(ORG_B, 1);
+    await startJob(ORG_A, 2);
+    expect((await runner().runOnce(1)).outcomes.map((entry) => entry.generationJobId)).toEqual([older]);
+  });
+
   it("passes over a deleted Property's job to the next one", async () => {
     const deleted = await startJob(ORG_A, 1, SECOND);
     const next = await startJob(ORG_A, 2);

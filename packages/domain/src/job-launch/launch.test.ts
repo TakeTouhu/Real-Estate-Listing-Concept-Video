@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
+import { renderPrompt } from "../generation/prompt-render";
 import type { FxSnapshot } from "../pricing/provider-pricing-contract";
 import type { PricingSnapshot } from "../pricing/pricing-snapshot";
 import { epochMillis } from "../pricing/units";
+import { PRESERVATION_RULES, SYSTEM_NEGATIVE_CONSTRAINTS, type CompiledPrompt } from "../storyboard/index";
 import {
   JobLaunchDefect,
   MAX_JOB_LAUNCH_BATCH_SIZE,
@@ -22,6 +24,17 @@ import type { JobLaunchFacts, JobLaunchPlan } from "./ports";
 
 type Planned = Extract<JobLaunchPlan, { kind: "PLANNED" }>;
 
+/** A compiled prompt the renderer accepts, distinct per scene. */
+function compiled(n: number, roomType: CompiledPrompt["sceneFacts"]["roomType"] = "LIVING_ROOM"): string {
+  const prompt: CompiledPrompt = {
+    preservation: [...PRESERVATION_RULES],
+    sceneFacts: { assetId: `ast_${n}`, position: n, roomType, durationSeconds: 5, cameraMotion: null },
+    userCustomization: null,
+    negativeConstraints: { system: [...SYSTEM_NEGATIVE_CONSTRAINTS], user: null },
+  };
+  return JSON.stringify(prompt);
+}
+
 function facts(): JobLaunchFacts {
   return {
     qualityTier: "NORMAL",
@@ -32,7 +45,7 @@ function facts(): JobLaunchFacts {
       initialRequestId: `greq_${n}`,
       durationSeconds: 5 * n,
       cameraMotion: n === 1 ? "SLOW_PAN" : null,
-      compiledPrompt: `compiled ${n}`,
+      compiledPrompt: compiled(n),
     })),
   };
 }
@@ -52,7 +65,7 @@ function plan(from: JobLaunchFacts = facts()): Planned {
       generationSceneId: scene.generationSceneId,
       generationSceneRequestId: scene.initialRequestId,
       compiledPrompt: scene.compiledPrompt ?? "",
-      requestRenderedPrompt: `rendered ${scene.generationSceneId}`,
+      requestRenderedPrompt: renderPrompt(scene.compiledPrompt ?? ""),
       pricingSnapshot: { fxSnapshotId: "fx_1" } as unknown as PricingSnapshot,
       fxSnapshot: { id: "fx_1" } as unknown as FxSnapshot,
     })),
@@ -66,7 +79,7 @@ function lockedScene(n: number, overrides: Partial<JobLaunchLockedScene> = {}): 
     state: "PENDING",
     durationSeconds: 5 * n,
     cameraMotion: n === 1 ? "SLOW_PAN" : null,
-    compiledPrompt: `compiled ${n}`,
+    compiledPrompt: compiled(n),
     requests: request(`greq_${n}`),
     ...overrides,
   };
@@ -222,6 +235,16 @@ describe("a plan made from other facts", () => {
         scenes: plan(other).scenes.map((s, i) => (i === 1 ? { ...s, generationSceneRequestId: "x" } : s)),
       },
       { ...plan(other), scenes: plan(other).scenes.map((s, i) => (i === 1 ? { ...s, compiledPrompt: "x" } : s)) },
+      {
+        ...plan(other),
+        scenes: plan(other).scenes.map((s, i) => (i === 1 ? { ...s, requestRenderedPrompt: "send this" } : s)),
+      },
+      {
+        ...plan(other),
+        scenes: plan(other).scenes.map((s, i) =>
+          i === 1 ? { ...s, requestRenderedPrompt: renderPrompt(compiled(2, "KITCHEN")) } : s,
+        ),
+      },
     ];
     for (const wrong of mismatched) {
       expect(defectOf(() => assertPlanForFacts(other, wrong))).toBe("PLAN_NOT_FOR_FACTS");
@@ -229,6 +252,13 @@ describe("a plan made from other facts", () => {
         .toBe("PLAN_NOT_FOR_FACTS");
     }
     expect(defectOf(() => assertPlanForFacts(other, plan(other)))).toBeNull();
+
+    // A compiled prompt the renderer refuses renders to nothing, whatever the plan carries.
+    const unrenderable = <S extends { compiledPrompt: string | null }>(s: S, i: number): S =>
+      i === 1 ? { ...s, compiledPrompt: "not a compiled prompt" } : s;
+    const broken: JobLaunchFacts = { ...other, scenes: other.scenes.map(unrenderable) };
+    const brokenPlan: Planned = { ...plan(other), scenes: plan(other).scenes.map(unrenderable) };
+    expect(defectOf(() => assertPlanForFacts(broken, brokenPlan))).toBe("PLAN_NOT_FOR_FACTS");
   });
 });
 

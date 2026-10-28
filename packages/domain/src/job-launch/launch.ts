@@ -14,6 +14,7 @@
  */
 
 import { AppError } from "@app/shared";
+import { renderPrompt } from "../generation/prompt-render";
 import type { JobLaunchFacts, JobLaunchPlan } from "./ports";
 
 /** One scene of the job as the commit locked it, in position order. */
@@ -122,7 +123,10 @@ function sameFacts(locked: JobLaunchLockedRows, facts: JobLaunchFacts): boolean 
 
 /**
  * The plan names exactly the facts' scenes and first requests, in order, and
- * each rendered prompt came from that scene's compiled prompt.
+ * each rendered prompt is what the renderer makes of that scene's compiled
+ * prompt. Admission stores the rendered prompt as given and nothing later
+ * renders it again, so this is where a provider prompt from anywhere else is
+ * stopped.
  *
  * @throws JobLaunchDefect PLAN_NOT_FOR_FACTS
  */
@@ -137,10 +141,20 @@ export function assertPlanForFacts(
       return (
         admission.generationSceneId === scene.generationSceneId &&
         admission.generationSceneRequestId === scene.initialRequestId &&
-        admission.compiledPrompt === scene.compiledPrompt
+        admission.compiledPrompt === scene.compiledPrompt &&
+        rendersTo(admission.compiledPrompt, admission.requestRenderedPrompt)
       );
     });
   if (!matches) throw new JobLaunchDefect("PLAN_NOT_FOR_FACTS");
+}
+
+/** The renderer's own answer for a compiled prompt, compared; one it refuses matches nothing. */
+function rendersTo(compiledPrompt: string, renderedPrompt: string): boolean {
+  try {
+    return renderPrompt(compiledPrompt) === renderedPrompt;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
