@@ -9,7 +9,8 @@ ADRs: `docs/decisions/0082-a-failed-deliverable-settles-its-job.md` (GS-1),
 `docs/decisions/0087-a-generation-starts-in-one-commit.md` (GS-4b),
 `docs/decisions/0088-starting-a-video-the-start-service.md` (GS-4c),
 `docs/decisions/0089-the-route-table-and-price-catalog-are-passed-in.md` (GS-5a-1),
-`docs/decisions/0090-the-test-route-is-built-only-outside-production.md` (GS-5a-2)
+`docs/decisions/0090-the-test-route-is-built-only-outside-production.md` (GS-5a-2),
+`docs/decisions/0091-a-billing-cycles-revenue-is-read-from-its-period.md` (GS-5b)
 Gap analysis: `docs/generation-e2e-gap-analysis.md`
 Plan: `/mnt/project-files/cto/generation-e2e-proposal.md`, approved by the
 product owner on 2026-10-26, including the development-only pipeline command
@@ -2166,3 +2167,197 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-5a-2 waits for the product owner's yes before merge. GS-5b (the billing
 cycle's revenue reader) follows.
+
+## GS-5b — a billing cycle's revenue is read from its period
+
+Base: `e34cf3f` (PR #114 merge commit on `main`; post-merge CI run 705 green).
+ADR: `docs/decisions/0091-a-billing-cycles-revenue-is-read-from-its-period.md`
+
+The last of GS-5's three pull requests. **No migration; no route, no page.**
+Nothing outside tests constructs the paid-submission service until GS-9.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `113db41` | the rule, the database reader, their tests, ADR-0091 and the documentation |
+| `67ff0ee` | the review's answers: the revenue read on the gate's own transaction through its session, the read's order pinned, comments and documents corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-5b does
+
+- **The rule, as decided.** `billingCycleRevenueYen` in `@app/domain`: the
+  monthly price of the plan the period was opened on plus every uncancelled
+  Unit purchase approved on it, tax-exclusive, as the product owner decided
+  on 2026-10-27. Seats and storage blocks are not counted while they are not
+  recorded. Enterprise, and a plan the catalog does not hold, are unknown; a
+  total past a safe integer throws.
+- **The facts are the cycle's period.** The cycle key comes from the job's
+  reservation; the organization's period for that key holds the plan it was
+  opened on, and each purchase names its period. No subscription row,
+  invoice or current plan is read.
+- **One statement, on the gate's transaction.** The gate asks its session
+  for the revenue after loading its facts and before arming, so only while
+  the cycle's cost-admission lock is held, which a purchase's block grant and
+  a cancellation also take. The database's session runs
+  `readBillingCycleRevenueWithin` on the gate's own transaction: one
+  tenant-scoped statement over the period, its purchases and their
+  cancellations, and never a second connection.
+- **A fixed figure only where asked.** The paid-submission repository's
+  `revenue` option replaces the read: a fixed figure in tests that steer the
+  guard, the unavailable reader where the gate must fail closed. The gate's
+  dependencies no longer carry a revenue reader.
+- **Nobody builds it in production yet.**
+
+```mermaid
+sequenceDiagram
+    participant G as Paid-submission gate
+    participant S as Session (one transaction)
+    participant DB as PostgreSQL
+    G->>S: withCostAdmission
+    S->>DB: cost-admission lock (purchases and cancellations wait)
+    G->>S: loadFacts
+    S->>DB: attempt, job, reservation (its cycle key), exposure
+    G->>S: readBillingCycleRevenue
+    S->>DB: period + its purchases + their cancellations, one statement, same transaction
+    DB-->>S: plan, prices, cancelled flags (no period: no rows)
+    S-->>G: plan price + uncancelled purchases, or null (Enterprise, no period)
+    alt null, or profit below the floor
+        G-->>G: SAFETY_GUARD_HARD_PAUSE, attempt stays QUEUED
+    else
+        G->>DB: QUEUED to SUBMITTING, revenue in the authorization record
+    end
+    G->>L: release at commit
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI), on `67ff0ee`; the same
+checks passed on `113db41` (6,249 unit tests, 1,675 database tests).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean |
+| `pnpm test` | 227 files, 6,251 tests passed |
+| `pnpm test:db` | 63 files, 1,675 tests passed |
+| `pnpm test:media` | not run: no media code changed |
+| `pnpm build` | succeeded |
+| `prisma migrate diff` | not run: no schema or migration changed |
+
+New and changed tests:
+
+- `packages/domain/src/authorization/revenue.test.ts` (new, 7): each plan's
+  price; purchases added; a cancelled one counted as nothing; Enterprise
+  unknown with or without purchases; a plan the catalog lacks unknown; a
+  total past a safe integer refused; the unavailable reader unknown.
+- `packages/domain/src/authorization/paid-submission-service.test.ts` (2
+  more): the revenue is read on the session after the facts and before
+  arming, inside the lock; and not read for an attempt with no cycle.
+- `tests/integration/billing-cycle-revenue-reader.db.test.ts` (new, 6, its
+  own two organizations): the plan price with no purchase; purchases of both
+  qualities added and a cancelled one left out, per period; a period whose
+  only purchase was cancelled; Enterprise unknown with or without purchases;
+  a cycle with no period unknown; another organization's period with the same
+  key never read.
+- `tests/integration/paid-submission-authorization.db.test.ts` (2 more): with
+  the database's reader, the fixture's Enterprise cycle hard-pauses for
+  unknown revenue and leaves the attempt queued; a Standard cycle with one
+  purchase authorizes and records ¥49,800 + ¥19,900 under its cycle key, on
+  a client with one connection, which only a read on the gate's own
+  transaction can pass.
+
+### Mutation testing
+
+The same harness as GS-5a-1: each mutant applied, the suites run, the file
+restored and checked by SHA-256, and the repository's manifest identical
+before and after the pass. The rule's and the service's mutants ran against
+the authorization unit tests; the reader's and the repository's against both
+database suites above. Run on `113db41` (R1 to D9) and again on the review's
+changes, with the reader's mutants re-anchored and S1 to S4 added.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R1 | Enterprise priced at its list price | killed |
+| R2 / R8 | a cancelled purchase counted; subtracted | killed |
+| R3 | purchases ignored | killed |
+| R4 | an unknown plan read as zero | killed |
+| R5 | the plan price taken tax-inclusive | killed |
+| R6 | no safe-integer check | killed |
+| R7 | the catalog given ignored | killed |
+| D1 / D2 | any organization's period; any cycle's | killed |
+| D3 | the organization's purchases on any period | killed |
+| D4 / D5 | cancellations ignored; any cancellation cancelling every purchase | killed |
+| D6 / D9 | Standard read as Premium; Enterprise as Standard | killed |
+| D7 | no period read as zero | killed |
+| D8 | the period's purchases dropped | killed |
+| S1 | the revenue read for an attempt with no cycle | killed |
+| S2 | the repository's given revenue ignored | killed |
+| S3 | the period never read | killed |
+| S4 | the period read on another pooled connection | killed |
+
+Result: all killed, 17 of 17 in the first pass and 21 of 21 in the second.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`113db41` against `e34cf3f`, reading only git objects. It confirmed that the
+rule matches the decision, including Enterprise before the catalog and the
+overflow check; that the statement finds at most one period (unique on
+organization and key), that a purchase has at most one cancellation (its
+primary key), and that every join is tenant-scoped with the price read as a
+number; that the read happens inside the cost-admission lock, which a
+purchase's grant and a cancellation also take, so the snapshot claim holds;
+that an allocated reservation's cycle key is its period's by foreign key; and
+that the tests' windows and cleanup collide with no other suite. Verdict:
+nothing blocking. Its two should-fix findings and five nits, answered in
+`67ff0ee`:
+
+| Finding | Answer |
+| --- | --- |
+| The read used a second pooled connection while the gate's transaction held one: as many concurrent authorizations as the pool has connections would all stall until the transaction timeout | Fixed: the gate reads revenue from its session, and the database's session reads the period on the gate's own transaction (`readBillingCycleRevenueWithin`). The gate's dependencies lose the reader; the repository's `revenue` option takes a fixed figure for tests or the unavailable reader. A database test authorizes on a one-connection client, and S4 proves it |
+| No test pinned the read inside the lock | A domain test records lock, facts, revenue, arm and unlock in that order, and another that no read happens for an attempt with no cycle (S1) |
+| Nit: two test comments still said no revenue layer exists | Reworded: a fixed figure, so the test controls the guard |
+| Nit: "seats and storage are not counted" dropped the decision's "while they are not recorded" | Restored in the rule's comment, ADR-0091 and this record |
+| Nit: the API summary gave `null` only for no period | Enterprise added |
+| Nit: ADR-0091's consequences named the test route, which the new gate test does not use | Reworded: reading the cycle's period, in a test |
+| Nit: a legacy reservation has no foreign key tying its key to a period | ADR-0091 Decision 2 says the lookup then finds that key's period or none, and none fails closed |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the billing-cycle revenue row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the decisions are ADR-0091 Decisions 1 to 5 |
+| OpenAPI / API change summary | `docs/api-changes-gs-5b.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-5b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the reader done; a new open gate on recording an
+Enterprise contracted price and versioning plan prices).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the paid-submission service. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Enterprise revenue is unknown**, so an Enterprise cycle's paid submission
+  still pauses; the development organizations GS-9 uses need a Standard or
+  Premium period. Where a contracted price is recorded is an open gate in
+  `docs/decisions/TODO.md`.
+- **Plan prices are not versioned**: a catalog price change would change an
+  open period's revenue (ADR-0091 Decision 4).
+
+### Remaining work
+
+GS-5b waits for the product owner's yes before merge. GS-6 (the test
+provider's status and real clip bytes at the route's sizes) follows.
