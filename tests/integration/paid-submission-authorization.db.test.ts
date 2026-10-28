@@ -42,6 +42,7 @@ import {
   PROJECT_A,
   PROJECT_B,
   PROP_A,
+  PROP_B,
   repositories,
   seedTenants,
   STORYBOARD_SCENE,
@@ -2199,6 +2200,23 @@ describe.skipIf(!HAS_DB)("the paid submission authorization gate", () => {
         (session) => session.lockSource(),
       );
       expect(locked).toBeNull();
+    });
+
+    it("does not read another organization's Property behind the project", async () => {
+      // The project pointed at organization B's Property underneath the
+      // application, which never moves a project: only the Property's own
+      // tenant predicate keeps it out.
+      const chain = await seedAuthorizableChain(prisma, "srcpropb");
+      await prisma.$executeRaw`UPDATE "video_projects" SET "propertyId" = ${PROP_B} WHERE "id" = ${PROJECT_A}`;
+      try {
+        expect(await authorize(prisma, chain.attempt.id)).toEqual({
+          kind: "SOURCE_INVALID",
+          reason: "ASSET_NOT_FOUND",
+        });
+        await unmoved(chain.attempt.id);
+      } finally {
+        await prisma.$executeRaw`UPDATE "video_projects" SET "propertyId" = ${PROP_A} WHERE "id" = ${PROJECT_A}`;
+      }
     });
 
     it("waits for a deletion request already being written, and then refuses", async () => {
