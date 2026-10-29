@@ -13,6 +13,7 @@ import {
   createSceneGenerationAttemptRepository,
   createSubmissionOutcomeRepository,
   createUnitEntitlementRepository,
+  createUnlaunchableJobEndingRepository,
 } from "@app/database";
 import {
   AttemptFailureSettlementRunner,
@@ -105,6 +106,7 @@ let seq = 0;
 function launcher(): JobLaunchRunner {
   return new JobLaunchRunner({
     repository: createJobLaunchRepository(prisma),
+    ending: createUnlaunchableJobEndingRepository(prisma),
     planner: new JobLaunchPlanner({
       routes: kit.routePolicy,
       models: kit.models,
@@ -114,6 +116,7 @@ function launcher(): JobLaunchRunner {
     }),
     ids: { nextAttemptId: () => `sgen_submit_${++seq}`, nextPricingSnapshotId: () => `gps_submit_${++seq}` },
     context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_launch_${++seq}` }),
+    clock: () => LAUNCHED_AT,
   });
 }
 

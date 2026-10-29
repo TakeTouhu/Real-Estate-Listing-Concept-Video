@@ -89,16 +89,28 @@ export function decideJobLaunch(input: {
   // in the same commit (ADR-0087). Anything else is a job some other writer
   // touched, and launching it would admit attempts onto rows nobody expects.
   if (locked.reservationState !== "RESERVED") return refuse("SHAPE_CONFLICT");
-  if (locked.scenes.length === 0) return refuse("SHAPE_CONFLICT");
-  for (const scene of locked.scenes) {
-    if (scene.state !== "PENDING" || scene.requests.length !== 1) return refuse("SHAPE_CONFLICT");
-    const request = scene.requests[0]!;
-    if (request.kind !== "INITIAL" || request.state !== "PENDING" || request.attempts !== 0) {
-      return refuse("SHAPE_CONFLICT");
-    }
-  }
+  if (!scenesOfStartShape(locked.scenes)) return refuse("SHAPE_CONFLICT");
 
   return sameFacts(locked, facts) ? { kind: "LAUNCH" } : refuse("FACTS_CHANGED");
+}
+
+/**
+ * Whether the scenes are as the start wrote them: at least one, each
+ * `PENDING` with exactly one first request, `PENDING`, with no attempt.
+ */
+export function scenesOfStartShape(scenes: readonly JobLaunchLockedScene[]): boolean {
+  if (scenes.length === 0) return false;
+  return scenes.every((scene) => {
+    const [request, ...others] = scene.requests;
+    return (
+      scene.state === "PENDING" &&
+      request !== undefined &&
+      others.length === 0 &&
+      request.kind === "INITIAL" &&
+      request.state === "PENDING" &&
+      request.attempts === 0
+    );
+  });
 }
 
 /** Field by field, scenes in order: every fact the plan was made from. Only for rows of the start's shape. */
@@ -187,13 +199,16 @@ export type JobLaunchDefectCode =
   /** Admission refused an attempt the commit had already checked it would admit. */
   | "ADMISSION_REFUSED"
   /** The organization's subscription names a plan the catalog does not hold. */
-  | "PLAN_NOT_IN_CATALOG";
+  | "PLAN_NOT_IN_CATALOG"
+  /** An ending's write matched no row while holding that row's lock (GS-7d-1). */
+  | "ENDING_LOST_UNDER_LOCK";
 
 const DEFECT_MESSAGES: Record<JobLaunchDefectCode, string> = {
   PLAN_NOT_FOR_FACTS: "A job launch was handed a plan made from other facts",
   ATTEMPT_IDS_NOT_FOR_PLAN: "A job launch was handed attempt ids for another plan",
   ADMISSION_REFUSED: "A job launch's attempt admission refused a plan the launch had checked",
   PLAN_NOT_IN_CATALOG: "A job launch read a subscription whose plan the catalog does not hold",
+  ENDING_LOST_UNDER_LOCK: "A waiting job's ending matched no row while holding that row's lock",
 };
 
 export class JobLaunchDefect extends Error {

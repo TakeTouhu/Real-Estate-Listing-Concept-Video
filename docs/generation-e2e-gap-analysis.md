@@ -231,4 +231,11 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
       freshness, the gate, one POST through the provider port, and the answer
       recorded; no more of a job sent once one of its attempts has ended, and
       a window that moves past attempts left waiting.
-- **GS-7d**: a job that can never launch released, with its Units.
+- **GS-7d**: a job that can never launch released, with its Units, in two:
+  - **GS-7d-1** (ADR-0099, no migration): a waiting job ended, and its Units
+    released, when its Property is deleted, a frozen fact is refused before
+    any catalog, or its rows are not as the start wrote them; the launch
+    runner ends a deleted Property's waiting jobs and any candidate that can
+    never launch.
+  - **GS-7d-2**: a generating job's attempt that can never be sent ended
+    before submission, so the attempt failure settlement releases its Unit.

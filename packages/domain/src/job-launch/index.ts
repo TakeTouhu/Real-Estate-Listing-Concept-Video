@@ -6,7 +6,9 @@ export {
 } from "./limit";
 export type { JobLaunchCapacity } from "./limit";
 export { JobLaunchPlanner } from "./planner";
-export type { JobLaunchPlannerDeps } from "./planner";
+export type { FrozenFactsCode, JobLaunchPlannerDeps } from "./planner";
+export { JOB_ENDED_UNLAUNCHABLE_EVENT_TYPE, decideUnlaunchableJobEnding } from "./ending";
+export type { UnlaunchableJobCause, UnlaunchableJobEnding, UnlaunchableJobEndingRefusal } from "./ending";
 export {
   ATTEMPT_ADMITTED_AT_LAUNCH_EVENT_TYPE,
   JOB_LAUNCHED_EVENT_TYPE,
@@ -26,6 +28,8 @@ export type {
   JobLaunchRefusal,
 } from "./launch";
 export type {
+  EndUnlaunchableJobInput,
+  EndUnlaunchableJobOutcome,
   JobLaunchAttemptIds,
   JobLaunchCandidate,
   JobLaunchCandidateQuery,
@@ -38,6 +42,8 @@ export type {
   JobLaunchSceneFacts,
   LaunchJobInput,
   LaunchJobOutcome,
+  PropertyDeletedWaitingJob,
+  UnlaunchableJobEndingRepository,
 } from "./ports";
 export { JobLaunchRunner } from "./runner";
 export type { JobLaunchIds, JobLaunchReport, JobLaunchRunOutcome, JobLaunchRunnerDeps } from "./runner";

@@ -15,12 +15,17 @@ import { describe, expect, it } from "vitest";
  *    decided in the pricing domain, for this planner and the media recovery's
  *    alike.
  * 4. **The declared lock order.** The commit takes its organization's launch
- *    lock first, then the project, reservation, job, scenes and requests.
+ *    lock first, then the project, reservation, job, scenes and requests. The
+ *    ending of a job that can never launch (ADR-0099) takes the cost-admission
+ *    lock first, then the reservation, Property, job, scenes and requests.
+ * 5. **The ending moves only the job and its Units.** It writes the job and
+ *    the reservation, and leaves the scenes and requests to Transaction L.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const MODULE_DIR = __dirname;
 const LAUNCH_REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "job-launch-repository.ts");
+const ENDING_REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "unlaunchable-job-ending-repository.ts");
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -66,8 +71,12 @@ describe("the planner, the runner and the commit exist but nothing runs them", (
       if (name.startsWith("packages/domain/src/job-launch/")) continue;
       expect(`${name}: ${text.includes("JobLaunchPlanner(")}`).toBe(`${name}: false`);
       expect(`${name}: ${text.includes("JobLaunchRunner(")}`).toBe(`${name}: false`);
-      if (name === "packages/database/src/job-launch-repository.ts") continue;
-      expect(`${name}: ${text.includes("createJobLaunchRepository(")}`).toBe(`${name}: false`);
+      if (name !== "packages/database/src/job-launch-repository.ts") {
+        expect(`${name}: ${text.includes("createJobLaunchRepository(")}`).toBe(`${name}: false`);
+      }
+      if (name !== "packages/database/src/unlaunchable-job-ending-repository.ts") {
+        expect(`${name}: ${text.includes("createUnlaunchableJobEndingRepository(")}`).toBe(`${name}: false`);
+      }
     }
   });
 });
@@ -80,7 +89,7 @@ describe("no paid boundary is reachable", () => {
           new RegExp(
             ": (" +
               [
-                "\\./(launch|limit|planner|ports|runner)",
+                "\\./(ending|launch|limit|planner|ports|runner)",
                 "\\.\\./authorization/routing",
                 "\\.\\./generation/(capability|model-catalog|prompt-render)",
                 "\\.\\./media-recovery/ports",
@@ -102,7 +111,7 @@ describe("no paid boundary is reachable", () => {
   });
 
   it("schedules nothing, fetches nothing and opens no transaction of its own", () => {
-    for (const file of ["launch.ts", "limit.ts", "planner.ts", "runner.ts"]) {
+    for (const file of ["ending.ts", "launch.ts", "limit.ts", "planner.ts", "runner.ts"]) {
       const text = code(readFileSync(join(MODULE_DIR, file), "utf8"));
       for (const banned of ["fetch(", "createGeneration(", "prisma", "$transaction", "setTimeout(", "setInterval("]) {
         expect(`${file}:${banned}: ${text.includes(banned)}`).toBe(`${file}:${banned}: false`);
@@ -146,6 +155,55 @@ describe("the declared lock order", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // Nothing is locked or read before the launch lock.
     expect(body.indexOf("tx.")).toBeGreaterThan(order[0]!);
+  });
+});
+
+describe("the ending of a job that can never launch", () => {
+  const repo = code(readFileSync(ENDING_REPOSITORY, "utf8"));
+  const body = repo.slice(repo.indexOf("async function endWithin("));
+
+  it("takes the cost-admission lock, then the reservation, Property, job, scenes and requests, then writes", () => {
+    const order = [
+      "await acquireCostAdmissionLock(",
+      "FOR UPDATE OF res",
+      "FOR SHARE OF p",
+      "FOR UPDATE OF j",
+      "FOR SHARE OF s",
+      "FOR UPDATE OF r`",
+      'GROUP BY a."generationSceneRequestId"',
+      "decideUnlaunchableJobEnding(",
+      "await applyLockedTransition(",
+      'UPDATE "generation_reservations"',
+    ].map((marker) => body.indexOf(marker));
+    expect(order.every((position) => position > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Only the reservation's cycle is read before the lock, and nothing is locked.
+    const beforeLock = body.slice(0, order[0]!);
+    expect(beforeLock.match(/tx\./g)).toHaveLength(1);
+    expect(beforeLock).not.toMatch(/FOR (UPDATE|SHARE)/);
+    // The attempts are counted in a statement of their own, after the requests' lock.
+    const requestLock = body.slice(body.lastIndexOf("tx.$queryRaw", order[5]!), order[5]!);
+    expect(requestLock).not.toContain("scene_generations");
+  });
+
+  it("writes the job and its reservation and nothing else, and admits nothing", () => {
+    expect(repo.match(/UPDATE "/g)).toHaveLength(1);
+    expect(repo.match(/await applyLockedTransition\(/g)).toHaveLength(1);
+    expect(repo).toMatch(
+      /table: "generation_jobs",\s+id: generationJobId,\s+from: "RESERVED",\s+to: "FAILED_TERMINAL"/,
+    );
+    for (const banned of [
+      "admitAttemptWithin",
+      "sceneGeneration.",
+      "sceneGenerationRequest.",
+      "generationScene.",
+      "auditLog",
+      'INSERT INTO "',
+      "DELETE FROM",
+      "acquireJobLaunchLock",
+    ]) {
+      expect(`${banned}: ${repo.includes(banned)}`).toBe(`${banned}: false`);
+    }
   });
 });
 

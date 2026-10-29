@@ -1,11 +1,13 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  createFailedJobSceneClosureRepository,
   createGenerationStartRepository,
   createJobLaunchRepository,
   createPrismaStoryboardRepositories,
   createSceneGenerationAttemptRepository,
   createUnitEntitlementRepository,
+  createUnlaunchableJobEndingRepository,
 } from "@app/database";
 import {
   JobLaunchDefect,
@@ -22,10 +24,13 @@ import {
   type StoryboardScene,
 } from "@app/domain";
 import { createFakeRouteKit } from "@app/video-providers";
+// Not published by the package: a test stands in for another writer admitting under a request's lock.
+import { admitAttemptWithin } from "../../packages/database/src/orchestration-repositories";
 import { ctx } from "./orchestration-fixture";
 
 /**
- * The launch commit against live PostgreSQL (GS-7b, ADR-0095).
+ * The launch commit against live PostgreSQL (GS-7b, ADR-0095), and the ending
+ * of a waiting job that can never launch (GS-7d-1, ADR-0099).
  *
  * Jobs are started by the real start commit, planned by the real planner on
  * the test route's kit, and launched by the runner and the commit. What only a
@@ -34,7 +39,9 @@ import { ctx } from "./orchestration-fixture";
  * subscription and counted under the organization's launch lock, so two
  * launches at once never both take the last place; that the oldest waiting
  * job goes first, past a deleted Property's; and that a deletion in flight is
- * waited for and then refused.
+ * waited for and then refused. And that a job that can never launch fails and
+ * its Units come back in one commit, behind the cost-admission lock, while one
+ * that may yet launch, or may have reached the provider, is left as it is.
  *
  * Organization A is on Standard (one place), B on Premium (three), and C has
  * no subscription. Every video is 720p, so Normal.
@@ -51,6 +58,7 @@ const FINGERPRINT = "sha256:launch";
 const NOVEMBER = { startsAt: new Date("2026-11-01T00:00:00.000Z"), endsAt: new Date("2026-12-01T00:00:00.000Z") };
 const STARTED_AT = new Date("2026-11-10T00:00:00.000Z");
 const LAUNCHED_AT = epochMillisFromDate(new Date("2026-11-10T01:00:00.000Z"));
+const ENDED_AT = epochMillisFromDate(new Date("2026-11-10T02:00:00.000Z"));
 
 type Tenant = { readonly property: string; readonly asset: string; readonly project: string };
 
@@ -81,6 +89,9 @@ const holder = new PrismaClient();
 const starts = createGenerationStartRepository(prisma);
 const storyboards = createPrismaStoryboardRepositories(prisma);
 const launches = createJobLaunchRepository(prisma);
+const endings = createUnlaunchableJobEndingRepository(prisma);
+const closures = createFailedJobSceneClosureRepository(prisma);
+const entitlements = createUnitEntitlementRepository(prisma);
 const attempts = createSceneGenerationAttemptRepository(prisma);
 
 const kit = createFakeRouteKit({ NODE_ENV: "test", VIDEO_PROVIDER: "fake" });
@@ -94,12 +105,14 @@ const planner = new JobLaunchPlanner({
 
 let seq = 0;
 
-function runner(): JobLaunchRunner {
+function runner(using: Pick<JobLaunchPlanner, "plan"> = planner): JobLaunchRunner {
   return new JobLaunchRunner({
     repository: launches,
-    planner,
+    ending: endings,
+    planner: using,
     ids: { nextAttemptId: () => `sgen_launch_${++seq}`, nextPricingSnapshotId: () => `gps_launch_${++seq}` },
     context: () => ctx({ actorType: "WORKER", correlationId: `corr_launch_${++seq}` }),
+    clock: () => ENDED_AT,
   });
 }
 
@@ -160,7 +173,7 @@ async function seedTenant(organizationId: string, plan: "STANDARD" | "PREMIUM" |
     }));
     await storyboards.scenes.saveComposition(organizationId, project, { scenes, compositionFingerprint: FINGERPRINT });
   }
-  const opened = await createUnitEntitlementRepository(prisma).openPeriod({
+  const opened = await entitlements.openPeriod({
     id: `uep_itest_launch_${organizationId}`,
     organizationId,
     planKey: plan === "PREMIUM" ? "premium" : "standard",
@@ -504,7 +517,7 @@ describe.skipIf(!HAS_DB)("a launch", () => {
     await startJob(ORG_A, 1);
     await runner().runOnce(10);
     const before = await written();
-    expect(await runner().runOnce(10)).toEqual({ launched: 0, failed: 0, outcomes: [] });
+    expect(await runner().runOnce(10)).toEqual({ launched: 0, ended: 0, failed: 0, outcomes: [] });
     expect(await written()).toEqual(before);
   });
 });
@@ -613,20 +626,21 @@ describe.skipIf(!HAS_DB)("oldest first", () => {
     expect((await runner().runOnce(1)).outcomes.map((entry) => entry.generationJobId)).toEqual([older]);
   });
 
-  it("passes over a deleted Property's job to the next one", async () => {
+  it("passes over a deleted Property's job to the next one, and ends it", async () => {
     const deleted = await startJob(ORG_A, 1, SECOND);
     const next = await startJob(ORG_A, 2);
     await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
     expect((await runner().runOnce(10)).outcomes.map((entry) => [entry.generationJobId, entry.outcome.kind])).toEqual([
+      [deleted, "ENDED"],
       [next, "LAUNCHED"],
     ]);
-    expect(await jobState(deleted)).toBe("RESERVED");
+    expect(await jobState(deleted)).toBe("FAILED_TERMINAL");
   });
 
   it("never launches a deleted Property's job", async () => {
     const job = await startJob(ORG_A, 1, SECOND);
     await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
-    expect((await runner().runOnce(10)).outcomes).toEqual([]);
+    expect(await launches.findJobLaunchCandidates({ limit: 10 })).toEqual([]);
     const before = await written();
     expect(await launches.launchJob(await commitInput(ORG_A, job))).toEqual({
       kind: "NOT_LAUNCHABLE",
@@ -724,10 +738,8 @@ describe.skipIf(!HAS_DB)("a refused launch", () => {
       { organizationId: ORG_A, generationJobId: job, facts: null },
     ]);
     const report = await runner().runOnce(10);
-    expect(report.outcomes.map((entry) => entry.outcome)).toEqual([
-      { kind: "NOT_LAUNCHABLE", reason: "SHAPE_CONFLICT" },
-    ]);
-    expect(await jobState(job)).toBe("RESERVED");
+    expect(report.outcomes.map((entry) => entry.outcome)).toEqual([{ kind: "ENDED", cause: "SHAPE_CONFLICT" }]);
+    expect(await jobState(job)).toBe("FAILED_TERMINAL");
   });
 
   it("answers another tenant's job as one it cannot see, and writes nothing", async () => {
@@ -764,6 +776,312 @@ describe.skipIf(!HAS_DB)("a refused launch", () => {
       .catch((thrown: unknown) => thrown);
     expect(error instanceof JobLaunchDefect ? error.code : error).toBe("ATTEMPT_IDS_NOT_FOR_PLAN");
     expect(await jobState(job)).toBe("RESERVED");
+  });
+});
+
+describe.skipIf(!HAS_DB)("a job that can never launch", () => {
+  const PERIOD = `uep_itest_launch_${ORG_A}`;
+  const endInput = (organizationId: string, generationJobId: string) => ({
+    organizationId,
+    generationJobId,
+    endedAt: ENDED_AT,
+    context: ctx({ actorType: "WORKER", correlationId: "corr_launch_end" }),
+  });
+
+  it("fails and returns its Units in one commit when its Property is deleted; L then cancels its scenes", async () => {
+    const unspent = await entitlements.balance(ORG_A, PERIOD);
+    const job = await startJob(ORG_A, 1, SECOND);
+    expect((await entitlements.balance(ORG_A, PERIOD))!.baseRemainingUnits).toBeLessThan(
+      unspent!.baseRemainingUnits,
+    );
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([
+      { organizationId: ORG_A, generationJobId: job },
+    ]);
+
+    const report = await runner().runOnce(10);
+    expect(report.outcomes).toEqual([
+      { organizationId: ORG_A, generationJobId: job, outcome: { kind: "ENDED", cause: "PROPERTY_DELETED" } },
+    ]);
+    expect([report.ended, report.launched, report.failed]).toEqual([1, 0, 0]);
+
+    const reservation = await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: job } });
+    expect([await jobState(job), reservation.state, reservation.releasedAt?.getTime()]).toEqual([
+      "FAILED_TERMINAL",
+      "RELEASED",
+      ENDED_AT,
+    ]);
+    expect(await entitlements.balance(ORG_A, PERIOD)).toEqual(unspent);
+    const events = await prisma.generationTransitionEvent.findMany({
+      where: { aggregateId: { in: [job, reservation.id] }, fromState: "RESERVED" },
+      orderBy: { aggregateType: "asc" },
+    });
+    expect(
+      events.map((e) => [e.organizationId, e.aggregateType, e.toState, e.eventType, e.reasonCode, e.actorType]),
+    ).toEqual([
+      [ORG_A, "JOB", "FAILED_TERMINAL", "job.ended_unlaunchable", "PROPERTY_DELETED", "WORKER"],
+      [ORG_A, "RESERVATION", "RELEASED", "reservation.released", "PROPERTY_DELETED", "WORKER"],
+    ]);
+    expect(events.map((e) => e.correlationId)).toEqual([events[0]!.correlationId, events[0]!.correlationId]);
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([]);
+
+    // The scenes and requests are left to Transaction L, which cancels them:
+    // none of them ever started.
+    const scenes = await prisma.generationScene.findMany({
+      where: { generationJobId: job },
+      include: { requests: true },
+    });
+    expect(scenes.flatMap((scene) => [scene.state, ...scene.requests.map((r) => r.state)])).toEqual(
+      Array(4).fill("PENDING"),
+    );
+    const candidates = await closures.findFailedJobSceneCandidates({ limit: 10 });
+    expect(candidates.map((c) => c.generationSceneId).sort()).toEqual(scenes.map((scene) => scene.id).sort());
+    for (const candidate of candidates) {
+      await closures.closeFailedJobScene({ ...candidate, closedAt: ENDED_AT, context: ctx({ actorType: "WORKER" }) });
+    }
+    const closed = await prisma.generationScene.findMany({
+      where: { generationJobId: job },
+      include: { requests: true },
+    });
+    expect(closed.flatMap((scene) => [scene.state, ...scene.requests.map((r) => r.state)])).toEqual(
+      Array(4).fill("CANCELLED"),
+    );
+  });
+
+  it.each([
+    [null, "SCENE_PROMPT_MISSING"],
+    ['{"shape":"old"}', "SCENE_PROMPT_UNRENDERABLE"],
+  ])("ends the head of the queue when a scene's prompt is %s, and the next job launches", async (prompt, cause) => {
+    const broken = await startJob(ORG_A, 1);
+    const next = await startJob(ORG_A, 2);
+    await prisma.generationScene.updateMany({
+      where: { generationJobId: broken, position: 2 },
+      data: { snapshotCompiledPrompt: prompt },
+    });
+    expect((await runner().runOnce(10)).outcomes).toEqual([
+      { organizationId: ORG_A, generationJobId: broken, outcome: { kind: "ENDED", cause } },
+    ]);
+    expect((await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: broken } })).state).toBe(
+      "RELEASED",
+    );
+    expect((await runner().runOnce(10)).outcomes.map((entry) => [entry.generationJobId, entry.outcome.kind])).toEqual([
+      [next, "LAUNCHED"],
+    ]);
+  });
+
+  it("leaves a job waiting for a rate as it is, its Units held", async () => {
+    const job = await startJob(ORG_A, 1);
+    const rateless = new JobLaunchPlanner({
+      routes: kit.routePolicy,
+      models: kit.models,
+      pricing: kit.pricing,
+      fx: { current: async () => null },
+      clock: () => LAUNCHED_AT,
+    });
+    const before = await written();
+    expect((await runner(rateless).runOnce(10)).outcomes.map((entry) => entry.outcome)).toEqual([
+      { kind: "NOT_PLANNED", code: "NO_FX_RATE" },
+    ]);
+    expect(await written()).toEqual(before);
+    expect(await jobState(job)).toBe("RESERVED");
+  });
+
+  it("writes nothing for a job that may launch, another tenant's, or one already launched", async () => {
+    const job = await startJob(ORG_A, 1);
+    const before = await written();
+    expect(await endings.endUnlaunchableJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "LAUNCHABLE",
+    });
+    await prisma.property.update({ where: { id: TENANT[ORG_A]![0]!.property }, data: { status: "DELETED" } });
+    expect(await endings.endUnlaunchableJob(endInput(ORG_B, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "NOT_WAITING",
+    });
+    await prisma.property.update({ where: { id: TENANT[ORG_A]![0]!.property }, data: { status: "ACTIVE" } });
+    expect(await written()).toEqual(before);
+
+    await runner().runOnce(10);
+    const launched = await written();
+    expect(await endings.endUnlaunchableJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "NOT_WAITING",
+    });
+    expect(await written()).toEqual(launched);
+  });
+
+  it("neither offers nor ends a deleted Property's job whose hold is not RESERVED", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    await prisma.generationReservation.update({
+      where: { generationJobId: job },
+      data: { state: "RECONCILIATION_HOLD" },
+    });
+    const before = await written();
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([]);
+    expect(await endings.endUnlaunchableJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "RESERVATION_NOT_HELD",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("neither offers nor ends a deleted Property's job one of whose requests has an attempt", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    await runner().runOnce(10);
+    // Every row put back as the start left it but the attempts, which ended.
+    await prisma.sceneGeneration.updateMany({
+      where: { generationSceneRequest: { generationScene: { generationJobId: job } } },
+      data: { orchestrationState: "CANCELLED_PRE_SUBMISSION" },
+    });
+    await prisma.sceneGenerationRequest.updateMany({
+      where: { generationScene: { generationJobId: job } },
+      data: { state: "PENDING" },
+    });
+    await prisma.generationScene.updateMany({ where: { generationJobId: job }, data: { state: "PENDING" } });
+    await prisma.generationJob.update({ where: { id: job }, data: { state: "RESERVED" } });
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    const before = await written();
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([]);
+    expect(await endings.endUnlaunchableJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "ATTEMPT_ADMITTED",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("offers deleted Properties' jobs oldest first, as many as the limit", async () => {
+    const newer = await startJob(ORG_A, 3, SECOND);
+    const older = await startJob(ORG_B, 1);
+    await startJob(ORG_A, 2);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    await prisma.property.update({ where: { id: TENANT[ORG_B]![0]!.property }, data: { status: "DELETED" } });
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([
+      { organizationId: ORG_B, generationJobId: older },
+      { organizationId: ORG_A, generationJobId: newer },
+    ]);
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 1 })).toEqual([
+      { organizationId: ORG_B, generationJobId: older },
+    ]);
+    await expect(endings.findPropertyDeletedWaitingJobs({ limit: 0 })).rejects.toThrow(/batch limit/);
+  });
+
+  it("waits for a deletion already saving, then ends the job", async () => {
+    const job = await startJob(ORG_A, 1);
+    const deletion = await holdOpen(async (tx) => {
+      await tx.property.update({ where: { id: TENANT[ORG_A]![0]!.property }, data: { status: "DELETED" } });
+    });
+    const ending = settled(endings.endUnlaunchableJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    await deletion.release();
+    expect(await ending.value).toEqual({ kind: "ENDED", cause: "PROPERTY_DELETED" });
+    expect(await jobState(job)).toBe("FAILED_TERMINAL");
+  });
+
+  it("waits for the cost-admission lock, taken before any row", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    // The lock's formula written out on purpose: if it changes, this stops blocking.
+    const lock = await holdOpen(async (tx) => {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtext(${`paid-submission:${ORG_A}`}),
+          hashtext('cycle:2026-11')
+        )::text AS locked`;
+    });
+    const ending = settled(endings.endUnlaunchableJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    // No row of the job is locked while it waits.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "generation_reservations" WHERE "generationJobId" = ${job} FOR UPDATE NOWAIT`;
+      await tx.$queryRaw`SELECT "id" FROM "generation_jobs" WHERE "id" = ${job} FOR UPDATE NOWAIT`;
+    });
+    await lock.release();
+    expect(await ending.value).toEqual({ kind: "ENDED", cause: "PROPERTY_DELETED" });
+  });
+
+  it("neither offers nor ends a deleted Property's job that is no longer waiting", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    // Moved by another writer, its hold still held and nothing admitted.
+    await prisma.generationJob.update({ where: { id: job }, data: { state: "GENERATING" } });
+    const before = await written();
+    expect(await endings.findPropertyDeletedWaitingJobs({ limit: 10 })).toEqual([]);
+    expect(await endings.endUnlaunchableJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "NOT_WAITING",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("counts an attempt admitted while it waited for a request's lock, and ends nothing", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    const { plan, attemptIds } = await commitInput(ORG_A, job);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    const admission = plan.scenes[0]!;
+    // Another writer admitting under the request's lock, as the attempt repository's `admit` does.
+    const admitting = await holdOpen(async (tx) => {
+      await tx.$queryRaw`
+        SELECT "id" FROM "scene_generation_requests" WHERE "id" = ${admission.generationSceneRequestId} FOR UPDATE`;
+      const admitted = await admitAttemptWithin(
+        tx,
+        ORG_A,
+        {
+          id: attemptIds[0]!.attemptId,
+          generationSceneRequestId: admission.generationSceneRequestId,
+          providerName: plan.route.providerName,
+          providerModelId: plan.route.providerModelId,
+          requestModelKey: plan.route.requestModelKey,
+          requestRenderedPrompt: admission.requestRenderedPrompt,
+          requestNativeGenerationResolution: plan.route.requestNativeGenerationResolution,
+          requestResolutionNormalization: plan.route.requestResolutionNormalization,
+          requestNativeMeetsTarget: plan.route.requestNativeMeetsTarget,
+          pricingSnapshotId: attemptIds[0]!.pricingSnapshotId,
+          pricingSnapshot: admission.pricingSnapshot,
+          fxSnapshot: admission.fxSnapshot,
+        },
+        ctx({ actorType: "WORKER" }),
+      );
+      expect(admitted.kind).toBe("ADMITTED");
+    });
+    const ending = settled(endings.endUnlaunchableJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    await admitting.release();
+    expect(await ending.value).toEqual({ kind: "NOT_ENDED", reason: "ATTEMPT_ADMITTED" });
+    expect(await jobState(job)).toBe("RESERVED");
+    expect((await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: job } })).state).toBe(
+      "RESERVED",
+    );
+  });
+
+  it("and a launch of the same job, at once, each answer and leave the job one way", async () => {
+    // Planned before its Property was deleted: only the ending writes.
+    const deleted = await startJob(ORG_A, 1, SECOND);
+    const stale = await commitInput(ORG_A, deleted);
+    await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
+    const [refused, ended] = await Promise.all([
+      launches.launchJob(stale),
+      endings.endUnlaunchableJob(endInput(ORG_A, deleted)),
+    ]);
+    expect(refused.kind).toBe("NOT_LAUNCHABLE");
+    expect(ended).toEqual({ kind: "ENDED", cause: "PROPERTY_DELETED" });
+    expect(await jobState(deleted)).toBe("FAILED_TERMINAL");
+
+    // Launchable: only the launch writes.
+    const job = await startJob(ORG_A, 2);
+    const [launched, kept] = await Promise.all([
+      launches.launchJob(await commitInput(ORG_A, job)),
+      endings.endUnlaunchableJob(endInput(ORG_A, job)),
+    ]);
+    expect(launched.kind).toBe("LAUNCHED");
+    expect(["LAUNCHABLE", "NOT_WAITING"]).toContain(kept.kind === "NOT_ENDED" ? kept.reason : kept.kind);
+    expect(await jobState(job)).toBe("GENERATING");
+    expect((await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: job } })).state).toBe(
+      "RESERVED",
+    );
   });
 });
 

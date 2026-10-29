@@ -44,6 +44,7 @@ export { createDeliverableValidationRepository } from "./deliverable-validation-
 export { createAttemptFailureSettlementRepository } from "./attempt-failure-settlement-repository";
 export { createFailedJobSceneClosureRepository } from "./failed-job-scene-closure-repository";
 export { createJobLaunchRepository } from "./job-launch-repository";
+export { createUnlaunchableJobEndingRepository } from "./unlaunchable-job-ending-repository";
 export { createAttemptSubmissionRepository } from "./attempt-submission-repository";
 export {
   ENTITLEMENT_AUDIT_ACTION,

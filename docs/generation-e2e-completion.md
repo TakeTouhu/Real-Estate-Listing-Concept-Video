@@ -3659,3 +3659,204 @@ scheduler and live Stripe charges remain BLOCKED.
 GS-7c-2b waits for the product owner's yes before merge. Then GS-7d: a job
 that can never launch, and an attempt the gate refuses for good, released
 with their Units.
+
+## GS-7d-1 — ending a waiting job that can never launch
+
+Base: `81ed350` (PR #122 merge commit on `main`; post-merge CI run 745 green).
+ADR: `docs/decisions/0099-ending-a-waiting-job-that-can-never-launch.md`
+
+The first of GS-7d's two pull requests (`/mnt/project-files/cto/gs-7d-proposal.md`).
+**No migration; no route, no page.** Nothing outside tests constructs the
+ending repository or the launch runner, so nothing ends a job until the
+pipeline command (GS-9), with the test provider only.
+
+On 2026-10-29 the product owner decided, on the decision card asking whether
+a deleted Property's unfinished videos end at once and return their Units,
+"すぐ戻す": they do, without waiting for the 30-day trash period.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `933b7bd` | the decision, the ending repository, the runner's two steps, their tests, ADR-0099 and the documentation |
+| `b11c90e` | the review's answers: the requests locked `FOR UPDATE` and their attempts counted after that lock; three DB tests; ADR-0099, the Roadmap and the TODO corrected |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7d-1 does
+
+- **A waiting job ends only for its own rows.** Its Property deleted, a fact
+  frozen at the start that the planner refuses before any catalog (an unknown
+  resolution, no scenes, a scene with no prompt or one that does not render),
+  or rows not as the start wrote them (`SHAPE_CONFLICT`). A job refused for a
+  route, a price or a rate keeps waiting with its Units held.
+- **Decided from the rows it locked.** `decideUnlaunchableJobEnding` keeps a
+  job that is not `RESERVED`, one whose hold is not `RESERVED`, and one any of
+  whose requests has an attempt, before it looks for a cause. The planner's
+  frozen-fact step and the launch's shape check are each one function the
+  ending shares, so the two cannot disagree.
+- **One commit behind the cost-admission lock.** The job moves `RESERVED →
+  FAILED_TERMINAL` (`job.ended_unlaunchable`) and its reservation `RESERVED →
+  RELEASED` (`reservation.released`), both events carrying the cause; the
+  balance returns the Units because it counts allocations by their
+  reservation's state. Transaction L then cancels the scenes.
+- **The launch runner ends them.** It first ends up to `limit` waiting jobs of
+  deleted Properties, found by a query that mirrors every refusal of the
+  ending, then launches as before, handing the ending any candidate whose
+  facts are not of the start's shape, that the planner refused for a frozen
+  fact, or that the commit refused as `PROPERTY_DELETED` or `SHAPE_CONFLICT`.
+
+```mermaid
+sequenceDiagram
+    participant W as Launch runner
+    participant E as Ending repository
+    participant DB as PostgreSQL
+    participant L as Transaction L
+    W->>E: findPropertyDeletedWaitingJobs(limit)
+    E-->>W: waiting jobs of deleted Properties, oldest first
+    W->>E: endUnlaunchableJob(organization, job, endedAt, context)
+    E->>DB: cost-admission lock, then reservation FOR UPDATE, Property FOR SHARE
+    E->>DB: job FOR UPDATE, scenes FOR SHARE, requests FOR UPDATE, then their attempts counted
+    E->>E: decideUnlaunchableJobEnding(locked rows)
+    E->>DB: job RESERVED to FAILED_TERMINAL, reservation RESERVED to RELEASED, two events
+    E-->>W: ENDED with its cause, or NOT_ENDED with the refusal
+    W->>W: then each organization's launch candidate; one that can never launch is ended
+    L->>DB: later, the failed job's PENDING scenes and requests CANCELLED
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `b11c90e`'s code, each exit status read |
+| `pnpm test` | 241 files, 6,549 tests passed on `b11c90e`'s code |
+| `pnpm test:db` | 66 files, 1,759 tests passed on `b11c90e`'s code (1,756 on `933b7bd`'s) |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `packages/domain/src/job-launch/ending.test.ts` (new, 23): the
+  decision's causes and their order; a job not waiting, a hold not `RESERVED`
+  and an admitted attempt kept before any cause; the frozen-fact codes, and no
+  configuration code among them.
+- `packages/domain/src/job-launch/runner.test.ts` (20 in all): configuration refusals left
+  waiting; a deleted Property's waiting jobs ended first at the clock's
+  instant, each with the runner's correlation; a frozen fact, facts not of the
+  start's shape and the commit's `PROPERTY_DELETED` or `SHAPE_CONFLICT` ended;
+  the ending's refusal reported; an ending that throws counted as failed and
+  the pass going on.
+- `tests/integration/job-launch.db.test.ts` (13 new, 38 in all): the full release with
+  the balance restored, the events and L cancelling the scenes; a null and an
+  unrenderable prompt ended and the next job launched; a rate left waiting;
+  nothing written for a launchable, another tenant's or a launched job; a hold
+  not `RESERVED`, an admitted attempt and a job no longer waiting neither
+  offered nor ended; oldest first and the limit; a deletion saving and the
+  cost-admission lock waited for; an attempt admitted while the ending waited
+  for a request's lock counted; a launch and an ending of the same job at
+  once.
+- `packages/domain/src/job-launch/dormancy.test.ts` (2 new, 9 in all): the ending's lock
+  order, its attempt count after the requests' lock, and its writes; nothing
+  in production constructs it.
+
+### Mutation testing
+
+The same harness as GS-7c-2b: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| E01 to E04 | the job's state, its hold or the attempts not checked; an attempt counted from the second | killed |
+| E05 to E08 | a deleted Property, a frozen fact or the shape not ended; a launchable job ended | killed |
+| E09 to E12 | the order: the hold before the job's state, the Property before the attempts, the shape before a frozen fact, the Property after one | killed |
+| L01 to L07 | the shape check: no scenes accepted, a second request, the request's kind, state or attempts, the scene's state, a missing request | killed |
+| P01 to P05 | the frozen-fact codes: one dropped, a configuration code added; an unknown resolution or no scenes passed; a missing prompt named unrenderable | killed |
+| N01 to N12 | the runner: the deleted phase skipped or unbounded; null facts, frozen codes or the commit's refusals not ended; every refusal ended; the clock or the context ignored; an ending not counted or its throw escaping; one launch per organization dropped | killed |
+| S01 to S04 | the reservation, job, scenes or requests not locked (static) | killed |
+| B01 to B03, B06 to B13 | the cost-admission lock missing or on the wrong key; the Property not locked or read across tenants; the reservation not released, its instant, the reason code, an event type or event dropped; a launchable job written; the job not failed | killed |
+| Q01 to Q06 | the deleted-Property query: not deleted, any hold, any attempts, newest first, the limit ignored or not validated | killed |
+| Q07 | the query offering any job state | survived pass 1; killed by a job no longer waiting (`b11c90e`) |
+| F01 to F04 | the fix: attempts not counted; requests only shared; attempts counted before the requests' lock; Q07 again | killed |
+
+Result: 58 mutants against `933b7bd`: 40 by the unit suites
+(`packages/domain/src/job-launch`), all killed; 18 by
+`tests/integration/job-launch.db.test.ts`, 17 killed in the first pass and Q07
+after one test. The review's answers added 4 against `b11c90e`'s code, F04 being Q07
+again: F02 by the unit suites, F01, F03 and F04 by the DB suite, all killed.
+The new DB test of an attempt admitted while the ending waits fails on
+`933b7bd`'s code (the job is ended) and passes on `b11c90e`'s.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`933b7bd` against `81ed350`, reading only git objects. It confirmed the tenant
+scoping of every query, the compare-and-set writes and an exactly-once
+release, events matching every other release, the decision's order, the
+deleted-Property query mirroring each refusal, configuration refusals never
+ended, the lock order against the launch, the start, the gate, L, the failure
+settlements and a deletion, and that nothing in production constructs the
+repository or the runner. Verdict: nothing blocking. Its findings, answered
+in `b11c90e`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: the attempt count was a subquery of the requests' locking statement, which reads the statement's snapshot even for a row it waited for, so an attempt admitted while the ending waited would count as none and the Unit would be released; and `FOR SHARE` does not stop a new attempt's insert | Fixed: the requests are locked `FOR UPDATE`, which a new attempt's foreign-key check waits for, and their attempts are counted in a statement of their own after that lock. A DB test holds a request and admits an attempt under it while the ending waits: the old code ended the job, the new one keeps it (`ATTEMPT_ADMITTED`). ADR-0099 Decision 3 says why |
+| Should-fix: `SCENE_PROMPT_UNRENDERABLE` follows from editing the prompt's fixed rules, a change of ours | Kept as a frozen fact: ADR-0020 already makes such a change a re-admission event, failed closed, and the ending returns the Units. Named in ADR-0099 Decision 1 and *Not decided here*, and a TODO item on releasing such a change only when no job waits |
+| Should-fix: a frozen-fact or shape job is found only as a launch candidate, so not while its organization is at its limit or has no subscription; two claims overstated the fix | Narrowed in ADR-0099 Context and Decision 5, the Roadmap and the TODO: such a job is ended once its organization has a place to offer it |
+| Should-fix: no live test of an ending racing a launch | A DB test runs a launch and an ending of the same job at once, for a job only the ending writes and one only the launch writes; each answers and the job goes one way. The serialization rests on the job's row lock, which both take before writing |
+| Nit: the job's compare-and-set missing raises the locked transition's internal error, not `ENDING_LOST_UNDER_LOCK` | ADR-0099 Decision 3 now says so |
+| Nit: "every such job in the same pass" ignores the limit | Decision 5 says up to `limit` a pass |
+| Nit: the reservation guard after the decision is unreachable | Kept: it narrows the type, and fails closed if the decision ever changes |
+| Nit: the ADR said `checkFrozenFacts` is exported | Decision 1 and Consequences say it is inside the module; `FrozenFactsCode` is the export |
+| Beyond the PR: a waiting job whose hold is not `RESERVED` or that has an attempt is neither launched nor ended | Named in ADR-0099 *Not decided here* and the TODO |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the ending row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0099 Decision 3 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7d-1.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7d-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (progress on releasing a started job that can never
+launch, the deleted Property's trash lifecycle and the preflight audit item;
+new items on bounding a configuration refusal's hold and on releasing a change
+to the prompt's fixed rules).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the ending repository or the launch
+runner. No scheduler, credential or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs a pass yet.** The pipeline command (GS-9) will, with the test
+  provider only.
+- **A job refused for configuration waits** with its Units held, and holds
+  back its organization's queue, until that is decided.
+- **A frozen-fact or shape job is ended only when offered**, which needs its
+  organization to have a place and a subscription.
+- **A change to the prompt's fixed rules ends every waiting job**, Units
+  returned, until how such a change is released is decided.
+- **An ended job is not shown to the customer** until the progress page
+  (GS-10, GS-11).
+
+### Remaining work
+
+GS-7d-1 waits for the product owner's yes before merge. Then GS-7d-2: a
+generating job's attempt that can never be sent, its Property deleted or its
+photo gone, ended before submission so the attempt failure settlement releases
+its Unit.

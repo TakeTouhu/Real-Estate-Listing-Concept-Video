@@ -7,10 +7,14 @@
  * locks and launches the job whole or not at all. One job per organization per
  * pass: the next pass sees the place the last one took.
  *
- * A job that cannot be planned is left waiting, its Units reserved, and the
- * code is reported; which codes release a job is GS-7d's to decide. A launch
- * that throws is that candidate's `FAILED` outcome and the pass goes on, as in
- * the other sweeps: one bad row never stops the others.
+ * A job that can never launch is ended and its Units released (GS-7d-1,
+ * ADR-0099): first, each waiting job of a deleted Property, which is never a
+ * candidate; then a candidate whose own rows stop it, as its planner's code
+ * for a frozen fact or the commit's refusal says. A job the planner refuses
+ * for a catalog, a price or a rate is left waiting, its Units reserved, and
+ * the code is reported. A launch or an ending that throws is that job's
+ * `FAILED` outcome and the pass goes on, as in the other sweeps: one bad row
+ * never stops the others.
  *
  * Nothing is sent to a provider here. The attempts it admits wait `QUEUED` for
  * the paid-submission gate (GS-7c).
@@ -23,20 +27,27 @@
  */
 
 import type { TransitionContext } from "../orchestration/ports";
+import { epochMillis } from "../pricing/units";
+import type { UnlaunchableJobCause, UnlaunchableJobEndingRefusal } from "./ending";
 import { JobLaunchDefect, type JobLaunchDefectCode, validateJobLaunchBatchLimit } from "./launch";
-import type { JobLaunchPlanner } from "./planner";
+import { isFrozenFactsCode, type JobLaunchPlanner } from "./planner";
 import type {
   JobLaunchAttemptIds,
   JobLaunchFacts,
   JobLaunchNoPlanCode,
   JobLaunchRepository,
   LaunchJobOutcome,
+  UnlaunchableJobEndingRepository,
 } from "./ports";
 
 export type JobLaunchRunOutcome =
   | LaunchJobOutcome
-  /** The planner found no plan; nothing was committed and the job waits. */
+  /** The planner found no plan for a reason that can pass; nothing was committed and the job waits. */
   | { readonly kind: "NOT_PLANNED"; readonly code: JobLaunchNoPlanCode }
+  /** The job could never launch: it failed and its Units were released. */
+  | { readonly kind: "ENDED"; readonly cause: UnlaunchableJobCause }
+  /** It looked as if it could never launch, but the ending refused under its locks and wrote nothing. */
+  | { readonly kind: "NOT_ENDED"; readonly reason: UnlaunchableJobEndingRefusal }
   /**
    * The plan or the commit threw and wrote nothing. The code is kept when it
    * was this module's defect, and nothing else about the error is.
@@ -45,6 +56,7 @@ export type JobLaunchRunOutcome =
 
 export interface JobLaunchReport {
   readonly launched: number;
+  readonly ended: number;
   readonly failed: number;
   readonly outcomes: readonly {
     readonly organizationId: string;
@@ -60,56 +72,73 @@ export interface JobLaunchIds {
 
 export interface JobLaunchRunnerDeps {
   readonly repository: JobLaunchRepository;
+  /** The ending of a job that can never launch (ADR-0099). */
+  readonly ending: UnlaunchableJobEndingRepository;
   /** The launch planner (ADR-0094), with the route policy the paid-submission gate uses. */
   readonly planner: Pick<JobLaunchPlanner, "plan">;
   readonly ids: JobLaunchIds;
   /** Built per launch so each carries its own correlation. */
   readonly context: () => TransitionContext;
+  /** The instant an ending releases a reservation at. */
+  readonly clock: () => number;
 }
 
 export class JobLaunchRunner {
   readonly #repository: JobLaunchRepository;
+  readonly #ending: UnlaunchableJobEndingRepository;
   readonly #planner: Pick<JobLaunchPlanner, "plan">;
   readonly #ids: JobLaunchIds;
   readonly #context: () => TransitionContext;
+  readonly #clock: () => number;
 
   constructor(deps: JobLaunchRunnerDeps) {
     this.#repository = deps.repository;
+    this.#ending = deps.ending;
     this.#planner = deps.planner;
     this.#ids = deps.ids;
     this.#context = deps.context;
+    this.#clock = deps.clock;
   }
 
-  /** One bounded pass. Each organization is offered at most one launch. */
+  /**
+   * One bounded pass: up to `limit` waiting jobs of deleted Properties are
+   * ended, then each organization is offered at most one launch.
+   */
   async runOnce(limit: number): Promise<JobLaunchReport> {
     const bounded = validateJobLaunchBatchLimit(limit);
-    const candidates = await this.#repository.findJobLaunchCandidates({ limit: bounded });
-
     const outcomes: { organizationId: string; generationJobId: string; outcome: JobLaunchRunOutcome }[] = [];
-    let launched = 0;
-    let failed = 0;
-    const seen = new Set<string>();
-
-    for (const candidate of candidates) {
-      if (seen.has(candidate.organizationId)) continue;
-      seen.add(candidate.organizationId);
-
+    const settle = async (
+      organizationId: string,
+      generationJobId: string,
+      run: () => Promise<JobLaunchRunOutcome>,
+    ): Promise<void> => {
       let outcome: JobLaunchRunOutcome;
       try {
-        outcome = await this.#launch(candidate.organizationId, candidate.generationJobId, candidate.facts);
+        outcome = await run();
       } catch (error: unknown) {
         outcome = { kind: "FAILED", code: error instanceof JobLaunchDefect ? error.code : null };
       }
-      if (outcome.kind === "LAUNCHED") launched += 1;
-      if (outcome.kind === "FAILED") failed += 1;
-      outcomes.push({
-        organizationId: candidate.organizationId,
-        generationJobId: candidate.generationJobId,
-        outcome,
-      });
+      outcomes.push({ organizationId, generationJobId, outcome });
+    };
+
+    const deleted = await this.#ending.findPropertyDeletedWaitingJobs({ limit: bounded });
+    for (const job of deleted) {
+      await settle(job.organizationId, job.generationJobId, () => this.#end(job.organizationId, job.generationJobId));
     }
 
-    return { launched, failed, outcomes };
+    const candidates = await this.#repository.findJobLaunchCandidates({ limit: bounded });
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      if (seen.has(candidate.organizationId)) continue;
+      seen.add(candidate.organizationId);
+      await settle(candidate.organizationId, candidate.generationJobId, () =>
+        this.#launch(candidate.organizationId, candidate.generationJobId, candidate.facts),
+      );
+    }
+
+    const count = (kind: JobLaunchRunOutcome["kind"]): number =>
+      outcomes.filter((entry) => entry.outcome.kind === kind).length;
+    return { launched: count("LAUNCHED"), ended: count("ENDED"), failed: count("FAILED"), outcomes };
   }
 
   async #launch(
@@ -117,19 +146,43 @@ export class JobLaunchRunner {
     generationJobId: string,
     facts: JobLaunchFacts | null,
   ): Promise<JobLaunchRunOutcome> {
-    if (facts === null) return { kind: "NOT_LAUNCHABLE", reason: "SHAPE_CONFLICT" };
+    // Facts are not read for a job not of the start's shape, which the commit
+    // would refuse as `SHAPE_CONFLICT`: the ending decides it from its own rows.
+    if (facts === null) return this.#end(organizationId, generationJobId);
     const plan = await this.#planner.plan(facts);
-    if (plan.kind === "NO_PLAN") return { kind: "NOT_PLANNED", code: plan.code };
+    if (plan.kind === "NO_PLAN") {
+      return isFrozenFactsCode(plan.code)
+        ? this.#end(organizationId, generationJobId)
+        : { kind: "NOT_PLANNED", code: plan.code };
+    }
     const attemptIds: JobLaunchAttemptIds[] = plan.scenes.map(() => ({
       attemptId: this.#ids.nextAttemptId(),
       pricingSnapshotId: this.#ids.nextPricingSnapshotId(),
     }));
-    return this.#repository.launchJob({
+    const outcome = await this.#repository.launchJob({
       organizationId,
       generationJobId,
       facts,
       plan,
       attemptIds,
+      context: this.#context(),
+    });
+    // A Property deleted since the candidates were read, or rows another
+    // writer touched: neither is ever launched.
+    if (
+      outcome.kind === "NOT_LAUNCHABLE" &&
+      (outcome.reason === "PROPERTY_DELETED" || outcome.reason === "SHAPE_CONFLICT")
+    ) {
+      return this.#end(organizationId, generationJobId);
+    }
+    return outcome;
+  }
+
+  async #end(organizationId: string, generationJobId: string): Promise<JobLaunchRunOutcome> {
+    return this.#ending.endUnlaunchableJob({
+      organizationId,
+      generationJobId,
+      endedAt: epochMillis(this.#clock()),
       context: this.#context(),
     });
   }
