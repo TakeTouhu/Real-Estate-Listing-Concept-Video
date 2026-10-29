@@ -6,8 +6,10 @@ export {
   validateAttemptSubmissionCursor,
 } from "./preparation-refusal";
 export type { PreparationRefusalEndState } from "./preparation-refusal";
+export { ATTEMPT_ENDED_PROPERTY_DELETED_EVENT_TYPE, PROPERTY_DELETED_ATTEMPT_CODE } from "./property-deleted";
 export { AttemptSubmissionRunner, MIN_SOURCE_URL_REMAINING_MS } from "./runner";
 export type {
+  AttemptEndingReason,
   AttemptSubmissionReport,
   AttemptSubmissionRunOutcome,
   AttemptSubmissionRunnerDeps,
@@ -19,5 +21,9 @@ export type {
   AttemptSubmissionRepository,
   EndPreparationRefusalInput,
   EndPreparationRefusalOutcome,
+  EndPropertyDeletedAttemptInput,
+  EndPropertyDeletedAttemptOutcome,
   PreparedGenerationSender,
+  PropertyDeletedAttempt,
+  PropertyDeletedAttemptQuery,
 } from "./ports";

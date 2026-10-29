@@ -43,13 +43,21 @@
  * transactions and are never held while this one is acquired, so there is no
  * cycle: nothing acquires a 2E lock and then waits for this one.
  *
- * Two transactions hold this lock and then lock a row of that kind:
+ * Many transactions hold this lock and then lock a row of that kind: the
+ * settlements and Transactions K and L lock jobs, scenes and requests. These
+ * also lock a project, an asset or a Property:
  *
  * - the start commit (ADR-0087) locks a `video_projects` row and its Property
  *   (`FOR SHARE`, to the commit);
  * - the paid-submission gate (ADR-0096) locks the attempt's `media_assets` row
  *   (`FOR NO KEY UPDATE`) and its project's Property (`FOR SHARE`), after the
- *   reservation and before the attempt's compare-and-set.
+ *   reservation and before the attempt's compare-and-set;
+ * - the ending of a waiting job that can never launch (ADR-0099) locks the
+ *   reservation `FOR UPDATE`, then the Property `FOR SHARE`, the job
+ *   `FOR UPDATE`, its scenes `FOR SHARE` and its requests `FOR UPDATE`;
+ * - the ending of a generating job's attempt whose Property was deleted
+ *   (ADR-0100) locks the attempt's Property (`FOR SHARE`) before the attempt's
+ *   compare-and-set.
  *
  * Each takes this lock first, before the row, as the order requires. A
  * transaction that locked a project, an asset or a Property and then waited

@@ -1,7 +1,8 @@
 /**
- * The attempt submission's persistence (GS-7c-2a, ADR-0097).
+ * The attempt submission's persistence (GS-7c-2a, ADR-0097; GS-7d-2,
+ * ADR-0100).
  *
- * Two operations on orchestrated attempts, and nothing that sends one:
+ * Operations on orchestrated attempts, and nothing that sends one:
  *
  * - **Discovery.** The attempts waiting to be sent, oldest first, read without
  *   locks: a hint, which the paid-submission gate re-decides under its own
@@ -11,25 +12,37 @@
  * - **The ending of a refused preparation.** One `QUEUED` attempt whose
  *   preparation was refused for good is cancelled before submission, nothing
  *   having been sent, with its transition event, in one commit.
+ * - **A deleted Property's attempts** (ADR-0100). Generating jobs' attempts
+ *   whose Property was deleted, which discovery never offers, one of each job,
+ *   read without locks; and the ending of one, cancelled before submission in
+ *   the same way, with `PROPERTY_DELETED` as its code, once its Property is
+ *   seen deleted under a lock.
  *
  * ## Lock order
  *
  * ```text
- * cost-admission advisory lock -> the attempt (its compare-and-set)
+ * cost-admission advisory lock
+ *   -> Property    FOR SHARE (a deleted Property's ending only)
+ *   -> the attempt (its compare-and-set)
  * ```
  *
  * The transactions that take this lock (the gate, the submission outcome,
  * completion, reconciliation, Transactions H, K and L) take it before any row
  * lock, and nothing holding a photo or a Property lock waits for it (ADR-0096).
- * Taking it first keeps this ending out of every cycle with them; nothing here
- * locks a photo, a Property, a reservation or a job, and nothing waits once the
- * attempt is held. A writer that takes no such lock, such as the attempt
- * repository's own arm, is kept apart by the compare-and-set below.
+ * Taking it first keeps these endings out of every cycle with them. The
+ * Property is held `FOR SHARE` after it, as the gate holds it, so a deletion
+ * saving is waited for and then seen; a deletion is one statement and waits
+ * for nothing held here. Nothing here locks a photo, a reservation or a job,
+ * and nothing waits once the attempt is held. A writer that takes no such
+ * lock, such as the attempt repository's own arm, is kept apart by the
+ * compare-and-set below.
  */
 
 import type { PrismaClient } from "@prisma/client";
 import {
+  ATTEMPT_ENDED_PROPERTY_DELETED_EVENT_TYPE,
   ATTEMPT_PREPARATION_REFUSED_EVENT_TYPE,
+  PROPERTY_DELETED_ATTEMPT_CODE,
   canTransitionAttempt,
   preparationRefusalEnding,
   validateAttemptSubmissionBatchLimit,
@@ -38,6 +51,9 @@ import {
   type AttemptSubmissionRepository,
   type EndPreparationRefusalInput,
   type EndPreparationRefusalOutcome,
+  type EndPropertyDeletedAttemptInput,
+  type EndPropertyDeletedAttemptOutcome,
+  type PropertyDeletedAttempt,
   type TransitionContext,
 } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -106,22 +122,90 @@ export function createAttemptSubmissionRepository(prisma: PrismaClient): Attempt
       if (target === null || !canTransitionAttempt("QUEUED", target)) {
         throw new AppError("INTERNAL_ERROR", "Only a terminal preparation refusal ends an attempt");
       }
-      return prisma.$transaction((tx) => endWithin(tx, input, target));
+      return prisma.$transaction((tx) => endWithin(tx, input));
+    },
+
+    async findPropertyDeletedAttempts({ limit: requested }): Promise<readonly PropertyDeletedAttempt[]> {
+      const limit = validateAttemptSubmissionBatchLimit(requested);
+      // The ending's refusals mirrored, an attempt `QUEUED` before submission
+      // and its Property deleted, with discovery's generating request and job.
+      // The job's oldest attempt only: ending it fails the job, which
+      // Transaction L closes, so a large job does not fill the window.
+      return prisma.$queryRaw<PropertyDeletedAttempt[]>`
+        SELECT o."organizationId", o."generationJobId", o."attemptId"
+          FROM (SELECT DISTINCT ON (s."generationJobId")
+                       vp."organizationId" AS "organizationId",
+                       s."generationJobId" AS "generationJobId",
+                       a."id" AS "attemptId",
+                       a."createdAt" AS "createdAt"
+                  FROM "scene_generations" a
+                  JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
+                  JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+                  JOIN "generation_jobs" j ON j."id" = s."generationJobId"
+                  JOIN "video_projects" vp ON vp."id" = a."videoProjectId"
+                  JOIN "properties" p ON p."id" = vp."propertyId"
+                 WHERE a."orchestrationState" = 'QUEUED'::"GenerationAttemptState"
+                   AND (a."submissionCertainty" IS NULL
+                        OR a."submissionCertainty" = 'PRE_SUBMISSION'::"SubmissionCertainty")
+                   AND r."state" = 'GENERATING'::"SceneGenerationRequestState"
+                   AND j."state" = 'GENERATING'::"GenerationJobState"
+                   AND p."status" = 'DELETED'::"PropertyStatus"
+                 ORDER BY s."generationJobId", a."createdAt", a."id") o
+         ORDER BY o."createdAt", o."attemptId"
+         LIMIT ${limit}`;
+    },
+
+    async endPropertyDeletedAttempt(input): Promise<EndPropertyDeletedAttemptOutcome> {
+      return prisma.$transaction((tx) => endPropertyDeletedWithin(tx, input));
     },
   };
 }
 
-async function endWithin(
-  tx: Tx,
-  input: EndPreparationRefusalInput,
-  target: "CANCELLED_PRE_SUBMISSION",
-): Promise<EndPreparationRefusalOutcome> {
-  const { organizationId, attemptId } = input;
+async function endWithin(tx: Tx, input: EndPreparationRefusalInput): Promise<EndPreparationRefusalOutcome> {
+  await lockCostAdmissionFor(tx, input.organizationId, input.attemptId);
+  const row = await cancelBeforeSubmission(tx, input, input.reason, ATTEMPT_PREPARATION_REFUSED_EVENT_TYPE);
+  return row === null ? { kind: "NOT_QUEUED" } : { kind: "ENDED", attemptId: row.id, stateVersion: row.stateVersion };
+}
 
-  // ---- 1. The cost-admission lock, first. ---------------------------------
-  // The key the gate takes for this attempt: its job's reservation's frozen
-  // billing cycle, or the organization's `unreserved` key. Read before the lock,
-  // which is safe because it is frozen when the hold is taken.
+async function endPropertyDeletedWithin(
+  tx: Tx,
+  input: EndPropertyDeletedAttemptInput,
+): Promise<EndPropertyDeletedAttemptOutcome> {
+  const { organizationId, attemptId } = input;
+  await lockCostAdmissionFor(tx, organizationId, attemptId);
+
+  // The attempt's Property, held as the gate holds it (ADR-0096), so the code
+  // written is true at the commit. Tenant-scoped through the attempt's project.
+  const properties = await tx.$queryRaw<{ status: string }[]>`
+    SELECT pr."status"::text AS "status"
+      FROM "scene_generations" a
+      JOIN "video_projects" p ON p."id" = a."videoProjectId"
+      JOIN "properties" pr ON pr."id" = p."propertyId"
+     WHERE a."id" = ${attemptId}
+       AND p."organizationId" = ${organizationId}
+       AND pr."organizationId" = ${organizationId}
+       FOR SHARE OF pr`;
+  const property = properties[0];
+  // Another tenant's id, or none: alike, and nothing about it is said.
+  if (property === undefined) return { kind: "NOT_QUEUED" };
+  if (property.status !== "DELETED") return { kind: "PROPERTY_NOT_DELETED" };
+
+  const row = await cancelBeforeSubmission(
+    tx,
+    input,
+    PROPERTY_DELETED_ATTEMPT_CODE,
+    ATTEMPT_ENDED_PROPERTY_DELETED_EVENT_TYPE,
+  );
+  return row === null ? { kind: "NOT_QUEUED" } : { kind: "ENDED", attemptId: row.id, stateVersion: row.stateVersion };
+}
+
+/**
+ * The cost-admission lock, first: the key the gate takes for this attempt, its
+ * job's reservation's frozen billing cycle, or the organization's `unreserved`
+ * key. Read before the lock, which is safe because it is frozen when the hold
+ * is taken.
+ */
+async function lockCostAdmissionFor(tx: Tx, organizationId: string, attemptId: string): Promise<void> {
   const cycles = await tx.$queryRaw<{ billingCycleKey: string }[]>`
     SELECT res."billingCycleKey" AS "billingCycleKey"
       FROM "scene_generations" a
@@ -134,18 +218,31 @@ async function endWithin(
        AND p."organizationId" = ${organizationId}
   `;
   await acquireCostAdmissionLock(tx, organizationId, cycles[0]?.billingCycleKey ?? "unreserved");
+}
 
-  // ---- 2. The compare-and-set. -------------------------------------------
-  // The gate's arm also requires the attempt `QUEUED`, so exactly one of the
-  // two moves it: a refused attempt is never sent, and a sent one is never
-  // ended here. The reason is the durable code, so the state and the code
-  // cannot describe different failures; the message is cleared, never left from
-  // an earlier failure.
+/**
+ * The one write both endings make, under the cost-admission lock: the attempt
+ * `QUEUED → CANCELLED_PRE_SUBMISSION` and its event, or nothing when it is not
+ * `QUEUED` before submission in the organization.
+ */
+async function cancelBeforeSubmission(
+  tx: Tx,
+  input: { readonly organizationId: string; readonly attemptId: string; readonly context: TransitionContext },
+  code: string,
+  eventType: string,
+): Promise<{ id: string; stateVersion: number } | null> {
+  const { organizationId, attemptId } = input;
+
+  // The compare-and-set. The gate's arm also requires the attempt `QUEUED`, so
+  // exactly one of the two moves it: an ended attempt is never sent, and a sent
+  // one is never ended here. The code is the durable one, so the state and the
+  // code cannot describe different failures; the message is cleared, never left
+  // from an earlier failure.
   const ended = await tx.$queryRaw<{ id: string; stateVersion: number }[]>`
     UPDATE "scene_generations" a
        SET "orchestrationState" = 'CANCELLED_PRE_SUBMISSION'::"GenerationAttemptState",
            "stateVersion" = a."stateVersion" + 1,
-           "normalizedErrorCode" = ${input.reason},
+           "normalizedErrorCode" = ${code},
            "normalizedErrorMessage" = NULL,
            "updatedAt" = CURRENT_TIMESTAMP
       FROM "video_projects" p
@@ -158,21 +255,16 @@ async function endWithin(
     RETURNING a."id", a."stateVersion"
   `;
   const row = ended[0];
-  if (row === undefined) return { kind: "NOT_QUEUED" };
+  if (row === undefined) return null;
 
-  // ---- 3. The event, in the same commit. ---------------------------------
+  // The event, in the same commit.
   await appendGenerationEvent(tx, {
     organizationId,
     aggregateType: "ATTEMPT",
     aggregateId: attemptId,
     fromState: "QUEUED",
-    toState: target,
-    context: {
-      ...input.context,
-      eventType: ATTEMPT_PREPARATION_REFUSED_EVENT_TYPE,
-      reasonCode: input.reason,
-    } satisfies TransitionContext,
+    toState: "CANCELLED_PRE_SUBMISSION",
+    context: { ...input.context, eventType, reasonCode: code } satisfies TransitionContext,
   });
-
-  return { kind: "ENDED", attemptId: row.id, stateVersion: row.stateVersion };
+  return row;
 }

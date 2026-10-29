@@ -1,8 +1,8 @@
 /**
  * The attempt submission's ports: its persistence (GS-7c-2a, ADR-0097), which
  * orchestrated attempts wait to be sent and the ending of one whose
- * preparation was refused for good; and the one paid call (GS-7c-2b,
- * ADR-0098).
+ * preparation was refused for good, or whose Property was deleted (GS-7d-2,
+ * ADR-0100); and the one paid call (GS-7c-2b, ADR-0098).
  *
  * Moving an attempt toward the provider is the paid-submission gate's
  * (ADR-0096); nothing in the persistence port does.
@@ -57,6 +57,32 @@ export type EndPreparationRefusalOutcome =
    */
   | { readonly kind: "NOT_QUEUED" };
 
+/** A generating job's attempt waiting to be sent, whose Property was deleted. */
+export interface PropertyDeletedAttempt {
+  readonly organizationId: string;
+  readonly generationJobId: string;
+  readonly attemptId: string;
+}
+
+export interface PropertyDeletedAttemptQuery {
+  /** Validated by {@link validateAttemptSubmissionBatchLimit}. */
+  readonly limit: number;
+}
+
+export interface EndPropertyDeletedAttemptInput {
+  readonly organizationId: string;
+  readonly attemptId: string;
+  /** Actor and correlation. The event type and reason code are the repository's. */
+  readonly context: TransitionContext;
+}
+
+export type EndPropertyDeletedAttemptOutcome =
+  | { readonly kind: "ENDED"; readonly attemptId: string; readonly stateVersion: number }
+  /** As for a refused preparation: none in the organization, or no longer `QUEUED` before submission. */
+  | { readonly kind: "NOT_QUEUED" }
+  /** The attempt's Property, read under its lock, is not deleted. Nothing was written. */
+  | { readonly kind: "PROPERTY_NOT_DELETED" };
+
 export interface AttemptSubmissionRepository {
   /**
    * Orchestrated attempts waiting to be sent, oldest first, with each one's
@@ -76,6 +102,24 @@ export interface AttemptSubmissionRepository {
    * cost-admission lock taken first, with its transition event, in one commit.
    */
   endPreparationRefusal(input: EndPreparationRefusalInput): Promise<EndPreparationRefusalOutcome>;
+
+  /**
+   * Generating jobs' attempts whose Property was deleted, which discovery
+   * never offers: at most one of each job, the job's oldest, and oldest first.
+   * Each one ended fails its job (Transaction K), which Transaction L then
+   * closes, so a job's other attempts need not fill the window.
+   *
+   * Reads only. Mirrors every refusal of the ending, and discovery's
+   * `GENERATING` request and job.
+   */
+  findPropertyDeletedAttempts(query: PropertyDeletedAttemptQuery): Promise<readonly PropertyDeletedAttempt[]>;
+
+  /**
+   * End one `QUEUED` attempt whose Property is deleted, under the
+   * cost-admission lock taken first and with the Property held while it
+   * decides, with its transition event, in one commit.
+   */
+  endPropertyDeletedAttempt(input: EndPropertyDeletedAttemptInput): Promise<EndPropertyDeletedAttemptOutcome>;
 }
 
 /**

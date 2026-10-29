@@ -237,5 +237,8 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
     any catalog, or its rows are not as the start wrote them; the launch
     runner ends a deleted Property's waiting jobs and any candidate that can
     never launch.
-  - **GS-7d-2**: a generating job's attempt that can never be sent ended
-    before submission, so the attempt failure settlement releases its Unit.
+  - **GS-7d-2** (ADR-0100, no migration): a generating job's attempt whose
+    Property was deleted ended before submission, so the attempt failure
+    settlement releases its Unit; the sender ends them before its window,
+    and one the gate refuses as deleted since discovery at once. A photo gone
+    is already ended by preparation (GS-7c-2a).

@@ -14,10 +14,11 @@
  * ```
  *
  * Everything before the gate writes nothing but the ending; a gate refusal
- * writes nothing, and the attempt is offered again on a later pass. Once the
- * gate has armed an attempt it is sent exactly once and its answer recorded:
- * a sender that throws, or answers with something that is not an observation,
- * is recorded as `SUBMISSION_UNKNOWN`, because the request may have left. The
+ * writes nothing, unless the attempt's Property was deleted (below), and the
+ * attempt is offered again on a later pass. Once the gate has armed an attempt
+ * it is sent exactly once and its answer recorded: a sender that throws, or
+ * answers with something that is not an observation, is recorded as
+ * `SUBMISSION_UNKNOWN`, because the request may have left. The
  * record is tried up to `RECORD_TRIES` times while it throws or loses a race,
  * since an answer already on file replays. If it still does not land, the
  * answer is lost: the attempt stays `SUBMITTING`, the state the stale
@@ -25,9 +26,17 @@
  * ever sends it again. The pass then sends nothing more, because whatever kept
  * one answer from being recorded would lose the next one too.
  *
- * Once an attempt of a job has ended in a pass, by preparation's refusal or by
- * the provider's, the job will fail (Transaction K, ADR-0083), so its other
- * attempts are not sent in that pass; Transaction L cancels them (ADR-0084).
+ * Before that window, a pass ends a generating job's attempt whose Property
+ * was deleted (GS-7d-2, ADR-0100), up to the same bound: discovery never
+ * offers one and the gate refuses it for good, so nothing else ever would. A
+ * gate that refuses an attempt because its Property was deleted since
+ * discovery ends it the same way. Each such ending re-decides under its own
+ * locks.
+ *
+ * Once an attempt of a job has ended in a pass, by preparation's refusal, by
+ * its Property's deletion or by the provider's refusal, the job will fail
+ * (Transaction K, ADR-0083), so its other attempts are not sent in that pass;
+ * Transaction L cancels them (ADR-0084).
  *
  * A pass reads one window of candidates after the caller's cursor and returns
  * where the next should start, so attempts left waiting do not hold the oldest
@@ -67,6 +76,7 @@ import type {
   AttemptSubmissionRepository,
   PreparedGenerationSender,
 } from "./ports";
+import { PROPERTY_DELETED_ATTEMPT_CODE } from "./property-deleted";
 
 /**
  * How long the photo's URL must still work when the gate is asked: the gate's
@@ -89,6 +99,9 @@ const UNKNOWN: ProviderSubmissionObservation = Object.freeze({
 
 type GateRefusal = Exclude<PaidSubmissionAuthorizationOutcome, { readonly kind: "AUTHORIZED" }>;
 
+/** Why an attempt ended before submission: preparation's refusal, or its Property's deletion. */
+export type AttemptEndingReason = PreflightRefusalReason | typeof PROPERTY_DELETED_ATTEMPT_CODE;
+
 export type AttemptSubmissionRunOutcome =
   /**
    * Sent once. What the provider answered, and the outcome's last result, or
@@ -101,20 +114,29 @@ export type AttemptSubmissionRunOutcome =
       readonly recorded: SubmissionOutcomeResult["kind"] | null;
       readonly safetyGuardWarning: boolean;
     }
-  /** Preparation refused for good, and the attempt ended before submission. */
-  | { readonly kind: "ENDED"; readonly reason: PreflightRefusalReason }
+  /** Ended before submission: preparation refused for good, or its Property was deleted. */
+  | { readonly kind: "ENDED"; readonly reason: AttemptEndingReason }
   /** Preparation refused for a reason that may pass; the attempt waits. */
   | { readonly kind: "NOT_PREPARED"; readonly reason: PreflightRefusalReason }
   /** Refused for good, but no longer `QUEUED` when ended: another writer moved it. */
-  | { readonly kind: "MOVED"; readonly reason: PreflightRefusalReason }
+  | { readonly kind: "MOVED"; readonly reason: AttemptEndingReason }
   /**
-   * Not asked of the gate, and nothing written: another provider's attempt, a
-   * URL with too little time left, a job that will fail, or a pass stopped by
-   * an answer it could not record.
+   * Not sent, and nothing written: another provider's attempt, a URL with too
+   * little time left, a job that will fail, a pass stopped by an answer it
+   * could not record, or an attempt whose Property the ending found standing.
+   * The last comes from the first step, for an attempt offered as deleted, or
+   * from the gate's refusal for a deleted Property; either way the Property
+   * reads standing again under its lock. From the first step the attempt is
+   * still `QUEUED`, so the window may report it a second time.
    */
   | {
       readonly kind: "NOT_SENT";
-      readonly reason: "OTHER_PROVIDER" | "SOURCE_URL_STALE" | "JOB_ENDING" | "PASS_STOPPED";
+      readonly reason:
+        | "OTHER_PROVIDER"
+        | "SOURCE_URL_STALE"
+        | "JOB_ENDING"
+        | "PASS_STOPPED"
+        | "PROPERTY_NOT_DELETED";
     }
   /** The gate refused and wrote nothing. */
   | { readonly kind: "NOT_AUTHORIZED"; readonly refusal: GateRefusal["kind"]; readonly reason: string | null }
@@ -159,11 +181,13 @@ export class AttemptSubmissionRunner {
     this.#deps = deps;
   }
 
-  /** One bounded pass over the window after `after`. */
+  /**
+   * One bounded pass: up to `limit` attempts of deleted Properties are ended,
+   * then the window after `after` is sent.
+   */
   async runOnce(limit: number, after: AttemptSubmissionCursor | null = null): Promise<AttemptSubmissionReport> {
     const bounded = validateAttemptSubmissionBatchLimit(limit);
     const start = validateAttemptSubmissionCursor(after);
-    const candidates = await this.#deps.repository.findSubmissionCandidates({ limit: bounded, after: start });
 
     const outcomes: { organizationId: string; attemptId: string; outcome: AttemptSubmissionRunOutcome }[] = [];
     const ending = new Set<string>();
@@ -171,7 +195,33 @@ export class AttemptSubmissionRunner {
     let sent = 0;
     let ended = 0;
     let failed = 0;
+    const settle = (
+      organizationId: string,
+      attemptId: string,
+      generationJobId: string,
+      outcome: AttemptSubmissionRunOutcome,
+    ): void => {
+      if (outcome.kind === "SENT") sent += 1;
+      if (outcome.kind === "ENDED") ended += 1;
+      if (outcome.kind === "FAILED") failed += 1;
+      if (outcome.kind === "ENDED" || (outcome.kind === "SENT" && outcome.observed === "DEFINITIVELY_REJECTED")) {
+        ending.add(generationJobId);
+      }
+      outcomes.push({ organizationId, attemptId, outcome });
+    };
 
+    const deleted = await this.#deps.repository.findPropertyDeletedAttempts({ limit: bounded });
+    for (const attempt of deleted) {
+      let outcome: AttemptSubmissionRunOutcome;
+      try {
+        outcome = await this.#endPropertyDeleted(attempt.organizationId, attempt.attemptId, this.#deps.context());
+      } catch {
+        outcome = { kind: "FAILED" };
+      }
+      settle(attempt.organizationId, attempt.attemptId, attempt.generationJobId, outcome);
+    }
+
+    const candidates = await this.#deps.repository.findSubmissionCandidates({ limit: bounded, after: start });
     for (const candidate of candidates) {
       let outcome: AttemptSubmissionRunOutcome;
       if (stopped !== undefined) {
@@ -185,16 +235,10 @@ export class AttemptSubmissionRunner {
           outcome = { kind: "FAILED" };
         }
       }
-      if (outcome.kind === "SENT") sent += 1;
-      if (outcome.kind === "ENDED") ended += 1;
-      if (outcome.kind === "FAILED") failed += 1;
-      if (outcome.kind === "ENDED" || (outcome.kind === "SENT" && outcome.observed === "DEFINITIVELY_REJECTED")) {
-        ending.add(candidate.generationJobId);
-      }
       if (outcome.kind === "SENT" && outcome.recorded !== "APPLIED" && outcome.recorded !== "REPLAYED") {
         stopped = candidate;
       }
-      outcomes.push({ organizationId: candidate.organizationId, attemptId: candidate.generation.id, outcome });
+      settle(candidate.organizationId, candidate.generation.id, candidate.generationJobId, outcome);
     }
 
     const resume = stopped ?? (candidates.length === bounded ? candidates.at(-1) : undefined);
@@ -229,6 +273,11 @@ export class AttemptSubmissionRunner {
       context,
     });
     if (authorized.kind !== "AUTHORIZED") {
+      // Deleted since discovery: refused for good, so ended now rather than
+      // by the next pass.
+      if (authorized.kind === "SOURCE_INVALID" && authorized.reason === PROPERTY_DELETED_ATTEMPT_CODE) {
+        return this.#endPropertyDeleted(organizationId, generation.id, context);
+      }
       return {
         kind: "NOT_AUTHORIZED",
         refusal: authorized.kind,
@@ -257,6 +306,17 @@ export class AttemptSubmissionRunner {
     if (preparationRefusalEnding(reason) === null) return { kind: "NOT_PREPARED", reason };
     const ended = await this.#deps.repository.endPreparationRefusal({ organizationId, attemptId, reason, context });
     return ended.kind === "ENDED" ? { kind: "ENDED", reason } : { kind: "MOVED", reason };
+  }
+
+  async #endPropertyDeleted(
+    organizationId: string,
+    attemptId: string,
+    context: TransitionContext,
+  ): Promise<AttemptSubmissionRunOutcome> {
+    const ended = await this.#deps.repository.endPropertyDeletedAttempt({ organizationId, attemptId, context });
+    if (ended.kind === "ENDED") return { kind: "ENDED", reason: PROPERTY_DELETED_ATTEMPT_CODE };
+    if (ended.kind === "NOT_QUEUED") return { kind: "MOVED", reason: PROPERTY_DELETED_ATTEMPT_CODE };
+    return { kind: "NOT_SENT", reason: "PROPERTY_NOT_DELETED" };
   }
 
   /** The one POST. A throw or a malformed answer says nothing about whether the request left. */

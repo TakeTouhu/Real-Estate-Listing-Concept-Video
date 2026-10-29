@@ -668,7 +668,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       preparation refusal with a transition event and no audit entry, as
       Transactions K and L release the Unit and cancel attempts with none.
       GS-7d-1 (ADR-0099 Decision 3) ends a waiting job that can never launch
-      and releases its Units the same way. Still open.*
+      and releases its Units the same way, and GS-7d-2 (ADR-0100 Decision 2)
+      a generating job's attempt whose Property was deleted. Still open.*
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the
@@ -703,7 +704,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       Transaction K releases the Unit. One deleted after
       preparation and refused by the gate, and a deleted Property's attempt,
       which discovery passes over, are GS-7d. The sender (GS-7c-2b, ADR-0098)
-      calls the ending.*
+      calls the ending. GS-7d-2 (ADR-0100): a photo deleted after preparation
+      is refused by the gate and ended by the next pass's preparation; a
+      deleted Property's attempt is ended by the sender with
+      `PROPERTY_DELETED`, and Transaction K releases the Unit. Nothing runs
+      the sender until the pipeline command (GS-9).*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1182,6 +1187,22 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       same test-only fix: signal from inside the transaction once it holds its
       locks.
 
+## Found in GS-7d-2 — a Property rename can undo its deletion
+
+- [ ] **Make a Property's rename and deletion conditional writes.**
+      `PropertyService.update` reads the Property, then writes the whole row
+      back, its `status` included, by id alone
+      (`packages/database/src/property-repositories.ts`, `update`); `remove`
+      does the same with `DELETED`. A rename that read the Property before a
+      deletion saved therefore writes `ACTIVE` back after it: the Property
+      reappears, while its photos stay asked to be deleted. A deletion that
+      read a Property before a rename saved writes the old name back. The fix
+      is a product change and needs the product owner's yes: a rename writes
+      only the fields it changes, and both write with `updateMany` where `id`,
+      `organizationId` and `status` not `DELETED` still hold, a lost race
+      answered as not found. Found by GS-7d-2's review; ADR-0100's ending
+      reads such a Property as standing and leaves its attempt for the gate.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
@@ -1350,8 +1371,12 @@ them is **built**. Each item below records the settled decision and what remains
       authorized) and no counter resets on restore.
       *A deleted Property's waiting videos end at once and their Units are
       released (the product owner's decision of 2026-10-29, ADR-0099), not
-      held for the trash period; a restored Property's videos would be
-      started again by the customer.*
+      held for the trash period, and a generating video whose attempt still
+      waits before submission ends so its Unit is released too (ADR-0100);
+      one whose attempts are all at the provider, or being assembled, is not
+      ended yet (*End a deleted Property's video already at the provider or
+      being assembled*, below). A restored Property's videos would be started
+      again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1531,7 +1556,30 @@ them is **built**. Each item below records the settled decision and what remains
       over a deleted Property's attempts, so they no longer
       fill a pass ahead of attempts that can be sent, but they would hold
       their Units, even once their photos are asked to be deleted, until
-      GS-7d.*
+      GS-7d.* *Done for a deleted Property in GS-7d-2 (ADR-0100, no
+      migration): the sender ends such an attempt before its window, and one
+      the gate refuses as deleted since discovery at once,
+      `CANCELLED_PRE_SUBMISSION` with `PROPERTY_DELETED`, behind the
+      cost-admission lock with the Property held; K then releases the Unit.
+      A photo gone or unrecoverable is ended by preparation (GS-7c-2a), on
+      the next pass when the gate refused it first. Still open: the gate's
+      other refusals for good, a price no contract will cover again
+      (`PRICING_INELIGIBLE`) or an attempt not in a shape to cross the
+      boundary (`ATTEMPT_NOT_ARMABLE`), which still write nothing; and how
+      long an attempt refused for configuration (no authorized route, the
+      Safety Guard's pause, no revenue figure) may hold its Unit, which must
+      be decided before generation is activated.*
+- [ ] **End a deleted Property's video already at the provider or being
+      assembled.** The product owner decided on 2026-10-29 ("すぐ戻す") that
+      a deleted Property's unfinished videos end at once and return their
+      Units. GS-7d-1 (ADR-0099) ends a waiting job, and GS-7d-2 (ADR-0100) a
+      generating job while one of its attempts still waits before
+      submission. A `GENERATING` job whose attempts are all at the provider,
+      or a job in `SCENES_READY`, `COMPOSITION_PENDING`, `COMPOSING` or
+      `DELIVERABLE_VALIDATING`, is not ended: nothing downstream reads the
+      Property, so it still delivers and its Unit is consumed. Planned as a
+      follow-up, GS-7d-3, to be proposed; the provider cost of an attempt
+      already sent would be VTaVision's (ADR-0083 Decision 1).
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

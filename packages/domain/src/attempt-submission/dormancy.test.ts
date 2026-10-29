@@ -12,11 +12,12 @@ import { describe, expect, it } from "vitest";
  *    the adapter is the only production caller of a provider's create POST.
  *    The module and the repository fetch nothing, touch no storage and
  *    schedule nothing themselves.
- * 3. **One write.** The ending moves an orchestrated attempt from `QUEUED` to
- *    `CANCELLED_PRE_SUBMISSION` and writes its event; it writes nothing else
- *    and locks nothing but the attempt.
+ * 3. **One write.** Each ending moves an orchestrated attempt from `QUEUED`
+ *    to `CANCELLED_PRE_SUBMISSION` and writes its event; it writes nothing
+ *    else and locks nothing but the attempt and, for a deleted Property's
+ *    attempt, its Property `FOR SHARE` (ADR-0100).
  * 4. **The declared lock order.** The cost-admission lock first, then the
- *    attempt.
+ *    Property, then the attempt.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -84,7 +85,7 @@ describe("one way to the provider", () => {
           new RegExp(
             ": (" +
               [
-                "\\./(index|ports|preparation-refusal|runner)",
+                "\\./(index|ports|preparation-refusal|property-deleted|runner)",
                 "\\.\\./authorization/(paid-submission-service|types)",
                 "\\.\\./generation/(execution-ports|execution-preflight|execution-preflight-errors)",
                 "\\.\\./orchestration/ports",
@@ -155,31 +156,54 @@ describe("one way to the provider", () => {
 
 describe("one write, after the cost-admission lock", () => {
   const repo = code(readFileSync(REPOSITORY, "utf8"));
-  const body = repo.slice(repo.indexOf("async function endWithin("));
+  /** From one marker to the next, or to the end. */
+  const between = (from: string, to?: string): string => {
+    const start = repo.indexOf(from);
+    expect(start).toBeGreaterThan(-1);
+    return repo.slice(start, to === undefined ? undefined : repo.indexOf(to, start));
+  };
+  const refusal = between("async function endWithin(", "async function endPropertyDeletedWithin(");
+  const deleted = between("async function endPropertyDeletedWithin(", "async function lockCostAdmissionFor(");
+  const lock = between("async function lockCostAdmissionFor(", "async function cancelBeforeSubmission(");
+  const write = between("async function cancelBeforeSubmission(");
+  const inOrder = (text: string, markers: readonly string[]): void => {
+    const order = markers.map((marker) => text.indexOf(marker));
+    expect(order.every((position) => position > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  };
 
   it("moves only a QUEUED attempt, only into CANCELLED_PRE_SUBMISSION", () => {
-    expect(body.match(/UPDATE "/g)).toHaveLength(1);
-    expect(body).toContain(`UPDATE "scene_generations" a`);
-    expect(body).toContain(`SET "orchestrationState" = 'CANCELLED_PRE_SUBMISSION'::"GenerationAttemptState"`);
-    expect(body).toContain(`AND a."orchestrationState" = 'QUEUED'::"GenerationAttemptState"`);
+    expect(repo.match(/UPDATE "/g)).toHaveLength(1);
+    expect(write).toContain(`UPDATE "scene_generations" a`);
+    expect(write).toContain(`SET "orchestrationState" = 'CANCELLED_PRE_SUBMISSION'::"GenerationAttemptState"`);
+    expect(write).toContain(`AND a."orchestrationState" = 'QUEUED'::"GenerationAttemptState"`);
     for (const banned of ["INSERT INTO", "DELETE FROM", ".update(", ".updateMany(", ".create(", ".upsert("]) {
       expect(`${banned}: ${repo.includes(banned)}`).toBe(`${banned}: false`);
     }
   });
 
-  it("locks nothing but the attempt it moves", () => {
-    for (const banned of ["FOR UPDATE", "FOR NO KEY UPDATE", "FOR SHARE", "FOR KEY SHARE"]) {
+  it("locks nothing but the attempt it moves and a deleted Property's attempt's Property, shared", () => {
+    expect(repo.match(/FOR SHARE/g)).toHaveLength(1);
+    expect(deleted).toContain("FOR SHARE OF pr`");
+    for (const banned of ["FOR UPDATE", "FOR NO KEY UPDATE", "FOR KEY SHARE"]) {
       expect(`${banned}: ${repo.includes(banned)}`).toBe(`${banned}: false`);
     }
   });
 
-  it("takes the cost-admission lock before the compare-and-set, and writes the event after it", () => {
-    const order = [
-      "await acquireCostAdmissionLock(",
-      `UPDATE "scene_generations" a`,
-      "await appendGenerationEvent(",
-    ].map((marker) => body.indexOf(marker));
-    expect(order.every((position) => position > -1)).toBe(true);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  it("takes the cost-admission lock first, then the Property, then the compare-and-set and its event", () => {
+    expect(lock).toContain("await acquireCostAdmissionLock(");
+    inOrder(refusal, ["await lockCostAdmissionFor(", "await cancelBeforeSubmission("]);
+    inOrder(deleted, [
+      "await lockCostAdmissionFor(",
+      "FOR SHARE OF pr`",
+      `property.status !== "DELETED"`,
+      "await cancelBeforeSubmission(",
+    ]);
+    inOrder(write, [`UPDATE "scene_generations" a`, "await appendGenerationEvent("]);
+  });
+
+  it("ends a deleted Property's attempt with the gate's code and its own event, never a caller's", () => {
+    inOrder(deleted, ["PROPERTY_DELETED_ATTEMPT_CODE,", "ATTEMPT_ENDED_PROPERTY_DELETED_EVENT_TYPE,"]);
+    expect(refusal).toContain("input.reason, ATTEMPT_PREPARATION_REFUSED_EVENT_TYPE");
   });
 });

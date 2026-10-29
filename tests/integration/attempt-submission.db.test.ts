@@ -52,7 +52,8 @@ import { ctx } from "./orchestration-fixture";
 
 /**
  * The attempt submission's discovery, the ending of a refused preparation and
- * the sender, against live PostgreSQL (GS-7c-2a, ADR-0097; GS-7c-2b, ADR-0098).
+ * the sender, against live PostgreSQL (GS-7c-2a, ADR-0097; GS-7c-2b, ADR-0098),
+ * and the ending of a deleted Property's attempts (GS-7d-2, ADR-0100).
  *
  * Jobs are started by the real start commit and launched by the real launch,
  * so every attempt here is one the product admits. What only a database can
@@ -383,8 +384,11 @@ function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<
  * Whether the ending is waiting on a lock of this kind within the deadline: the
  * database says so, for a backend running the ending's own statement.
  */
-async function waitForBlocked(waitEvent: "advisory" | "transactionid", withinMs = 10_000): Promise<boolean> {
-  const statement = waitEvent === "advisory" ? "%pg_advisory_xact_lock%" : '%UPDATE "scene_generations" a%';
+async function waitForBlocked(
+  waitEvent: "advisory" | "transactionid",
+  withinMs = 10_000,
+  statement = waitEvent === "advisory" ? "%pg_advisory_xact_lock%" : '%UPDATE "scene_generations" a%',
+): Promise<boolean> {
   const deadline = Date.now() + withinMs;
   while (Date.now() < deadline) {
     const rows = await prisma.$queryRaw<{ waiting: boolean }[]>`
@@ -1062,5 +1066,276 @@ describe.skipIf(!HAS_DB)("the sender (GS-7c-2b)", () => {
     const third = await runner.runOnce(2, second.next);
     expect([third.outcomes, third.next]).toEqual([[], null]);
     expect((await runner.runOnce(2, third.next)).outcomes.map((o) => o.attemptId)).toEqual(b.attempts);
+  });
+});
+
+async function deletedOffered(limit = 100): Promise<string[][]> {
+  const found = await submission.findPropertyDeletedAttempts({ limit });
+  return found.map((attempt) => [attempt.organizationId, attempt.generationJobId, attempt.attemptId]);
+}
+
+function endDeleted(organizationId: string, attemptId: string) {
+  return submission.endPropertyDeletedAttempt({ organizationId, attemptId, context: refusedContext() });
+}
+
+/** Delete the Property of the tenant's project `which`, as the Property service does. */
+async function deleteProperty(organizationId: string, which: number): Promise<void> {
+  const { property } = TENANT[organizationId]![which - 1]!;
+  await prisma.property.update({ where: { id: property }, data: { status: "DELETED" } });
+}
+
+describe.skipIf(!HAS_DB)("a deleted Property's attempts (GS-7d-2)", () => {
+  it("offers the oldest attempt of each generating job of a deleted Property, oldest first", async () => {
+    const a1 = await launchJob(ORG_A, 1);
+    const a2 = await launchJob(ORG_A, 2);
+    const a4 = await launchJob(ORG_A, 4);
+    const b1 = await launchJob(ORG_B, 1);
+    for (const [minute, id] of [a2.attempts[1]!, a2.attempts[0]!, a1.attempts[0]!, a1.attempts[1]!].entries()) {
+      await age(id, minute);
+    }
+    await age(b1.attempts[1]!, 10);
+    await age(b1.attempts[0]!, 11);
+    await age(a4.attempts[0]!, 0);
+    expect(await deletedOffered()).toEqual([]);
+
+    // A's first Property holds projects 1 to 3; its second, project 4, stands.
+    await deleteProperty(ORG_A, 1);
+    await deleteProperty(ORG_B, 1);
+    expect(await deletedOffered()).toEqual([
+      [ORG_A, a2.job, a2.attempts[1]],
+      [ORG_A, a1.job, a1.attempts[0]],
+      [ORG_B, b1.job, b1.attempts[1]],
+    ]);
+    expect(await deletedOffered(2)).toEqual([
+      [ORG_A, a2.job, a2.attempts[1]],
+      [ORG_A, a1.job, a1.attempts[0]],
+    ]);
+    for (const limit of [0, 101, 1.5, Number.POSITIVE_INFINITY]) {
+      await expect(submission.findPropertyDeletedAttempts({ limit })).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+      });
+    }
+  });
+
+  it("passes over an attempt not waiting before submission, and a request or job not generating", async () => {
+    const a1 = await launchJob(ORG_A, 1);
+    const a2 = await launchJob(ORG_A, 2);
+    for (const [minute, id] of [...a1.attempts, ...a2.attempts].entries()) await age(id, minute);
+    await deleteProperty(ORG_A, 1);
+    const jobOf = async (job: string) => (await deletedOffered()).filter((row) => row[1] === job).map((row) => row[2]);
+
+    // Armed: the job's next attempt is offered instead; then its request ends.
+    const armed = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: a1.attempts[0]! } });
+    await attempts.armProviderBoundary({
+      organizationId: ORG_A,
+      id: armed.id,
+      expectedVersion: armed.stateVersion,
+      context: ctx(),
+    });
+    expect(await jobOf(a1.job)).toEqual([a1.attempts[1]]);
+    const request = await prisma.sceneGeneration.findUniqueOrThrow({
+      where: { id: a1.attempts[1]! },
+      select: { generationSceneRequestId: true },
+    });
+    await prisma.sceneGenerationRequest.update({
+      where: { id: request.generationSceneRequestId! },
+      data: { state: "CANCELLED" },
+    });
+    expect(await jobOf(a1.job)).toEqual([]);
+
+    // No longer before the boundary: the next; then the job fails.
+    await prisma.$executeRaw`
+      UPDATE "scene_generations" SET "submissionCertainty" = 'SUBMISSION_UNKNOWN'::"SubmissionCertainty"
+       WHERE "id" = ${a2.attempts[0]!}
+    `;
+    expect(await jobOf(a2.job)).toEqual([a2.attempts[1]]);
+    await prisma.generationJob.update({ where: { id: a2.job }, data: { state: "FAILED_TERMINAL" } });
+    expect(await deletedOffered()).toEqual([]);
+  });
+
+  it("ends the attempt before submission, with its code and event, and writes nothing else", async () => {
+    const a = await launchJob(ORG_A, 1);
+    await launchJob(ORG_B, 1);
+    await deleteProperty(ORG_A, 1);
+    const target = a.attempts[0]!;
+    await prisma.sceneGeneration.update({ where: { id: target }, data: { normalizedErrorMessage: "stale" } });
+    const before = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: target } });
+    const eventsBefore = await prisma.generationTransitionEvent.count({ where: { aggregateId: target } });
+    const others = await written();
+
+    const context = refusedContext();
+    const outcome = await submission.endPropertyDeletedAttempt({ organizationId: ORG_A, attemptId: target, context });
+    expect(outcome).toEqual({ kind: "ENDED", attemptId: target, stateVersion: before.stateVersion + 1 });
+    expect(await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: target } })).toMatchObject({
+      state: "QUEUED",
+      orchestrationState: "CANCELLED_PRE_SUBMISSION",
+      stateVersion: before.stateVersion + 1,
+      submissionCertainty: "PRE_SUBMISSION",
+      submissionBoundaryEnteredAt: null,
+      providerPredictionId: null,
+      normalizedErrorCode: "PROPERTY_DELETED",
+      normalizedErrorMessage: null,
+    });
+    const events = await prisma.generationTransitionEvent.findMany({
+      where: { aggregateId: target },
+      orderBy: { sequence: "asc" },
+    });
+    expect(events).toHaveLength(eventsBefore + 1);
+    expect(events.at(-1)).toMatchObject({
+      organizationId: ORG_A,
+      aggregateType: "ATTEMPT",
+      fromState: "QUEUED",
+      toState: "CANCELLED_PRE_SUBMISSION",
+      eventType: "attempt.ended_property_deleted",
+      reasonCode: "PROPERTY_DELETED",
+      actorType: "WORKER",
+      correlationId: context.correlationId,
+    });
+
+    const unchanged = (state: Record<string, unknown>) => ({
+      ...state,
+      attempts: (state.attempts as { id: string }[]).filter((row) => row.id !== target),
+      events: undefined,
+    });
+    expect(unchanged(await written())).toEqual(unchanged(others));
+    // The job's other attempt is offered next, and is ended the same way.
+    expect(await deletedOffered()).toEqual([[ORG_A, a.job, a.attempts[1]]]);
+  });
+
+  it("writes nothing for a standing Property, another organization, a replay or an armed attempt", async () => {
+    const a1 = await launchJob(ORG_A, 1);
+    const a4 = await launchJob(ORG_A, 4);
+    await launchJob(ORG_B, 1);
+    expect(await endDeleted(ORG_A, a4.attempts[0]!)).toEqual({ kind: "PROPERTY_NOT_DELETED" });
+
+    await deleteProperty(ORG_A, 1);
+    const armed = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: a1.attempts[1]! } });
+    await attempts.armProviderBoundary({
+      organizationId: ORG_A,
+      id: armed.id,
+      expectedVersion: armed.stateVersion,
+      context: ctx(),
+    });
+    // Another organization naming a queued attempt of a deleted Property is
+    // answered as for none, and moves nothing.
+    const queued = await written();
+    expect(await endDeleted(ORG_B, a1.attempts[0]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await written()).toEqual(queued);
+    expect((await endDeleted(ORG_A, a1.attempts[0]!)).kind).toBe("ENDED");
+
+    const before = await written();
+    expect(await endDeleted(ORG_B, a1.attempts[0]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await endDeleted(ORG_B, a4.attempts[0]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await endDeleted(ORG_A, a1.attempts[0]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await endDeleted(ORG_A, a1.attempts[1]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await endDeleted(ORG_A, "sgen_submit_none")).toEqual({ kind: "NOT_QUEUED" });
+    expect(await written()).toEqual(before);
+    expect((await attemptRow(a1.attempts[1]!)).orchestrationState).toBe("SUBMITTING");
+  });
+
+  it("waits for the cost-admission lock of its organization and cycle, then ends", async () => {
+    const a = await launchJob(ORG_A, 1);
+    await deleteProperty(ORG_A, 1);
+    const held = await holdOpen(async (tx) => {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${`paid-submission:${ORG_A}`}), hashtext(${`cycle:${CYCLE}`}))::text
+      `;
+    });
+    const ending = settled(endDeleted(ORG_A, a.attempts[0]!));
+    try {
+      expect(await waitForBlocked("advisory")).toBe(true);
+      expect(ending.done()).toBe(false);
+    } finally {
+      await held.release();
+    }
+    expect((await ending.value).kind).toBe("ENDED");
+  });
+
+  it("waits for a deletion saving, and then sees it", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const held = await holdOpen(async (tx) => {
+      await tx.property.update({ where: { id: TENANT[ORG_A]![0]!.property }, data: { status: "DELETED" } });
+    });
+    const ending = settled(endDeleted(ORG_A, a.attempts[0]!));
+    try {
+      expect(await waitForBlocked("transactionid", 10_000, "%FOR SHARE OF pr%")).toBe(true);
+      expect(ending.done()).toBe(false);
+    } finally {
+      await held.release();
+    }
+    expect((await ending.value).kind).toBe("ENDED");
+    expect((await attemptRow(a.attempts[0]!)).normalizedErrorCode).toBe("PROPERTY_DELETED");
+  });
+
+  it("is ended by the sender first, sends nothing of its job, and frees the Unit through K and L", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    for (const [minute, id] of [...a.attempts, ...b.attempts].entries()) await age(id, minute);
+    await deleteProperty(ORG_A, 1);
+    const { provider, requests } = counting();
+
+    const report = await sender(provider).runOnce(10);
+    expect(report.outcomes.map((o) => [o.attemptId, o.outcome])).toEqual([
+      [a.attempts[0], { kind: "ENDED", reason: "PROPERTY_DELETED" }],
+      ...b.attempts.map((id) => [
+        id,
+        { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+      ]),
+    ]);
+    expect(report).toMatchObject({ sent: 2, ended: 1, failed: 0 });
+    expect(requests).toHaveLength(2);
+    // Nothing of A's was signed or armed.
+    expect(signed.filter((key) => key.startsWith(`org/${ORG_A}/`))).toEqual([]);
+    for (const id of a.attempts) expect(await armAudits(id)).toBe(0);
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("QUEUED");
+
+    let n = 0;
+    const settledReport = await new AttemptFailureSettlementRunner({
+      repository: createAttemptFailureSettlementRepository(prisma),
+      clock: () => SETTLED_AT,
+      context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_k_${++n}` }),
+    }).runOnce(10);
+    expect([settledReport.settled, settledReport.unitsReleased]).toEqual([1, 1]);
+    const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: a.job }, include: { reservation: true } });
+    expect([job.state, job.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    const closed = await new FailedJobSceneClosureRunner({
+      repository: createFailedJobSceneClosureRepository(prisma),
+      clock: () => SETTLED_AT,
+      context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_l_${++n}` }),
+    }).runOnce(10);
+    expect(closed.attemptsCancelled).toBe(1);
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("CANCELLED_PRE_SUBMISSION");
+
+    // Nothing is left to end or send.
+    expect(await deletedOffered()).toEqual([]);
+    expect((await sender(provider).runOnce(10)).outcomes).toEqual([]);
+  });
+
+  it("ends an attempt the gate refuses because its Property was deleted since discovery", async () => {
+    const a = await launchJob(ORG_A, 1);
+    for (const [minute, id] of a.attempts.entries()) await age(id, minute);
+    // The deletion saves while the first attempt is prepared: after discovery,
+    // before the gate.
+    const deleting: ExecutionPreflightDeps["storage"] = {
+      exists: (key) => storage.exists(key),
+      async createSignedDownloadUrl(key, ttl) {
+        await deleteProperty(ORG_A, 1);
+        return storage.createSignedDownloadUrl(key, ttl);
+      },
+    };
+    const { provider, requests } = counting();
+
+    const report = await sender(provider, { source: deleting }).runOnce(10);
+    expect(report.outcomes.map((o) => [o.attemptId, o.outcome])).toEqual([
+      [a.attempts[0], { kind: "ENDED", reason: "PROPERTY_DELETED" }],
+      [a.attempts[1], { kind: "NOT_SENT", reason: "JOB_ENDING" }],
+    ]);
+    expect(requests).toEqual([]);
+    expect(await attemptRow(a.attempts[0]!)).toMatchObject({
+      orchestrationState: "CANCELLED_PRE_SUBMISSION",
+      submissionCertainty: "PRE_SUBMISSION",
+      normalizedErrorCode: "PROPERTY_DELETED",
+    });
+    expect(await armAudits(a.attempts[0]!)).toBe(0);
   });
 });
