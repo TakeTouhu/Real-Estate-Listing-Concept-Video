@@ -251,3 +251,16 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
   - **GS-7d-3b** (ADR-0103, no migration): Transaction G refuses to publish
     a deleted Property's initial video, fails the job and releases its Unit,
     through the settlement of a cycle with no usable video.
+
+## GS-8 — planning a video's composition once its scenes are ready
+
+On `d298251` Transaction F moves a job to `SCENES_READY` when its last scene is
+delivered, and Transaction I would plan its composition and move it to
+`COMPOSITION_PENDING`, where the composition claim (J1) takes it. But nothing
+finds such a job or calls Transaction I: Phase 5A shipped it with no discovery
+(ADR-0049), so a job stops at `SCENES_READY`.
+
+GS-8 (ADR-0104, no migration) adds the candidate query on the plan repository,
+mirroring every refusal of Transaction I, and a dormant runner that calls
+Transaction I once per job. Transaction I is unchanged. The pipeline command
+(GS-9) is what will run it.

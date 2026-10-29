@@ -90,6 +90,8 @@ export interface ChainOptions {
    * reserved — allocations and all — and only then moved to `jobState`.
    */
   readonly fundFromLedgerAt?: Date;
+  /** Name the rows yourself, so a test can choose how their ids sort. */
+  readonly tag?: string;
 }
 
 let seq = 0;
@@ -99,7 +101,7 @@ export async function seedPlanChain(
   options: ChainOptions = {},
 ): Promise<PlanChain> {
   seq += 1;
-  const tag = `dcp${seq}`;
+  const tag = options.tag ?? `dcp${seq}`;
   const organizationId = options.organizationId ?? ORG_A;
   const videoProjectId = organizationId === ORG_A ? PROJECT_A : PROJECT_B;
   const jobId = `genjob_${tag}`;

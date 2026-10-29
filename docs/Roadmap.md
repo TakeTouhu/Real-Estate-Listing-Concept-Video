@@ -400,6 +400,14 @@ no usable video, so the cause cannot change the bill. A replacement, a replay
 and a stale target are answered as before. Nothing outside tests constructs the
 validation repository or its runner.
 
+**GS-8 — planning a video's composition once its scenes are ready** (ADR-0104,
+no migration): a dormant runner finds the `SCENES_READY` jobs Transaction I
+would plan, oldest first, and calls it once per job with a fresh version id.
+The query mirrors every refusal of Transaction I, so a job it would refuse
+never holds the head of the batch; a verdict bound to other bytes is offered
+and reported as that job's failure. Transaction I is unchanged. Nothing outside
+tests constructs the runner.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

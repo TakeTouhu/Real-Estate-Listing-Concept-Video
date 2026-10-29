@@ -35,6 +35,13 @@
  *
  * Database work only. No object-store read, no `ffprobe`, no `ffmpeg`, no HTTP
  * and no temporary file is reachable from inside the transaction.
+ *
+ * ## Discovery (ADR-0104)
+ *
+ * `findCompositionPlanCandidates` is a hint for the dormant runner: one read
+ * outside any transaction, with no lock, returning identifiers only. It
+ * mirrors every refusal of the admission, and the admission still decides
+ * everything again under its own locks.
  */
 
 import {
@@ -45,8 +52,10 @@ import {
   FIRST_DELIVERABLE_ORDINAL,
   JOB_COMPOSITION_PENDING_EVENT_TYPE,
   computeDeliverableInputFingerprint,
+  validateCompositionPlanBatchLimit,
   type AdmitCompositionPlanInput,
   type AdmitCompositionPlanOutcome,
+  type CompositionPlanCandidate,
   type DeliverableCompositionPlanRepository,
   type DeliverableInputFingerprintScene,
   type DisclosureMode,
@@ -108,6 +117,61 @@ export function createDeliverableCompositionPlanRepository(
   prisma: PrismaClient,
 ): DeliverableCompositionPlanRepository {
   return {
+    async findCompositionPlanCandidates({ limit: requested }) {
+      // Validated here as well as in the runner: this method is public.
+      const limit = validateCompositionPlanBatchLimit(requested);
+      // Every refusal of the admission is mirrored here, so a job it would
+      // refuse cannot hold the head of the batch: the Job's state, the two
+      // composition cycles, at least one Scene, and each Scene's proofs.
+      //
+      // Two of the admission's tests are not repeated. A `VALID` verdict
+      // always has its `validatedAt`, which the database's own check enforces.
+      // And a verdict bound to other bytes than its attempt's receipt is a
+      // defect, not a refusal: such a job is offered, so its pass reports it.
+      const rows = await prisma.$queryRaw<CompositionPlanCandidate[]>`
+        SELECT p."organizationId" AS "organizationId",
+               j."id"             AS "generationJobId"
+          FROM "generation_jobs" j
+          JOIN "video_projects" p ON p."id" = j."videoProjectId"
+          JOIN "generation_reservations" res ON res."generationJobId" = j."id"
+         WHERE j."state" = 'SCENES_READY'::"GenerationJobState"
+           AND ((j."currentDeliverableVersionId" IS NULL
+                 AND res."state" = 'RESERVED'::"GenerationReservationState")
+             OR (j."currentDeliverableVersionId" IS NOT NULL
+                 AND res."state" = 'CONSUMED'::"GenerationReservationState"))
+           AND EXISTS (
+                 SELECT 1 FROM "generation_scenes" es WHERE es."generationJobId" = j."id")
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM "generation_scenes" s
+                   LEFT JOIN "scene_generation_requests" r
+                          ON r."id" = s."currentDeliveredRequestId"
+                         AND r."generationSceneId" = s."id"
+                   LEFT JOIN "scene_generations" a
+                          ON a."generationSceneRequestId" = r."id"
+                         AND a."attemptOrdinal" = (
+                               SELECT MAX(sib."attemptOrdinal")
+                                 FROM "scene_generations" sib
+                                WHERE sib."generationSceneRequestId" = r."id"
+                             )
+                   LEFT JOIN "managed_output_media_validations" v
+                          ON v."sceneGenerationId" = a."id"
+                  WHERE s."generationJobId" = j."id"
+                    AND (s."state" <> 'READY'::"GenerationSceneState"
+                         OR r."state" IS DISTINCT FROM 'DELIVERED'::"SceneGenerationRequestState"
+                         OR a."orchestrationState"
+                              IS DISTINCT FROM 'OUTPUT_VERIFIED'::"GenerationAttemptState"
+                         OR v."status"
+                              IS DISTINCT FROM 'VALID'::"ManagedOutputMediaValidationStatus"))
+         ORDER BY j."createdAt" ASC, j."id" ASC
+         LIMIT ${limit}
+      `;
+      return rows.map((row) => ({
+        organizationId: row.organizationId,
+        generationJobId: row.generationJobId,
+      }));
+    },
+
     async admitCompositionPlan(input: AdmitCompositionPlanInput) {
       return prisma.$transaction(async (tx): Promise<AdmitCompositionPlanOutcome> => {
         // ---- 1. The entitlement and Job locks, held for the whole transaction.
