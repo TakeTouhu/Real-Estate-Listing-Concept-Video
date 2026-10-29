@@ -153,24 +153,28 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
       ).map(toProperty);
     },
     async updateDetails(organizationId, id, change) {
-      return prisma.$transaction(async (tx) => {
-        // Only the named fields (Prisma leaves an `undefined` one unwritten),
-        // and only while the row stands: never its status or assignments.
-        // `updatedAt` is written as `@updatedAt` would, and keeps a change
-        // naming no field a statement: Prisma skips an empty `updateMany`.
-        const { count } = await tx.property.updateMany({
-          where: { id, organizationId, status: { not: "DELETED" } },
-          data: {
-            updatedAt: new Date(),
-            name: change.name,
-            propertyType: change.propertyType,
-            addressMasked: change.addressMasked,
-            description: change.description,
-          },
-        });
-        if (count === 0) return null;
-        return toProperty(await tx.property.findUniqueOrThrow({ where: { id } }));
-      });
+      // One conditional UPDATE, as `updateIfCurrent` below: Prisma 5.22
+      // compiles the extra filters beside the id into its WHERE. Only the named
+      // fields (Prisma leaves an `undefined` one unwritten, and `@updatedAt`
+      // follows), and only while the row stands: never its status or
+      // assignments. A change naming no field is a read under the same
+      // condition. `P2025` is the lost race: gone, another tenant's, or deleted.
+      try {
+        return toProperty(
+          await prisma.property.update({
+            where: { id, organizationId, status: { not: "DELETED" } },
+            data: {
+              name: change.name,
+              propertyType: change.propertyType,
+              addressMasked: change.addressMasked,
+              description: change.description,
+            },
+          }),
+        );
+      } catch (error) {
+        if (isRecordNotFound(error)) return null;
+        throw error;
+      }
     },
     async markDeleted(organizationId, id) {
       const { count } = await prisma.property.updateMany({

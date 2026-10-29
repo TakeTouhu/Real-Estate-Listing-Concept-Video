@@ -34,26 +34,27 @@ before a route does.
 ## Decision 1 — A rename writes the fields it names, while the Property stands
 
 `PropertyRepository.updateDetails(organizationId, id, change)` writes only the
-fields `change` names (name, type, masked address, description), in one
-`updateMany` whose condition is the id, the organization and a status other
-than `DELETED`, then reads the row back in the same transaction. It never
-writes the status or the assignments. `null` means no such Property in the
-organization, or a deleted one; nothing was written.
+fields `change` names (name, type, masked address, description), and
+`updatedAt` by `@updatedAt`, in one `UPDATE … RETURNING` whose condition is
+the id, the organization and a status other than `DELETED`, as the photos'
+`updateIfCurrent` does (Prisma 5.22 compiles the extra filters into the
+statement's `WHERE`; checked against PostgreSQL). It never writes the status
+or the assignments. `null` means no such Property in the organization, or a
+deleted one (Prisma's `P2025`); nothing was written.
 
 `PropertyService.update` passes only the fields the member sent, after the same
 validation as before, and answers `null` as `NOT_FOUND`, the answer its own
 read gives a deleted Property, with no audit entry.
 
-`updatedAt` is written explicitly, as Prisma's `@updatedAt` would: a change
-naming no field is then still one statement and answers the Property, as
-before, where an empty `updateMany` would be skipped and read as not found.
+A change naming no field writes nothing: Prisma reads the row under the same
+condition, and the Property is answered, or `null`.
 
 ## Decision 2 — A deletion writes the status alone, once
 
 `PropertyRepository.markDeleted(organizationId, id)` writes `status: DELETED`
-alone, in one `updateMany` on the id, the organization and a status other than
-`DELETED`. `false` means no such Property in the organization, or another
-deletion saved first.
+alone (and `updatedAt`, by `@updatedAt`), in one `updateMany` on the id, the
+organization and a status other than `DELETED`. `false` means no such
+Property in the organization, or another deletion saved first.
 
 `PropertyService.remove` answers `false` as `NOT_FOUND`, as the next request
 would be answered, before asking for any photo's deletion and with no audit
@@ -69,9 +70,10 @@ methods with the same conditions.
 
 ## Not decided here
 
-- **A rename racing a reassignment** that takes the Property out of the
-  member's reach: reach is checked at the read, as for every Property action
-  (ADR-0064), and the reassignment is itself a compare-and-set.
+- **A rename or a deletion racing a reassignment** that takes the Property
+  out of the member's reach: reach is checked at the read, as for every
+  Property action (ADR-0064), so either still saves; the reassignment is
+  itself a compare-and-set.
 - **A deletion's photos and audit entry in one transaction.** `remove` marks
   the Property deleted, then asks for each photo's deletion, then writes its
   audit entry, each its own statement. A failure between them leaves photos

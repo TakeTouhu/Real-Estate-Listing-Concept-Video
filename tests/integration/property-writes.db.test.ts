@@ -167,6 +167,13 @@ describe.skipIf(!HAS_DB)("a rename and a deletion racing", () => {
     expect(await audits("property.deleted")).toBe(1);
   });
 
+  it("keeps the name, type and address another rename changed when this one changes the description", async () => {
+    const change = { name: "Harbor Point", propertyType: "OFFICE" as const, addressMasked: "Tokyo" };
+    const rename = service(readThen(() => service().update(OWNER, ORG, PROPERTY, change)));
+    await rename.update(OWNER, ORG, PROPERTY, { description: "Garden view" });
+    expect(await row()).toMatchObject({ ...change, description: "Garden view", status: "ACTIVE" });
+  });
+
   it("keeps a field another rename changed since this one read the Property", async () => {
     const rename = service(readThen(() => service().update(OWNER, ORG, PROPERTY, { description: "Garden view" })));
     await rename.update(OWNER, ORG, PROPERTY, { name: "Harbor Point" });

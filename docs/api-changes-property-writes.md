@@ -5,7 +5,7 @@ Property yet.
 
 | Export | Change |
 | --- | --- |
-| `PropertyRepository` (`@app/domain`) | `update(property)` removed; `updateDetails(organizationId, id, change)` writes only the named fields while the Property is in the organization and not deleted, `null` otherwise; `markDeleted(organizationId, id)` writes the status alone, once, `false` otherwise |
+| `PropertyRepository` (`@app/domain`) | `update(property)` removed; `updateDetails(organizationId, id, change)` writes only the named fields while the Property is in the organization and not deleted, `null` otherwise; `markDeleted(organizationId, id)` writes the status alone (and `updatedAt`), once, `false` otherwise |
 | `PropertyDetailsChange` (`@app/domain`) | new: the fields a change may name (name, type, masked address, description) |
 | `PropertyService.update` / `remove` (`@app/domain`) | a Property deleted since their read, or by another deletion first, is answered `NOT_FOUND` with no audit entry |
 | `createPrismaPropertyRepositories(prisma)` (`@app/database`) | implements the two methods |

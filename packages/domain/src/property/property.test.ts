@@ -322,6 +322,32 @@ describe("a rename and a deletion saved meanwhile (ADR-0101)", () => {
     expect(await stored()).toEqual(renamed);
   });
 
+  it("keeps the name, type and address another rename changed when this one changes the description", async () => {
+    const rename = service(
+      readThen(ctx.propertyRepo, () =>
+        ctx.properties.update(ctx.ownerId, ctx.orgId, propertyId, {
+          name: "Harbor Point",
+          propertyType: "OFFICE",
+          addressMasked: "Tokyo",
+        }),
+      ),
+    );
+    await rename.update(ctx.ownerId, ctx.orgId, propertyId, { description: "Garden view" });
+    expect(await stored()).toMatchObject({
+      name: "Harbor Point",
+      propertyType: "OFFICE",
+      addressMasked: "Tokyo",
+      description: "Garden view",
+    });
+  });
+
+  it("writes nothing for another organization's Property, as the database's write does", async () => {
+    const before = await stored();
+    expect(await ctx.propertyRepo.updateDetails("org_elsewhere", propertyId, { name: "Mine" })).toBeNull();
+    expect(await ctx.propertyRepo.markDeleted("org_elsewhere", propertyId)).toBe(false);
+    expect(await stored()).toEqual(before);
+  });
+
   it("leaves a field passed as undefined as stored, as the database's write does", async () => {
     await ctx.propertyRepo.updateDetails(ctx.orgId, propertyId, { name: undefined, description: "Garden view" });
     expect(await stored()).toMatchObject({ name: "Harbor", description: "Garden view" });
