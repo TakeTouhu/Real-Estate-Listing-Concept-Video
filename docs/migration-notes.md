@@ -1964,9 +1964,10 @@ calls what GS-7d-3a adds. A job a test ended stays ended, its Unit released.
 no new environment variable. A refused publication writes a job's
 `DELIVERABLE_VALIDATING → FAILED_TERMINAL` and a reservation's release, states
 and columns that already exist, through the failure settlement of ADR-0082.
-Its events go to the existing transition history, the job's with the type the
-endings of ADR-0099 and ADR-0102 record (`job.ended_property_deleted`) and both
-with `PROPERTY_DELETED` as their reason code.
+Its events go to the existing transition history, the job's with the type
+ADR-0102's ending records (`job.ended_property_deleted`) and both with
+`PROPERTY_DELETED` as their reason code, the code every deleted Property's
+ending carries.
 
 **What changes at deploy.** Nothing. Nothing outside tests constructs the
 validation repository or its runner.

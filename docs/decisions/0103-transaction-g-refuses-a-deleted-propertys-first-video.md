@@ -40,15 +40,20 @@ Transaction G keeps its order of judgement (ADR-0051, ADR-0080, ADR-0081):
    plan, or a hold that cannot be spent: the defects as before.
 
 Then, for the job's **first** video, once its hold is shown `RESERVED` or
-`RECONCILIATION_HOLD`, the Property is read. **Deleted, nothing is published:**
+`RECONCILIATION_HOLD`, the Property is judged; it was locked and read before
+the job (Decision 3). **Deleted, nothing is published:**
 the job fails and its Unit is released in this commit, and G answers
-**`PROPERTY_DELETED`**. The frozen funding is not checked (Phase 6A): nothing is
-spent. A standing Property's video is published and its Unit consumed as
-before.
+**`PROPERTY_DELETED`**. A standing Property's video is published and its Unit
+consumed as before.
 
 Judged after every other refusal, so a target that is not the job's next
 (another verdict, an older version, a job that moved on) ends nothing, and a
-version this build would never publish still raises its defect.
+version this build would never publish, or a hold that cannot be spent, still
+raises its defect. One check comes after it: the frozen funding (Phase 6A),
+which guards what a consumption spends. Nothing is spent here, so it is not
+made, as the composition block and the terminal verdicts never make it: a hold
+whose frozen funding no longer covers it is released like any other, and its
+Units still recorded come back.
 
 **A replacement is published whatever its Property.** No Unit is held by one: it
 replaces a video the customer already paid for (ADR-0083 Decision 3). Whether a
@@ -67,11 +72,14 @@ events and changes nothing it writes: `NO_USABLE_VIDEO` (the default, for the
 block and the verdicts) or `PROPERTY_DELETED`.
 
 **What is written.** The job moves `DELIVERABLE_VALIDATING → FAILED_TERMINAL`
-with a `job.ended_property_deleted` event, the type the endings of ADR-0099 and
-ADR-0102 record. The reservation moves to `RELEASED` with `releasedAt` set to
+with a `job.ended_property_deleted` event, the type ADR-0102's ending records.
+The reservation moves to `RELEASED` with `releasedAt` set to
 the publication's instant and a `reservation.released` event. Both events carry
 `PROPERTY_DELETED` as their reason code and the caller's actor and correlation.
-`deliverableSettlementRecord(kind, cause)` names them. The pointer is proved
+That code, not the event type, is what every deleted Property's ending shares:
+ADR-0099's records `job.ended_unlaunchable` and ADR-0100's an attempt's
+`attempt.ended_property_deleted`. `deliverableSettlementRecord(kind, cause)`
+names them. The pointer is proved
 unmoved. No deliverable event: the version stays validated and is never
 published, and its `VALID` verdict stays the evidence it was.
 
@@ -111,7 +119,10 @@ it: another organization's id locks nothing, and a Property of another
 organization is not the job's.
 
 **Against the other writers.** A Property's deletion and rename write the
-Property row alone (ADR-0101). The launch commit holds a waiting job's Property
+Property row alone (ADR-0101), and so does its assignment (ADR-0062); a
+member's removal and a group's deletion release their Properties `FOR UPDATE`
+in id order holding only their member or group row, never a job, a reservation
+or the cost-admission lock. The launch commit holds a waiting job's Property
 `FOR SHARE` before that job's reservation, both shared. The composition claim
 and finalize, and the validation claim, `VALID` verdict and deferral, lock the
 job first and then wait for neither a Property nor the cost-admission lock. The
@@ -146,6 +157,15 @@ on the test provider only.
 save compute only: the Unit's outcome is the same, and G must judge anyway for
 the deletion saved after either step. It would add a refusal to four more
 transactions.
+
+**Refusing a first video whose Property is not in the job's organization.** No
+key ties a project's Property to the project's organization, but no code writes
+such a row: a project is created on a Property of its own organization, and no
+writer changes a Property's organization. G reads such a Property as not the
+job's, as ADR-0100 and ADR-0102 do, and publishes to the job's own organization,
+so nothing reaches another tenant. Raising a defect instead would roll the
+commit back and leave the Unit held with no video, which ADR-0052 Decision 19
+forbids.
 
 ## Not decided here
 

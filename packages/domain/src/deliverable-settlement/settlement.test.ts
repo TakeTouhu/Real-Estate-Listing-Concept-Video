@@ -169,7 +169,7 @@ describe("deliverableSettlementRecord", () => {
   it.each([
     ["RELEASE", "NO_USABLE_VIDEO", "job.deliverable_failed", "DELIVERABLE_FAILURE_SETTLEMENT"],
     ["ROLL_BACK", "NO_USABLE_VIDEO", "job.deliverable_rolled_back", "DELIVERABLE_FAILURE_SETTLEMENT"],
-    // As the endings of ADR-0099 and ADR-0102 record a deleted Property's job (ADR-0103).
+    // As ADR-0102's ending records a deleted Property's job, with the code every such ending carries (ADR-0103).
     ["RELEASE", "PROPERTY_DELETED", "job.ended_property_deleted", "PROPERTY_DELETED"],
     ["ROLL_BACK", "PROPERTY_DELETED", "job.deliverable_rolled_back", "PROPERTY_DELETED"],
   ] as const)("records a %s for %s as %s, %s", (kind, cause, jobEventType, reasonCode) => {

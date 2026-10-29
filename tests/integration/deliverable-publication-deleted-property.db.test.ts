@@ -78,11 +78,15 @@ async function validated(composed: ComposedDeliverable): Promise<DeliverableVali
   return finalized.publication;
 }
 
-function publish(publication: DeliverableValidationPublicationTarget, client: PrismaClient = prisma) {
+function publish(
+  publication: DeliverableValidationPublicationTarget,
+  client: PrismaClient = prisma,
+  context = ctx(),
+) {
   return createDeliverableValidationRepository(client).publishDeliverable({
     publication,
     publishedAt: PUBLISHED_AT,
-    context: ctx(),
+    context,
   });
 }
 
@@ -166,11 +170,11 @@ async function holdOpen(body: (tx: Tx) => Promise<void>): Promise<{ release: () 
 }
 
 /** The cost-admission lock's formula, written out on purpose: if it changes, this stops blocking. */
-async function holdCostAdmissionLock(tx: Tx, organizationId: string): Promise<void> {
+async function holdCostAdmissionLock(tx: Tx, organizationId: string, cycle: string = FIXTURE_CYCLE): Promise<void> {
   await tx.$queryRaw`
     SELECT pg_advisory_xact_lock(
       hashtext(${`paid-submission:${organizationId}`}),
-      hashtext(${`cycle:${FIXTURE_CYCLE}`})
+      hashtext(${`cycle:${cycle}`})
     )::text AS locked`;
 }
 
@@ -195,8 +199,9 @@ RUN("ADR-0103 — Transaction G refuses a deleted Property's first video and rel
     const held = await reservationOf(prisma, composed.reservationId);
     const validation = await validationOf(prisma, composed.deliverableVersionId);
     const events = await eventCount(prisma);
+    const context = ctx({ correlationId: "corr_deleted_property", causationId: "cause_deleted_property" });
 
-    expect(await publish(publication)).toEqual({ kind: "PROPERTY_DELETED" });
+    expect(await publish(publication, prisma, context)).toEqual({ kind: "PROPERTY_DELETED" });
 
     const failed = await jobOf(prisma, composed.jobId);
     expect([failed.state, failed.stateVersion, failed.currentDeliverableVersionId]).toEqual([
@@ -226,6 +231,16 @@ RUN("ADR-0103 — Transaction G refuses a deleted Property's first video and rel
       "reservation.released",
       "PROPERTY_DELETED",
     ]);
+    // Both under the caller's actor and correlation.
+    for (const aggregateId of [composed.jobId, composed.reservationId]) {
+      const last = (await eventsFor(prisma, aggregateId)).at(-1);
+      expect([last?.actorType, last?.actorUserId, last?.correlationId, last?.causationId]).toEqual([
+        "SYSTEM",
+        null,
+        "corr_deleted_property",
+        "cause_deleted_property",
+      ]);
+    }
     expect(
       (await eventsFor(prisma, composed.deliverableVersionId)).map((event) => event.toState),
     ).not.toContain("PUBLISHED");
@@ -409,6 +424,31 @@ RUN("ADR-0103 — Transaction G refuses a deleted Property's first video and rel
       expect.objectContaining({ code: "RESERVATION_NOT_CONSUMABLE" }),
     );
     expect(await publicationState(composed)).toEqual(before);
+  });
+
+  it("raises the same defect for a first video with no hold at all, under the unreserved key", async () => {
+    const composed = await seedComposedDeliverable(prisma);
+    const publication = await validated(composed);
+    await prisma.generationReservation.delete({ where: { id: composed.reservationId } });
+    await deleteProperty();
+    const job = await jobOf(prisma, composed.jobId);
+    const events = await eventCount(prisma);
+    const lock = await holdOpen(async (tx) => {
+      await holdCostAdmissionLock(tx, ORG_A, "unreserved");
+    });
+    try {
+      const publishing = settled(publish(publication));
+      expect(await waitForBlocked(1)).toBe(true);
+      expect(publishing.done()).toBe(false);
+      await lock.release();
+      await expect(publishing.value).rejects.toThrow(
+        expect.objectContaining({ code: "RESERVATION_NOT_CONSUMABLE" }),
+      );
+    } finally {
+      await lock.release();
+    }
+    expect(await jobOf(prisma, composed.jobId)).toEqual(job);
+    expect(await eventCount(prisma)).toBe(events);
   });
 
   it("waits for a deletion already saving, then refuses the video", async () => {

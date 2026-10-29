@@ -997,16 +997,19 @@ RUN("Phase 6A — Transaction G spends the frozen funding", () => {
   });
 
   it("releases, not spends, a hold its frozen funding no longer covers, once its Property was deleted", async () => {
-    const { composed, allocations } = await splitFundedDeliverable();
+    const { period, composed, allocations } = await splitFundedDeliverable();
     const { publication } = await validateAndPublish(ORG_A, composed.deliverableVersionId, 35);
     await prisma.generationReservationAllocation.delete({ where: { id: allocations[1]?.id ?? "" } });
     await prisma.property.update({ where: { id: PROP_A }, data: { status: "DELETED" } });
+    const held = await balance(period.id);
 
-    // Nothing is spent, so the funding that would have been spent is not judged.
+    // Nothing is spent, so the funding that would have been spent is not judged,
+    // as no failure settlement judges it: the Base Unit still frozen comes back.
     const refused = await validation.publishDeliverable({ publication, publishedAt: NOW + 2_000, context: ctx() });
     expect(refused).toEqual({ kind: "PROPERTY_DELETED" });
     const reservation = await prisma.generationReservation.findUniqueOrThrow({ where: { id: composed.reservationId } });
     expect(reservation.state).toBe("RELEASED");
+    expect(await balance(period.id)).toEqual({ ...held, baseRemainingUnits: held.baseRemainingUnits + 1 });
   });
 
   it("refuses to spend a hold whose frozen funding no longer covers it, and commits nothing", async () => {

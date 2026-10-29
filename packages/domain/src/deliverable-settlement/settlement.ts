@@ -174,8 +174,9 @@ export interface DeliverableSettlementRecord {
  * The events a settlement records, by what it does and why.
  *
  * A rollback is recorded as one whatever its cause. A deleted Property's failed
- * job is recorded as the endings of ADR-0099 and ADR-0102 record theirs, so one
- * event type tells every such ending apart from a video that could not be used.
+ * job is recorded with the event type of ADR-0102's ending and the reason code
+ * every deleted Property's ending carries, `PROPERTY_DELETED`, which tells them
+ * apart from a video that could not be used.
  */
 export function deliverableSettlementRecord(
   kind: DeliverableFailureSettlement["kind"],
