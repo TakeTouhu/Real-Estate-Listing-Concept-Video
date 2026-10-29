@@ -391,6 +391,15 @@ waiting ones and before its launches, so the place each frees is taken in the
 same pass. A job being assembled or checked is GS-7d-3b's. Nothing outside
 tests constructs the runner or the repository.
 
+**GS-7d-3b — Transaction G refuses a deleted Property's first video**
+(ADR-0103, no migration): Transaction G takes the cost-admission lock first and
+holds the job's Property `FOR SHARE` after the reservation. Finding it deleted
+when it would publish a job's first video, it publishes nothing: the job fails
+and its Unit is released in that commit, through the settlement of a cycle with
+no usable video, so the cause cannot change the bill. A replacement, a replay
+and a stale target are answered as before. Nothing outside tests constructs the
+validation repository or its runner.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

@@ -224,6 +224,7 @@ describe("the database boundary can reach nothing external", () => {
       expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
     }
     expect(imports(text).sort()).toEqual([
+      "./cost-admission-lock",
       "./deliverable-failure-settlement",
       "./orchestration-repositories",
       "@app/domain",
@@ -264,8 +265,9 @@ describe("only Transaction G and the failure settlement move the pointer or the 
     // A hold marked spent with no record of when is a hold nobody can audit.
     expect(consuming[0]).toContain("consumedAt:");
     // And it never releases a hold itself: a terminal verdict's release is the
-    // failure settlement's (ADR-0082), and a released hold behind a validated
-    // deliverable fails closed.
+    // failure settlement's (ADR-0082), and so is Transaction G's for a deleted
+    // Property (ADR-0103); a released hold behind a validated deliverable fails
+    // closed.
     expect(payloads.some((p) => p.includes("releasedAt"))).toBe(false);
     expect(payloads.some((p) => p.includes('state: "RELEASED"'))).toBe(false);
   });
@@ -279,7 +281,7 @@ describe("only Transaction G and the failure settlement move the pointer or the 
     expect(pointing[0]).toContain('state: "DELIVERABLE_READY"');
   });
 
-  it("terminalizes no job itself, and settles only from the terminal verdict", () => {
+  it("terminalizes no job itself, and settles only from the terminal verdict and a deleted Property", () => {
     // Whether an unusable deliverable fails the job is the settlement's
     // decision (ADR-0082): during a recomposition the customer may already hold
     // a perfectly good video, and the job returns to it instead.
@@ -290,10 +292,19 @@ describe("only Transaction G and the failure settlement move the pointer or the 
     }
     const terminal = text.slice(text.indexOf("async function finalizeTerminalVerdict"));
     const body = terminal.slice(0, terminal.indexOf("async function lockValidationChain"));
-    for (const call of ["lockReservationForDeliverable(", "settleDeliverableFailure("]) {
-      expect(text.split(call)).toHaveLength(2);
-      expect(`${call} in the verdict: ${body.includes(call)}`).toBe(`${call} in the verdict: true`);
-    }
+    expect(text.split("lockReservationForDeliverable(")).toHaveLength(2);
+    expect(body).toContain("lockReservationForDeliverable(");
+    // Twice: the verdict's, and Transaction G's for a first video whose
+    // Property was deleted, which names that cause (ADR-0103).
+    const settlements = text.split("settleDeliverableFailure(").slice(1);
+    expect(settlements).toHaveLength(2);
+    expect(body.split("settleDeliverableFailure(")).toHaveLength(2);
+    const publication = text.slice(
+      text.indexOf("async publishDeliverable("),
+      text.indexOf("async findValidationByVersionId("),
+    );
+    expect(publication.split("settleDeliverableFailure(")).toHaveLength(2);
+    expect(publication).toMatch(/settleDeliverableFailure\([^;]*"PROPERTY_DELETED",\s*\);/);
   });
 
   it("never writes a scene, request, attempt or provider row", () => {

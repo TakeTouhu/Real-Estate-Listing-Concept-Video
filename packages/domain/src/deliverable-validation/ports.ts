@@ -239,7 +239,10 @@ export interface DeliverableValidationPublicationTarget {
 
 export interface PublishValidatedDeliverableInput {
   readonly publication: DeliverableValidationPublicationTarget;
-  /** Epoch ms. Stamped on the hold when a unit is actually spent. */
+  /**
+   * Epoch ms. Stamped on the hold when a unit is actually spent, or released
+   * because the job's Property was deleted (ADR-0103).
+   */
   readonly publishedAt: number;
   readonly context: TransitionContext;
 }
@@ -268,7 +271,13 @@ export type PublishValidatedDeliverableOutcome =
    * different version became current. An ordinary outcome, and deliberately not
    * a defect: a superseded cycle is a normal thing to lose.
    */
-  | { readonly kind: "NOT_PUBLISHABLE" };
+  | { readonly kind: "NOT_PUBLISHABLE" }
+  /**
+   * This would have been the job's first video, and its Property was deleted.
+   * Nothing was published: the job failed and its Unit was released, in this
+   * commit (ADR-0103). A replacement is published whatever its Property.
+   */
+  | { readonly kind: "PROPERTY_DELETED" };
 
 // ---------------------------------------------------------------------------
 // The repository
@@ -363,6 +372,10 @@ export interface DeliverableValidationRepository {
    * together or not at all. Nothing here reads object storage: the bytes were
    * proved usable before this was called, and re-reading them inside a
    * transaction that holds the entitlement lock would pin it across a download.
+   *
+   * A first video whose Property was deleted is never published: the job fails
+   * and its Unit is released instead, as a cycle with no usable video settles
+   * (`PROPERTY_DELETED`, ADR-0103).
    */
   publishDeliverable(
     input: PublishValidatedDeliverableInput,

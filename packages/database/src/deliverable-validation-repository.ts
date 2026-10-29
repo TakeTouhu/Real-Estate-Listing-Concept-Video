@@ -15,7 +15,9 @@
  *           replacement back to DELIVERABLE_READY (ADR-0082)
  * defer     work -> PENDING with a future instant, job untouched
  * G         DELIVERABLE_VALIDATING -> DELIVERABLE_READY, the deliverable pointer,
- *           and the entitlement consume where one is owed -- one commit
+ *           and the entitlement consume where one is owed -- one commit; or,
+ *           for a first video whose Property was deleted, the job settled as
+ *           a terminal verdict settles it, with nothing published (ADR-0103)
  * ```
  *
  * ## Lock order
@@ -24,7 +26,8 @@
  * claim, VALID, defer : GenerationJob -> version -> composition -> validation
  * terminal verdicts    : cost-admission lock -> GenerationReservation
  *                        -> GenerationJob -> version -> composition -> validation
- * Transaction G        : GenerationReservation -> GenerationJob -> version
+ * Transaction G        : cost-admission lock -> GenerationReservation
+ *                        -> Property (FOR SHARE) -> GenerationJob -> version
  *                        -> composition -> validation
  * ```
  *
@@ -40,6 +43,13 @@
  * a row they never read. A terminal verdict does lock it, first, behind the
  * cost-admission lock every entitlement release takes, because its commit may
  * release it.
+ *
+ * Transaction G takes that lock too (ADR-0103): its commit consumes a first
+ * video's Unit, or releases it when the job's Property was deleted. It holds the
+ * Property `FOR SHARE` after the reservation and before the job, as the
+ * paid-submission gate and the endings of ADR-0099 and ADR-0102 hold it, so a
+ * deletion saving is waited for and then seen. No writer holds a job or a
+ * version while it waits for a Property or this lock, so there is no cycle.
  */
 
 import {
@@ -94,6 +104,7 @@ import {
   settleDeliverableFailure,
   type FailedDeliverableCycle,
 } from "./deliverable-failure-settlement";
+import { acquireCostAdmissionLock } from "./cost-admission-lock";
 import { appendGenerationEvent } from "./orchestration-repositories";
 
 type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
@@ -540,10 +551,17 @@ export function createDeliverableValidationRepository(
       return prisma.$transaction(async (tx): Promise<PublishValidatedDeliverableOutcome> => {
         const target = input.publication;
         // ---- 1. The entitlement lock, first and for the whole transaction. --
-        // **Reservation before Job**, the order Transaction H and Transaction I
-        // take. Taking the Job first would close a real cycle with settlement,
-        // which holds the reservation and then waits for the Job.
+        // The cost-admission lock, then **Reservation before Job**, the order
+        // Transaction H and Transaction I take. Taking the Job first would close
+        // a real cycle with settlement, which holds the reservation and then
+        // waits for the Job. The Property between them, as every release
+        // that reads it holds it (ADR-0103).
         const reservation = await lockReservationForPublication(
+          tx,
+          target.organizationId,
+          target.generationJobId,
+        );
+        const propertyDeleted = await lockPropertyForPublication(
           tx,
           target.organizationId,
           target.generationJobId,
@@ -620,6 +638,23 @@ export function createDeliverableValidationRepository(
               reservation.reservationState !== "RECONCILIATION_HOLD")
           ) {
             throw new DeliverableValidationDefect("RESERVATION_NOT_CONSUMABLE");
+          }
+          // A deleted Property's first video is never delivered, and its Unit
+          // comes back (ADR-0103, the product owner's "すぐ戻す" of 2026-10-29):
+          // the job settles as a cycle with no usable video does, so the cause
+          // cannot change the bill. Judged only here, once this publication is
+          // known to be the job's own and next, so a stale target ends nothing.
+          if (propertyDeleted) {
+            await settleDeliverableFailure(
+              tx,
+              failedCycleOf(ctx),
+              reservation,
+              new Date(input.publishedAt),
+              input.context,
+              "PROPERTY_DELETED",
+            );
+            await assertPointerUnmoved(tx, ctx);
+            return { kind: "PROPERTY_DELETED" };
           }
           // Phase 6A: the Units this commit spends are the frozen allocations,
           // read here and never reselected. A ledger-funded hold whose set does
@@ -1059,14 +1094,29 @@ async function lockValidationChain(
  * and before the publication committed, spending or skipping a unit against an
  * entitlement that no longer said so.
  *
- * Taken **before** the job, matching Transaction H and Transaction I. A job with
- * no reservation locks nothing and returns `null`, which the caller refuses.
+ * Taken **before** the job, matching Transaction H and Transaction I, and after
+ * the cost-admission lock every release takes (ADR-0103): this commit may
+ * release the hold. The billing-cycle key is read first, without a lock: it is
+ * frozen on the reservation when the hold is taken. A job with no reservation
+ * takes the organization's `unreserved` key, locks nothing and returns `null`,
+ * which the caller refuses. Tenant-scoped, the cycle read included, so another
+ * organization's id takes no lock of this job's.
  */
 async function lockReservationForPublication(
   tx: Tx,
   organizationId: string,
   generationJobId: string,
 ): Promise<ReservationRow | null> {
+  const cycles = await tx.$queryRaw<{ billingCycleKey: string }[]>`
+    SELECT res."billingCycleKey" AS "billingCycleKey"
+      FROM "generation_reservations" res
+      JOIN "generation_jobs" j ON j."id" = res."generationJobId"
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+     WHERE res."generationJobId" = ${generationJobId}
+       AND p."organizationId" = ${organizationId}
+  `;
+  await acquireCostAdmissionLock(tx, organizationId, cycles[0]?.billingCycleKey ?? "unreserved");
+
   const rows = await tx.$queryRaw<ReservationRow[]>`
     SELECT res."id"                      AS "reservationId",
            res."state"::text             AS "reservationState",
@@ -1081,6 +1131,33 @@ async function lockReservationForPublication(
        FOR UPDATE OF res
   `;
   return rows[0] ?? null;
+}
+
+/**
+ * Hold the job's Property `FOR SHARE` and say whether it was deleted (ADR-0103).
+ *
+ * Shared, as the paid-submission gate and the endings of ADR-0099 and ADR-0102
+ * hold it: a deletion saving is waited for and then seen, and none is saved
+ * while this commits. Read through the job's project and by the Property's own
+ * organization too, as ADR-0100 reads it, so another organization's id locks
+ * nothing and a Property of another organization is not this job's.
+ */
+async function lockPropertyForPublication(
+  tx: Tx,
+  organizationId: string,
+  generationJobId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ status: string }[]>`
+    SELECT pr."status"::text AS "status"
+      FROM "generation_jobs" j
+      JOIN "video_projects" p ON p."id" = j."videoProjectId"
+      JOIN "properties" pr ON pr."id" = p."propertyId"
+     WHERE j."id" = ${generationJobId}
+       AND p."organizationId" = ${organizationId}
+       AND pr."organizationId" = ${organizationId}
+       FOR SHARE OF pr
+  `;
+  return rows[0]?.status === "DELETED";
 }
 
 /**

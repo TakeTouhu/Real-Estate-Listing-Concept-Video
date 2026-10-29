@@ -82,15 +82,42 @@ describe("the failure settlement writes a release and nothing else that moves mo
 });
 
 describe("the failure settlement is the only release in either deliverable writer", () => {
+  // The validation repository settles twice: a terminal verdict, and Transaction
+  // G's refusal of a deleted Property's first video (ADR-0103). G takes the
+  // cost-admission lock through its own reservation read, which it needs whole.
   it.each([
-    ["deliverable-composition-execution-repository.ts"],
-    ["deliverable-validation-repository.ts"],
-  ])("%s releases nothing itself and settles in one place", (file) => {
+    ["deliverable-composition-execution-repository.ts", 1],
+    ["deliverable-validation-repository.ts", 2],
+  ] as const)("%s releases nothing itself and settles in %i place(s)", (file, settlements) => {
     const text = source(join(DATABASE_SRC, file));
     for (const banned of ["RELEASED", "releasedAt", "FAILED_TERMINAL"]) {
       expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
     }
-    expect(text.match(/settleDeliverableFailure\(/g)).toHaveLength(1);
+    expect(text.match(/settleDeliverableFailure\(/g)).toHaveLength(settlements);
     expect(text.match(/lockReservationForDeliverable\(/g)).toHaveLength(1);
+  });
+
+  it("names a settlement's events through the domain's record, by its cause", () => {
+    const text = source(SETTLEMENT_MODULE);
+    expect(text.match(/deliverableSettlementRecord\(/g)).toHaveLength(1);
+    expect(text).toContain("deliverableSettlementRecord(settlement.kind, cause)");
+    expect(text).toContain(`cause: DeliverableFailureCause = "NO_USABLE_VIDEO"`);
+    for (const banned of ["job.deliverable_failed", "PROPERTY_DELETED", "DELIVERABLE_SETTLEMENT_REASON_CODE"]) {
+      expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
+    }
+  });
+
+  it("has Transaction G take the cost-admission lock before the reservation, and the Property before the job", () => {
+    const text = source(join(DATABASE_SRC, "deliverable-validation-repository.ts"));
+    const read = text.slice(text.indexOf("async function lockReservationForPublication("));
+    expect(read.indexOf("acquireCostAdmissionLock(")).toBeGreaterThan(-1);
+    expect(read.indexOf("FOR UPDATE OF res")).toBeGreaterThan(read.indexOf("acquireCostAdmissionLock("));
+    expect(text.match(/acquireCostAdmissionLock\(/g)).toHaveLength(1);
+    const publication = text.slice(text.indexOf("async publishDeliverable("));
+    const reservation = publication.indexOf("lockReservationForPublication(");
+    const property = publication.indexOf("lockPropertyForPublication(");
+    const chain = publication.indexOf("lockValidationChain(");
+    expect([reservation > -1, property > reservation, chain > property]).toEqual([true, true, true]);
+    expect(text).toContain("FOR SHARE OF pr");
   });
 });

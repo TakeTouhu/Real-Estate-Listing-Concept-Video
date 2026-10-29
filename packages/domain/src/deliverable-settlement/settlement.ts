@@ -16,12 +16,15 @@
  *
  * The failure class never enters the decision. A block and both verdicts settle
  * through this one function, so they cannot come to bill differently
- * (Decision 19, "failure class must not change the bill").
+ * (Decision 19, "failure class must not change the bill"). Nor does a deleted
+ * Property, which Transaction G settles here too when it finds one at an initial
+ * publication (ADR-0103): the cause names the events, never the writes.
  *
  * Pure: the persistence layer reads the locked rows, asks this module what they
  * settle into, and writes that.
  */
 
+import { JOB_ENDED_PROPERTY_DELETED_EVENT_TYPE } from "../job-launch/launched-ending";
 import type { GenerationJobState, GenerationReservationState } from "../orchestration/types";
 
 /** The job states a failed deliverable cycle can be found in, one per failure point. */
@@ -148,5 +151,44 @@ export const JOB_DELIVERABLE_FAILED_EVENT_TYPE = "job.deliverable_failed";
 export const JOB_DELIVERABLE_ROLLED_BACK_EVENT_TYPE = "job.deliverable_rolled_back";
 export const RESERVATION_RELEASED_EVENT_TYPE = "reservation.released";
 
-/** The reason code recorded on every settlement transition. */
+/** The reason code recorded on every settlement transition of a cycle with no usable video. */
 export const DELIVERABLE_SETTLEMENT_REASON_CODE = "DELIVERABLE_FAILURE_SETTLEMENT";
+
+/**
+ * Why a cycle settles with no video delivered.
+ *
+ * - `NO_USABLE_VIDEO`: its composition was blocked, or its final verdict was
+ *   `INVALID_MEDIA` or `INTEGRITY_MISMATCH` (ADR-0082);
+ * - `PROPERTY_DELETED`: Transaction G found the job's Property deleted when it
+ *   would have published the job's first video (ADR-0103).
+ */
+export type DeliverableFailureCause = "NO_USABLE_VIDEO" | "PROPERTY_DELETED";
+
+/** What a settlement's transition events record: the job's event type and both events' reason code. */
+export interface DeliverableSettlementRecord {
+  readonly jobEventType: string;
+  readonly reasonCode: string;
+}
+
+/**
+ * The events a settlement records, by what it does and why.
+ *
+ * A rollback is recorded as one whatever its cause. A deleted Property's failed
+ * job is recorded as the endings of ADR-0099 and ADR-0102 record theirs, so one
+ * event type tells every such ending apart from a video that could not be used.
+ */
+export function deliverableSettlementRecord(
+  kind: DeliverableFailureSettlement["kind"],
+  cause: DeliverableFailureCause,
+): DeliverableSettlementRecord {
+  const propertyDeleted = cause === "PROPERTY_DELETED";
+  return {
+    jobEventType:
+      kind === "ROLL_BACK"
+        ? JOB_DELIVERABLE_ROLLED_BACK_EVENT_TYPE
+        : propertyDeleted
+          ? JOB_ENDED_PROPERTY_DELETED_EVENT_TYPE
+          : JOB_DELIVERABLE_FAILED_EVENT_TYPE,
+    reasonCode: propertyDeleted ? cause : DELIVERABLE_SETTLEMENT_REASON_CODE,
+  };
+}

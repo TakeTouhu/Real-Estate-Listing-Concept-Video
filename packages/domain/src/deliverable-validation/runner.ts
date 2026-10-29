@@ -37,6 +37,9 @@
  * already hold is never lost to one that could not be validated. The runner hands
  * over its transition context for those events and decides nothing about them.
  *
+ * Transaction G settles a first video the same way when its Property was deleted
+ * (ADR-0103), and the runner reports its answer, `PROPERTY_DELETED`, unchanged.
+ *
  * ## A usable video that is not the planned one
  *
  * A `VALID` answer from the validator says the bytes are a usable video. It is
@@ -98,6 +101,8 @@ export type DeliverableValidationRunOutcome =
   | { readonly kind: "ALREADY_PUBLISHED" }
   /** Validated, but the job moved on before publication. Ordinary. */
   | { readonly kind: "NOT_PUBLISHABLE" }
+  /** Validated, and its Property deleted: the job failed and its Unit was released (ADR-0103). */
+  | { readonly kind: "PROPERTY_DELETED" }
   /** Terminal verdict written and its job settled (ADR-0082). Nothing published. */
   | { readonly kind: "INVALID_MEDIA" }
   | { readonly kind: "INTEGRITY_MISMATCH" }
