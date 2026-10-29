@@ -4558,3 +4558,215 @@ production scheduler and live Stripe charges remain BLOCKED.
 GS-7d-3b waits for the product owner's yes before merge. It completes GS-7d:
 once the pipeline runs, every unfinished first video of a deleted Property ends
 and returns its Unit. Then GS-8, the Transaction I driver, and GS-9, the pipeline command.
+
+## GS-8 — planning a video's composition once its scenes are ready
+
+Base: `d298251` (PR #127 merge commit on `main`).
+ADR: `docs/decisions/0104-planning-a-videos-composition-once-its-scenes-are-ready.md`
+
+A milestone of the approved plan (`/mnt/project-files/cto/generation-e2e-proposal.md`,
+row GS-8). **No migration; no route, no page.** Nothing outside tests
+constructs the runner, so nothing is planned until the pipeline command (GS-9),
+with the test provider only.
+
+Transaction F moves a job to `SCENES_READY` when its last scene is delivered.
+Transaction I would plan its composition and move it to `COMPOSITION_PENDING`,
+where the composition claim (J1) takes it, but nothing found such a job or
+called Transaction I, so a job stopped at `SCENES_READY`.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `f224002` | the candidate query, the runner, their tests, ADR-0104 and the documentation |
+| `24e8536` | the review's answers: the latest-attempt test, the guards scoped to everything but discovery, the defect's place in the batch documented, the repository's lock-order comments, four tests added or extended |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-8 does
+
+- **The candidate query.** `findCompositionPlanCandidates({ limit })` on the
+  plan repository: one read with no lock and no transaction, identifiers only,
+  oldest first by the job's creation and then its id, the organization taken
+  from the job's project. It offers a `SCENES_READY` job whose hold describes a
+  first video (no current deliverable, `RESERVED`) or a recomposition (a current
+  deliverable, `CONSUMED`), with at least one scene and every scene `READY`,
+  its delivered pointer naming a `DELIVERED` request whose latest attempt is
+  `OUTPUT_VERIFIED` with a `VALID` verdict. That mirrors every refusal of
+  Transaction I, so a job it would refuse never holds the head of the batch.
+- **A defect is offered.** A verdict bound to other bytes than its attempt's
+  receipt is reported on every pass as that job's failure with its code, and
+  keeps its place in the batch until someone repairs it (ADR-0104 Decision 1).
+- **The runner.** `CompositionPlanRunner.runOnce(limit)` asks once, then calls
+  Transaction I once per job with a fresh version id and its own context. A job
+  listed twice is planned once; an admission that throws is that job's `FAILED`
+  outcome, with its defect code or none, and the pass goes on; a query that
+  throws rejects the pass. The report counts the plans and the failures.
+- **Transaction I is unchanged.**
+
+```mermaid
+sequenceDiagram
+    participant R as Composition plan runner
+    participant Q as Candidate query
+    participant I as Transaction I
+    participant DB as PostgreSQL
+    R->>Q: findCompositionPlanCandidates(limit)
+    Q->>DB: SCENES_READY jobs it would plan, oldest first (no lock)
+    Q-->>R: organization and job ids
+    loop each job, once
+        R->>I: admitCompositionPlan(org, job, fresh version id, context)
+        I->>DB: reservation, job and scene chain FOR UPDATE; version, inputs, job COMPOSITION_PENDING
+        I-->>R: PLANNED, ALREADY_PLANNED, NOT_ELIGIBLE, NOT_FOUND, or it throws (FAILED)
+    end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `f224002` and on `24e8536`, each exit status read |
+| `pnpm test` | 6,605 tests in 243 files passed on `f224002`'s code, exit 0; the module's 55 pass on `24e8536`, exit 0 |
+| `pnpm test:db` | 1,837 tests in 69 files passed on `f224002`'s code, exit 0; the discovery suite's 29 pass on `24e8536`, exit 0 |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/composition-plan-discovery.db.test.ts` (29): both cycles
+  offered oldest first by creation then id, up to the limit, each with its
+  organization; an unusable limit refused by the query itself; a scene judged
+  by its latest attempt, a recovery that passed after a first attempt that
+  failed offered and planned; a receipt defect offered and reported by the
+  runner with its code, nothing written; for each of 24 refusals (four job
+  states, seven hold shapes and no hold, no scene, a scene not `READY`, no
+  pointer, a request not `DELIVERED`, no attempt, an attempt not verified, a
+  newer attempt with no verdict, four verdicts that are not `VALID`, no
+  verdict) the job passed over for a younger one and Transaction I refusing it,
+  a job marked planned with no plan behind it by its defect; and the runner
+  planning two jobs of two organizations once each, with its version ids and
+  correlations, then finding nothing and writing nothing.
+- `packages/domain/src/deliverable-composition/runner.test.ts` (5): each job
+  offered once with its own version id and correlation, outcomes passed
+  through and counted; an empty pass; the bound checked before discovery; a
+  throw isolated, a defect's code kept and nothing else; a discovery failure
+  rejecting the pass.
+- `packages/domain/src/deliverable-composition/dormancy.test.ts` (changed):
+  nothing in production calls the repository but the runner, or constructs the
+  runner, `apps/ops` included; discovery one plain read with no lock and no
+  write; the reservation-state, pointer and `CONSUMED` guards applied to
+  everything but discovery, and discovery's own reads pinned.
+- `tests/integration/deliverable-composition-fixture.ts` gains a `tag` option,
+  so a test chooses how its rows' ids sort.
+
+### Mutation testing
+
+The same harness as GS-7d-3b: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| D01 | no job-state condition | killed |
+| D02 to D07 | either cycle's pointer or hold not required, or loosened; both cycles required at once | killed |
+| D08 to D14 | no scene required; another job's scene counted; scene, request, attempt or verdict not checked; a missing verdict passing | killed |
+| D15, D22 | the oldest attempt, or any attempt, instead of the latest | killed |
+| D16 to D19 | ordered by id only, without the id tie-break, newest first; one row past the limit | killed |
+| D20, D21 | the query not checking its limit; the wrong organization returned | killed |
+| U01 to U09 | no dedupe; one version id or correlation for all; replays counted as plans; failures not counted or listed; the defect code dropped; the bound not checked; a throw stopping the pass | killed |
+| U10 to U12 | 100, 0 or a fraction misjudged by the bound | killed |
+| K01 to K03 | outside discovery: an unlocked reservation-state read; a pointer write naming `IS NULL`; a `CONSUMED` write | killed |
+
+Result: **37 of 37 killed.** The first run, on `f224002`, killed 21 database
+mutants on the discovery suite and 12 unit mutants on the module's tests. The
+second, on `24e8536`, killed the 4 written for the review: D22 on the
+discovery suite, K01 to K03 on the static tests. D17 is killed because the heap
+returns the tied pair in insertion order, which the test makes the reverse of
+id order. Not run: the reservation join made outer, and the request's state
+or the attempt's compared with `<>`: each is equivalent, since a job with no
+hold fails both cycle shapes and a missing request or attempt leaves no
+verdict. The tree's manifest matched before and after every run.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the query mirrors Transaction I
+exactly but for the receipt defect it leaves out on purpose, the schema allows
+one reservation per job, one verdict per attempt and one attempt per ordinal,
+the organization returned is the one Transaction I accepts, and the runner is
+correct. All of it is answered in `24e8536`:
+
+- **Should fix: the latest-attempt filter was not tested.** Removing it passed
+  every test. Added: a scene whose first attempt failed its check and whose
+  recovery passed is offered and planned (D22).
+- **Should fix: a defect holds the head of the batch on every pass.** Kept, and
+  stated in ADR-0104 Decision 1, the Roadmap and the port: such a job, or any
+  whose admission keeps throwing, keeps its place and is reported each time;
+  with `limit` of them a pass plans no newer job. Hiding the defect would leave
+  the job stopped with nothing saying why.
+- **Should fix: the static guards were weaker than stated.** The
+  reservation-state check now covers the whole file but discovery; the
+  pointer allowlist applies outside discovery, and discovery may name the
+  pointer on its two cycle lines only; `'CONSUMED'` appears nowhere but once in
+  discovery's read (K01 to K03).
+- **Should fix: stale comments.** The repository's header now gives the lock
+  order the transaction takes, the reservation first, and the pointer read's
+  comment says discovery reads the reservation's state unlocked as a hint.
+- **Minor: two events ordered across jobs by a sequence both have as 1.** Each
+  job's events are now read on their own.
+- **Minor: tests not covering a `RUNNING` or `INTEGRITY_MISMATCH` verdict, a
+  recomposition with its hold released, or a second organization end to end.**
+  Added.
+- **Question: should the runner refuse more than `limit` candidates?** No: the
+  query is bounded by the same validated limit, as in every other sweep.
+- **Question: a `FAILED` outcome with no code carries no diagnosis.** Kept, as
+  in every other sweep: an error's text can carry SQL or provider detail, and
+  the report is not the place for it. The pipeline command (GS-9) decides what
+  it logs.
+- **Minor: table rows over 120 columns** in `docs/api-changes-gs-8.md` and
+  `docs/architecture.md`, as in the earlier summaries; prose and code lines fit.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the composition plan row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-8.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-8*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/generation-e2e-gap-analysis.md`.
+`docs/decisions/TODO.md` is unchanged: nothing is left open by this change
+that the plan does not already carry (GS-9, GS-11).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the runner. No scheduler, credential
+or payment integration. Paid Provider Activation, production Provider
+credentials, production paid AI calls, the production scheduler and live
+Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs it yet.** The pipeline command (GS-9) will, with the test
+  provider only.
+- **A job whose admission keeps throwing keeps its place** at the head of the
+  batch and is reported on every pass (ADR-0104 Decision 1).
+- **A deleted Property's job is planned like any other** if the pass reaches it
+  first; ADR-0102's ending and ADR-0103's refusal end it and return its Unit,
+  and the version written for it is never published.
+- **A video waiting for composition is not shown to the customer** until the
+  progress page (GS-11).
+
+### Remaining work
+
+GS-8 waits for the product owner's yes before merge. Then GS-9, the pipeline
+command that runs every step on the test provider, and the screens (GS-10 to
+GS-12).

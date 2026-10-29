@@ -23,13 +23,15 @@
  * the Job lock, because an ordinal chosen outside the transaction is a claim
  * about rows the caller did not lock.
  *
- * ## No discovery method
+ * ## Discovery is a hint
  *
- * There is no `findCompositionCandidates` here, and that is not an oversight.
- * Phase 5A ships dormant: no scheduler, no runner and no actor for
- * `COMPOSITION_PENDING -> COMPOSING`. A candidate query would be a queue with
- * nothing draining it, and shipping one would suggest work is happening that
- * is not.
+ * Phase 5A shipped no discovery, because nothing after the plan ran yet. GS-8
+ * (ADR-0104) adds `findCompositionPlanCandidates` for the dormant runner:
+ * identifiers only, read without a lock, mirroring every refusal of the
+ * admission so a job it would refuse never holds the head of the batch. A job
+ * whose admission throws is still offered, and holds its place on every pass
+ * until someone looks. The admission still re-reads and re-decides everything
+ * under its own locks.
  */
 
 import type { TransitionContext } from "../orchestration/ports";
@@ -45,7 +47,25 @@ export interface AdmitCompositionPlanInput {
   readonly context: TransitionContext;
 }
 
+/** Identifiers only. Nothing here is a decision. */
+export interface CompositionPlanCandidate {
+  readonly organizationId: string;
+  readonly generationJobId: string;
+}
+
+export interface CompositionPlanCandidateQuery {
+  readonly limit: number;
+}
+
 export interface DeliverableCompositionPlanRepository {
+  /**
+   * Bounded, deterministic, one row per job, oldest first. A hint only: no
+   * lock and no transaction.
+   */
+  findCompositionPlanCandidates(
+    query: CompositionPlanCandidateQuery,
+  ): Promise<readonly CompositionPlanCandidate[]>;
+
   /**
    * Transaction I, in one short database transaction.
    *

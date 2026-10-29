@@ -1975,3 +1975,15 @@ validation repository or its runner.
 **Rolling back.** To GS-7d-3a's build: safe, since nothing in production calls
 Transaction G. A job a test ended stays ended, its Unit released.
 
+## GS-8 — planning a video's composition once its scenes are ready
+
+**No migration** (ADR-0104). No schema, enum, constraint or row changes, and no
+new environment variable. The candidate query reads existing tables and
+writes nothing; Transaction I, which the runner calls, is unchanged.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+runner, and nothing but the runner calls the plan repository.
+
+**Rolling back.** To GS-7d-3b's build: safe. A job a test planned stays
+`COMPOSITION_PENDING` with its version and inputs, as Transaction I always
+left it.

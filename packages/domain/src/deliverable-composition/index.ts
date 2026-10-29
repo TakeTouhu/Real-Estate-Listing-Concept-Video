@@ -5,7 +5,9 @@ export {
   DeliverableCompositionDefect,
   FIRST_DELIVERABLE_ORDINAL,
   JOB_COMPOSITION_PENDING_EVENT_TYPE,
+  MAX_COMPOSITION_PLAN_BATCH_SIZE,
   computeDeliverableInputFingerprint,
+  validateCompositionPlanBatchLimit,
 } from "./plan";
 export type {
   AdmitCompositionPlanOutcome,
@@ -15,5 +17,14 @@ export type {
 } from "./plan";
 export type {
   AdmitCompositionPlanInput,
+  CompositionPlanCandidate,
+  CompositionPlanCandidateQuery,
   DeliverableCompositionPlanRepository,
 } from "./ports";
+export { CompositionPlanRunner } from "./runner";
+export type {
+  CompositionPlanIds,
+  CompositionPlanReport,
+  CompositionPlanRunOutcome,
+  CompositionPlanRunnerDeps,
+} from "./runner";

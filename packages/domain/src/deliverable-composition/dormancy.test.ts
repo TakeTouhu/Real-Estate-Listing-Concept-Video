@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
  * This phase decides which paid renditions become a customer's video, so the
  * scope claim is the whole safety argument. Five claims:
  *
- * 1. **Dormancy.** Nothing constructs the plan repository, schedules it, or
- *    calls it. There is no runner, and no actor for `COMPOSITION_PENDING`.
+ * 1. **Dormancy.** Nothing in production constructs the plan repository or
+ *    its runner (ADR-0104), or calls the repository except that runner.
  * 2. **No composition.** Nothing here can reach `ffmpeg`, `ffprobe`, an object
  *    store, a provider or an HTTP client. Planning is database-only.
  * 3. **No normalization policy.** No codec, bitrate, frame rate, crop, padding
@@ -72,6 +72,7 @@ function productionSources(): { name: string; text: string }[] {
   return [
     join(REPO_ROOT, "apps", "web", "src"),
     join(REPO_ROOT, "apps", "worker", "src"),
+    join(REPO_ROOT, "apps", "ops", "src"),
     join(REPO_ROOT, "packages", "database", "src"),
     join(REPO_ROOT, "packages", "video-providers", "src"),
     join(REPO_ROOT, "packages", "storage", "src"),
@@ -93,6 +94,20 @@ function phaseSources(): { name: string; text: string }[] {
   ];
 }
 
+/**
+ * The repository split in two: discovery's method (ADR-0104), and everything
+ * else. Discovery may read what the transaction must only read under a lock, so
+ * each guard below says which part it is about.
+ */
+function repositoryParts(): { discovery: string; rest: string } {
+  const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+  const start = repo.indexOf("async findCompositionPlanCandidates");
+  const end = repo.indexOf("async admitCompositionPlan");
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return { discovery: repo.slice(start, end), rest: repo.slice(0, start) + repo.slice(end) };
+}
+
 // ---------------------------------------------------------------------------
 
 describe("the capability exists but nothing runs it", () => {
@@ -106,21 +121,36 @@ describe("the capability exists but nothing runs it", () => {
     }
   });
 
-  it("invokes the admission entry point nowhere in production", () => {
+  it("calls the repository nowhere in production but from its own runner", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("packages/database/src/deliverable-composition-repository.ts")) continue;
-      expect(`${name}: ${text.includes(".admitCompositionPlan(")}`).toBe(`${name}: false`);
+      if (name === "packages/domain/src/deliverable-composition/runner.ts") continue;
+      for (const banned of [".admitCompositionPlan(", ".findCompositionPlanCandidates("]) {
+        expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+      }
     }
   });
 
-  it("ships no runner and no candidate discovery", () => {
-    // A queue with nothing draining it would suggest work is happening that is
-    // not. Phase 5B owns both.
-    expect(existsSync(join(MODULE_DIR, "runner.ts"))).toBe(false);
+  it("constructs the runner nowhere in production", () => {
+    // The pipeline command (GS-9) is what will run it, on the test provider.
+    for (const { name, text } of productionSources()) {
+      expect(`${name}: ${text.includes("CompositionPlanRunner(")}`).toBe(`${name}: false`);
+    }
+  });
+
+  it("discovers through one plain read, and claims and leases nothing", () => {
+    // Transaction I is its own idempotence, so the pass needs no work row. The
+    // composition claim's queue (J1) is not this module's to read.
     for (const { name, text } of phaseSources()) {
-      for (const banned of ["Runner", "findCompositionCandidates", "claim(", "lease"]) {
+      for (const banned of ["findCompositionCandidates", "claim(", "lease"]) {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
+    }
+    const { discovery } = repositoryParts();
+    expect(discovery).toContain("validateCompositionPlanBatchLimit(requested)");
+    expect(discovery).toContain("prisma.$queryRaw");
+    for (const banned of ["FOR UPDATE", "FOR SHARE", "$transaction", "tx.", "UPDATE ", "INSERT", "DELETE"]) {
+      expect(`${banned}: ${discovery.includes(banned)}`).toBe(`${banned}: false`);
     }
   });
 
@@ -155,6 +185,8 @@ describe("the capability exists but nothing runs it", () => {
           "createDeliverableCompositionPlanRepository",
           "admitCompositionPlan",
           "computeDeliverableInputFingerprint",
+          "CompositionPlanRunner",
+          "findCompositionPlanCandidates",
         ]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
@@ -244,18 +276,24 @@ describe("planning never bills and never publishes", () => {
         "Quota",
         "ledger",
       ]) {
-        // The reservation *state* is read as evidence of which composition cycle
-        // this is; the banned forms above are the written ones.
+        // Discovery reads the reservation *state* as a hint of which composition
+        // cycle this is, and is checked below; the banned forms above are the
+        // written ones.
         if (name.endsWith("deliverable-composition-repository.ts") && banned === "'CONSUMED'") {
           continue;
         }
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }
+    const { discovery, rest } = repositoryParts();
+    expect(rest).not.toContain("'CONSUMED'");
+    expect(discovery.split("'CONSUMED'")).toHaveLength(2);
+    expect(discovery).toContain(`AND res."state" = 'CONSUMED'::"GenerationReservationState"))`);
   });
 
   it("never writes the job's current deliverable pointer", () => {
     const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+    const { discovery, rest } = repositoryParts();
     // An allowlist rather than a banned substring, because the column has to
     // appear here: it is read to decide the composition cycle and read again to
     // prove it unmoved. Every line that names it must be one of those reads, so
@@ -270,12 +308,20 @@ describe("planning never bills and never publishes", () => {
       // version through the database rather than trusting the pointer value.
       "where: { id: job.currentDeliverableVersionId,",
     ];
-    for (const line of repo.split("\n")) {
+    for (const line of rest.split("\n")) {
       if (!line.includes("currentDeliverableVersionId")) continue;
       expect(`${line.trim()}: ${reads.some((read) => line.includes(read))}`).toBe(
         `${line.trim()}: true`,
       );
     }
+    // Discovery names it on exactly two lines, its mirror of the two
+    // composition cycles (ADR-0104), and on no other.
+    expect(
+      discovery
+        .split("\n")
+        .filter((line) => line.includes("currentDeliverableVersionId"))
+        .map((line) => line.trim()),
+    ).toEqual(['AND ((j."currentDeliverableVersionId" IS NULL', 'OR (j."currentDeliverableVersionId" IS NOT NULL']);
     expect(repo).not.toContain('SET "currentDeliverableVersionId"');
     expect(repo).toContain("CURRENT_DELIVERABLE_POINTER_MOVED");
   });
@@ -427,8 +473,12 @@ describe("the authorities the transaction must use", () => {
     // the unlocked value carried by the job read is explicitly overwritten.
     expect(repo).toContain("const reservationState = await lockReservationForComposition(");
     expect(repo).toContain("const job: JobContextRow = { ...locked, reservationState };");
-    // And the locking helper is the only place `res."state"` is selected.
-    const selects = repo.split("$queryRaw").filter((s) => s.includes('res."state"'));
+    // And the locking helper is the only place outside discovery that selects
+    // `res."state"`. Discovery reads it unlocked as a hint and decides nothing
+    // (ADR-0104).
+    const { rest } = repositoryParts();
+    const selects = rest.split("$queryRaw").filter((s) => s.includes('res."state"'));
+    expect(selects).toHaveLength(1);
     for (const statement of selects) {
       expect(`res.state selected without FOR UPDATE OF res: ${statement.includes("FOR UPDATE OF res")}`)
         .toBe("res.state selected without FOR UPDATE OF res: true");

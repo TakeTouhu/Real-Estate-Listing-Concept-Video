@@ -11,30 +11,40 @@
  * ## Lock order
  *
  * ```text
- * GenerationJob
- *   → GenerationScenes (position ASC, id ASC)
- *     → selected SceneGenerationRequests
- *       → selected latest SceneGenerations
- *         → their ManagedOutputMediaValidations
+ * GenerationReservation
+ *   → GenerationJob
+ *     → GenerationScenes (position ASC, id ASC)
+ *       → selected SceneGenerationRequests
+ *         → selected latest SceneGenerations
+ *           → their ManagedOutputMediaValidations
  * ```
  *
- * The same Job-first order Transaction F, the recovery admission and
- * Transaction H take, so none of them can close a deadlock cycle with this one.
+ * The reservation first, as Transaction H takes it (see
+ * `lockReservationForComposition`), then the Job-first order Transaction F,
+ * the recovery admission and Transaction H take, so none of them can close a
+ * deadlock cycle with this one.
  * The **Job** lock is what makes the decision safe: two workers admitting a plan
  * for one `SCENES_READY` Job serialize there, and the loser re-reads a Job that
  * is already `COMPOSITION_PENDING` and answers `ALREADY_PLANNED`. It is also
  * what makes the plan non-stale — a revision start takes the same Job lock, so
  * it cannot move a Scene's delivered pointer underneath a plan being frozen.
  *
- * The reservation is joined as **evidence** and deliberately not locked: this
- * transaction proves which composition cycle it is in and then leaves the hold
- * entirely alone. There is no cost-admission advisory lock either — planning
- * authorizes no provider call and moves no quota.
+ * The reservation is locked as **evidence**: its state proves which
+ * composition cycle this is, and the hold is then left entirely alone. There is
+ * no cost-admission advisory lock — planning authorizes no provider call and
+ * moves no quota.
  *
  * ## No external I/O
  *
  * Database work only. No object-store read, no `ffprobe`, no `ffmpeg`, no HTTP
  * and no temporary file is reachable from inside the transaction.
+ *
+ * ## Discovery (ADR-0104)
+ *
+ * `findCompositionPlanCandidates` is a hint for the dormant runner: one read
+ * outside any transaction, with no lock, returning identifiers only. It
+ * mirrors every refusal of the admission, and the admission still decides
+ * everything again under its own locks.
  */
 
 import {
@@ -45,8 +55,10 @@ import {
   FIRST_DELIVERABLE_ORDINAL,
   JOB_COMPOSITION_PENDING_EVENT_TYPE,
   computeDeliverableInputFingerprint,
+  validateCompositionPlanBatchLimit,
   type AdmitCompositionPlanInput,
   type AdmitCompositionPlanOutcome,
+  type CompositionPlanCandidate,
   type DeliverableCompositionPlanRepository,
   type DeliverableInputFingerprintScene,
   type DisclosureMode,
@@ -108,6 +120,61 @@ export function createDeliverableCompositionPlanRepository(
   prisma: PrismaClient,
 ): DeliverableCompositionPlanRepository {
   return {
+    async findCompositionPlanCandidates({ limit: requested }) {
+      // Validated here as well as in the runner: this method is public.
+      const limit = validateCompositionPlanBatchLimit(requested);
+      // Every refusal of the admission is mirrored here, so a job it would
+      // refuse cannot hold the head of the batch: the Job's state, the two
+      // composition cycles, at least one Scene, and each Scene's proofs.
+      //
+      // Two of the admission's tests are not repeated. A `VALID` verdict
+      // always has its `validatedAt`, which the database's own check enforces.
+      // And a verdict bound to other bytes than its attempt's receipt is a
+      // defect, not a refusal: such a job is offered, so its pass reports it.
+      const rows = await prisma.$queryRaw<CompositionPlanCandidate[]>`
+        SELECT p."organizationId" AS "organizationId",
+               j."id"             AS "generationJobId"
+          FROM "generation_jobs" j
+          JOIN "video_projects" p ON p."id" = j."videoProjectId"
+          JOIN "generation_reservations" res ON res."generationJobId" = j."id"
+         WHERE j."state" = 'SCENES_READY'::"GenerationJobState"
+           AND ((j."currentDeliverableVersionId" IS NULL
+                 AND res."state" = 'RESERVED'::"GenerationReservationState")
+             OR (j."currentDeliverableVersionId" IS NOT NULL
+                 AND res."state" = 'CONSUMED'::"GenerationReservationState"))
+           AND EXISTS (
+                 SELECT 1 FROM "generation_scenes" es WHERE es."generationJobId" = j."id")
+           AND NOT EXISTS (
+                 SELECT 1
+                   FROM "generation_scenes" s
+                   LEFT JOIN "scene_generation_requests" r
+                          ON r."id" = s."currentDeliveredRequestId"
+                         AND r."generationSceneId" = s."id"
+                   LEFT JOIN "scene_generations" a
+                          ON a."generationSceneRequestId" = r."id"
+                         AND a."attemptOrdinal" = (
+                               SELECT MAX(sib."attemptOrdinal")
+                                 FROM "scene_generations" sib
+                                WHERE sib."generationSceneRequestId" = r."id"
+                             )
+                   LEFT JOIN "managed_output_media_validations" v
+                          ON v."sceneGenerationId" = a."id"
+                  WHERE s."generationJobId" = j."id"
+                    AND (s."state" <> 'READY'::"GenerationSceneState"
+                         OR r."state" IS DISTINCT FROM 'DELIVERED'::"SceneGenerationRequestState"
+                         OR a."orchestrationState"
+                              IS DISTINCT FROM 'OUTPUT_VERIFIED'::"GenerationAttemptState"
+                         OR v."status"
+                              IS DISTINCT FROM 'VALID'::"ManagedOutputMediaValidationStatus"))
+         ORDER BY j."createdAt" ASC, j."id" ASC
+         LIMIT ${limit}
+      `;
+      return rows.map((row) => ({
+        organizationId: row.organizationId,
+        generationJobId: row.generationJobId,
+      }));
+    },
+
     async admitCompositionPlan(input: AdmitCompositionPlanInput) {
       return prisma.$transaction(async (tx): Promise<AdmitCompositionPlanOutcome> => {
         // ---- 1. The entitlement and Job locks, held for the whole transaction.
@@ -487,10 +554,12 @@ function proveSceneInput(row: SceneInputRow): DeliverableInputFingerprintScene |
  * ownership and deliberately not locked.
  *
  * The reservation is **not joined here at all**, and its state is not among the
- * columns returned. That is the point: the only read of `res."state"` in this
- * file is the one that holds the reservation's row lock, so there is no unlocked
- * value for a later edit to start trusting by accident. A cross-tenant or
- * unknown id matches no row, locks nothing, and is reported as not found.
+ * columns returned. That is the point: the only read of `res."state"` in the
+ * transaction is the one that holds the reservation's row lock, so there is no
+ * unlocked value for a later edit to start trusting by accident. Discovery reads
+ * it too, unlocked and outside any transaction, as a hint it decides nothing on
+ * (ADR-0104). A cross-tenant or unknown id matches no row, locks nothing, and is
+ * reported as not found.
  */
 async function lockJobForComposition(
   tx: Tx,

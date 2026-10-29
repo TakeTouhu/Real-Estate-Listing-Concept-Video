@@ -45,7 +45,7 @@
  * ```
  */
 
-import { sha256Hex } from "@app/shared";
+import { AppError, sha256Hex } from "@app/shared";
 import type { DisclosureMode } from "../disclosure/mode";
 
 /** What one Transaction I attempt concluded. Closed and application-owned. */
@@ -273,3 +273,17 @@ export const COMPOSITION_PLAN_REASON_CODE = "DELIVERABLE_COMPOSITION_PLANNED";
 
 /** The first ordinal any job's first deliverable version receives. */
 export const FIRST_DELIVERABLE_ORDINAL = 1;
+
+/** The most jobs one composition plan pass offers Transaction I (ADR-0104). */
+export const MAX_COMPOSITION_PLAN_BATCH_SIZE = 100;
+
+/** Prove a candidate-query limit is usable, or refuse. Never clamped. */
+export function validateCompositionPlanBatchLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_COMPOSITION_PLAN_BATCH_SIZE) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      `Composition plan batch limit must be an integer between 1 and ${MAX_COMPOSITION_PLAN_BATCH_SIZE}`,
+    );
+  }
+  return value;
+}
