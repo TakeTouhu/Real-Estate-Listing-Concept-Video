@@ -405,7 +405,8 @@ no migration): a dormant runner finds the `SCENES_READY` jobs Transaction I
 would plan, oldest first, and calls it once per job with a fresh version id.
 The query mirrors every refusal of Transaction I, so a job it would refuse
 never holds the head of the batch; a verdict bound to other bytes is offered
-and reported as that job's failure. Transaction I is unchanged. Nothing outside
+and reported as that job's failure on every pass, keeping its place until
+someone repairs it. Transaction I is unchanged. Nothing outside
 tests constructs the runner.
 
 Completion criteria as met: a composed deliverable is proved technically valid,

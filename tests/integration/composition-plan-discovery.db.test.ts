@@ -117,6 +117,19 @@ RUN("composition plan discovery and its runner (ADR-0104)", () => {
       }
     });
 
+    it("judges a scene by its latest attempt, as Transaction I does, not by an earlier one", async () => {
+      // The first attempt's video failed its check, and the recovery attempt's
+      // passed: Transaction I plans the recovery's.
+      const chain = await composable({
+        scenes: { 1: { validation: "INVALID_MEDIA", supersededByValid: true } },
+      });
+
+      expect(await repository.findCompositionPlanCandidates({ limit: 1 })).toEqual([
+        { organizationId: ORG_A, generationJobId: chain.jobId },
+      ]);
+      expect((await admit(chain.jobId)).kind).toBe("PLANNED");
+    });
+
     it("offers a job whose verdict is bound to other bytes, so its pass reports the defect", async () => {
       const chain = await composable({ scenes: { 1: { receiptSha256: "d".repeat(64) } } });
       const before = await worldSnapshot(prisma);
@@ -163,7 +176,16 @@ RUN("composition plan discovery and its runner (ADR-0104)", () => {
         },
         "NOT_ELIGIBLE",
       ],
-      ["a hold in reconciliation",() => composable({ reservationState: "RECONCILIATION_HOLD" }), "NOT_ELIGIBLE"],
+      [
+        "a video with its hold released",
+        async () => {
+          const chain = await composable({ reservationState: "RELEASED" });
+          await makeCurrentDeliverable(prisma, chain.jobId, "sha256:deliverable-input:v1:prior");
+          return chain;
+        },
+        "NOT_ELIGIBLE",
+      ],
+      ["a hold in reconciliation", () => composable({ reservationState: "RECONCILIATION_HOLD" }), "NOT_ELIGIBLE"],
       ["a hold released", () => composable({ reservationState: "RELEASED" }), "NOT_ELIGIBLE"],
       ["a hold being taken", () => composable({ reservationState: "RESERVING" }), "NOT_ELIGIBLE"],
       [
@@ -205,6 +227,12 @@ RUN("composition plan discovery and its runner (ADR-0104)", () => {
       ],
       ["a newer attempt with no verdict", () => composable({ scenes: { 1: { supersede: true } } }), "NOT_ELIGIBLE"],
       ["a verdict still PENDING", () => composable({ scenes: { 1: { validation: "PENDING" } } }), "NOT_ELIGIBLE"],
+      ["a verdict still RUNNING", () => composable({ scenes: { 1: { validation: "RUNNING" } } }), "NOT_ELIGIBLE"],
+      [
+        "a verdict INTEGRITY_MISMATCH",
+        () => composable({ scenes: { 1: { validation: "INTEGRITY_MISMATCH" } } }),
+        "NOT_ELIGIBLE",
+      ],
       ["a verdict INVALID_MEDIA", () => composable({ scenes: { 1: { validation: "INVALID_MEDIA" } } }), "NOT_ELIGIBLE"],
       ["no verdict at all", () => composable({ scenes: { 1: { validation: "NONE" } } }), "NOT_ELIGIBLE"],
     ];
@@ -231,8 +259,8 @@ RUN("composition plan discovery and its runner (ADR-0104)", () => {
 
   // -----------------------------------------------------------------------
   describe("the runner", () => {
-    it("plans each ready job once, with its own version id, then finds nothing", async () => {
-      const first = await composable();
+    it("plans each ready job once, in its organization, with its own version id, then finds nothing", async () => {
+      const first = await composable({ organizationId: ORG_B });
       const again = await recomposable();
       await createdAt(first, T0);
       await createdAt(again, T1);
@@ -264,14 +292,18 @@ RUN("composition plan discovery and its runner (ADR-0104)", () => {
         const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: chain.jobId } });
         expect(job.state).toBe("COMPOSITION_PENDING");
       }
-      const events = await prisma.generationTransitionEvent.findMany({
-        where: { aggregateId: { in: [first.jobId, again.jobId] } },
-        orderBy: { sequence: "asc" },
-      });
-      expect(events.map((e) => [e.aggregateId, e.toState, e.correlationId])).toEqual([
-        [first.jobId, "COMPOSITION_PENDING", "corr_gs8_1"],
-        [again.jobId, "COMPOSITION_PENDING", "corr_gs8_2"],
-      ]);
+      for (const [chain, correlation] of [
+        [first, "corr_gs8_1"],
+        [again, "corr_gs8_2"],
+      ] as const) {
+        const events = await prisma.generationTransitionEvent.findMany({
+          where: { aggregateId: chain.jobId },
+          orderBy: { sequence: "asc" },
+        });
+        expect(events.map((e) => [e.toState, e.correlationId])).toEqual([
+          ["COMPOSITION_PENDING", correlation],
+        ]);
+      }
 
       const before = await worldSnapshot(prisma);
       expect(await runner().runOnce(10)).toEqual({ planned: 0, failed: 0, outcomes: [] });

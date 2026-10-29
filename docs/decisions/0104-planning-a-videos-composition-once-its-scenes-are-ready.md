@@ -55,6 +55,12 @@ produces that state. Such a job is offered on every pass and reported as failed
 with its code, so whoever runs the pass sees it. Hiding it in the query would
 leave the job at `SCENES_READY` with nothing saying why.
 
+The cost is that such a job keeps its place: nothing it does moves it, so it
+stays the oldest. So does a job whose admission keeps throwing for any other
+reason. With `limit` of them at the head, a pass plans no newer job, and each
+report lists them as failed until someone repairs them. That is the trade
+against a defect nobody sees.
+
 The order is the job's creation, oldest first, then its id. The limit is an
 integer from 1 to 100, refused otherwise and never clamped, checked by the
 query as well as the runner, since the query is public.

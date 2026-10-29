@@ -11,25 +11,28 @@
  * ## Lock order
  *
  * ```text
- * GenerationJob
- *   → GenerationScenes (position ASC, id ASC)
- *     → selected SceneGenerationRequests
- *       → selected latest SceneGenerations
- *         → their ManagedOutputMediaValidations
+ * GenerationReservation
+ *   → GenerationJob
+ *     → GenerationScenes (position ASC, id ASC)
+ *       → selected SceneGenerationRequests
+ *         → selected latest SceneGenerations
+ *           → their ManagedOutputMediaValidations
  * ```
  *
- * The same Job-first order Transaction F, the recovery admission and
- * Transaction H take, so none of them can close a deadlock cycle with this one.
+ * The reservation first, as Transaction H takes it (see
+ * `lockReservationForComposition`), then the Job-first order Transaction F,
+ * the recovery admission and Transaction H take, so none of them can close a
+ * deadlock cycle with this one.
  * The **Job** lock is what makes the decision safe: two workers admitting a plan
  * for one `SCENES_READY` Job serialize there, and the loser re-reads a Job that
  * is already `COMPOSITION_PENDING` and answers `ALREADY_PLANNED`. It is also
  * what makes the plan non-stale — a revision start takes the same Job lock, so
  * it cannot move a Scene's delivered pointer underneath a plan being frozen.
  *
- * The reservation is joined as **evidence** and deliberately not locked: this
- * transaction proves which composition cycle it is in and then leaves the hold
- * entirely alone. There is no cost-admission advisory lock either — planning
- * authorizes no provider call and moves no quota.
+ * The reservation is locked as **evidence**: its state proves which
+ * composition cycle this is, and the hold is then left entirely alone. There is
+ * no cost-admission advisory lock — planning authorizes no provider call and
+ * moves no quota.
  *
  * ## No external I/O
  *
@@ -551,10 +554,12 @@ function proveSceneInput(row: SceneInputRow): DeliverableInputFingerprintScene |
  * ownership and deliberately not locked.
  *
  * The reservation is **not joined here at all**, and its state is not among the
- * columns returned. That is the point: the only read of `res."state"` in this
- * file is the one that holds the reservation's row lock, so there is no unlocked
- * value for a later edit to start trusting by accident. A cross-tenant or
- * unknown id matches no row, locks nothing, and is reported as not found.
+ * columns returned. That is the point: the only read of `res."state"` in the
+ * transaction is the one that holds the reservation's row lock, so there is no
+ * unlocked value for a later edit to start trusting by accident. Discovery reads
+ * it too, unlocked and outside any transaction, as a hint it decides nothing on
+ * (ADR-0104). A cross-tenant or unknown id matches no row, locks nothing, and is
+ * reported as not found.
  */
 async function lockJobForComposition(
   tx: Tx,

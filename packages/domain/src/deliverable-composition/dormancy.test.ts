@@ -94,6 +94,20 @@ function phaseSources(): { name: string; text: string }[] {
   ];
 }
 
+/**
+ * The repository split in two: discovery's method (ADR-0104), and everything
+ * else. Discovery may read what the transaction must only read under a lock, so
+ * each guard below says which part it is about.
+ */
+function repositoryParts(): { discovery: string; rest: string } {
+  const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+  const start = repo.indexOf("async findCompositionPlanCandidates");
+  const end = repo.indexOf("async admitCompositionPlan");
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return { discovery: repo.slice(start, end), rest: repo.slice(0, start) + repo.slice(end) };
+}
+
 // ---------------------------------------------------------------------------
 
 describe("the capability exists but nothing runs it", () => {
@@ -132,11 +146,7 @@ describe("the capability exists but nothing runs it", () => {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }
-    const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
-    const discovery = repo.slice(
-      repo.indexOf("async findCompositionPlanCandidates"),
-      repo.indexOf("async admitCompositionPlan"),
-    );
+    const { discovery } = repositoryParts();
     expect(discovery).toContain("validateCompositionPlanBatchLimit(requested)");
     expect(discovery).toContain("prisma.$queryRaw");
     for (const banned of ["FOR UPDATE", "FOR SHARE", "$transaction", "tx.", "UPDATE ", "INSERT", "DELETE"]) {
@@ -266,18 +276,24 @@ describe("planning never bills and never publishes", () => {
         "Quota",
         "ledger",
       ]) {
-        // The reservation *state* is read as evidence of which composition cycle
-        // this is; the banned forms above are the written ones.
+        // Discovery reads the reservation *state* as a hint of which composition
+        // cycle this is, and is checked below; the banned forms above are the
+        // written ones.
         if (name.endsWith("deliverable-composition-repository.ts") && banned === "'CONSUMED'") {
           continue;
         }
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }
+    const { discovery, rest } = repositoryParts();
+    expect(rest).not.toContain("'CONSUMED'");
+    expect(discovery.split("'CONSUMED'")).toHaveLength(2);
+    expect(discovery).toContain(`AND res."state" = 'CONSUMED'::"GenerationReservationState"))`);
   });
 
   it("never writes the job's current deliverable pointer", () => {
     const repo = code(readFileSync(PLAN_REPOSITORY, "utf8"));
+    const { discovery, rest } = repositoryParts();
     // An allowlist rather than a banned substring, because the column has to
     // appear here: it is read to decide the composition cycle and read again to
     // prove it unmoved. Every line that names it must be one of those reads, so
@@ -291,16 +307,21 @@ describe("planning never bills and never publishes", () => {
       // A lookup key, not an assignment: the replay path resolves the current
       // version through the database rather than trusting the pointer value.
       "where: { id: job.currentDeliverableVersionId,",
-      // Discovery's mirror of the two composition cycles (ADR-0104).
-      '"currentDeliverableVersionId" IS NULL',
-      '"currentDeliverableVersionId" IS NOT NULL',
     ];
-    for (const line of repo.split("\n")) {
+    for (const line of rest.split("\n")) {
       if (!line.includes("currentDeliverableVersionId")) continue;
       expect(`${line.trim()}: ${reads.some((read) => line.includes(read))}`).toBe(
         `${line.trim()}: true`,
       );
     }
+    // Discovery names it on exactly two lines, its mirror of the two
+    // composition cycles (ADR-0104), and on no other.
+    expect(
+      discovery
+        .split("\n")
+        .filter((line) => line.includes("currentDeliverableVersionId"))
+        .map((line) => line.trim()),
+    ).toEqual(['AND ((j."currentDeliverableVersionId" IS NULL', 'OR (j."currentDeliverableVersionId" IS NOT NULL']);
     expect(repo).not.toContain('SET "currentDeliverableVersionId"');
     expect(repo).toContain("CURRENT_DELIVERABLE_POINTER_MOVED");
   });
@@ -452,11 +473,11 @@ describe("the authorities the transaction must use", () => {
     // the unlocked value carried by the job read is explicitly overwritten.
     expect(repo).toContain("const reservationState = await lockReservationForComposition(");
     expect(repo).toContain("const job: JobContextRow = { ...locked, reservationState };");
-    // And the locking helper is the only place the transaction selects
-    // `res."state"`. Discovery, before it in the file, reads it unlocked as a
-    // hint and decides nothing (ADR-0104).
-    const transaction = repo.slice(repo.indexOf("async admitCompositionPlan"));
-    const selects = transaction.split("$queryRaw").filter((s) => s.includes('res."state"'));
+    // And the locking helper is the only place outside discovery that selects
+    // `res."state"`. Discovery reads it unlocked as a hint and decides nothing
+    // (ADR-0104).
+    const { rest } = repositoryParts();
+    const selects = rest.split("$queryRaw").filter((s) => s.includes('res."state"'));
     expect(selects).toHaveLength(1);
     for (const statement of selects) {
       expect(`res.state selected without FOR UPDATE OF res: ${statement.includes("FOR UPDATE OF res")}`)

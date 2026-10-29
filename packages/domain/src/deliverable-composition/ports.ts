@@ -28,8 +28,10 @@
  * Phase 5A shipped no discovery, because nothing after the plan ran yet. GS-8
  * (ADR-0104) adds `findCompositionPlanCandidates` for the dormant runner:
  * identifiers only, read without a lock, mirroring every refusal of the
- * admission so a job it would refuse never holds the head of the batch. The
- * admission still re-reads and re-decides everything under its own locks.
+ * admission so a job it would refuse never holds the head of the batch. A job
+ * whose admission throws is still offered, and holds its place on every pass
+ * until someone looks. The admission still re-reads and re-decides everything
+ * under its own locks.
  */
 
 import type { TransitionContext } from "../orchestration/ports";
