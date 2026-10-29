@@ -78,6 +78,61 @@ function noPlan(code: JobLaunchNoPlanCode): JobLaunchPlan {
   return { kind: "NO_PLAN", code };
 }
 
+/** The codes for a job's own frozen facts: no configuration ever makes such a job plannable. */
+export type FrozenFactsCode = Extract<
+  JobLaunchNoPlanCode,
+  "TARGET_RESOLUTION_UNKNOWN" | "NO_SCENES" | "SCENE_PROMPT_MISSING" | "SCENE_PROMPT_UNRENDERABLE"
+>;
+
+const FROZEN_FACTS_CODES: readonly JobLaunchNoPlanCode[] = deepFreeze([
+  "TARGET_RESOLUTION_UNKNOWN",
+  "NO_SCENES",
+  "SCENE_PROMPT_MISSING",
+  "SCENE_PROMPT_UNRENDERABLE",
+]);
+
+/** Whether the planner refused a job for its own facts, rather than for a catalog, a price or a rate. */
+export function isFrozenFactsCode(code: JobLaunchNoPlanCode): code is FrozenFactsCode {
+  return FROZEN_FACTS_CODES.includes(code);
+}
+
+export type FrozenFactsCheck =
+  | {
+      readonly ok: true;
+      readonly target: TargetOutputResolution;
+      /** Each scene's compiled prompt and what it renders to, in the scenes' order. */
+      readonly prompts: readonly { readonly compiled: string; readonly rendered: string }[];
+    }
+  | { readonly ok: false; readonly code: FrozenFactsCode };
+
+/**
+ * The job's own facts, before any catalog is consulted: the planner's first
+ * step, and the ending's check that a job can never launch (GS-7d-1). The
+ * facts were copied at the start and nothing writes them again, so a job that
+ * fails here fails on every pass.
+ */
+export function checkFrozenFacts(facts: {
+  readonly targetOutputResolution: string;
+  readonly scenes: readonly { readonly compiledPrompt: string | null }[];
+}): FrozenFactsCheck {
+  const target = facts.targetOutputResolution;
+  if (!isTargetOutputResolution(target)) return { ok: false, code: "TARGET_RESOLUTION_UNKNOWN" };
+  if (facts.scenes.length === 0) return { ok: false, code: "NO_SCENES" };
+
+  // Rendered once, here, as for every new attempt (ADR-0023): the renderer
+  // refuses a corrupt or old-shaped prompt rather than sending a plausible one.
+  const prompts: { readonly compiled: string; readonly rendered: string }[] = [];
+  for (const scene of facts.scenes) {
+    if (scene.compiledPrompt === null) return { ok: false, code: "SCENE_PROMPT_MISSING" };
+    try {
+      prompts.push({ compiled: scene.compiledPrompt, rendered: renderPrompt(scene.compiledPrompt) });
+    } catch {
+      return { ok: false, code: "SCENE_PROMPT_UNRENDERABLE" };
+    }
+  }
+  return { ok: true, target, prompts };
+}
+
 export class JobLaunchPlanner {
   readonly #routes: RoutePolicy;
   readonly #models: VideoModelCatalog;
@@ -95,21 +150,9 @@ export class JobLaunchPlanner {
 
   async plan(facts: JobLaunchFacts): Promise<JobLaunchPlan> {
     // ---- 1. The job's own facts, before any catalog is consulted. --------
-    const target = facts.targetOutputResolution;
-    if (!isTargetOutputResolution(target)) return noPlan("TARGET_RESOLUTION_UNKNOWN");
-    if (facts.scenes.length === 0) return noPlan("NO_SCENES");
-
-    // Rendered once, here, as for every new attempt (ADR-0023): the renderer
-    // refuses a corrupt or old-shaped prompt rather than sending a plausible one.
-    const prompts: { readonly compiled: string; readonly rendered: string }[] = [];
-    for (const scene of facts.scenes) {
-      if (scene.compiledPrompt === null) return noPlan("SCENE_PROMPT_MISSING");
-      try {
-        prompts.push({ compiled: scene.compiledPrompt, rendered: renderPrompt(scene.compiledPrompt) });
-      } catch {
-        return noPlan("SCENE_PROMPT_UNRENDERABLE");
-      }
-    }
+    const frozen = checkFrozenFacts(facts);
+    if (!frozen.ok) return noPlan(frozen.code);
+    const { target, prompts } = frozen;
 
     // ---- 2. One route for the whole job. ----------------------------------
     const choices = this.#qualifyingRoutes(facts, target);

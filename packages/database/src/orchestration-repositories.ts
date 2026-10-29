@@ -149,8 +149,9 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // generic move to a terminal state would strand the Unit in a hold nobody
   // will ever settle. The media and attempt failure settlements (Transactions H
   // and K) own GENERATING's edge, the deliverable failure settlement owns
-  // COMPOSING's and DELIVERABLE_VALIDATING's, and the rest have no owner yet, so
-  // they cannot be taken at all.
+  // COMPOSING's and DELIVERABLE_VALIDATING's, the ending of a waiting job that
+  // can never launch (ADR-0099) owns RESERVED's edge to FAILED_TERMINAL, and the
+  // rest have no owner yet, so they cannot be taken at all.
   "RESERVED->CANCELLED",
   "RESERVED->FAILED_TERMINAL",
   "GENERATING->FAILED_TERMINAL",

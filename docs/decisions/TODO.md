@@ -667,7 +667,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       *GS-7c-2a (ADR-0097 Decision 3) ends an orchestrated attempt's terminal
       preparation refusal with a transition event and no audit entry, as
       Transactions K and L release the Unit and cancel attempts with none.
-      Still open.*
+      GS-7d-1 (ADR-0099 Decision 3) ends a waiting job that can never launch
+      and releases its Units the same way. Still open.*
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the
@@ -1347,6 +1348,10 @@ them is **built**. Each item below records the settled decision and what remains
       videos, with the in-trash restrictions (no generate/regenerate, no
       disclosure change, no upload, no edit; preview/download still allowed when
       authorized) and no counter resets on restore.
+      *A deleted Property's waiting videos end at once and their Units are
+      released (the product owner's decision of 2026-10-29, ADR-0099), not
+      held for the trash period; a restored Property's videos would be
+      started again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1477,6 +1482,26 @@ them is **built**. Each item below records the settled decision and what remains
       organization's job is offered (ADR-0095 Decision 7). GS-7d must remove a
       job that can never launch from the head of its queue, and GS-9's pass
       must keep refused jobs from using up its window.*
+      *Done for a job's own rows in GS-7d-1 (ADR-0099, no migration): a
+      waiting job whose Property is deleted (the product owner's decision of
+      2026-10-29: at once), whose frozen facts the planner refuses before any
+      catalog, or whose rows are not as the start wrote them, fails and its
+      Units are released in one commit; the launch runner ends a deleted
+      Property's waiting jobs and any candidate that can never launch, so none
+      holds back its queue or a window. Still open: a job refused for a route,
+      a price or a rate keeps waiting with its Units held, and holds back its
+      organization's queue (the next item), and GS-9's pass must keep such
+      jobs from using up its window.*
+- [ ] **Bound how long a waiting job refused for configuration may hold its
+      Units.** A waiting job the planner refuses for VTaVision's own
+      configuration or for timing (`NO_ROUTE`, `AMBIGUOUS_ROUTE`,
+      `NO_CURRENT_PRICING`, `AMBIGUOUS_CURRENT_PRICING`, `NO_FX_RATE`) is not
+      ended (ADR-0099 Decision 1): it can launch once the configuration is
+      fixed. Until then it holds its Units, and, the launch being oldest first,
+      its organization's later jobs. Whether it ends after some time, and
+      whether a fault of ours that never clears is then a failure the customer
+      is not charged for, is not decided. Must be decided before generation is
+      activated.
 - [ ] **End an orchestrated attempt the gate will never authorize (GS-7d).**
       A gate refusal writes nothing, so an attempt refused for good, such as
       one whose Property was deleted or whose photo was deleted or is

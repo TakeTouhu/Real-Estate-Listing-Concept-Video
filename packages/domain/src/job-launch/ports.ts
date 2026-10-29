@@ -14,6 +14,7 @@ import type { GenerationQualityTier } from "../orchestration/types";
 import type { FxSnapshot } from "../pricing/provider-pricing-contract";
 import type { PricingSnapshot } from "../pricing/pricing-snapshot";
 import type { EpochMillis } from "../pricing/units";
+import type { UnlaunchableJobCause, UnlaunchableJobEndingRefusal } from "./ending";
 import type { JobLaunchRefusal } from "./launch";
 
 /** One scene of the waiting job, as the start copied it (ADR-0087). */
@@ -181,4 +182,43 @@ export interface JobLaunchRepository {
    * or nothing is written.
    */
   launchJob(input: LaunchJobInput): Promise<LaunchJobOutcome>;
+}
+
+// ---------------------------------------------------------------------------
+// The ending of a waiting job that can never launch (GS-7d-1, ADR-0099)
+// ---------------------------------------------------------------------------
+
+/** A waiting job of a deleted Property. A hint: the ending decides again under its own locks. */
+export interface PropertyDeletedWaitingJob {
+  readonly organizationId: string;
+  readonly generationJobId: string;
+}
+
+export interface EndUnlaunchableJobInput {
+  /** As for a launch: never trusted on its own, proved through the job's project. */
+  readonly organizationId: string;
+  readonly generationJobId: string;
+  /** The release instant, stamped on the reservation. */
+  readonly endedAt: EpochMillis;
+  readonly context: TransitionContext;
+}
+
+/** How an ending commit ended. Only `ENDED` wrote anything. */
+export type EndUnlaunchableJobOutcome =
+  /** The job failed and its Units were released, for this cause. */
+  | { readonly kind: "ENDED"; readonly cause: UnlaunchableJobCause }
+  | { readonly kind: "NOT_ENDED"; readonly reason: UnlaunchableJobEndingRefusal };
+
+export interface UnlaunchableJobEndingRepository {
+  /**
+   * Bounded, oldest first: waiting jobs whose Property is deleted, which the
+   * launch's candidates pass over. Mirrors every refusal of the ending.
+   */
+  findPropertyDeletedWaitingJobs(query: JobLaunchCandidateQuery): Promise<readonly PropertyDeletedWaitingJob[]>;
+
+  /**
+   * End the job, in one short database transaction with no external I/O: it
+   * fails and its reservation is released, or nothing is written.
+   */
+  endUnlaunchableJob(input: EndUnlaunchableJobInput): Promise<EndUnlaunchableJobOutcome>;
 }

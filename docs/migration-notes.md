@@ -1899,3 +1899,17 @@ sender, the repository or the adapter.
 
 **Rolling back.** To GS-7c-2a's build: safe, since nothing in production calls
 what GS-7c-2b adds.
+
+## GS-7d-1 — ending a waiting job that can never launch
+
+**No migration** (ADR-0099). No schema, enum, constraint or row changes, and
+no new environment variable. The ending writes the job's `RESERVED →
+FAILED_TERMINAL` and the reservation's `RESERVED → RELEASED`, both states and
+columns that already exist; its events go to the existing transition history,
+with a new event type (`job.ended_unlaunchable`) in a free-text column.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+ending repository or the launch runner.
+
+**Rolling back.** To GS-7c-2b's build: safe, since nothing in production calls
+what GS-7d-1 adds. A job a test ended stays ended; its Units stay released.

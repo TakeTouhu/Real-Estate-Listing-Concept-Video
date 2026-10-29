@@ -126,7 +126,8 @@ describe("the database package's public surface", () => {
 
   it("does not export the locked transition or the launch lock", () => {
     // Each writes or locks on the assumption that its caller holds what makes
-    // it safe; published, either would be reachable without that.
+    // it safe; published, either would be reachable without that. GS-7d-1
+    // (ADR-0099): the ending fails a waiting job it locked itself.
     expect("applyLockedTransition" in database).toBe(false);
     expect("acquireJobLaunchLock" in database).toBe(false);
     const callers = productionSources()
@@ -136,6 +137,7 @@ describe("the database package's public surface", () => {
     expect(callers).toEqual([
       "packages/database/src/job-launch-repository.ts",
       "packages/database/src/orchestration-repositories.ts",
+      "packages/database/src/unlaunchable-job-ending-repository.ts",
     ]);
   });
 
