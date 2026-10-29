@@ -289,11 +289,11 @@ describe.skipIf(!HAS_DB)("each assignment commits with its audit entry or not at
 });
 
 describe.skipIf(!HAS_DB)("the service against PostgreSQL", () => {
-  it("never writes the assignments when a Property is edited, even from a stale snapshot", async () => {
+  it("never writes the assignments when a Property is edited, even after they changed since its read", async () => {
     const before = await repos.properties.findById(ORG, PROPERTY);
     if (!before) throw new Error("fixture Property missing");
     await assign({ responsibleUserId: VIEWER, groupId: GROUP });
-    const edited = await repos.properties.update({ ...before, name: "Edited" });
+    const edited = await repos.properties.updateDetails(ORG, PROPERTY, { name: "Edited" });
     expect(edited).toMatchObject({ name: "Edited", responsibleUserId: VIEWER, groupId: GROUP });
     expect(await assignment()).toEqual({ responsibleUserId: VIEWER, groupId: GROUP });
   });

@@ -401,8 +401,8 @@ describe("reassignment", () => {
   });
 
   it("is never undone by editing or deleting the Property", async () => {
-    // A write from a snapshot taken before a reassignment keeps the assignments.
-    await fx.repo.update({ ...property, responsibleUserId: null, groupId: null, name: "Stale" });
+    // A change of the Property's own fields cannot name its assignments.
+    await fx.repo.updateDetails(fx.orgId, property.id, { name: "Stale" });
     await fx.service.update(fx.ownerId, fx.orgId, property.id, { name: "Renamed" });
     expect(assignment(await fx.repo.findById(fx.orgId, property.id))).toEqual({
       responsibleUserId: fx.ids.CREATOR,

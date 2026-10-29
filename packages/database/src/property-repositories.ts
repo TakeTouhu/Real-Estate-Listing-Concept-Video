@@ -152,19 +152,36 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
         })
       ).map(toProperty);
     },
-    async update(property) {
-      return toProperty(
-        await prisma.property.update({
-          where: { id: property.id },
-          data: {
-            name: property.name,
-            propertyType: property.propertyType,
-            addressMasked: property.addressMasked,
-            description: property.description,
-            status: property.status,
-          },
-        }),
-      );
+    async updateDetails(organizationId, id, change) {
+      // One conditional UPDATE, as `updateIfCurrent` below: Prisma 5.22
+      // compiles the extra filters beside the id into its WHERE. Only the named
+      // fields (Prisma leaves an `undefined` one unwritten, and `@updatedAt`
+      // follows), and only while the row stands: never its status or
+      // assignments. A change naming no field is a read under the same
+      // condition. `P2025` is the lost race: gone, another tenant's, or deleted.
+      try {
+        return toProperty(
+          await prisma.property.update({
+            where: { id, organizationId, status: { not: "DELETED" } },
+            data: {
+              name: change.name,
+              propertyType: change.propertyType,
+              addressMasked: change.addressMasked,
+              description: change.description,
+            },
+          }),
+        );
+      } catch (error) {
+        if (isRecordNotFound(error)) return null;
+        throw error;
+      }
+    },
+    async markDeleted(organizationId, id) {
+      const { count } = await prisma.property.updateMany({
+        where: { id, organizationId, status: { not: "DELETED" } },
+        data: { status: "DELETED" },
+      });
+      return count === 1;
     },
     async assign(organizationId, propertyId, expected, next, audit) {
       try {

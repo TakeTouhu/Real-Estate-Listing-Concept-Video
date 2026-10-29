@@ -7,6 +7,9 @@ import type { MediaAsset, MediaAssetStatus, Property } from "./types";
 /** The audit entry a Property change commits together with the change itself. */
 export type PropertyChangeAudit = Omit<AuditLog, "id" | "createdAt">;
 
+/** The Property fields a change writes; a field left out keeps its stored value. */
+export type PropertyDetailsChange = Partial<Pick<Property, "name" | "propertyType" | "addressMasked" | "description">>;
+
 /** A Property's two assignments (ADR-0052 Decision 10, ADR-0062); null is unset. */
 export interface PropertyAssignment {
   readonly responsibleUserId: string | null;
@@ -44,8 +47,29 @@ export interface PropertyRepository {
    * Filtered in the query, never after loading (Phase 6I).
    */
   listReachable(reach: Reach): Promise<Property[]>;
-  /** Write a Property's own fields. Never its assignments, which only {@link assign} changes. */
-  update(property: Property): Promise<Property>;
+  /**
+   * Write the fields `change` names, only while the Property is in the
+   * organization and not deleted (ADR-0101). Never its status, which only
+   * {@link markDeleted} changes, nor its assignments, which only
+   * {@link assign} changes.
+   *
+   * Replaces an unconditional whole-row `update`. That method addressed the row
+   * by id alone and wrote every field from the caller's snapshot, status
+   * included, so a rename that read the Property before its deletion saved
+   * wrote `ACTIVE` back after it, and a deletion that read it before a rename
+   * saved wrote the old name back.
+   *
+   * `null`: no such Property in the organization, or it is deleted; nothing was
+   * written.
+   */
+  updateDetails(organizationId: string, id: string, change: PropertyDetailsChange): Promise<Property | null>;
+  /**
+   * Mark the Property deleted, writing its status alone, only while it is in
+   * the organization and not deleted already (ADR-0101). One statement.
+   * `false`: no such Property in the organization, or another deletion saved
+   * first; nothing was written.
+   */
+  markDeleted(organizationId: string, id: string): Promise<boolean>;
   /**
    * Change a Property's assignments from `expected` to `next` and record
    * `audit`, atomically, only while the Property is not deleted and still has

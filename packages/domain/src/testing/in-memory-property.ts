@@ -4,6 +4,7 @@ import type {
   PropertyAssignment,
   PropertyChangeAudit,
   PropertyCreation,
+  PropertyDetailsChange,
   PropertyReassignment,
   PropertyRepository,
 } from "../property/ports";
@@ -60,13 +61,20 @@ export class InMemoryPropertyRepository implements PropertyRepository {
     );
   }
 
-  update(property: Property): Promise<Property> {
-    const stored = this.byId.get(property.id);
-    if (!stored) throw new Error("property not found");
-    // Never the assignments, as the database's update never writes them.
-    const updated: Property = { ...property, responsibleUserId: stored.responsibleUserId, groupId: stored.groupId };
-    this.byId.set(property.id, updated);
+  updateDetails(organizationId: string, id: string, change: PropertyDetailsChange): Promise<Property | null> {
+    const stored = this.byId.get(id);
+    if (stored?.organizationId !== organizationId || stored.status === "DELETED") return Promise.resolve(null);
+    // The named fields alone, as the database's conditional write.
+    const updated: Property = { ...stored, ...definedOnly(change), updatedAt: this.clock.now() };
+    this.byId.set(id, updated);
     return Promise.resolve(updated);
+  }
+
+  markDeleted(organizationId: string, id: string): Promise<boolean> {
+    const stored = this.byId.get(id);
+    if (stored?.organizationId !== organizationId || stored.status === "DELETED") return Promise.resolve(false);
+    this.byId.set(id, { ...stored, status: "DELETED", updatedAt: this.clock.now() });
+    return Promise.resolve(true);
   }
 
   async assign(
@@ -110,6 +118,11 @@ export class InMemoryPropertyRepository implements PropertyRepository {
     }
     return count;
   }
+}
+
+/** The fields a change names, as Prisma leaves an `undefined` one unwritten. */
+function definedOnly(change: PropertyDetailsChange): PropertyDetailsChange {
+  return Object.fromEntries(Object.entries(change).filter(([, value]) => value !== undefined));
 }
 
 export class InMemoryMediaAssetRepository implements MediaAssetRepository {

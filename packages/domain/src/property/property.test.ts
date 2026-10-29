@@ -10,7 +10,7 @@ import {
 import { PropertyService } from "./property-service";
 import { AssetService } from "./asset-service";
 import { buildAssetStorageKey } from "./media";
-import type { ImageProcessor, MalwareScanner, ObjectStorage, ProcessedImage } from "./ports";
+import type { ImageProcessor, MalwareScanner, ObjectStorage, ProcessedImage, PropertyRepository } from "./ports";
 import type { ScanVerdict } from "./ports";
 
 const PASSWORD = "password-123456";
@@ -99,6 +99,7 @@ interface Ctx {
   assets: AssetService;
   /** The repository itself, so a test can interleave a real deletion. */
   assetRepo: InMemoryMediaAssetRepository;
+  propertyRepo: InMemoryPropertyRepository;
   storage: FakeStorage;
   scanner: FakeScanner;
   images: FakeImageProcessor;
@@ -122,6 +123,7 @@ async function setup(): Promise<Ctx> {
   return {
     deps,
     assetRepo,
+    propertyRepo,
     storage,
     scanner,
     images,
@@ -233,6 +235,122 @@ describe("PropertyService CRUD", () => {
     await ctx.properties.remove(ctx.ownerId, ctx.orgId, p.id);
     const list = await ctx.assets.list(ctx.ownerId, ctx.orgId, p.id);
     expect(list.find((a) => a.id === asset.id)?.status).toBe("DELETION_PENDING");
+  });
+});
+
+/**
+ * The Property repository with a pause after its first read: `meanwhile` runs
+ * there, as another request saving between this one's read and its write.
+ */
+function readThen(repo: InMemoryPropertyRepository, meanwhile: () => Promise<unknown>): PropertyRepository {
+  let paused = false;
+  return {
+    create: (input, audit) => repo.create(input, audit),
+    async findById(organizationId, id) {
+      const read = await repo.findById(organizationId, id);
+      if (!paused) {
+        paused = true;
+        await meanwhile();
+      }
+      return read;
+    },
+    listReachable: (reach) => repo.listReachable(reach),
+    updateDetails: (organizationId, id, change) => repo.updateDetails(organizationId, id, change),
+    markDeleted: (organizationId, id) => repo.markDeleted(organizationId, id),
+    assign: (organizationId, id, expected, next, audit) => repo.assign(organizationId, id, expected, next, audit),
+  };
+}
+
+describe("a rename and a deletion saved meanwhile (ADR-0101)", () => {
+  let ctx: Ctx;
+  let propertyId: string;
+  const service = (properties: PropertyRepository) =>
+    new PropertyService({
+      identity: ctx.deps,
+      properties,
+      assets: ctx.assetRepo,
+      clock: ctx.deps.clock,
+      ids: ctx.deps.ids,
+    });
+  const actions = async () => (await ctx.deps.repos.auditLogs.listByOrganization(ctx.orgId)).map((a) => a.action);
+  const stored = () => ctx.propertyRepo.findById(ctx.orgId, propertyId);
+
+  beforeEach(async () => {
+    ctx = await setup();
+    propertyId = (
+      await ctx.properties.create(ctx.ownerId, {
+        organizationId: ctx.orgId,
+        name: "Harbor",
+        propertyType: "APARTMENT",
+        description: "Sea view",
+        rightsConfirmed: true,
+      })
+    ).id;
+  });
+
+  it("answers a rename as not found, and audits nothing, when the deletion saved after its read", async () => {
+    const rename = service(readThen(ctx.propertyRepo, () => ctx.properties.remove(ctx.ownerId, ctx.orgId, propertyId)));
+    await expect(rename.update(ctx.ownerId, ctx.orgId, propertyId, { name: "Too late" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(await stored()).toMatchObject({ name: "Harbor", status: "DELETED" });
+    expect(await actions()).not.toContain("property.updated");
+  });
+
+  it("keeps the new name when the rename saved after the deletion's read", async () => {
+    const deletion = service(
+      readThen(ctx.propertyRepo, () => ctx.properties.update(ctx.ownerId, ctx.orgId, propertyId, { name: "Renamed" })),
+    );
+    await deletion.remove(ctx.ownerId, ctx.orgId, propertyId);
+    expect(await stored()).toMatchObject({ name: "Renamed", description: "Sea view", status: "DELETED" });
+  });
+
+  it("answers a second deletion as not found, with one audit entry", async () => {
+    const second = service(readThen(ctx.propertyRepo, () => ctx.properties.remove(ctx.ownerId, ctx.orgId, propertyId)));
+    await expect(second.remove(ctx.ownerId, ctx.orgId, propertyId)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await actions()).filter((action) => action === "property.deleted")).toHaveLength(1);
+  });
+
+  it("writes only the fields a rename names, keeping one another rename changed", async () => {
+    const rename = service(
+      readThen(ctx.propertyRepo, () =>
+        ctx.properties.update(ctx.ownerId, ctx.orgId, propertyId, { description: "Garden view" }),
+      ),
+    );
+    const renamed = await rename.update(ctx.ownerId, ctx.orgId, propertyId, { name: "Harbor Point" });
+    expect(renamed).toMatchObject({ name: "Harbor Point", description: "Garden view", status: "ACTIVE" });
+    expect(await stored()).toEqual(renamed);
+  });
+
+  it("keeps the name, type and address another rename changed when this one changes the description", async () => {
+    const rename = service(
+      readThen(ctx.propertyRepo, () =>
+        ctx.properties.update(ctx.ownerId, ctx.orgId, propertyId, {
+          name: "Harbor Point",
+          propertyType: "OFFICE",
+          addressMasked: "Tokyo",
+        }),
+      ),
+    );
+    await rename.update(ctx.ownerId, ctx.orgId, propertyId, { description: "Garden view" });
+    expect(await stored()).toMatchObject({
+      name: "Harbor Point",
+      propertyType: "OFFICE",
+      addressMasked: "Tokyo",
+      description: "Garden view",
+    });
+  });
+
+  it("writes nothing for another organization's Property, as the database's write does", async () => {
+    const before = await stored();
+    expect(await ctx.propertyRepo.updateDetails("org_elsewhere", propertyId, { name: "Mine" })).toBeNull();
+    expect(await ctx.propertyRepo.markDeleted("org_elsewhere", propertyId)).toBe(false);
+    expect(await stored()).toEqual(before);
+  });
+
+  it("leaves a field passed as undefined as stored, as the database's write does", async () => {
+    await ctx.propertyRepo.updateDetails(ctx.orgId, propertyId, { name: undefined, description: "Garden view" });
+    expect(await stored()).toMatchObject({ name: "Harbor", description: "Garden view" });
   });
 });
 
