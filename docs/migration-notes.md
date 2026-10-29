@@ -1932,9 +1932,10 @@ what GS-7d-2 adds. An attempt a test ended stays ended.
 ## Property rename and deletion as conditional writes (ADR-0101)
 
 **No migration.** No schema, enum, constraint or row changes, and no new
-environment variable. A rename and a deletion now write with `updateMany` on
-the id, the organization and a status other than `DELETED`, the columns they
-already wrote.
+environment variable. A rename now writes with one conditional `UPDATE …
+RETURNING`, and a deletion with one conditional `updateMany`, each on the id,
+the organization and a status other than `DELETED`, the columns they already
+wrote.
 
 **What changes at deploy.** Nothing a customer reaches: no route renames or
 deletes a Property yet.
