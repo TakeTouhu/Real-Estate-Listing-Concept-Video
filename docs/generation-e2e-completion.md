@@ -3441,3 +3441,221 @@ production scheduler and live Stripe charges remain BLOCKED.
 
 GS-7c-2a waits for the product owner's yes before merge. Then GS-7c-2b,
 sending a prepared attempt through the gate and recording the answer.
+
+## GS-7c-2b — sending an attempt once, and recording the answer
+
+Base: `c18d3f8` (PR #121 merge commit on `main`; post-merge CI run 741 green).
+ADR: `docs/decisions/0098-sending-an-attempt-once-and-recording-the-answer.md`
+
+The second of GS-7c-2's two pull requests. **No migration; no route, no
+page.** Nothing outside tests constructs the runner, the attempt submission
+repository or the sender adapter, so nothing sends an attempt until the
+pipeline command (GS-9), with the test provider only.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `d52a6db` | the runner, the sender port and its adapter, discovery's cursor, their tests, ADR-0098 and the documentation |
+| `2391f96` | the review's answers: the record tried again while it throws or loses a race, and a pass stopped by an answer it could not record; the static test, the cursor's validation and a retryable refusal tightened; ADR-0098 and the TODO corrected |
+| `53f2005` | a test that the record's last try decides what is reported |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7c-2b does
+
+- **One runner, in a fixed order.** `AttemptSubmissionRunner.runOnce` takes
+  each attempt discovery offers through preparation (a refusal for good ends
+  it, ADR-0097), a check that this sender reaches its provider and that the
+  signed URL has 300 seconds left, the paid-submission gate, one send and the
+  submission outcome's record. Each attempt gets one transition context.
+- **Armed means sent once.** After `AUTHORIZED` the sender is called once. A
+  sender that throws, or answers with anything that is not a well-formed
+  observation, is recorded `SUBMISSION_UNKNOWN`. The record is tried up to
+  three times while it throws or loses a race; an answer still not recorded
+  is lost, the attempt is left `SUBMITTING` for the stale submission recovery,
+  and the pass sends nothing more. Nothing sends an attempt again.
+- **Nothing is sent that cannot be used.** Another provider's attempt is passed
+  over before it is signed; a URL with too little time left is not sent and
+  nothing is written; once an attempt of a job ends in the pass, by
+  preparation or by the provider's definitive refusal, the job's other
+  attempts are not sent in it.
+- **The window moves.** Discovery reads after a `{ createdAt, id }` cursor in
+  its own order, and each pass returns `next`, or `null` at the end.
+- **The adapter.** `createPreparedGenerationSender` builds the provider's
+  request from the prepared generation alone and maps the answer into the
+  outcome's closed vocabulary. It is the only production caller of a
+  provider's create POST.
+
+```mermaid
+sequenceDiagram
+    participant W as Runner
+    participant D as Discovery
+    participant P as Preparation
+    participant G as Paid-submission gate
+    participant S as Sender adapter
+    participant O as Submission outcome
+    W->>D: findSubmissionCandidates(limit, after)
+    D-->>W: QUEUED attempts, each with its organization and job
+    W->>W: provider is this sender's, else OTHER_PROVIDER
+    W->>P: prepareQueuedGeneration(candidate)
+    P-->>W: signed URL and frozen request, or a refusal (ended if for good)
+    W->>W: 300 s left on the URL, else SOURCE_URL_STALE
+    W->>G: authorize(organization, attempt, source)
+    G-->>W: AUTHORIZED (QUEUED to SUBMITTING, audited), or refused with nothing written
+    W->>S: send(prepared), once
+    S-->>W: ACCEPTED, DEFINITIVELY_REJECTED or SUBMISSION_UNKNOWN
+    W->>O: recordObservation(attempt, answer)
+    W-->>W: report, and next for the following pass
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `53f2005`'s code, each exit status read |
+| `pnpm test` | 240 files, 6,511 tests passed on `53f2005`'s code (6,500 on `d52a6db`'s) |
+| `pnpm test:db` | 66 files, 1,746 tests passed on `53f2005`'s code (and on `d52a6db`'s) |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `packages/domain/src/attempt-submission/runner.test.ts` (new, 26): the order
+  and one context per attempt; the gate's warning carried; an answer lost to a
+  throw, a blank acceptance or an unknown kind recorded unknown; the record
+  tried again while it throws or loses a race, and a pass stopped by an answer
+  no try records or the outcome refuses; the gate's refusals and reasons; another provider; the URL's
+  boundary and the margin below the URL's life; an ending, a move and a
+  retryable refusal; a definitive refusal, retryable or not, stopping the
+  job's other attempts; a
+  gate, a photo read or an ending that throws counted as failed; the cursor
+  and `next`, and validation before any read.
+- `packages/video-providers/src/prepared-generation-sender.test.ts` (new, 14):
+  the request field by field; the answer's mapping and its only code; one
+  call; another provider's attempt never sent; a throw let through; the test
+  provider's acceptance.
+- `tests/integration/attempt-submission.db.test.ts` (8 new, 26 in all), on jobs
+  started and launched by the real commits, through the real gate and outcome
+  service over the test provider: four attempts sent with their audit entries
+  and events in order; a withdrawn photo ended, its job's other attempts not
+  sent, K and L settling; a gate refusal writing nothing; a provider's refusal;
+  an unknown answer holding the reservation so the sibling is refused; two
+  concurrent passes sending each attempt once; a window moving past attempts
+  left waiting; discovery naming each job and reading after the cursor.
+- `packages/domain/src/attempt-submission/dormancy.test.ts` (rewritten, 9): no
+  production construction of the runner, repository or adapter; the module's
+  imports; the gate and outcome taken as types; no network, storage or timer;
+  one send, one authorize and one record, in order; one production caller of
+  a provider's create POST.
+- `packages/domain/src/attempt-submission/preparation-refusal.test.ts` (6 new):
+  the cursor passed through, and refused when it is not one.
+
+### Mutation testing
+
+The same harness as GS-7c-2a: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R01 / R02 | the provider check removed or inverted | killed |
+| R03 to R05 | the URL's boundary moved, removed, or the margin set to the URL's whole life | killed |
+| R06 / R07 | a send without `AUTHORIZED`; the gate's reason dropped | killed |
+| R08 to R10 | a malformed answer passed through; a sender's throw not recorded; a record's throw escaping | killed |
+| R11 | the gate's warning inverted | killed |
+| R12 to R14 | an ended or definitively refused job's attempts still sent; the job check removed | killed |
+| R15 to R17 | a retryable refusal ended; a move reported as an ending; any error read as a refusal | killed |
+| R18 to R22 | `next` on a partial window or from the first candidate; the cursor not passed; the cursor or the bound not validated | killed |
+| R23 to R26 | a count dropped; one throw stopping the pass | killed |
+| R27 to R30 | the record under another context; the gate given another source; the wrong attempt reported; the ending given another reason | killed |
+| C01 / C02 | a cursor with an invalid date or a blank id accepted | killed |
+| S01 to S12 | the adapter's model id, native resolution, URL or request hash wrong; a timeout not named, every error named one, retryable forced, an unknown answer losing its code; the provider check removed, the provider's name fixed, the prediction id wrong, `LOCAL_CONFIGURATION` dropped | killed |
+| D01 to D06 | discovery's cursor: an instant or id compared inclusively, the tie arm dropped, the cursor ignored or not validated, the wrong job named | killed |
+| F01 to F03, F10 | the record not tried again, not after a lost race, not after a throw; one try too many | killed |
+| F04 to F09 | a replay stopping the pass; a refused answer not stopping it; no stop; `next` ignoring the stop; the stop not applied; `stopped` not reported | killed |
+| F11 | the cursor's type not checked | killed |
+| F12 | a throw on the last try keeping an earlier try's result | survived pass 1; killed by a record that loses races and then throws |
+
+Result: 50 mutants against `d52a6db`, all killed in the first pass: 44 by the
+unit suites (`packages/domain/src/attempt-submission` and the adapter's), 6 by
+`tests/integration/attempt-submission.db.test.ts`. The review's answers added
+12 against `2391f96`: 11 killed in the first pass, and F12 after one test in
+`53f2005`; F01 to F03, F10 and F12 were run again against it, all killed.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`d52a6db` against `c18d3f8`, reading only git objects. It confirmed that the
+gate is asked once and the sender called once per attempt, and only after
+`AUTHORIZED`; that nothing after the arm can throw; that concurrent passes are
+kept apart by the gate's compare-and-set under the cost-admission lock; the
+tenant scoping of discovery, preparation and the gate, which locks the source
+preparation signed; that the cursor's predicate matches discovery's order
+exactly, ties included, on a millisecond column; that the freshness check
+compares milliseconds and fails closed; that only a prediction id and the
+closed codes cross from the provider; and that nothing in production
+constructs the runner, the repository or the adapter. Verdict: nothing
+blocking. Its findings, answered in `2391f96` and `53f2005`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: a record that throws or loses a race loses the provider's answer (an acceptance's prediction id among it), and the pass goes on sending, so a systemic record fault would pay for a whole window and record none of it | Fixed: the record is tried up to three times while it throws or answers `LOST_CONCURRENCY` (an identical answer on file replays); an answer still not recorded, or one the outcome refuses, stops the pass (`PASS_STOPPED`, `stopped`), and `next` starts after that attempt. ADR-0098 Decision 2 says the answer is then lost |
+| Should-fix: "until a pass sends and ends nothing" would stop GS-9 at a full window of waiting attempts, the starvation Decision 6 fixes | Fixed in ADR-0098 and the TODO: a whole cycle, from the oldest until a pass returns `next: null`, with nothing sent or ended; and at once on a pass that stopped |
+| Nit: only a non-retryable provider refusal was tested ending the job for the pass; Decision 5's wording when the answer was not recorded | A retryable refusal tested too; Decision 5 now says the outcome writes `FAILED_RETRYABLE` or `FAILED_TERMINAL` and K settles both; an unrecorded answer now stops the pass |
+| Nit: the static test's `.send(` count would not see a second `this.#send(` | It counts `this.#send(`, `this.#record(` and `.recordObservation(` too |
+| Nit: Decision 4 said an armed unsent attempt "can only be recorded as unknown"; the order listed preparation before the provider check; a DB test's title said "unreadable" for a timeout | Reworded: it is left `SUBMITTING` for the recovery; the provider check listed first; the title says timed out |
+| Nit: `SOURCE_URL_STALE` and `OTHER_PROVIDER` also wait and hold a Unit | Added to ADR-0098 *Not decided here* and the TODO item on how long an attempt may hold a Unit |
+| Nit: the runner does not check that the gate's answer names the same attempt | Not built: the gate is called with the attempt and answers for it; a check after the arm could only leave an armed attempt unsent |
+| Nit: the cursor's validation threw a `TypeError` for `undefined` from a caller the types do not reach | Fixed: anything not an object is `VALIDATION_FAILED`, tested |
+| Nit: an attempt committed after a pass read past its `createdAt` waits until the cursor comes round | Named in ADR-0098 Decision 6: it waits, it is not lost |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the attempt sender row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the order is ADR-0098 Decision 1 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7c-2b.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7c-2b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (progress noted on the Phase 4C-3 sequence, the
+signed URL's provisional life, failing closed on a missing source, bounding
+how long an attempt may run, keeping the submission window moving, and a
+refusal the deployment causes).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the runner, the repository or the
+sender adapter, and the only provider any test sends to is the test provider.
+No scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs a pass yet.** The pipeline command (GS-9) will, with the
+  test provider only; it must carry `next` and stop on a pass that sends and
+  ends nothing.
+- **An attempt the gate refuses for good waits** and keeps its Unit until
+  GS-7d.
+- **A retryable refusal holds the Unit** for as long as it recurs.
+- **The URL's 300-second margin is provisional**, with its 600-second life,
+  until measured against a real submission.
+- **A refusal the deployment's catalog causes still ends the attempt**, by the
+  canonical table, until that is decided.
+
+### Remaining work
+
+GS-7c-2b waits for the product owner's yes before merge. Then GS-7d: a job
+that can never launch, and an attempt the gate refuses for good, released
+with their Units.
