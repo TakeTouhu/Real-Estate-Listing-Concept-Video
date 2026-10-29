@@ -343,6 +343,18 @@ job's Unit. A reason that may pass leaves it waiting for the next pass.
 Nothing outside tests constructs either, and nothing sends an attempt until
 GS-7c-2b.
 
+**GS-7c-2b — sending an attempt once, and recording the answer** (ADR-0098, no
+migration): the sender takes each attempt discovery offers through
+preparation, a check that the photo's signed URL has at least 300 seconds
+left, the paid-submission gate, one POST through the provider port and the
+record of the provider's answer. A send whose answer is lost is recorded as
+unknown, never sent again. Once one attempt of a job has ended in a pass, the
+job's other attempts are not sent in it, since the job will fail and its Unit
+is released. Each pass starts after the last attempt the previous one was
+offered, so attempts left waiting do not hold back newer ones in any
+organization. Nothing outside tests constructs the sender; the pipeline
+command (GS-9) is what will, on the test provider only.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

@@ -1886,3 +1886,16 @@ attempt submission repository.
 
 **Rolling back.** To GS-7c-1's build: safe, since nothing in production calls
 what GS-7c-2a adds.
+
+## GS-7c-2b — sending an attempt once, and recording the answer
+
+**No migration** (ADR-0098). No schema, enum, constraint or row changes, and
+no new environment variable. A send writes through the gate's arm and the
+submission outcome, which already exist; discovery's cursor is a query
+predicate on `createdAt` and `id`, which the existing order already uses.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+sender, the repository or the adapter.
+
+**Rolling back.** To GS-7c-2a's build: safe, since nothing in production calls
+what GS-7c-2b adds.

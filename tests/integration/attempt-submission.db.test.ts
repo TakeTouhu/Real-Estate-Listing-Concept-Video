@@ -7,34 +7,51 @@ import {
   createFailedJobSceneClosureRepository,
   createGenerationStartRepository,
   createJobLaunchRepository,
+  createPaidSubmissionAuthorizationRepository,
   createPrismaPropertyRepositories,
   createPrismaStoryboardRepositories,
   createSceneGenerationAttemptRepository,
+  createSubmissionOutcomeRepository,
   createUnitEntitlementRepository,
 } from "@app/database";
 import {
   AttemptFailureSettlementRunner,
+  AttemptSubmissionRunner,
   FailedJobSceneClosureRunner,
   JobLaunchPlanner,
   JobLaunchRunner,
   PRESERVATION_RULES,
   PreflightRefusalError,
   SYSTEM_NEGATIVE_CONSTRAINTS,
+  createFixedAuthorizationClock,
+  createPaidSubmissionAuthorizationService,
+  createSubmissionOutcomeService,
+  createSystemSubmissionClock,
   epochMillisFromDate,
   preparationRefusalEnding,
   prepareQueuedGeneration,
+  validateReconciliationPolicy,
+  yen,
+  type AttemptSubmissionCursor,
   type CompiledPrompt,
   type ExecutionPreflightDeps,
   type PreflightRefusalReason,
   type SafeTransitionMetadata,
   type StoryboardScene,
+  type Yen,
 } from "@app/domain";
-import { createFakeRouteKit } from "@app/video-providers";
+import {
+  FakeVideoProvider,
+  createFakeRouteKit,
+  createPreparedGenerationSender,
+  type FakeSubmissionOutcomeKind,
+  type VideoGenerationSubmissionProvider,
+} from "@app/video-providers";
 import { ctx } from "./orchestration-fixture";
 
 /**
- * The attempt submission's discovery and the ending of a refused preparation,
- * against live PostgreSQL (GS-7c-2a, ADR-0097).
+ * The attempt submission's discovery, the ending of a refused preparation and
+ * the sender, against live PostgreSQL (GS-7c-2a, ADR-0097; GS-7c-2b, ADR-0098).
  *
  * Jobs are started by the real start commit and launched by the real launch,
  * so every attempt here is one the product admits. What only a database can
@@ -252,7 +269,8 @@ async function age(attemptId: string, minute: number): Promise<void> {
 }
 
 async function offered(limit = 100): Promise<string[]> {
-  return (await submission.findSubmissionCandidates({ limit })).map((candidate) => candidate.generation.id);
+  const candidates = await submission.findSubmissionCandidates({ limit, after: null });
+  return candidates.map((candidate) => candidate.generation.id);
 }
 
 function refusedContext() {
@@ -423,7 +441,7 @@ describe.skipIf(!HAS_DB)("discovery", () => {
     await age(a.attempts[0]!, 3);
     await age(a.attempts[1]!, 3);
 
-    const candidates = await submission.findSubmissionCandidates({ limit: 10 });
+    const candidates = await submission.findSubmissionCandidates({ limit: 10, after: null });
     expect(candidates.map((candidate) => [candidate.organizationId, candidate.generation.id])).toEqual([
       [ORG_B, b.attempts[1]],
       [ORG_B, b.attempts[0]],
@@ -434,11 +452,42 @@ describe.skipIf(!HAS_DB)("discovery", () => {
     expect(candidates.map((candidate) => candidate.generation.state)).toEqual(["QUEUED", "QUEUED", "QUEUED", "QUEUED"]);
   });
 
+  it("names each attempt's job, and starts a window after the cursor in the same order", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    await age(b.attempts[1]!, 1);
+    await age(b.attempts[0]!, 2);
+    await age(a.attempts[0]!, 3);
+    await age(a.attempts[1]!, 3);
+    const all = await submission.findSubmissionCandidates({ limit: 10, after: null });
+    expect(all.map((candidate) => candidate.generationJobId)).toEqual([b.job, b.job, a.job, a.job]);
+
+    const after = async (cursor: AttemptSubmissionCursor) =>
+      (await submission.findSubmissionCandidates({ limit: 10, after: cursor })).map((c) => c.generation.id);
+    // After each attempt in turn, exactly the ones after it: ties by id.
+    for (const [i, candidate] of all.entries()) {
+      const cursor = { createdAt: candidate.generation.createdAt, id: candidate.generation.id };
+      expect(await after(cursor)).toEqual(all.slice(i + 1).map((c) => c.generation.id));
+    }
+    // A cursor need not name an attempt: its instant and id place it.
+    expect(await after({ createdAt: new Date(Date.UTC(2026, 10, 10, 1, 3)), id: "sgen_" })).toEqual(
+      [...a.attempts].sort(),
+    );
+    for (const cursor of [
+      { createdAt: new Date(Number.NaN), id: "sgen_1" },
+      { createdAt: new Date(), id: "" },
+    ]) {
+      await expect(submission.findSubmissionCandidates({ limit: 10, after: cursor })).rejects.toThrow(
+        expect.objectContaining({ code: "VALIDATION_FAILED" }),
+      );
+    }
+  });
+
   it("hands preparation a candidate it can prepare, and writes nothing", async () => {
     const a = await launchJob(ORG_A, 1);
     const before = await written();
 
-    const [candidate] = await submission.findSubmissionCandidates({ limit: 1 });
+    const [candidate] = await submission.findSubmissionCandidates({ limit: 1, after: null });
     const prepared = await prepareQueuedGeneration(preflight, candidate!);
     expect(prepared).toMatchObject({
       generationId: candidate!.generation.id,
@@ -457,7 +506,7 @@ describe.skipIf(!HAS_DB)("discovery", () => {
     for (const [i, id] of [...a.attempts, ...b.attempts].entries()) await age(id, i);
     expect(await offered(3)).toEqual([...a.attempts, b.attempts[0]]);
     for (const limit of [0, 101, 1.5]) {
-      await expect(submission.findSubmissionCandidates({ limit })).rejects.toThrow(
+      await expect(submission.findSubmissionCandidates({ limit, after: null })).rejects.toThrow(
         expect.objectContaining({ code: "VALIDATION_FAILED" }),
       );
     }
@@ -578,7 +627,7 @@ describe.skipIf(!HAS_DB)("the ending of a refused preparation", () => {
 
     // The sender's first step, written out: prepare, and end what is refused
     // for good.
-    const [candidate] = await submission.findSubmissionCandidates({ limit: 1 });
+    const [candidate] = await submission.findSubmissionCandidates({ limit: 1, after: null });
     const refusal = await prepareQueuedGeneration(preflight, candidate!).then(
       () => null,
       (error: unknown) => error,
@@ -753,5 +802,262 @@ describe.skipIf(!HAS_DB)("concurrency and lock order", () => {
     expect(await ending.value).toEqual({ kind: "NOT_QUEUED" });
     const after = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: row.id } });
     expect([after.orchestrationState, after.normalizedErrorCode]).toEqual(["SUBMITTING", null]);
+  });
+});
+
+/** The test provider, counting each request it is sent. */
+function counting(outcome: FakeSubmissionOutcomeKind = "ACCEPTED") {
+  const fake = new FakeVideoProvider({ submissionOutcome: outcome });
+  const requests: string[] = [];
+  const provider: VideoGenerationSubmissionProvider = {
+    name: "fake",
+    async createGeneration(input) {
+      requests.push(input.requestHash);
+      return fake.createGeneration(input);
+    },
+    normalizeError: (error) => fake.normalizeError(error),
+  };
+  return { provider, requests };
+}
+
+const RECONCILIATION = (() => {
+  const result = validateReconciliationPolicy({
+    reconciliationWindowMs: 24 * 60 * 60 * 1000,
+    staleSubmittingAfterMs: 15 * 60 * 1000,
+  });
+  if (!result.ok) throw new Error(`policy: ${result.reason}`);
+  return result.policy;
+})();
+
+/** The sender over the real gate and outcome service, on the test provider's route. */
+interface SenderOptions {
+  readonly revenue?: Yen | null;
+  readonly source?: ExecutionPreflightDeps["storage"];
+}
+
+function sender(
+  provider: VideoGenerationSubmissionProvider,
+  { revenue = yen(49_800), source = storage }: SenderOptions = {},
+): AttemptSubmissionRunner {
+  return new AttemptSubmissionRunner({
+    repository: submission,
+    preflight: { assets, storage: source, models: kit.models },
+    gate: createPaidSubmissionAuthorizationService({
+      authorization: createPaidSubmissionAuthorizationRepository(prisma, {
+        pricing: kit.pricing,
+        revenue: { revenueYen: async () => revenue },
+      }),
+      clock: createFixedAuthorizationClock(LAUNCHED_AT),
+      routePolicy: kit.routePolicy,
+    }),
+    sender: createPreparedGenerationSender(provider),
+    outcomes: createSubmissionOutcomeService({
+      outcomes: createSubmissionOutcomeRepository(prisma),
+      clock: createSystemSubmissionClock(),
+      policy: RECONCILIATION,
+    }),
+    clock: createSystemSubmissionClock(),
+    context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_send_${++seq}` }),
+  });
+}
+
+async function attemptRow(id: string) {
+  return prisma.sceneGeneration.findUniqueOrThrow({
+    where: { id },
+    select: {
+      orchestrationState: true,
+      submissionCertainty: true,
+      normalizedErrorCode: true,
+      providerPredictionId: true,
+    },
+  });
+}
+
+/** The paid call's audit entries for one attempt, written by the gate's arm. */
+function armAudits(attemptId: string): Promise<number> {
+  return prisma.auditLog.count({ where: { resourceId: attemptId, action: "generation.submission_started" } });
+}
+
+describe.skipIf(!HAS_DB)("the sender (GS-7c-2b)", () => {
+  it("sends each launched attempt once through the gate, audited, and records the acceptance", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    const { provider, requests } = counting();
+
+    const report = await sender(provider).runOnce(10);
+    expect(report).toMatchObject({ sent: 4, ended: 0, failed: 0, next: null });
+    expect(report.outcomes.map((o) => o.outcome)).toEqual(
+      Array(4).fill({ kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false }),
+    );
+    expect(new Set(requests).size).toBe(4);
+    for (const id of [...a.attempts, ...b.attempts]) {
+      expect(await attemptRow(id)).toMatchObject({ orchestrationState: "PROCESSING", submissionCertainty: "ACCEPTED" });
+      expect((await attemptRow(id)).providerPredictionId).not.toBeNull();
+      // The arm's audit entry and its two events, under the pass's one correlation.
+      expect(await armAudits(id)).toBe(1);
+      const events = await prisma.generationTransitionEvent.findMany({
+        where: { aggregateId: id, toState: { in: ["SUBMITTING", "PROCESSING"] } },
+        orderBy: { sequence: "asc" },
+      });
+      expect(events.map((e) => [e.eventType, e.toState])).toEqual([
+        ["PAID_SUBMISSION_AUTHORIZED", "SUBMITTING"],
+        ["SUBMISSION_OUTCOME_RECORDED", "PROCESSING"],
+      ]);
+      expect(new Set(events.map((e) => e.correlationId)).size).toBe(1);
+    }
+
+    // Nothing is offered or sent again.
+    expect((await sender(provider).runOnce(10)).outcomes).toEqual([]);
+    expect(requests).toHaveLength(4);
+  });
+
+  it("ends an attempt whose photo is asked to be deleted, sends no more of its job, and frees its Unit", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    for (const [minute, id] of [...a.attempts, ...b.attempts].entries()) await age(id, minute);
+    await prisma.mediaAsset.update({
+      where: { id: TENANT[ORG_A]![0]!.asset },
+      data: { deletionRequestedAt: new Date("2026-11-10T01:30:00.000Z") },
+    });
+    const { provider, requests } = counting();
+
+    const report = await sender(provider).runOnce(10);
+    expect(report.outcomes.map((o) => [o.attemptId, o.outcome.kind])).toEqual([
+      [a.attempts[0], "ENDED"],
+      [a.attempts[1], "NOT_SENT"],
+      [b.attempts[0], "SENT"],
+      [b.attempts[1], "SENT"],
+    ]);
+    expect(report.outcomes[1]!.outcome).toEqual({ kind: "NOT_SENT", reason: "JOB_ENDING" });
+    expect(requests).toHaveLength(2);
+    expect(await attemptRow(a.attempts[0]!)).toMatchObject({
+      orchestrationState: "CANCELLED_PRE_SUBMISSION",
+      normalizedErrorCode: "ASSET_UNRECOVERABLE",
+    });
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("QUEUED");
+
+    let n = 0;
+    const settledReport = await new AttemptFailureSettlementRunner({
+      repository: createAttemptFailureSettlementRepository(prisma),
+      clock: () => SETTLED_AT,
+      context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_k_${++n}` }),
+    }).runOnce(10);
+    expect([settledReport.settled, settledReport.unitsReleased]).toEqual([1, 1]);
+    const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: a.job }, include: { reservation: true } });
+    expect([job.state, job.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    const closed = await new FailedJobSceneClosureRunner({
+      repository: createFailedJobSceneClosureRepository(prisma),
+      clock: () => SETTLED_AT,
+      context: () => ctx({ actorType: "WORKER", correlationId: `corr_submit_l_${++n}` }),
+    }).runOnce(10);
+    expect(closed.attemptsCancelled).toBe(1);
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("CANCELLED_PRE_SUBMISSION");
+  });
+
+  it("writes and sends nothing when the gate refuses, and offers the attempts again", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const before = await written();
+    const { provider, requests } = counting();
+
+    const report = await sender(provider, { revenue: null }).runOnce(10);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual(
+      Array(2).fill({
+        kind: "NOT_AUTHORIZED",
+        refusal: "SAFETY_GUARD_HARD_PAUSE",
+        reason: "BILLING_CYCLE_REVENUE_UNAVAILABLE",
+      }),
+    );
+    expect(requests).toEqual([]);
+    expect(await written()).toEqual(before);
+    expect((await offered()).sort()).toEqual([...a.attempts].sort());
+  });
+
+  it("records a provider's refusal, and sends nothing more of its job", async () => {
+    const a = await launchJob(ORG_A, 1);
+    await age(a.attempts[0]!, 1);
+    await age(a.attempts[1]!, 2);
+    const { provider, requests } = counting("DEFINITIVELY_REJECTED");
+
+    const report = await sender(provider).runOnce(10);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "DEFINITIVELY_REJECTED", recorded: "APPLIED", safetyGuardWarning: false },
+      { kind: "NOT_SENT", reason: "JOB_ENDING" },
+    ]);
+    expect(requests).toHaveLength(1);
+    expect(await attemptRow(a.attempts[0]!)).toMatchObject({
+      orchestrationState: "FAILED_TERMINAL",
+      submissionCertainty: "DEFINITIVELY_REJECTED",
+    });
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("QUEUED");
+  });
+
+  it("records an unreadable answer as uncertain, whose hold on the Unit keeps the job's next attempt", async () => {
+    const a = await launchJob(ORG_A, 1);
+    await age(a.attempts[0]!, 1);
+    await age(a.attempts[1]!, 2);
+    const { provider, requests } = counting("SUBMISSION_UNKNOWN");
+
+    const report = await sender(provider).runOnce(10);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "SUBMISSION_UNKNOWN", recorded: "APPLIED", safetyGuardWarning: false },
+      // The gate refuses a reservation on hold, and writes nothing.
+      { kind: "NOT_AUTHORIZED", refusal: "RESERVATION_INVALID", reason: "RESERVATION_ON_RECONCILIATION_HOLD" },
+    ]);
+    expect(requests).toHaveLength(1);
+    expect(await attemptRow(a.attempts[0]!)).toMatchObject({
+      orchestrationState: "RECONCILIATION_PENDING",
+      submissionCertainty: "SUBMISSION_UNKNOWN",
+      normalizedErrorCode: "TIMEOUT",
+    });
+    expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("QUEUED");
+    const reservation = await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: a.job } });
+    expect(reservation.state).toBe("RECONCILIATION_HOLD");
+  });
+
+  it("sends each attempt once when two passes run at once", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    const { provider, requests } = counting();
+
+    const reports = await Promise.all([sender(provider).runOnce(10), sender(provider).runOnce(10)]);
+    expect(reports[0]!.sent + reports[1]!.sent).toBe(4);
+    expect(requests.sort()).toEqual([...new Set(requests)].sort());
+    expect(requests).toHaveLength(4);
+    for (const id of [...a.attempts, ...b.attempts]) {
+      expect((await attemptRow(id)).orchestrationState).toBe("PROCESSING");
+      expect(await armAudits(id)).toBe(1);
+    }
+  });
+
+  it("moves its window past attempts left waiting, so newer ones are reached", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const b = await launchJob(ORG_B, 1);
+    for (const [minute, id] of [...b.attempts, ...a.attempts].entries()) await age(id, minute);
+    // B's photo store does not answer, a refusal that may pass: B's attempts wait.
+    const flaky: ExecutionPreflightDeps["storage"] = {
+      async exists(key) {
+        if (key.startsWith(`org/${ORG_B}/`)) throw new Error("storage gone");
+        return true;
+      },
+      createSignedDownloadUrl: (key, ttl) => storage.createSignedDownloadUrl(key, ttl),
+    };
+    const { provider, requests } = counting();
+    const runner = sender(provider, { source: flaky });
+
+    const first = await runner.runOnce(2);
+    expect(first.outcomes.map((o) => [o.attemptId, o.outcome])).toEqual(
+      b.attempts.map((id) => [id, { kind: "NOT_PREPARED", reason: "STORAGE_UNAVAILABLE" }]),
+    );
+    expect(first.next?.id).toBe(b.attempts[1]);
+
+    // From the oldest again, the same window would be read; after it, A's.
+    const second = await runner.runOnce(2, first.next);
+    expect(second.outcomes.map((o) => [o.attemptId, o.outcome.kind])).toEqual(a.attempts.map((id) => [id, "SENT"]));
+    expect(requests).toHaveLength(2);
+    expect(second.next?.id).toBe(a.attempts[1]);
+
+    const third = await runner.runOnce(2, second.next);
+    expect([third.outcomes, third.next]).toEqual([[], null]);
+    expect((await runner.runOnce(2, third.next)).outcomes.map((o) => o.attemptId)).toEqual(b.attempts);
   });
 });

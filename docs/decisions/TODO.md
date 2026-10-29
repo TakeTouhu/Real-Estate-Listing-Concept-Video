@@ -651,7 +651,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       race is the one ADR-0030 accepted: a deletion requested after the
       gate's commit does not stop the send. Steps 1 and 6, the URL's
       freshness and the POST, are GS-7c-2b. GS-7c-2a (ADR-0097) finds the
-      attempts to send and ends one whose preparation is refused for good.*
+      attempts to send and ends one whose preparation is refused for good.
+      GS-7c-2b (ADR-0098) builds steps 1 and 6 for orchestrated attempts: the
+      sender requires 300 seconds left on the URL before the gate, and makes
+      one POST after it, through the only production caller of a provider's
+      create POST. Nothing outside tests constructs the sender; open until it
+      runs, since only then is a paid POST possible.*
 - [ ] **A preflight-failure audit event, if wanted, belongs to orchestration.**
       Phase 4C-2B deliberately emits none: there is no provider POST in it, and
       coupling audit I/O into the persistence CAS would put a second failure mode
@@ -668,6 +673,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       run end to end. It must cover preparation, the claim, the POST and the
       provider's own fetch. Confirm or change it against a real submission during
       the Phase 4C-3 paid-call review. **Required before real provider spending.**
+      *The sender's margin, `MIN_SOURCE_URL_REMAINING_MS` (300 seconds, half the
+      URL's life; ADR-0098 Decision 4), is provisional with it.*
 - [ ] **Capability re-validation at execution is identity-only.** Phase 4C-2A
       verifies the deployment still serves the admitted `providerName` and
       `providerModelId`, but cannot re-run `assertSettingsSupported`: that needs
@@ -694,7 +701,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       or missing from storage ends the attempt with that reason, and
       Transaction K releases the Unit. One deleted after
       preparation and refused by the gate, and a deleted Property's attempt,
-      which discovery passes over, are GS-7d.*
+      which discovery passes over, are GS-7d. The sender (GS-7c-2b, ADR-0098)
+      calls the ending.*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1406,10 +1414,11 @@ them is **built**. Each item below records the settled decision and what remains
       and the customer's Unit stays held (ADR-0083, *Not decided here*).
       Whether such an attempt ends, after how long, and as which state, is not
       decided. Must be settled before generation is activated.
-      *Once the sender prepares attempts (GS-7c-2b), the same will hold for an
-      attempt waiting `QUEUED` whose preparation is refused, on every pass,
-      for a reason that may pass (ADR-0097 Decision 2), such as a model not restored or storage that does
-      not answer: it is prepared again each time and holds its Unit.*
+      *Now that the sender prepares attempts (GS-7c-2b, ADR-0098), the same
+      holds for an attempt waiting `QUEUED` whose preparation is refused, on
+      every pass, for a reason that may pass (ADR-0097 Decision 2), such as a
+      model not restored or storage that does not answer: it is prepared again
+      each time and holds its Unit.*
 - [x] **Stop the legacy executor's discovery from offering orchestrated
       attempts (GS-7).** `findNextQueuedForPreparation` and its claim read the
       legacy `state` column, which no orchestration writer moves: every
@@ -1582,6 +1591,11 @@ them is **built**. Each item below records the settled decision and what remains
       one organization's incident would stop every other's. The pass must
       move past them, as the launch must past jobs that cannot launch
       (ADR-0095 Decision 7). Must be settled before generation is activated.
+      *GS-7c-2b (ADR-0098 Decision 6) builds the means:* discovery reads after
+      a `{ createdAt, id }` cursor and each pass returns `next`. Still open:
+      the pipeline command (GS-9) must pass each `next` to the following pass,
+      and must stop on a pass that sends and ends nothing rather than on an
+      empty window.
 - [ ] **Decide whether a refusal the deployment causes ends a customer's
       attempt.** `PROVIDER_IDENTITY_MISMATCH` and
       `MODEL_DELIVERY_PLAN_CHANGED` are `TERMINAL` (ADR-0027) but come from
@@ -1593,6 +1607,11 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 20). Whether such a refusal ends the attempt or leaves it for a
       correctly configured worker is not decided (ADR-0097 Decision 2). Must
       be settled before generation is activated.
+      *GS-7c-2b (ADR-0098):* the runner now calls the ending for both. An
+      attempt admitted for another provider is passed over before it is
+      prepared (`OTHER_PROVIDER`, nothing written), so a worker for another
+      provider never ends one; a misconfigured catalog, or an older catalog
+      during a rollout, still would.
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period
