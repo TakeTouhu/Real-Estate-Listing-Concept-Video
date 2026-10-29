@@ -150,8 +150,10 @@ const JOB_RESERVED_EDGES: readonly `${string}->${string}`[] = [
   // will ever settle. The media and attempt failure settlements (Transactions H
   // and K) own GENERATING's edge, the deliverable failure settlement owns
   // COMPOSING's and DELIVERABLE_VALIDATING's, the ending of a waiting job that
-  // can never launch (ADR-0099) owns RESERVED's edge to FAILED_TERMINAL, and the
-  // rest have no owner yet, so they cannot be taken at all.
+  // can never launch (ADR-0099) owns RESERVED's edge to FAILED_TERMINAL, the
+  // ending of a deleted Property's launched job (ADR-0102) owns GENERATING's,
+  // SCENES_READY's and COMPOSITION_PENDING's, and the rest have no owner yet, so
+  // they cannot be taken at all.
   "RESERVED->CANCELLED",
   "RESERVED->FAILED_TERMINAL",
   "GENERATING->FAILED_TERMINAL",

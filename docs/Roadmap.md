@@ -380,6 +380,17 @@ deleted since discovery at once. An attempt whose photo is gone was already
 ended by preparation (GS-7c-2a). Nothing outside tests constructs the sender or
 the repository.
 
+**GS-7d-3a — ending a deleted Property's launched job before its video is
+assembled** (ADR-0102, no migration): a launched job in `GENERATING`,
+`SCENES_READY` or `COMPOSITION_PENDING` whose Property was deleted, with no
+delivered video and its Unit `RESERVED`, fails and its Unit comes back in one
+commit behind the cost-admission lock, the Property held while it decides.
+Transaction L then closes its open scenes; one already at the provider still
+finishes there and is never delivered. The launch runner ends them after the
+waiting ones and before its launches, so the place each frees is taken in the
+same pass. A job being assembled or checked is GS-7d-3b's. Nothing outside
+tests constructs the runner or the repository.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

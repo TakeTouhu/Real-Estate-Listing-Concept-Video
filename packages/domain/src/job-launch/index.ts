@@ -10,6 +10,17 @@ export type { FrozenFactsCode, JobLaunchPlannerDeps } from "./planner";
 export { JOB_ENDED_UNLAUNCHABLE_EVENT_TYPE, decideUnlaunchableJobEnding } from "./ending";
 export type { UnlaunchableJobCause, UnlaunchableJobEnding, UnlaunchableJobEndingRefusal } from "./ending";
 export {
+  JOB_ENDED_PROPERTY_DELETED_EVENT_TYPE,
+  JOB_STATES_BEFORE_ASSEMBLY,
+  decideLaunchedJobEnding,
+} from "./launched-ending";
+export type {
+  JobStateBeforeAssembly,
+  LaunchedJobEnding,
+  LaunchedJobEndingRefusal,
+  LaunchedJobLockedRows,
+} from "./launched-ending";
+export {
   ATTEMPT_ADMITTED_AT_LAUNCH_EVENT_TYPE,
   JOB_LAUNCHED_EVENT_TYPE,
   JOB_LAUNCH_REASON_CODE,
@@ -28,6 +39,8 @@ export type {
   JobLaunchRefusal,
 } from "./launch";
 export type {
+  EndLaunchedJobInput,
+  EndLaunchedJobOutcome,
   EndUnlaunchableJobInput,
   EndUnlaunchableJobOutcome,
   JobLaunchAttemptIds,
@@ -42,6 +55,8 @@ export type {
   JobLaunchSceneFacts,
   LaunchJobInput,
   LaunchJobOutcome,
+  LaunchedJobEndingRepository,
+  PropertyDeletedLaunchedJob,
   PropertyDeletedWaitingJob,
   UnlaunchableJobEndingRepository,
 } from "./ports";

@@ -10,11 +10,13 @@
  * A job that can never launch is ended and its Units released (GS-7d-1,
  * ADR-0099): first, each waiting job of a deleted Property, which is never a
  * candidate; then a candidate whose own rows stop it, as its planner's code
- * for a frozen fact or the commit's refusal says. A job the planner refuses
- * for a catalog, a price or a rate is left waiting, its Units reserved, and
- * the code is reported. A launch or an ending that throws is that job's
- * `FAILED` outcome and the pass goes on, as in the other sweeps: one bad row
- * never stops the others.
+ * for a frozen fact or the commit's refusal says. A deleted Property's launched
+ * job not yet being assembled is ended too (GS-7d-3a, ADR-0102), before the
+ * launches, so the place it frees can be taken in the same pass. A job the
+ * planner refuses for a catalog, a price or a rate is left waiting, its Units
+ * reserved, and the code is reported. A launch or an ending that throws is that
+ * job's `FAILED` outcome and the pass goes on, as in the other sweeps: one bad
+ * row never stops the others.
  *
  * Nothing is sent to a provider here. The attempts it admits wait `QUEUED` for
  * the paid-submission gate (GS-7c).
@@ -29,14 +31,17 @@
 import type { TransitionContext } from "../orchestration/ports";
 import { epochMillis } from "../pricing/units";
 import type { UnlaunchableJobCause, UnlaunchableJobEndingRefusal } from "./ending";
+import type { LaunchedJobEndingRefusal } from "./launched-ending";
 import { JobLaunchDefect, type JobLaunchDefectCode, validateJobLaunchBatchLimit } from "./launch";
 import { isFrozenFactsCode, type JobLaunchPlanner } from "./planner";
 import type {
+  EndUnlaunchableJobInput,
   JobLaunchAttemptIds,
   JobLaunchFacts,
   JobLaunchNoPlanCode,
   JobLaunchRepository,
   LaunchJobOutcome,
+  LaunchedJobEndingRepository,
   UnlaunchableJobEndingRepository,
 } from "./ports";
 
@@ -44,10 +49,10 @@ export type JobLaunchRunOutcome =
   | LaunchJobOutcome
   /** The planner found no plan for a reason that can pass; nothing was committed and the job waits. */
   | { readonly kind: "NOT_PLANNED"; readonly code: JobLaunchNoPlanCode }
-  /** The job could never launch: it failed and its Units were released. */
+  /** The job could never launch, or its Property was deleted: it failed and its Units were released. */
   | { readonly kind: "ENDED"; readonly cause: UnlaunchableJobCause }
-  /** It looked as if it could never launch, but the ending refused under its locks and wrote nothing. */
-  | { readonly kind: "NOT_ENDED"; readonly reason: UnlaunchableJobEndingRefusal }
+  /** It looked as if it should end, but the ending refused under its locks and wrote nothing. */
+  | { readonly kind: "NOT_ENDED"; readonly reason: UnlaunchableJobEndingRefusal | LaunchedJobEndingRefusal }
   /**
    * The plan or the commit threw and wrote nothing. The code is kept when it
    * was this module's defect, and nothing else about the error is.
@@ -74,6 +79,8 @@ export interface JobLaunchRunnerDeps {
   readonly repository: JobLaunchRepository;
   /** The ending of a job that can never launch (ADR-0099). */
   readonly ending: UnlaunchableJobEndingRepository;
+  /** The ending of a deleted Property's launched job not yet being assembled (ADR-0102). */
+  readonly launchedEnding: LaunchedJobEndingRepository;
   /** The launch planner (ADR-0094), with the route policy the paid-submission gate uses. */
   readonly planner: Pick<JobLaunchPlanner, "plan">;
   readonly ids: JobLaunchIds;
@@ -86,6 +93,7 @@ export interface JobLaunchRunnerDeps {
 export class JobLaunchRunner {
   readonly #repository: JobLaunchRepository;
   readonly #ending: UnlaunchableJobEndingRepository;
+  readonly #launchedEnding: LaunchedJobEndingRepository;
   readonly #planner: Pick<JobLaunchPlanner, "plan">;
   readonly #ids: JobLaunchIds;
   readonly #context: () => TransitionContext;
@@ -94,6 +102,7 @@ export class JobLaunchRunner {
   constructor(deps: JobLaunchRunnerDeps) {
     this.#repository = deps.repository;
     this.#ending = deps.ending;
+    this.#launchedEnding = deps.launchedEnding;
     this.#planner = deps.planner;
     this.#ids = deps.ids;
     this.#context = deps.context;
@@ -102,7 +111,8 @@ export class JobLaunchRunner {
 
   /**
    * One bounded pass: up to `limit` waiting jobs of deleted Properties are
-   * ended, then each organization is offered at most one launch.
+   * ended, then up to `limit` of their launched jobs not yet being assembled,
+   * then each organization is offered at most one launch.
    */
   async runOnce(limit: number): Promise<JobLaunchReport> {
     const bounded = validateJobLaunchBatchLimit(limit);
@@ -124,6 +134,13 @@ export class JobLaunchRunner {
     const deleted = await this.#ending.findPropertyDeletedWaitingJobs({ limit: bounded });
     for (const job of deleted) {
       await settle(job.organizationId, job.generationJobId, () => this.#end(job.organizationId, job.generationJobId));
+    }
+
+    const launched = await this.#launchedEnding.findPropertyDeletedLaunchedJobs({ limit: bounded });
+    for (const job of launched) {
+      await settle(job.organizationId, job.generationJobId, () =>
+        this.#launchedEnding.endPropertyDeletedLaunchedJob(this.#endInput(job.organizationId, job.generationJobId)),
+      );
     }
 
     const candidates = await this.#repository.findJobLaunchCandidates({ limit: bounded });
@@ -179,11 +196,10 @@ export class JobLaunchRunner {
   }
 
   async #end(organizationId: string, generationJobId: string): Promise<JobLaunchRunOutcome> {
-    return this.#ending.endUnlaunchableJob({
-      organizationId,
-      generationJobId,
-      endedAt: epochMillis(this.#clock()),
-      context: this.#context(),
-    });
+    return this.#ending.endUnlaunchableJob(this.#endInput(organizationId, generationJobId));
+  }
+
+  #endInput(organizationId: string, generationJobId: string): EndUnlaunchableJobInput {
+    return { organizationId, generationJobId, endedAt: epochMillis(this.#clock()), context: this.#context() };
   }
 }

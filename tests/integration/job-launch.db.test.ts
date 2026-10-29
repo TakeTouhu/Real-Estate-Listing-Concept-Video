@@ -1,9 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  createDeliverableCompositionExecutionRepository,
   createFailedJobSceneClosureRepository,
   createGenerationStartRepository,
   createJobLaunchRepository,
+  createLaunchedJobEndingRepository,
   createPrismaStoryboardRepositories,
   createSceneGenerationAttemptRepository,
   createUnitEntitlementRepository,
@@ -41,7 +43,9 @@ import { ctx } from "./orchestration-fixture";
  * job goes first, past a deleted Property's; and that a deletion in flight is
  * waited for and then refused. And that a job that can never launch fails and
  * its Units come back in one commit, behind the cost-admission lock, while one
- * that may yet launch, or may have reached the provider, is left as it is.
+ * that may yet launch, or may have reached the provider, is left as it is; and
+ * that a deleted Property's launched job not yet being assembled ends the same
+ * way (GS-7d-3a, ADR-0102), freeing its place for the next.
  *
  * Organization A is on Standard (one place), B on Premium (three), and C has
  * no subscription. Every video is 720p, so Normal.
@@ -90,6 +94,7 @@ const starts = createGenerationStartRepository(prisma);
 const storyboards = createPrismaStoryboardRepositories(prisma);
 const launches = createJobLaunchRepository(prisma);
 const endings = createUnlaunchableJobEndingRepository(prisma);
+const launchedEnding = createLaunchedJobEndingRepository(prisma);
 const closures = createFailedJobSceneClosureRepository(prisma);
 const entitlements = createUnitEntitlementRepository(prisma);
 const attempts = createSceneGenerationAttemptRepository(prisma);
@@ -109,6 +114,7 @@ function runner(using: Pick<JobLaunchPlanner, "plan"> = planner): JobLaunchRunne
   return new JobLaunchRunner({
     repository: launches,
     ending: endings,
+    launchedEnding,
     planner: using,
     ids: { nextAttemptId: () => `sgen_launch_${++seq}`, nextPricingSnapshotId: () => `gps_launch_${++seq}` },
     context: () => ctx({ actorType: "WORKER", correlationId: `corr_launch_${++seq}` }),
@@ -343,6 +349,8 @@ async function cleanup(): Promise<void> {
   await prisma.generationScene.deleteMany({ where: { generationJobId: { in: jobIds } } });
   await prisma.generationReservationAllocation.deleteMany({ where: { organizationId: { in: ORGS } } });
   await prisma.generationReservation.deleteMany({ where: { generationJobId: { in: jobIds } } });
+  await prisma.generationJob.updateMany({ where: { id: { in: jobIds } }, data: { currentDeliverableVersionId: null } });
+  await prisma.generationDeliverableVersion.deleteMany({ where: { generationJobId: { in: jobIds } } });
   await prisma.generationJob.deleteMany({ where: { id: { in: jobIds } } });
   await prisma.unitAddOnBlock.deleteMany({ where: { organizationId: { in: ORGS } } });
   await prisma.unitEntitlementPeriod.deleteMany({ where: { organizationId: { in: ORGS } } });
@@ -1082,6 +1090,337 @@ describe.skipIf(!HAS_DB)("a job that can never launch", () => {
     expect((await prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId: job } })).state).toBe(
       "RESERVED",
     );
+  });
+});
+
+describe.skipIf(!HAS_DB)("a deleted Property's launched job (ADR-0102)", () => {
+  const PERIOD = `uep_itest_launch_${ORG_A}`;
+  const STANDING = TENANT[ORG_A]![0]!;
+  const endInput = (organizationId: string, generationJobId: string) => ({
+    organizationId,
+    generationJobId,
+    endedAt: ENDED_AT,
+    context: ctx({ actorType: "WORKER", correlationId: "corr_launched_end" }),
+  });
+  /** One job of `which`, launched: `GENERATING`, each scene's first attempt waiting to be sent. */
+  const launchedJob = async (organizationId: string, minute: number, which: Tenant | number = minute) => {
+    const job = await startJob(organizationId, minute, which);
+    const launched = await runner().runOnce(10);
+    expect(launched.outcomes.find((entry) => entry.generationJobId === job)?.outcome.kind).toBe("LAUNCHED");
+    return job;
+  };
+  const deleteProperty = (tenant: Tenant) =>
+    prisma.property.update({ where: { id: tenant.property }, data: { status: "DELETED" } });
+  const reservationOf = (generationJobId: string) =>
+    prisma.generationReservation.findUniqueOrThrow({ where: { generationJobId } });
+
+  it("fails a generating job and returns its Unit in one commit; the next job takes its place", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    const heldVersion = (await reservationOf(job)).stateVersion;
+    const heldOne = await entitlements.balance(ORG_A, PERIOD);
+    const next = await startJob(ORG_A, 2);
+    // Standard has one place, which the launched job holds: the next is not even offered.
+    expect((await runner().runOnce(10)).outcomes).toEqual([]);
+    await deleteProperty(SECOND);
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([
+      { organizationId: ORG_A, generationJobId: job },
+    ]);
+
+    const report = await runner().runOnce(10);
+    expect(report.outcomes.map((entry) => [entry.generationJobId, entry.outcome])).toEqual([
+      [job, { kind: "ENDED", cause: "PROPERTY_DELETED" }],
+      [next, expect.objectContaining({ kind: "LAUNCHED" })],
+    ]);
+    expect([report.ended, report.launched, report.failed]).toEqual([1, 1, 0]);
+
+    const reservation = await reservationOf(job);
+    expect([
+      await jobState(job),
+      reservation.state,
+      reservation.releasedAt?.getTime(),
+      reservation.stateVersion,
+    ]).toEqual(["FAILED_TERMINAL", "RELEASED", ENDED_AT, heldVersion + 1]);
+    // Each video holds one Unit: the ended one's came back, the next one's is held.
+    expect(await entitlements.balance(ORG_A, PERIOD)).toEqual(heldOne);
+    const events = await prisma.generationTransitionEvent.findMany({
+      where: { aggregateId: { in: [job, reservation.id] }, toState: { in: ["FAILED_TERMINAL", "RELEASED"] } },
+      orderBy: { aggregateType: "asc" },
+    });
+    expect(
+      events.map((e) => [e.organizationId, e.aggregateType, e.fromState, e.eventType, e.reasonCode, e.actorType]),
+    ).toEqual([
+      [ORG_A, "JOB", "GENERATING", "job.ended_property_deleted", "PROPERTY_DELETED", "WORKER"],
+      [ORG_A, "RESERVATION", "RESERVED", "reservation.released", "PROPERTY_DELETED", "WORKER"],
+    ]);
+    expect(events.map((e) => e.correlationId)).toEqual([events[0]!.correlationId, events[0]!.correlationId]);
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+
+    // The scenes are left to Transaction L, which fails them and cancels the
+    // attempts still waiting to be sent.
+    const candidates = await closures.findFailedJobSceneCandidates({ limit: 10 });
+    expect(candidates).toHaveLength(2);
+    for (const candidate of candidates) {
+      await closures.closeFailedJobScene({ ...candidate, closedAt: ENDED_AT, context: ctx({ actorType: "WORKER" }) });
+    }
+    const closed = await prisma.generationScene.findMany({
+      where: { generationJobId: job },
+      include: { requests: { include: { attempts: true } } },
+    });
+    expect(
+      closed.flatMap((scene) => [
+        scene.state,
+        ...scene.requests.flatMap((r) => [r.state, ...r.attempts.map((a) => a.orchestrationState)]),
+      ]),
+    ).toEqual(Array(2).fill(["FAILED_TERMINAL", "FAILED_TERMINAL", "CANCELLED_PRE_SUBMISSION"]).flat());
+  });
+
+  it.each(["SCENES_READY", "COMPOSITION_PENDING"] as const)("ends a job %s, from that state", async (state) => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    // As scene delivery or composition admission would leave it; nothing here reads the scenes.
+    await prisma.generationJob.update({ where: { id: job }, data: { state } });
+    await deleteProperty(SECOND);
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([
+      { organizationId: ORG_A, generationJobId: job },
+    ]);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+      kind: "ENDED",
+      cause: "PROPERTY_DELETED",
+    });
+    expect([await jobState(job), (await reservationOf(job)).state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    const event = await prisma.generationTransitionEvent.findFirstOrThrow({
+      where: { aggregateId: job, toState: "FAILED_TERMINAL" },
+    });
+    expect([event.fromState, event.eventType]).toEqual([state, "job.ended_property_deleted"]);
+  });
+
+  it("leaves a COMPOSITION_PENDING job's planned video to nothing that composes it", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    const { disclosureMode } = await prisma.generationJob.findUniqueOrThrow({ where: { id: job } });
+    // As composition admission (Transaction I) leaves it: the job waiting, its version planned.
+    await prisma.generationJob.update({ where: { id: job }, data: { state: "COMPOSITION_PENDING" } });
+    await prisma.generationDeliverableVersion.create({
+      data: {
+        id: "gdv_itest_launched_planned",
+        generationJobId: job,
+        ordinal: 1,
+        disclosureMode,
+        inputFingerprint: "sha256:deliverable-input:v2:fixture",
+      },
+    });
+    const compositions = createDeliverableCompositionExecutionRepository(prisma);
+    const offered = async () =>
+      (await compositions.findCompositionCandidates({ limit: 10, now: ENDED_AT })).map((c) => c.deliverableVersionId);
+    expect(await offered()).toEqual(["gdv_itest_launched_planned"]);
+
+    await deleteProperty(SECOND);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+      kind: "ENDED",
+      cause: "PROPERTY_DELETED",
+    });
+    expect(await offered()).toEqual([]);
+    expect(
+      await compositions.claimCompositionWork({
+        organizationId: ORG_A,
+        deliverableVersionId: "gdv_itest_launched_planned",
+        now: ENDED_AT,
+        leaseToken: "lease_itest_launched",
+        leaseExpiresAt: ENDED_AT + 60_000,
+        context: ctx({ actorType: "WORKER" }),
+      }),
+    ).toEqual({ kind: "NOT_CLAIMABLE" });
+  });
+
+  it.each(["COMPOSING", "DELIVERABLE_VALIDATING", "FAILED_TERMINAL"] as const)(
+    "neither offers nor ends a job %s",
+    async (state) => {
+      const job = await launchedJob(ORG_A, 1, SECOND);
+      await prisma.generationJob.update({ where: { id: job }, data: { state } });
+      await deleteProperty(SECOND);
+      const before = await written();
+      expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+      expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+        kind: "NOT_ENDED",
+        reason: "NOT_BEFORE_ASSEMBLY",
+      });
+      expect(await written()).toEqual(before);
+    },
+  );
+
+  it("leaves a waiting job to the waiting job's ending", async () => {
+    const job = await startJob(ORG_A, 1, SECOND);
+    await deleteProperty(SECOND);
+    const before = await written();
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "NOT_BEFORE_ASSEMBLY",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("neither offers nor ends a job holding a delivered video, nor one whose hold is not RESERVED", async () => {
+    const delivered = await launchedJob(ORG_A, 1, SECOND);
+    const held = await launchedJob(ORG_B, 2);
+    const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: delivered } });
+    await prisma.generationDeliverableVersion.create({
+      data: {
+        id: "gdv_itest_launched_delivered",
+        generationJobId: delivered,
+        ordinal: 1,
+        disclosureMode: job.disclosureMode,
+        inputFingerprint: "sha256:deliverable-input:v2:fixture",
+      },
+    });
+    // A regeneration's job names its delivered video; its hold is left RESERVED
+    // here so that the pointer alone is what keeps it.
+    await prisma.generationJob.update({
+      where: { id: delivered },
+      data: { currentDeliverableVersionId: "gdv_itest_launched_delivered" },
+    });
+    await prisma.generationReservation.update({
+      where: { generationJobId: held },
+      data: { state: "RECONCILIATION_HOLD" },
+    });
+    await deleteProperty(SECOND);
+    await deleteProperty(TENANT[ORG_B]![0]!);
+    const before = await written();
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, delivered))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "HOLDS_DELIVERABLE",
+    });
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_B, held))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "RESERVATION_NOT_HELD",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("writes nothing for a job whose Property stands, or for another tenant's", async () => {
+    const job = await launchedJob(ORG_A, 1);
+    const before = await written();
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "PROPERTY_STANDS",
+    });
+    await deleteProperty(STANDING);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_B, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "NOT_BEFORE_ASSEMBLY",
+    });
+    await prisma.property.update({ where: { id: STANDING.property }, data: { status: "ACTIVE" } });
+    expect(await written()).toEqual(before);
+  });
+
+  it("reads a Property only of the job's own organization", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    // No key ties a project's Property to the project's organization; the ending's reads do.
+    await prisma.property.update({
+      where: { id: SECOND.property },
+      data: { organizationId: ORG_B, status: "DELETED" },
+    });
+    const before = await written();
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([]);
+    expect(await launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job))).toEqual({
+      kind: "NOT_ENDED",
+      reason: "PROPERTY_STANDS",
+    });
+    expect(await written()).toEqual(before);
+  });
+
+  it("takes no lock of the job's rows, nor its cycle's, for another tenant's id", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    await deleteProperty(SECOND);
+    const rows = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "generation_jobs" WHERE "id" = ${job} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "generation_reservations" WHERE "generationJobId" = ${job} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "properties" WHERE "id" = ${SECOND.property} FOR UPDATE`;
+      // The other tenant's key for this job's cycle: what a cycle read across tenants would take.
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtext(${`paid-submission:${ORG_B}`}),
+          hashtext('cycle:2026-11')
+        )::text AS locked`;
+    });
+    try {
+      const ending = settled(launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_B, job)));
+      expect(await waitForBlocked(1_000)).toBe(false);
+      expect(await ending.value).toEqual({ kind: "NOT_ENDED", reason: "NOT_BEFORE_ASSEMBLY" });
+    } finally {
+      await rows.release();
+    }
+    expect([await jobState(job), (await reservationOf(job)).state]).toEqual(["GENERATING", "RESERVED"]);
+  });
+
+  it("offers deleted Properties' launched jobs oldest first, as many as the limit", async () => {
+    const newer = await launchedJob(ORG_A, 3, SECOND);
+    const older = await launchedJob(ORG_B, 1);
+    const middle = await launchedJob(ORG_B, 2);
+    await deleteProperty(SECOND);
+    await deleteProperty(TENANT[ORG_B]![0]!);
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 10 })).toEqual([
+      { organizationId: ORG_B, generationJobId: older },
+      { organizationId: ORG_B, generationJobId: middle },
+      { organizationId: ORG_A, generationJobId: newer },
+    ]);
+    expect(await launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 1 })).toEqual([
+      { organizationId: ORG_B, generationJobId: older },
+    ]);
+    await expect(launchedEnding.findPropertyDeletedLaunchedJobs({ limit: 0 })).rejects.toThrow(/batch limit/);
+  });
+
+  it("waits for a deletion already saving, then ends the job", async () => {
+    const job = await launchedJob(ORG_A, 1);
+    const deletion = await holdOpen(async (tx) => {
+      await tx.property.update({ where: { id: STANDING.property }, data: { status: "DELETED" } });
+    });
+    const ending = settled(launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    await deletion.release();
+    expect(await ending.value).toEqual({ kind: "ENDED", cause: "PROPERTY_DELETED" });
+    expect(await jobState(job)).toBe("FAILED_TERMINAL");
+  });
+
+  it("waits for the cost-admission lock, taken before any row", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    await deleteProperty(SECOND);
+    // The lock's formula written out on purpose: if it changes, this stops blocking.
+    const lock = await holdOpen(async (tx) => {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtext(${`paid-submission:${ORG_A}`}),
+          hashtext('cycle:2026-11')
+        )::text AS locked`;
+    });
+    const ending = settled(launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    // No row of the job is locked while it waits.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "generation_reservations" WHERE "generationJobId" = ${job} FOR UPDATE NOWAIT`;
+      await tx.$queryRaw`SELECT "id" FROM "generation_jobs" WHERE "id" = ${job} FOR UPDATE NOWAIT`;
+    });
+    await lock.release();
+    expect(await ending.value).toEqual({ kind: "ENDED", cause: "PROPERTY_DELETED" });
+  });
+
+  it("reads the state a writer holding the job left, and ends nothing once it is being assembled", async () => {
+    const job = await launchedJob(ORG_A, 1, SECOND);
+    await prisma.generationJob.update({ where: { id: job }, data: { state: "COMPOSITION_PENDING" } });
+    await deleteProperty(SECOND);
+    // The composition claim locks the job first and moves it to COMPOSING.
+    const claim = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "generation_jobs" WHERE "id" = ${job} FOR UPDATE`;
+      await tx.generationJob.update({ where: { id: job }, data: { state: "COMPOSING" } });
+    });
+    const ending = settled(launchedEnding.endPropertyDeletedLaunchedJob(endInput(ORG_A, job)));
+    expect(await waitForBlocked()).toBe(true);
+    expect(ending.done()).toBe(false);
+    await claim.release();
+    expect(await ending.value).toEqual({ kind: "NOT_ENDED", reason: "NOT_BEFORE_ASSEMBLY" });
+    expect([await jobState(job), (await reservationOf(job)).state]).toEqual(["COMPOSING", "RESERVED"]);
   });
 });
 

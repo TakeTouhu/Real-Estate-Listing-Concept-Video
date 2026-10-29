@@ -4077,3 +4077,234 @@ scheduler and live Stripe charges remain BLOCKED.
 GS-7d-2 waits for the product owner's yes before merge. Then GS-7d-3, a
 deleted Property's video already at the provider or being assembled, to be
 proposed; GS-8, the Transaction I driver; and GS-9, the pipeline command.
+
+## GS-7d-3a — ending a deleted Property's launched job before its video is assembled
+
+Base: `9c8a8b8` (PR #125 merge commit on `main`).
+ADR: `docs/decisions/0102-ending-a-deleted-propertys-launched-job-before-assembly.md`
+
+The first of GS-7d-3's two pull requests (`/mnt/project-files/cto/gs-7d-3-proposal.md`,
+approved by the product owner on 2026-10-29 08:14Z). **No migration; no route,
+no page.** Nothing outside tests constructs the ending's repository or the
+launch runner, so nothing ends a job until the pipeline command (GS-9), with the
+test provider only.
+
+The product owner decided on 2026-10-29 ("すぐ戻す") that a deleted Property's
+unfinished videos end at once and their Units are released. GS-7d-1 ends a
+waiting one and GS-7d-2 a generating one's attempt still waiting to be sent.
+A launched job with no attempt left waiting was still assembled and delivered,
+its Unit consumed. This pull request ends one not yet being assembled:
+`GENERATING`, `SCENES_READY` or `COMPOSITION_PENDING`. One being assembled or
+checked is GS-7d-3b's.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `37d2a7f` | the ending, its finder, the runner's step, their tests, ADR-0102 and the documentation |
+| `afad90c` | the review's answers: ADR-0102's reconciliation hold and unknown outcome, the Property's own organization, Decision 4's notes, the TODO's progress notes, three tests added and three extended |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7d-3a does
+
+- **The job fails and its Unit comes back, in one commit.** A launched job not
+  yet being assembled, with no delivered video, a `RESERVED` hold and a
+  deleted Property, moves to `FAILED_TERMINAL` with a
+  `job.ended_property_deleted` event, and its reservation `RESERVED →
+  RELEASED` with `releasedAt` set to the ending's time and a
+  `reservation.released` event, both with `PROPERTY_DELETED` as their code.
+- **Behind the cost-admission lock.** The lock for the job's frozen cycle
+  first, then the reservation `FOR UPDATE`, the Property `FOR SHARE` and the
+  job `FOR UPDATE`, each tenant-scoped through the project. The decision
+  (`decideLaunchedJobEnding`) reads only those locked rows: a job in any other
+  state, a regeneration holding a delivered video, a hold not `RESERVED`
+  (reconciliation, consumed, released) and a standing Property write nothing.
+- **The scenes are left to Transaction L**, as after Transaction K: an attempt
+  still waiting is cancelled and its scene fails; an attempt at the provider
+  finishes there and is never delivered, its cost VTaVision's.
+- **The launch runner ends them before it launches.** Between the waiting
+  jobs' endings (GS-7d-1) and the launches, up to the pass's limit, oldest
+  first. The place an ended job held is taken by its organization's next
+  waiting job in the same pass.
+
+```mermaid
+sequenceDiagram
+    participant W as Launch runner
+    participant E as Launched job ending repository
+    participant DB as PostgreSQL
+    participant L as Transaction L
+    W->>E: findPropertyDeletedLaunchedJobs(limit)
+    E-->>W: deleted Properties' jobs GENERATING, SCENES_READY or COMPOSITION_PENDING, a RESERVED hold, oldest first
+    W->>E: endPropertyDeletedLaunchedJob(organization, job, endedAt, context)
+    E->>DB: cost-admission lock, reservation FOR UPDATE, Property FOR SHARE, job FOR UPDATE
+    E->>E: decideLaunchedJobEnding(the locked rows)
+    E->>DB: job to FAILED_TERMINAL, reservation RESERVED to RELEASED, their events
+    E-->>W: ENDED, or NOT_ENDED with the refusal
+    W->>DB: then the launches: the organization's next waiting job takes the freed place
+    L->>DB: later, the failed job's open scenes closed, their queued attempts cancelled
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `afad90c`, each exit status read |
+| `pnpm test` | 6,592 tests in 242 files passed, exit 0 |
+| `pnpm test:db` | 1,793 tests in 67 files passed, exit 0 |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `packages/domain/src/job-launch/launched-ending.test.ts` (21): each of the
+  three states ended from itself; the list frozen; every other state, and no
+  job, kept whatever else is true of it (extended after review); a delivered
+  video read before the hold; every hold but `RESERVED`, and none, kept; a
+  standing Property kept, and read last.
+- `packages/domain/src/job-launch/runner.test.ts` (4 new; every expected call
+  list changed): the launched jobs ended after the waiting ones and before the
+  launches, each under its own correlation and time, and counted; a refusal
+  reported; an ending that throws counted as failed and the pass going on; a
+  read of them that throws rejecting the pass before any launch, the waiting
+  job's ending already made (extended after review).
+- `packages/domain/src/job-launch/dormancy.test.ts` (2 new, 3 changed): the
+  repository not constructed outside tests; the lock order, the cost-admission
+  lock first with one read before it; one `UPDATE`, the locked transition from
+  the decided state, and no scene, request or attempt, audit, insert, delete
+  or launch lock.
+- `tests/integration/job-launch.db.test.ts` (16 new, 3 of them after review): a
+  generating job ended, its Unit back and its version bumped, the next job
+  launched in the same pass, the events, and L closing its scenes; `SCENES_READY` and `COMPOSITION_PENDING` ended;
+  `COMPOSING`, `DELIVERABLE_VALIDATING` and `FAILED_TERMINAL` kept; a waiting
+  job left to GS-7d-1; a delivered video and a reconciliation hold kept; a
+  standing Property and another tenant writing nothing; oldest first, bounded
+  and validated; a deletion saving waited for; the cost-admission lock waited
+  for with no row locked; a writer holding the job waited for and the state it
+  left read. After review: a `COMPOSITION_PENDING` job's planned video no
+  longer offered to or claimable by the composition claim (J1) once ended; a
+  Property of another organization read as standing; and another tenant's id
+  waiting on none of the job's rows nor on its cycle's lock.
+
+### Mutation testing
+
+The same harness as GS-7d-2: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| D01 to D11 | the decision: each of its four checks dropped; the Property read before the hold, or the hold before the delivered video; `COMPOSITION_PENDING` left out or `COMPOSING` added; always from `GENERATING`; the event type of the waiting job's ending; the list not frozen | 10 killed; D10 survived the unit suites and is C01 below |
+| R01 to R08 | the runner: the step skipped, unbounded, or after the launches; another job's ending; the outcome under the wrong ids; the clock not read; an ending's throw escaping the pass; a read that throws swallowed | killed |
+| S01 to S07 | the reservation, the Property or the job not locked; the Property locked `FOR UPDATE`, or before the reservation; a scene written; a read before the cost-admission lock (static) | killed |
+| Q01 to Q07 | the finder: any job state, a job holding a delivered video, any hold, any Property, newest first, the limit ignored or not validated | killed |
+| B01 to B20 | the ending: no cost-admission lock, or the wrong cycle's; the reservation, the Property or the job read across tenants; the Property or the job not locked; the release not a compare-and-set; its time not the ending's; the version not bumped; the wrong event type or reason code; the job moved or recorded from `GENERATING` always; either event not written; the delivered video, the Property or the hold not read; a lost release reported ended | 15 killed on the first run; B03, B04 and B10 killed after review; B08 and B20 equivalent |
+| C01 | the event type constant reused (D10), on the DB suite | killed |
+| D12, R09 | after review: the delivered video read before the job's state; the launched jobs read before the waiting ones end | killed |
+| K01, P01, P02 | after review: the cycle read across tenants; the ending, then the finder, not reading the Property's own organization | killed |
+
+Result: **56 of 58 killed, and 2 equivalent.** The first run, on `37d2a7f`,
+killed 25 of 26 in `packages/domain/src/job-launch` and 22 of 27 in
+`tests/integration/job-launch.db.test.ts`. The second, on `afad90c` with
+the tests the review asked for, killed all 9 it ran: the three DB survivors
+(B03 and B04 with the Property's own organization added, B10), D10 again as
+C01 on the DB suite, and five new ones. B08 and B20 are equivalent: the
+reservation is locked `FOR UPDATE` and read `RESERVED` in the same
+transaction, so the release's compare-and-set always matches its one row and
+the check of that count cannot fire. The tree's manifest matched before and
+after every run.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: no lock cycle with any writer of
+a launched job, no double release, no later consumption of a released Unit,
+the finder mirroring the decision, and nothing outside tests running it. All
+of it is answered in `afad90c`:
+
+- **Should fix: a released reconciliation hold was said to be left to
+  publication.** Reconciliation releases only on a terminal rejection or
+  exhaustion, and Transaction K then fails the job, accepting a released hold.
+  ADR-0102 and TODO.md now say so; the hold is kept because it is
+  reconciliation's to move.
+- **Should fix: the Unit is released while a submission's outcome may be
+  unknown.** Now stated in Decision 3: a later unknown outcome leaves a
+  released hold alone, and whatever the provider did is VTaVision's cost.
+- **Should fix: the race claims were tested against stand-ins.** Added: a
+  `COMPOSITION_PENDING` job's planned video, run through the real composition
+  discovery and claim; another tenant's id taking none of the job's locks; the
+  reservation's version; and every other state kept whatever else is true.
+  These kill the review's three surviving mutants. Not added: a race with K,
+  the gate or ADR-0100's ending, each ordered with this by the cost-admission
+  lock under the same key, which the lock-wait test shows; nor with F or I,
+  ordered by the job's and the reservation's row locks, which the static lock
+  order and the writer test show.
+- **Minor: the Property is now read by its own organization too**, as ADR-0100
+  reads it, in the ending and the finder (P01, P02).
+- **Minor: a read of launched jobs that throws** keeps the waiting jobs'
+  endings, each its own commit; Decision 4 says so and the runner test shows
+  it.
+- **Minor: the two endings report alike.** Their events tell them apart;
+  Decision 4 says so. The report's only reader will be the pipeline command
+  (GS-9).
+- **Question: a place freed while an attempt is at the provider.** A place
+  counts a customer's videos at once, not provider work, as after K; the
+  attempt's cost stays in the gate's exposure, which counts attempts by their
+  own state. Decision 4 says so.
+- **Question: no audit entry for the release.** As for ADR-0099, K and L; the
+  existing TODO item on audit entries for such releases now names this
+  ending.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the ending's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0102 Decision 2 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7d-3a.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7d-3a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (progress on ending a deleted Property's video already
+at the provider or being assembled, and the trash lifecycle).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the repository or the runner. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs a pass yet.** The pipeline command (GS-9) will, with the test
+  provider only, and must run Transaction L after the runner for the scenes to
+  close.
+- **A deleted Property's video being assembled or checked still delivers**
+  (`COMPOSING`, `DELIVERABLE_VALIDATING`), its Unit consumed, until GS-7d-3b.
+- **A job whose hold is on reconciliation is kept**: once restored to
+  `RESERVED` the next pass ends it; if released, it is GS-7d-3b's to stop at
+  publication.
+- **An attempt already at the provider still runs there** when the job fails;
+  its cost is VTaVision's (ADR-0083 Decision 1), and its copied output stays in
+  internal storage until the 30-day trash lifecycle (TODO).
+- **A regeneration of a deleted Property's delivered video** holds no Unit and
+  is not ended; whether it may run belongs to the open item on video projects
+  created before their Property's deletion.
+- **An ended video is not shown to the customer** until the progress page
+  (GS-10, GS-11).
+
+### Remaining work
+
+GS-7d-3a waits for the product owner's yes before merge. Then GS-7d-3b,
+Transaction G refusing to publish a deleted Property's initial video, failing
+the job and releasing its Unit; GS-8, the Transaction I driver; and GS-9, the
+pipeline command.
