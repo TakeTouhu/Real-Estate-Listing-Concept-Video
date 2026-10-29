@@ -332,6 +332,17 @@ neither deleted nor changed (`SOURCE_INVALID` otherwise), and writes the paid ca
 entry in the commit that moves it to `SUBMITTING`. Nothing outside tests
 constructs either, and nothing sends an attempt until GS-7c-2.
 
+**GS-7c-2a — finding an attempt to send, and ending one refused for good**
+(ADR-0097, no migration): discovery offers the orchestrated attempts waiting
+to be sent, oldest first, with the organization each belongs to, passing over
+any whose job has failed or whose Property is deleted. When preparation
+refuses one for a reason that can never pass, such as its photo deleted, the
+attempt ends before submission with that reason, in one commit behind the
+cost-admission lock, and the attempt failure settlement then releases the
+job's Unit. A reason that may pass leaves it waiting for the next pass.
+Nothing outside tests constructs either, and nothing sends an attempt until
+GS-7c-2b.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

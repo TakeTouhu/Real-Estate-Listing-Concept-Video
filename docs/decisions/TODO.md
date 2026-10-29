@@ -650,7 +650,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       writes the audit entry in one commit. What remains of the deletion
       race is the one ADR-0030 accepted: a deletion requested after the
       gate's commit does not stop the send. Steps 1 and 6, the URL's
-      freshness and the POST, are GS-7c-2.*
+      freshness and the POST, are GS-7c-2b. GS-7c-2a (ADR-0097) finds the
+      attempts to send and ends one whose preparation is refused for good.*
 - [ ] **A preflight-failure audit event, if wanted, belongs to orchestration.**
       Phase 4C-2B deliberately emits none: there is no provider POST in it, and
       coupling audit I/O into the persistence CAS would put a second failure mode
@@ -658,6 +659,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       invariant is unchanged — a durable `generation.submission_started` audit
       must succeed **before** the provider POST. Decide during Phase 4C-3 whether
       a parked refusal also warrants an audit entry.
+      *GS-7c-2a (ADR-0097 Decision 3) ends an orchestrated attempt's terminal
+      preparation refusal with a transition event and no audit entry, as
+      Transactions K and L release the Unit and cancel attempts with none.
+      Still open.*
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the
@@ -683,7 +688,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       a substituted image. **Required before Phase 4C ships.**
       *The paid-submission gate refuses such a source, and one whose
       Property is deleted, with a normalized reason (`SOURCE_INVALID`,
-      ADR-0096 Decision 2). Ending the attempt for it is GS-7c-2 and GS-7d.*
+      ADR-0096 Decision 2). Ending the attempt for it is GS-7c-2 and GS-7d.
+      Since GS-7c-2a (ADR-0097) a photo preparation finds gone, asked to be
+      deleted, unrecoverable or missing from storage ends the attempt with
+      that reason, and Transaction K releases the Unit. One deleted after
+      preparation and refused by the gate, and a deleted Property's attempt,
+      which discovery passes over, are GS-7d.*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1395,6 +1405,10 @@ them is **built**. Each item below records the settled decision and what remains
       and the customer's Unit stays held (ADR-0083, *Not decided here*).
       Whether such an attempt ends, after how long, and as which state, is not
       decided. Must be settled before generation is activated.
+      *Since GS-7c-2a (ADR-0097 Decision 2) the same holds for an attempt
+      waiting `QUEUED` whose preparation is refused, on every pass, for a
+      reason that may pass, such as a model not restored or storage that does
+      not answer: it is prepared again each time and holds its Unit.*
 - [x] **Stop the legacy executor's discovery from offering orchestrated
       attempts (GS-7).** `findNextQueuedForPreparation` and its claim read the
       legacy `state` column, which no orchestration writer moves: every
@@ -1459,7 +1473,11 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 19). A photo changed but still usable is prepared again and
       passes, so it is not such a case. Which refusals end the attempt, as
       which state, and under which lock, is not decided. *Planned for GS-7d;
-      GS-7c-2 parks preparation's terminal refusals.*
+      GS-7c-2a (ADR-0097) ends preparation's terminal refusals. Since then
+      discovery passes over a deleted Property's attempts, so they no longer
+      fill a pass ahead of attempts that can be sent, but they still hold
+      their Units, even once their photos are asked to be deleted, until
+      GS-7d.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a
@@ -1523,7 +1541,7 @@ them is **built**. Each item below records the settled decision and what remains
       process never moved, and the empty folders a deleted key leaves stay in
       the folder (ADR-0085, *Not decided here*). Deleting the folder starts
       over; nothing in production uses it.
-- [ ] **Move the execution preflight's failures onto the orchestration
+- [x] **Move the execution preflight's failures onto the orchestration
       state.** `failQueuedPreflight` (Phase 4C-2B, ADR-0027) records a refused
       attempt in the legacy `state` column and leaves its orchestration state
       `QUEUED`, so an orchestrated attempt that fails preflight has not ended
@@ -1534,7 +1552,23 @@ them is **built**. Each item below records the settled decision and what remains
       activated. *Since GS-7c-1 (ADR-0096 Decision 1) `failQueuedPreflight`
       leaves an orchestrated attempt alone: it writes nothing and answers
       `null`. Ending an orchestrated attempt's terminal preparation refusal in
-      its orchestration state is planned for GS-7c-2.*
+      its orchestration state is planned for GS-7c-2. Done in GS-7c-2a
+      (ADR-0097, no migration): a `TERMINAL` refusal, by the canonical
+      disposition, ends the attempt `QUEUED → CANCELLED_PRE_SUBMISSION` with
+      the reason as its code, behind the cost-admission lock, and K settles
+      it. `QUEUED → FAILED_*` is refused by the schema without a boundary
+      instant. A `RETRYABLE` refusal leaves the attempt `QUEUED` to be
+      prepared again, which the item on bounding how long an attempt may run
+      now covers.*
+- [ ] **Decide whether a photo changed while its URL is signed ends an
+      orchestrated attempt.** Preparation's `ASSET_SOURCE_CHANGED` is
+      `TERMINAL` in the canonical table (ADR-0027), so since GS-7c-2a such an
+      attempt ends and its Unit is released (ADR-0097 Decision 2). The gate's
+      `ASSET_SOURCE_CHANGED`, the same change found after preparation, leaves
+      the attempt `QUEUED` to be prepared again (ADR-0096). A `READY` photo
+      has no production route into re-processing (ADR-0029), so neither is
+      expected; if one appears, the two should agree. Changing the table also
+      changes the legacy park.
 - [ ] **Build Unit accounting per ADR-0053.** *Ledger foundation built in
       Phase 6A (ADR-0055):* non-carrying period-bound blocks, the
       eligibility-first order (see the two items below) and renewal-period

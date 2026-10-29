@@ -205,7 +205,7 @@ may run at once. Attempt admission takes the route, the rendered prompt and the
 price from its caller, and moves neither the scene nor the job.
 
 GS-7 is split into four pull requests (ADR-0094), the third of them in two
-(ADR-0096):
+(ADR-0096), and its second half in two again (ADR-0097):
 
 - **GS-7a** (ADR-0094, no migration): each plan's concurrent-job limit (1 / 3 /
   5), which job states hold a place under it, and the launch planner: one route
@@ -222,8 +222,11 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
     orchestrated attempts; the gate locks the attempt's photo and its
     Property and moves it only while the Property stands and the photo is
     the prepared source, and audits the paid call in the same commit.
-  - **GS-7c-2**: discovery and preparation of an orchestrated attempt, its
-    terminal preparation refusals ended in its orchestration state, the
-    signed URL's freshness, the gate, one POST through the provider port, and
-    the answer recorded.
+  - **GS-7c-2**, itself in two (ADR-0097):
+    - **GS-7c-2a** (ADR-0097, no migration): discovery of the orchestrated
+      attempts waiting to be sent, and a terminal preparation refusal ended
+      in the attempt's orchestration state, so the attempt failure settlement
+      releases its Unit.
+    - **GS-7c-2b**: preparation, the signed URL's freshness, the gate, one
+      POST through the provider port, and the answer recorded.
 - **GS-7d**: a job that can never launch released, with its Units.
