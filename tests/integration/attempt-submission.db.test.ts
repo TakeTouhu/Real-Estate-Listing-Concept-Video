@@ -26,6 +26,7 @@ import {
   type CompiledPrompt,
   type ExecutionPreflightDeps,
   type PreflightRefusalReason,
+  type SafeTransitionMetadata,
   type StoryboardScene,
 } from "@app/domain";
 import { createFakeRouteKit } from "@app/video-providers";
@@ -616,6 +617,25 @@ describe.skipIf(!HAS_DB)("the ending of a refused preparation", () => {
       );
     }
     expect(await written()).toEqual(before);
+  });
+
+  it("writes nothing when its event cannot be written", async () => {
+    const a = await launchJob(ORG_A, 1);
+    const before = await written();
+    // A forbidden key, refused at the event's boundary after the compare-and-set
+    // has run: the move must roll back with it.
+    const metadata = { prompt: "never stored" } as unknown as SafeTransitionMetadata;
+    const context = { ...refusedContext(), metadata };
+    await expect(
+      submission.endPreparationRefusal({
+        organizationId: ORG_A,
+        attemptId: a.attempts[0]!,
+        reason: "ASSET_UNRECOVERABLE",
+        context,
+      }),
+    ).rejects.toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
+    expect(await written()).toEqual(before);
+    expect(new Set(await offered())).toEqual(new Set(a.attempts));
   });
 
   it("ends nothing in another organization", async () => {
