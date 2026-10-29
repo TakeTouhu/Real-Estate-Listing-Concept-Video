@@ -3860,3 +3860,220 @@ GS-7d-1 waits for the product owner's yes before merge. Then GS-7d-2: a
 generating job's attempt that can never be sent, its Property deleted or its
 photo gone, ended before submission so the attempt failure settlement releases
 its Unit.
+
+## GS-7d-2 — ending a generating job's attempt whose Property was deleted
+
+Base: `8e267b2` (PR #123 merge commit on `main`).
+ADR: `docs/decisions/0100-ending-a-generating-attempt-whose-property-was-deleted.md`
+
+The second of GS-7d's two pull requests (`/mnt/project-files/cto/gs-7d-proposal.md`).
+**No migration; no route, no page.** Nothing outside tests constructs the
+attempt submission repository or the sender, so nothing ends an attempt until
+the pipeline command (GS-9), with the test provider only.
+
+The product owner's decision of 2026-10-29 ("すぐ戻す") covers a deleted
+Property's generating videos as well as its waiting ones: they end at once and
+their Units are released, without waiting for the 30-day trash period. This
+pull request ends a generating video while one of its attempts still waits
+before submission; one whose attempts are all at the provider, or one being
+assembled, is a follow-up (GS-7d-3).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `7c0e6ba` | the ending, its query, the sender's two hand-offs, their tests, ADR-0100 and the documentation |
+| `030a397` | the review's answers: ADR-0100 narrowed to an attempt still waiting, a rename's lost update and the in-flight case recorded, a comment, the lock's header, two tests |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7d-2 does
+
+- **The attempt ends before submission.** A `QUEUED` attempt, before
+  submission, whose Property is deleted moves `QUEUED →
+  CANCELLED_PRE_SUBMISSION` with `PROPERTY_DELETED` as its code and an
+  `attempt.ended_property_deleted` event, as a refused preparation's attempt
+  ends (ADR-0097). Transaction K then fails the job and releases its Unit (a
+  scene regeneration rolls back to the video already delivered), and
+  Transaction L closes the job's other scenes.
+- **One commit behind the cost-admission lock.** The gate's key first, then
+  the attempt's Property `FOR SHARE`, tenant-scoped through its project, found
+  `DELETED`, then the attempt's compare-and-set and its event. The
+  compare-and-set is now one function the two endings share. A standing
+  Property (`PROPERTY_NOT_DELETED`), an attempt no longer queued, another
+  tenant's or none (`NOT_QUEUED`) write nothing.
+- **Found one per job.** `findPropertyDeletedAttempts` offers the oldest
+  queued attempt of each generating job of a deleted Property, oldest first,
+  up to the pass's limit; ending one fails the job, so a job with many scenes
+  does not fill a pass.
+- **The sender ends them.** First, before its window; then, when the gate
+  refuses an attempt as `SOURCE_INVALID` with `PROPERTY_DELETED` (a deletion
+  saved since discovery), at once. Either marks the job as ending for the
+  rest of the pass. An attempt whose photo is gone was already ended by
+  preparation (GS-7c-2a).
+
+```mermaid
+sequenceDiagram
+    participant W as Sender
+    participant R as Attempt submission repository
+    participant DB as PostgreSQL
+    participant K as Transaction K
+    participant L as Transaction L
+    W->>R: findPropertyDeletedAttempts(limit)
+    R-->>W: one queued attempt of each generating job of a deleted Property
+    W->>R: endPropertyDeletedAttempt(organization, attempt, context)
+    R->>DB: cost-admission lock, then the Property FOR SHARE, found DELETED
+    R->>DB: attempt QUEUED to CANCELLED_PRE_SUBMISSION, PROPERTY_DELETED, and its event
+    R-->>W: ENDED, NOT_QUEUED or PROPERTY_NOT_DELETED
+    W->>W: then the window; a gate refusal for a deletion since discovery is ended the same way
+    K->>DB: later, the request's attempts all ended: the job fails, its Unit released
+    L->>DB: later, the failed job's other scenes closed, their queued attempts cancelled
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `030a397`, each exit status read |
+| `pnpm test` | 6,558 tests in 241 files passed, exit 0 |
+| `pnpm test:db` | 1,767 tests in 66 files passed, exit 0 |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `packages/domain/src/attempt-submission/runner.test.ts` (8 new): a deleted
+  Property's attempts ended first, each under its own correlation, before the
+  window, bounded by the pass's limit, and their jobs sent nothing more; an
+  ending that found the attempt moved or its Property standing reported and
+  its job sent; an ending that throws counted as failed; a read of them that
+  throws rejecting the pass before its window; a gate refusal for a
+  deleted Property ended under the gate's correlation; the ending's two
+  refusals there; any other source refusal left.
+- `packages/domain/src/attempt-submission/dormancy.test.ts` (1 new, 2
+  changed): one write between the two endings, the Property the only row
+  locked and only `FOR SHARE`, the cost-admission lock before it and the
+  compare-and-set after, the code and event the repository's own.
+- `tests/integration/attempt-submission.db.test.ts` (8 new, one of them
+  extended after review): one attempt of
+  each generating job of a deleted Property, oldest first, bounded and
+  validated; an armed attempt, one no longer before the boundary, a request
+  or a job not generating passed over; the full write, its event and nothing
+  else; a standing Property, another tenant (before and after the ending), a
+  replay, an unknown and an armed attempt writing nothing; the cost-admission lock waited for; a deletion
+  saving waited for and then seen; the sender ending one, sending the other
+  organization's, and K and L freeing the Unit and closing the job; a
+  deletion saved after discovery ended at the gate's refusal, nothing sent.
+
+### Mutation testing
+
+The same harness as GS-7d-1: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| N01 to N07 | the runner: the deleted step skipped or unbounded; its throw escaping; its job not marked; an ending not counted; the window read first; one correlation for every ending | killed |
+| G01 to G03 | the gate's deleted Property not ended; every source refusal ended; a new correlation for it | killed |
+| M01 to M03 | the ending's answers mapped wrong: `ENDED`, `NOT_QUEUED`, `PROPERTY_NOT_DELETED` | killed |
+| S01 to S03 | the Property not locked, locked `FOR UPDATE`, or locked before the cost-admission lock (static) | killed |
+| Q01 to Q10 | the query: any Property, every attempt of a job, a job's newest, newest first, the limit ignored or not validated, any attempt state, certainty, request or job state | killed (10/10) |
+| B01 to B08 | the ending: no cost-admission lock; the Property not locked or read across tenants; a standing Property ended; the wrong code or event; an unknown attempt named standing; a lost compare-and-set reported ended | killed (8/8) |
+| H01 to H05 | the shared write and the preparation ending: no lock; not tenant-scoped; the code or the event type ignored; the event not written | killed (5/5) |
+| C01 | the event type constant reused | killed |
+| N08 | after review: a read of deleted Properties' attempts that throws swallowed, the window still sent | killed |
+
+Result: **41 of 41 killed**: 16 in the unit suites and 24 in
+`tests/integration/attempt-submission.db.test.ts` on `7c0e6ba`, and N08 on
+`030a397`, killed by the test the review asked for. The tree's manifest
+matched before and after every run.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking. All of it is answered in
+`030a397`:
+
+- **Should fix: the scope was overstated.** The documentation said a deleted
+  Property's generating videos end; only one whose attempt still waits before
+  submission does. ADR-0100 and the TODO's trash item are narrowed, and the
+  rest, a job whose attempts are all at the provider or one being assembled,
+  which still delivers and consumes its Unit, is a new TODO item and a
+  follow-up, GS-7d-3.
+- **"Nothing restores a Property" was not true.** A rename that read the
+  Property before its deletion writes the whole row back, `ACTIVE` included.
+  ADR-0100 now says so; the ending then reads the Property standing and leaves
+  the attempt, which the gate refuses for its photo once the deletion's photo
+  requests save. The rename is a separate bug in Property editing, recorded in
+  TODO.md for the product owner, not fixed here.
+- **A read of deleted Properties' attempts that throws** rejects the pass
+  before its window, as a window read that throws does; now in ADR-0100
+  Decision 4 and tested (N08).
+- **The runner's comment on `PROPERTY_NOT_DELETED`** said only the gate's path
+  reaches it; it now names both, and that the first step's may be reported
+  again from the window.
+- **The cost-admission lock's header** listed two lockers of a Property; it
+  now lists the ending of ADR-0099 and this one too.
+- **Another organization naming a deleted Property's queued attempt** is now
+  tested to answer `NOT_QUEUED` and write nothing.
+
+Not added: a race test between the gate and this ending. The ending waits for
+the cost-admission lock under the attempt's organization and cycle, the key
+the gate takes, which the lock-wait test shows; and both require the attempt
+`QUEUED`, which the armed-attempt test shows.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the ending's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0100 Decision 2 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7d-2.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7d-2*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (progress on ending an attempt the gate will never
+authorize, failing closed on a missing source, the preflight audit item and
+the trash lifecycle).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the repository or the sender. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs a pass yet.** The pipeline command (GS-9) will, with the test
+  provider only, and must run K and L after the sender for the Unit to come
+  back.
+- **The gate's other refusals for good still write nothing**: a price no
+  contract will cover again, or an attempt not in a shape to cross the
+  boundary. Such an attempt holds its Unit (TODO).
+- **An attempt refused for configuration waits** (no route, the Safety
+  Guard's pause, no revenue figure), its Unit held, until how long it may is
+  decided.
+- **A deleted Property's video with no attempt left waiting still delivers**:
+  every attempt at the provider, or the job being assembled. Its Unit is
+  consumed until GS-7d-3.
+- **A rename can undo a Property's deletion** (Property editing's own bug,
+  TODO.md): the ending then leaves the attempt to the gate and preparation.
+- **An attempt of the same job already at the provider still runs there**
+  when the job fails; its cost is VTaVision's (ADR-0083 Decision 1).
+- **An ended video is not shown to the customer** until the progress page
+  (GS-10, GS-11).
+
+### Remaining work
+
+GS-7d-2 waits for the product owner's yes before merge. Then GS-7d-3, a
+deleted Property's video already at the provider or being assembled, to be
+proposed; GS-8, the Transaction I driver; and GS-9, the pipeline command.
