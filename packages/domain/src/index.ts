@@ -37,5 +37,6 @@ export * from "./deliverable-settlement/index";
 export * from "./attempt-failure-settlement/index";
 export * from "./failed-job-scene-closure/index";
 export * from "./job-launch/index";
+export * from "./attempt-submission/index";
 export * from "./disclosure/index";
 export * from "./clean-master/index";

@@ -3253,3 +3253,191 @@ remain BLOCKED.
 
 GS-7c-1 waits for the product owner's yes before merge. Then GS-7c-2, sending
 an admitted attempt through the gate and recording the answer.
+
+## GS-7c-2a — finding an attempt to send, and ending one refused for good
+
+Base: `ccbfdc6` (PR #120 merge commit on `main`; post-merge CI run 736 green).
+ADR: `docs/decisions/0097-finding-an-attempt-to-send-and-ending-one-whose-preparation-is-refused.md`
+
+The first of GS-7c-2's two pull requests (GS-7 is now six: 7a, 7b, 7c-1,
+7c-2a, 7c-2b, 7d). **No migration; no route, no page.** Nothing outside tests
+constructs the attempt submission repository, and nothing sends an attempt
+until GS-7c-2b.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `be9a609` | discovery, the ending of a refused preparation, their tests, ADR-0097 and the documentation |
+| `c7015be` | a test that the ending rolls back when its event cannot be written |
+| `15c8399` | the review's answers: the lock-order wording, two risks named in ADR-0097 and the TODO, the TODO notes qualified, and three tests sharpened or added |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7c-2a does
+
+- **Discovery offers what the sender could send.** Orchestrated attempts
+  `QUEUED` before submission, under a `GENERATING` request and job and a
+  Property not deleted, oldest first with `id` breaking ties, bounded 1 to
+  100 (refused, not clamped), each with its project's organization, read
+  without locks.
+- **A refusal for good ends the attempt.** A `TERMINAL` preparation refusal,
+  by the canonical disposition, ends the attempt `QUEUED →
+  CANCELLED_PRE_SUBMISSION` with the reason as its code and an
+  `attempt.preparation_refused` event, in one commit behind the
+  cost-admission lock. Transaction K then fails the request, scene and job
+  and releases the Unit; Transaction L cancels the other scenes' attempts.
+- **A refusal that may pass leaves it waiting.** A `RETRYABLE` reason is
+  refused by the ending as a caller's defect, and the attempt stays `QUEUED`.
+- **Exactly one of the gate and the ending moves an attempt.** Both require it
+  `QUEUED`; another organization's attempt, one already ended or armed, or one
+  whose certainty moved answers `NOT_QUEUED` and writes nothing.
+
+```mermaid
+sequenceDiagram
+    participant S as Sender (GS-7c-2b)
+    participant R as Attempt submission repository
+    participant P as Preparation (preflight)
+    participant K as Transaction K
+    S->>R: findSubmissionCandidates(limit)
+    R-->>S: QUEUED attempts, oldest first, with their organizations
+    S->>P: prepareQueuedGeneration(candidate)
+    P-->>S: refused, TERMINAL reason
+    S->>R: endPreparationRefusal(organization, attempt, reason)
+    R->>R: cost-admission lock, then QUEUED to CANCELLED_PRE_SUBMISSION, event
+    R-->>S: ENDED, or NOT_QUEUED with nothing written
+    K->>K: request, scene and job failed, Unit released
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI). CI run 738 passed on
+`c7015be`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `15c8399`'s code, each exit status read |
+| `pnpm test` | 238 files, 6,462 tests passed on `15c8399`'s code (6,477 on `be9a609`'s, before one table test replaced seventeen) |
+| `pnpm test:db` | 66 files, 1,737 tests passed on `c7015be`'s code; `15c8399` adds one test, and the suite's 18 pass |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job passed on `c7015be` |
+| `pnpm build` | not run locally; CI's verify job builds, and passed on `c7015be` |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/attempt-submission.db.test.ts` (new, 18), on jobs started
+  by the real start commit and launched by the real launch: discovery's order
+  across organizations and ties, its organizations, a candidate preparation
+  accepts with nothing written, the bound; passing over an armed attempt, a
+  certainty that moved, a request no longer generating and a deleted
+  Property; the ending's row and event and nothing else moved; a photo
+  withdrawn, refused by preparation before anything is signed, ended, and the
+  Unit released by K and the sibling cancelled by L; a retryable reason
+  refused; a rollback when the event cannot be written; another organization,
+  a replay, an armed attempt and a moved certainty answering `NOT_QUEUED`;
+  the wait for the cost-admission lock of the organization and cycle; no
+  other organization's reservation read for the lock key; an arm in flight
+  that takes no cost lock waited for on the row, then nothing ended.
+- `packages/domain/src/attempt-submission/preparation-refusal.test.ts` (new):
+  the reasons that stay written out, every other one ending; the move legal
+  and read by K as ended without a video; the bound.
+- `packages/domain/src/attempt-submission/dormancy.test.ts` (new): no
+  production caller; no provider, network, storage or timer; one write, after
+  the cost-admission lock, and no row lock.
+
+### Mutation testing
+
+The same harness as GS-7c-1: each mutant applied alone, the named suite run,
+the file restored and its digest checked.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R01 to R05 | a discovery filter dropped: orchestration state, certainty, request state, job state, Property | killed |
+| R06 to R10 | newest first, ties reversed, the bound off by one, the bound not validated, the wrong organization | killed |
+| R11 | a retryable reason not refused | killed |
+| R12 / R13 | no cost-admission lock; the wrong key | killed |
+| R14 | the cycle read before the lock not tenant-scoped | survived pass 1; killed by a call as another organization that must not wait on its own lock for the other's cycle |
+| R15 to R17 | the compare-and-set's organization, `QUEUED` or certainty predicate dropped | killed |
+| R18 to R20 | the version not bumped, the code not written, the message not cleared | killed |
+| R21 to R23, R27, R28, M07 | the event's type, reason code, from-state, aggregate or caller context wrong; the event type constant changed | killed |
+| R24 / R25 | the outcome's version wrong; `NOT_QUEUED` thrown | killed |
+| R26 | the ending outside a transaction | killed by the rollback test |
+| M01 to M06 | the disposition inverted, every refusal ending, the bound's edges, non-integers accepted, the bound changed | killed |
+| S01 to S03 | a production caller, a row lock, storage reachable | killed by the static test |
+
+Result: 38 mutants against `c7015be`, 37 killed in the first pass and the
+last after one test. M01, M02, R12, R13, R14 and R16 were run again against
+`15c8399`'s tests, which changed the tests that kill them: all killed.
+
+### Review
+
+Codex is at its usage limit, so an independent review agent reviewed
+`be9a609` against `ccbfdc6`, reading only git objects. It confirmed the
+tenant scoping of both statements, that the lock key is the gate's own query
+with the same fallback, that the ending and an arm cannot both move an
+attempt, that the schema's checks accept the write and no trigger or
+allowlist refuses the event, that K settles the new ending and releases the
+Unit and L closes the request beside it, that regeneration attempts are not
+excluded, and that every writer taking the cost-admission lock takes it
+before any row lock, so it found no cycle. Verdict: nothing blocking. Its
+findings, answered in `15c8399`:
+
+| Finding | Answer |
+| --- | --- |
+| Should-fix: discovery is one window over every organization, oldest first; attempts left `QUEUED` by a retryable refusal or a gate refusal that writes nothing (a hard pause, an ineligible price) are offered on every pass, and once a window's worth are oldest no other organization's attempt is found | Not built here, since how a pass moves past them is the sender's and the pipeline pass's design (GS-7c-2b, GS-9), as the launch's same problem is (ADR-0095 Decision 7). ADR-0097 *Not decided here* names it, and a new TODO item requires it before activation |
+| Should-fix: `PROVIDER_IDENTITY_MISMATCH` and `MODEL_DELIVERY_PLAN_CHANGED` are `TERMINAL` but come from the deployment's catalog, so a misconfigured or older worker would end customers' attempts across organizations | Named in ADR-0097 Decision 2 as a refusal the deployment causes; a new TODO item asks whether it should end an attempt, before activation. The canonical table is unchanged |
+| Nit: "every writer of an attempt's orchestration state takes this lock first" is not true (K and H write no attempt; the repository's own arm and admission take none) | Reworded in the repository and the ADR: the transactions that take it take it before any row lock; a writer that takes none is kept apart by the compare-and-set |
+| Nit: "the predicate the gate's arm competes on" is not literal | Reworded: both require the attempt `QUEUED` |
+| Nit: TODO notes described the ending as running, though only tests call it | Qualified: built in GS-7c-2a, called by the sender from GS-7c-2b |
+| Nit: the arm-in-flight test uses an arm that takes no cost lock | Kept and renamed: it proves the compare-and-set holds without that lock; the cost-lock test proves the gate and the ending serialize on it |
+| Nit: the lock-wait helper accepted any waiting backend | It now matches the ending's own statement |
+| Nit: the per-reason table test repeated the implementation | Replaced by the reasons that stay, written out |
+| Nit: the null-certainty branch cannot match an orchestrated row | Kept, as the gate's reading of null; commented |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the attempt submission row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0097 Decision 3 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7c-2a.md`: no HTTP change; the new exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7c-2a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (GS-7c-2
+split in two) and `docs/decisions/TODO.md` (*Move the execution preflight's
+failures onto the orchestration state* built; progress noted on the Phase
+4C-3 sequence, the preflight-failure audit, failing closed on a missing
+source, bounding how long an attempt may run, and ending an attempt the gate
+will never authorize; three new items: a photo changed while its URL is
+signed, keeping the submission window moving, and a refusal the deployment
+causes).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the repository, and nothing sends
+an attempt. No scheduler, credential or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing sends an attempt yet.** GS-7c-2b prepares, checks the URL's
+  freshness, gates and sends one.
+- **A retryable refusal holds the Unit** for as long as it recurs; how long an
+  attempt may wait is not decided.
+- **Attempts that cannot be sent could fill discovery's window** once a pass
+  runs; GS-7c-2b and GS-9 must move past them.
+- **A deleted Property's attempt is passed over and keeps its Unit** until
+  GS-7d.
+- **A refusal the deployment's catalog causes ends the attempt**, by the
+  canonical table, until that is decided.
+
+### Remaining work
+
+GS-7c-2a waits for the product owner's yes before merge. Then GS-7c-2b,
+sending a prepared attempt through the gate and recording the answer.

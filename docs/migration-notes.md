@@ -1873,3 +1873,16 @@ also require `orchestrationState IS NULL`, which every legacy row already has.
 
 **Rolling back.** To GS-7b's build: safe, since nothing in production calls
 either.
+
+## GS-7c-2a — finding an attempt to send, and ending one refused for good
+
+**No migration** (ADR-0097). No schema, enum, constraint or row changes, and
+no new environment variable. The ending writes `CANCELLED_PRE_SUBMISSION`, a
+state the schema already allows without a boundary instant, and an event in the
+existing `generation_transition_events` table.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+attempt submission repository.
+
+**Rolling back.** To GS-7c-1's build: safe, since nothing in production calls
+what GS-7c-2a adds.
