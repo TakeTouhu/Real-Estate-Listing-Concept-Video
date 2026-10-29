@@ -152,19 +152,32 @@ export function createPrismaPropertyRepositories(prisma: PrismaClient): {
         })
       ).map(toProperty);
     },
-    async update(property) {
-      return toProperty(
-        await prisma.property.update({
-          where: { id: property.id },
+    async updateDetails(organizationId, id, change) {
+      return prisma.$transaction(async (tx) => {
+        // Only the named fields (Prisma leaves an `undefined` one unwritten),
+        // and only while the row stands: never its status or assignments.
+        // `updatedAt` is written as `@updatedAt` would, and keeps a change
+        // naming no field a statement: Prisma skips an empty `updateMany`.
+        const { count } = await tx.property.updateMany({
+          where: { id, organizationId, status: { not: "DELETED" } },
           data: {
-            name: property.name,
-            propertyType: property.propertyType,
-            addressMasked: property.addressMasked,
-            description: property.description,
-            status: property.status,
+            updatedAt: new Date(),
+            name: change.name,
+            propertyType: change.propertyType,
+            addressMasked: change.addressMasked,
+            description: change.description,
           },
-        }),
-      );
+        });
+        if (count === 0) return null;
+        return toProperty(await tx.property.findUniqueOrThrow({ where: { id } }));
+      });
+    },
+    async markDeleted(organizationId, id) {
+      const { count } = await prisma.property.updateMany({
+        where: { id, organizationId, status: { not: "DELETED" } },
+        data: { status: "DELETED" },
+      });
+      return count === 1;
     },
     async assign(organizationId, propertyId, expected, next, audit) {
       try {

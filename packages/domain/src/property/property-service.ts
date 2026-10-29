@@ -194,16 +194,15 @@ export class PropertyService {
     if (name.length === 0 || name.length > MAX_NAME_LENGTH) {
       throw new AppError("VALIDATION_FAILED", "Property name is required");
     }
-    const updated = await this.deps.properties.update({
-      ...existing,
-      name,
-      propertyType: input.propertyType ?? existing.propertyType,
-      addressMasked:
-        input.addressMasked === undefined ? existing.addressMasked : input.addressMasked?.trim() || null,
-      description:
-        input.description === undefined ? existing.description : input.description?.trim() || null,
-      updatedAt: this.deps.clock.now(),
+    // Only the fields the member changed, and only while the Property still
+    // stands: a deletion that saved since the read is not undone (ADR-0101).
+    const updated = await this.deps.properties.updateDetails(organizationId, propertyId, {
+      ...(input.name === undefined ? {} : { name }),
+      ...(input.propertyType === undefined ? {} : { propertyType: input.propertyType }),
+      ...(input.addressMasked === undefined ? {} : { addressMasked: input.addressMasked?.trim() || null }),
+      ...(input.description === undefined ? {} : { description: input.description?.trim() || null }),
     });
+    if (!updated) throw new AppError("NOT_FOUND", "Property not found");
     await recordAudit(this.deps.identity, {
       organizationId,
       actorUserId,
@@ -221,9 +220,13 @@ export class PropertyService {
    */
   async remove(actorUserId: string, organizationId: string, propertyId: string): Promise<void> {
     const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.delete");
-    const existing = await this.requireReachable(actor, propertyId);
+    await this.requireReachable(actor, propertyId);
     const now = this.deps.clock.now();
-    await this.deps.properties.update({ ...existing, status: "DELETED", updatedAt: now });
+    // Its status alone, and once: a second deletion saving first answers this
+    // one as not found, as the next request would be, with one audit entry.
+    if (!(await this.deps.properties.markDeleted(organizationId, propertyId))) {
+      throw new AppError("NOT_FOUND", "Property not found");
+    }
     for (const asset of await this.deps.assets.listByProperty(organizationId, propertyId)) {
       if (asset.status === "DELETED" || asset.status === "DELETION_PENDING") continue;
       // Deliberately not checked for `null`. Removal's requirement is that the

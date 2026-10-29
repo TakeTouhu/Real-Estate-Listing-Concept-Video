@@ -1928,3 +1928,16 @@ attempt submission repository or the sender.
 
 **Rolling back.** To GS-7d-1's build: safe, since nothing in production calls
 what GS-7d-2 adds. An attempt a test ended stays ended.
+
+## Property rename and deletion as conditional writes (ADR-0101)
+
+**No migration.** No schema, enum, constraint or row changes, and no new
+environment variable. A rename and a deletion now write with `updateMany` on
+the id, the organization and a status other than `DELETED`, the columns they
+already wrote.
+
+**What changes at deploy.** Nothing a customer reaches: no route renames or
+deletes a Property yet.
+
+**Rolling back.** To GS-7d-2's build: safe, with the lost update ADR-0101 fixes
+back in the code, unreachable from any route.

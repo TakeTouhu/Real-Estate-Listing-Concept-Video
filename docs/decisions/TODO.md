@@ -1189,19 +1189,26 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Found in GS-7d-2 — a Property rename can undo its deletion
 
-- [ ] **Make a Property's rename and deletion conditional writes.**
-      `PropertyService.update` reads the Property, then writes the whole row
-      back, its `status` included, by id alone
-      (`packages/database/src/property-repositories.ts`, `update`); `remove`
-      does the same with `DELETED`. A rename that read the Property before a
-      deletion saved therefore writes `ACTIVE` back after it: the Property
-      reappears, while its photos stay asked to be deleted. A deletion that
-      read a Property before a rename saved writes the old name back. The fix
-      is a product change and needs the product owner's yes: a rename writes
-      only the fields it changes, and both write with `updateMany` where `id`,
-      `organizationId` and `status` not `DELETED` still hold, a lost race
-      answered as not found. Found by GS-7d-2's review; ADR-0100's ending
-      reads such a Property as standing and leaves its attempt for the gate.
+- [x] **Make a Property's rename and deletion conditional writes.** Done in
+      ADR-0101 (no migration), approved by the product owner on 2026-10-29
+      ("直す"): `updateDetails` writes only the fields a rename names and
+      `markDeleted` the status alone, each only while the Property is in the
+      organization and not deleted; a lost race is answered `NOT_FOUND` with
+      no audit entry. `PropertyRepository.update` is gone. No route reached
+      either write, so no customer met the bug.
+      `PropertyService.update` read the Property, then wrote the whole row
+      back, its `status` included, by id alone; `remove` did the same with
+      `DELETED`. A rename that read the Property before a deletion saved
+      therefore wrote `ACTIVE` back after it: the Property reappeared, while
+      its photos stayed asked to be deleted. Found by GS-7d-2's review.
+- [ ] **Make a Property's deletion, its photos' deletion requests and its
+      audit entry one commit.** `PropertyService.remove` marks the Property
+      deleted, then asks for each photo's deletion, then writes its audit
+      entry, each its own statement. A failure between them leaves photos not
+      asked to be deleted, or no audit entry, under a deleted Property, and a
+      retry is answered `NOT_FOUND`, so nothing finishes it. Found while
+      writing ADR-0101; a product change, to propose before a route deletes a
+      Property.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
