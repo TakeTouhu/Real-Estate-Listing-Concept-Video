@@ -57,7 +57,10 @@
  *   `FOR UPDATE`, its scenes `FOR SHARE` and its requests `FOR UPDATE`;
  * - the ending of a generating job's attempt whose Property was deleted
  *   (ADR-0100) locks the attempt's Property (`FOR SHARE`) before the attempt's
- *   compare-and-set.
+ *   compare-and-set;
+ * - the ending of a deleted Property's launched job (ADR-0102) locks the
+ *   reservation `FOR UPDATE`, then the Property `FOR SHARE` and the job
+ *   `FOR UPDATE`.
  *
  * Each takes this lock first, before the row, as the order requires. A
  * transaction that locked a project, an asset or a Property and then waited

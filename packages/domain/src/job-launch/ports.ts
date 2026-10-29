@@ -15,6 +15,7 @@ import type { FxSnapshot } from "../pricing/provider-pricing-contract";
 import type { PricingSnapshot } from "../pricing/pricing-snapshot";
 import type { EpochMillis } from "../pricing/units";
 import type { UnlaunchableJobCause, UnlaunchableJobEndingRefusal } from "./ending";
+import type { LaunchedJobEndingRefusal } from "./launched-ending";
 import type { JobLaunchRefusal } from "./launch";
 
 /** One scene of the waiting job, as the start copied it (ADR-0087). */
@@ -221,4 +222,40 @@ export interface UnlaunchableJobEndingRepository {
    * fails and its reservation is released, or nothing is written.
    */
   endUnlaunchableJob(input: EndUnlaunchableJobInput): Promise<EndUnlaunchableJobOutcome>;
+}
+
+// ---------------------------------------------------------------------------
+// The ending of a deleted Property's launched job (GS-7d-3a, ADR-0102)
+// ---------------------------------------------------------------------------
+
+/**
+ * A launched job of a deleted Property, not yet being assembled. A hint: the
+ * ending decides again under its own locks.
+ */
+export interface PropertyDeletedLaunchedJob {
+  readonly organizationId: string;
+  readonly generationJobId: string;
+}
+
+/** As for a waiting job's ending: the tenant is proved through the job's project. */
+export type EndLaunchedJobInput = EndUnlaunchableJobInput;
+
+/** How an ending commit ended. Only `ENDED` wrote anything. */
+export type EndLaunchedJobOutcome =
+  /** The job failed and its Unit was released. */
+  | { readonly kind: "ENDED"; readonly cause: "PROPERTY_DELETED" }
+  | { readonly kind: "NOT_ENDED"; readonly reason: LaunchedJobEndingRefusal };
+
+export interface LaunchedJobEndingRepository {
+  /**
+   * Bounded, oldest first: launched jobs not yet being assembled whose
+   * Property is deleted. Mirrors every refusal of the ending.
+   */
+  findPropertyDeletedLaunchedJobs(query: JobLaunchCandidateQuery): Promise<readonly PropertyDeletedLaunchedJob[]>;
+
+  /**
+   * End the job, in one short database transaction with no external I/O: it
+   * fails and its reservation is released, or nothing is written.
+   */
+  endPropertyDeletedLaunchedJob(input: EndLaunchedJobInput): Promise<EndLaunchedJobOutcome>;
 }

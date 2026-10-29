@@ -1942,3 +1942,18 @@ deletes a Property yet.
 
 **Rolling back.** To GS-7d-2's build: safe, with the lost update ADR-0101 fixes
 back in the code, unreachable from any route.
+
+## GS-7d-3a — ending a deleted Property's launched job before its video is assembled
+
+**No migration** (ADR-0102). No schema, enum, constraint or row changes, and
+no new environment variable. The ending writes a job's move from
+`GENERATING`, `SCENES_READY` or `COMPOSITION_PENDING` to `FAILED_TERMINAL` and
+a reservation's `RESERVED → RELEASED`, states and columns that already exist.
+Its events go to the existing transition history, the job's with a new event
+type (`job.ended_property_deleted`) in a free-text column.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+ending's repository or the launch runner.
+
+**Rolling back.** To the build before it: safe, since nothing in production
+calls what GS-7d-3a adds. A job a test ended stays ended, its Unit released.

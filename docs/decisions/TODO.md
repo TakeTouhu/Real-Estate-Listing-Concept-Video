@@ -1379,10 +1379,10 @@ them is **built**. Each item below records the settled decision and what remains
       *A deleted Property's waiting videos end at once and their Units are
       released (the product owner's decision of 2026-10-29, ADR-0099), not
       held for the trash period, and a generating video whose attempt still
-      waits before submission ends so its Unit is released too (ADR-0100);
-      one whose attempts are all at the provider, or being assembled, is not
-      ended yet (*End a deleted Property's video already at the provider or
-      being assembled*, below). A restored Property's videos would be started
+      waits before submission ends so its Unit is released too (ADR-0100),
+      as does one launched and not yet being assembled (ADR-0102); one being
+      assembled is not ended yet (*End a deleted Property's video already at
+      the provider or being assembled*, below). A restored Property's videos would be started
       again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
@@ -1587,6 +1587,14 @@ them is **built**. Each item below records the settled decision and what remains
       Property, so it still delivers and its Unit is consumed. Planned as a
       follow-up, GS-7d-3, to be proposed; the provider cost of an attempt
       already sent would be VTaVision's (ADR-0083 Decision 1).
+      *GS-7d-3 approved by the product owner on 2026-10-29 ("承認"). GS-7d-3a
+      (ADR-0102) ends a launched job in `GENERATING`, `SCENES_READY` or
+      `COMPOSITION_PENDING` whose Property was deleted, its Unit released in
+      the same commit; the launch runner ends them before its launches.
+      **Still open:** a job in `COMPOSING` or `DELIVERABLE_VALIDATING`, which
+      GS-7d-3b will stop at publication (Transaction G refuses to publish,
+      fails the job and releases its Unit), and a job whose hold is on
+      reconciliation and is then released rather than restored.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

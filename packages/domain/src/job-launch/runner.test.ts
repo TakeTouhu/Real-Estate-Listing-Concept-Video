@@ -3,6 +3,8 @@ import type { TransitionContext } from "../orchestration/ports";
 import { epochMillis } from "../pricing/units";
 import { JobLaunchDefect } from "./launch";
 import type {
+  EndLaunchedJobInput,
+  EndLaunchedJobOutcome,
   EndUnlaunchableJobInput,
   EndUnlaunchableJobOutcome,
   JobLaunchCandidate,
@@ -12,6 +14,8 @@ import type {
   JobLaunchRepository,
   LaunchJobInput,
   LaunchJobOutcome,
+  LaunchedJobEndingRepository,
+  PropertyDeletedLaunchedJob,
   PropertyDeletedWaitingJob,
   UnlaunchableJobEndingRepository,
 } from "./ports";
@@ -110,6 +114,32 @@ class ScriptedEnding implements UnlaunchableJobEndingRepository {
   }
 }
 
+/** The launched job's ending (ADR-0102), on the same call log. */
+class ScriptedLaunchedEnding implements LaunchedJobEndingRepository {
+  readonly inputs: EndLaunchedJobInput[] = [];
+
+  constructor(
+    private readonly calls: string[],
+    private readonly deleted: readonly PropertyDeletedLaunchedJob[] | "THROW" = [],
+    private readonly outcomes: Record<string, EndLaunchedJobOutcome | "DEFECT" | "THROW"> = {},
+  ) {}
+
+  async findPropertyDeletedLaunchedJobs(query: { readonly limit: number }) {
+    this.calls.push(`launched:${query.limit}`);
+    if (this.deleted === "THROW") throw new Error("connection lost: SELECT secret");
+    return this.deleted;
+  }
+
+  async endPropertyDeletedLaunchedJob(input: EndLaunchedJobInput) {
+    this.calls.push(`end-launched:${input.organizationId}:${input.generationJobId}`);
+    this.inputs.push(input);
+    const outcome = this.outcomes[input.generationJobId];
+    if (outcome === undefined || outcome === "THROW") throw new Error("deadlock detected: secret");
+    if (outcome === "DEFECT") throw new JobLaunchDefect("ENDING_LOST_UNDER_LOCK");
+    return outcome;
+  }
+}
+
 class ScriptedPlanner {
   readonly planned: string[] = [];
 
@@ -141,6 +171,7 @@ function runner(
   repository: ScriptedRepository,
   planner = new ScriptedPlanner(),
   ending = new ScriptedEnding(repository.calls),
+  launchedEnding = new ScriptedLaunchedEnding(repository.calls),
 ) {
   let n = 0;
   let attempt = 0;
@@ -149,6 +180,7 @@ function runner(
   return new JobLaunchRunner({
     repository,
     ending,
+    launchedEnding,
     planner,
     ids: { nextAttemptId: () => `att_${++attempt}`, nextPricingSnapshotId: () => `psn_${++snapshot}` },
     context: () => context(`corr-${++n}`),
@@ -175,7 +207,13 @@ describe("one pass", () => {
     );
     const report = await runner(repository).runOnce(10);
 
-    expect(repository.calls).toEqual(["deleted:10", "find:10", "launch:org_a:job_a", "launch:org_b:job_b"]);
+    expect(repository.calls).toEqual([
+      "deleted:10",
+      "launched:10",
+      "find:10",
+      "launch:org_a:job_a",
+      "launch:org_b:job_b",
+    ]);
     expect(repository.inputs.map((input) => input.facts)).toEqual([a, b]);
     expect(repository.inputs.map((input) => input.plan)).toEqual([planFor(a), planFor(b)]);
     expect(repository.inputs.map((input) => input.attemptIds)).toEqual([
@@ -206,7 +244,7 @@ describe("one pass", () => {
       { job_a1: LAUNCHED("job_a1", ["att_1", "att_2"]), job_a2: LAUNCHED("job_a2", ["att_3", "att_4"]) },
     );
     const report = await runner(repository).runOnce(5);
-    expect(repository.calls).toEqual(["deleted:5", "find:5", "launch:org_a:job_a1"]);
+    expect(repository.calls).toEqual(["deleted:5", "launched:5", "find:5", "launch:org_a:job_a1"]);
     expect(report.launched).toBe(1);
     expect(report.outcomes).toHaveLength(1);
   });
@@ -228,7 +266,7 @@ describe("a job not launched", () => {
       {},
     );
     const report = await runner(repository, planner).runOnce(1);
-    expect(repository.calls).toEqual(["deleted:1", "find:1"]);
+    expect(repository.calls).toEqual(["deleted:1", "launched:1", "find:1"]);
     expect(report).toEqual({
       launched: 0,
       ended: 0,
@@ -248,7 +286,7 @@ describe("a job not launched", () => {
         {},
       );
       const report = await runner(repository, planner).runOnce(1);
-      expect(repository.calls).toEqual(["deleted:1", "find:1"]);
+      expect(repository.calls).toEqual(["deleted:1", "launched:1", "find:1"]);
       expect(report.outcomes.map((entry) => entry.outcome)).toEqual([{ kind: "NOT_PLANNED", code }]);
     },
   );
@@ -296,6 +334,7 @@ describe("a job that can never launch", () => {
       "deleted:7",
       "end:org_a:job_d1",
       "end:org_a:job_d2",
+      "launched:7",
       "find:7",
       "launch:org_a:job_a",
     ]);
@@ -330,7 +369,7 @@ describe("a job that can never launch", () => {
       );
       const ending = new ScriptedEnding(repository.calls, [], { job_a: ENDED(code) });
       const report = await runner(repository, planner, ending).runOnce(1);
-      expect(repository.calls).toEqual(["deleted:1", "find:1", "end:org_a:job_a"]);
+      expect(repository.calls).toEqual(["deleted:1", "launched:1", "find:1", "end:org_a:job_a"]);
       expect(report.outcomes.map((entry) => entry.outcome)).toEqual([ENDED(code)]);
       expect(report.ended).toBe(1);
     },
@@ -342,7 +381,7 @@ describe("a job that can never launch", () => {
     const ending = new ScriptedEnding(repository.calls, [], { job_a: ENDED("SHAPE_CONFLICT") });
     const report = await runner(repository, planner, ending).runOnce(1);
     expect(planner.planned).toEqual([]);
-    expect(repository.calls).toEqual(["deleted:1", "find:1", "end:org_a:job_a"]);
+    expect(repository.calls).toEqual(["deleted:1", "launched:1", "find:1", "end:org_a:job_a"]);
     expect(report.outcomes[0]?.outcome).toEqual(ENDED("SHAPE_CONFLICT"));
   });
 
@@ -355,7 +394,13 @@ describe("a job that can never launch", () => {
       );
       const ending = new ScriptedEnding(repository.calls, [], { job_a: ENDED(reason) });
       const report = await runner(repository, new ScriptedPlanner(), ending).runOnce(1);
-      expect(repository.calls).toEqual(["deleted:1", "find:1", "launch:org_a:job_a", "end:org_a:job_a"]);
+      expect(repository.calls).toEqual([
+        "deleted:1",
+        "launched:1",
+        "find:1",
+        "launch:org_a:job_a",
+        "end:org_a:job_a",
+      ]);
       expect(ending.inputs[0]?.context.correlationId).toBe("corr-2");
       expect(report.outcomes.map((entry) => entry.outcome)).toEqual([ENDED(reason)]);
     },
@@ -397,6 +442,110 @@ describe("a job that can never launch", () => {
     expect(report.failed).toBe(3);
     expect(report.launched).toBe(1);
     expect(JSON.stringify(report)).not.toContain("secret");
+  });
+});
+
+describe("a deleted Property's launched job (ADR-0102)", () => {
+  const ENDED: EndLaunchedJobOutcome = { kind: "ENDED", cause: "PROPERTY_DELETED" };
+
+  it("is ended after the waiting ones and before any launch, each at the clock's instant and correlation", async () => {
+    const repository = new ScriptedRepository(
+      [{ organizationId: "org_a", generationJobId: "job_a", facts: facts("job_a") }],
+      { job_a: LAUNCHED("job_a", ["att_1", "att_2"]) },
+    );
+    const ending = new ScriptedEnding(repository.calls, [{ organizationId: "org_a", generationJobId: "job_w" }], {
+      job_w: { kind: "ENDED", cause: "PROPERTY_DELETED" },
+    });
+    const launched = new ScriptedLaunchedEnding(
+      repository.calls,
+      [
+        { organizationId: "org_a", generationJobId: "job_l1" },
+        { organizationId: "org_b", generationJobId: "job_l2" },
+      ],
+      { job_l1: ENDED, job_l2: ENDED },
+    );
+    const report = await runner(repository, new ScriptedPlanner(), ending, launched).runOnce(4);
+
+    expect(repository.calls).toEqual([
+      "deleted:4",
+      "end:org_a:job_w",
+      "launched:4",
+      "end-launched:org_a:job_l1",
+      "end-launched:org_b:job_l2",
+      "find:4",
+      "launch:org_a:job_a",
+    ]);
+    expect(launched.inputs).toEqual([
+      expect.objectContaining({ organizationId: "org_a", generationJobId: "job_l1", endedAt: 5_002 }),
+      expect.objectContaining({ organizationId: "org_b", generationJobId: "job_l2", endedAt: 5_003 }),
+    ]);
+    expect(launched.inputs.map((input) => input.context.correlationId)).toEqual(["corr-2", "corr-3"]);
+    expect(report).toEqual({
+      launched: 1,
+      ended: 3,
+      failed: 0,
+      outcomes: [
+        { organizationId: "org_a", generationJobId: "job_w", outcome: { kind: "ENDED", cause: "PROPERTY_DELETED" } },
+        { organizationId: "org_a", generationJobId: "job_l1", outcome: ENDED },
+        { organizationId: "org_b", generationJobId: "job_l2", outcome: ENDED },
+        { organizationId: "org_a", generationJobId: "job_a", outcome: LAUNCHED("job_a", ["att_1", "att_2"]) },
+      ],
+    });
+  });
+
+  it("reports the ending's refusal, which wrote nothing", async () => {
+    const repository = new ScriptedRepository([], {});
+    const launched = new ScriptedLaunchedEnding(
+      repository.calls,
+      [{ organizationId: "org_a", generationJobId: "job_l" }],
+      { job_l: { kind: "NOT_ENDED", reason: "PROPERTY_STANDS" } },
+    );
+    const report = await runner(repository, new ScriptedPlanner(), undefined, launched).runOnce(1);
+    expect(report).toEqual({
+      launched: 0,
+      ended: 0,
+      failed: 0,
+      outcomes: [
+        {
+          organizationId: "org_a",
+          generationJobId: "job_l",
+          outcome: { kind: "NOT_ENDED", reason: "PROPERTY_STANDS" },
+        },
+      ],
+    });
+  });
+
+  it("is that job's FAILED outcome when the ending throws, with a defect's code alone; the pass goes on", async () => {
+    const repository = new ScriptedRepository(
+      [{ organizationId: "org_ok", generationJobId: "job_ok", facts: facts("job_ok", 1) }],
+      { job_ok: LAUNCHED("job_ok", ["att_1"]) },
+    );
+    const launched = new ScriptedLaunchedEnding(
+      repository.calls,
+      [
+        { organizationId: "org_d", generationJobId: "job_d" },
+        { organizationId: "org_t", generationJobId: "job_t" },
+      ],
+      { job_d: "DEFECT", job_t: "THROW" },
+    );
+    const report = await runner(repository, new ScriptedPlanner(), undefined, launched).runOnce(10);
+    expect(report.outcomes.map((entry) => entry.outcome)).toEqual([
+      { kind: "FAILED", code: "ENDING_LOST_UNDER_LOCK" },
+      { kind: "FAILED", code: null },
+      LAUNCHED("job_ok", ["att_1"]),
+    ]);
+    expect([report.failed, report.launched]).toEqual([2, 1]);
+    expect(JSON.stringify(report)).not.toContain("secret");
+  });
+
+  it("rejects the pass when reading them throws, and launches nothing", async () => {
+    const repository = new ScriptedRepository(
+      [{ organizationId: "org_a", generationJobId: "job_a", facts: facts("job_a") }],
+      { job_a: LAUNCHED("job_a", ["att_1", "att_2"]) },
+    );
+    const launched = new ScriptedLaunchedEnding(repository.calls, "THROW");
+    await expect(runner(repository, new ScriptedPlanner(), undefined, launched).runOnce(3)).rejects.toThrow();
+    expect(repository.calls).toEqual(["deleted:3", "launched:3"]);
   });
 });
 

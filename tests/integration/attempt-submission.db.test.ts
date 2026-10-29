@@ -7,6 +7,7 @@ import {
   createFailedJobSceneClosureRepository,
   createGenerationStartRepository,
   createJobLaunchRepository,
+  createLaunchedJobEndingRepository,
   createPaidSubmissionAuthorizationRepository,
   createPrismaPropertyRepositories,
   createPrismaStoryboardRepositories,
@@ -108,6 +109,7 @@ function launcher(): JobLaunchRunner {
   return new JobLaunchRunner({
     repository: createJobLaunchRepository(prisma),
     ending: createUnlaunchableJobEndingRepository(prisma),
+    launchedEnding: createLaunchedJobEndingRepository(prisma),
     planner: new JobLaunchPlanner({
       routes: kit.routePolicy,
       models: kit.models,

@@ -242,3 +242,11 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
     settlement releases its Unit; the sender ends them before its window,
     and one the gate refuses as deleted since discovery at once. A photo gone
     is already ended by preparation (GS-7c-2a).
+- **GS-7d-3**: a deleted Property's video already sent or being assembled, in
+  two (approved 2026-10-29):
+  - **GS-7d-3a** (ADR-0102, no migration): a launched job in `GENERATING`,
+    `SCENES_READY` or `COMPOSITION_PENDING` whose Property was deleted fails
+    and its Unit is released in one commit; the launch runner ends them
+    before its launches.
+  - **GS-7d-3b**: Transaction G refuses to publish a deleted Property's
+    initial video, fails the job and releases its Unit.
