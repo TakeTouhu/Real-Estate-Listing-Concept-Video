@@ -4308,3 +4308,253 @@ GS-7d-3a waits for the product owner's yes before merge. Then GS-7d-3b,
 Transaction G refusing to publish a deleted Property's initial video, failing
 the job and releasing its Unit; GS-8, the Transaction I driver; and GS-9, the
 pipeline command.
+
+## GS-7d-3b — Transaction G refusing a deleted Property's first video
+
+Base: `5d5bbdb` (PR #126 merge commit on `main`).
+ADR: `docs/decisions/0103-transaction-g-refuses-a-deleted-propertys-first-video.md`
+
+The second of GS-7d-3's two pull requests (`/mnt/project-files/cto/gs-7d-3-proposal.md`,
+approved by the product owner on 2026-10-29 08:14Z). **No migration; no route,
+no page.** Nothing outside tests constructs the validation repository or its
+runner, so nothing is refused until the pipeline command (GS-9), with the test
+provider only.
+
+The product owner decided on 2026-10-29 ("すぐ戻す") that a deleted Property's
+unfinished videos end at once and their Units are released. GS-7d-1, GS-7d-2 and
+GS-7d-3a end such a video while it waits, while it is generated and while it
+waits to be assembled. One being assembled or checked (`COMPOSING`,
+`DELIVERABLE_VALIDATING`) was still published and its Unit consumed, and so was
+one whose deletion was saved just after an ending read its Property. This pull
+request makes Transaction G, the only place a Unit is consumed, refuse it.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `4c1aadc` | the refusal, the settlement's cause, their tests, ADR-0103 and the documentation |
+| `c2a775d` | the review's answers: the event type and the reason code every ending shares, ADR-0103's wording on the Property's lock, the funding check and the Property's writers, and three tests added or extended |
+| this commit | this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-7d-3b does
+
+- **A deleted Property's first video is never published.** For the job's first
+  video, once its hold is shown `RESERVED` or `RECONCILIATION_HOLD`, G reads the
+  Property. Deleted, the job moves `DELIVERABLE_VALIDATING → FAILED_TERMINAL`
+  with a `job.ended_property_deleted` event, its reservation to `RELEASED` with
+  `releasedAt` set to the publication's instant and a `reservation.released`
+  event, both with `PROPERTY_DELETED` as their code, in one commit, and G
+  answers `PROPERTY_DELETED`. The version stays validated and unpublished; its
+  `VALID` verdict is kept.
+- **Judged after every other refusal.** A replay of a publication that happened
+  is `ALREADY_PUBLISHED`; a target that is not the job's next is
+  `NOT_PUBLISHABLE`; a defect is raised as before, a hold that cannot be spent
+  included. None of them ends the job. The frozen funding is not checked:
+  nothing is spent.
+- **A replacement is published whatever its Property**: its Unit was spent by
+  the video the customer holds.
+- **The same settlement as a video with no usable output.**
+  `settleDeliverableFailure` (ADR-0082) gains a `cause`, `NO_USABLE_VIDEO` by
+  default, which names the events and nothing else, so a deleted Property
+  cannot bill differently from a blocked composition or a terminal verdict
+  (ADR-0052 Decision 19). `deliverableSettlementRecord(kind, cause)` names them.
+- **The cost-admission lock first.** G now takes the lock for the
+  reservation's frozen cycle before the reservation `FOR UPDATE`, then the
+  Property `FOR SHARE`, then the job and version `FOR UPDATE`, each read
+  tenant-scoped through the job's project, and the Property by its own
+  organization too.
+- **The validation runner reports `PROPERTY_DELETED` unchanged** and counts it
+  as claimed work.
+
+```mermaid
+sequenceDiagram
+    participant V as Validation runner
+    participant G as Transaction G
+    participant DB as PostgreSQL
+    V->>G: publishDeliverable(the VALID verdict's target)
+    G->>DB: cost-admission lock for the hold's frozen cycle
+    G->>DB: reservation FOR UPDATE, Property FOR SHARE, job and version FOR UPDATE
+    G->>G: replay, eligibility and defects judged as before
+    alt first video, hold RESERVED or RECONCILIATION_HOLD, Property deleted
+        G->>DB: job to FAILED_TERMINAL, reservation to RELEASED, their events (PROPERTY_DELETED)
+        G-->>V: PROPERTY_DELETED
+    else Property standing, or a replacement
+        G->>DB: publish, and consume the first video's Unit
+        G-->>V: PUBLISHED_AND_CONSUMED or PUBLISHED_AS_REPLACEMENT
+    end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `c2a775d`, each exit status read |
+| `pnpm test` | 6,599 tests in 242 files passed, exit 0 |
+| `pnpm test:db` | 1,806 tests in 68 files passed on the first commit's code, exit 0; the six tests added after it pass with their two files (53 tests, exit 0) |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/deliverable-publication-deleted-property.db.test.ts`
+  (17): the job failed and its Unit released in one commit, its version
+  bumped, `releasedAt` the publication's instant, two events with the
+  `PROPERTY_DELETED` code and the caller's actor and correlation, and nothing
+  published; a replay answered
+  `NOT_PUBLISHABLE` and the version no longer offered or claimable; a hold on
+  reconciliation released; a replacement published; a publication that already
+  happened replayed `ALREADY_PUBLISHED`; a stale target and a foreign job id
+  ending nothing; a Property of another organization read as not the job's;
+  another tenant's id waiting on no lock of the job's, its Property's or its
+  cycle's, including through a Property now in the caller's organization; a
+  Property held `FOR SHARE` by another transaction not stopping it; a hold
+  already released, or none at all under the `unreserved` key, raising its
+  defect whatever the Property; a deletion saving
+  waited for, then the video refused; the Property held until commit, so a
+  deletion waits for the published video; the Property taken after the
+  reservation and before the job; the cost-admission lock waited for with no
+  row locked; and the validation runner reporting `PROPERTY_DELETED` end to end.
+- `tests/integration/unit-entitlement-ledger.db.test.ts` (2 new): every frozen
+  Unit, Base and add-on block, given back when the Property was deleted, the
+  frozen allocations kept; a hold whose frozen funding no longer covers it
+  released, not refused, once its Property was deleted, its recorded Base Unit
+  given back.
+- `packages/domain/src/deliverable-settlement/settlement.test.ts` (4 new): the
+  events and reason code for each settlement kind and cause.
+- `packages/domain/src/deliverable-settlement/settlement-shape.test.ts` (2 new,
+  1 changed): the events named through the domain's record by their cause; G's
+  lock order, the cost-admission lock before the reservation and the Property
+  `FOR SHARE` before the job; the settlement counted per file.
+- `packages/domain/src/deliverable-validation/runner.test.ts` (1 new, 1
+  changed): `PROPERTY_DELETED` passed through and counted as claimed work, the
+  pass going on.
+- `packages/domain/src/deliverable-validation/dormancy.test.ts` (1 changed):
+  the settlement called from the terminal verdict and from G's refusal only,
+  with the `PROPERTY_DELETED` cause, and the repository still not constructed
+  outside tests.
+
+### Mutation testing
+
+The same harness as GS-7d-2: each mutant applied alone, the named suite run,
+the file restored and its digest checked, and the working tree's manifest
+compared before and after.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| R01, R02 | the refusal never taken, or taken for every first video | killed |
+| R03 | a Property not read counted as deleted | killed |
+| R04, R05 | the Property read across organizations, by its own organization or through the project | killed |
+| R06, R07 | the Property read without a lock, or locked `FOR UPDATE` | killed |
+| R08 | the Property locked after the job | killed |
+| R09 to R12 | no cost-admission lock; always the `unreserved` key; the cycle read across tenants; the lock taken after the reservation | killed |
+| R16 to R18 | the refusal judged for every publication before the hold, before eligibility, or after the frozen funding | killed |
+| S01 to S03 | the settlement's reason code or event fixed whatever the cause; `PROPERTY_DELETED` the default cause | killed |
+| D01 to D04 | the record's event types swapped; the rollback event for a release; one reason code; the reason codes swapped | killed |
+| U01 | the refusal counted by the runner as unclaimed work | killed |
+| K01, C01 | after review: another key for a job with no hold; a correlation not the caller's | killed |
+
+Result: **25 of 25 killed.** The first run, on the first commit's code,
+killed all 23: the 18 database mutants on
+`tests/integration/deliverable-publication-deleted-property.db.test.ts`,
+`deliverable-failure-settlement.db.test.ts`,
+`deliverable-publication-gate.db.test.ts` and
+`unit-entitlement-ledger.db.test.ts`, the 5 unit mutants on
+`packages/domain/src/deliverable-settlement` and
+`packages/domain/src/deliverable-validation`. R05 needed a Property moved to
+the caller's organization, R07 a Property held `FOR SHARE`, R16 a hold already
+released and R18 frozen funding no longer intact: those tests were written
+before the run. The second, on `c2a775d`, killed the 2 the review's tests
+were written for, on the deleted-Property suite. Not run: the pointer check after the release
+removed, equivalent under the job lock (the pointer cannot move). The tree's
+manifest matched before and after every run.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the refusal judged after every
+other refusal, no double release and no consumption after a release, the
+cost-admission key the one every release takes for the same hold, no lock
+cycle with any writer of these rows, every read tenant-scoped, and the writes
+those of the failure settlement. All of it is answered in `c2a775d`:
+
+- **Should fix: ADR-0099's ending does not record
+  `job.ended_property_deleted`.** It records `job.ended_unlaunchable`. What
+  every deleted Property's ending shares is the reason code
+  `PROPERTY_DELETED`; the domain's record, its test, ADR-0103 and the migration
+  notes now say so.
+- **Should fix: claims no test proved.** Added: both events carry the caller's
+  actor and correlation (C01); a first video with no hold raises its defect,
+  having waited for the `unreserved` key (K01); a released hold whose funding
+  no longer covers it gives its recorded Base Unit back. Not added: G run
+  concurrently with a terminal verdict, a composition block or a launch
+  commit, each ordered with G by the cost-admission lock or by row locks
+  taken in the declared order, which the lock-wait, lock-order and writer
+  tests show; nor a failure halfway through the settlement, whose writes are
+  one transaction and whose own tests show its defect raised before any write.
+- **Question: a Property outside the job's organization is read as standing.**
+  Kept, and recorded under "Considered and not done": no code writes such a
+  row, G publishes only to the job's own organization, and a defect would
+  leave the Unit held with no video, which ADR-0052 Decision 19 forbids.
+- **Minor: the frozen funding is not checked on the refusal.** Kept, as the
+  composition block and the terminal verdicts never check it: the check guards
+  what a consumption spends. Decision 1 no longer says every defect is raised,
+  and says so.
+- **Minor: ADR wording.** Decision 1 says the Property is locked before the job
+  and judged after the hold; Decision 3 lists the Property's assignment and the
+  release of a member's or group's Properties among its writers, neither
+  holding a job, a reservation or the cost-admission lock.
+- **Minor: only the job's event says why the version never published.** As
+  Decision 2 records; the version stays validated, its verdict `VALID`.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the validation row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above; the lock order is ADR-0103 Decision 3 |
+| OpenAPI / API change summary | `docs/api-changes-gs-7d-3b.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-7d-3b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (ending a deleted Property's video already at the
+provider or being assembled, done; the trash lifecycle).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the validation repository or its
+runner. No scheduler, credential or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs it yet.** The pipeline command (GS-9) will, with the test
+  provider only.
+- **A deleted Property's video being assembled or checked is still composed
+  and checked**: G is where it ends, and the Unit comes back when the check
+  finishes. That compute is VTaVision's.
+- **A refused video's composed outputs stay in managed storage** (the
+  deliverable key no route signs yet, the Clean Master in the internal
+  namespace) until the 30-day trash lifecycle (TODO).
+- **A regeneration of a deleted Property's delivered video is still
+  published**; whether it may run belongs to the open item on video projects
+  created before their Property's deletion.
+- **No audit entry for the release**, as for the other endings; the existing
+  TODO item on such entries covers it.
+- **A refused video is not shown to the customer** until the progress page
+  (GS-10, GS-11).
+
+### Remaining work
+
+GS-7d-3b waits for the product owner's yes before merge. It completes GS-7d:
+once the pipeline runs, every unfinished first video of a deleted Property ends
+and returns its Unit. Then GS-8, the Transaction I driver, and GS-9, the pipeline command.
