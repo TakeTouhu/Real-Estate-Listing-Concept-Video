@@ -29,11 +29,11 @@ Some waiting jobs can never start, because of their own rows:
 - Rows not as the start wrote them (`SHAPE_CONFLICT`), which only a writer
   other than the start can make.
 
-Each of these is refused on every pass and holds its Units, against ADR-0052
-Decision 19. The launch is oldest first, so the second and third kinds also
-hold back their organization's later jobs, and the candidate query offers
-organizations by their oldest waiting job, so enough of them fill a pass's
-window (ADR-0095 Decision 7).
+Each of these is refused on every pass it is offered to and holds its Units,
+against ADR-0052 Decision 19. The launch is oldest first, so the second and
+third kinds also hold back their organization's later jobs, and the candidate
+query offers organizations by their oldest waiting job, so enough of them fill
+a pass's window (ADR-0095 Decision 7).
 
 On 2026-10-29 the product owner decided, on the decision card asking whether
 a deleted Property's unfinished videos end at once and return their Units,
@@ -68,6 +68,15 @@ step is now one function, `checkFrozenFacts`, which the planner runs and the
 ending runs on the rows it locked, so the two cannot disagree about what a
 frozen fact is. The shape check is likewise one function, `scenesOfStartShape`,
 which the launch decision and the ending share.
+
+One frozen fact can fail because of a change of ours. Editing the prompt's
+fixed rules (`PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS`) makes every
+admitted, unexecuted prompt fail to render, which ADR-0020 accepts as a
+re-admission event, failed closed. A job still waiting then ends as
+`SCENE_PROMPT_UNRENDERABLE` with its Units released: no one is charged, but
+every waiting video must be started again. How such a change is released is
+not decided here (`docs/decisions/TODO.md`, *Release a change to the prompt's
+fixed rules only when no job waits*).
 
 ## Decision 2 — The ending decides the cause from the rows it locked
 
@@ -107,7 +116,8 @@ cost-admission advisory lock (organization, the reservation's frozen cycle or "u
   -> Property                FOR SHARE
   -> GenerationJob           FOR UPDATE
   -> GenerationScene         FOR SHARE, in position order
-  -> SceneGenerationRequest  FOR SHARE, in scene position order (with each one's attempt count)
+  -> SceneGenerationRequest  FOR UPDATE, in scene position order
+  -> their attempts          counted, in a statement of their own
   -> decide
   -> GenerationJob           RESERVED -> FAILED_TERMINAL, and its event
   -> GenerationReservation   RESERVED -> RELEASED, releasedAt = endedAt, and its event
@@ -130,6 +140,15 @@ holding it makes the ending wait; whichever commits first leaves the job the
 other refuses (`NOT_WAITING`). The Property is shared by both, so neither
 waits for the other there.
 
+**Against an admission.** Every admission of an attempt inserts under a
+request, and the attempt's foreign-key check waits for a request held `FOR
+UPDATE`; so once the ending holds the requests, no attempt is admitted under
+them until it commits. Their attempts are counted after that lock, in a
+statement of their own: a statement reads what was committed when it began,
+even for a row it waited for, so a count inside the locking statement would
+miss an attempt committed while it waited, and a job with an attempt would be
+ended. The launch admits under the job's lock, which the ending takes first.
+
 **Against the start and a deletion.** The start takes the cost-admission lock
 before the project and Property (ADR-0087), the order this one keeps. A
 deletion locks the Property and waits for nothing this holds.
@@ -142,7 +161,9 @@ and the caller's actor and correlation. The reservation's allocations are not
 written: a period's balance counts each allocation by its reservation's state,
 so a released reservation returns its Units (Phase 6A). Each write is a
 compare-and-set on the state the commit read under its lock; one that matches
-no row is a defect (`ENDING_LOST_UNDER_LOCK`) and rolls the commit back.
+no row rolls the commit back, the reservation's as a defect
+(`ENDING_LOST_UNDER_LOCK`), the job's as the locked transition's internal
+error.
 
 Any refusal writes nothing.
 
@@ -177,8 +198,8 @@ and runs in two steps:
    jobs whose Property is deleted, whose reservation is `RESERVED` and none of
    whose requests has an attempt: every refusal of the ending, mirrored, so a
    job it would refuse is never offered. Each is ended. They are never launch
-   candidates (ADR-0095 Decision 3), so this is how they are found, and an
-   organization's every such job is ended in the same pass.
+   candidates (ADR-0095 Decision 3), so this is how they are found, up to
+   `limit` of them a pass, whether or not their organization has a place.
 2. **The launch,** as before, with one change: a candidate whose rows were not
    of the start's shape (facts `null`), one the planner refused for a frozen
    fact, and one the commit refused as `PROPERTY_DELETED` or `SHAPE_CONFLICT`
@@ -192,9 +213,12 @@ outcome, keeping only a defect's code, and the pass goes on. The report gains
 instant.
 
 A job ended at the head of its organization's queue frees the queue: the
-next pass offers the organization's next waiting job. Jobs refused for a
-frozen fact no longer fill a pass's window; jobs refused for configuration
-still can, and keeping them from doing so is GS-9's (ADR-0095 Decision 7).
+next pass offers the organization's next waiting job. A job refused for a
+frozen fact or its shape is found only as a launch candidate, so it is ended
+only when its organization has a place and a subscription; until then it
+holds its Units, as before. Once offered, such jobs no longer fill a pass's
+window; jobs refused for configuration still can, and keeping them from doing
+so is GS-9's (ADR-0095 Decision 7).
 
 ## Decision 6 — Nothing runs it yet
 
@@ -220,15 +244,23 @@ provider only.
   is built, a restored Property's ended videos are started again by the
   customer, at no loss, since their Units were returned.
 - **Whether an ended job warrants an audit entry** (Decision 3).
+- **How a change to the prompt's fixed rules is released** (Decision 1), since
+  it ends every waiting job.
+- **A waiting job that is neither launched nor ended**: one whose hold is not
+  `RESERVED`, or one of whose requests has an attempt. Only a writer other
+  than the start and the launch makes such a job; it keeps its organization's
+  queue held back (`docs/decisions/TODO.md`, *Release a started job that can
+  never launch*).
 
 ## Consequences
 
 - `@app/domain`: in the `job-launch` module, `decideUnlaunchableJobEnding`,
   `UnlaunchableJobCause`, `UnlaunchableJobEndingRefusal`,
   `JOB_ENDED_UNLAUNCHABLE_EVENT_TYPE`, the `UnlaunchableJobEndingRepository`
-  port and its input and outcome; the planner's frozen-fact step as
-  `checkFrozenFacts`; `JobLaunchRunner` takes `ending` and `clock`, and its
-  report gains `ended`; `JobLaunchDefect` gains `ENDING_LOST_UNDER_LOCK`.
+  port and its input and outcome, and the `FrozenFactsCode` type; the
+  planner's frozen-fact step as `checkFrozenFacts`, inside the module;
+  `JobLaunchRunner` takes `ending` and `clock`, and its report gains `ended`;
+  `JobLaunchDefect` gains `ENDING_LOST_UNDER_LOCK`.
 - `@app/database`: `createUnlaunchableJobEndingRepository(prisma)`.
 - No migration. Nothing outside tests constructs the repository or the runner,
   so no path a customer or a worker reaches changes.

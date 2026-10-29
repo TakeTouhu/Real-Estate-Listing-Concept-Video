@@ -1486,12 +1486,18 @@ them is **built**. Each item below records the settled decision and what remains
       waiting job whose Property is deleted (the product owner's decision of
       2026-10-29: at once), whose frozen facts the planner refuses before any
       catalog, or whose rows are not as the start wrote them, fails and its
-      Units are released in one commit; the launch runner ends a deleted
-      Property's waiting jobs and any candidate that can never launch, so none
-      holds back its queue or a window. Still open: a job refused for a route,
-      a price or a rate keeps waiting with its Units held, and holds back its
-      organization's queue (the next item), and GS-9's pass must keep such
-      jobs from using up its window.*
+      Units are released in one commit. The launch runner ends a deleted
+      Property's waiting jobs, found by a query of their own, and any launch
+      candidate that can never launch, which frees the head of its queue. A
+      job refused for a frozen fact or its shape is found only as a launch
+      candidate, so it is ended only when its organization has a place and a
+      subscription; until then it holds its Units. Still open: a job refused
+      for a route, a price or a rate keeps waiting with its Units held, and
+      holds back its organization's queue (the next item); a waiting job whose
+      hold is not `RESERVED` or one of whose requests has an attempt, which
+      only a writer other than the start and the launch can make, is neither
+      launched nor ended and holds back its queue too; and GS-9's pass must
+      keep such jobs from using up its window.*
 - [ ] **Bound how long a waiting job refused for configuration may hold its
       Units.** A waiting job the planner refuses for VTaVision's own
       configuration or for timing (`NO_ROUTE`, `AMBIGUOUS_ROUTE`,
@@ -1502,6 +1508,15 @@ them is **built**. Each item below records the settled decision and what remains
       whether a fault of ours that never clears is then a failure the customer
       is not charged for, is not decided. Must be decided before generation is
       activated.
+- [ ] **Release a change to the prompt's fixed rules only when no job
+      waits.** Editing `PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS`
+      makes every admitted, unexecuted generation's frozen prompt fail to
+      render (ADR-0020: a re-admission event, failed closed). For a job still
+      waiting, that is `SCENE_PROMPT_UNRENDERABLE`, and the next launch pass
+      ends it and releases its Units (ADR-0099 Decision 1): no one is charged,
+      but every waiting video of every customer must be started again because
+      of a change of ours. How such a change is released (drained first, or
+      announced) is not decided; it must be before generation is activated.
 - [ ] **End an orchestrated attempt the gate will never authorize (GS-7d).**
       A gate refusal writes nothing, so an attempt refused for good, such as
       one whose Property was deleted or whose photo was deleted or is

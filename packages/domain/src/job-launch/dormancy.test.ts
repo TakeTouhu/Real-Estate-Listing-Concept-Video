@@ -169,7 +169,8 @@ describe("the ending of a job that can never launch", () => {
       "FOR SHARE OF p",
       "FOR UPDATE OF j",
       "FOR SHARE OF s",
-      "FOR SHARE OF r",
+      "FOR UPDATE OF r`",
+      'GROUP BY a."generationSceneRequestId"',
       "decideUnlaunchableJobEnding(",
       "await applyLockedTransition(",
       'UPDATE "generation_reservations"',
@@ -180,6 +181,9 @@ describe("the ending of a job that can never launch", () => {
     const beforeLock = body.slice(0, order[0]!);
     expect(beforeLock.match(/tx\./g)).toHaveLength(1);
     expect(beforeLock).not.toMatch(/FOR (UPDATE|SHARE)/);
+    // The attempts are counted in a statement of their own, after the requests' lock.
+    const requestLock = body.slice(body.lastIndexOf("tx.$queryRaw", order[5]!), order[5]!);
+    expect(requestLock).not.toContain("scene_generations");
   });
 
   it("writes the job and its reservation and nothing else, and admits nothing", () => {

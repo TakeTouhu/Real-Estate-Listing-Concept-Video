@@ -365,9 +365,9 @@ before any catalog, or rows not as the start wrote them. The cause is decided
 from the rows the ending locks; a hold that is not `RESERVED`, or a job with an
 attempt, is never released. A job refused for a route, a price or a rate keeps
 waiting. The launch runner ends a deleted Property's waiting jobs first, then
-hands the ending any candidate that can never launch, so such a job no longer
-holds back its organization's queue. Transaction L then cancels the job's
-scenes. Nothing outside tests constructs the runner or the repository.
+hands the ending any candidate that can never launch, so such a job, once
+its organization has a place to offer it, no longer holds back its queue.
+Transaction L then cancels the job's scenes. Nothing outside tests constructs the runner or the repository.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

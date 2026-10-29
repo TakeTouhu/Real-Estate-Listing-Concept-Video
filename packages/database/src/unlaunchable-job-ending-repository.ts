@@ -17,7 +17,8 @@
  *   -> Property                        FOR SHARE
  *   -> GenerationJob                   FOR UPDATE
  *   -> GenerationScene                 FOR SHARE, in position order
- *   -> SceneGenerationRequest          FOR SHARE, in scene position order
+ *   -> SceneGenerationRequest          FOR UPDATE, in scene position order
+ *   -> their attempts, counted         in a statement of their own
  * ```
  *
  * The cost-admission lock first and the reservation next, as every release
@@ -28,9 +29,12 @@
  * then seen. The launch holds the Property and the reservation `FOR SHARE`
  * before the job and takes no cost-admission lock; an ending holding the
  * reservation makes the launch wait at it, and whichever commits first leaves
- * the job the other refuses. The scenes and requests are read under a shared
- * lock and never written: Transaction L cancels them once the job has failed
- * (ADR-0084), as it closes every failed job's open scenes.
+ * the job the other refuses. The scenes and requests are locked and never
+ * written: Transaction L cancels them once the job has failed (ADR-0084), as it
+ * closes every failed job's open scenes. The requests are held `FOR UPDATE`,
+ * which a new attempt's foreign-key check waits for, so no attempt is admitted
+ * under them until this commits; their attempts are counted after that lock, in
+ * a statement of their own, so one committed while this waited is seen.
  *
  * ## No work row
  *
@@ -143,17 +147,25 @@ async function endWithin(tx: Tx, input: EndUnlaunchableJobInput): Promise<EndUnl
      ORDER BY s."position"
        FOR SHARE OF s`;
 
-  const requests = await tx.$queryRaw<
-    { id: string; generationSceneId: string; kind: string; state: string; attempts: number }[]
-  >`
-    SELECT r."id", r."generationSceneId", r."kind"::text AS "kind", r."state"::text AS "state",
-           (SELECT count(*)::int FROM "scene_generations" a WHERE a."generationSceneRequestId" = r."id")
-             AS "attempts"
+  const requests = await tx.$queryRaw<{ id: string; generationSceneId: string; kind: string; state: string }[]>`
+    SELECT r."id", r."generationSceneId", r."kind"::text AS "kind", r."state"::text AS "state"
       FROM "scene_generation_requests" r
       JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
      WHERE s."generationJobId" = ${generationJobId}
      ORDER BY s."position", r."id"
-       FOR SHARE OF r`;
+       FOR UPDATE OF r`;
+
+  // Not a subquery of the statement above: a statement reads what was
+  // committed when it began, even for a row it waited for, so an attempt
+  // committed while that one waited on a request's lock would count as none.
+  const counts = await tx.$queryRaw<{ requestId: string; attempts: number }[]>`
+    SELECT a."generationSceneRequestId" AS "requestId", count(*)::int AS "attempts"
+      FROM "scene_generations" a
+      JOIN "scene_generation_requests" r ON r."id" = a."generationSceneRequestId"
+      JOIN "generation_scenes" s ON s."id" = r."generationSceneId"
+     WHERE s."generationJobId" = ${generationJobId}
+     GROUP BY a."generationSceneRequestId"`;
+  const attemptsOf = new Map(counts.map((row) => [row.requestId, row.attempts]));
 
   // ---- 2. The decision. ---------------------------------------------------
   const lockedScenes: JobLaunchLockedScene[] = scenes.map((scene) => ({
@@ -164,7 +176,7 @@ async function endWithin(tx: Tx, input: EndUnlaunchableJobInput): Promise<EndUnl
     compiledPrompt: scene.compiledPrompt,
     requests: requests
       .filter((request) => request.generationSceneId === scene.id)
-      .map(({ id, kind, state, attempts }) => ({ id, kind, state, attempts })),
+      .map(({ id, kind, state }) => ({ id, kind, state, attempts: attemptsOf.get(id) ?? 0 })),
   }));
   const decision = decideUnlaunchableJobEnding({
     jobState: job.state,
