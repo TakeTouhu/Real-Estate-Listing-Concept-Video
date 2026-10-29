@@ -77,7 +77,7 @@ export function createLaunchedJobEndingRepository(prisma: PrismaClient): Launche
         SELECT vp."organizationId" AS "organizationId", j."id" AS "generationJobId"
           FROM "generation_jobs" j
           JOIN "video_projects" vp ON vp."id" = j."videoProjectId"
-          JOIN "properties" p ON p."id" = vp."propertyId"
+          JOIN "properties" p ON p."id" = vp."propertyId" AND p."organizationId" = vp."organizationId"
           JOIN "generation_reservations" res ON res."generationJobId" = j."id"
          WHERE j."state"::text IN (${BEFORE_ASSEMBLY})
            AND j."currentDeliverableVersionId" IS NULL
@@ -116,12 +116,14 @@ async function endWithin(tx: Tx, input: EndLaunchedJobInput): Promise<EndLaunche
        FOR UPDATE OF res`;
   const reservation = reservations[0];
 
+  // The Property's own organization too, as the attempt's ending reads it (ADR-0100).
   const properties = await tx.$queryRaw<{ status: string }[]>`
     SELECT p."status"::text AS "status"
       FROM "generation_jobs" j
       JOIN "video_projects" vp ON vp."id" = j."videoProjectId"
       JOIN "properties" p ON p."id" = vp."propertyId"
      WHERE j."id" = ${generationJobId} AND vp."organizationId" = ${organizationId}
+       AND p."organizationId" = ${organizationId}
        FOR SHARE OF p`;
   const property = properties[0];
 

@@ -668,8 +668,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       preparation refusal with a transition event and no audit entry, as
       Transactions K and L release the Unit and cancel attempts with none.
       GS-7d-1 (ADR-0099 Decision 3) ends a waiting job that can never launch
-      and releases its Units the same way, and GS-7d-2 (ADR-0100 Decision 2)
-      a generating job's attempt whose Property was deleted. Still open.*
+      and releases its Units the same way, GS-7d-2 (ADR-0100 Decision 2)
+      a generating job's attempt whose Property was deleted, and GS-7d-3a
+      (ADR-0102 Decision 2) a deleted Property's launched job before its video
+      is assembled. Still open.*
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the
@@ -1382,8 +1384,8 @@ them is **built**. Each item below records the settled decision and what remains
       waits before submission ends so its Unit is released too (ADR-0100),
       as does one launched and not yet being assembled (ADR-0102); one being
       assembled is not ended yet (*End a deleted Property's video already at
-      the provider or being assembled*, below). A restored Property's videos would be started
-      again by the customer.*
+      the provider or being assembled*, below). A restored Property's videos
+      would be started again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1591,10 +1593,11 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0102) ends a launched job in `GENERATING`, `SCENES_READY` or
       `COMPOSITION_PENDING` whose Property was deleted, its Unit released in
       the same commit; the launch runner ends them before its launches.
-      **Still open:** a job in `COMPOSING` or `DELIVERABLE_VALIDATING`, which
-      GS-7d-3b will stop at publication (Transaction G refuses to publish,
-      fails the job and releases its Unit), and a job whose hold is on
-      reconciliation and is then released rather than restored.*
+      A job whose hold is on reconciliation is ended once the hold is
+      restored, or failed by Transaction K once it is released. **Still
+      open:** a job in `COMPOSING` or `DELIVERABLE_VALIDATING`, which GS-7d-3b
+      will stop at publication (Transaction G refuses to publish, fails the
+      job and releases its Unit).*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

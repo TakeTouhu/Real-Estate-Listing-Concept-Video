@@ -39,8 +39,10 @@ this order:
    regeneration, which holds no Unit and rolls back to that video on failure
    (ADR-0083 Decision 3);
 3. its reservation is not `RESERVED`: **keep** (`RESERVATION_NOT_HELD`). A hold
-   on reconciliation is the platform not knowing what a provider did, and one
-   consumed or released has nothing left to return, as in ADR-0099;
+   on reconciliation is reconciliation's to move: once it is restored the next
+   pass ends the job, and once it is released Transaction K fails the job,
+   which accepts a released hold. One consumed or released has nothing left to
+   return, as in ADR-0099;
 4. its Property stands: **keep** (`PROPERTY_STANDS`);
 5. otherwise **end** it, from the state it was read in.
 
@@ -78,7 +80,8 @@ Transactions H and K, which fail a generating job and release its Unit, take
 the same lock first. The billing-cycle key is read before the lock; it is
 frozen when the hold is taken. The Property is held `FOR SHARE` after the
 reservation, as the gate holds it, so a deletion saving is waited for and then
-seen.
+seen. Every read is tenant-scoped through the job's project, and the Property's
+by its own organization too, as ADR-0100 reads it.
 
 **Against the writers that move a launched job forward.** Scene delivery
 (Transaction F) and the composition claim (J1) lock the job first and take
@@ -101,7 +104,9 @@ the job's as the locked transition's internal error, the reservation's as a
 defect (`ENDING_LOST_UNDER_LOCK`). A refusal writes nothing.
 
 **No audit entry**, as for ADR-0099 and Transactions K and L; the transition
-events are the record.
+events are the record. Whether a release the customer did not ask for warrants
+one stays open with the item already recorded (`docs/decisions/TODO.md`, *A
+preflight-failure audit event, if wanted, belongs to orchestration*).
 
 ## Decision 3 — The scenes are left to Transaction L
 
@@ -118,6 +123,13 @@ ADR-0083 Decision 1 accepts for a sibling of any failed scene. A
 `COMPOSITION_PENDING` job's planned deliverable version stays with its inputs and
 no composition: the claim requires the job `COMPOSITION_PENDING`, so nothing
 composes it.
+
+**The Unit is released even while a submission's outcome is unknown.** A hold
+stands `RESERVED` while an attempt of the job is being submitted or is at the
+provider. The ending releases it, and an outcome that later turns out unknown
+leaves the released hold alone rather than moving it to reconciliation
+(`RELEASED` is gone). No video of the job will be delivered, so no Unit is the
+customer's to spend; whatever the provider did is VTaVision's cost, as above.
 
 ## Decision 4 — Finding them, and the launch runner ends them
 
@@ -136,8 +148,16 @@ before the launches lets the organization's next waiting job take that place in
 the same pass. The ending's answer is the job's outcome: `ENDED` with
 `PROPERTY_DELETED`, or `NOT_ENDED` with the refusal. An ending that throws is
 that job's `FAILED` outcome, keeping only a defect's code, and the pass goes
-on. A read that throws rejects the pass, and nothing is launched. `ended`
-counts both endings.
+on. A read that throws rejects the pass, and nothing is launched; the waiting
+jobs already ended stay ended, each its own commit, and only their report is
+lost. `ended` counts both endings, which their events tell apart
+(`job.ended_unlaunchable`, `job.ended_property_deleted`).
+
+A place counts a customer's videos at once (ADR-0094 Decision 2), not provider
+work. As after Transaction K, a failed job holds none while an attempt of it may
+still finish at the provider. That attempt's cost stays in the paid-submission
+gate's exposure, which counts attempts by their own state, whatever their job's
+or their hold's.
 
 ## Decision 5 — Nothing runs it yet
 
@@ -157,16 +177,14 @@ provider, HTTP client or storage and schedule nothing. The pipeline command
 - **A regeneration of a deleted Property's delivered video.** No Unit is held
   by one. Whether it may run at all belongs to the open item on video projects
   created before their Property's deletion.
-- **A job whose hold is on reconciliation.** It is kept. Once reconciliation
-  restores the hold to `RESERVED`, the next pass ends the job. If it releases
-  the hold instead, the job is GS-7d-3b's to stop at publication.
 - **Removing an ended job's copied outputs and planned version.** They are only
   in internal storage and the database. Removing them belongs to the 30-day
   trash lifecycle (`docs/decisions/TODO.md`, *Build the 30-day trash
   lifecycle*).
 - **How the customer is shown an ended video** (GS-10, GS-11). The wording must
   not name a provider or a model.
-- **Whether an ended job warrants an audit entry** (Decision 2).
+- **Whether an ended job warrants an audit entry** (Decision 2, and the TODO
+  item it names).
 
 ## Consequences
 

@@ -538,14 +538,18 @@ describe("a deleted Property's launched job (ADR-0102)", () => {
     expect(JSON.stringify(report)).not.toContain("secret");
   });
 
-  it("rejects the pass when reading them throws, and launches nothing", async () => {
+  it("rejects the pass when reading them throws, the waiting ones already ended, and launches nothing", async () => {
     const repository = new ScriptedRepository(
       [{ organizationId: "org_a", generationJobId: "job_a", facts: facts("job_a") }],
       { job_a: LAUNCHED("job_a", ["att_1", "att_2"]) },
     );
+    const ending = new ScriptedEnding(repository.calls, [{ organizationId: "org_a", generationJobId: "job_w" }], {
+      job_w: { kind: "ENDED", cause: "PROPERTY_DELETED" },
+    });
     const launched = new ScriptedLaunchedEnding(repository.calls, "THROW");
-    await expect(runner(repository, new ScriptedPlanner(), undefined, launched).runOnce(3)).rejects.toThrow();
-    expect(repository.calls).toEqual(["deleted:3", "launched:3"]);
+    await expect(runner(repository, new ScriptedPlanner(), ending, launched).runOnce(3)).rejects.toThrow();
+    // Each ending is its own commit: the waiting job's stands, and only its report is lost.
+    expect(repository.calls).toEqual(["deleted:3", "end:org_a:job_w", "launched:3"]);
   });
 });
 

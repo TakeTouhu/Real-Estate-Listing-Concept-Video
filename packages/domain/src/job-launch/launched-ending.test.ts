@@ -25,10 +25,15 @@ describe("the ending of a deleted Property's launched job", () => {
   it.each([...GENERATION_JOB_STATES.filter((state) => !BEFORE_ASSEMBLY.includes(state)), null])(
     "keeps a job %s, whatever else is true of it",
     (jobState) => {
-      expect(decideLaunchedJobEnding({ ...ENDABLE, jobState })).toEqual({
-        kind: "KEEP",
-        reason: "NOT_BEFORE_ASSEMBLY",
-      });
+      for (const others of [
+        ENDABLE,
+        { jobHoldsDeliverable: true, reservationState: "CONSUMED", propertyDeleted: false },
+      ]) {
+        expect(decideLaunchedJobEnding({ ...others, jobState })).toEqual({
+          kind: "KEEP",
+          reason: "NOT_BEFORE_ASSEMBLY",
+        });
+      }
     },
   );
 

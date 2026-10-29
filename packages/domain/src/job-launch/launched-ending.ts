@@ -59,9 +59,9 @@ export type LaunchedJobEndingRefusal =
    */
   | "HOLDS_DELIVERABLE"
   /**
-   * Its reservation is not `RESERVED`. A hold on reconciliation is the platform
-   * not knowing what a provider did, and one consumed or released has nothing
-   * left to return.
+   * Its reservation is not `RESERVED`. A hold on reconciliation is
+   * reconciliation's to move: restored, the next pass ends the job; released,
+   * Transaction K fails it. One consumed or released has nothing left to return.
    */
   | "RESERVATION_NOT_HELD"
   /** Its Property stands. */
