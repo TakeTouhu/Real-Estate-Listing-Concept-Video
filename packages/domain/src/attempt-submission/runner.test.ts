@@ -627,6 +627,16 @@ describe("a deleted Property's attempt", () => {
     expect(report).toMatchObject({ sent: 1, ended: 1, failed: 1 });
   });
 
+  it("rejects the pass when reading them throws, as a window read that throws does, and sends nothing", async () => {
+    const h = harness({ sg1: "job1" });
+    h.offer("sg1");
+    h.deps.repository.findPropertyDeletedAttempts = () => Promise.reject(new Error("database gone"));
+    await expect(run(h)).rejects.toThrow("database gone");
+    expect(h.queries).toEqual([]);
+    expect(h.deletedEndings).toEqual([]);
+    expect(sends(h)).toEqual([]);
+  });
+
   it("is ended when the gate refuses it as deleted since discovery, under the gate's context", async () => {
     const h = harness({ sg1: "job1", sg2: "job1", sg3: "job2" });
     h.offer("sg1", "sg2", "sg3");

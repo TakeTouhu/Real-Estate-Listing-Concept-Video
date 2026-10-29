@@ -1216,6 +1216,11 @@ describe.skipIf(!HAS_DB)("a deleted Property's attempts (GS-7d-2)", () => {
       expectedVersion: armed.stateVersion,
       context: ctx(),
     });
+    // Another organization naming a queued attempt of a deleted Property is
+    // answered as for none, and moves nothing.
+    const queued = await written();
+    expect(await endDeleted(ORG_B, a1.attempts[0]!)).toEqual({ kind: "NOT_QUEUED" });
+    expect(await written()).toEqual(queued);
     expect((await endDeleted(ORG_A, a1.attempts[0]!)).kind).toBe("ENDED");
 
     const before = await written();

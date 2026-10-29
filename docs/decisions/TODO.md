@@ -1187,6 +1187,22 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       same test-only fix: signal from inside the transaction once it holds its
       locks.
 
+## Found in GS-7d-2 — a Property rename can undo its deletion
+
+- [ ] **Make a Property's rename and deletion conditional writes.**
+      `PropertyService.update` reads the Property, then writes the whole row
+      back, its `status` included, by id alone
+      (`packages/database/src/property-repositories.ts`, `update`); `remove`
+      does the same with `DELETED`. A rename that read the Property before a
+      deletion saved therefore writes `ACTIVE` back after it: the Property
+      reappears, while its photos stay asked to be deleted. A deletion that
+      read a Property before a rename saved writes the old name back. The fix
+      is a product change and needs the product owner's yes: a rename writes
+      only the fields it changes, and both write with `updateMany` where `id`,
+      `organizationId` and `status` not `DELETED` still hold, a lost race
+      answered as not found. Found by GS-7d-2's review; ADR-0100's ending
+      reads such a Property as standing and leaves its attempt for the gate.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
@@ -1355,9 +1371,12 @@ them is **built**. Each item below records the settled decision and what remains
       authorized) and no counter resets on restore.
       *A deleted Property's waiting videos end at once and their Units are
       released (the product owner's decision of 2026-10-29, ADR-0099), not
-      held for the trash period, and its generating videos' attempts end
-      before submission so their Units are released too (ADR-0100); a
-      restored Property's videos would be started again by the customer.*
+      held for the trash period, and a generating video whose attempt still
+      waits before submission ends so its Unit is released too (ADR-0100);
+      one whose attempts are all at the provider, or being assembled, is not
+      ended yet (*End a deleted Property's video already at the provider or
+      being assembled*, below). A restored Property's videos would be started
+      again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1550,6 +1569,17 @@ them is **built**. Each item below records the settled decision and what remains
       long an attempt refused for configuration (no authorized route, the
       Safety Guard's pause, no revenue figure) may hold its Unit, which must
       be decided before generation is activated.*
+- [ ] **End a deleted Property's video already at the provider or being
+      assembled.** The product owner decided on 2026-10-29 ("すぐ戻す") that
+      a deleted Property's unfinished videos end at once and return their
+      Units. GS-7d-1 (ADR-0099) ends a waiting job, and GS-7d-2 (ADR-0100) a
+      generating job while one of its attempts still waits before
+      submission. A `GENERATING` job whose attempts are all at the provider,
+      or a job in `SCENES_READY`, `COMPOSITION_PENDING`, `COMPOSING` or
+      `DELIVERABLE_VALIDATING`, is not ended: nothing downstream reads the
+      Property, so it still delivers and its Unit is consumed. Planned as a
+      follow-up, GS-7d-3, to be proposed; the provider cost of an attempt
+      already sent would be VTaVision's (ADR-0083 Decision 1).
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

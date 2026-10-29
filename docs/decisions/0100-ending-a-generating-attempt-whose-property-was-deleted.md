@@ -37,7 +37,9 @@ On 2026-10-29 the product owner decided, on the decision card asking whether
 a deleted Property's unfinished videos end at once and return their Units,
 "すぐ戻す": both its waiting and its generating videos do, without waiting for
 the 30-day trash period of ADR-0052 Decision 17. ADR-0099 ends the waiting
-ones.
+ones. This ADR ends a generating one while one of its attempts still waits
+before submission; a generating video whose attempts are all at the provider,
+or one already being assembled, is not ended yet (*Not decided here*).
 
 ## Decision 1 — The attempt ends before submission, and K does the rest
 
@@ -103,9 +105,15 @@ share; only the code and the event type differ.
 **Refusals write nothing.** `NOT_QUEUED`: no such attempt in the organization
 (another tenant's id is answered the same, and nothing about it is said), or it
 is no longer `QUEUED` before submission. `PROPERTY_NOT_DELETED`: its Property,
-read under its lock, stands. Nothing restores a Property today, so the second
-is a guard for a restore that may be built (ADR-0052 Decision 17), not a path
-a test can reach through the product.
+read under its lock, stands. Nothing restores a Property on purpose today, so
+the second is a guard for a restore that may be built (ADR-0052 Decision 17).
+It can also be reached by a rename that read the Property before its deletion
+saved: the rename writes the whole row back, `ACTIVE` included
+(`docs/decisions/TODO.md`, *A Property rename can undo its deletion*). The
+ending then leaves the attempt `QUEUED`, as the Property reads standing; once
+the deletion's requests to delete its photos save, the gate refuses the
+attempt for its photo and preparation ends it (ADR-0097). The bug is the
+rename's, and its fix is that item's.
 
 **No audit entry**, as for the refused preparation's ending and Transactions K
 and L; the transition event is the record (`docs/decisions/TODO.md`, *A
@@ -139,7 +147,8 @@ own:
    ending's answer is the attempt's outcome: `ENDED` with `PROPERTY_DELETED`,
    `MOVED` when it was no longer `QUEUED`, or `NOT_SENT` with
    `PROPERTY_NOT_DELETED`. An ending that throws is that attempt's `FAILED`
-   outcome, and the pass goes on.
+   outcome, and the pass goes on. A read that throws rejects the pass before
+   its window, as a window read that throws does, and nothing is sent.
 2. **The window,** as before (ADR-0098), with one change: a gate that refuses
    an attempt as `SOURCE_INVALID` with `PROPERTY_DELETED`, a deletion saved
    since discovery, hands it to the same ending under the attempt's own
@@ -156,12 +165,19 @@ The cursor the pass returns still describes the window only.
 `createAttemptSubmissionRepository` and `AttemptSubmissionRunner` have no
 caller outside tests, and the static tests keep it so. The module and the
 repository reach no provider, HTTP client or storage of their own and schedule
-nothing; the repository writes one statement and locks only a Property, shared.
+nothing; the new ending writes one compare-and-set and its event, and locks
+only a Property, shared.
 The pipeline command (GS-9) is what will run the sender, on the test provider
 only.
 
 ## Not decided here
 
+- **A deleted Property's generating video with no attempt left waiting.** When
+  every attempt of its job is already at the provider, or the job is being
+  composed or validated, nothing here ends it: it still delivers, and its Unit
+  is consumed. The product owner's decision covers it too; ending it is a
+  follow-up, GS-7d-3 (`docs/decisions/TODO.md`, *End a deleted Property's
+  video already at the provider or being assembled*).
 - **The gate's other refusals for good.** A price no contract will cover again
   (`PRICING_INELIGIBLE`) or an attempt not in a shape that could cross the
   boundary (`ATTEMPT_NOT_ARMABLE`) still writes nothing, so such an attempt

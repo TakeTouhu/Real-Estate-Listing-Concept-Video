@@ -124,7 +124,10 @@ export type AttemptSubmissionRunOutcome =
    * Not sent, and nothing written: another provider's attempt, a URL with too
    * little time left, a job that will fail, a pass stopped by an answer it
    * could not record, or an attempt whose Property the ending found standing.
-   * Only the last is asked of the gate, which refused it.
+   * The last comes from the first step, for an attempt offered as deleted, or
+   * from the gate's refusal for a deleted Property; either way the Property
+   * reads standing again under its lock. From the first step the attempt is
+   * still `QUEUED`, so the window may report it a second time.
    */
   | {
       readonly kind: "NOT_SENT";
