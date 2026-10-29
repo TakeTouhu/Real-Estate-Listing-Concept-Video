@@ -310,13 +310,22 @@ describe("sending an attempt the gate authorized", () => {
     expect(report).toMatchObject({ sent: 2, stopped: false });
   });
 
-  it("loses an answer recording never takes, sends nothing more in the pass, and resumes after it", async () => {
+  const LOST = { kind: "LOST_CONCURRENCY" } as const;
+  it.each<[string, (SubmissionOutcomeResult | "THROW")[], SubmissionOutcomeResult["kind"] | null]>([
+    ["throws each time", ["THROW", "THROW", "THROW"], null],
+    ["throws last, after losing races", [LOST, LOST, "THROW"], null],
+    ["loses every race", [LOST, LOST, LOST], "LOST_CONCURRENCY"],
+  ])("loses an answer whose record %s, sends nothing more in the pass, and resumes after it", async (
+    _,
+    records,
+    last,
+  ) => {
     const h = harness({ sg1: "job1", sg2: "job2" });
     h.offer("sg1", "sg2");
-    h.state.records = ["THROW", "THROW", "THROW"];
+    h.state.records = [...records];
     const report = await run(h);
     expect(report.outcomes.map((o) => o.outcome)).toEqual([
-      { kind: "SENT", observed: "ACCEPTED", recorded: null, safetyGuardWarning: false },
+      { kind: "SENT", observed: "ACCEPTED", recorded: last, safetyGuardWarning: false },
       { kind: "NOT_SENT", reason: "PASS_STOPPED" },
     ]);
     expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1", "record:sg1", "record:sg1"]);
