@@ -668,7 +668,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       preparation refusal with a transition event and no audit entry, as
       Transactions K and L release the Unit and cancel attempts with none.
       GS-7d-1 (ADR-0099 Decision 3) ends a waiting job that can never launch
-      and releases its Units the same way. Still open.*
+      and releases its Units the same way, and GS-7d-2 (ADR-0100 Decision 2)
+      a generating job's attempt whose Property was deleted. Still open.*
 - [ ] **The 600-second preflight source URL TTL is provisional.**
       `PREFLIGHT_SOURCE_URL_TTL_SECONDS` was chosen for a pipeline nothing has
       run end to end. It must cover preparation, the claim, the POST and the
@@ -703,7 +704,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       Transaction K releases the Unit. One deleted after
       preparation and refused by the gate, and a deleted Property's attempt,
       which discovery passes over, are GS-7d. The sender (GS-7c-2b, ADR-0098)
-      calls the ending.*
+      calls the ending. GS-7d-2 (ADR-0100): a photo deleted after preparation
+      is refused by the gate and ended by the next pass's preparation; a
+      deleted Property's attempt is ended by the sender with
+      `PROPERTY_DELETED`, and Transaction K releases the Unit. Nothing runs
+      the sender until the pipeline command (GS-9).*
 - [ ] **Phase 4C provider request construction must use the immutable
       `SceneGeneration` snapshot only.** Never the current `StoryboardScene`
       (recomposition deletes it) and never the project's current `aspectRatio`
@@ -1350,8 +1355,9 @@ them is **built**. Each item below records the settled decision and what remains
       authorized) and no counter resets on restore.
       *A deleted Property's waiting videos end at once and their Units are
       released (the product owner's decision of 2026-10-29, ADR-0099), not
-      held for the trash period; a restored Property's videos would be
-      started again by the customer.*
+      held for the trash period, and its generating videos' attempts end
+      before submission so their Units are released too (ADR-0100); a
+      restored Property's videos would be started again by the customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1531,7 +1537,19 @@ them is **built**. Each item below records the settled decision and what remains
       over a deleted Property's attempts, so they no longer
       fill a pass ahead of attempts that can be sent, but they would hold
       their Units, even once their photos are asked to be deleted, until
-      GS-7d.*
+      GS-7d.* *Done for a deleted Property in GS-7d-2 (ADR-0100, no
+      migration): the sender ends such an attempt before its window, and one
+      the gate refuses as deleted since discovery at once,
+      `CANCELLED_PRE_SUBMISSION` with `PROPERTY_DELETED`, behind the
+      cost-admission lock with the Property held; K then releases the Unit.
+      A photo gone or unrecoverable is ended by preparation (GS-7c-2a), on
+      the next pass when the gate refused it first. Still open: the gate's
+      other refusals for good, a price no contract will cover again
+      (`PRICING_INELIGIBLE`) or an attempt not in a shape to cross the
+      boundary (`ATTEMPT_NOT_ARMABLE`), which still write nothing; and how
+      long an attempt refused for configuration (no authorized route, the
+      Safety Guard's pause, no revenue figure) may hold its Unit, which must
+      be decided before generation is activated.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

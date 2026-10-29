@@ -14,6 +14,10 @@ import type {
   AttemptSubmissionCandidateQuery,
   EndPreparationRefusalInput,
   EndPreparationRefusalOutcome,
+  EndPropertyDeletedAttemptInput,
+  EndPropertyDeletedAttemptOutcome,
+  PropertyDeletedAttempt,
+  PropertyDeletedAttemptQuery,
 } from "./ports";
 import { AttemptSubmissionRunner, MIN_SOURCE_URL_REMAINING_MS, type AttemptSubmissionRunnerDeps } from "./runner";
 
@@ -145,6 +149,8 @@ function harness(jobs: Record<string, string>) {
   const log: string[] = [];
   const queries: AttemptSubmissionCandidateQuery[] = [];
   const endings: EndPreparationRefusalInput[] = [];
+  const deletedQueries: PropertyDeletedAttemptQuery[] = [];
+  const deletedEndings: EndPropertyDeletedAttemptInput[] = [];
   const gateContexts: TransitionContext[] = [];
   const recorded: { attemptId: string; observation: ProviderSubmissionObservation; context: TransitionContext }[] = [];
   const sentPrepared: PreparedGeneration[] = [];
@@ -156,6 +162,9 @@ function harness(jobs: Record<string, string>) {
     expiresAt: new Date(NOW + PREFLIGHT_SOURCE_URL_TTL_SECONDS * 1000),
     ending: { kind: "ENDED", attemptId: "x", stateVersion: 2 } as EndPreparationRefusalOutcome,
     endThrows: false,
+    deleted: [] as PropertyDeletedAttempt[],
+    /** The deleted-Property ending's answers by attempt; `ENDED` when absent. */
+    deletedEnding: new Map<string, EndPropertyDeletedAttemptOutcome | "THROW">(),
     gate: new Map<string, PaidSubmissionAuthorizationOutcome | "THROW">(),
     answer: new Map<string, unknown>(),
     /** The outcome's answers, one per try, in turn; `APPLIED` once they run out. */
@@ -164,6 +173,7 @@ function harness(jobs: Record<string, string>) {
   const deps: AttemptSubmissionRunnerDeps = {
     repository: {
       async findSubmissionCandidates(query) {
+        log.push("window");
         queries.push(query);
         return state.candidates;
       },
@@ -172,6 +182,22 @@ function harness(jobs: Record<string, string>) {
         endings.push(input);
         if (state.endThrows) throw new Error("database gone");
         return state.ending;
+      },
+      async findPropertyDeletedAttempts(query) {
+        log.push("deleted");
+        deletedQueries.push(query);
+        return state.deleted;
+      },
+      async endPropertyDeletedAttempt(input) {
+        log.push(`end-deleted:${input.attemptId}`);
+        deletedEndings.push(input);
+        const answer = state.deletedEnding.get(input.attemptId) ?? {
+          kind: "ENDED",
+          attemptId: input.attemptId,
+          stateVersion: 2,
+        };
+        if (answer === "THROW") throw new Error("database gone");
+        return answer;
       },
     },
     preflight: {
@@ -235,8 +261,30 @@ function harness(jobs: Record<string, string>) {
   function offer(...ids: string[]): void {
     state.candidates = ids.map((id) => ({ organizationId: ORG, generationJobId: jobs[id]!, generation: attempt(id) }));
   }
-  return { deps, log, queries, endings, gateContexts, recorded, sentPrepared, contexts, state, offer };
+  /** Attempts of deleted Properties, as `findPropertyDeletedAttempts` offers them. */
+  function deleted(...ids: string[]): void {
+    state.deleted = ids.map((id) => ({ organizationId: ORG, generationJobId: jobs[id]!, attemptId: id }));
+  }
+  return {
+    deps,
+    log,
+    queries,
+    endings,
+    deletedQueries,
+    deletedEndings,
+    gateContexts,
+    recorded,
+    sentPrepared,
+    contexts,
+    state,
+    offer,
+    deleted,
+  };
 }
+
+/** The log without the two reads every pass makes. */
+const sends = (h: ReturnType<typeof harness>): string[] =>
+  h.log.filter((entry) => entry !== "deleted" && entry !== "window");
 
 const run = (h: ReturnType<typeof harness>, limit = 10) => new AttemptSubmissionRunner(h.deps).runOnce(limit);
 
@@ -246,7 +294,7 @@ describe("sending an attempt the gate authorized", () => {
     h.offer("sg1");
     const report = await run(h);
 
-    expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1"]);
+    expect(h.log).toEqual(["deleted", "window", `sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1"]);
     expect(report).toMatchObject({ sent: 1, ended: 0, failed: 0, stopped: false, next: null });
     expect(report.outcomes).toEqual([
       {
@@ -305,7 +353,7 @@ describe("sending an attempt the gate authorized", () => {
       { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
     ]);
     const tries = ["record:sg1", "record:sg1", "record:sg1"];
-    expect(h.log.slice(0, 6)).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", ...tries]);
+    expect(sends(h).slice(0, 6)).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", ...tries]);
     expect(h.recorded.slice(0, 3).map((r) => r.observation)).toEqual([ACCEPTED, ACCEPTED, ACCEPTED]);
     expect(report).toMatchObject({ sent: 2, stopped: false });
   });
@@ -328,7 +376,7 @@ describe("sending an attempt the gate authorized", () => {
       { kind: "SENT", observed: "ACCEPTED", recorded: last, safetyGuardWarning: false },
       { kind: "NOT_SENT", reason: "PASS_STOPPED" },
     ]);
-    expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1", "record:sg1", "record:sg1"]);
+    expect(sends(h)).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1", "record:sg1", "record:sg1"]);
     expect(report).toMatchObject({ sent: 1, failed: 0, stopped: true });
     expect(report.next).toEqual({ createdAt: h.state.candidates[0]!.generation.createdAt, id: "sg1" });
   });
@@ -362,7 +410,7 @@ describe("what is not sent", () => {
       { kind: "NOT_AUTHORIZED", refusal: "SAFETY_GUARD_HARD_PAUSE", reason: "HARD_PAUSE_PROJECTED_PROFIT_BELOW_FLOOR" },
       { kind: "NOT_AUTHORIZED", refusal: "LOST_CONCURRENCY", reason: null },
     ]);
-    expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", `sign:${KEY}`, "gate:sg2"]);
+    expect(sends(h)).toEqual([`sign:${KEY}`, "gate:sg1", `sign:${KEY}`, "gate:sg2"]);
     expect(report).toMatchObject({ sent: 0, ended: 0, failed: 0 });
   });
 
@@ -371,7 +419,7 @@ describe("what is not sent", () => {
     h.state.candidates = [{ organizationId: ORG, generationJobId: "job1", generation: attempt("sg1", "wavespeed") }];
     const report = await run(h);
     expect(report.outcomes[0]!.outcome).toEqual({ kind: "NOT_SENT", reason: "OTHER_PROVIDER" });
-    expect(h.log).toEqual([]);
+    expect(sends(h)).toEqual([]);
     expect(h.contexts).toEqual([]);
   });
 
@@ -380,7 +428,7 @@ describe("what is not sent", () => {
     h.offer("sg1");
     h.state.expiresAt = new Date(NOW + MIN_SOURCE_URL_REMAINING_MS - 1);
     expect((await run(h)).outcomes[0]!.outcome).toEqual({ kind: "NOT_SENT", reason: "SOURCE_URL_STALE" });
-    expect(h.log).toEqual([`sign:${KEY}`]);
+    expect(sends(h)).toEqual([`sign:${KEY}`]);
 
     h.state.expiresAt = new Date(NOW + MIN_SOURCE_URL_REMAINING_MS);
     expect((await run(h)).outcomes[0]!.outcome).toMatchObject({ kind: "SENT" });
@@ -411,7 +459,7 @@ describe("a refused preparation", () => {
     expect(h.endings).toEqual([
       { organizationId: ORG, attemptId: "sg1", reason: "ASSET_UNRECOVERABLE", context: h.contexts[0] },
     ]);
-    expect(h.log).toEqual(["end:sg1", `sign:${KEY}`, "gate:sg3", "send:sg3", "record:sg3"]);
+    expect(sends(h)).toEqual(["end:sg1", `sign:${KEY}`, "gate:sg3", "send:sg3", "record:sg3"]);
     expect(report).toMatchObject({ sent: 1, ended: 1, failed: 0 });
   });
 
@@ -424,7 +472,7 @@ describe("a refused preparation", () => {
       { kind: "NOT_PREPARED", reason: "STORAGE_UNAVAILABLE" },
       { kind: "NOT_PREPARED", reason: "STORAGE_UNAVAILABLE" },
     ]);
-    expect(h.log).toEqual([]);
+    expect(sends(h)).toEqual([]);
   });
 
   it("reports an ending that found the attempt moved, and goes on with its job", async () => {
@@ -470,7 +518,7 @@ describe("one bad attempt never stops the others", () => {
     h.deps.preflight.assets.findById = () => Promise.reject(new Error("database gone"));
     expect((await run(h)).outcomes[0]!.outcome).toEqual({ kind: "FAILED" });
     expect(h.endings).toEqual([]);
-    expect(h.log).toEqual([]);
+    expect(sends(h)).toEqual([]);
   });
 
   it("makes an ending that throws FAILED", async () => {
@@ -512,5 +560,121 @@ describe("the window", () => {
       await expect(runner.runOnce(1, after)).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     }
     expect(h.queries).toEqual([]);
+    expect(h.deletedQueries).toEqual([]);
+  });
+});
+
+describe("a deleted Property's attempt", () => {
+  const ENDED_DELETED = { kind: "ENDED", reason: "PROPERTY_DELETED" } as const;
+
+  it("is ended first, each under its own context, and nothing more of its job is sent in the pass", async () => {
+    const h = harness({ sd1: "job1", sd2: "job2", sg1: "job1", sg2: "job3" });
+    h.deleted("sd1", "sd2");
+    // An attempt of the first job in the window too, which discovery would not
+    // offer, so only the job rule keeps it from being sent.
+    h.offer("sg1", "sg2");
+    const report = await run(h, 3);
+
+    expect(report.outcomes.map((o) => [o.attemptId, o.outcome])).toEqual([
+      ["sd1", ENDED_DELETED],
+      ["sd2", ENDED_DELETED],
+      ["sg1", { kind: "NOT_SENT", reason: "JOB_ENDING" }],
+      ["sg2", { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false }],
+    ]);
+    expect(h.log).toEqual([
+      "deleted",
+      "end-deleted:sd1",
+      "end-deleted:sd2",
+      "window",
+      `sign:${KEY}`,
+      "gate:sg2",
+      "send:sg2",
+      "record:sg2",
+    ]);
+    expect(h.deletedQueries).toEqual([{ limit: 3 }]);
+    expect(h.queries).toEqual([{ limit: 3, after: null }]);
+    expect(h.deletedEndings).toEqual([
+      { organizationId: ORG, attemptId: "sd1", context: h.contexts[0] },
+      { organizationId: ORG, attemptId: "sd2", context: h.contexts[1] },
+    ]);
+    expect(h.contexts.map((c) => c.correlationId)).toEqual(["corr_1", "corr_2", "corr_3"]);
+    expect(report).toMatchObject({ sent: 1, ended: 2, failed: 0, stopped: false, next: null });
+  });
+
+  it("reports an ending that found it moved or its Property standing, and goes on with its job", async () => {
+    const h = harness({ sd1: "job1", sd2: "job2", sg1: "job1", sg2: "job2" });
+    h.deleted("sd1", "sd2");
+    h.offer("sg1", "sg2");
+    h.state.deletedEnding.set("sd1", { kind: "NOT_QUEUED" });
+    h.state.deletedEnding.set("sd2", { kind: "PROPERTY_NOT_DELETED" });
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "MOVED", reason: "PROPERTY_DELETED" },
+      { kind: "NOT_SENT", reason: "PROPERTY_NOT_DELETED" },
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+    ]);
+    expect(report).toMatchObject({ sent: 2, ended: 0, failed: 0 });
+  });
+
+  it("makes an ending that throws FAILED, and goes on", async () => {
+    const h = harness({ sd1: "job1", sd2: "job2", sg1: "job1" });
+    h.deleted("sd1", "sd2");
+    h.offer("sg1");
+    h.state.deletedEnding.set("sd1", "THROW");
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome.kind)).toEqual(["FAILED", "ENDED", "SENT"]);
+    expect(report).toMatchObject({ sent: 1, ended: 1, failed: 1 });
+  });
+
+  it("is ended when the gate refuses it as deleted since discovery, under the gate's context", async () => {
+    const h = harness({ sg1: "job1", sg2: "job1", sg3: "job2" });
+    h.offer("sg1", "sg2", "sg3");
+    h.state.gate.set("sg1", { kind: "SOURCE_INVALID", reason: "PROPERTY_DELETED" });
+    const report = await run(h);
+    expect(report.outcomes.map((o) => [o.attemptId, o.outcome])).toEqual([
+      ["sg1", ENDED_DELETED],
+      ["sg2", { kind: "NOT_SENT", reason: "JOB_ENDING" }],
+      ["sg3", { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false }],
+    ]);
+    expect(sends(h)).toEqual([
+      `sign:${KEY}`,
+      "gate:sg1",
+      "end-deleted:sg1",
+      `sign:${KEY}`,
+      "gate:sg3",
+      "send:sg3",
+      "record:sg3",
+    ]);
+    expect(h.deletedEndings).toEqual([{ organizationId: ORG, attemptId: "sg1", context: h.gateContexts[0] }]);
+    expect(report).toMatchObject({ sent: 1, ended: 1, failed: 0 });
+  });
+
+  it.each<[string, EndPropertyDeletedAttemptOutcome, unknown]>([
+    ["moved", { kind: "NOT_QUEUED" }, { kind: "MOVED", reason: "PROPERTY_DELETED" }],
+    ["standing", { kind: "PROPERTY_NOT_DELETED" }, { kind: "NOT_SENT", reason: "PROPERTY_NOT_DELETED" }],
+  ])("reports a gate's deleted Property the ending found %s, and goes on with its job", async (_, ending, outcome) => {
+    const h = harness({ sg1: "job1", sg2: "job1" });
+    h.offer("sg1", "sg2");
+    h.state.gate.set("sg1", { kind: "SOURCE_INVALID", reason: "PROPERTY_DELETED" });
+    h.state.deletedEnding.set("sg1", ending);
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      outcome,
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+    ]);
+    expect(report.ended).toBe(0);
+  });
+
+  it("leaves an attempt the gate refuses for any other source reason", async () => {
+    const h = harness({ sg1: "job1", sg2: "job1" });
+    h.offer("sg1", "sg2");
+    h.state.gate.set("sg1", { kind: "SOURCE_INVALID", reason: "ASSET_SOURCE_CHANGED" });
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "NOT_AUTHORIZED", refusal: "SOURCE_INVALID", reason: "ASSET_SOURCE_CHANGED" },
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+    ]);
+    expect(h.deletedEndings).toEqual([]);
   });
 });

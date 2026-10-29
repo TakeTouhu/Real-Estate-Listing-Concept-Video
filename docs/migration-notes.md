@@ -1913,3 +1913,18 @@ ending repository or the launch runner.
 
 **Rolling back.** To GS-7c-2b's build: safe, since nothing in production calls
 what GS-7d-1 adds. A job a test ended stays ended; its Units stay released.
+
+## GS-7d-2 — ending a generating job's attempt whose Property was deleted
+
+**No migration** (ADR-0100). No schema, enum, constraint or row changes, and
+no new environment variable. The ending writes the attempt's `QUEUED →
+CANCELLED_PRE_SUBMISSION`, a state and columns that already exist, with
+`PROPERTY_DELETED` in the free-text `normalizedErrorCode`; its event goes to
+the existing transition history with a new event type
+(`attempt.ended_property_deleted`) in a free-text column.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+attempt submission repository or the sender.
+
+**Rolling back.** To GS-7d-1's build: safe, since nothing in production calls
+what GS-7d-2 adds. An attempt a test ended stays ended.

@@ -369,6 +369,17 @@ hands the ending any candidate that can never launch, so such a job, once
 its organization has a place to offer it, no longer holds back its queue.
 Transaction L then cancels the job's scenes. Nothing outside tests constructs the runner or the repository.
 
+**GS-7d-2 — ending a generating job's attempt whose Property was deleted**
+(ADR-0100, no migration): such an attempt, which discovery never offers and
+the gate refuses for good, ends before submission with `PROPERTY_DELETED`, in
+one commit behind the cost-admission lock with the Property held while it
+decides; the attempt failure settlement then fails the job and releases its
+Unit, and Transaction L closes its other scenes. The sender ends up to its
+limit of them, one per job, before its window, and one the gate refuses as
+deleted since discovery at once. An attempt whose photo is gone was already
+ended by preparation (GS-7c-2a). Nothing outside tests constructs the sender or
+the repository.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
