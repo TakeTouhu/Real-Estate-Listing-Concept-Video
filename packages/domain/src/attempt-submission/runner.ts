@@ -5,8 +5,9 @@
  * for each, in this order:
  *
  * ```text
+ * provider     this sender reaches the attempt's provider, before anything is signed
  * prepare      sign the photo's URL; a refusal for good ends the attempt, one that may pass leaves it
- * check        this sender reaches the attempt's provider, and the URL has time left
+ * fresh        the URL has time left
  * authorize    the paid-submission gate moves it QUEUED -> SUBMITTING, audited, or refuses
  * send         one POST, only after AUTHORIZED, never retried
  * record       what the provider answered, through the submission outcome
@@ -16,10 +17,13 @@
  * writes nothing, and the attempt is offered again on a later pass. Once the
  * gate has armed an attempt it is sent exactly once and its answer recorded:
  * a sender that throws, or answers with something that is not an observation,
- * is recorded as `SUBMISSION_UNKNOWN`, because the request may have left. A
- * record that throws leaves the attempt `SUBMITTING`, the state the stale
- * submission recovery turns into `SUBMISSION_UNKNOWN` (ADR-0036); nothing ever
- * sends it again.
+ * is recorded as `SUBMISSION_UNKNOWN`, because the request may have left. The
+ * record is tried up to `RECORD_TRIES` times while it throws or loses a race,
+ * since an answer already on file replays. If it still does not land, the
+ * answer is lost: the attempt stays `SUBMITTING`, the state the stale
+ * submission recovery turns into `SUBMISSION_UNKNOWN` (ADR-0036), and nothing
+ * ever sends it again. The pass then sends nothing more, because whatever kept
+ * one answer from being recorded would lose the next one too.
  *
  * Once an attempt of a job has ended in a pass, by preparation's refusal or by
  * the provider's, the job will fail (Transaction K, ADR-0083), so its other
@@ -46,7 +50,11 @@ import {
 import { PreflightRefusalError, type PreflightRefusalReason } from "../generation/execution-preflight-errors";
 import type { TransitionContext } from "../orchestration/ports";
 import { isWellFormedObservation, type ProviderSubmissionObservation } from "../submission/observation";
-import type { SubmissionClock, SubmissionOutcomeResult } from "../submission/ports";
+import type {
+  RecordSubmissionObservationInput,
+  SubmissionClock,
+  SubmissionOutcomeResult,
+} from "../submission/ports";
 import type { SubmissionOutcomeService } from "../submission/service";
 import {
   preparationRefusalEnding,
@@ -67,6 +75,12 @@ import type {
  */
 export const MIN_SOURCE_URL_REMAINING_MS = 300_000;
 
+/**
+ * How many times an answer is offered to the submission outcome. Each try is
+ * its own transaction; one that landed answers `REPLAYED` to the next.
+ */
+const RECORD_TRIES = 3;
+
 /** The answer recorded for a send whose fate is not known. */
 const UNKNOWN: ProviderSubmissionObservation = Object.freeze({
   kind: "SUBMISSION_UNKNOWN",
@@ -77,8 +91,9 @@ type GateRefusal = Exclude<PaidSubmissionAuthorizationOutcome, { readonly kind: 
 
 export type AttemptSubmissionRunOutcome =
   /**
-   * Sent once. What the provider answered, and the outcome's result, or `null`
-   * when recording it threw and the attempt stays `SUBMITTING`.
+   * Sent once. What the provider answered, and the outcome's last result, or
+   * `null` when the last try to record it threw. Anything but `APPLIED` or
+   * `REPLAYED` stopped the pass.
    */
   | {
       readonly kind: "SENT";
@@ -94,9 +109,13 @@ export type AttemptSubmissionRunOutcome =
   | { readonly kind: "MOVED"; readonly reason: PreflightRefusalReason }
   /**
    * Not asked of the gate, and nothing written: another provider's attempt, a
-   * URL with too little time left, or a job that will fail.
+   * URL with too little time left, a job that will fail, or a pass stopped by
+   * an answer it could not record.
    */
-  | { readonly kind: "NOT_SENT"; readonly reason: "OTHER_PROVIDER" | "SOURCE_URL_STALE" | "JOB_ENDING" }
+  | {
+      readonly kind: "NOT_SENT";
+      readonly reason: "OTHER_PROVIDER" | "SOURCE_URL_STALE" | "JOB_ENDING" | "PASS_STOPPED";
+    }
   /** The gate refused and wrote nothing. */
   | { readonly kind: "NOT_AUTHORIZED"; readonly refusal: GateRefusal["kind"]; readonly reason: string | null }
   /** Something threw before any send; nothing about the error is kept. */
@@ -106,14 +125,17 @@ export interface AttemptSubmissionReport {
   readonly sent: number;
   readonly ended: number;
   readonly failed: number;
+  /** An answer was not recorded, and nothing after it was sent. */
+  readonly stopped: boolean;
   readonly outcomes: readonly {
     readonly organizationId: string;
     readonly attemptId: string;
     readonly outcome: AttemptSubmissionRunOutcome;
   }[];
   /**
-   * Where the next pass starts: after the last attempt offered when the window
-   * was full, or from the oldest (`null`) when it reached the end.
+   * Where the next pass starts: after the attempt that stopped the pass, after
+   * the last attempt offered when the window was full, or from the oldest
+   * (`null`) when it reached the end.
    */
   readonly next: AttemptSubmissionCursor | null;
 }
@@ -145,13 +167,16 @@ export class AttemptSubmissionRunner {
 
     const outcomes: { organizationId: string; attemptId: string; outcome: AttemptSubmissionRunOutcome }[] = [];
     const ending = new Set<string>();
+    let stopped: AttemptSubmissionCandidate | undefined;
     let sent = 0;
     let ended = 0;
     let failed = 0;
 
     for (const candidate of candidates) {
       let outcome: AttemptSubmissionRunOutcome;
-      if (ending.has(candidate.generationJobId)) {
+      if (stopped !== undefined) {
+        outcome = { kind: "NOT_SENT", reason: "PASS_STOPPED" };
+      } else if (ending.has(candidate.generationJobId)) {
         outcome = { kind: "NOT_SENT", reason: "JOB_ENDING" };
       } else {
         try {
@@ -166,15 +191,15 @@ export class AttemptSubmissionRunner {
       if (outcome.kind === "ENDED" || (outcome.kind === "SENT" && outcome.observed === "DEFINITIVELY_REJECTED")) {
         ending.add(candidate.generationJobId);
       }
+      if (outcome.kind === "SENT" && outcome.recorded !== "APPLIED" && outcome.recorded !== "REPLAYED") {
+        stopped = candidate;
+      }
       outcomes.push({ organizationId: candidate.organizationId, attemptId: candidate.generation.id, outcome });
     }
 
-    const last = candidates.at(-1);
-    const next =
-      candidates.length === bounded && last !== undefined
-        ? { createdAt: last.generation.createdAt, id: last.generation.id }
-        : null;
-    return { sent, ended, failed, outcomes, next };
+    const resume = stopped ?? (candidates.length === bounded ? candidates.at(-1) : undefined);
+    const next = resume === undefined ? null : { createdAt: resume.generation.createdAt, id: resume.generation.id };
+    return { sent, ended, failed, stopped: stopped !== undefined, outcomes, next };
   }
 
   async #submit(candidate: AttemptSubmissionCandidate): Promise<AttemptSubmissionRunOutcome> {
@@ -214,14 +239,7 @@ export class AttemptSubmissionRunner {
     // Armed and audited: from here the attempt is sent once, and its answer
     // is recorded whatever happens.
     const observation = await this.#send(prepared);
-    let recorded: SubmissionOutcomeResult["kind"] | null;
-    try {
-      recorded = (
-        await this.#deps.outcomes.recordObservation({ organizationId, attemptId: generation.id, observation, context })
-      ).kind;
-    } catch {
-      recorded = null;
-    }
+    const recorded = await this.#record({ organizationId, attemptId: generation.id, observation, context });
     return {
       kind: "SENT",
       observed: observation.kind,
@@ -249,5 +267,19 @@ export class AttemptSubmissionRunner {
     } catch {
       return UNKNOWN;
     }
+  }
+
+  /** The answer, offered again only while recording it throws or loses a race. */
+  async #record(input: RecordSubmissionObservationInput): Promise<SubmissionOutcomeResult["kind"] | null> {
+    let recorded: SubmissionOutcomeResult["kind"] | null = null;
+    for (let tries = 0; tries < RECORD_TRIES; tries += 1) {
+      try {
+        recorded = (await this.#deps.outcomes.recordObservation(input)).kind;
+      } catch {
+        recorded = null;
+      }
+      if (recorded !== null && recorded !== "LOST_CONCURRENCY") return recorded;
+    }
+    return recorded;
   }
 }

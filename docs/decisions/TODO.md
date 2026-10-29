@@ -1418,7 +1418,10 @@ them is **built**. Each item below records the settled decision and what remains
       holds for an attempt waiting `QUEUED` whose preparation is refused, on
       every pass, for a reason that may pass (ADR-0097 Decision 2), such as a
       model not restored or storage that does not answer: it is prepared again
-      each time and holds its Unit.*
+      each time and holds its Unit. So does one whose signed URL storage keeps
+      issuing with less than 300 seconds left (`SOURCE_URL_STALE`), and one
+      admitted for a provider no sender is built for (`OTHER_PROVIDER`): both
+      write nothing and wait.*
 - [x] **Stop the legacy executor's discovery from offering orchestrated
       attempts (GS-7).** `findNextQueuedForPreparation` and its claim read the
       legacy `state` column, which no orchestration writer moves: every
@@ -1594,8 +1597,10 @@ them is **built**. Each item below records the settled decision and what remains
       *GS-7c-2b (ADR-0098 Decision 6) builds the means:* discovery reads after
       a `{ createdAt, id }` cursor and each pass returns `next`. Still open:
       the pipeline command (GS-9) must pass each `next` to the following pass,
-      and must stop on a pass that sends and ends nothing rather than on an
-      empty window.
+      and stop only after a whole cycle, from the oldest until a pass returns
+      `next: null`, in which nothing was sent or ended, since a full window of
+      waiting attempts sends and ends nothing while newer ones wait behind it;
+      and at once on a pass that reports `stopped`.
 - [ ] **Decide whether a refusal the deployment causes ends a customer's
       attempt.** `PROVIDER_IDENTITY_MISMATCH` and
       `MODEL_DELIVERY_PLAN_CHANGED` are `TERMINAL` (ADR-0027) but come from

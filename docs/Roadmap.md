@@ -348,7 +348,8 @@ migration): the sender takes each attempt discovery offers through
 preparation, a check that the photo's signed URL has at least 300 seconds
 left, the paid-submission gate, one POST through the provider port and the
 record of the provider's answer. A send whose answer is lost is recorded as
-unknown, never sent again. Once one attempt of a job has ended in a pass, the
+unknown, never sent again, and a pass that cannot record an answer sends
+nothing more. Once one attempt of a job has ended in a pass, the
 job's other attempts are not sent in it, since the job will fail and its Unit
 is released. Each pass starts after the last attempt the previous one was
 offered, so attempts left waiting do not hold back newer ones in any

@@ -158,7 +158,8 @@ function harness(jobs: Record<string, string>) {
     endThrows: false,
     gate: new Map<string, PaidSubmissionAuthorizationOutcome | "THROW">(),
     answer: new Map<string, unknown>(),
-    recordThrows: false,
+    /** The outcome's answers, one per try, in turn; `APPLIED` once they run out. */
+    records: [] as (SubmissionOutcomeResult | "THROW")[],
   };
   const deps: AttemptSubmissionRunnerDeps = {
     repository: {
@@ -211,8 +212,9 @@ function harness(jobs: Record<string, string>) {
       async recordObservation(input): Promise<SubmissionOutcomeResult> {
         log.push(`record:${input.attemptId}`);
         recorded.push(input);
-        if (state.recordThrows) throw new Error("database gone");
-        return { kind: "APPLIED", attemptId: input.attemptId, stateVersion: 3, entitlementAnomaly: "NONE" };
+        const answer = state.records.shift();
+        if (answer === "THROW") throw new Error("database gone");
+        return answer ?? { kind: "APPLIED", attemptId: input.attemptId, stateVersion: 3, entitlementAnomaly: "NONE" };
       },
     },
     clock: { now: () => epochMillis(NOW) },
@@ -245,7 +247,7 @@ describe("sending an attempt the gate authorized", () => {
     const report = await run(h);
 
     expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1"]);
-    expect(report).toMatchObject({ sent: 1, ended: 0, failed: 0, next: null });
+    expect(report).toMatchObject({ sent: 1, ended: 0, failed: 0, stopped: false, next: null });
     expect(report.outcomes).toEqual([
       {
         organizationId: ORG,
@@ -293,19 +295,46 @@ describe("sending an attempt the gate authorized", () => {
     expect(report.outcomes[0]!.outcome).toMatchObject({ kind: "SENT", observed: "SUBMISSION_UNKNOWN" });
   });
 
-  it("reports a record that threw, and sends nothing again", async () => {
-    const h = harness({ sg1: "job1" });
-    h.offer("sg1");
-    h.state.recordThrows = true;
+  it("offers the answer again while recording throws or loses a race, never sending it again", async () => {
+    const h = harness({ sg1: "job1", sg2: "job2" });
+    h.offer("sg1", "sg2");
+    h.state.records = ["THROW", { kind: "LOST_CONCURRENCY" }, { kind: "REPLAYED", attemptId: "sg1" }];
     const report = await run(h);
-    expect(report).toMatchObject({ sent: 1, failed: 0 });
-    expect(report.outcomes[0]!.outcome).toEqual({
-      kind: "SENT",
-      observed: "ACCEPTED",
-      recorded: null,
-      safetyGuardWarning: false,
-    });
-    expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1"]);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "ACCEPTED", recorded: "REPLAYED", safetyGuardWarning: false },
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+    ]);
+    const tries = ["record:sg1", "record:sg1", "record:sg1"];
+    expect(h.log.slice(0, 6)).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", ...tries]);
+    expect(h.recorded.slice(0, 3).map((r) => r.observation)).toEqual([ACCEPTED, ACCEPTED, ACCEPTED]);
+    expect(report).toMatchObject({ sent: 2, stopped: false });
+  });
+
+  it("loses an answer recording never takes, sends nothing more in the pass, and resumes after it", async () => {
+    const h = harness({ sg1: "job1", sg2: "job2" });
+    h.offer("sg1", "sg2");
+    h.state.records = ["THROW", "THROW", "THROW"];
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "ACCEPTED", recorded: null, safetyGuardWarning: false },
+      { kind: "NOT_SENT", reason: "PASS_STOPPED" },
+    ]);
+    expect(h.log).toEqual([`sign:${KEY}`, "gate:sg1", "send:sg1", "record:sg1", "record:sg1", "record:sg1"]);
+    expect(report).toMatchObject({ sent: 1, failed: 0, stopped: true });
+    expect(report.next).toEqual({ createdAt: h.state.candidates[0]!.generation.createdAt, id: "sg1" });
+  });
+
+  it("stops the pass on an answer the outcome refuses, without offering it again", async () => {
+    const h = harness({ sg1: "job1", sg2: "job2" });
+    h.offer("sg1", "sg2");
+    h.state.records = [{ kind: "ATTEMPT_NOT_FOUND" }];
+    const report = await run(h);
+    expect(report.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "ACCEPTED", recorded: "ATTEMPT_NOT_FOUND", safetyGuardWarning: false },
+      { kind: "NOT_SENT", reason: "PASS_STOPPED" },
+    ]);
+    expect(h.recorded).toHaveLength(1);
+    expect(report.stopped).toBe(true);
   });
 });
 
@@ -401,10 +430,12 @@ describe("a refused preparation", () => {
     expect(report.ended).toBe(0);
   });
 
-  it("ends the job for the pass when the provider refuses an attempt for good", async () => {
+  it.each([false, true])("ends the job for the pass when the provider refuses an attempt, retryable %s", async (
+    retryable,
+  ) => {
     const h = harness({ sg1: "job1", sg2: "job1" });
     h.offer("sg1", "sg2");
-    h.state.answer.set("sg1", { kind: "DEFINITIVELY_REJECTED", retryable: false, normalizedErrorCode: null });
+    h.state.answer.set("sg1", { kind: "DEFINITIVELY_REJECTED", retryable, normalizedErrorCode: null });
     const report = await run(h);
     expect(report.outcomes.map((o) => o.outcome)).toEqual([
       { kind: "SENT", observed: "DEFINITIVELY_REJECTED", recorded: "APPLIED", safetyGuardWarning: false },

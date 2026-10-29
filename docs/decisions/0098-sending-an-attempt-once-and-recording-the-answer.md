@@ -28,8 +28,9 @@ checked immediately before the call, and the call itself
 and takes each through:
 
 ```text
+provider    this sender reaches the attempt's provider, checked before anything is signed
 prepare     sign the photo's URL; a refusal for good ends the attempt (ADR-0097), one that may pass leaves it
-check       this sender reaches the attempt's provider, and the URL has time left
+fresh       the URL has time left
 authorize   the gate arms it and writes the audit entry, or refuses and writes nothing
 send        one POST through the sender port, only after AUTHORIZED
 record      the answer, through the submission outcome
@@ -55,9 +56,19 @@ may cost money. So:
 - a sender that throws, or answers with something that is not a well-formed
   observation, is recorded as `SUBMISSION_UNKNOWN` with no code: the request may
   have left, and only reconciliation may say otherwise (ADR-0035);
-- a record that throws leaves the attempt `SUBMITTING`, which discovery never
-  offers. The stale submission recovery of the reconciliation maintenance turns
-  it into `SUBMISSION_UNKNOWN` (ADR-0036); nothing sends it again.
+- the record is tried up to three times while it throws or loses a race
+  (`LOST_CONCURRENCY`). Each try is its own transaction, and an answer already
+  on file answers `REPLAYED`, so a try that landed is never written twice;
+- an answer no try records, or one the outcome refuses, is lost. The attempt
+  stays `SUBMITTING`, which discovery never offers; the stale submission
+  recovery of the reconciliation maintenance turns it into
+  `SUBMISSION_UNKNOWN` (ADR-0036), and nothing sends it again. Reconciliation
+  then has no prediction id to look for, so an accepted request's clip may
+  never be collected, and the attempt fails when its window runs out;
+- the pass then sends nothing more (`PASS_STOPPED`, and the report says
+  `stopped`), because whatever kept one answer from being recorded would lose
+  the next, each a paid request. Its `next` starts after the attempt that
+  stopped it.
 
 The gate's commit landing and its answer being lost (a dropped connection
 after `COMMIT`) also leaves the attempt `SUBMITTING` unsent, and the same
@@ -94,8 +105,9 @@ least `MIN_SOURCE_URL_REMAINING_MS` (300 seconds) left, by its own clock. The
 time must cover the gate's transaction, the POST and the provider's own fetch
 of the photo. An attempt whose URL has less is not sent and nothing is written
 (`SOURCE_URL_STALE`); the next pass signs a new one. The check is before the
-gate rather than after, because after the gate the attempt is armed and an
-unsent armed attempt can only be recorded as unknown.
+gate rather than after, because after the gate the attempt is armed, and an
+armed attempt the runner does not send can only be left `SUBMITTING` for the
+recovery to record as unknown.
 
 300 seconds is half the URL's provisional 600-second life and is provisional
 with it, to be measured against a real submission before paid spending
@@ -104,8 +116,9 @@ with it, to be measured against a real submission before paid spending
 ## Decision 5 — A job that will fail sends no more in the pass
 
 When an attempt of a job ends in a pass, by preparation's refusal or by the
-provider's definitive refusal, Transaction K will fail the job and release its
-Unit (ADR-0083). The pass then sends none of that job's other attempts
+provider's definitive refusal (retryable or not: the outcome writes
+`FAILED_RETRYABLE` or `FAILED_TERMINAL`, and Transaction K settles both),
+Transaction K will fail the job and release its Unit (ADR-0083). The pass then sends none of that job's other attempts
 (`JOB_ENDING`, nothing written), because a request sent for a job that will
 fail is paid for and delivers nothing; Transaction L cancels them (ADR-0084).
 Discovery carries each attempt's job for this. An attempt left uncertain does
@@ -122,6 +135,11 @@ visits every waiting attempt in turn, so attempts left waiting by a refusal
 that may pass, or by a gate refusal, no longer hold the oldest window for every
 pass after them, in any organization (ADR-0097, *Keeping the window moving*).
 The cursor is the caller's to keep; nothing stores it.
+
+An attempt's `createdAt` is taken when it is written, not when its
+transaction commits, so an attempt committed after a pass has read past that
+instant is reached when the cursor next comes round from the oldest. It waits;
+it is not lost.
 
 ## Decision 7 — Nothing runs it yet
 
@@ -140,12 +158,20 @@ will, with the test provider only.
   (`docs/decisions/TODO.md`).
 - **How long a retryable refusal may hold a Unit** (`docs/decisions/TODO.md`).
 - **How the pipeline command carries the cursor and when it stops** (GS-9). A
-  pass with attempts left waiting always finds work, so "until nothing is left"
-  must mean until a pass sends and ends nothing.
+  pass with attempts left waiting always finds work, and a full window of them
+  sends and ends nothing while newer attempts wait behind it. So "until
+  nothing is left" must mean a whole cycle, from the oldest until a pass
+  returns `next: null`, in which nothing was sent or ended; and a pass that
+  `stopped` must stop the command.
+- **Attempts that wait for ever without a refusal.** A URL storage keeps
+  signing with too little time left (`SOURCE_URL_STALE`), and an attempt of a
+  provider no sender is built for (`OTHER_PROVIDER`), write nothing and hold
+  their Units as a retryable refusal does (`docs/decisions/TODO.md`).
 
 ## Consequences
 
-- `@app/domain`: `AttemptSubmissionRunner`, its report and outcomes,
+- `@app/domain`: `AttemptSubmissionRunner`, its report (with `stopped` and
+  `next`) and outcomes,
   `MIN_SOURCE_URL_REMAINING_MS`, `PreparedGenerationSender`,
   `AttemptSubmissionCursor`, `AttemptSubmissionCandidate` and
   `validateAttemptSubmissionCursor`; discovery's query takes `after`, and each

@@ -70,6 +70,7 @@ export function validateAttemptSubmissionCursor(
 ): AttemptSubmissionCursor | null {
   if (value === null) return null;
   if (
+    typeof value !== "object" ||
     !(value.createdAt instanceof Date) ||
     !Number.isFinite(value.createdAt.getTime()) ||
     typeof value.id !== "string" ||

@@ -15,9 +15,9 @@ No change.
 
 | Export | What it is |
 | --- | --- |
-| `AttemptSubmissionRunner` | `runOnce(limit, after)`: one window of candidates, each prepared, checked, authorized by the gate, sent once and recorded, in that order |
-| `AttemptSubmissionReport` | `{ sent, ended, failed, outcomes, next }`; `next` is the cursor for the following pass, or `null` when the window was not full |
-| `AttemptSubmissionRunOutcome` | `SENT` (the observation, the record or `null`, and whether the gate warned), `ENDED`, `NOT_PREPARED`, `MOVED`, `NOT_SENT` (`OTHER_PROVIDER`, `SOURCE_URL_STALE`, `JOB_ENDING`), `NOT_AUTHORIZED` (the gate's refusal and reason) or `FAILED` |
+| `AttemptSubmissionRunner` | `runOnce(limit, after)`: one window of candidates, each checked for its provider, prepared, checked for its URL's time left, authorized by the gate, sent once and recorded (up to three tries while recording throws or loses a race), in that order |
+| `AttemptSubmissionReport` | `{ sent, ended, failed, stopped, outcomes, next }`; `stopped` when an answer was not recorded and nothing after it was sent; `next` is the cursor for the following pass (after the attempt that stopped it, or the window's last when it was full), or `null` |
+| `AttemptSubmissionRunOutcome` | `SENT` (the observation, the record or `null`, and whether the gate warned), `ENDED`, `NOT_PREPARED`, `MOVED`, `NOT_SENT` (`OTHER_PROVIDER`, `SOURCE_URL_STALE`, `JOB_ENDING`, `PASS_STOPPED`), `NOT_AUTHORIZED` (the gate's refusal and reason) or `FAILED` |
 | `AttemptSubmissionRunnerDeps` | the repository, the preflight's dependencies, the gate's `authorize`, the sender, the outcome's `recordObservation`, a clock and a context factory |
 | `MIN_SOURCE_URL_REMAINING_MS` (300 000) | the time a signed photo URL must have left, immediately before the gate |
 | `PreparedGenerationSender` | the sender port: `providerName` and `send(prepared)`, answering with a `ProviderSubmissionObservation` |

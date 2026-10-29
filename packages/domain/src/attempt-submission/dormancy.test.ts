@@ -132,12 +132,15 @@ describe("one way to the provider", () => {
   it("sends once, after the gate and before the record", () => {
     const runner = code(readFileSync(join(MODULE_DIR, "runner.ts"), "utf8"));
     expect(runner.match(/\.send\(/g)).toHaveLength(1);
+    expect(runner.match(/this\.#send\(/g)).toHaveLength(1);
     expect(runner.match(/\.authorize\(/g)).toHaveLength(1);
+    expect(runner.match(/this\.#record\(/g)).toHaveLength(1);
+    expect(runner.match(/\.recordObservation\(/g)).toHaveLength(1);
     const order = [
       "await prepareQueuedGeneration(",
       "await this.#deps.gate.authorize(",
       "await this.#send(prepared)",
-      ".recordObservation(",
+      "await this.#record(",
     ].map((marker) => runner.indexOf(marker));
     expect(order.every((position) => position > -1)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);

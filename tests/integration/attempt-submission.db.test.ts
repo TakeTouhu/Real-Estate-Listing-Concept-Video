@@ -991,7 +991,7 @@ describe.skipIf(!HAS_DB)("the sender (GS-7c-2b)", () => {
     expect((await attemptRow(a.attempts[1]!)).orchestrationState).toBe("QUEUED");
   });
 
-  it("records an unreadable answer as uncertain, whose hold on the Unit keeps the job's next attempt", async () => {
+  it("records a timed-out answer as uncertain, whose hold on the Unit keeps the job's next attempt", async () => {
     const a = await launchJob(ORG_A, 1);
     await age(a.attempts[0]!, 1);
     await age(a.attempts[1]!, 2);
