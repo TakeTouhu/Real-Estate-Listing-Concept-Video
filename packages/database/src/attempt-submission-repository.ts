@@ -6,7 +6,8 @@
  * - **Discovery.** The attempts waiting to be sent, oldest first, read without
  *   locks: a hint, which the paid-submission gate re-decides under its own
  *   locks (ADR-0096). Each comes with the organization its project names, so
- *   preparation can address its photo through the tenant-scoped repository.
+ *   preparation can address its photo through the tenant-scoped repository,
+ *   and with its job. A window starts after the caller's cursor (ADR-0098).
  * - **The ending of a refused preparation.** One `QUEUED` attempt whose
  *   preparation was refused for good is cancelled before submission, nothing
  *   having been sent, with its transition event, in one commit.
@@ -32,10 +33,11 @@ import {
   canTransitionAttempt,
   preparationRefusalEnding,
   validateAttemptSubmissionBatchLimit,
+  validateAttemptSubmissionCursor,
+  type AttemptSubmissionCandidate,
   type AttemptSubmissionRepository,
   type EndPreparationRefusalInput,
   type EndPreparationRefusalOutcome,
-  type SystemGenerationCandidate,
   type TransitionContext,
 } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -47,16 +49,28 @@ type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
 
 export function createAttemptSubmissionRepository(prisma: PrismaClient): AttemptSubmissionRepository {
   return {
-    async findSubmissionCandidates({ limit: requested }) {
+    async findSubmissionCandidates({ limit: requested, after: requestedAfter }) {
       // Validated here as well as by the caller: this method is public, and a
       // caller reaching it directly must not put `Infinity` into a SQL LIMIT.
       const limit = validateAttemptSubmissionBatchLimit(requested);
+      const after = validateAttemptSubmissionCursor(requestedAfter);
       const rows = await prisma.sceneGeneration.findMany({
         where: {
           orchestrationState: "QUEUED",
-          // Null read as `PRE_SUBMISSION`, as the gate reads it; the
-          // all-or-none check gives every orchestrated row a certainty.
-          OR: [{ submissionCertainty: null }, { submissionCertainty: "PRE_SUBMISSION" }],
+          AND: [
+            // Null read as `PRE_SUBMISSION`, as the gate reads it; the
+            // all-or-none check gives every orchestrated row a certainty.
+            { OR: [{ submissionCertainty: null }, { submissionCertainty: "PRE_SUBMISSION" }] },
+            // After the cursor, in the order below (ADR-0098).
+            after === null
+              ? {}
+              : {
+                  OR: [
+                    { createdAt: { gt: after.createdAt } },
+                    { createdAt: after.createdAt, id: { gt: after.id } },
+                  ],
+                },
+          ],
           generationSceneRequest: {
             state: "GENERATING",
             generationScene: { generationJob: { state: "GENERATING" } },
@@ -68,14 +82,21 @@ export function createAttemptSubmissionRepository(prisma: PrismaClient): Attempt
         // Oldest first, `id` breaking ties, as every other sweep orders.
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: limit,
-        include: { videoProject: { select: { organizationId: true } } },
+        include: {
+          videoProject: { select: { organizationId: true } },
+          generationSceneRequest: { select: { generationScene: { select: { generationJobId: true } } } },
+        },
       });
-      return rows.map(
-        (row): SystemGenerationCandidate => ({
+      return rows.map((row): AttemptSubmissionCandidate => {
+        // The filter above requires the request, so it is never absent here.
+        const request = row.generationSceneRequest;
+        if (request === null) throw new AppError("INTERNAL_ERROR", "An offered attempt must have a request");
+        return {
           organizationId: row.videoProject.organizationId,
+          generationJobId: request.generationScene.generationJobId,
           generation: toGeneration(row),
-        }),
-      );
+        };
+      });
     },
 
     async endPreparationRefusal(input) {

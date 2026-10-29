@@ -227,6 +227,8 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
       attempts waiting to be sent, and a terminal preparation refusal ended
       in the attempt's orchestration state, so the attempt failure settlement
       releases its Unit.
-    - **GS-7c-2b**: preparation, the signed URL's freshness, the gate, one
-      POST through the provider port, and the answer recorded.
+    - **GS-7c-2b** (ADR-0098, no migration): preparation, the signed URL's
+      freshness, the gate, one POST through the provider port, and the answer
+      recorded; no more of a job sent once one of its attempts has ended, and
+      a window that moves past attempts left waiting.
 - **GS-7d**: a job that can never launch released, with its Units.

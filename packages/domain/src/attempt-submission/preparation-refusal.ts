@@ -26,6 +26,7 @@
  */
 
 import { AppError } from "@app/shared";
+import type { AttemptSubmissionCursor } from "./ports";
 import {
   preflightDispositionFor,
   type PreflightRefusalReason,
@@ -59,6 +60,23 @@ export function validateAttemptSubmissionBatchLimit(value: number): number {
       "VALIDATION_FAILED",
       `Attempt submission batch limit must be an integer between 1 and ${MAX_ATTEMPT_SUBMISSION_BATCH_SIZE}`,
     );
+  }
+  return value;
+}
+
+/** Prove a window's start is usable, or refuse: a real instant and an id. */
+export function validateAttemptSubmissionCursor(
+  value: AttemptSubmissionCursor | null,
+): AttemptSubmissionCursor | null {
+  if (value === null) return null;
+  if (
+    typeof value !== "object" ||
+    !(value.createdAt instanceof Date) ||
+    !Number.isFinite(value.createdAt.getTime()) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0
+  ) {
+    throw new AppError("VALIDATION_FAILED", "Attempt submission cursor must name an instant and an attempt");
   }
   return value;
 }

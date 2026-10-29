@@ -9,6 +9,7 @@ import {
   MAX_ATTEMPT_SUBMISSION_BATCH_SIZE,
   preparationRefusalEnding,
   validateAttemptSubmissionBatchLimit,
+  validateAttemptSubmissionCursor,
 } from "./preparation-refusal";
 
 describe("what a preparation refusal does to an orchestrated attempt", () => {
@@ -61,5 +62,25 @@ describe("the discovery's batch limit", () => {
 
   it("is one hundred, as the other sweeps' bound", () => {
     expect(MAX_ATTEMPT_SUBMISSION_BATCH_SIZE).toBe(100);
+  });
+});
+
+describe("discovery's cursor", () => {
+  it("passes the start and a usable cursor through", () => {
+    const cursor = { createdAt: new Date("2026-11-10T01:00:00.000Z"), id: "sg1" };
+    expect(validateAttemptSubmissionCursor(null)).toBeNull();
+    expect(validateAttemptSubmissionCursor(cursor)).toBe(cursor);
+  });
+
+  it.each<[string, unknown]>([
+    ["nothing", undefined],
+    ["a string", "sg1"],
+    ["a date given as text", { createdAt: "2026-11-10T01:00:00.000Z", id: "sg1" }],
+    ["an invalid date", { createdAt: new Date(Number.NaN), id: "sg1" }],
+    ["a blank id", { createdAt: new Date("2026-11-10T01:00:00.000Z"), id: "" }],
+  ])("refuses %s from a caller the types do not reach", (_, value) => {
+    expect(() => validateAttemptSubmissionCursor(value as null)).toThrow(
+      expect.objectContaining({ code: "VALIDATION_FAILED" }),
+    );
   });
 });

@@ -3,13 +3,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * What the attempt submission's discovery and ending (ADR-0097) may and may
- * not do.
+ * What the attempt submission (ADR-0097, ADR-0098) may and may not do.
  *
- * 1. **Dormancy.** Nothing in production constructs the repository. The
- *    sender (GS-7c-2b) and the pipeline command (GS-9) are what will.
- * 2. **No paid boundary.** The module and the repository reach no provider,
- *    HTTP client or storage, and schedule nothing.
+ * 1. **Dormancy.** Nothing in production constructs the repository, the
+ *    runner or the sender adapter. The pipeline command (GS-9) is what will.
+ * 2. **One way to the provider.** The module reaches a provider only through
+ *    its sender port, after the gate and before the record, once per attempt;
+ *    the adapter is the only production caller of a provider's create POST.
+ *    The module and the repository fetch nothing, touch no storage and
+ *    schedule nothing themselves.
  * 3. **One write.** The ending moves an orchestrated attempt from `QUEUED` to
  *    `CANCELLED_PRE_SUBMISSION` and writes its event; it writes nothing else
  *    and locks nothing but the attempt.
@@ -20,6 +22,7 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const MODULE_DIR = __dirname;
 const REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "attempt-submission-repository.ts");
+const SENDER = "packages/video-providers/src/prepared-generation-sender.ts";
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -59,26 +62,33 @@ function imports(text: string): string[] {
   return [...text.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1] ?? "");
 }
 
-describe("the repository exists but nothing runs it", () => {
-  it("is not constructed in production", () => {
-    const callers = productionSources()
-      .filter(({ text }) => text.includes("createAttemptSubmissionRepository("))
-      .map(({ name }) => name);
-    expect(callers).toEqual(["packages/database/src/attempt-submission-repository.ts"]);
+describe("the repository, the runner and the sender exist but nothing runs them", () => {
+  it("are not constructed in production", () => {
+    const callers = (marker: string) =>
+      productionSources()
+        .filter(({ text }) => text.includes(marker))
+        .map(({ name }) => name);
+    expect(callers("createAttemptSubmissionRepository(")).toEqual([
+      "packages/database/src/attempt-submission-repository.ts",
+    ]);
+    expect(callers("AttemptSubmissionRunner(")).toEqual([]);
+    expect(callers("createPreparedGenerationSender(")).toEqual([SENDER]);
   });
 });
 
-describe("no paid boundary is reachable", () => {
-  it("keeps the module to the preflight's vocabulary and the orchestration ports", () => {
+describe("one way to the provider", () => {
+  it("keeps the module to the preflight, the gate's and the outcome's types, and the orchestration ports", () => {
     for (const { name, text } of sourceFiles(MODULE_DIR)) {
       for (const source of imports(text)) {
         expect(`${name}: ${source}`).toMatch(
           new RegExp(
             ": (" +
               [
-                "\\./(index|ports|preparation-refusal)",
-                "\\.\\./generation/(execution-ports|execution-preflight-errors)",
+                "\\./(index|ports|preparation-refusal|runner)",
+                "\\.\\./authorization/(paid-submission-service|types)",
+                "\\.\\./generation/(execution-ports|execution-preflight|execution-preflight-errors)",
                 "\\.\\./orchestration/ports",
+                "\\.\\./submission/(observation|ports|service)",
                 "@app/shared",
               ].join("|") +
               ")$",
@@ -88,7 +98,13 @@ describe("no paid boundary is reachable", () => {
     }
   });
 
-  it("schedules nothing and calls no provider, network or storage", () => {
+  it("takes the gate and the outcome service as given, never building one", () => {
+    const runner = readFileSync(join(MODULE_DIR, "runner.ts"), "utf8");
+    expect(runner).toMatch(/import type \{ PaidSubmissionAuthorizationService \} from "\.\.\/authorization\/paid/);
+    expect(runner).toMatch(/import type \{ SubmissionOutcomeService \} from "\.\.\/submission\/service"/);
+  });
+
+  it("fetches nothing, touches no storage and schedules nothing", () => {
     const files = [
       ...sourceFiles(MODULE_DIR),
       { name: REPOSITORY, text: code(readFileSync(REPOSITORY, "utf8")) },
@@ -106,6 +122,34 @@ describe("no paid boundary is reachable", () => {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }
+    for (const { name, text } of sourceFiles(MODULE_DIR)) {
+      for (const banned of ["prisma", "$transaction"]) {
+        expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
+      }
+    }
+  });
+
+  it("sends once, after the gate and before the record", () => {
+    const runner = code(readFileSync(join(MODULE_DIR, "runner.ts"), "utf8"));
+    expect(runner.match(/\.send\(/g)).toHaveLength(1);
+    expect(runner.match(/this\.#send\(/g)).toHaveLength(1);
+    expect(runner.match(/\.authorize\(/g)).toHaveLength(1);
+    expect(runner.match(/this\.#record\(/g)).toHaveLength(1);
+    expect(runner.match(/\.recordObservation\(/g)).toHaveLength(1);
+    const order = [
+      "await prepareQueuedGeneration(",
+      "await this.#deps.gate.authorize(",
+      "await this.#send(prepared)",
+      "await this.#record(",
+    ].map((marker) => runner.indexOf(marker));
+    expect(order.every((position) => position > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("has one production caller of a provider's create POST: the sender adapter, once", () => {
+    const callers = productionSources().filter(({ text }) => text.includes(".createGeneration("));
+    expect(callers.map(({ name }) => name)).toEqual([SENDER]);
+    expect(callers[0]!.text.match(/\.createGeneration\(/g)).toHaveLength(1);
   });
 });
 

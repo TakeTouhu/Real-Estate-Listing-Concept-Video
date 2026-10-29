@@ -5,6 +5,16 @@ export * from "./factory";
 export * from "./catalog";
 export { deepFreeze } from "./deep-freeze";
 
+/**
+ * The attempt sender's paid call over a submission adapter (ADR-0098).
+ * Dormant: nothing in production constructs it.
+ */
+export {
+  createPreparedGenerationSender,
+  providerGenerationInputFor,
+  submissionObservationFor,
+} from "./prepared-generation-sender";
+
 export { FakeVideoProvider } from "./fake/fake-provider";
 export type {
   FakeSubmissionOutcomeKind,
