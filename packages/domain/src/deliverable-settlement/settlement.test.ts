@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DeliverableSettlementDefect,
+  deliverableSettlementRecord,
   isDeliverableFailureSettled,
   settleFailedDeliverable,
 } from "./settlement";
@@ -161,6 +162,18 @@ describe("isDeliverableFailureSettled", () => {
         failedVersionIsNewest: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("deliverableSettlementRecord", () => {
+  it.each([
+    ["RELEASE", "NO_USABLE_VIDEO", "job.deliverable_failed", "DELIVERABLE_FAILURE_SETTLEMENT"],
+    ["ROLL_BACK", "NO_USABLE_VIDEO", "job.deliverable_rolled_back", "DELIVERABLE_FAILURE_SETTLEMENT"],
+    // As ADR-0102's ending records a deleted Property's job, with the code every such ending carries (ADR-0103).
+    ["RELEASE", "PROPERTY_DELETED", "job.ended_property_deleted", "PROPERTY_DELETED"],
+    ["ROLL_BACK", "PROPERTY_DELETED", "job.deliverable_rolled_back", "PROPERTY_DELETED"],
+  ] as const)("records a %s for %s as %s, %s", (kind, cause, jobEventType, reasonCode) => {
+    expect(deliverableSettlementRecord(kind, cause)).toEqual({ jobEventType, reasonCode });
   });
 });
 

@@ -8,7 +8,9 @@
  * call this module from inside their own transaction, after writing their
  * terminal row, so the failure and its settlement commit together or not at all.
  * There is no later sweep to forget, and no window in which a failed job still
- * holds the customer's Unit.
+ * holds the customer's Unit. Transaction G calls it too, in place of a
+ * publication, when the job's Property was deleted before its first video was
+ * published (ADR-0103): the same writes, with that cause on the events.
  *
  * The decision itself is the domain's (`settleFailedDeliverable`); this module
  * only reads the locked rows into it and writes what it answers.
@@ -21,21 +23,21 @@
  *
  * The order every entitlement release takes (`cost-admission-lock.ts`), as the
  * media failure settlement (Transaction H) does, and whose **Reservation before
- * Job** part Transactions G and I take too. A caller takes both with
+ * Job** part Transaction I takes too. A caller takes both with
  * {@link lockReservationForDeliverable} *first*, then locks its own chain, and
- * only then calls {@link settleDeliverableFailure}.
+ * only then calls {@link settleDeliverableFailure}. Transaction G takes them
+ * through its own reservation read, which it needs whole, in the same order.
  */
 
 import {
-  DELIVERABLE_SETTLEMENT_REASON_CODE,
   DeliverableSettlementDefect,
   GENERATION_JOB_STATES,
   GENERATION_RESERVATION_STATES,
-  JOB_DELIVERABLE_FAILED_EVENT_TYPE,
-  JOB_DELIVERABLE_ROLLED_BACK_EVENT_TYPE,
   RESERVATION_RELEASED_EVENT_TYPE,
+  deliverableSettlementRecord,
   isDeliverableFailureSettled,
   settleFailedDeliverable,
+  type DeliverableFailureCause,
   type FailedDeliverableCycleState,
   type GenerationJobState,
   type GenerationReservationState,
@@ -121,7 +123,8 @@ export async function lockReservationForDeliverable(
  * Called after the caller wrote its terminal row, in the same transaction, with
  * the reservation and the job both locked. Every write names the state it read,
  * and a write that matches no row is a defect rather than a race: under these
- * locks nothing else can have moved them.
+ * locks nothing else can have moved them. The cause names the events and
+ * nothing else (ADR-0103).
  *
  * @throws DeliverableSettlementDefect `RESERVATION_NOT_SETTLEABLE` before any
  *   settlement write when the reservation contradicts the job; the caller's
@@ -133,15 +136,17 @@ export async function settleDeliverableFailure(
   reservation: SettlementReservationRow | null,
   at: Date,
   context: TransitionContext,
+  cause: DeliverableFailureCause = "NO_USABLE_VIDEO",
 ): Promise<void> {
   const settlement = settleFailedDeliverable({
     currentDeliverableVersionId: cycle.currentDeliverableVersionId,
     reservationState: reservationStateOf(reservation),
   });
+  const record = deliverableSettlementRecord(settlement.kind, cause);
   const event = (eventType: string): TransitionContext => ({
     ...context,
     eventType,
-    reasonCode: DELIVERABLE_SETTLEMENT_REASON_CODE,
+    reasonCode: record.reasonCode,
   });
 
   await moveJob(tx, cycle.jobId, cycle.failedIn, settlement.jobState);
@@ -151,11 +156,7 @@ export async function settleDeliverableFailure(
     aggregateId: cycle.jobId,
     fromState: cycle.failedIn,
     toState: settlement.jobState,
-    context: event(
-      settlement.kind === "RELEASE"
-        ? JOB_DELIVERABLE_FAILED_EVENT_TYPE
-        : JOB_DELIVERABLE_ROLLED_BACK_EVENT_TYPE,
-    ),
+    context: event(record.jobEventType),
   });
 
   // A replacement's reservation is deliberately untouched, not even a version

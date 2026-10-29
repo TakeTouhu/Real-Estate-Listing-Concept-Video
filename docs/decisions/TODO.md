@@ -1383,9 +1383,9 @@ them is **built**. Each item below records the settled decision and what remains
       held for the trash period, and a generating video whose attempt still
       waits before submission ends so its Unit is released too (ADR-0100),
       as does one launched and not yet being assembled (ADR-0102); one being
-      assembled is not ended yet (*End a deleted Property's video already at
-      the provider or being assembled*, below). A restored Property's videos
-      would be started again by the customer.*
+      assembled is never published, its Unit released at publication
+      (ADR-0103). A restored Property's videos would be started again by the
+      customer.*
 - [ ] **Build storage quota accounting and thresholds** (80% / 90% / 100%), with
       the correct inclusion rules: count retained source images, normalized
       images and the current final video; exclude internal scene media,
@@ -1578,7 +1578,7 @@ them is **built**. Each item below records the settled decision and what remains
       long an attempt refused for configuration (no authorized route, the
       Safety Guard's pause, no revenue figure) may hold its Unit, which must
       be decided before generation is activated.*
-- [ ] **End a deleted Property's video already at the provider or being
+- [x] **End a deleted Property's video already at the provider or being
       assembled.** The product owner decided on 2026-10-29 ("すぐ戻す") that
       a deleted Property's unfinished videos end at once and return their
       Units. GS-7d-1 (ADR-0099) ends a waiting job, and GS-7d-2 (ADR-0100) a
@@ -1594,10 +1594,14 @@ them is **built**. Each item below records the settled decision and what remains
       `COMPOSITION_PENDING` whose Property was deleted, its Unit released in
       the same commit; the launch runner ends them before its launches.
       A job whose hold is on reconciliation is ended once the hold is
-      restored, or failed by Transaction K once it is released. **Still
-      open:** a job in `COMPOSING` or `DELIVERABLE_VALIDATING`, which GS-7d-3b
-      will stop at publication (Transaction G refuses to publish, fails the
-      job and releases its Unit).*
+      restored, or failed by Transaction K once it is released. GS-7d-3b
+      (ADR-0103) stops a job in `COMPOSING` or `DELIVERABLE_VALIDATING` at
+      publication: Transaction G holds the Property `FOR SHARE` behind the
+      cost-admission lock and, finding it deleted at a first video, publishes
+      nothing, fails the job and releases its Unit, as a cycle with no usable
+      video settles. Done. Whether a deleted Property's delivered video may
+      be regenerated stays with *Decide what a deleted Property's existing
+      video projects allow*.*
 - [ ] **Decide whether a regeneration counts against the concurrent-job
       limit, and whether it waits for a place.** ADR-0052 Decision 7 limits
       concurrent customer video Jobs; nothing decides whether regenerating a

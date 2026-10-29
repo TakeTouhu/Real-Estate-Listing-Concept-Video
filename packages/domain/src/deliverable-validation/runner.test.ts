@@ -432,12 +432,31 @@ describe("every publication outcome reaches the caller unchanged", () => {
       "PUBLISHED_AS_REPLACEMENT",
       "ALREADY_PUBLISHED",
       "NOT_PUBLISHABLE",
+      "PROPERTY_DELETED",
     ] as const) {
       const { runner } = runnerFor({ publish: { kind } }, { kind: "VALID", facts: FACTS });
       // Collapsing these would leave a caller unable to say whether a customer's
       // unit was spent, which is the one thing it must be able to report.
       expect(await runner.runOne("org_1", "gdv_1", CONTEXT)).toEqual({ kind });
     }
+  });
+
+  it("counts a deleted Property's refused publication as claimed work, and goes on", async () => {
+    // Validated and then refused (ADR-0103): the job failed and its Unit came
+    // back, which the pass reports, as it reports a terminal verdict.
+    const { runner, calls } = runnerFor(
+      { candidates: ["gdv_1", "gdv_2"], publish: { kind: "PROPERTY_DELETED" } },
+      { kind: "VALID", facts: FACTS },
+    );
+    const report = await runner.runOnce(10, CONTEXT);
+    expect(report).toEqual({
+      claimed: 2,
+      outcomes: [
+        { deliverableVersionId: "gdv_1", outcome: { kind: "PROPERTY_DELETED" } },
+        { deliverableVersionId: "gdv_2", outcome: { kind: "PROPERTY_DELETED" } },
+      ],
+    });
+    expect(calls.filter((call) => call === "publish")).toHaveLength(2);
   });
 });
 

@@ -60,6 +60,9 @@
  *   compare-and-set;
  * - the ending of a deleted Property's launched job (ADR-0102) locks the
  *   reservation `FOR UPDATE`, then the Property `FOR SHARE` and the job
+ *   `FOR UPDATE`;
+ * - Transaction G (ADR-0103) locks the reservation `FOR UPDATE`, then the
+ *   Property `FOR SHARE`, then the job and its deliverable version
  *   `FOR UPDATE`.
  *
  * Each takes this lock first, before the row, as the order requires. A

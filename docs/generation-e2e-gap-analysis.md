@@ -248,5 +248,6 @@ GS-7 is split into four pull requests (ADR-0094), the third of them in two
     `SCENES_READY` or `COMPOSITION_PENDING` whose Property was deleted fails
     and its Unit is released in one commit; the launch runner ends them
     before its launches.
-  - **GS-7d-3b**: Transaction G refuses to publish a deleted Property's
-    initial video, fails the job and releases its Unit.
+  - **GS-7d-3b** (ADR-0103, no migration): Transaction G refuses to publish
+    a deleted Property's initial video, fails the job and releases its Unit,
+    through the settlement of a cycle with no usable video.
