@@ -17,11 +17,13 @@
  * cost-admission advisory lock -> the attempt (its compare-and-set)
  * ```
  *
- * The lock every writer of an attempt's orchestration state takes first: the
- * gate, the submission outcome, completion, reconciliation, Transactions H, K
- * and L. Taking it first keeps this ending out of every cycle with them; nothing
- * here locks a photo, a Property, a reservation or a job, and nothing waits
- * once the attempt is held.
+ * The transactions that take this lock (the gate, the submission outcome,
+ * completion, reconciliation, Transactions H, K and L) take it before any row
+ * lock, and nothing holding a photo or a Property lock waits for it (ADR-0096).
+ * Taking it first keeps this ending out of every cycle with them; nothing here
+ * locks a photo, a Property, a reservation or a job, and nothing waits once the
+ * attempt is held. A writer that takes no such lock, such as the attempt
+ * repository's own arm, is kept apart by the compare-and-set below.
  */
 
 import type { PrismaClient } from "@prisma/client";
@@ -52,6 +54,8 @@ export function createAttemptSubmissionRepository(prisma: PrismaClient): Attempt
       const rows = await prisma.sceneGeneration.findMany({
         where: {
           orchestrationState: "QUEUED",
+          // Null read as `PRE_SUBMISSION`, as the gate reads it; the
+          // all-or-none check gives every orchestrated row a certainty.
           OR: [{ submissionCertainty: null }, { submissionCertainty: "PRE_SUBMISSION" }],
           generationSceneRequest: {
             state: "GENERATING",
@@ -111,9 +115,9 @@ async function endWithin(
   await acquireCostAdmissionLock(tx, organizationId, cycles[0]?.billingCycleKey ?? "unreserved");
 
   // ---- 2. The compare-and-set. -------------------------------------------
-  // On the predicate the gate's arm competes on, so exactly one of the two
-  // moves a `QUEUED` attempt: a refused attempt is never sent, and a sent one is
-  // never ended here. The reason is the durable code, so the state and the code
+  // The gate's arm also requires the attempt `QUEUED`, so exactly one of the
+  // two moves it: a refused attempt is never sent, and a sent one is never
+  // ended here. The reason is the durable code, so the state and the code
   // cannot describe different failures; the message is cleared, never left from
   // an earlier failure.
   const ended = await tx.$queryRaw<{ id: string; stateVersion: number }[]>`

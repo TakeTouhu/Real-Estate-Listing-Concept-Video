@@ -358,15 +358,22 @@ function settled<T>(promise: Promise<T>): { done: () => boolean; value: Promise<
   return { done: () => finished, value };
 }
 
-/** Whether another backend is waiting on a lock of this kind within the deadline: the database says so. */
+/**
+ * Whether the ending is waiting on a lock of this kind within the deadline: the
+ * database says so, for a backend running the ending's own statement.
+ */
 async function waitForBlocked(waitEvent: "advisory" | "transactionid", withinMs = 10_000): Promise<boolean> {
+  const statement = waitEvent === "advisory" ? "%pg_advisory_xact_lock%" : '%UPDATE "scene_generations" a%';
   const deadline = Date.now() + withinMs;
   while (Date.now() < deadline) {
-    const rows = await prisma.$queryRawUnsafe<{ wait_event_type: string | null; wait_event: string | null }[]>(
-      `SELECT wait_event_type, wait_event FROM pg_stat_activity
-        WHERE datname = current_database() AND pid <> pg_backend_pid()`,
-    );
-    if (rows.some((row) => row.wait_event_type === "Lock" && row.wait_event === waitEvent)) return true;
+    const rows = await prisma.$queryRaw<{ waiting: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_stat_activity
+         WHERE datname = current_database() AND pid <> pg_backend_pid()
+           AND wait_event_type = 'Lock' AND wait_event = ${waitEvent} AND query LIKE ${statement}
+      ) AS waiting
+    `;
+    if (rows[0]?.waiting === true) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return false;
@@ -702,7 +709,29 @@ describe.skipIf(!HAS_DB)("concurrency and lock order", () => {
     expect((await ending.value).kind).toBe("ENDED");
   });
 
-  it("waits for a gate arm in flight, and then ends nothing", async () => {
+  it("reads no other organization's reservation, not even for its lock key", async () => {
+    const a = await launchJob(ORG_A, 1);
+    // B's own cycle is A's too. Asked as B, the ending must not find A's
+    // reservation's cycle and wait on B's lock for it: it knows no reservation
+    // of B's, so it takes B's `unreserved` key, and answers at once.
+    const held = await holdOpen(async (tx) => {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${`paid-submission:${ORG_B}`}), hashtext(${`cycle:${CYCLE}`}))::text
+      `;
+    });
+    const ending = settled(end(ORG_B, a.attempts[0]!));
+    try {
+      expect(await waitForBlocked("advisory", 2_000)).toBe(false);
+    } finally {
+      await held.release();
+    }
+    expect(await ending.value).toEqual({ kind: "NOT_QUEUED" });
+  });
+
+  // The gate and the ending serialize on the cost-admission lock, proved above.
+  // The attempt repository's own arm takes none, so this proves the row's
+  // compare-and-set keeps the two apart without it.
+  it("waits for an arm in flight that takes no cost-admission lock, and then ends nothing", async () => {
     const a = await launchJob(ORG_A, 1);
     const row = await prisma.sceneGeneration.findUniqueOrThrow({ where: { id: a.attempts[0]! } });
     const held = await holdOpen(async (tx) => {

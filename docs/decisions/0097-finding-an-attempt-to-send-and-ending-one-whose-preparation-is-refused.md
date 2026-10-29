@@ -101,6 +101,16 @@ refuses the same change found after preparation as `SOURCE_INVALID`
 here: it is shared with the legacy park, and a disposition is a decision of its
 own (`docs/decisions/TODO.md`).
 
+**A refusal the deployment causes.** Two `TERMINAL` reasons come from the
+deployment's model catalog rather than from the customer's photo or request:
+`PROVIDER_IDENTITY_MISMATCH` and `MODEL_DELIVERY_PLAN_CHANGED`. A worker with
+a misconfigured catalog, or an older worker during a rollout, would end every
+attempt it prepares; Transaction K would then fail those customers' jobs, the
+Units released and nothing charged, and only an operator could recover them
+(ADR-0052 Decision 20). Whether such a refusal should end an attempt or leave
+it for a correctly configured worker is not decided here
+(`docs/decisions/TODO.md`).
+
 ## Decision 3 — The ending is one transaction behind the cost-admission lock
 
 `endPreparationRefusal({ organizationId, attemptId, reason, context })`
@@ -115,17 +125,20 @@ cost-admission advisory lock (organization, the reservation's frozen cycle or "u
   -> commit
 ```
 
-The lock key is the one the gate takes for the same attempt. Every writer of
-an attempt's orchestration state takes this lock first (the gate, the
-submission outcome, completion, reconciliation, Transactions H, K and L), and
-nothing that holds an asset or a Property lock waits for it (ADR-0096
+The lock key is the one the gate takes for the same attempt, read by the same
+query. The transactions that take this lock (the gate, the submission outcome,
+completion, reconciliation, Transactions H, K and L) take it before any row
+lock, and nothing that holds an asset or a Property lock waits for it (ADR-0096
 Decision 2). Nothing else here is locked, so the ending adds no cycle.
 
 The compare-and-set requires the attempt to be in the caller's organization,
-through its project, `QUEUED` and before submission, the predicate the gate's
-arm competes on. Exactly one of the two moves a `QUEUED` attempt: a refused
-attempt is never sent, and a sent one is never ended here. An arm in flight is
-waited for, and then the ending finds the attempt moved. It writes
+through its project, `QUEUED` and before submission. The gate's arm also
+requires it `QUEUED`, so exactly one of the two moves it: a refused attempt is
+never sent, and a sent one is never ended here. The gate and the ending
+serialize on the cost-admission lock; a writer that takes none, such as the
+attempt repository's own arm, which only tests call (ADR-0096 Decision 3), is
+waited for on the attempt's row, and then the ending finds the attempt
+moved. It writes
 `stateVersion + 1`, the reason as `normalizedErrorCode`, and clears
 `normalizedErrorMessage`, so the state and the code describe one failure. The
 event is `QUEUED → CANCELLED_PRE_SUBMISSION`, type `attempt.preparation_refused`,
@@ -154,6 +167,13 @@ storage and schedule nothing. The sender (GS-7c-2b) and the pipeline command
 - **An attempt the gate refuses for good** (GS-7d), including a deleted
   Property's, which discovery passes over.
 - **How long a retryable refusal may hold a Unit** (the TODO item above).
+- **Keeping the window moving.** Discovery is one window over every
+  organization, oldest first. An attempt left `QUEUED` by a retryable refusal,
+  or by a gate refusal that writes nothing (a hard pause, an ineligible price,
+  a route not authorized), is offered on every pass. Once a window's worth of
+  them are oldest, no newer attempt in any organization is found. How the pass
+  (GS-7c-2b, GS-9) keeps such attempts from filling it, as the launch must for
+  jobs (ADR-0095 Decision 7), is not decided here (`docs/decisions/TODO.md`).
 
 ## Consequences
 

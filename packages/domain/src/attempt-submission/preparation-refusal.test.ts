@@ -12,10 +12,22 @@ import {
 } from "./preparation-refusal";
 
 describe("what a preparation refusal does to an orchestrated attempt", () => {
-  it.each(PREFLIGHT_REFUSAL_REASONS)("follows the canonical disposition of %s", (reason) => {
-    expect(preparationRefusalEnding(reason)).toBe(
-      preflightDispositionFor(reason) === "TERMINAL" ? "CANCELLED_PRE_SUBMISSION" : null,
-    );
+  it("leaves exactly the reasons that may pass, and ends every other", () => {
+    // Written out, so a disposition changed in the canonical table is noticed
+    // here too: it changes whether a customer's job fails.
+    const staying = [
+      "ASSET_NOT_READY",
+      "ASSET_UPLOAD_FAILED",
+      "MODEL_UNAVAILABLE",
+      "SIGNED_SOURCE_URL_UNUSABLE",
+      "STORAGE_UNAVAILABLE",
+    ];
+    const left = PREFLIGHT_REFUSAL_REASONS.filter((reason) => preparationRefusalEnding(reason) === null);
+    expect([...left].sort()).toEqual(staying);
+    for (const reason of PREFLIGHT_REFUSAL_REASONS.filter((r) => !staying.includes(r))) {
+      expect([reason, preparationRefusalEnding(reason)]).toEqual([reason, "CANCELLED_PRE_SUBMISSION"]);
+      expect(preflightDispositionFor(reason)).toBe("TERMINAL");
+    }
   });
 
   it("ends an attempt whose photo is gone, and leaves one whose storage did not answer", () => {
