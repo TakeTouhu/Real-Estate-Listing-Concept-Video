@@ -442,15 +442,18 @@ database CI job installs FFmpeg for it. GS-9c is the command that runs them.
 **GS-9c — the development pipeline command** (ADR-0108, no migration):
 `pnpm --filter @app/worker pipeline --provider-folder <absolute path>` runs
 every step once per cycle, in the order work flows, carrying the launch and
-submission windows' cursors, until a whole cycle changes nothing. It stops at
-once when a step throws, after the cycle when an answer from the provider was
-not recorded, and at `--max-cycles`; it never waits, and work handed back for
-later waits for the next run. It prints counts only. It is refused in
-production, unless `VIDEO_PROVIDER=fake`, and on a database holding any
-attempt of another provider. The database suite runs its loop: a started job
-becomes a published video and the run ends quiet. That is the end-to-end test
-GS-9d planned, so GS-9 ends here, and a person on a development machine can
-now turn a started video into a published one.
+submission windows' cursors, until cycles that change nothing have read both
+windows through. It stops at once when a step throws, after the cycle when an
+answer from the provider was not recorded, and at `--max-cycles`; it never
+waits, and work handed back for later waits for the next run. Every outcome a
+step can report is counted as a change, a failure or neither, and a failure
+makes the run exit 1. It prints counts only. It is refused in production,
+unless `VIDEO_PROVIDER=fake`, on a database not on this machine, and on one
+holding any attempt of another provider. The database suite runs its loop: a
+started job becomes a published video and the run ends quiet. That is the
+end-to-end test GS-9d planned, so GS-9 ends here. Only a test can start a
+video until GS-10 gives the customer a way to; the command then takes it to
+publication.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

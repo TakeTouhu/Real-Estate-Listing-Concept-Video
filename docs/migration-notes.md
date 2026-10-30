@@ -2031,8 +2031,9 @@ new environment variable. The command reads the variables the assembly already
 reads, and `DATABASE_URL`.
 
 **What changes at deploy.** Nothing. The command is the worker's `pipeline`
-script, which nothing runs by itself; it is refused in production, and refused
-on a database holding any attempt of a provider other than the test provider.
+script, which nothing runs by itself; it is refused in production, on a
+database not on this machine, and on one holding any attempt of a provider
+other than the test provider.
 
 **Rolling back.** To GS-9b-2's build: safe. The command stores nothing of its
 own; what its steps write is the rows and objects the steps already write.

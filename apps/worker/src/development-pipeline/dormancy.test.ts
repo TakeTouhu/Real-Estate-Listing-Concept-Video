@@ -45,6 +45,9 @@ describe("the development pipeline's assembly", () => {
         "setTimeout",
         "setImmediate",
         "queueMicrotask",
+        "node:timers",
+        "scheduler.wait",
+        "Atomics.wait",
         "process.on",
         "process.argv",
         "cron",
@@ -77,8 +80,9 @@ describe("the development pipeline's assembly", () => {
     expect(command.match(/\.runOnce\(/g)).toHaveLength(11);
     expect(command.match(/\.runProviderOutputBatchOnce\(/g)).toHaveLength(1);
     for (const banned of ["assembleDevelopmentPipeline", "Runner(", "Repository(", "new ", "create"]) {
-      // `new Set(` holds the counted outcomes and `new AppError(` the refusal; nothing else is constructed.
-      const text = banned === "new " ? command.replace(/new (Set|AppError)\(/g, "") : command;
+      // Fixed hosts and messages (`new Set(`, `new Map(`), the database address read (`new URL(`) and the refusals
+      // (`new AppError(`); nothing else is built.
+      const text = banned === "new " ? command.replace(/new (Set|Map|URL|AppError)\(/g, "") : command;
       expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
     }
     // The entry point assembles the steps and hands them to the command; it runs none itself.
@@ -86,6 +90,9 @@ describe("the development pipeline's assembly", () => {
     expect(entry).toContain("assembleDevelopmentPipeline(");
     expect(entry).toContain("refuseForeignAttempts(");
     expect(entry).toContain("runDevelopmentPipeline(");
+    // The database's address is checked before the steps are built, so before any contact with it.
+    const addressChecked = entry.indexOf("refuseRemoteDatabase(");
+    expect([addressChecked > 0, addressChecked < entry.indexOf("assembleDevelopmentPipeline(")]).toEqual([true, true]);
     for (const banned of [".runOnce(", "runProviderOutputBatchOnce(", "BatchOnce"]) {
       expect(`${banned}: ${entry.includes(banned)}`).toBe(`${banned}: false`);
     }

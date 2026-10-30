@@ -530,8 +530,9 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const lines: number[] = [];
     const report = await runDevelopmentPipeline(steps, { limit: 10, maxCycles: 20 }, (cycle) => lines.push(cycle));
 
-    expect([report.stop, pipelineExitCode(report)]).toEqual([{ kind: "QUIET" }, 0]);
-    expect(lines).toEqual(Array.from({ length: report.cycles }, (_, index) => index + 1));
+    // One cycle moves the video from waiting to published; the next finds nothing more.
+    expect([report.cycles, report.stop, pipelineExitCode(report)]).toEqual([2, { kind: "QUIET" }, 0]);
+    expect(lines).toEqual([1, 2]);
     const changed = Object.fromEntries(Object.entries(report.totals).map(([step, pass]) => [step, pass.changed]));
     expect(changed).toEqual({
       launch: 1,
@@ -559,7 +560,8 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const job = await start();
     const report = await runDevelopmentPipeline(pipeline(), { limit: 10, maxCycles: 20 });
 
-    expect([report.stop, pipelineExitCode(report)]).toEqual([{ kind: "QUIET" }, 0]);
+    // Two cycles send, check and resolve each clip twice, the third closes the job's scenes, the fourth is quiet.
+    expect([report.cycles, report.stop, pipelineExitCode(report)]).toEqual([4, { kind: "QUIET" }, 0]);
     expect([report.totals.submission.changed, report.totals.media_validation.changed]).toEqual([4, 4]);
     const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
     expect([ended.state, ended.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);

@@ -8,6 +8,7 @@ import {
   parsePipelineArguments,
   pipelineExitCode,
   refuseForeignAttempts,
+  refuseRemoteDatabase,
   runDevelopmentPipeline,
 } from "./command";
 
@@ -29,17 +30,23 @@ async function prepare(providerFolder: string): Promise<DevelopmentPipeline | nu
   try {
     env = loadServerEnv();
   } catch (error) {
-    // It names each variable and what is wrong with it, never a value.
+    // It names each variable and what is wrong with it; no secret's value is repeated.
     console.error(error instanceof Error ? error.message : "Invalid server environment configuration");
     return null;
   }
   try {
+    // The address first, then the assembly's refusals, so production never reaches the database.
+    refuseRemoteDatabase(env.DATABASE_URL);
     const steps = assembleDevelopmentPipeline(env, { providerFolder }, { prisma });
     await refuseForeignAttempts(prisma);
     return steps;
   } catch (error) {
-    if (!(error instanceof AppError)) throw error;
-    console.error(error.message);
+    // A database or file system error's text may name a host or a user: only its kind is said.
+    console.error(
+      error instanceof AppError
+        ? error.message
+        : `The development pipeline could not start (${error instanceof Error ? error.name : "unknown error"})`,
+    );
     return null;
   }
 }
@@ -56,5 +63,5 @@ try {
     process.exitCode = pipelineExitCode(report);
   }
 } finally {
-  await prisma.$disconnect();
+  await prisma.$disconnect().catch(() => undefined);
 }

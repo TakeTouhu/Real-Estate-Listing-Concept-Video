@@ -43,14 +43,17 @@ pnpm --filter @app/worker pipeline --provider-folder <absolute path> \
   of the steps' own ceilings (composition and the final validation take 25);
   `--max-cycles` bounds one run.
 - The entry point (`src/development-pipeline/cli.ts`) parses the arguments,
-  loads the server environment, has the assembly build the steps (refused in
-  production, given or ambient `NODE_ENV`, unless `VIDEO_PROVIDER=fake`,
-  without `SHARED_STORAGE_DIR`, or with a relative folder), checks the
-  database (Decision 6), runs, prints, and disconnects.
+  loads the server environment, checks the database's address (Decision 6),
+  has the assembly build the steps (refused in production, given or ambient
+  `NODE_ENV`, unless `VIDEO_PROVIDER=fake`, without `SHARED_STORAGE_DIR`, or
+  with a relative folder), checks what the database holds (Decision 6), runs,
+  prints, and disconnects. The first two refusals come before any contact
+  with the database.
 - Exit status: **0** when the run ended with nothing more to do now and no
   step reported a failure; **1** when it stopped for any other reason or a
   step reported a failure; **2** when it was refused before any step ran
-  (arguments, environment, the assembly's refusal or the database's).
+  (arguments, environment, the assembly's refusal or either of the
+  database's).
 
 It is the worker's `pipeline` script and nothing else: no start-up path,
 route, hook, CI step or other script runs it.
@@ -94,50 +97,67 @@ run starts from the oldest (`null`). The other steps have no window: what they
 handle leaves their candidates, and what they cannot handle is reported as a
 failure.
 
-## Decision 4 — It stops when a whole cycle changed nothing
+## Decision 4 — It stops when quiet cycles have read both windows through
 
 A run ends at the first of:
 
 | Stop | When | Exit |
 | --- | --- | --- |
-| nothing more to do now (`QUIET`) | a whole cycle changed nothing and neither window has more after its cursor | 0, or 1 if any step reported a failure during the run |
+| nothing more to do now (`QUIET`) | cycles that changed nothing have read each window, from its oldest row through to its end | 0, or 1 if any step reported a failure during the run |
 | an answer was not recorded (`SUBMISSION_STOPPED`) | the submission reports `stopped` (ADR-0098): an answer from the provider could not be recorded | 1, after the rest of that cycle |
 | a step threw (`STEP_THREW`) | any step throws | 1, at once |
 | the cycle limit (`CYCLE_LIMIT`) | `--max-cycles` cycles ran with work still moving | 1 |
 
-What each step counts as a change, and as a failure:
+**Quiet means both windows were read through.** A window is read through
+when, since the last cycle that changed something, one of its passes began at
+its oldest row (a `null` cursor) and that pass or a later one returned `next`
+`null`. A cycle that changes anything starts both reads again; the cursors are
+kept. A change can let a row move that a pass had already gone past (a job
+behind its organization's limit, once a job ahead of it ends), so a single
+quiet cycle that began mid-window is not enough. A window that fits in one
+pass is read through by any quiet cycle that starts at its oldest row.
 
-| Step | Changed | Failed |
-| --- | --- | --- |
-| launch | launched + ended | failed |
-| submission | sent + ended | failed |
-| provider output | `PROVIDER_COMPLETION_APPLIED`, `OUTPUT_VERIFIED` | `OUTPUT_LOCATOR_UNAVAILABLE`, `TRANSFER_RETRYABLE_FAILURE`, `TRANSFER_SOURCE_FAILED`, `STATUS_SOURCE_FAILED`, `STATUS_OBSERVATION_MALFORMED`, `TRANSFER_OUTCOME_MALFORMED`, `PROVIDER_REALITY_CONFLICT`, `ATTEMPT_CONTEXT_INVALID` |
-| maintenance | uncertainty entered + exhausted | none |
-| K | settled | failed |
-| L | closed | failed |
-| media validation | `VALID`, `INVALID_MEDIA`, `INTEGRITY_MISMATCH`, and a claim `RELEASED` to be retried later | none |
-| failure resolution | claimed | none |
-| F | delivered | none |
-| I | planned | failed |
-| J | claimed | failed |
-| G | any outcome that wrote a row | `FAILED` |
+**What counts.** Each item a pass reports is a change (the pass moved a row),
+a failure (it could not move it, and will offer it again), or neither (the
+item is not this pass's to move now). Each step's table names every outcome
+its runner can report, so an outcome added or renamed does not compile until
+it is placed:
+
+| Step | Changed | Failed | Neither |
+| --- | --- | --- | --- |
+| launch | `LAUNCHED`, `ENDED` | `NO_SUBSCRIPTION`, `NOT_PLANNED`, `NOT_ENDED`, `FAILED`; `NOT_LAUNCHABLE` for `FACTS_CHANGED`, `PROPERTY_DELETED`, `SHAPE_CONFLICT` | `AT_LIMIT`, `NOT_NEXT`, `SAME_REQUEST_RUNNING`; `NOT_LAUNCHABLE` for `NOT_WAITING` |
+| submission | `SENT`, `ENDED` | `NOT_PREPARED`, `NOT_AUTHORIZED`, `FAILED`; `NOT_SENT` for `SOURCE_URL_STALE`, `OTHER_PROVIDER` | `MOVED`; `NOT_SENT` for `JOB_ENDING`, `PASS_STOPPED`, `PROPERTY_NOT_DELETED` |
+| provider output | `PROVIDER_COMPLETION_APPLIED`, `OUTPUT_VERIFIED` | `OUTPUT_LOCATOR_UNAVAILABLE`, `TRANSFER_RETRYABLE_FAILURE`, `TRANSFER_SOURCE_FAILED`, `STATUS_SOURCE_FAILED`, `STATUS_OBSERVATION_MALFORMED`, `TRANSFER_OUTCOME_MALFORMED`, `PROVIDER_REALITY_CONFLICT`, `ATTEMPT_CONTEXT_INVALID` | `STILL_PROCESSING`, `PROVIDER_COMPLETION_REPLAYED`, `INGESTION_ALREADY_CLAIMED`, `OUTPUT_VERIFICATION_REPLAYED`, `ALREADY_VERIFIED`, `ATTEMPT_NOT_FOUND`, `ATTEMPT_NOT_APPLICABLE`, `LOST_CONCURRENCY` |
+| maintenance | uncertainty entered + exhausted | none | the rest |
+| K | settled | failed | the rest |
+| L | closed | failed | the rest |
+| media validation | `VALID`, `INVALID_MEDIA`, `INTEGRITY_MISMATCH` | `RELEASED` (not read this time; checked again after its delay) | `NOT_CLAIMED`, `ALREADY_TERMINAL`, `NOT_ELIGIBLE`, `LOST` |
+| failure resolution | recovery `ADMITTED`, `RECONCILED`, settlement `SETTLED`, `RESOLVED` | `DEFERRED` (no retry could be planned now) | any other recovery or settlement outcome, `SKIPPED` |
+| F | delivered | none | the rest |
+| I | planned | failed | the rest |
+| J | finalized + blocked (a refused composition ends its job) | deferred + lease lost + unsupported target + failed | the rest |
+| G | `PUBLISHED_AND_CONSUMED`, `PUBLISHED_AS_REPLACEMENT`, `PROPERTY_DELETED`, `INVALID_MEDIA`, `INTEGRITY_MISMATCH` | `RELEASED`, `FAILED` | `NOT_PUBLISHABLE`, `ALREADY_PUBLISHED`, `NOT_CLAIMABLE`, `ALREADY_TERMINAL`, `NOT_ELIGIBLE`, `NOT_FOUND`, `LOST` |
 
 A failure never keeps a run going: an item a step cannot handle is offered
-again on every pass, so counting it as a change would never end. What is
-neither (an attempt still processing, an answer or a verdict already on file,
-an item another worker holds or that is not yet due) is work that is not this
-pass's to move.
+again on every pass, so counting it as a change would never end. But it is
+never silent either: a refusal that keeps a job from moving (a launch or a
+send refused, a source address gone stale, a clip or a video released
+unread, a retry or a composition put off) makes the run exit 1, so a person
+knows the run did not finish everything it could see.
 
 - **A step that throws stops the run at once.** A throw is a fault (the
   database gone, a bug), not an item's outcome; the steps after it would act
-  on a state no one has looked at. Only an `AppError`'s code is kept.
+  on a state no one has looked at. Only an `AppError`'s code is kept. A throw
+  in the cycle whose submission also stopped is reported as the throw, the
+  larger fault.
 - **An unrecorded answer finishes the cycle, then stops.** The submission has
   already stopped sending (ADR-0098); the steps after it in that cycle send
   nothing. Another cycle would send again before anyone has looked.
 - **The cycle limit** bounds a step that changes something on every pass
   without converging. One video on the test provider takes one cycle, then a
-  quiet one; a job whose clips are unusable takes three, then a quiet one; 50
-  leaves room for many jobs queued behind their organizations' limits.
+  quiet one; a job whose clips are unusable takes three, then a quiet one
+  (both measured by the database test); 50 leaves room for many jobs queued
+  behind their organizations' limits.
 
 ## Decision 5 — It never waits
 
@@ -155,26 +175,43 @@ back to be retried later waits for a later run:
   fifteen minutes in development, and one whose answer never comes, which it
   gives up when its one-hour window ends (ADR-0106).
 
-A run that ends `QUIET` therefore means nothing more can move *now*.
+A run that ends `QUIET` therefore means nothing more can move *now*. Work
+handed back by an outcome this run saw (a clip or a video released unread, a
+retry put off) is a failure, so that run exits 1; work that only becomes due
+later (the `OBSOLETE` resolution above) is not offered at all, so a run can
+exit 0 with it still waiting.
 
-## Decision 6 — It refuses a database that holds another provider's attempts
+## Decision 6 — It refuses a database that is not on this machine, or holds another provider's attempts
 
-Before its first pass, the command counts the scene attempts addressed to any
-provider other than the test provider (`sceneGeneration.providerName` not
-`fake`). If there is one, it is refused (`CONFIGURATION_ERROR`, exit 2) and
-nothing runs.
+Two checks guard the database, both before the first pass:
+
+1. **Its address.** `DATABASE_URL` must name `localhost`, `127.0.0.1` or
+   `[::1]`, and a `host` parameter, if any, must be a socket path. Anything
+   else, or an address that cannot be read, is refused (`CONFIGURATION_ERROR`,
+   exit 2) before the assembly is built and before any contact with the
+   database. The address is never printed.
+2. **What it holds.** The command counts the scene attempts addressed to any
+   provider other than the test provider (`sceneGeneration.providerName` not
+   `fake`). If there is one, it is refused (`CONFIGURATION_ERROR`, exit 2) and
+   nothing runs. The check reads one count and writes nothing.
 
 The steps act on every organization's rows: the final validation publishes and
-consumes Units, F and I advance jobs, and the resolution admits retries. A
-database that has ever held an attempt for a real provider is not one the test
-provider's pipeline may act on. The check reads one count and writes nothing.
-It runs once: nothing the command runs can address another provider, because
-the assembly's route kit is the test provider's alone (ADR-0090).
+consumes Units, F and I advance jobs, and the resolution admits retries. The
+refusal in production does not protect a developer's laptop on its own:
+`NODE_ENV` defaults to `development`, so a laptop whose `DATABASE_URL` points
+at a shared or production database would otherwise pass. The address check
+closes that for any database reached over the network; the second check
+refuses a database that has ever held an attempt for a real provider.
 
-This answers the question ADR-0106 and ADR-0107 left open. A database that is
-not a development one but holds no attempt of another provider is not
-detected by it; the refusal in production and `SHARED_STORAGE_DIR`, itself
-refused in production, still guard that case.
+Both run once, before the first pass: nothing the command runs can address
+another provider, because the assembly's route kit is the test provider's
+alone (ADR-0090), and the address does not change during a run.
+
+This answers the question ADR-0106 and ADR-0107 left open, with one known
+gap: a remote database reached through a local port (an SSH tunnel or a port
+forward to `localhost`) that holds no attempt of another provider is not
+detected. A positive mark that a database is a development one would close it,
+but needs a schema change; it is recorded in `docs/decisions/TODO.md`.
 
 ## Decision 7 — It reports counts only
 
@@ -184,16 +221,24 @@ totals:
 
 ```text
 cycle 1: launch 1, submission 2, provider output 2, clips checked 2, scenes delivered (F) 2,
-  videos planned (I) 1, videos composed (J) 1, videos validated (G) 1
+  videos planned (I) 1, compositions finished (J) 1, videos validated (G) 1
 cycle 2: nothing changed
 nothing more to do now after 2 cycles; in all: launch 1, submission 2, provider output 2, …
 ```
 
 (Each is one line; the first is wrapped here.)
 
+A step that reported failures shows them after its count, as
+`launch 0 (1 failed)`.
+
 No id, key, URL, signed address, provider payload or error text is printed:
 the database holds the rows a developer may look at, and a thrown error is
-reported by its step and its `AppError` code only.
+reported by its step and its `AppError` code only. Nothing typed is repeated
+either: an argument the command cannot read is reported by a fixed sentence
+for its kind (an unknown option, a stray word, an option without its value),
+since Node's own message quotes what was typed, which may be anything pasted.
+An error before the first pass that is not one of the command's refusals (the
+database or the file system failing) is reported by its name only.
 
 ## Decision 8 — Static tests admit the command by name, and the run is tested
 
@@ -218,18 +263,23 @@ now says:
   output batch), and it constructs no runner, repository or assembly;
 - only the entry point reads the command line; it builds the steps, checks the
   database and hands both to the command, and runs no step itself;
-- none of the four sets a timer, listens for a process event, reaches a
-  network or names a real provider;
+- none of the four sets a timer (including `node:timers`, `scheduler.wait`
+  and `Atomics.wait`), listens for a process event, reaches a network or
+  names a real provider;
 - outside the folder, only the worker's `pipeline` script names it, and
   neither the root's scripts nor any CI workflow runs it.
 
 `tests/integration/development-pipeline.db.test.ts` runs the command's loop
 against PostgreSQL and FFmpeg, in CI's `database` job (ADR-0107 Decision 3):
-a started job becomes a published video and the run stops quiet with exit 0,
-then a second run finds nothing in one cycle; a job whose clips are unusable
-is retried once, its Unit is released and the run stops quiet, one resolution
-still waiting; and the database check refuses once an attempt names another
-provider. This is GS-9d: it needs no milestone of its own.
+a started job becomes a published video and the run stops quiet with exit 0
+after two cycles, then a second run finds nothing in one cycle; a job whose
+clips are unusable is retried once, its Unit is released and the run stops
+quiet after four cycles, one resolution still waiting; and the database check
+refuses once an attempt names another provider. This is GS-9d: it needs no
+milestone of its own.
+
+The command's unit tests stand a fake in for each step and cover each stop,
+the reads of both windows, every counted outcome and the address check.
 
 ## Considered and not done
 
@@ -244,8 +294,16 @@ provider. This is GS-9d: it needs no milestone of its own.
   crash.
 - **Printing ids.** Counts say whether the pipeline moved; the rows are in the
   developer's database.
-- **Checking the database's name or host.** Neither says reliably what a
-  database holds; another provider's attempts do.
+- **Checking the database's name.** A name says nothing reliable about what
+  a database holds; its host says whether it can be shared, and another
+  provider's attempts say what it held (Decision 6).
+- **Starting each window again from its oldest row after a change.** It reads
+  the same full window again on every changing cycle and starves the rows
+  after it; keeping the cursor and asking for a full read before stopping
+  offers every row and still ends.
+- **A positive mark on a development database.** It needs a schema change
+  and a step to set it on every developer's database; recorded as an open
+  question instead (Decision 6).
 - **A filter by organization.** Each step's query would change for it, and a
   development database's organizations are all test ones.
 

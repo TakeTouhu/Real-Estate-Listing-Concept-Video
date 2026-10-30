@@ -53,7 +53,7 @@ export const USAGE = [
   "  --provider-folder <absolute path: the test provider's own folder, for its clips> \\",
   `  [--limit <1 to ${MAX_PIPELINE_LIMIT}: items each step takes per pass; 10 if omitted>] \\`,
   `  [--max-cycles <1 to ${MAX_PIPELINE_CYCLES}: cycles before it gives up; 50 if omitted>]`,
-  "Runs only with VIDEO_PROVIDER=fake and SHARED_STORAGE_DIR, never in production.",
+  "Runs only with VIDEO_PROVIDER=fake, SHARED_STORAGE_DIR and a database on this machine, never in production.",
 ].join("\n");
 
 export interface PipelineArguments {
@@ -76,7 +76,13 @@ function bounded(raw: unknown, name: string, fallback: number, max: number, erro
   return Number(text);
 }
 
-/** Read and validate the command line. */
+const PARSE_ERRORS: ReadonlyMap<unknown, string> = new Map([
+  ["ERR_PARSE_ARGS_UNKNOWN_OPTION", "An option it does not know was given"],
+  ["ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL", "A word that is not an option was given"],
+  ["ERR_PARSE_ARGS_INVALID_OPTION_VALUE", "An option was given without its value"],
+]);
+
+/** Read and validate the command line. Nothing typed is repeated back. */
 export function parsePipelineArguments(argv: readonly string[]): ParsedPipelineArguments {
   let values: Record<string, unknown>;
   try {
@@ -91,7 +97,9 @@ export function parsePipelineArguments(argv: readonly string[]): ParsedPipelineA
       },
     }));
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "Unreadable arguments" };
+    // Node's own message quotes what was typed, which may be anything pasted: only its kind is said.
+    const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+    return { ok: false, error: PARSE_ERRORS.get(code) ?? "The arguments could not be read" };
   }
   const errors: string[] = [];
   const folder = values["provider-folder"];
@@ -101,6 +109,31 @@ export function parsePipelineArguments(argv: readonly string[]): ParsedPipelineA
   const maxCycles = bounded(values["max-cycles"], "max-cycles", 50, MAX_PIPELINE_CYCLES, errors);
   if (errors.length > 0) return { ok: false, error: errors.join("; ") };
   return { ok: true, value: { providerFolder, limit, maxCycles } };
+}
+
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Refused unless `DATABASE_URL` names a database on this machine (ADR-0108
+ * Decision 6). Reads the address and never prints it.
+ */
+export function refuseRemoteDatabase(databaseUrl: string | undefined): void {
+  let local = false;
+  if (databaseUrl !== undefined) {
+    try {
+      const url = new URL(databaseUrl);
+      const socket = url.searchParams.get("host");
+      local = LOCAL_HOSTS.has(url.hostname) && (socket === null || socket.startsWith("/"));
+    } catch {
+      local = false;
+    }
+  }
+  if (!local) {
+    throw new AppError(
+      "CONFIGURATION_ERROR",
+      "The development pipeline is refused: DATABASE_URL must name a database on this machine",
+    );
+  }
 }
 
 /** The test provider: the only one whose attempts a development database may hold. */
@@ -156,7 +189,7 @@ export const PIPELINE_ORDER = [
 export type PipelineStep = (typeof PIPELINE_ORDER)[number];
 
 export type PipelineStop =
-  /** A whole cycle changed nothing, with both windows at their end. */
+  /** Cycles that changed nothing read each window from its oldest row to its end. */
   | { readonly kind: "QUIET" }
   /** An answer from the provider was not recorded; nothing after it was sent. */
   | { readonly kind: "SUBMISSION_STOPPED" }
@@ -170,33 +203,141 @@ export interface PipelineRunReport {
   readonly totals: Readonly<Record<PipelineStep, PassCount>>;
 }
 
-const PROVIDER_OUTPUT_CHANGED = new Set(["PROVIDER_COMPLETION_APPLIED", "OUTPUT_VERIFIED"]);
-/** An attempt the provider output could not take further this pass. */
-const PROVIDER_OUTPUT_FAILED = new Set([
-  "OUTPUT_LOCATOR_UNAVAILABLE",
-  "TRANSFER_RETRYABLE_FAILURE",
-  "TRANSFER_SOURCE_FAILED",
-  "STATUS_SOURCE_FAILED",
-  "STATUS_OBSERVATION_MALFORMED",
-  "TRANSFER_OUTCOME_MALFORMED",
-  "PROVIDER_REALITY_CONFLICT",
-  "ATTEMPT_CONTEXT_INVALID",
-]);
-/** Media validation's verdicts, and a claim handed back to be retried later. */
-const VERDICTS = new Set(["VALID", "INVALID_MEDIA", "INTEGRITY_MISMATCH", "RELEASED"]);
-/** What the final validation reports when it wrote nothing. */
-const NOT_CHANGED_BY_VALIDATION = new Set([
-  "ALREADY_PUBLISHED",
-  "NOT_CLAIMABLE",
-  "ALREADY_TERMINAL",
-  "NOT_ELIGIBLE",
-  "NOT_FOUND",
-  "LOST",
-  "FAILED",
-]);
+/**
+ * How an item's outcome counts (ADR-0108 Decision 4): a row this pass moved,
+ * an item it could not move and will offer again, or neither (still at the
+ * provider, already done, held by another worker, not yet due, or waiting
+ * for another job to move first).
+ */
+type Tally = "CHANGED" | "FAILED" | "NEITHER";
 
-function count<T>(items: readonly T[], test: (item: T) => boolean): number {
-  return items.filter(test).length;
+/** One pass's report, as the assembly's step returns it. */
+type Report<K extends Exclude<keyof DevelopmentPipeline, "providerOutput">> = Awaited<
+  ReturnType<DevelopmentPipeline[K]["runOnce"]>
+>;
+type LaunchOutcome = Report<"launch">["outcomes"][number]["outcome"];
+type SubmissionOutcome = Report<"submission">["outcomes"][number]["outcome"];
+type ProviderOutputKind = Awaited<
+  ReturnType<DevelopmentPipeline["providerOutput"]["runProviderOutputBatchOnce"]>
+>["results"][number];
+type MediaValidationKind = Report<"mediaValidation">["outcomes"][number]["outcome"]["kind"];
+type ResolutionOutcome = Report<"mediaFailureResolution">["outcomes"][number]["result"];
+type FinalValidationKind = Report<"deliverableValidation">["outcomes"][number]["outcome"]["kind"];
+
+// Each table names every kind its step can report, so a kind added or renamed
+// does not compile until it is counted.
+const LAUNCH: Readonly<Record<Exclude<LaunchOutcome["kind"], "NOT_LAUNCHABLE">, Tally>> = {
+  LAUNCHED: "CHANGED",
+  ENDED: "CHANGED",
+  AT_LIMIT: "NEITHER",
+  NOT_NEXT: "NEITHER",
+  SAME_REQUEST_RUNNING: "NEITHER",
+  NO_SUBSCRIPTION: "FAILED",
+  NOT_PLANNED: "FAILED",
+  NOT_ENDED: "FAILED",
+  FAILED: "FAILED",
+};
+const NOT_LAUNCHABLE: Readonly<Record<Extract<LaunchOutcome, { kind: "NOT_LAUNCHABLE" }>["reason"], Tally>> = {
+  // Launched or ended by another writer.
+  NOT_WAITING: "NEITHER",
+  // The runner ends these two at once; either reaching the command means a job that should have moved.
+  PROPERTY_DELETED: "FAILED",
+  SHAPE_CONFLICT: "FAILED",
+  FACTS_CHANGED: "FAILED",
+};
+const SUBMISSION: Readonly<Record<Exclude<SubmissionOutcome["kind"], "NOT_SENT">, Tally>> = {
+  SENT: "CHANGED",
+  ENDED: "CHANGED",
+  MOVED: "NEITHER",
+  NOT_PREPARED: "FAILED",
+  NOT_AUTHORIZED: "FAILED",
+  FAILED: "FAILED",
+};
+const NOT_SENT: Readonly<Record<Extract<SubmissionOutcome, { kind: "NOT_SENT" }>["reason"], Tally>> = {
+  JOB_ENDING: "NEITHER",
+  PASS_STOPPED: "NEITHER",
+  PROPERTY_NOT_DELETED: "NEITHER",
+  SOURCE_URL_STALE: "FAILED",
+  OTHER_PROVIDER: "FAILED",
+};
+const PROVIDER_OUTPUT: Readonly<Record<ProviderOutputKind, Tally>> = {
+  PROVIDER_COMPLETION_APPLIED: "CHANGED",
+  OUTPUT_VERIFIED: "CHANGED",
+  STILL_PROCESSING: "NEITHER",
+  PROVIDER_COMPLETION_REPLAYED: "NEITHER",
+  INGESTION_ALREADY_CLAIMED: "NEITHER",
+  OUTPUT_VERIFICATION_REPLAYED: "NEITHER",
+  ALREADY_VERIFIED: "NEITHER",
+  ATTEMPT_NOT_FOUND: "NEITHER",
+  ATTEMPT_NOT_APPLICABLE: "NEITHER",
+  LOST_CONCURRENCY: "NEITHER",
+  OUTPUT_LOCATOR_UNAVAILABLE: "FAILED",
+  TRANSFER_RETRYABLE_FAILURE: "FAILED",
+  TRANSFER_SOURCE_FAILED: "FAILED",
+  STATUS_SOURCE_FAILED: "FAILED",
+  STATUS_OBSERVATION_MALFORMED: "FAILED",
+  TRANSFER_OUTCOME_MALFORMED: "FAILED",
+  PROVIDER_REALITY_CONFLICT: "FAILED",
+  ATTEMPT_CONTEXT_INVALID: "FAILED",
+};
+const MEDIA_VALIDATION: Readonly<Record<MediaValidationKind, Tally>> = {
+  VALID: "CHANGED",
+  INVALID_MEDIA: "CHANGED",
+  INTEGRITY_MISMATCH: "CHANGED",
+  NOT_CLAIMED: "NEITHER",
+  ALREADY_TERMINAL: "NEITHER",
+  NOT_ELIGIBLE: "NEITHER",
+  LOST: "NEITHER",
+  // Not read this time; checked again after its delay.
+  RELEASED: "FAILED",
+};
+const FINAL_VALIDATION: Readonly<Record<FinalValidationKind, Tally>> = {
+  PUBLISHED_AND_CONSUMED: "CHANGED",
+  PUBLISHED_AS_REPLACEMENT: "CHANGED",
+  PROPERTY_DELETED: "CHANGED",
+  INVALID_MEDIA: "CHANGED",
+  INTEGRITY_MISMATCH: "CHANGED",
+  NOT_PUBLISHABLE: "NEITHER",
+  ALREADY_PUBLISHED: "NEITHER",
+  NOT_CLAIMABLE: "NEITHER",
+  ALREADY_TERMINAL: "NEITHER",
+  NOT_ELIGIBLE: "NEITHER",
+  NOT_FOUND: "NEITHER",
+  LOST: "NEITHER",
+  RELEASED: "FAILED",
+  FAILED: "FAILED",
+};
+
+function launchTally(outcome: LaunchOutcome): Tally {
+  return outcome.kind === "NOT_LAUNCHABLE" ? NOT_LAUNCHABLE[outcome.reason] : LAUNCH[outcome.kind];
+}
+
+function submissionTally(outcome: SubmissionOutcome): Tally {
+  return outcome.kind === "NOT_SENT" ? NOT_SENT[outcome.reason] : SUBMISSION[outcome.kind];
+}
+
+function resolutionTally(result: ResolutionOutcome): Tally {
+  switch (result.kind) {
+    case "RECOVERY":
+      return result.outcome.kind === "ADMITTED" ? "CHANGED" : "NEITHER";
+    case "SETTLEMENT":
+      return result.outcome.kind === "SETTLED" ? "CHANGED" : "NEITHER";
+    case "RECONCILED":
+    case "RESOLVED":
+      return "CHANGED";
+    // No retry could be planned now; offered again after its delay.
+    case "DEFERRED":
+      return "FAILED";
+    case "SKIPPED":
+      return "NEITHER";
+  }
+}
+
+function tally(tallies: readonly Tally[]): PassCount {
+  return {
+    changed: tallies.filter((entry) => entry === "CHANGED").length,
+    failed: tallies.filter((entry) => entry === "FAILED").length,
+  };
 }
 
 /** The exit status for a run: 0 when it ended quiet with nothing failed, 1 otherwise. */
@@ -205,9 +346,31 @@ export function pipelineExitCode(report: PipelineRunReport): 0 | 1 {
   return report.stop.kind === "QUIET" && !failed ? 0 : 1;
 }
 
+/** Where one pass of a window began and ended. */
+interface WindowPass {
+  readonly fromOldest: boolean;
+  readonly toEnd: boolean;
+}
+
 /**
- * Runs cycles until one changes nothing, a step throws, the provider's answer
- * is not recorded, or `maxCycles` have run. Each cycle runs every step once.
+ * How far a window has been read since the last cycle that changed something:
+ * not yet from its oldest row, from its oldest row on, or through to its end.
+ */
+type Sweep = "NOT_BEGUN" | "BEGUN" | "DONE";
+
+function swept(sweep: Sweep, pass: WindowPass): Sweep {
+  if (sweep === "DONE") return "DONE";
+  const begun = sweep === "BEGUN" || pass.fromOldest;
+  if (!begun) return "NOT_BEGUN";
+  return pass.toEnd ? "DONE" : "BEGUN";
+}
+
+/**
+ * Runs cycles until nothing changes, a step throws, the provider's answer is
+ * not recorded, or `maxCycles` have run. Each cycle runs every step once. A
+ * run is quiet only after cycles that changed nothing have read each window
+ * from its oldest row through to its end, since a change can let a row behind
+ * a cursor move.
  */
 export async function runDevelopmentPipeline(
   steps: PipelinePasses,
@@ -222,29 +385,32 @@ export async function runDevelopmentPipeline(
   // Each window's cursor is carried from one cycle to the next; a run starts from the oldest.
   let launchFrom: JobLaunchCursor | null = null;
   let submitFrom: AttemptSubmissionCursor | null = null;
+  let launchPass: WindowPass = { fromOldest: false, toEnd: false };
+  let submitPass: WindowPass = { fromOldest: false, toEnd: false };
+  let launchSweep: Sweep = "NOT_BEGUN";
+  let submitSweep: Sweep = "NOT_BEGUN";
   let submissionStopped = false;
 
-  const passes: Record<PipelineStep, () => Promise<PassCount & { readonly moreWaiting?: boolean }>> = {
+  const passes: Record<PipelineStep, () => Promise<PassCount>> = {
     launch: async () => {
       const report = await steps.launch.runOnce(limit, launchFrom);
+      launchPass = { fromOldest: launchFrom === null, toEnd: report.next === null };
       launchFrom = report.next;
-      return { changed: report.launched + report.ended, failed: report.failed, moreWaiting: report.next !== null };
+      return tally(report.outcomes.map(({ outcome }) => launchTally(outcome)));
     },
     submission: async () => {
       const report = await steps.submission.runOnce(limit, submitFrom);
+      submitPass = { fromOldest: submitFrom === null, toEnd: report.next === null };
       submitFrom = report.next;
       submissionStopped = report.stopped;
-      return { changed: report.sent + report.ended, failed: report.failed, moreWaiting: report.next !== null };
+      return tally(report.outcomes.map(({ outcome }) => submissionTally(outcome)));
     },
     provider_output: async () => {
       const { results } = await steps.providerOutput.runProviderOutputBatchOnce({
         limit,
         context: developmentPipelineContext("provider_output"),
       });
-      return {
-        changed: count(results, (kind) => PROVIDER_OUTPUT_CHANGED.has(kind)),
-        failed: count(results, (kind) => PROVIDER_OUTPUT_FAILED.has(kind)),
-      };
+      return tally(results.map((kind) => PROVIDER_OUTPUT[kind]));
     },
     reconciliation: async () => {
       const report = await steps.reconciliation.runOnce({
@@ -263,11 +429,11 @@ export async function runDevelopmentPipeline(
     },
     media_validation: async () => {
       const { outcomes } = await steps.mediaValidation.runOnce(limit);
-      return { changed: count(outcomes, ({ outcome }) => VERDICTS.has(outcome.kind)), failed: 0 };
+      return tally(outcomes.map(({ outcome }) => MEDIA_VALIDATION[outcome.kind]));
     },
     media_failure_resolution: async () => {
-      const report = await steps.mediaFailureResolution.runOnce(limit);
-      return { changed: report.claimed, failed: 0 };
+      const { outcomes } = await steps.mediaFailureResolution.runOnce(limit);
+      return tally(outcomes.map(({ result }) => resolutionTally(result)));
     },
     scene_delivery: async () => {
       const report = await steps.sceneDelivery.runOnce(limit);
@@ -279,26 +445,26 @@ export async function runDevelopmentPipeline(
     },
     composition: async () => {
       const report = await steps.composition.runOnce(limit);
-      return { changed: report.claimed, failed: report.failed };
+      // A refused composition ends its job and frees its place, so it moved a row too.
+      return {
+        changed: report.finalized + report.blocked,
+        failed: report.deferred + report.leaseLost + report.unsupportedTarget + report.failed,
+      };
     },
     deliverable_validation: async () => {
       const { outcomes } = await steps.deliverableValidation.runOnce(
         limit,
         developmentPipelineContext("deliverable_validation"),
       );
-      return {
-        changed: count(outcomes, ({ outcome }) => !NOT_CHANGED_BY_VALIDATION.has(outcome.kind)),
-        failed: count(outcomes, ({ outcome }) => outcome.kind === "FAILED"),
-      };
+      return tally(outcomes.map(({ outcome }) => FINAL_VALIDATION[outcome.kind]));
     },
   };
 
   for (let cycle = 1; cycle <= options.maxCycles; cycle += 1) {
     const counts: Partial<Record<PipelineStep, PassCount>> = {};
     let changed = 0;
-    let moreWaiting = false;
     for (const step of PIPELINE_ORDER) {
-      let pass: PassCount & { readonly moreWaiting?: boolean };
+      let pass: PassCount;
       try {
         pass = await passes[step]();
       } catch (error) {
@@ -306,15 +472,21 @@ export async function runDevelopmentPipeline(
         const code = error instanceof AppError ? error.code : null;
         return { cycles: cycle, stop: { kind: "STEP_THREW", step, code }, totals };
       }
-      counts[step] = { changed: pass.changed, failed: pass.failed };
+      counts[step] = pass;
       totals[step].changed += pass.changed;
       totals[step].failed += pass.failed;
       changed += pass.changed;
-      moreWaiting ||= pass.moreWaiting === true;
     }
     onCycle(cycle, counts);
     if (submissionStopped) return { cycles: cycle, stop: { kind: "SUBMISSION_STOPPED" }, totals };
-    if (changed === 0 && !moreWaiting) return { cycles: cycle, stop: { kind: "QUIET" }, totals };
+    if (changed > 0) {
+      launchSweep = "NOT_BEGUN";
+      submitSweep = "NOT_BEGUN";
+      continue;
+    }
+    launchSweep = swept(launchSweep, launchPass);
+    submitSweep = swept(submitSweep, submitPass);
+    if (launchSweep === "DONE" && submitSweep === "DONE") return { cycles: cycle, stop: { kind: "QUIET" }, totals };
   }
   return { cycles: options.maxCycles, stop: { kind: "CYCLE_LIMIT" }, totals };
 }
@@ -331,7 +503,7 @@ const LABELS: Readonly<Record<PipelineStep, string>> = {
   media_failure_resolution: "unusable clips resolved",
   scene_delivery: "scenes delivered (F)",
   composition_plan: "videos planned (I)",
-  composition: "videos composed (J)",
+  composition: "compositions finished (J)",
   deliverable_validation: "videos validated (G)",
 };
 

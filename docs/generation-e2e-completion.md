@@ -5396,7 +5396,9 @@ Commits, oldest first:
 
 | Commit | What it carries |
 | --- | --- |
-| this commit | the command, its entry point and `pipeline` script, its unit and database tests, the static tests' admissions, ADR-0108 and the documentation |
+| `a6e01f3` | the command, its entry point and `pipeline` script, its unit and database tests, the static tests' admissions, ADR-0108 and the documentation |
+| `a80f494` | three checks mutation testing asked for: a window read only by the launch, the final validation's failures, a cycle's printed failures |
+| this commit | the answers to the review: the quiet rule reads both windows through, every outcome counted by an exhaustive table, the database's address checked, fixed messages for unreadable arguments and start-up errors |
 
 The exact head SHA is reported with the pull request.
 
@@ -5406,14 +5408,22 @@ The exact head SHA is reported with the pull request.
   --provider-folder <absolute path>` runs the twelve steps the assembly built,
   one pass each per cycle, in the order work flows, carrying the launch's and
   the submission's cursors from one cycle to the next.
-- **It stops when a whole cycle changed nothing** and neither window has more;
-  at once when a step throws; after the cycle when an answer from the provider
-  was not recorded; and at `--max-cycles`. It never waits: work handed back
-  for later waits for the next run.
-- **It refuses a database holding another provider's attempts**, before any
-  step, and is refused in production by the assembly.
-- **It prints counts only**: a line per cycle and one for the run. Exit 0 when
-  nothing more can move now and nothing failed, 1 otherwise, 2 when refused.
+- **It stops when cycles that changed nothing have read both windows
+  through**, each from its oldest row to its end; at once when a step throws;
+  after the cycle when an answer from the provider was not recorded; and at
+  `--max-cycles`. It never waits: work handed back for later waits for the
+  next run.
+- **Every outcome a step can report is placed** as a change, a failure or
+  neither, in a table the compiler checks is complete. A failure (a launch or
+  send refused, a clip or video released unread, a retry or composition put
+  off) never keeps a run going, and makes it exit 1.
+- **It refuses a database not on this machine, or holding another provider's
+  attempts**, before any step; the address check comes before the assembly
+  and any contact with the database. The assembly refuses production.
+- **It prints counts only**: a line per cycle and one for the run, with a
+  step's failures after its count. Nothing typed is repeated, and a start-up
+  error that is not a refusal is named only. Exit 0 when nothing more can move
+  now and nothing failed, 1 otherwise, 2 when refused.
 
 ```mermaid
 sequenceDiagram
@@ -5423,10 +5433,10 @@ sequenceDiagram
     participant D as Database
     participant C as Command
     P->>E: pnpm --filter @app/worker pipeline --provider-folder …
-    E->>E: arguments, server environment (exit 2 if refused)
+    E->>E: arguments, server environment, database on this machine (exit 2 if refused)
     E->>A: build the steps (refused in production, unless the test provider)
     E->>D: count attempts of another provider (exit 2 if any)
-    loop each cycle, until one changes nothing
+    loop each cycle, until quiet cycles have read both windows through
         C->>A: launch, submission (cursors carried), provider output, maintenance
         C->>A: K, L, media validation, failure resolution
         C->>A: F, I, J, G
@@ -5443,9 +5453,9 @@ Ubuntu 24.04).
 | Check | Result |
 | --- | --- |
 | `pnpm lint` / `pnpm typecheck` | clean, each exit status read |
-| `pnpm test` | 6,646 tests in 247 files passed, exit 0 |
+| `pnpm test` | 6,651 tests in 247 files passed, exit 0 |
 | `pnpm test:db` | 1,854 tests in 70 files passed, exit 0 |
-| `pnpm test:media` | see the pull request |
+| `pnpm test:media` | 172 tests passed, exit 0, on `a6e01f3`; nothing it runs changed since |
 | `pnpm build` | not run locally; CI's verify job builds |
 | `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
 
@@ -5458,6 +5468,9 @@ Run by hand against an empty development database, with the test provider:
 | `--limit 26` | `--limit must be a whole number from 1 to 25` and the usage | 2 |
 | `NODE_ENV=production` | the environment's refusal of `SHARED_STORAGE_DIR` in production | 2 |
 | `VIDEO_PROVIDER=wavespeed` | the environment's refusal, naming the missing variable only | 2 |
+| `DATABASE_URL` on another host, or `localhost` with a `host` parameter naming another | `The development pipeline is refused: DATABASE_URL must name a database on this machine` | 2 |
+| an unknown option holding a value, or a stray word | `An option it does not know was given` or `A word that is not an option was given`, and the usage; nothing typed is repeated | 2 |
+| `localhost` on a port nothing listens on | `The development pipeline could not start (PrismaClientInitializationError)` | 2 |
 
 New tests:
 
@@ -5474,17 +5487,75 @@ New tests:
     for a later run.
   - **Another provider's attempts.** The check passes on the test provider's
     attempts and refuses once one names `wavespeed`.
-- `apps/worker/src/development-pipeline/command.test.ts` (new, 17): the
-  arguments; the order, the limit and each context; the cursors; another
-  cycle after a change; every outcome of every step counted as a change, a
-  failure or neither, and the printed totals; the stop on an unrecorded
-  answer, on a throw (keeping only an application error's code, and printing
-  the partial cycle) and at the cycle limit; the limit's ceiling; the database
-  check.
+- `apps/worker/src/development-pipeline/command.test.ts` (new, 22): the
+  arguments, and fixed messages for unreadable ones; the order, the limit and
+  each context; the cursors; quiet only once both windows were read through
+  since the last change, from a cursor, after a change, and with a window
+  that fills again; another cycle after a change; every outcome of every
+  step counted as a change, a failure or neither, and the printed totals; the
+  stop on an unrecorded answer, on a throw (keeping only an application
+  error's code, and printing the partial cycle) and at the cycle limit; the
+  limit's ceiling; the address check; the attempts check.
 - `apps/worker/src/development-pipeline/dormancy.test.ts` (1 more, 3 in all):
-  only the command runs a step's pass and builds nothing; only the entry point
-  reads the command line; only the `pipeline` script names the folder, and
-  neither the root's scripts nor CI run it.
+  only the command runs a step's pass and builds nothing but its fixed tables
+  and refusals; only the entry point reads the command line, and it checks
+  the address before the assembly; no timer of any kind; only the `pipeline`
+  script names the folder, and neither the root's scripts nor CI run it.
+
+### Mutation testing
+
+The same harness as GS-9b-1, in three rounds.
+
+| Round | Mutants | Result |
+| --- | --- | --- |
+| `a6e01f3` | 60 on the command, 11 on the static tests | 57 and 11 killed; M16 (the launch's window having more ignored), M41 (G's failures not counted) and M46 (a cycle's failures not printed) survived, then were killed by the three checks of `a80f494` |
+| this commit, the command | 52 on the quiet rule, every table, the address check and the argument messages | 48 killed; N03 (a window read through undone by a later pass), N04 and N05 (a read not restarted after a change) and N07 (the submission's pass always taken as from its oldest row) survived, then were killed by the two tests added for them |
+| this commit, the static tests | the 11 above and 4 more: `node:timers`, `Atomics.wait`, a `new Date(` in the command, the address check removed from the entry point | 15 killed; the last needed a check added before the run, that the entry point checks the address before the assembly |
+
+No mutant survives; none was judged equivalent.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the command runs only the passes
+the assembly built, in the approved order, never waits or starts itself,
+reaches no network, paid provider, credential or scheduler, and every static
+admission names its exact path for its one call. Answered in this commit:
+
+- **Should fix: a run could end quiet with work still movable behind a
+  cursor.** A change late in a cycle (a job ending) can free a row the launch
+  or the submission had already read past, and one quiet cycle starting
+  mid-window ended the run. Quiet now needs cycles that changed nothing to
+  read each window from its oldest row through to its end, since the last
+  change (ADR-0108 Decision 4).
+- **Should fix: a run could exit 0 with work stuck.** A refused launch or
+  send, a stale source address, a clip or video released unread, and a retry
+  or composition put off were counted as neither. Every outcome each step can
+  report is now placed in a table the compiler checks is complete, and those
+  are failures: the run still ends, but exits 1.
+- **Should fix: the database check did nothing on a laptop pointed at a
+  shared database.** `NODE_ENV` defaults to `development`, so the refusal in
+  production does not apply there. `DATABASE_URL` must now name a database on
+  this machine, checked before the assembly and any contact with the
+  database; the one gap left (a tunnel to `localhost`) is recorded in ADR-0108
+  and `docs/decisions/TODO.md`.
+- **Minor: an unreadable argument was quoted back, and a start-up error that
+  was not a refusal printed its stack.** Each kind of argument mistake now has
+  a fixed sentence, and such an error is named only, with exit 2.
+- **Minor: the counted outcomes were sets of strings.** They are exhaustive
+  tables by outcome now.
+- **Minor: the database test depended on the shared database.** Each suite
+  cleans up after itself and the files run one at a time; the test now also
+  checks the number of cycles each run took (two, and four).
+- **Minor: the documentation said a person can now turn a started video into
+  a published one.** Nothing outside the tests starts a video until GS-10; the
+  Roadmap and the setup guide say so, and ADR-0108's table no longer counts
+  "any outcome that wrote a row" for G.
+- **Nits.** A throw in the cycle whose submission also stopped is reported as
+  the throw, the larger fault (kept, and said in the ADR); the address check
+  now comes before the assembly; `node:timers`, `scheduler.wait` and
+  `Atomics.wait` are banned with the other timers; a long line in the setup
+  guide is wrapped.
 
 ### Required documentation
 
@@ -5500,8 +5571,9 @@ New tests:
 
 Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (GS-9d
 folded into GS-9c), `docs/local-setup.md` (how to run it) and `.gitignore`
-(`.dev-provider/`). `docs/decisions/TODO.md` is unchanged: the open question
-ADR-0106 and ADR-0107 left to the command is answered by ADR-0108 Decision 6.
+(`.dev-provider/`). `docs/decisions/TODO.md`: the open question ADR-0106 and
+ADR-0107 left to the command is answered by ADR-0108 Decision 6, and the one
+gap it leaves (a tunnelled database) is recorded.
 
 ### Activation status
 
@@ -5519,9 +5591,13 @@ production scheduler and live Stripe charges remain BLOCKED.
   run at least five minutes later; nothing reruns the command by itself.
 - **The entry point is checked by hand**, as the operator commands' are: its
   parts are tested, and the table above records its runs.
-- **The database check sees only attempts.** A database that is not a
-  development one but holds no attempt of another provider is guarded only by
-  the refusal in production.
+- **A tunnelled database is not detected.** A shared database reached
+  through an SSH tunnel or a port forward to `localhost`, holding no attempt
+  of another provider, passes both checks. A positive mark on a development
+  database would close it, and needs a schema change; recorded in
+  `docs/decisions/TODO.md`.
+- **Only a test starts a video until GS-10.** On a fresh development database
+  the command finds nothing to do.
 - **The development reconciliation values are not production's**, which are
   still open (`docs/decisions/TODO.md`).
 
