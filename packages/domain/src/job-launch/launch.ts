@@ -15,7 +15,7 @@
 
 import { AppError } from "@app/shared";
 import { renderPrompt } from "../generation/prompt-render";
-import type { JobLaunchFacts, JobLaunchPlan } from "./ports";
+import type { JobLaunchCursor, JobLaunchFacts, JobLaunchPlan } from "./ports";
 
 /** One scene of the job as the commit locked it, in position order. */
 export interface JobLaunchLockedScene {
@@ -183,6 +183,21 @@ export function validateJobLaunchBatchLimit(value: number): number {
       "VALIDATION_FAILED",
       `Job launch batch limit must be an integer between 1 and ${MAX_JOB_LAUNCH_BATCH_SIZE}`,
     );
+  }
+  return value;
+}
+
+/** Prove a window's cursor names an instant and a job, or refuse (ADR-0105). */
+export function validateJobLaunchCursor(value: JobLaunchCursor | null): JobLaunchCursor | null {
+  if (value === null) return null;
+  if (
+    typeof value !== "object" ||
+    !(value.createdAt instanceof Date) ||
+    !Number.isFinite(value.createdAt.getTime()) ||
+    typeof value.generationJobId !== "string" ||
+    value.generationJobId.length === 0
+  ) {
+    throw new AppError("VALIDATION_FAILED", "Job launch cursor must name an instant and a job");
   }
   return value;
 }

@@ -53,6 +53,7 @@ import {
   decideJobLaunch,
   decideJobLaunchCapacity,
   validateJobLaunchBatchLimit,
+  validateJobLaunchCursor,
   type CustomerPlanKey,
   type JobLaunchCandidate,
   type JobLaunchFacts,
@@ -93,10 +94,20 @@ export function createJobLaunchRepository(prisma: PrismaClient): JobLaunchReposi
   return {
     async findJobLaunchCandidates(query): Promise<readonly JobLaunchCandidate[]> {
       const limit = validateJobLaunchBatchLimit(query.limit);
+      const after = validateJobLaunchCursor(query.after);
       // Each organization's oldest waiting job whose Property is not deleted,
       // where its plan's limit leaves a place: the commit's own three checks.
-      const rows = await prisma.$queryRaw<{ organizationId: string; generationJobId: string }[]>`
-        SELECT w."organizationId", w."generationJobId"
+      // The window starts after the caller's cursor, in the same order
+      // (ADR-0105). A Date parameter arrives as `timestamptz` and the column
+      // holds UTC without a zone, so the instant is turned to UTC here: a
+      // session in another time zone would otherwise move the window's start.
+      const window =
+        after === null
+          ? Prisma.empty
+          : Prisma.sql`AND (w."createdAt", w."generationJobId")
+                         > ((${after.createdAt}::timestamptz AT TIME ZONE 'UTC'), ${after.generationJobId})`;
+      const rows = await prisma.$queryRaw<{ organizationId: string; generationJobId: string; createdAt: Date }[]>`
+        SELECT w."organizationId", w."generationJobId", w."createdAt"
           FROM (
             SELECT DISTINCT ON (vp."organizationId")
                    vp."organizationId" AS "organizationId",
@@ -119,6 +130,7 @@ export function createJobLaunchRepository(prisma: PrismaClient): JobLaunchReposi
                   WHERE hp."organizationId" = w."organizationId"
                     AND h."state"::text IN (${HOLDING_A_PLACE})
                ) < lim."concurrentJobs"
+           ${window}
          ORDER BY w."createdAt", w."generationJobId"
          LIMIT ${limit}`;
 

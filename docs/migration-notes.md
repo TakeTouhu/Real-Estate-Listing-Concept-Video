@@ -1987,3 +1987,15 @@ runner, and nothing but the runner calls the plan repository.
 **Rolling back.** To GS-7d-3b's build: safe. A job a test planned stays
 `COMPOSITION_PENDING` with its version and inputs, as Transaction I always
 left it.
+
+## GS-9a — the launch window moves
+
+**No migration** (ADR-0105). No schema, enum, constraint or row changes, and no
+new environment variable. The launch candidate query reads existing columns,
+`generation_jobs.createdAt` among them, and writes nothing.
+
+**What changes at deploy.** Nothing. Nothing outside tests constructs the
+launch runner or its repository.
+
+**Rolling back.** To GS-8's build: safe. The cursor is never stored, so
+nothing is left behind.

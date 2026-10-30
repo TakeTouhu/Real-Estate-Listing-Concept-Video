@@ -117,6 +117,8 @@ export type JobLaunchPlan =
 export interface JobLaunchCandidate {
   readonly organizationId: string;
   readonly generationJobId: string;
+  /** When the job was written, its place in the window's order (ADR-0105). */
+  readonly createdAt: Date;
   /**
    * Read without a lock, for the planner. `null` when a scene does not have
    * exactly one first request, a shape only another writer could have made;
@@ -128,6 +130,20 @@ export interface JobLaunchCandidate {
 export interface JobLaunchCandidateQuery {
   /** At most this many organizations, one candidate each. */
   readonly limit: number;
+}
+
+/**
+ * Where a launch window starts (ADR-0105): after this job, in the candidates'
+ * own order of each organization's oldest waiting job, by creation and then id.
+ */
+export interface JobLaunchCursor {
+  readonly createdAt: Date;
+  readonly generationJobId: string;
+}
+
+export interface JobLaunchWindowQuery extends JobLaunchCandidateQuery {
+  /** `null` starts from the oldest. */
+  readonly after: JobLaunchCursor | null;
 }
 
 /** Ids for one scene's first attempt. Opaque and fresh, never derived. */
@@ -174,8 +190,11 @@ export type LaunchJobOutcome =
   | { readonly kind: "NOT_LAUNCHABLE"; readonly reason: JobLaunchRefusal };
 
 export interface JobLaunchRepository {
-  /** Bounded, deterministic, one per organization, oldest waiting job first. A hint only. */
-  findJobLaunchCandidates(query: JobLaunchCandidateQuery): Promise<readonly JobLaunchCandidate[]>;
+  /**
+   * Bounded, deterministic, one per organization, oldest waiting job first,
+   * after the query's cursor (ADR-0105). A hint only.
+   */
+  findJobLaunchCandidates(query: JobLaunchWindowQuery): Promise<readonly JobLaunchCandidate[]>;
 
   /**
    * Launch the job, in one short database transaction with no external I/O:
