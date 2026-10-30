@@ -80,7 +80,7 @@ export interface JobLaunchReport {
     readonly outcome: JobLaunchRunOutcome;
   }[];
   /**
-   * Where the next pass's launches start: after the last organization offered,
+   * Where the next pass's launches start: after the last organization read,
    * when the window was full; `null`, from the oldest, when it reached the end.
    */
   readonly next: JobLaunchCursor | null;

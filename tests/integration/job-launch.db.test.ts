@@ -208,10 +208,10 @@ async function seedTenant(organizationId: string, plan: "STANDARD" | "PREMIUM" |
 
 /**
  * Start one job through the start commit, of the organization's project
- * `which` (a project of its own, by default its minute's), its age fixed by
- * `minute`.
+ * `which` (a project of its own, by default its minute's), created at
+ * `minute(at)`.
  */
-async function startJob(organizationId: string, minute: number, which: Tenant | number = minute): Promise<string> {
+async function startJob(organizationId: string, at: number, which: Tenant | number = at): Promise<string> {
   const tenant = typeof which === "number" ? TENANT[organizationId]![(which - 1) % 4]! : which;
   seq += 1;
   const n = seq;
@@ -246,7 +246,7 @@ async function startJob(organizationId: string, minute: number, which: Tenant | 
   if (outcome.kind !== "STARTED") throw new Error(`start: ${outcome.kind}`);
   await prisma.generationJob.update({
     where: { id: outcome.job.id },
-    data: { createdAt: new Date(Date.UTC(2026, 10, 10, 0, minute)) },
+    data: { createdAt: minute(at) },
   });
   return outcome.job.id;
 }
@@ -555,7 +555,7 @@ describe.skipIf(!HAS_DB)("the concurrent-job limit", () => {
 
   it("runs three Premium jobs at once, oldest first, and holds the fourth", async () => {
     const jobs: string[] = [];
-    for (const minute of [4, 2, 3, 1]) jobs.push(await startJob(ORG_B, minute));
+    for (const at of [4, 2, 3, 1]) jobs.push(await startJob(ORG_B, at));
     const order: string[] = [];
     for (let pass = 0; pass < 4; pass += 1) {
       for (const entry of (await runner().runOnce(10)).outcomes) {
@@ -742,6 +742,19 @@ describe.skipIf(!HAS_DB)("the launch window (ADR-0105)", () => {
     } finally {
       await tokyo.$disconnect();
     }
+  });
+
+  it("passes over every job of an organization whose oldest is at or before the cursor", async () => {
+    const a1 = await startJob(ORG_A, 1);
+    const b2 = await startJob(ORG_B, 2);
+    await startJob(ORG_A, 3);
+    // A's later job is not offered once the window has passed A: the commit
+    // would refuse it while A's oldest waits.
+    const window = await launches.findJobLaunchCandidates({
+      limit: 10,
+      after: { createdAt: minute(1), generationJobId: a1 },
+    });
+    expect(window.map((candidate) => candidate.generationJobId)).toEqual([b2]);
   });
 
   it("breaks a tie in creation by id, the query's own order", async () => {

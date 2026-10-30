@@ -1222,14 +1222,23 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       runs in UTC today (the CI service and the local database), so nothing
       is wrong yet. In a session set to `Asia/Tokyo` the launch window's start
       moved by nine hours until GS-9a turned its parameter to UTC (ADR-0105).
-      The other raw uses are unchanged: the claims' `nextAttemptAt` and
-      `leaseExpiresAt` comparisons (composition execution, deliverable
-      validation, media validation lifecycle) and the `failedAt`,
-      `releasedAt`, `resolvedAt` and `nextAttemptAt` writes (attempt failure
-      settlement, deliverable failure settlement, media failure resolution).
-      Either cast each parameter as GS-9a does, or have the database client
-      set its sessions to UTC. A product change, to propose before any
-      deployment whose database is not on UTC.
+      Unchanged, as of GS-9a:
+      - comparisons with a `Date` parameter: the claims' `nextAttemptAt` and
+        `leaseExpiresAt` (composition execution, deliverable validation,
+        media validation lifecycle) and reconciliation's
+        `reconciliationDeadlineAt` and `submissionBoundaryEnteredAt`;
+      - writes of a `Date` parameter: `failedAt`, `releasedAt`, `resolvedAt`
+        and `nextAttemptAt` (attempt failure settlement, deliverable failure
+        settlement, media failure resolution, failed-job scene closure, and
+        both job endings);
+      - every raw `CURRENT_TIMESTAMP` written to such a column: the
+        `"updatedAt" = CURRENT_TIMESTAMP` of raw updates, and the `createdAt`
+        and `updatedAt` of two raw inserts (20 uses in 9 repositories).
+      Casting each parameter as GS-9a does covers the first two kinds only;
+      `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` would cover the third. Having the
+      database client set its sessions to UTC covers all three at once. A
+      product change, to propose before any deployment whose database is not
+      on UTC.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

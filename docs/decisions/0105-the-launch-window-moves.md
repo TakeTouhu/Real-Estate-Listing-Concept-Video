@@ -76,27 +76,39 @@ candidate of one organization, which the runner skips, still counts.
 The cursor applies to the launches only. A pass still ends a deleted
 Property's waiting jobs, then its launched jobs not yet being assembled, each
 from the oldest (ADR-0099, ADR-0102). An ending moves its job out of what its
-query finds, so an ending that succeeds holds no window.
+query finds, so an ending that succeeds holds no window. An ending that keeps
+throwing does keep its place, as before this record: it is reported as failed
+on every pass, and with `limit` of them at the head of their query, newer
+deleted Properties' jobs wait, their Units held. It does not hold the launch
+window.
 
 The cursor is the caller's to keep. Nothing stores it. Without a cursor a pass
 reads from the oldest, as it did before.
 
-## Decision 3 — What a caller owes
+## Decision 3 — What the caller must respect
 
-The caller is the pipeline command (GS-9c), and the rule is the submission
-window's (ADR-0098 Decision 6):
+The caller is the pipeline command (GS-9c), which decides how it carries the
+cursor and when it stops. Whatever it decides must respect two constraints,
+the same ADR-0098 sets the submission window (Decision 6, and its *Not decided
+here*):
 
 - pass each `next` to the following pass;
-- consider the launches settled only after a whole cycle, from the oldest
-  until a pass returns `next: null`, in which nothing was launched or ended. A
-  full window of waiting jobs launches and ends nothing while newer
-  organizations wait behind it, so one quiet pass proves nothing.
+- judge the launches settled only after a whole cycle, from the oldest until a
+  pass returns `next: null`, in which nothing was launched or ended. A full
+  window of waiting jobs launches and ends nothing while newer organizations
+  wait behind it, so one quiet pass proves nothing.
 
 A job is written with its `createdAt` before its transaction commits. One
 committed after a pass has read past that instant is reached when the cursor
 next comes round from the oldest. It waits; it is not lost. An organization
 whose job launched in a pass may be offered again later in the same cycle,
 for its next job, which is now its oldest.
+
+Every organization is reached in turn only if the cursor comes round. Under a
+load that fills every window with organizations newly able to launch, `next`
+may stay non-null for a long time, and an organization the window has already
+passed waits until it comes back to the oldest. ADR-0098 accepts the same for
+attempts. The development command, on the test provider, will not meet it.
 
 ## Decision 4 — Nothing else changes
 
@@ -119,7 +131,10 @@ tests keep it so. No timer, cron or startup hook is added.
 ## Not decided here
 
 - The pipeline command: its order of passes, when it stops, and what it reports
-  (GS-9c).
+  (GS-9c). Among them, whether a cycle whose only outcomes are failures counts
+  as quiet: such a cycle launches and ends nothing, and a failure that would
+  pass on a retry, such as the exchange-rate snapshot race of ADR-0095
+  Decision 7, is then retried only when the command next runs.
 - How long a job refused for configuration may hold its Units
   (`docs/decisions/TODO.md`).
 - Other raw queries compare `Date` parameters with zone-less columns as they
