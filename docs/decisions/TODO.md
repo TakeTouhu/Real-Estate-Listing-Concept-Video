@@ -1212,6 +1212,34 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       writing ADR-0101; a product change, to propose before a route deletes a
       Property.
 
+## Found in GS-9a — a `Date` parameter in raw SQL depends on the session's time zone
+
+- [ ] **Compare and write raw SQL instants in UTC whatever the session's time
+      zone.** Prisma sends a `Date` parameter as `timestamptz`, and every
+      `DateTime` column is `timestamp(3)` holding UTC with no zone. PostgreSQL
+      converts between the two in the session's `TimeZone`, so a raw
+      comparison or write is right only in a UTC session. Every environment
+      runs in UTC today (the CI service and the local database), so nothing
+      is wrong yet. In a session set to `Asia/Tokyo` the launch window's start
+      moved by nine hours until GS-9a turned its parameter to UTC (ADR-0105).
+      Unchanged, as of GS-9a:
+      - comparisons with a `Date` parameter: the claims' `nextAttemptAt` and
+        `leaseExpiresAt` (composition execution, deliverable validation,
+        media validation lifecycle) and reconciliation's
+        `reconciliationDeadlineAt` and `submissionBoundaryEnteredAt`;
+      - writes of a `Date` parameter: `failedAt`, `releasedAt`, `resolvedAt`
+        and `nextAttemptAt` (attempt failure settlement, deliverable failure
+        settlement, media failure resolution, failed-job scene closure, and
+        both job endings);
+      - every raw `CURRENT_TIMESTAMP` written to such a column: the
+        `"updatedAt" = CURRENT_TIMESTAMP` of raw updates, and the `createdAt`
+        and `updatedAt` of two raw inserts (20 uses in 9 repositories).
+      Casting each parameter as GS-9a does covers the first two kinds only;
+      `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` would cover the third. Having the
+      database client set its sessions to UTC covers all three at once. A
+      product change, to propose before any deployment whose database is not
+      on UTC.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
@@ -1532,6 +1560,11 @@ them is **built**. Each item below records the settled decision and what remains
       only a writer other than the start and the launch can make, is neither
       launched nor ended and holds back its queue too; and GS-9's pass must
       keep such jobs from using up its window.*
+      *GS-9a (ADR-0105, no migration) builds the means for the window:* the
+      candidate query reads after a `{ createdAt, generationJobId }` cursor
+      and each pass returns `next`. Still open: the pipeline command (GS-9c)
+      must carry it, as the submission's (the item on the submission window
+      below).
 - [ ] **Bound how long a waiting job refused for configuration may hold its
       Units.** A waiting job the planner refuses for VTaVision's own
       configuration or for timing (`NO_ROUTE`, `AMBIGUOUS_ROUTE`,
@@ -1541,7 +1574,9 @@ them is **built**. Each item below records the settled decision and what remains
       its organization's later jobs. Whether it ends after some time, and
       whether a fault of ours that never clears is then a failure the customer
       is not charged for, is not decided. Must be decided before generation is
-      activated.
+      activated. Since GS-9a (ADR-0105) such a job no longer keeps other
+      organizations' jobs from being offered, once the pipeline command carries
+      the launch window's cursor; it still holds its own organization's.
 - [ ] **Release a change to the prompt's fixed rules only when no job
       waits.** Editing `PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS`
       makes every admitted, unexecuted generation's frozen prompt fail to

@@ -264,3 +264,40 @@ GS-8 (ADR-0104, no migration) adds the candidate query on the plan repository,
 mirroring every refusal of Transaction I, and a dormant runner that calls
 Transaction I once per job. Transaction I is unchanged. The pipeline command
 (GS-9) is what will run it.
+
+## GS-9 — the pipeline command
+
+On `2fc1380` every step from the launch to the final validation exists as a
+dormant runner or batch, and the test provider makes real clip bytes (GS-6).
+Nothing runs them in order. A survey on that commit found what the command
+needs that is not built yet:
+
+- **The launch window does not move.** The launch offers each organization's
+  oldest waiting job, oldest first, up to its limit, and a job refused for a
+  route, a price or a rate keeps waiting at its organization's head (ADR-0099
+  Decision 1). A window of such organizations would stop every other
+  organization's videos (ADR-0095 Decision 7). The submission window already
+  moves (ADR-0098 Decision 6).
+- **Pieces with no factory outside tests**: an exchange-rate source over the
+  route kit's snapshot; a source-photo reader over the shared folder; an
+  absolute `https` base for the shared folder's signed URLs, without which
+  preparation refuses every attempt (`SIGNED_SOURCE_URL_UNUSABLE`); a
+  reconciliation policy; the temporary-file factory of media validation,
+  which the storage package does not export; and the ids, leases and
+  contexts each runner takes.
+- **Static tests** forbid constructing each runner outside its module, and
+  some pin the exact files of `apps/ops`; each must admit the command's
+  assembly by name and nothing else.
+- **No CI job has both a database and FFmpeg**, so no test runs the steps end
+  to end.
+
+GS-9 is split into four milestones, each its own pull request:
+
+- **GS-9a** (ADR-0105, no migration): the launch candidate query reads after a
+  cursor and each launch pass returns `next`.
+- **GS-9b**: the development assembly, which builds every runner for the test
+  provider only and fills the pieces above.
+- **GS-9c**: the command: the passes in order, each window's cursor carried,
+  when to stop, and what it reports.
+- **GS-9d**: an end-to-end test of the command against a database and FFmpeg
+  in CI.

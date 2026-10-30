@@ -18,6 +18,11 @@
  * job's `FAILED` outcome and the pass goes on, as in the other sweeps: one bad
  * row never stops the others.
  *
+ * The launches read one window of organizations after the caller's cursor and
+ * return where the next should start (ADR-0105), so organizations whose oldest
+ * job waits for a configuration do not hold the window for every pass after
+ * them.
+ *
  * Nothing is sent to a provider here. The attempts it admits wait `QUEUED` for
  * the paid-submission gate (GS-7c).
  *
@@ -32,11 +37,17 @@ import type { TransitionContext } from "../orchestration/ports";
 import { epochMillis } from "../pricing/units";
 import type { UnlaunchableJobCause, UnlaunchableJobEndingRefusal } from "./ending";
 import type { LaunchedJobEndingRefusal } from "./launched-ending";
-import { JobLaunchDefect, type JobLaunchDefectCode, validateJobLaunchBatchLimit } from "./launch";
+import {
+  JobLaunchDefect,
+  type JobLaunchDefectCode,
+  validateJobLaunchBatchLimit,
+  validateJobLaunchCursor,
+} from "./launch";
 import { isFrozenFactsCode, type JobLaunchPlanner } from "./planner";
 import type {
   EndUnlaunchableJobInput,
   JobLaunchAttemptIds,
+  JobLaunchCursor,
   JobLaunchFacts,
   JobLaunchNoPlanCode,
   JobLaunchRepository,
@@ -68,6 +79,11 @@ export interface JobLaunchReport {
     readonly generationJobId: string;
     readonly outcome: JobLaunchRunOutcome;
   }[];
+  /**
+   * Where the next pass's launches start: after the last organization read,
+   * when the window was full; `null`, from the oldest, when it reached the end.
+   */
+  readonly next: JobLaunchCursor | null;
 }
 
 export interface JobLaunchIds {
@@ -112,10 +128,12 @@ export class JobLaunchRunner {
   /**
    * One bounded pass: up to `limit` waiting jobs of deleted Properties are
    * ended, then up to `limit` of their launched jobs not yet being assembled,
-   * then each organization is offered at most one launch.
+   * then each organization in the window after `after` is offered at most one
+   * launch.
    */
-  async runOnce(limit: number): Promise<JobLaunchReport> {
+  async runOnce(limit: number, after: JobLaunchCursor | null = null): Promise<JobLaunchReport> {
     const bounded = validateJobLaunchBatchLimit(limit);
+    const start = validateJobLaunchCursor(after);
     const outcomes: { organizationId: string; generationJobId: string; outcome: JobLaunchRunOutcome }[] = [];
     const settle = async (
       organizationId: string,
@@ -143,7 +161,7 @@ export class JobLaunchRunner {
       );
     }
 
-    const candidates = await this.#repository.findJobLaunchCandidates({ limit: bounded });
+    const candidates = await this.#repository.findJobLaunchCandidates({ limit: bounded, after: start });
     const seen = new Set<string>();
     for (const candidate of candidates) {
       if (seen.has(candidate.organizationId)) continue;
@@ -155,7 +173,9 @@ export class JobLaunchRunner {
 
     const count = (kind: JobLaunchRunOutcome["kind"]): number =>
       outcomes.filter((entry) => entry.outcome.kind === kind).length;
-    return { launched: count("LAUNCHED"), ended: count("ENDED"), failed: count("FAILED"), outcomes };
+    const last = candidates.length === bounded ? candidates.at(-1) : undefined;
+    const next = last === undefined ? null : { createdAt: last.createdAt, generationJobId: last.generationJobId };
+    return { launched: count("LAUNCHED"), ended: count("ENDED"), failed: count("FAILED"), outcomes, next };
   }
 
   async #launch(

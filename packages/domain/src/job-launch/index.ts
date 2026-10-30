@@ -30,6 +30,7 @@ export {
   assertPlanForFacts,
   decideJobLaunch,
   validateJobLaunchBatchLimit,
+  validateJobLaunchCursor,
 } from "./launch";
 export type {
   JobLaunchDecision,
@@ -46,6 +47,7 @@ export type {
   JobLaunchAttemptIds,
   JobLaunchCandidate,
   JobLaunchCandidateQuery,
+  JobLaunchCursor,
   JobLaunchFacts,
   JobLaunchNoPlanCode,
   JobLaunchPlan,
@@ -53,6 +55,7 @@ export type {
   JobLaunchRoute,
   JobLaunchSceneAdmission,
   JobLaunchSceneFacts,
+  JobLaunchWindowQuery,
   LaunchJobInput,
   LaunchJobOutcome,
   LaunchedJobEndingRepository,

@@ -20,8 +20,10 @@ import {
   epochMillisFromDate,
   renderPrompt,
   type CompiledPrompt,
+  type JobLaunchCursor,
   type JobLaunchFacts,
   type JobLaunchPlan,
+  type JobLaunchReport,
   type LaunchJobInput,
   type StoryboardScene,
 } from "@app/domain";
@@ -206,10 +208,10 @@ async function seedTenant(organizationId: string, plan: "STANDARD" | "PREMIUM" |
 
 /**
  * Start one job through the start commit, of the organization's project
- * `which` (a project of its own, by default its minute's), its age fixed by
- * `minute`.
+ * `which` (a project of its own, by default its minute's), created at
+ * `minute(at)`.
  */
-async function startJob(organizationId: string, minute: number, which: Tenant | number = minute): Promise<string> {
+async function startJob(organizationId: string, at: number, which: Tenant | number = at): Promise<string> {
   const tenant = typeof which === "number" ? TENANT[organizationId]![(which - 1) % 4]! : which;
   seq += 1;
   const n = seq;
@@ -244,7 +246,7 @@ async function startJob(organizationId: string, minute: number, which: Tenant | 
   if (outcome.kind !== "STARTED") throw new Error(`start: ${outcome.kind}`);
   await prisma.generationJob.update({
     where: { id: outcome.job.id },
-    data: { createdAt: new Date(Date.UTC(2026, 10, 10, 0, minute)) },
+    data: { createdAt: minute(at) },
   });
   return outcome.job.id;
 }
@@ -295,6 +297,11 @@ async function commitInput(
     context: ctx({ actorType: "WORKER", correlationId: "corr_launch_commit" }),
     ...overrides,
   };
+}
+
+/** The instant `startJob` gives a job started at `n`. */
+function minute(n: number): Date {
+  return new Date(Date.UTC(2026, 10, 10, 0, n));
 }
 
 async function jobState(generationJobId: string): Promise<string> {
@@ -525,7 +532,7 @@ describe.skipIf(!HAS_DB)("a launch", () => {
     await startJob(ORG_A, 1);
     await runner().runOnce(10);
     const before = await written();
-    expect(await runner().runOnce(10)).toEqual({ launched: 0, ended: 0, failed: 0, outcomes: [] });
+    expect(await runner().runOnce(10)).toEqual({ launched: 0, ended: 0, failed: 0, outcomes: [], next: null });
     expect(await written()).toEqual(before);
   });
 });
@@ -548,7 +555,7 @@ describe.skipIf(!HAS_DB)("the concurrent-job limit", () => {
 
   it("runs three Premium jobs at once, oldest first, and holds the fourth", async () => {
     const jobs: string[] = [];
-    for (const minute of [4, 2, 3, 1]) jobs.push(await startJob(ORG_B, minute));
+    for (const at of [4, 2, 3, 1]) jobs.push(await startJob(ORG_B, at));
     const order: string[] = [];
     for (let pass = 0; pass < 4; pass += 1) {
       for (const entry of (await runner().runOnce(10)).outcomes) {
@@ -648,7 +655,7 @@ describe.skipIf(!HAS_DB)("oldest first", () => {
   it("never launches a deleted Property's job", async () => {
     const job = await startJob(ORG_A, 1, SECOND);
     await prisma.property.update({ where: { id: SECOND.property }, data: { status: "DELETED" } });
-    expect(await launches.findJobLaunchCandidates({ limit: 10 })).toEqual([]);
+    expect(await launches.findJobLaunchCandidates({ limit: 10, after: null })).toEqual([]);
     const before = await written();
     expect(await launches.launchJob(await commitInput(ORG_A, job))).toEqual({
       kind: "NOT_LAUNCHABLE",
@@ -669,6 +676,108 @@ describe.skipIf(!HAS_DB)("oldest first", () => {
     await deletion.release();
     expect(await launch.value).toEqual({ kind: "NOT_LAUNCHABLE", reason: "PROPERTY_DELETED" });
     expect(await jobState(job)).toBe("RESERVED");
+  });
+});
+
+describe.skipIf(!HAS_DB)("the launch window (ADR-0105)", () => {
+  it("moves past an organization whose oldest job waits for a rate, and comes round to it again", async () => {
+    const waiting = await startJob(ORG_A, 1);
+    const ready = await startJob(ORG_B, 2);
+    const refused = new Set((await factsOf(waiting)).scenes.map((scene) => scene.generationSceneId));
+    const noRate: Pick<JobLaunchPlanner, "plan"> = {
+      plan: async (facts) =>
+        refused.has(facts.scenes[0]!.generationSceneId) ? { kind: "NO_PLAN", code: "NO_FX_RATE" } : planner.plan(facts),
+    };
+    const pass = (after: JobLaunchCursor | null) => runner(noRate).runOnce(1, after);
+    const outcome = (report: JobLaunchReport) =>
+      report.outcomes.map((entry) => [entry.generationJobId, entry.outcome.kind]);
+
+    // Without a cursor the waiting job would hold the window of one for ever.
+    const first = await pass(null);
+    expect(outcome(first)).toEqual([[waiting, "NOT_PLANNED"]]);
+    expect(first.next).toEqual({ createdAt: minute(1), generationJobId: waiting });
+
+    const second = await pass(first.next);
+    expect(outcome(second)).toEqual([[ready, "LAUNCHED"]]);
+    expect(second.next).toEqual({ createdAt: minute(2), generationJobId: ready });
+
+    const third = await pass(second.next);
+    expect(third.outcomes).toEqual([]);
+    expect(third.next).toBeNull();
+
+    // From the oldest again: the job still waits, its Units held.
+    expect(outcome(await pass(third.next))).toEqual([[waiting, "NOT_PLANNED"]]);
+    expect(await jobState(waiting)).toBe("RESERVED");
+  });
+
+  it("starts after the cursor, not at it, to the millisecond, and between jobs", async () => {
+    const a = await startJob(ORG_A, 1);
+    const b = await startJob(ORG_B, 2);
+    const window = async (after: JobLaunchCursor) =>
+      (await launches.findJobLaunchCandidates({ limit: 10, after })).map((candidate) => candidate.generationJobId);
+
+    const shifted = (ms: number) => new Date(minute(1).getTime() + ms);
+
+    expect(await window({ createdAt: minute(1), generationJobId: a })).toEqual([b]);
+    expect(await window({ createdAt: shifted(-1), generationJobId: a })).toEqual([a, b]);
+    expect(await window({ createdAt: shifted(1), generationJobId: "genjob_between" })).toEqual([b]);
+    expect(await window({ createdAt: minute(2), generationJobId: b })).toEqual([]);
+  });
+
+  it("starts at the same instant in a session of another time zone", async () => {
+    const base = process.env.DATABASE_URL!;
+    const tokyo = new PrismaClient({
+      datasources: { db: { url: `${base}${base.includes("?") ? "&" : "?"}options=-c%20TimeZone%3DAsia%2FTokyo` } },
+    });
+    try {
+      const [zone] = await tokyo.$queryRaw<{ zone: string }[]>`SELECT current_setting('TimeZone') AS zone`;
+      expect(zone!.zone).toBe("Asia/Tokyo");
+      const a = await startJob(ORG_A, 1);
+      const b = await startJob(ORG_B, 2);
+      const window = await createJobLaunchRepository(tokyo).findJobLaunchCandidates({
+        limit: 10,
+        after: { createdAt: minute(1), generationJobId: a },
+      });
+      expect(window.map((candidate) => [candidate.generationJobId, candidate.createdAt])).toEqual([[b, minute(2)]]);
+    } finally {
+      await tokyo.$disconnect();
+    }
+  });
+
+  it("passes over every job of an organization whose oldest is at or before the cursor", async () => {
+    const a1 = await startJob(ORG_A, 1);
+    const b2 = await startJob(ORG_B, 2);
+    await startJob(ORG_A, 3);
+    // A's later job is not offered once the window has passed A: the commit
+    // would refuse it while A's oldest waits.
+    const window = await launches.findJobLaunchCandidates({
+      limit: 10,
+      after: { createdAt: minute(1), generationJobId: a1 },
+    });
+    expect(window.map((candidate) => candidate.generationJobId)).toEqual([b2]);
+  });
+
+  it("breaks a tie in creation by id, the query's own order", async () => {
+    await startJob(ORG_A, 1);
+    await startJob(ORG_B, 1);
+    const all = await launches.findJobLaunchCandidates({ limit: 10, after: null });
+    expect(all.map((candidate) => candidate.createdAt)).toEqual([minute(1), minute(1)]);
+    const [head, tail] = all;
+
+    const rest = await launches.findJobLaunchCandidates({
+      limit: 10,
+      after: { createdAt: head!.createdAt, generationJobId: head!.generationJobId },
+    });
+    expect(rest.map((candidate) => candidate.generationJobId)).toEqual([tail!.generationJobId]);
+  });
+
+  it("refuses a cursor that names no instant or no job itself, since it is public", async () => {
+    for (const after of [
+      { createdAt: new Date(Number.NaN), generationJobId: "genjob_launch_1" },
+      { createdAt: minute(1), generationJobId: "" },
+    ]) {
+      await expect(launches.findJobLaunchCandidates({ limit: 1, after })).rejects.toThrow(/cursor/);
+    }
   });
 });
 
@@ -742,8 +851,8 @@ describe.skipIf(!HAS_DB)("a refused launch", () => {
         state: "PENDING",
       },
     });
-    expect(await launches.findJobLaunchCandidates({ limit: 10 })).toEqual([
-      { organizationId: ORG_A, generationJobId: job, facts: null },
+    expect(await launches.findJobLaunchCandidates({ limit: 10, after: null })).toEqual([
+      { organizationId: ORG_A, generationJobId: job, createdAt: minute(1), facts: null },
     ]);
     const report = await runner().runOnce(10);
     expect(report.outcomes.map((entry) => entry.outcome)).toEqual([{ kind: "ENDED", cause: "SHAPE_CONFLICT" }]);

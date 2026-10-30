@@ -12,6 +12,7 @@ import type {
   JobLaunchNoPlanCode,
   JobLaunchPlan,
   JobLaunchRepository,
+  JobLaunchWindowQuery,
   LaunchJobInput,
   LaunchJobOutcome,
   LaunchedJobEndingRepository,
@@ -65,17 +66,27 @@ function planFor(from: JobLaunchFacts): JobLaunchPlan {
   };
 }
 
+/** A candidate as a test writes it; its creation instant follows its place in the list. */
+type ScriptedCandidate = Omit<JobLaunchCandidate, "createdAt"> & { readonly createdAt?: Date };
+
 class ScriptedRepository implements JobLaunchRepository {
   readonly calls: string[] = [];
   readonly inputs: LaunchJobInput[] = [];
+  private readonly candidates: readonly JobLaunchCandidate[];
 
   constructor(
-    private readonly candidates: readonly JobLaunchCandidate[],
+    candidates: readonly ScriptedCandidate[],
     private readonly outcomes: Record<string, LaunchJobOutcome | "DEFECT" | "THROW">,
-  ) {}
+  ) {
+    this.candidates = candidates.map((candidate, i) => ({
+      ...candidate,
+      createdAt: candidate.createdAt ?? new Date(Date.UTC(2026, 9, 1) + i * 1_000),
+    }));
+  }
 
-  async findJobLaunchCandidates(query: { readonly limit: number }) {
-    this.calls.push(`find:${query.limit}`);
+  async findJobLaunchCandidates(query: JobLaunchWindowQuery) {
+    const after = query.after === null ? "" : `:after:${query.after.generationJobId}`;
+    this.calls.push(`find:${query.limit}${after}`);
     return this.candidates;
   }
 
@@ -232,6 +243,7 @@ describe("one pass", () => {
         { organizationId: "org_a", generationJobId: "job_a", outcome: LAUNCHED("job_a", ["att_1", "att_2"]) },
         { organizationId: "org_b", generationJobId: "job_b", outcome: { kind: "AT_LIMIT" } },
       ],
+      next: null,
     });
   });
 
@@ -258,6 +270,61 @@ describe("one pass", () => {
   });
 });
 
+describe("the launch window (ADR-0105)", () => {
+  const AT = new Date(Date.UTC(2026, 9, 1, 12));
+
+  it("starts the launches after the cursor, the endings from the oldest, and is null short of full", async () => {
+    const repository = new ScriptedRepository(
+      [{ organizationId: "org_b", generationJobId: "job_b", facts: facts("job_b", 1) }],
+      { job_b: LAUNCHED("job_b", ["att_1"]) },
+    );
+    const report = await runner(repository).runOnce(2, { createdAt: AT, generationJobId: "job_a" });
+    expect(repository.calls).toEqual(["deleted:2", "launched:2", "find:2:after:job_a", "launch:org_b:job_b"]);
+    expect(report.next).toBeNull();
+  });
+
+  it("returns the last organization read when the window is full, whatever its launch answered", async () => {
+    const repository = new ScriptedRepository(
+      [
+        { organizationId: "org_a", generationJobId: "job_a", facts: facts("job_a", 1) },
+        { organizationId: "org_b", generationJobId: "job_b", facts: facts("job_b", 1), createdAt: AT },
+      ],
+      { job_a: LAUNCHED("job_a", ["att_1"]), job_b: "THROW" },
+    );
+    const report = await runner(repository).runOnce(2);
+    expect(report.outcomes.map((entry) => entry.outcome.kind)).toEqual(["LAUNCHED", "FAILED"]);
+    expect(report.next).toEqual({ createdAt: AT, generationJobId: "job_b" });
+  });
+
+  it("counts what the query read, not what was offered: an organization listed twice still fills it", async () => {
+    const repository = new ScriptedRepository(
+      [
+        { organizationId: "org_a", generationJobId: "job_a1", facts: facts("job_a1", 1) },
+        { organizationId: "org_a", generationJobId: "job_a2", facts: facts("job_a2", 1) },
+      ],
+      { job_a1: LAUNCHED("job_a1", ["att_1"]) },
+    );
+    const report = await runner(repository).runOnce(2);
+    expect(report.outcomes).toHaveLength(1);
+    expect(report.next).toEqual({ createdAt: new Date(Date.UTC(2026, 9, 1) + 1_000), generationJobId: "job_a2" });
+  });
+
+  it("refuses a cursor that names no instant or no job before reading anything", async () => {
+    const repository = new ScriptedRepository([], {});
+    const bad = [
+      { createdAt: new Date(Number.NaN), generationJobId: "job_a" },
+      { createdAt: AT.getTime() as unknown as Date, generationJobId: "job_a" },
+      { createdAt: AT, generationJobId: "" },
+      { createdAt: AT, generationJobId: 7 as unknown as string },
+      "job_a" as unknown as { createdAt: Date; generationJobId: string },
+    ];
+    for (const after of bad) {
+      await expect(runner(repository).runOnce(1, after)).rejects.toThrow(/cursor/);
+    }
+    expect(repository.calls).toEqual([]);
+  });
+});
+
 describe("a job not launched", () => {
   it("is left waiting with the planner's code when there is no plan, and nothing is committed", async () => {
     const planner = new ScriptedPlanner({ job_a: { kind: "NO_PLAN", code: "NO_FX_RATE" } });
@@ -274,6 +341,8 @@ describe("a job not launched", () => {
       outcomes: [
         { organizationId: "org_a", generationJobId: "job_a", outcome: { kind: "NOT_PLANNED", code: "NO_FX_RATE" } },
       ],
+      // The window of one was full, so the next pass starts after it.
+      next: { createdAt: new Date(Date.UTC(2026, 9, 1)), generationJobId: "job_a" },
     });
   });
 
@@ -351,6 +420,7 @@ describe("a job that can never launch", () => {
         { organizationId: "org_a", generationJobId: "job_d2", outcome: ENDED("PROPERTY_DELETED") },
         { organizationId: "org_a", generationJobId: "job_a", outcome: LAUNCHED("job_a", ["att_1", "att_2"]) },
       ],
+      next: null,
     });
   });
 
@@ -490,6 +560,7 @@ describe("a deleted Property's launched job (ADR-0102)", () => {
         { organizationId: "org_b", generationJobId: "job_l2", outcome: ENDED },
         { organizationId: "org_a", generationJobId: "job_a", outcome: LAUNCHED("job_a", ["att_1", "att_2"]) },
       ],
+      next: null,
     });
   });
 
@@ -512,6 +583,7 @@ describe("a deleted Property's launched job (ADR-0102)", () => {
           outcome: { kind: "NOT_ENDED", reason: "PROPERTY_STANDS" },
         },
       ],
+      next: null,
     });
   });
 

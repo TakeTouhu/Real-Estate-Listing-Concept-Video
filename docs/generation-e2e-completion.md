@@ -4770,3 +4770,202 @@ Stripe charges remain BLOCKED.
 GS-8 waits for the product owner's yes before merge. Then GS-9, the pipeline
 command that runs every step on the test provider, and the screens (GS-10 to
 GS-12).
+
+## GS-9a — the launch window moves
+
+Base: `2fc1380` (PR #128 merge commit on `main`).
+ADR: `docs/decisions/0105-the-launch-window-moves.md`
+
+The first milestone of row GS-9 of the approved plan
+(`/mnt/project-files/cto/generation-e2e-proposal.md`: the pipeline command).
+**No migration; no route, no page.** Nothing outside tests constructs the
+launch runner or its repository.
+
+The launch offers each organization its oldest waiting job, oldest first, up
+to the pass's limit. A job refused for a route, a price or a rate keeps
+waiting at its organization's head (ADR-0099 Decision 1), so a window of such
+organizations was read again on every pass, and no other organization's job
+was ever offered (ADR-0095 Decision 7).
+
+GS-9 is split into four milestones, recorded in
+`docs/generation-e2e-gap-analysis.md`: this one; the development assembly
+(GS-9b); the command (GS-9c); and its end-to-end test (GS-9d).
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `526404e` | the cursor, `next`, the UTC comparison, their tests, ADR-0105 and the documentation |
+| this commit | the review's answers and this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-9a does
+
+- **The query reads after a cursor.** `findJobLaunchCandidates({ limit,
+  after })` takes `after`, a `{ createdAt, generationJobId }` cursor in its own
+  order, or `null` for the oldest. The cursor is applied after each
+  organization's oldest waiting job is chosen, so it moves over organizations.
+  Each candidate carries its job's `createdAt`.
+- **The instant is compared in UTC.** A `Date` parameter reaches PostgreSQL as
+  `timestamptz` and the column holds UTC with no zone; the query turns the
+  parameter to UTC, so a session in another time zone does not move the
+  window's start. Found while testing: in a session set to `Asia/Tokyo` the
+  window started nine hours off.
+- **The runner returns `next`.** `runOnce(limit, after = null)` passes the
+  cursor to its launches and returns the last candidate read when the window
+  was full, or `null` when it reached the end. The endings of deleted
+  Properties' jobs still read from the oldest.
+- **Both check the cursor.** `validateJobLaunchCursor` refuses anything but
+  `null` or a `Date` with a finite time and a non-empty string id, before any
+  read.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller (GS-9c)
+    participant R as Launch runner
+    participant Q as Candidate query
+    participant DB as PostgreSQL
+    C->>R: runOnce(limit, null)
+    R->>Q: findJobLaunchCandidates(limit, after: null)
+    Q->>DB: each organization's oldest waiting job, oldest first
+    Q-->>R: up to limit candidates, each with createdAt
+    R-->>C: report, next = last candidate (window full)
+    C->>R: runOnce(limit, next)
+    R->>Q: findJobLaunchCandidates(limit, after: next)
+    Q->>DB: the same, after (createdAt, id) in UTC
+    Q-->>R: fewer than limit
+    R-->>C: report, next = null (from the oldest again)
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `526404e`'s code, each exit status read |
+| `pnpm test` | 6,609 tests in 243 files passed, exit 0, before the two cursor tests of `launch.test.ts` were added; that file's 35 pass after, exit 0 |
+| `pnpm test:db` | 1,846 tests in 69 files passed on `526404e`'s code, exit 0; the launch suite's 60 pass on this commit, exit 0 |
+| the window's DB tests in other session time zones | pass with `TimeZone` set to `Asia/Tokyo`, `America/Los_Angeles` and `UTC`; without the cast, the three that compare an instant fail in `Asia/Tokyo` |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/job-launch.db.test.ts` (6 new, 3 changed): a cycle in
+  which an organization whose oldest job waits for a rate is passed over for
+  the next window's organization, then the window comes back to it from the
+  oldest, its Units still held; the window starting after the cursor, not at
+  it, to the millisecond and between two jobs; the same in a session set to
+  `Asia/Tokyo`, on its own connection; an organization's later job not offered
+  once the window has passed its oldest; a tie in creation broken by id; a
+  cursor that names no instant or no job refused by the query. The candidate
+  shape and the empty report now carry `createdAt` and `next`.
+- `packages/domain/src/job-launch/runner.test.ts` (4 new, 5 changed): the
+  cursor passed to the launches only, `next` null short of full; the last
+  candidate read returned when full, whatever its launch answered; a window
+  full by what was read, not what was offered; a bad cursor refused before any
+  read.
+- `packages/domain/src/job-launch/launch.test.ts` (2 new): the cursor's
+  validation, accepted and refused.
+
+### Mutation testing
+
+The same harness as GS-8: each mutant applied alone, the named suite run, the
+file restored and its digest checked, and the working tree's manifest
+compared before and after. 21 of 21 killed.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| D01 | the query not checking its cursor | killed |
+| D02 | the cursor ignored | killed |
+| D03, D07 | the window starting at the cursor, or reading before it | killed |
+| D04 | the instant compared in the session's time zone | killed (by the `Asia/Tokyo` test alone) |
+| D05 | no tie-break by id | killed |
+| D06 | a candidate's `createdAt` not its job's | killed |
+| D08 | the cursor applied inside each organization's choice of its oldest job, so a later job is offered | killed (added after the review) |
+| U01, U02 | the runner not checking the cursor, or not passing it | killed |
+| U03, U07 | `next` when the window is not full; never full | killed |
+| U04 to U06 | `next` the first candidate, without its instant, or naming the organization | killed |
+| U08 to U13 | each clause of the cursor's validation removed or loosened | killed |
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the cursor sits after each
+organization's choice and before the order and the limit, the row comparison
+matches the order, the UTC cast gives back the stored value to the
+millisecond, `next` is right, and the validator matches the submission
+window's. Answered in this commit:
+
+- **Should fix: the TODO's list of raw SQL that depends on the session's time
+  zone was incomplete.** It now lists reconciliation's two comparisons, the
+  failed-job scene closure's and both job endings' writes, and the 20 raw
+  `CURRENT_TIMESTAMP` writes, and says that a cast covers parameters only,
+  while setting the session to UTC covers all of them.
+- **Should fix: "neither are its later jobs" was not tested.** Added: an
+  organization's later job is not offered once the window has passed its
+  oldest (D08).
+- **Minor: `next`'s comment said "offered".** It says "read", as the code, the
+  ADR and the tests do.
+- **Minor: Decision 3 cited ADR-0098 Decision 6 for the stopping rule**, which
+  is in ADR-0098's *Not decided here*. It now cites both, and states the rule
+  as a constraint the command must respect, the command deciding the rest.
+- **Minor: an ending that keeps throwing keeps its place** at the head of its
+  own query, as before this change. ADR-0105 Decision 2 now says so: it holds
+  newer deleted Properties' jobs back, not the launch window.
+- **Minor: `startJob`'s parameter shadowed the new `minute()` helper.**
+  Renamed, and the helper reused.
+- **Minor: a `Date` outside PostgreSQL's range passes the validator** and
+  fails in the database instead. Kept: the submission window's validator does
+  the same, and only a caller's own code makes such a cursor.
+- **Question: does a cycle of failures alone count as quiet?** Left to the
+  command (GS-9c), and recorded in ADR-0105's *Not decided here*: a failure
+  that would pass on a retry is then retried only when the command next runs.
+- **Question: can a cycle starve under load?** Yes, as ADR-0098 accepts for
+  attempts: if every window fills with organizations newly able to launch,
+  one the window has passed waits until it comes round. ADR-0105 Decision 3
+  now says so.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the job launch row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-9a.md`: no HTTP change; the new and changed exports |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-9a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (the
+GS-9 survey and split) and `docs/decisions/TODO.md`: the launch window's means
+built and the command still to carry it, and a new item on raw SQL `Date`
+parameters in other repositories, which are right only in a UTC session.
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing outside tests constructs the runner. No scheduler, credential
+or payment integration. Paid Provider Activation, production Provider
+credentials, production paid AI calls, the production scheduler and live
+Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing carries the cursor yet.** The pipeline command (GS-9c) will, and
+  must run a whole cycle before it judges the launches settled (ADR-0105
+  Decision 3).
+- **A job refused for configuration still holds its own organization's queue
+  and its Units.** How long it may is still open (`docs/decisions/TODO.md`).
+- **Other raw SQL `Date` parameters** compare and write in the session's time
+  zone; every environment runs in UTC today (`docs/decisions/TODO.md`).
+
+### Remaining work
+
+GS-9a waits for the product owner's yes before merge. Then GS-9b, GS-9c and
+GS-9d, and the screens (GS-10 to GS-12).
+

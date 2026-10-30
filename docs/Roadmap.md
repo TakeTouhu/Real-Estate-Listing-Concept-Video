@@ -409,6 +409,16 @@ and reported as that job's failure on every pass, keeping its place until
 someone repairs it. Transaction I is unchanged. Nothing outside
 tests constructs the runner.
 
+**GS-9a — the launch window moves** (ADR-0105, no migration): the launch
+candidate query reads after a `{ createdAt, generationJobId }` cursor, and each
+launch pass returns `next`, the last organization read when its window was
+full. A caller that carries it reaches every organization in turn, so
+organizations whose oldest job waits for a route, a price or a rate no longer
+keep every other organization's jobs from being offered. The instant is
+compared in UTC whatever the session's time zone. GS-9 is split into four
+milestones: this, the development assembly (GS-9b), the pipeline command
+(GS-9c) and its end-to-end test (GS-9d).
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

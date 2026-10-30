@@ -11,10 +11,11 @@ import {
   assertPlanForFacts,
   decideJobLaunch,
   validateJobLaunchBatchLimit,
+  validateJobLaunchCursor,
   type JobLaunchLockedRows,
   type JobLaunchLockedScene,
 } from "./launch";
-import type { JobLaunchFacts, JobLaunchPlan } from "./ports";
+import type { JobLaunchCursor, JobLaunchFacts, JobLaunchPlan } from "./ports";
 
 /**
  * The launch commit's decision (ADR-0095): the locked rows launch only when
@@ -268,6 +269,30 @@ describe("the batch bound", () => {
     expect(validateJobLaunchBatchLimit(MAX_JOB_LAUNCH_BATCH_SIZE)).toBe(MAX_JOB_LAUNCH_BATCH_SIZE);
     for (const bad of [0, -1, 1.5, MAX_JOB_LAUNCH_BATCH_SIZE + 1, Number.NaN]) {
       expect(() => validateJobLaunchBatchLimit(bad)).toThrow(AppError);
+    }
+  });
+});
+
+describe("the window's cursor (ADR-0105)", () => {
+  it("accepts none, or an instant and a job, as given", () => {
+    const cursor = { createdAt: new Date(Date.UTC(2026, 10, 10)), generationJobId: "genjob_1" };
+    expect(validateJobLaunchCursor(null)).toBeNull();
+    expect(validateJobLaunchCursor(cursor)).toBe(cursor);
+  });
+
+  it("refuses one that names no instant or no job, or is not a cursor at all", () => {
+    const at = new Date(Date.UTC(2026, 10, 10));
+    const bad: unknown[] = [
+      undefined,
+      "genjob_1",
+      { createdAt: new Date(Number.NaN), generationJobId: "genjob_1" },
+      { createdAt: at.toISOString(), generationJobId: "genjob_1" },
+      { createdAt: at, generationJobId: "" },
+      { createdAt: at, generationJobId: 1 },
+      { createdAt: at },
+    ];
+    for (const value of bad) {
+      expect(() => validateJobLaunchCursor(value as JobLaunchCursor)).toThrow(AppError);
     }
   });
 });
