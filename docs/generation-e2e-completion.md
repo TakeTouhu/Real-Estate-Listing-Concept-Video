@@ -5617,7 +5617,15 @@ The first milestone of row GS-10 of the approved plan
 route). **No migration; no route, no page, no environment variable.** GS-10 is
 split into four milestones (`docs/generation-e2e-gap-analysis.md`).
 
-The commits and the exact head SHA are reported with the pull request.
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `e489b31` | the offer, its unit and database tests, ADR-0109 and the documentation |
+| `dfbb315` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
 
 ### What GS-10a does
 
@@ -5649,6 +5657,48 @@ sequenceDiagram
     O->>O: planUnitAllocation: Base first, then add-on of the same quality
     O-->>S: READY (quality, scenes, length, Units, funding) or why not
 ```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI), each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,664 passed in 247 files (13 new, in the start service's suite) |
+| `pnpm test:db` | 1,856 passed in 70 files (2 new): the offer forecasts the funding the start then reserves, opening no period, and answers short Units once the plan's one HQ Unit is spent |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-9c, against the start service's unit suite: 29
+mutants on the offer, the shared authorization and reach, and the period
+read (each check removed or loosened, the order, the funding split, the
+prospective period, a foreign or unreadable period, each permission). All 29
+killed; one first needed an anchor that names the offer's line only. None
+judged equivalent.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the start is unchanged by the
+refactor, the offer judges in its order, plans with the commit's own
+function, reads the period without writing, and reveals no more than the
+start does. Answered in `dfbb315`:
+
+- **Should fix: a never-composed project is read as not fresh, and no test
+  had it.** Swapping the first two checks would have answered it `STALE`. The
+  order test now has it, answered `NOT_COMPOSED`.
+- **Minor: a period overlapping the renewal period without containing now is
+  not seen.** The offer offers the plan's allowance where the start refuses.
+  Only a ledger already wrong holds one; recorded in ADR-0109 Decision 3 and
+  below rather than widening the ledger port.
+- **Minor: ADR-0109 said the start also refuses an unreadable balance.** It
+  never reads one outside its commit; the ADR now says that refusal is the
+  offer's own.
+- **Nits.** A refused offer is now shown to open no period; the funding
+  test's title claims only what it checks; a new long line is wrapped; a
+  database test's title says what it checks.
 
 ### Required documentation
 
