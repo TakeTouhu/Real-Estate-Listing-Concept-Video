@@ -4,12 +4,18 @@ import { describe, expect, it } from "vitest";
 
 /**
  * The development pipeline's assembly builds the steps and runs none of them
- * (GS-9b, ADR-0106). The pipeline command (GS-9c) will be what runs them, when
- * a person or a test starts it; until then nothing reaches this folder.
+ * (GS-9b, ADR-0106). The pipeline command (GS-9c, ADR-0108) runs them, and only
+ * when a person or a test starts it: its entry point is the one file that reads
+ * the command line, the command is the one file that runs a step's pass, and
+ * nothing outside this folder reaches it but the worker's `pipeline` script.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const FOLDER = __dirname;
+const ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+const ENTRY_POINT = "apps/worker/src/development-pipeline/cli.ts";
+const COMMAND = "apps/worker/src/development-pipeline/command.ts";
+const PHOTO_READER = "apps/worker/src/development-pipeline/photo-reader.ts";
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -29,10 +35,7 @@ function sourceFiles(dir: string): { name: string; text: string }[] {
 describe("the development pipeline's assembly", () => {
   it("runs no step, starts nothing by itself and reaches no network or real provider", () => {
     const files = sourceFiles(FOLDER);
-    expect(files.map(({ name }) => name).sort()).toEqual([
-      "apps/worker/src/development-pipeline/assembly.ts",
-      "apps/worker/src/development-pipeline/photo-reader.ts",
-    ]);
+    expect(files.map(({ name }) => name).sort()).toEqual([ASSEMBLY, ENTRY_POINT, COMMAND, PHOTO_READER]);
     for (const { name, text } of files) {
       for (const banned of [
         ".runOnce(",
@@ -60,8 +63,31 @@ describe("the development pipeline's assembly", () => {
         "FalH3MaxSubmissionProvider",
         "FalQueueCompletionStatusSource",
       ]) {
+        // The command runs each step's pass, as the assembly built it; it runs no single attempt.
+        if (name === COMMAND && (banned === ".runOnce(" || banned === "runProviderOutputBatchOnce(")) continue;
+        // The entry point reads the command line, and does nothing else of its own.
+        if (name === ENTRY_POINT && banned === "process.argv") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
+    }
+  });
+
+  it("has the command run every step's pass, and build none of its own", () => {
+    const command = sourceFiles(FOLDER).find(({ name }) => name === COMMAND)?.text ?? "";
+    expect(command.match(/\.runOnce\(/g)).toHaveLength(11);
+    expect(command.match(/\.runProviderOutputBatchOnce\(/g)).toHaveLength(1);
+    for (const banned of ["assembleDevelopmentPipeline", "Runner(", "Repository(", "new ", "create"]) {
+      // `new Set(` holds the counted outcomes and `new AppError(` the refusal; nothing else is constructed.
+      const text = banned === "new " ? command.replace(/new (Set|AppError)\(/g, "") : command;
+      expect(`${banned}: ${text.includes(banned)}`).toBe(`${banned}: false`);
+    }
+    // The entry point assembles the steps and hands them to the command; it runs none itself.
+    const entry = sourceFiles(FOLDER).find(({ name }) => name === ENTRY_POINT)?.text ?? "";
+    expect(entry).toContain("assembleDevelopmentPipeline(");
+    expect(entry).toContain("refuseForeignAttempts(");
+    expect(entry).toContain("runDevelopmentPipeline(");
+    for (const banned of [".runOnce(", "runProviderOutputBatchOnce(", "BatchOnce"]) {
+      expect(`${banned}: ${entry.includes(banned)}`).toBe(`${banned}: false`);
     }
   });
 
@@ -76,7 +102,23 @@ describe("the development pipeline's assembly", () => {
     for (const { name, text } of outside) {
       expect(`${name}: ${text.includes("development-pipeline")}`).toBe(`${name}: false`);
     }
-    const worker = readFileSync(join(REPO_ROOT, "apps", "worker", "package.json"), "utf8");
-    expect(worker.includes("development-pipeline")).toBe(false);
+    // Only the worker's `pipeline` script names the folder: no start-up script, hook or other script.
+    const worker = JSON.parse(readFileSync(join(REPO_ROOT, "apps", "worker", "package.json"), "utf8")) as {
+      readonly scripts?: Readonly<Record<string, string>>;
+    };
+    const { pipeline, ...otherScripts } = worker.scripts ?? {};
+    expect(pipeline).toBe("tsx src/development-pipeline/cli.ts");
+    expect(JSON.stringify({ ...worker, scripts: otherScripts }).includes("development-pipeline")).toBe(false);
+    // Nothing runs the script by itself: not the root's scripts, and not CI.
+    const workflows = join(REPO_ROOT, ".github", "workflows");
+    for (const file of [
+      join(REPO_ROOT, "package.json"),
+      ...readdirSync(workflows).map((entry) => join(workflows, entry)),
+    ]) {
+      const text = readFileSync(file, "utf8");
+      for (const banned of ["development-pipeline", "cli.ts", "worker pipeline", "run pipeline"]) {
+        expect(`${file}:${banned}: ${text.includes(banned)}`).toBe(`${file}:${banned}: false`);
+      }
+    }
   });
 });

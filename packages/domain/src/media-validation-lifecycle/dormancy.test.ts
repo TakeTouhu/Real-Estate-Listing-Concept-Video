@@ -29,6 +29,12 @@ const LIFECYCLE_DIR = __dirname;
  * itself. It builds this runner and the validator it reads clips with.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -100,6 +106,8 @@ describe("the lifecycle exists but nothing runs it", () => {
       for (const banned of [".runOnce(", ".runOne("]) {
         // Other runners exist; this asserts no production *caller* of any of
         // them appeared, which is the property that keeps this one unscheduled.
+        // The pipeline command runs each step's pass; it runs no single item.
+        if (name === DEVELOPMENT_COMMAND && banned === ".runOnce(") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

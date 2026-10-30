@@ -15,6 +15,12 @@ const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
  * for the test provider, is refused in production, and runs nothing itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 
 describe("the Safety Guard's arithmetic is untouched", () => {
   it.each([
@@ -104,6 +110,8 @@ describe("nothing in production calls the orchestration", () => {
       ]) {
         // The assembly builds the runner and runs no batch.
         if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
+        // The pipeline command runs the assembly's batch, and builds no runner.
+        if (name === DEVELOPMENT_COMMAND && banned === "runProviderOutputBatchOnce") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

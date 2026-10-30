@@ -30,6 +30,12 @@ const ADAPTER_DIR = __dirname;
  * for the test provider, is refused in production, and runs nothing itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 
 function sourceFiles(dir: string): { name: string; text: string }[] {
   const found: { name: string; text: string }[] = [];
@@ -102,6 +108,8 @@ describe("the concrete fal status adapter has no production composition", () => 
       ]) {
         // The assembly builds the runner on the test provider's status source, not fal's.
         if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
+        // The pipeline command runs the assembly's batch, on the test provider's source.
+        if (name === DEVELOPMENT_COMMAND && banned === "runProviderOutputBatchOnce") continue;
         expect(`${name}:${banned}: ${code(text).includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

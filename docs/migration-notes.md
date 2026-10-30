@@ -2023,3 +2023,16 @@ refused in production. CI's database job now installs FFmpeg; a local
 
 **Rolling back.** To GS-9b-1's build: safe. The assembly stores nothing of its
 own; what its steps write is the rows and objects the steps already write.
+
+## GS-9c — the development pipeline command
+
+**No migration** (ADR-0108). No schema, enum, constraint or row changes, and no
+new environment variable. The command reads the variables the assembly already
+reads, and `DATABASE_URL`.
+
+**What changes at deploy.** Nothing. The command is the worker's `pipeline`
+script, which nothing runs by itself; it is refused in production, and refused
+on a database holding any attempt of a provider other than the test provider.
+
+**Rolling back.** To GS-9b-2's build: safe. The command stores nothing of its
+own; what its steps write is the rows and objects the steps already write.

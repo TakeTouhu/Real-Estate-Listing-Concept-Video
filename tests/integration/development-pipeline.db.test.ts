@@ -29,6 +29,11 @@ import {
   developmentPipelineContext,
   type DevelopmentPipeline,
 } from "../../apps/worker/src/development-pipeline/assembly";
+import {
+  pipelineExitCode,
+  refuseForeignAttempts,
+  runDevelopmentPipeline,
+} from "../../apps/worker/src/development-pipeline/command";
 import { ctx } from "./orchestration-fixture";
 
 /**
@@ -518,4 +523,66 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     expect(third.outcomes.map(({ result }) => result)).toEqual([{ kind: "RESOLVED", resolutionKind: "OBSOLETE" }]);
     expect(await prisma.sceneGeneration.count({ where: recovering })).toBe(2);
   }, 60_000);
+
+  it("the command runs every step until the video is published, then stops", async () => {
+    const job = await start();
+    const steps = pipeline("FFMPEG");
+    const lines: number[] = [];
+    const report = await runDevelopmentPipeline(steps, { limit: 10, maxCycles: 20 }, (cycle) => lines.push(cycle));
+
+    expect([report.stop, pipelineExitCode(report)]).toEqual([{ kind: "QUIET" }, 0]);
+    expect(lines).toEqual(Array.from({ length: report.cycles }, (_, index) => index + 1));
+    const changed = Object.fromEntries(Object.entries(report.totals).map(([step, pass]) => [step, pass.changed]));
+    expect(changed).toEqual({
+      launch: 1,
+      submission: 2,
+      provider_output: 2,
+      reconciliation: 0,
+      attempt_failure_settlement: 0,
+      failed_job_scene_closure: 0,
+      media_validation: 2,
+      media_failure_resolution: 0,
+      scene_delivery: 2,
+      composition_plan: 1,
+      composition: 1,
+      deliverable_validation: 1,
+    });
+    const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
+    expect([ended.state, ended.reservation?.state]).toEqual(["DELIVERABLE_READY", "CONSUMED"]);
+
+    // A second run finds nothing to do.
+    const again = await runDevelopmentPipeline(steps, { limit: 10, maxCycles: 20 });
+    expect([again.cycles, again.stop, pipelineExitCode(again)]).toEqual([1, { kind: "QUIET" }, 0]);
+  }, 180_000);
+
+  it("the command retries an unusable clip once, gives the Unit back, and stops", async () => {
+    const job = await start();
+    const report = await runDevelopmentPipeline(pipeline(), { limit: 10, maxCycles: 20 });
+
+    expect([report.stop, pipelineExitCode(report)]).toEqual([{ kind: "QUIET" }, 0]);
+    expect([report.totals.submission.changed, report.totals.media_validation.changed]).toEqual([4, 4]);
+    const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
+    expect([ended.state, ended.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    // The other scene's resolution is handed back for five minutes and waits
+    // for a later run, which resolves it OBSOLETE; nothing it owes is money.
+    const waiting = await prisma.managedOutputMediaFailureResolution.count({
+      where: { status: "PENDING", validation: { sceneGeneration: { videoProject: { organizationId: ORG } } } },
+    });
+    expect(waiting).toBe(1);
+  }, 60_000);
+
+  it("refuses a database that holds another provider's attempts", async () => {
+    await start();
+    const steps = pipeline();
+    await steps.launch.runOnce(10);
+    await expect(refuseForeignAttempts(prisma)).resolves.toBeUndefined();
+    await prisma.sceneGeneration.updateMany({
+      where: { videoProject: { organizationId: ORG } },
+      data: { providerName: "wavespeed" },
+    });
+    await expect(refuseForeignAttempts(prisma)).rejects.toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      message: "The development pipeline is refused: this database holds attempts of another provider",
+    });
+  });
 });

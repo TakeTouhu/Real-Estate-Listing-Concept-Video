@@ -5380,3 +5380,153 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-9b-2 waits for the product owner's yes before merge. Then GS-9c (the
 command), GS-9d (the command's own run), and the screens (GS-10 to GS-12).
+
+## GS-9c — the development pipeline command
+
+Base: `dcf92cf` (PR #131 merge commit on `main`).
+ADR: `docs/decisions/0108-the-development-pipeline-command.md`
+
+The last milestone of row GS-9 of the approved plan
+(`/mnt/project-files/cto/generation-e2e-proposal.md`: the pipeline command,
+run only when a person or a test starts it, only with the test provider, never
+in production, with no timer or cron). **No migration; no route, no page, no
+environment variable.** GS-9d, the command's end-to-end test, is folded in.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| this commit | the command, its entry point and `pipeline` script, its unit and database tests, the static tests' admissions, ADR-0108 and the documentation |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-9c does
+
+- **A person runs the pipeline.** `pnpm --filter @app/worker pipeline
+  --provider-folder <absolute path>` runs the twelve steps the assembly built,
+  one pass each per cycle, in the order work flows, carrying the launch's and
+  the submission's cursors from one cycle to the next.
+- **It stops when a whole cycle changed nothing** and neither window has more;
+  at once when a step throws; after the cycle when an answer from the provider
+  was not recorded; and at `--max-cycles`. It never waits: work handed back
+  for later waits for the next run.
+- **It refuses a database holding another provider's attempts**, before any
+  step, and is refused in production by the assembly.
+- **It prints counts only**: a line per cycle and one for the run. Exit 0 when
+  nothing more can move now and nothing failed, 1 otherwise, 2 when refused.
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant E as Entry point (cli.ts)
+    participant A as Assembly
+    participant D as Database
+    participant C as Command
+    P->>E: pnpm --filter @app/worker pipeline --provider-folder …
+    E->>E: arguments, server environment (exit 2 if refused)
+    E->>A: build the steps (refused in production, unless the test provider)
+    E->>D: count attempts of another provider (exit 2 if any)
+    loop each cycle, until one changes nothing
+        C->>A: launch, submission (cursors carried), provider output, maintenance
+        C->>A: K, L, media validation, failure resolution
+        C->>A: F, I, J, G
+        C-->>P: cycle N: counts
+    end
+    C-->>P: why it stopped, totals; exit 0, or 1
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI, FFmpeg 6.1.1 as on
+Ubuntu 24.04).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean, each exit status read |
+| `pnpm test` | 6,646 tests in 247 files passed, exit 0 |
+| `pnpm test:db` | 1,854 tests in 70 files passed, exit 0 |
+| `pnpm test:media` | see the pull request |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+Run by hand against an empty development database, with the test provider:
+
+| Run | Printed | Exit |
+| --- | --- | --- |
+| `pnpm --filter @app/worker pipeline --provider-folder <absolute>` | `cycle 1: nothing changed`, then `nothing more to do now after 1 cycle; in all: nothing changed` | 0 |
+| a relative folder | `The test provider's folder must be an absolute path` | 2 |
+| `--limit 26` | `--limit must be a whole number from 1 to 25` and the usage | 2 |
+| `NODE_ENV=production` | the environment's refusal of `SHARED_STORAGE_DIR` in production | 2 |
+| `VIDEO_PROVIDER=wavespeed` | the environment's refusal, naming the missing variable only | 2 |
+
+New tests:
+
+- `tests/integration/development-pipeline.db.test.ts` (3 more, 7 in all), the
+  command's loop against PostgreSQL and FFmpeg in CI's `database` job:
+  - **A video is made.** A started job is published in the first cycle (launch
+    1, submission 2, provider output 2, clips checked 2, scenes delivered 2,
+    one video planned, composed and validated), the second cycle changes
+    nothing, the run stops quiet with exit 0, the job is `DELIVERABLE_READY`
+    and its Unit `CONSUMED`; a second run stops quiet after one cycle.
+  - **An unusable clip is retried once.** Each scene is sent twice and checked
+    twice, the job ends `FAILED_TERMINAL` with its Unit `RELEASED`, the run
+    stops quiet with exit 0 after four cycles, and one resolution still waits
+    for a later run.
+  - **Another provider's attempts.** The check passes on the test provider's
+    attempts and refuses once one names `wavespeed`.
+- `apps/worker/src/development-pipeline/command.test.ts` (new, 17): the
+  arguments; the order, the limit and each context; the cursors; another
+  cycle after a change; every outcome of every step counted as a change, a
+  failure or neither, and the printed totals; the stop on an unrecorded
+  answer, on a throw (keeping only an application error's code, and printing
+  the partial cycle) and at the cycle limit; the limit's ceiling; the database
+  check.
+- `apps/worker/src/development-pipeline/dormancy.test.ts` (1 more, 3 in all):
+  only the command runs a step's pass and builds nothing; only the entry point
+  reads the command line; only the `pipeline` script names the folder, and
+  neither the root's scripts nor CI run it.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the development pipeline command row; the rows that said nothing runs a step until the command |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-9c.md`: no HTTP change; the command line and the command's module |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-9c*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (GS-9d
+folded into GS-9c), `docs/local-setup.md` (how to run it) and `.gitignore`
+(`.dev-provider/`). `docs/decisions/TODO.md` is unchanged: the open question
+ADR-0106 and ADR-0107 left to the command is answered by ADR-0108 Decision 6.
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes. The command runs only when a person or a test starts it, never waits
+or starts itself, and is refused in production and unless the provider is the
+test provider. No scheduler, credential or payment integration. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **A run ends when nothing can move now.** Work handed back for later, such
+  as the second unusable clip of a job that has already failed, waits for a
+  run at least five minutes later; nothing reruns the command by itself.
+- **The entry point is checked by hand**, as the operator commands' are: its
+  parts are tested, and the table above records its runs.
+- **The database check sees only attempts.** A database that is not a
+  development one but holds no attempt of another provider is guarded only by
+  the refusal in production.
+- **The development reconciliation values are not production's**, which are
+  still open (`docs/decisions/TODO.md`).
+
+### Remaining work
+
+GS-9c waits for the product owner's yes before merge. Then the screens: the
+start screen and route (GS-10), progress (GS-11), preview and download
+(GS-12), and the browser test (GS-13).

@@ -27,6 +27,12 @@ const CORE_DIR = __dirname;
  * runner, and still names no child process itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 const CORE_FILES = ["streaming-transfer.ts", "staging.ts", "defect.ts", "index.ts"];
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
@@ -334,6 +340,8 @@ describe("no production composition", () => {
       ]) {
         // The assembly builds the runner and runs no batch.
         if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
+        // The pipeline command runs the assembly's batch, and builds no runner.
+        if (name === DEVELOPMENT_COMMAND && banned === "runProviderOutputBatchOnce") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }
