@@ -112,12 +112,21 @@ importers:
 
   apps/worker:
     dependencies:
+      '@app/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@app/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@app/observability':
         specifier: workspace:*
         version: link:../../packages/observability
       '@app/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@app/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@app/video-providers':
         specifier: workspace:*
         version: link:../../packages/video-providers

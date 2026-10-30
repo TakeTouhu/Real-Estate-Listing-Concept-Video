@@ -10,6 +10,11 @@ import { classifyProviderCostExposure } from "../authorization/exposure";
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 
 describe("the Safety Guard's arithmetic is untouched", () => {
   it.each([
@@ -97,6 +102,8 @@ describe("nothing in production calls the orchestration", () => {
         "runProviderOutputBatchOnce",
         "createProviderOutputRunner",
       ]) {
+        // The assembly builds the runner and runs no batch.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

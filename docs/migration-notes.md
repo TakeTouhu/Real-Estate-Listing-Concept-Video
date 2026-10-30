@@ -1999,3 +1999,15 @@ launch runner or its repository.
 
 **Rolling back.** To GS-8's build: safe. The cursor is never stored, so
 nothing is left behind.
+
+## GS-9b-1 — the development pipeline's assembly
+
+**No migration** (ADR-0106). No schema, enum, constraint or row changes, and no
+new environment variable. The assembly reads `SHARED_STORAGE_DIR`,
+`STORAGE_SIGNING_SECRET`, `NODE_ENV` and `VIDEO_PROVIDER`, which exist.
+
+**What changes at deploy.** Nothing. Nothing calls the assembly, and it is
+refused in production.
+
+**Rolling back.** To GS-9a's build: safe. The assembly stores nothing of its
+own; the folders it creates are the shared folder and the test provider's.

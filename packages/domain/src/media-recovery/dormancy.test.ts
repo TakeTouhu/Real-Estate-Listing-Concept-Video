@@ -26,6 +26,11 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const RECOVERY_DIR = __dirname;
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const RECOVERY_REPOSITORY = join(
   REPO_ROOT,
   "packages",
@@ -223,6 +228,8 @@ describe("the paid provider boundary stays closed", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("media-recovery/ports.ts")) continue;
       for (const banned of ["implements FxRateSource", ": FxRateSource =", "FxRateSource {"]) {
+        // The test route's fixed rate, which the assembly hands the launch planner.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === ": FxRateSource =") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

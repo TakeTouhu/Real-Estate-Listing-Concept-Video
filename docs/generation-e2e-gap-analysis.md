@@ -296,7 +296,11 @@ GS-9 is split into four milestones, each its own pull request:
 - **GS-9a** (ADR-0105, no migration): the launch candidate query reads after a
   cursor and each launch pass returns `next`.
 - **GS-9b**: the development assembly, which builds every runner for the test
-  provider only and fills the pieces above.
+  provider only and fills the pieces above. Split in two: **GS-9b-1**
+  (ADR-0106, no migration) the assembly and the steps up to each clip copied
+  into the shared folder, with K, L and the maintenance at the provider
+  boundary; **GS-9b-2** media validation, its failure resolution, F, I, J and
+  G.
 - **GS-9c**: the command: the passes in order, each window's cursor carried,
   when to stop, and what it reports.
 - **GS-9d**: an end-to-end test of the command against a database and FFmpeg

@@ -10,8 +10,11 @@
     "start": "tsx src/main.ts"
   },
   "dependencies": {
+    "@app/database": "workspace:*",
+    "@app/domain": "workspace:*",
     "@app/observability": "workspace:*",
     "@app/shared": "workspace:*",
+    "@app/storage": "workspace:*",
     "@app/video-providers": "workspace:*"
   },
   "devDependencies": {

@@ -262,13 +262,14 @@ function callers(name: string): string[] {
 
 describe("who builds the kit, or a policy or catalog like it", () => {
   /**
-   * Nobody yet. The pipeline command (GS-9) and the start route (GS-10) will be
-   * the factory's first callers, and each adds itself here when it is
+   * The development pipeline's assembly (GS-9b, ADR-0106) is the factory's
+   * first caller. The start route (GS-10) adds itself here when it is
    * reviewed. The two builders the factory uses have no production check of
    * their own, so nothing else may call them.
    */
-  it("is only the package that defines the factory, until the pipeline command", () => {
+  it("is the package that defines the factory and the development pipeline", () => {
     expect(callers("createFakeRouteKit")).toEqual([
+      "apps/worker/src/development-pipeline/assembly.ts",
       "packages/video-providers/src/fake/route-kit.ts",
       "packages/video-providers/src/index.ts",
     ]);
@@ -287,13 +288,15 @@ describe("who builds the kit, or a policy or catalog like it", () => {
 });
 
 describe("who builds the test provider's studio and its clip maker", () => {
-  /** Nobody yet, as with the kit: the pipeline command (GS-9) will be first. */
-  it("is only the packages that define them", () => {
+  /** As with the kit, the development pipeline's assembly (GS-9b, ADR-0106). */
+  it("is the packages that define them and the development pipeline", () => {
     expect(callers("createFakeClipStudio")).toEqual([
+      "apps/worker/src/development-pipeline/assembly.ts",
       "packages/video-providers/src/fake/clip-studio.ts",
       "packages/video-providers/src/index.ts",
     ]);
     expect(callers("createFfmpegFakeClipRenderer")).toEqual([
+      "apps/worker/src/development-pipeline/assembly.ts",
       "packages/storage/src/fake-clip-renderer.ts",
       "packages/storage/src/index.ts",
     ]);

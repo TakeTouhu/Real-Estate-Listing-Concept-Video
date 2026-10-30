@@ -877,9 +877,9 @@ describe("the worker's existing seams, over the folder", () => {
 });
 
 describe("where it is opened", () => {
-  it("is opened in production code only by the web app's wiring", () => {
-    // The worker's side is opened by the pipeline command (GS-9), which adds
-    // itself here. Anything else that opens the folder gets that review too.
+  it("is opened in production code only by the web app's wiring and the development pipeline", () => {
+    // The worker's side is opened by the development pipeline's assembly
+    // (GS-9b, ADR-0106). Anything else that opens the folder gets that review too.
     const repo = join(__dirname, "..", "..", "..");
     const sources = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
@@ -894,6 +894,7 @@ describe("where it is opened", () => {
       .map((file) => file.slice(repo.length + 1));
     expect(openers.sort()).toEqual([
       "apps/web/src/lib/property.ts",
+      "apps/worker/src/development-pipeline/assembly.ts",
       "packages/storage/src/shared-folder-storage.ts",
     ]);
   });
