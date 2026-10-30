@@ -22,6 +22,8 @@ coverage/
 
 # Development storage folder (SHARED_STORAGE_DIR, ADR-0085)
 .dev-storage/
+# The test provider's clips for the development pipeline (ADR-0108)
+.dev-provider/
 
 # Logs
 *.log

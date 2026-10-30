@@ -32,6 +32,12 @@ const RECOVERY_DIR = __dirname;
  * itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 const RECOVERY_REPOSITORY = join(
   REPO_ROOT,
   "packages",
@@ -153,6 +159,8 @@ describe("the capability exists but nothing runs it", () => {
         // them, which is the property that keeps all three unscheduled.
         if (name.endsWith("scene-delivery/runner.ts")) continue;
         if (name.endsWith("media-validation-lifecycle/runner.ts")) continue;
+        // The pipeline command runs each step's pass and admits no recovery itself.
+        if (name === DEVELOPMENT_COMMAND && banned === ".runOnce(") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

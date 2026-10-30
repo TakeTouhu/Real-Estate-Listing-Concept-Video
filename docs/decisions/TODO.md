@@ -1240,6 +1240,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       product change, to propose before any deployment whose database is not
       on UTC.
 
+## Found in GS-9c — the development pipeline cannot tell a tunnelled database
+
+- [ ] **Mark a development database positively before the pipeline command
+      acts on it.** The command refuses a `DATABASE_URL` that is not on this
+      machine and a database holding any attempt of another provider
+      (ADR-0108 Decision 6). A shared or production database reached through
+      an SSH tunnel or a port forward to `localhost`, holding no attempt of
+      another provider, passes both, and the command would then publish
+      videos and consume Units on every organization in it. A row or setting
+      written only by the development setup, which the command requires,
+      would close this; it needs a schema change. Found by GS-9c's review; to
+      propose before anyone but the team runs the command.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

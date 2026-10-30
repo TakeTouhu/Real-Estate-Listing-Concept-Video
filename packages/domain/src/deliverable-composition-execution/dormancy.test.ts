@@ -35,6 +35,12 @@ const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
  * for the test provider, is refused in production, and runs nothing itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
+/**
+ * The development pipeline command (GS-9c, ADR-0108): the one production caller
+ * of each step's pass. It runs only when a person or a test starts it, only on
+ * the test provider, and never in production.
+ */
+const DEVELOPMENT_COMMAND = "apps/worker/src/development-pipeline/command.ts";
 const MODULE_DIR = __dirname;
 const EXECUTION_REPOSITORY = join(
   REPO_ROOT,
@@ -177,6 +183,8 @@ describe("the capability exists but nothing runs it", () => {
         "deferComposition(",
         "findCompositionCandidates(",
       ]) {
+        // The pipeline command runs the runner's pass and calls no transaction itself.
+        if (name === DEVELOPMENT_COMMAND && banned === ".runOnce(") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

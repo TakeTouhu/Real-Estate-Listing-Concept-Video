@@ -89,8 +89,8 @@ SHARED_STORAGE_DIR=/absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-stor
 The folder is created on first use, readable by your user alone; `.dev-storage/`
 is git-ignored. The path must be absolute, because the web app and the worker
 run from different folders, and the setting is refused in production. The
-worker will read the same folder once the pipeline command exists (GS-9).
-Delete the folder to start over.
+development pipeline (section 4a) reads the same folder. Delete the folder to
+start over.
 
 ## 4. Run the worker (optional)
 
@@ -100,6 +100,46 @@ pnpm --filter @app/worker start
 
 The Phase 0 worker validates configuration, constructs the configured provider,
 runs an offline self-check, logs readiness, and exits.
+
+## 4a. Run the development pipeline (optional)
+
+A started video becomes a published one only when you run the pipeline, on
+the test provider (ADR-0108). Until GS-10 adds a way for a customer to start
+a video, only the tests start one, so on a fresh database the pipeline finds
+nothing to do. Export the variables of `.env.local` in your shell, with
+`VIDEO_PROVIDER=fake` and the same `SHARED_STORAGE_DIR` as the web app
+(section 3b), have FFmpeg on the `PATH`, and run:
+
+```bash
+pnpm --filter @app/worker pipeline \
+  --provider-folder /absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-provider
+```
+
+`--provider-folder` is where the test provider keeps the clips it makes. Use
+the same folder every time: a later run collects a clip from it. It runs every
+step once per cycle until cycles that change nothing have read all the waiting
+work, printing one line per cycle, counts only:
+
+```text
+cycle 1: launch 1, submission 2, provider output 2, clips checked 2, scenes delivered (F) 2, …
+cycle 2: nothing changed
+nothing more to do now after 2 cycles; in all: launch 1, submission 2, …
+```
+
+Here one video was made in the first cycle and published.
+
+It never waits. Work handed back for later waits for your next run: for
+example, when a job fails because its clips are unusable, its second clip is
+settled at least five minutes later. `--limit` (1 to 25, 10 if omitted) is how
+many items each step takes per pass, and `--max-cycles` (1 to 1000, 50 if
+omitted) bounds one run. Exit code 0 means nothing more to do now, 1 that it
+stopped or a step reported a failure (`(1 failed)` after a step's count), 2
+that it was refused before any step ran: in production, without the test
+provider or the shared folder, when `DATABASE_URL` does not name a database on
+this machine (`localhost`, `127.0.0.1` or `[::1]`), or on a database holding
+attempts of another provider, which a development database never does. Do not
+point it at a shared database through a tunnel: it acts on every
+organization's rows.
 
 ## 4b. Give an organization its contract's plan (optional)
 
