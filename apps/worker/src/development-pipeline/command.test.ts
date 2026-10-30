@@ -203,6 +203,12 @@ describe("running the steps", () => {
       [7, SUBMIT_CURSOR],
       [7, SUBMIT_CURSOR],
     ]);
+
+    // The launch's window alone having more is enough for another cycle.
+    const launchOnly = quiet();
+    launchOnly.launch.runOnce.mockResolvedValueOnce(launchReport({ next: LAUNCH_CURSOR }));
+    const again = await runDevelopmentPipeline(launchOnly, OPTIONS);
+    expect([again.stop, again.cycles]).toEqual([{ kind: "QUIET" }, 2]);
   });
 
   it("runs another cycle after one that changed something", async () => {
@@ -317,10 +323,14 @@ describe("running the steps", () => {
           { kind: "NOT_FOUND" },
           { kind: "LOST" },
           { kind: "FAILED", code: null },
+          { kind: "FAILED", code: "INTERNAL_ERROR" },
         ] as const
       ).map((outcome, index) => ({ deliverableVersionId: `gdv_${index}`, outcome })),
     });
-    const report = await runDevelopmentPipeline(steps, OPTIONS);
+    const cycles: string[] = [];
+    const report = await runDevelopmentPipeline(steps, OPTIONS, (cycle, counts) =>
+      cycles.push(formatPipelineCycle(cycle, counts)),
+    );
 
     expect(report.totals).toEqual({
       launch: { changed: 3, failed: 1 },
@@ -334,17 +344,18 @@ describe("running the steps", () => {
       scene_delivery: { changed: 4, failed: 0 },
       composition_plan: { changed: 0, failed: 3 },
       composition: { changed: 2, failed: 1 },
-      deliverable_validation: { changed: 7, failed: 1 },
+      deliverable_validation: { changed: 7, failed: 2 },
     });
     // It ended quiet, but something failed on the way.
     expect([report.stop, pipelineExitCode(report)]).toEqual([{ kind: "QUIET" }, 1]);
-    expect(formatPipelineReport(report)).toBe(
-      "nothing more to do now after 2 cycles; in all: launch 3 (1 failed), submission 4 (2 failed), " +
-        "provider output 2 (8 failed), maintenance 3, provider failures settled (K) 2 (1 failed), " +
-        "failed jobs' scenes closed (L) 3 (2 failed), clips checked 4, unusable clips resolved 2, " +
-        "scenes delivered (F) 4, videos planned (I) 0 (3 failed), videos composed (J) 2 (1 failed), " +
-        "videos validated (G) 7 (1 failed)",
-    );
+    const counted =
+      "launch 3 (1 failed), submission 4 (2 failed), " +
+      "provider output 2 (8 failed), maintenance 3, provider failures settled (K) 2 (1 failed), " +
+      "failed jobs' scenes closed (L) 3 (2 failed), clips checked 4, unusable clips resolved 2, " +
+      "scenes delivered (F) 4, videos planned (I) 0 (3 failed), videos composed (J) 2 (1 failed), " +
+      "videos validated (G) 7 (2 failed)";
+    expect(cycles).toEqual([`cycle 1: ${counted}`, "cycle 2: nothing changed"]);
+    expect(formatPipelineReport(report)).toBe(`nothing more to do now after 2 cycles; in all: ${counted}`);
   });
 
   it("finishes the cycle, then stops, when an answer was not recorded", async () => {
