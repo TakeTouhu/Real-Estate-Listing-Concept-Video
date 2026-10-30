@@ -193,6 +193,10 @@ CI runs the same sequence in the `database` job against a PostgreSQL 16 service
 container, and additionally verifies that the committed migrations have no drift
 against the schema.
 
+The development pipeline's suite makes a real video, so `pnpm test:db` also
+needs `ffmpeg` and `ffprobe` on the `PATH` (ADR-0107); on Ubuntu,
+`sudo apt-get install ffmpeg`. The `database` job installs them.
+
 ### Media tests
 
 The suites that run the real `ffmpeg` and `ffprobe` are opt-in too (ADR-0072).

@@ -44,9 +44,10 @@ store require, which media validation already uses by default.
 | `composition` | `DeliverableCompositionRunner` (J) | its repository, the reader, composer, publisher, Clean Master store and inspector of Decision 2, the system clock |
 | `deliverableValidation` | `DeliverableValidationRunner` (G) | its repository, the validator of Decision 2, the system clock, `dvlease_` lease tokens |
 
-Each gets a worker's context per transition, as in ADR-0106 Decision 6, with
-its step's label. The final validation takes its context per pass, as its
-`runOnce(limit, context)` always has; the command will pass
+Each step that records a transition gets a worker's context per transition,
+as in ADR-0106 Decision 6, with its step's label. Media validation records no
+transition and takes no context. The final validation takes its context per
+pass, as its `runOnce(limit, context)` always has; the command will pass
 `developmentPipelineContext("deliverable_validation")`.
 
 Leases and retry delays are each runner's own defaults: they are recovery
@@ -81,13 +82,17 @@ through the assembly against PostgreSQL:
   copied and validated; F delivers both scenes; I plans the video; J composes
   the Clean Master and the video with its disclosure; the final validation
   publishes it. The job is `DELIVERABLE_READY`, the Unit is `CONSUMED`, every
-  verdict and the Unit's use are on the system clock, and the video is a
-  1280×720, 10-second file that differs from its Clean Master.
+  verdict, receipt and the Unit's use are on the system clock, each receipt
+  names the bytes stored, the Clean Master cannot be signed, and the video is a
+  1280×720, 10-second file that differs from its Clean Master. That the
+  disclosure is drawn on it is the media suite's to prove
+  (`composition-runner.media.test.ts`).
 - **An unusable clip is retried once, then the Unit comes back.** Each scene's
   clip is not a video, so each is retried once on the test route's prices; the
   retry is the same request, so the test provider answers with the same clip;
-  the second failure fails the job and releases the Unit, and L closes the
-  other scene.
+  the second failure fails the job and releases the Unit. The other scene's
+  work is handed back for five minutes; once L closes that scene, it is
+  resolved `OBSOLETE` when next due, and no third attempt is made.
 
 The database job therefore installs FFmpeg as the media job does, and is
 pinned to the same Ubuntu 24.04 (it ran on `ubuntu-latest`, which is 24.04
@@ -104,7 +109,7 @@ constructors and factories it calls, and for nothing that runs a step:
 | --- | --- |
 | `media-validation-lifecycle/dormancy` | the runner, the validator, the probe and the process runner |
 | `media-failure-resolution/dormancy` | the runner and its repository; no call of either |
-| `media-recovery/dormancy` | the planner and the recovery repository; no call of either |
+| `media-recovery/dormancy` | the planner and the recovery repository; a test bans the assembly calling the planner's `.plan(` or the repository's admission or discovery |
 | `scene-delivery/dormancy` | the runner and its repository |
 | `deliverable-composition/dormancy` | the runner and the plan repository; no call of either |
 | `deliverable-composition-execution/dormancy` | the runner, its repository, the reader, composer, publisher, Clean Master store and inspector |
@@ -136,7 +141,12 @@ own module still covers the assembly.
   (`MEDIA_FAILURE_RESOLUTION_RETRY_DELAY_MS`). And the final validation takes
   its context per pass, not per transition.
 - Whether the command refuses a database that holds another provider's
-  attempts (ADR-0106).
+  attempts (ADR-0106), or one that is not plainly a development database. The
+  steps act on every organization's rows in the database they are given: the
+  final validation publishes and consumes Units, F and I advance jobs, and the
+  resolution admits retries priced on the test route. Today only the refusal
+  in production stands between them and a database that is not a development
+  one; the command decides what more it checks before its first pass.
 
 ## Consequences
 

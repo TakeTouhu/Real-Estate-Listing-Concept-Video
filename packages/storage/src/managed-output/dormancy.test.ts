@@ -21,8 +21,10 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const CORE_DIR = __dirname;
 /**
- * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
- * for the test provider, is refused in production, and runs nothing itself.
+ * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): it builds the
+ * steps for the test provider, is refused in production, and runs nothing
+ * itself. It builds the validator, the probe, the inspector and the process
+ * runner, and still names no child process itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const CORE_FILES = ["streaming-transfer.ts", "staging.ts", "defect.ts", "index.ts"];

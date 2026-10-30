@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   AttemptFailureSettlementRunner,
   AttemptSubmissionRunner,
   CompositionPlanRunner,
+  DISCLOSURE_LAYER_ASSETS,
   DeliverableCompositionRunner,
   DeliverableValidationRunner,
   FailedJobSceneClosureRunner,
@@ -116,7 +118,12 @@ describe("assembling the development pipeline", () => {
   it("composes with the repository's own disclosure images", () => {
     const repository = join(__dirname, "..", "..", "..", "..");
     expect(DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY).toBe(join(repository, "assets", "disclosure"));
-    expect(readdirSync(DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY).filter((name) => name.endsWith(".png"))).toHaveLength(6);
+    // Every image the composer may ask for is there, as committed.
+    for (const layer of DISCLOSURE_LAYER_ASSETS) {
+      const bytes = readFileSync(join(DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY, layer.fileName));
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      expect([layer.fileName, sha256]).toEqual([layer.fileName, layer.sha256]);
+    }
   });
 
   it("signs photo URLs under an https base whose host never resolves", () => {

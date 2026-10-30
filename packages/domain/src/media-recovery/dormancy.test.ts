@@ -126,6 +126,14 @@ describe("the capability exists but nothing runs it", () => {
     }
   });
 
+  it("has the assembly hand the planner and the repository on, and call neither", () => {
+    const assembly = productionSources().find(({ name }) => name === DEVELOPMENT_ASSEMBLY);
+    expect(assembly).toBeDefined();
+    for (const banned of [".plan(", ".admitAutomaticMediaRecovery(", ".findAutomaticMediaRecoveryCandidates("]) {
+      expect(`${banned}: ${assembly?.text.includes(banned)}`).toBe(`${banned}: false`);
+    }
+  });
+
   it("invokes no recovery entry point anywhere in production", () => {
     for (const { name, text } of productionSources()) {
       // Phase 4C-3B-2H-3B-6C removed this phase's own runner: the durable

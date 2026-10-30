@@ -12,6 +12,7 @@ import {
   createUnitEntitlementRepository,
 } from "@app/database";
 import {
+  MEDIA_FAILURE_RESOLUTION_RETRY_DELAY_MS,
   PRESERVATION_RULES,
   SYSTEM_NEGATIVE_CONSTRAINTS,
   buildAssetStorageKey,
@@ -387,6 +388,7 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const plan = planned.outcomes[0]?.outcome;
     if (plan?.kind !== "PLANNED") throw new Error(`plan: ${plan?.kind}`);
     const version = plan.deliverableVersionId;
+    expect(version).toMatch(/^gdv_[\w-]{16}$/);
     const composed = await steps.composition.runOnce(10);
     expect(composed).toMatchObject({ claimed: 1, finalized: 1, deferred: 0, blocked: 0, failed: 0 });
     const published = await steps.deliverableValidation.runOnce(
@@ -407,10 +409,17 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const verdicts = await prisma.managedOutputMediaValidation.findMany({
       where: { sceneGeneration: { videoProject: { organizationId: ORG } } },
     });
-    const checked = await prisma.generationDeliverableValidation.findUniqueOrThrow({
-      where: { deliverableVersionId: version },
-    });
-    for (const at of [...verdicts.map((v) => v.validatedAt), checked.validatedAt, ended.reservation?.consumedAt]) {
+    const where = { deliverableVersionId: version };
+    const composition = await prisma.generationDeliverableComposition.findUniqueOrThrow({ where });
+    const receipt = await prisma.generationDeliverableCleanMaster.findUniqueOrThrow({ where });
+    const checked = await prisma.generationDeliverableValidation.findUniqueOrThrow({ where });
+    for (const at of [
+      ...verdicts.map((v) => v.validatedAt),
+      composition.outputVerifiedAt,
+      receipt.verifiedAt,
+      checked.validatedAt,
+      ended.reservation?.consumedAt,
+    ]) {
       expect(at?.getTime()).toBeGreaterThanOrEqual(before);
       expect(at?.getTime()).toBeLessThanOrEqual(Date.now());
     }
@@ -421,6 +430,12 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const master = await shared().getObject(managedCleanMasterKey(keys));
     expect([video === null, master === null]).toEqual([false, false]);
     expect(Buffer.from(video!).equals(Buffer.from(master!))).toBe(false);
+    // Each receipt describes the bytes stored, and the Clean Master is signed for
+    // no one. The disclosure's pixels are the media suite's to prove
+    // (`composition-runner.media.test.ts`).
+    const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    expect([composition.outputSha256, receipt.sha256]).toEqual([sha(video!), sha(master!)]);
+    await expect(shared().createSignedDownloadUrl(managedCleanMasterKey(keys), 60)).rejects.toThrow();
     const path = join(dir, "video.mp4");
     await writeFile(path, video!);
     const { stdout } = await promisify(execFile)("ffprobe", [
@@ -466,15 +481,41 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     // The retry fails too, so the job fails and the Unit comes back.
     const before = Date.now();
     const second = await round();
-    expect([second.claimed, second.recovered, second.settled]).toEqual([2, 0, 1]);
+    expect([second.claimed, second.recovered, second.settled, second.deferred]).toEqual([2, 0, 1, 0]);
+    // One scene's failure settles the job. The other's is owed nothing yet, so
+    // it is handed back for five minutes, and no third attempt is made.
+    const kinds = second.outcomes.map(({ result }) =>
+      result.kind === "SETTLEMENT" ? result.outcome.kind : result.kind,
+    );
+    expect(kinds.sort()).toEqual(["NOT_EXHAUSTED", "SETTLED"]);
+    const recovering = { videoProject: { organizationId: ORG }, attemptKind: "SYSTEM_RECOVERY" as const };
+    expect(await prisma.sceneGeneration.count({ where: recovering })).toBe(2);
     // The retry is the same request, so the test provider answers it with the clip it made first.
     expect(made).toEqual([PHOTO, PHOTO]);
     const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
     expect([ended.state, ended.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
     expect(ended.reservation?.releasedAt?.getTime()).toBeGreaterThanOrEqual(before);
     expect(ended.reservation?.releasedAt?.getTime()).toBeLessThanOrEqual(Date.now());
-    // L closes the other scene, so its failure is owed nothing on its next pass.
+    const open = {
+      status: "PENDING" as const,
+      validation: { sceneGeneration: { videoProject: { organizationId: ORG } } },
+    };
+    const handedBack = await prisma.managedOutputMediaFailureResolution.findMany({ where: open });
+    expect(handedBack).toHaveLength(1);
+    const due = handedBack[0]!.nextAttemptAt!.getTime() - MEDIA_FAILURE_RESOLUTION_RETRY_DELAY_MS;
+    expect(due).toBeGreaterThanOrEqual(before);
+    expect(due).toBeLessThanOrEqual(Date.now());
+
+    // L closes the other scene, so its failure is owed nothing: when it is next
+    // due, it is resolved without a retry.
     const closed = await steps.failedJobSceneClosure.runOnce(10);
     expect([closed.closed, closed.failed]).toEqual([1, 0]);
+    await prisma.managedOutputMediaFailureResolution.updateMany({
+      where: open,
+      data: { nextAttemptAt: new Date(Date.now() - 1_000) },
+    });
+    const third = await steps.mediaFailureResolution.runOnce(10);
+    expect(third.outcomes.map(({ result }) => result)).toEqual([{ kind: "RESOLVED", resolutionKind: "OBSOLETE" }]);
+    expect(await prisma.sceneGeneration.count({ where: recovering })).toBe(2);
   }, 60_000);
 });
