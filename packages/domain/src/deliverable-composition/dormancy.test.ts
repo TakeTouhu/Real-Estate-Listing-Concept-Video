@@ -23,6 +23,11 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0107): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const MODULE_DIR = __dirname;
 const PLAN_REPOSITORY = join(
   REPO_ROOT,
@@ -115,6 +120,7 @@ describe("the capability exists but nothing runs it", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("packages/database/src/deliverable-composition-repository.ts")) continue;
       if (name.endsWith("packages/database/src/index.ts")) continue;
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       expect(`${name}: ${text.includes("createDeliverableCompositionPlanRepository(")}`).toBe(
         `${name}: false`,
       );
@@ -134,6 +140,7 @@ describe("the capability exists but nothing runs it", () => {
   it("constructs the runner nowhere in production", () => {
     // The pipeline command (GS-9) is what will run it, on the test provider.
     for (const { name, text } of productionSources()) {
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       expect(`${name}: ${text.includes("CompositionPlanRunner(")}`).toBe(`${name}: false`);
     }
   });
@@ -188,6 +195,9 @@ describe("the capability exists but nothing runs it", () => {
           "CompositionPlanRunner",
           "findCompositionPlanCandidates",
         ]) {
+          // The assembly builds the runner and its repository, and calls neither.
+          const built = ["createDeliverableCompositionPlanRepository", "CompositionPlanRunner"];
+          if (name === DEVELOPMENT_ASSEMBLY && built.includes(banned)) continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
       }

@@ -1,25 +1,40 @@
 import { isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createAttemptFailureSettlementRepository,
   createAttemptSubmissionRepository,
+  createAutomaticMediaRecoveryRepository,
   createCompletionRepository,
+  createDeliverableCompositionExecutionRepository,
+  createDeliverableCompositionPlanRepository,
+  createDeliverableValidationRepository,
   createFailedJobSceneClosureRepository,
   createJobLaunchRepository,
   createLaunchedJobEndingRepository,
+  createMediaFailureResolutionRepository,
+  createMediaValidationLifecycleRepository,
   createPaidSubmissionAuthorizationRepository,
   createPrismaPropertyRepositories,
   createProviderPollingContextReader,
   createReconciliationRepository,
   createSubmissionOutcomeRepository,
   createUnlaunchableJobEndingRepository,
+  createValidatedSceneDeliveryRepository,
   type PrismaClient,
 } from "@app/database";
 import {
   AttemptFailureSettlementRunner,
   AttemptSubmissionRunner,
+  AutomaticMediaRecoveryPricingPlanner,
+  CompositionPlanRunner,
+  DeliverableCompositionRunner,
+  DeliverableValidationRunner,
   FailedJobSceneClosureRunner,
   JobLaunchPlanner,
   JobLaunchRunner,
+  MediaFailureResolutionRunner,
+  MediaValidationLifecycleRunner,
+  ValidatedSceneDeliveryRunner,
   createPaidSubmissionAuthorizationService,
   createProviderCompletionService,
   createProviderOutputRunner,
@@ -37,13 +52,21 @@ import {
 } from "@app/domain";
 import { AppError, randomId, type ServerEnv } from "@app/shared";
 import {
+  FfprobeCleanMasterInspector,
+  FfprobeMediaProbe,
   MAX_MANAGED_PROVIDER_OUTPUT_BYTES,
+  S3ManagedOutputMediaValidator,
   S3ManagedOutputStagingSink,
   SHARED_FOLDER_STORAGE_BUCKET,
   StreamingManagedOutputTransfer,
+  createCleanMasterStore,
   createDefaultProcessRunner,
+  createDeliverableCompositionSourceMaterializer,
+  createDeliverableOutputPublisher,
+  createFfmpegDeliverableComposer,
   createFfmpegFakeClipRenderer,
   createSharedFolderStorage,
+  nodeManagedOutputTempFileFactory,
 } from "@app/storage";
 import {
   FakeVideoProvider,
@@ -55,9 +78,9 @@ import {
 import { createSharedFolderPhotoReader } from "./photo-reader";
 
 /**
- * The development pipeline's assembly (GS-9b, ADR-0106): every generation step,
- * built on the test provider and the shared folder, for the pipeline command
- * to run when a person or a test starts it.
+ * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): every
+ * generation step, built on the test provider and the shared folder, for the
+ * pipeline command to run when a person or a test starts it.
  *
  * It runs nothing. It builds the runners and hands them back; no timer, loop
  * or startup hook calls them, and nothing in the worker's start-up imports
@@ -67,7 +90,8 @@ import { createSharedFolderPhotoReader } from "./photo-reader";
  * Every runner reads and writes the database it is given and the shared folder
  * the web app stores photos in (ADR-0085). The test provider reads each photo
  * through the URL preparation signed (ADR-0092), and its clips are copied into
- * the same folder.
+ * the same folder. FFmpeg and ffprobe on the machine validate the clips, compose
+ * the video and its Clean Master, and validate the video, as in the media suite.
  */
 
 /**
@@ -76,6 +100,15 @@ import { createSharedFolderPhotoReader } from "./photo-reader";
  * it can be fetched. Only the test provider's photo reader redeems one.
  */
 export const DEVELOPMENT_SIGNED_URL_BASE = "https://development.invalid/api/storage";
+
+/**
+ * The repository's own disclosure images, which the composer checks against
+ * their committed hashes before laying one over a video (ADR-0075). The command
+ * runs from the repository, so its copy is this one.
+ */
+export const DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY = fileURLToPath(
+  new URL("../../../../assets/disclosure", import.meta.url),
+);
 
 /**
  * Development values, never production's, which is an activation decision
@@ -109,7 +142,13 @@ export type DevelopmentPipelineStep =
   | "provider_output"
   | "reconciliation"
   | "attempt_failure_settlement"
-  | "failed_job_scene_closure";
+  | "failed_job_scene_closure"
+  | "media_validation"
+  | "media_failure_resolution"
+  | "scene_delivery"
+  | "composition_plan"
+  | "composition"
+  | "deliverable_validation";
 
 export interface DevelopmentPipeline {
   readonly launch: JobLaunchRunner;
@@ -118,6 +157,16 @@ export interface DevelopmentPipeline {
   readonly reconciliation: ReturnType<typeof createReconciliationMaintenance>;
   readonly attemptFailureSettlement: AttemptFailureSettlementRunner;
   readonly failedJobSceneClosure: FailedJobSceneClosureRunner;
+  readonly mediaValidation: MediaValidationLifecycleRunner;
+  readonly mediaFailureResolution: MediaFailureResolutionRunner;
+  /** Transaction F. */
+  readonly sceneDelivery: ValidatedSceneDeliveryRunner;
+  /** Transaction I. */
+  readonly compositionPlan: CompositionPlanRunner;
+  /** Transaction J. */
+  readonly composition: DeliverableCompositionRunner;
+  /** Takes its context per pass; publishes through Transaction G. */
+  readonly deliverableValidation: DeliverableValidationRunner;
 }
 
 /** A worker's context for one transition of `step`, with its own correlation. */
@@ -166,12 +215,14 @@ export function assembleDevelopmentPipeline(
     basePath: DEVELOPMENT_SIGNED_URL_BASE,
   });
   const kit = createFakeRouteKit(env);
+  // FFmpeg and ffprobe, launched with an argument list and never a shell.
+  const processes = createDefaultProcessRunner();
   // One studio serves the provider, the status source and the byte source.
   const studio = createFakeClipStudio(
     env,
     { root: options.providerFolder },
     {
-      renderer: deps.renderer ?? createFfmpegFakeClipRenderer({ runner: createDefaultProcessRunner() }),
+      renderer: deps.renderer ?? createFfmpegFakeClipRenderer({ runner: processes }),
       photos: createSharedFolderPhotoReader({
         base: DEVELOPMENT_SIGNED_URL_BASE,
         secret,
@@ -192,6 +243,13 @@ export function assembleDevelopmentPipeline(
   });
   const completion = createCompletionRepository(prisma);
   const reconciliation = createReconciliationRepository(prisma);
+  // One validator reads both a clip and a composed video back from the folder.
+  const validator = new S3ManagedOutputMediaValidator(
+    { bucket: SHARED_FOLDER_STORAGE_BUCKET },
+    { reader: storage.objectClient, probe: new FfprobeMediaProbe({}, { runner: processes }) },
+  );
+  const io = { client: storage.objectClient, tempFiles: nodeManagedOutputTempFileFactory };
+  const bucket = { bucket: SHARED_FOLDER_STORAGE_BUCKET };
 
   return {
     launch: new JobLaunchRunner({
@@ -258,5 +316,62 @@ export function assembleDevelopmentPipeline(
       clock: at,
       context: () => developmentPipelineContext("failed_job_scene_closure"),
     }),
+    mediaValidation: new MediaValidationLifecycleRunner(
+      {},
+      {
+        repository: createMediaValidationLifecycleRepository(prisma),
+        validator,
+        clock: now,
+        leaseTokens: { next: () => randomId("mvlease") },
+      },
+    ),
+    mediaFailureResolution: new MediaFailureResolutionRunner({
+      work: createMediaFailureResolutionRepository(prisma),
+      recovery: createAutomaticMediaRecoveryRepository(prisma),
+      planner: new AutomaticMediaRecoveryPricingPlanner({
+        models: kit.models,
+        pricing: kit.pricing,
+        clock: now,
+        fx,
+      }),
+      ids: {
+        nextAttemptId: () => randomId("gatt"),
+        nextPricingSnapshotId: () => randomId("gpsn"),
+        nextLeaseToken: () => randomId("mrlease"),
+      },
+      clock: now,
+      context: () => developmentPipelineContext("media_failure_resolution"),
+    }),
+    sceneDelivery: new ValidatedSceneDeliveryRunner({
+      repository: createValidatedSceneDeliveryRepository(prisma),
+      context: () => developmentPipelineContext("scene_delivery"),
+    }),
+    compositionPlan: new CompositionPlanRunner({
+      repository: createDeliverableCompositionPlanRepository(prisma),
+      ids: { nextDeliverableVersionId: () => randomId("gdv") },
+      context: () => developmentPipelineContext("composition_plan"),
+    }),
+    composition: new DeliverableCompositionRunner({
+      repository: createDeliverableCompositionExecutionRepository(prisma),
+      materializer: createDeliverableCompositionSourceMaterializer(io, bucket),
+      composer: createFfmpegDeliverableComposer(
+        { runner: processes },
+        { disclosureLayerDirectory: DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY },
+      ),
+      publisher: createDeliverableOutputPublisher(io, bucket),
+      cleanMasterStore: createCleanMasterStore(io, bucket),
+      cleanMasterInspector: new FfprobeCleanMasterInspector({}, { runner: processes }),
+      clock: now,
+      context: () => developmentPipelineContext("composition"),
+    }),
+    deliverableValidation: new DeliverableValidationRunner(
+      {},
+      {
+        repository: createDeliverableValidationRepository(prisma),
+        validator,
+        clock: now,
+        leaseTokens: { next: () => randomId("dvlease") },
+      },
+    ),
   };
 }

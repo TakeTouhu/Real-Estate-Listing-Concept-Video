@@ -24,8 +24,9 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const LIFECYCLE_DIR = __dirname;
 /**
- * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
- * for the test provider, is refused in production, and runs nothing itself.
+ * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): it builds the
+ * steps for the test provider, is refused in production, and runs nothing
+ * itself. It builds this runner and the validator it reads clips with.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 
@@ -82,6 +83,7 @@ describe("the lifecycle exists but nothing runs it", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith(OWN) || name.endsWith(INDEX)) continue;
       if (name.endsWith("packages/domain/src/index.ts")) continue;
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       for (const banned of [
         "new MediaValidationLifecycleRunner",
         "MediaValidationLifecycleRunner(",
@@ -116,8 +118,8 @@ describe("the lifecycle exists but nothing runs it", () => {
         }
         if (name.endsWith("managed-output/index.ts")) continue;
         if (name.endsWith("packages/storage/src/index.ts")) continue;
-        // For the test provider's clip maker.
-        if (name === DEVELOPMENT_ASSEMBLY && banned === "createDefaultProcessRunner(") continue;
+        // For the test provider's clip maker and the pipeline's validation.
+        if (name === DEVELOPMENT_ASSEMBLY) continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

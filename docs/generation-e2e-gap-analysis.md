@@ -299,9 +299,10 @@ GS-9 is split into four milestones, each its own pull request:
   provider only and fills the pieces above. Split in two: **GS-9b-1**
   (ADR-0106, no migration) the assembly and the steps up to each clip copied
   into the shared folder, with K, L and the maintenance at the provider
-  boundary; **GS-9b-2** media validation, its failure resolution, F, I, J and
-  G.
+  boundary; **GS-9b-2** (ADR-0107, no migration) media validation, its
+  failure resolution, F, I, J and G. GS-9b-2 also gave the database CI job
+  FFmpeg, so its suite runs every step end to end.
 - **GS-9c**: the command: the passes in order, each window's cursor carried,
   when to stop, and what it reports.
 - **GS-9d**: an end-to-end test of the command against a database and FFmpeg
-  in CI.
+  in CI. The CI job it needs is GS-9b-2's.

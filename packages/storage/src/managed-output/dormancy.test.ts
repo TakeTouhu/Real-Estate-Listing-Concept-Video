@@ -271,7 +271,10 @@ describe("no production composition", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
-      if (!name.endsWith(VALIDATOR)) {
+      // The assembly builds these to validate and compose on the machine's
+      // tools; it still launches nothing itself (below).
+      const assembly = name === DEVELOPMENT_ASSEMBLY;
+      if (!name.endsWith(VALIDATOR) && !assembly) {
         for (const banned of ["new S3ManagedOutputMediaValidator", "S3ManagedOutputMediaValidator("]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
@@ -284,8 +287,7 @@ describe("no production composition", () => {
           "FfprobeCleanMasterInspector(",
           "createDefaultProcessRunner(",
         ]) {
-          // For the test provider's clip maker.
-          if (name === DEVELOPMENT_ASSEMBLY && banned === "createDefaultProcessRunner(") continue;
+          if (assembly) continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
         // Only the dormant inspector may reference a child process at all.

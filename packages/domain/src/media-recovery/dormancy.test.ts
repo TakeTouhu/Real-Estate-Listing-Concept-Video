@@ -27,8 +27,9 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const RECOVERY_DIR = __dirname;
 /**
- * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
- * for the test provider, is refused in production, and runs nothing itself.
+ * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): it builds
+ * the steps for the test provider, is refused in production, and runs nothing
+ * itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const RECOVERY_REPOSITORY = join(
@@ -114,6 +115,8 @@ describe("the capability exists but nothing runs it", () => {
       if (name.endsWith("packages/domain/src/index.ts")) continue;
       if (name.endsWith("packages/database/src/media-recovery-repository.ts")) continue;
       if (name.endsWith("packages/database/src/index.ts")) continue;
+      // The assembly builds both for the failure resolution it builds.
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       for (const banned of [
         "new AutomaticMediaRecoveryPricingPlanner",
         "createAutomaticMediaRecoveryRepository(",
@@ -177,6 +180,8 @@ describe("the capability exists but nothing runs it", () => {
           "AutomaticMediaRecoveryPricingPlanner",
           "createAutomaticMediaRecoveryRepository",
         ]) {
+          const built = ["AutomaticMediaRecoveryPricingPlanner", "createAutomaticMediaRecoveryRepository"];
+          if (name === DEVELOPMENT_ASSEMBLY && built.includes(banned)) continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
       }
