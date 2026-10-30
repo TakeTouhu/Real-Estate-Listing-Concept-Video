@@ -27,7 +27,7 @@ function sourceFiles(dir: string): { name: string; text: string }[] {
 }
 
 describe("the development pipeline's assembly", () => {
-  it("runs no step and starts nothing by itself", () => {
+  it("runs no step, starts nothing by itself and reaches no network or real provider", () => {
     const files = sourceFiles(FOLDER);
     expect(files.map(({ name }) => name).sort()).toEqual([
       "apps/worker/src/development-pipeline/assembly.ts",
@@ -47,6 +47,18 @@ describe("the development pipeline's assembly", () => {
         "cron",
         "schedule(",
         "fetch(",
+        "node:http",
+        "node:https",
+        "node:net",
+        "undici",
+        "axios",
+        "@aws-sdk",
+        "S3Client",
+        "@app/ai-providers",
+        "WaveSpeed",
+        "createVideoProvider",
+        "FalH3MaxSubmissionProvider",
+        "FalQueueCompletionStatusSource",
       ]) {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }

@@ -191,7 +191,7 @@ describe("DS-4 shape", () => {
     }
   });
 
-  it("serves stored bytes from one route, for the key a verified token names", () => {
+  it("serves stored bytes from one route and one photo reader, for the key a verified token names", () => {
     // And hands them to the test provider from one reader, the same way.
     expect(matching(["apps"], /\.getObject\(/)).toEqual([DOWNLOAD_ROUTE, PHOTO_READER]);
     const route = read(DOWNLOAD_ROUTE);

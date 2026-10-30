@@ -52,7 +52,10 @@ const CLIP = Buffer.from("a clip the stand-in made");
 const prisma = new PrismaClient();
 const storyboards = createPrismaStoryboardRepositories(prisma);
 
-/** The billing cycle the system clock is in, which the gate reads revenue from. */
+/**
+ * The billing cycle the system clock is in, which the gate reads revenue from.
+ * The job starts at this instant too, so a run across a month's end stays in it.
+ */
 const NOW = new Date();
 const CYCLE_START = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), 1));
 const CYCLE_END = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth() + 1, 1));
@@ -185,7 +188,7 @@ async function start(): Promise<string> {
     requestedByUserId: USER,
     qualityTier: "NORMAL",
     disclosureMode: "THROUGHOUT",
-    startedAt: new Date(),
+    startedAt: NOW,
     storyboard: {
       compositionFingerprint: FINGERPRINT,
       scenes: [1, 2].map((position) => ({
@@ -268,7 +271,10 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     expect([launched.launched, launched.next]).toEqual([1, null]);
 
     const sent = await steps.submission.runOnce(10);
-    expect(sent.outcomes.map((o) => o.outcome.kind)).toEqual(["SENT", "SENT"]);
+    expect(sent.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+      { kind: "SENT", observed: "ACCEPTED", recorded: "APPLIED", safetyGuardWarning: false },
+    ]);
     // The provider read each scene's photo through the URL preparation signed.
     expect(made).toEqual([PHOTO, PHOTO]);
 
@@ -284,7 +290,8 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
       expect(Buffer.from((await shared().getObject(key)) ?? [])).toEqual(CLIP);
     }
 
-    // Nothing was left at the provider boundary for maintenance to find.
+    // Nothing was left at the provider boundary for maintenance to find. Its
+    // stale and exhaustion paths are `reconciliation.db.test.ts`'s.
     const maintained = await steps.reconciliation.runOnce({
       limit: 10,
       context: developmentPipelineContext("reconciliation"),
@@ -296,14 +303,18 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     render = "FAIL";
     const job = await start();
     const steps = pipeline();
-    await steps.launch.runOnce(10);
+    expect((await steps.launch.runOnce(10)).launched).toBe(1);
 
     // The first scene's clip is not made, so the provider refuses it; the job
     // is then ending, and its second scene is not sent.
     const sent = await steps.submission.runOnce(10);
-    expect(sent.outcomes.map((o) => o.outcome.kind)).toEqual(["SENT", "NOT_SENT"]);
+    expect(sent.outcomes.map((o) => o.outcome)).toEqual([
+      { kind: "SENT", observed: "DEFINITIVELY_REJECTED", recorded: "APPLIED", safetyGuardWarning: false },
+      { kind: "NOT_SENT", reason: "JOB_ENDING" },
+    ]);
     expect(made).toEqual([PHOTO]);
 
+    const before = Date.now();
     const settled = await steps.attemptFailureSettlement.runOnce(10);
     expect([settled.settled, settled.unitsReleased, settled.failed]).toEqual([1, 1, 0]);
     const closed = await steps.failedJobSceneClosure.runOnce(10);
@@ -311,6 +322,15 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
 
     const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
     expect([ended.state, ended.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    // Both on the system clock: the Unit is released, and the second scene's
+    // request fails, at the instant they ran.
+    const closedRequest = await prisma.sceneGenerationRequest.findUniqueOrThrow({
+      where: { id: "greq_itest_devpipe_2" },
+    });
+    for (const at of [ended.reservation?.releasedAt, closedRequest.failedAt]) {
+      expect(at?.getTime()).toBeGreaterThanOrEqual(before);
+      expect(at?.getTime()).toBeLessThanOrEqual(Date.now());
+    }
     expect((await attempts(job)).map((attempt) => attempt.orchestrationState)).toEqual([
       "FAILED_TERMINAL",
       "CANCELLED_PRE_SUBMISSION",

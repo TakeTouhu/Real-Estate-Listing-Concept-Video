@@ -7,10 +7,12 @@ import type { FakeSourcePhotoReader } from "@app/video-providers";
  * (GS-9b, ADR-0106): through the signed URL preparation gave it, redeemed the
  * way the download route redeems one, from the shared folder.
  *
- * A URL is read only when it is one the pipeline signed: under the pipeline's
- * own base, for download, with a token this secret signed and that has not
- * expired. Anything else names nothing readable, and the test provider then
- * refuses the request, as a real provider refuses a URL it cannot fetch.
+ * A URL is read only under the pipeline's own base, for download, with a token
+ * signed with the shared folder's secret that has not expired. The web app
+ * signs with the same secret, so its download tokens read here too, as the
+ * pipeline's would at its route. Anything else names nothing readable, and the
+ * test provider then refuses the request, as a real provider refuses a URL it
+ * cannot fetch.
  *
  * Nothing is fetched. The base's host is under `.invalid`, which never
  * resolves, so the URL cannot reach a network either.

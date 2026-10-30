@@ -64,13 +64,17 @@ same `SHARED_STORAGE_DIR` and `STORAGE_SIGNING_SECRET` (ADR-0085), and signs
 under `https://development.invalid/api/storage`. Preparation refuses a source
 URL that is not `https` with a host, and `.invalid` is reserved never to
 resolve (RFC 6761), so no URL the pipeline signs can be fetched by anyone. The
-token is the same HMAC token the web app's download route redeems.
+token is the same HMAC token, under the same secret, that the web app's
+download route redeems, so the route would serve a pipeline token too, for as
+long as it lasts. Nothing stores the URL.
 
 ## Decision 4 — The test provider reads a photo as the download route serves it
 
 `createSharedFolderPhotoReader` reads a URL only when its origin and path are
-the base's download path and its token was signed with this secret, for
-download, has not expired and names a key that may be signed (ADR-0074). The
+the base's download path and its token was signed with the shared folder's
+secret, for download, has not expired and names a key that may be signed
+(ADR-0074). The web app signs with the same secret, so a download token the web
+app made is read too; the base is what it must be under. The
 bytes are the shared folder's at that key. Anything else reads as nothing; the
 studio then makes no clip, and the test provider refuses the request, as a real
 provider refuses a URL it cannot fetch (ADR-0092).
@@ -88,9 +92,9 @@ names. The clip maker is FFmpeg's unless one is given; the database suite gives
 a stand-in, since its CI job has no FFmpeg.
 
 The launch planner prices against the test route's fixed development exchange
-rate, `{ current: () => kit.fx }`, typed as an `FxRateSource`. It is the one
-form of exchange-rate source the media-recovery dormancy test admits, for this
-file only. The planner and the paid-submission gate use the route kit's
+rate, `{ current: () => Promise.resolve(kit.fx) }`, typed as an
+`FxRateSource`. The media-recovery dormancy test admits that one line, once, in
+this file only. The planner and the paid-submission gate use the route kit's
 catalog. The gate's revenue is the billing cycle's own (ADR-0091), so an
 organization the pipeline runs for needs a Standard or Premium period, as
 `provision-subscription` opens.
@@ -137,15 +141,17 @@ factories it calls and for nothing that would run a step:
 | `provider-output/dormancy`, `fal/queue-status-dormancy` | `createProviderOutputRunner`; no batch |
 | `managed-output/dormancy` | `createProviderOutputRunner`, the streaming copy, the staging sink over the shared folder's client, and the process runner; no batch and no `S3Client` |
 | `media-validation-lifecycle/dormancy` | the process runner, for the clip maker |
-| `media-recovery/dormancy` | `: FxRateSource =`, the test route's rate |
+| `media-recovery/dormancy` | `: FxRateSource =` once, in the exact line of the test route's rate |
 | `fake/route-kit` | the route kit, the studio and the clip maker |
 | `shared-folder-storage` | opening the shared folder |
 | `clean-master/clean-master-shape` | the photo reader, as above |
 
 A new test in the folder pins that it holds the assembly and the photo reader
-only, that neither runs a step, starts a timer, reads an argument or fetches,
-and that nothing in the worker's other files, the web app or the operator
-commands names the folder.
+only; that neither runs a step, starts a timer or reads an argument; that
+neither names `fetch(`, an HTTP or socket module, an HTTP client, the AWS SDK,
+an `S3Client`, the AI providers, the WaveSpeed or fal adapters or the
+provider factory; and that nothing in the worker's other files, the web app or
+the operator commands names the folder.
 
 ## Considered and not done
 
@@ -163,12 +169,22 @@ commands names the folder.
   what it reports, and how a person starts it (GS-9c). Among them, where the
   test provider's folder is when the person names none.
 - The steps after a clip is copied (GS-9b-2).
+- Whether the command refuses a database that holds another provider's
+  attempts. The steps read every organization's rows in the database they are
+  given; only the sender passes over another provider's attempts. A
+  development database holds none, since nothing can send to another provider
+  while paid activation is blocked. If one did, the output pass would poll
+  them through the studio, which refuses them and writes nothing, and the
+  maintenance would apply this record's development values to them (GS-9c).
 
 ## Consequences
 
 - `apps/worker` depends on `@app/database`, `@app/domain` and `@app/storage`,
   and gains `src/development-pipeline/`: `assembleDevelopmentPipeline`,
   `developmentPipelineContext`, `DEVELOPMENT_SIGNED_URL_BASE`,
-  `DEVELOPMENT_RECONCILIATION` and `createSharedFolderPhotoReader`.
+  `DEVELOPMENT_RECONCILIATION` and `createSharedFolderPhotoReader`, with the
+  types `DevelopmentPipeline`, `DevelopmentPipelineEnv`,
+  `DevelopmentPipelineOptions`, `DevelopmentPipelineDeps`,
+  `DevelopmentPipelineStep` and `SharedFolderPhotoReaderOptions`.
 - The static tests of Decision 8.
 - No migration, no route, no page, no environment variable.

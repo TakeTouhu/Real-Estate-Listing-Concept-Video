@@ -228,8 +228,13 @@ describe("the paid provider boundary stays closed", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("media-recovery/ports.ts")) continue;
       for (const banned of ["implements FxRateSource", ": FxRateSource =", "FxRateSource {"]) {
-        // The test route's fixed rate, which the assembly hands the launch planner.
-        if (name === DEVELOPMENT_ASSEMBLY && banned === ": FxRateSource =") continue;
+        // The test route's fixed rate, which the assembly hands the launch
+        // planner: this one line, once, and no other source.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === ": FxRateSource =") {
+          expect(text.split(banned)).toHaveLength(2);
+          expect(text).toContain("const fx: FxRateSource = { current: () => Promise.resolve(kit.fx) };");
+          continue;
+        }
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

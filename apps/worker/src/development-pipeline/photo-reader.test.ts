@@ -46,12 +46,14 @@ describe("the development pipeline's photo reader", () => {
       KEY,
       300,
     );
+    // Under the download path, so only the token's purpose can refuse it.
     const upload = await storage.objectStorage.createSignedUploadUrl(KEY, 300);
+    const uploadAsDownload = `${BASE}/download${upload.url.slice(upload.url.indexOf("?"))}`;
     const expired = await folder({ now: () => new Date(Date.now() - 3_600_000) }).objectStorage.createSignedDownloadUrl(
       KEY,
       300,
     );
-    for (const url of [other.url, upload.url, expired.url]) {
+    for (const url of [other.url, uploadAsDownload, expired.url]) {
       expect(await reader().read(url)).toBeNull();
     }
   });
