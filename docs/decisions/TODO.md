@@ -1253,6 +1253,17 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       would close this; it needs a schema change. Found by GS-9c's review; to
       propose before anyone but the team runs the command.
 
+## Open in GS-10 — starting a project's video again
+
+- [ ] **Decide whether a project with a video in progress or delivered may be
+      started again.** Today each start with a new key reserves its Units, so
+      pressing start twice reserves twice, and the price of making a delivered
+      video again is not set (ADR-0052 says only that a regeneration uses
+      more Units). Put to the product owner on 2026-10-30 with three options:
+      only after a failure (recommended), also after delivery as a new video
+      at its full Units, or at any time. GS-10b enforces the answer in the
+      start commit and reports it in the start offer (ADR-0109).
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

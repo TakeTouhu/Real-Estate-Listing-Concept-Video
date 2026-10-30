@@ -308,3 +308,35 @@ GS-9 is split into four milestones, each its own pull request:
 - **GS-9d**: an end-to-end test of the command against a database and FFmpeg
   in CI. Folded into GS-9c: the CI job is GS-9b-2's, and GS-9c's database
   suite runs the command's loop until a published video.
+
+## GS-10 — the start screen and its route
+
+On `1220ca5` the start service (ADR-0088) and its commit (ADR-0087) exist, and
+the pipeline command takes a started job to a published video (ADR-0108).
+Nothing a customer can reach starts one. A survey on that commit found:
+
+- **The start needs a confirmation the screen has nothing to build from.** It
+  takes the quality and the storyboard's scene ids that the customer saw, and
+  no read says what a start would be. The start itself cannot be asked: it
+  opens the Unit period before its commit.
+- **The same project can be started again and again.** Each start with a new
+  key reserves its Units, so a customer who opens the screen twice and presses
+  twice reserves twice. Whether a project with a video in progress or
+  delivered may be started again is a product decision; it was put to the
+  product owner on 2026-10-30.
+- **Nothing builds the service outside tests**, and the test provider's route
+  kit, which offers HQ, is refused outside development by its own guard.
+- **The web app has no start route or page.** The project page shows the
+  storyboard and its compose panel, and nothing after them. Its copy is inline
+  English, as elsewhere.
+
+GS-10 is split into four milestones, each its own pull request:
+
+- **GS-10a** (ADR-0109, no migration): the start offer, a read that writes
+  nothing and answers what the start would, with the quality, scenes, length,
+  Units and their forecast funding.
+- **GS-10b**: the product owner's answer on starting again, enforced in the
+  start commit and reported by the offer.
+- **GS-10c**: the web composition and the start route, built only in
+  development with the test provider and refused otherwise.
+- **GS-10d**: the start page and the project page's link to it.

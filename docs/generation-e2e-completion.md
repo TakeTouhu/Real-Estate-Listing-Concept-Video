@@ -5606,3 +5606,86 @@ production scheduler and live Stripe charges remain BLOCKED.
 GS-9c waits for the product owner's yes before merge. Then the screens: the
 start screen and route (GS-10), progress (GS-11), preview and download
 (GS-12), and the browser test (GS-13).
+
+## GS-10a — what the start screen offers
+
+Base: `1220ca5` (PR #132 merge commit on `main`).
+ADR: `docs/decisions/0109-what-the-start-screen-offers.md`
+
+The first milestone of row GS-10 of the approved plan
+(`/mnt/project-files/cto/generation-e2e-proposal.md`: the start screen and its
+route). **No migration; no route, no page, no environment variable.** GS-10 is
+split into four milestones (`docs/generation-e2e-gap-analysis.md`).
+
+The commits and the exact head SHA are reported with the pull request.
+
+### What GS-10a does
+
+- **The start service answers what a start would be, without starting.**
+  `offer` returns `READY` with the quality, the scenes in order, the length,
+  the Units required and how many would come from Base Units and from add-on
+  Units; or why a start would not happen: not composed, stale, compose again,
+  quality not offered, too long, no plan, or Units short with how many could
+  be covered.
+- **It judges in the start's order and answers as the start would**: the same
+  permissions, the same reach, the same checks one after another; where the
+  start throws `VALIDATION_FAILED` it names the reason instead. Its `READY`
+  quality and scene ids are the confirmation the start accepts.
+- **It writes nothing.** It reads the Unit period the start would reserve
+  from without opening it: a period nobody has opened holds the plan's whole
+  allowance and no block, as opening it would freeze it. The funding is
+  planned by the commit's own function, and is a forecast.
+
+```mermaid
+sequenceDiagram
+    participant S as Start screen (GS-10d)
+    participant O as GenerationStartService.offer
+    participant R as Repositories
+    S->>O: offer(member, organization, project)
+    O->>R: membership: video.generate and unit.consume
+    O->>R: storyboard, Property reach
+    O->>O: composed, fresh, quality offered, scenes usable, length
+    O->>R: subscription, the period at now and its balance (read only)
+    O->>O: planUnitAllocation: Base first, then add-on of the same quality
+    O-->>S: READY (quality, scenes, length, Units, funding) or why not
+```
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start service's row names the offer |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10a.md`: no HTTP change; the offer and its kinds |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` (GS-10
+and its split) and `docs/decisions/TODO.md` (whether a project may be started
+again, open with the product owner).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the offer is a read on a service nothing outside tests constructs.
+Paid Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The funding is a forecast.** Another start, a purchase or a release
+  between the offer and the start can change the split or make the Units
+  short; the start's own answer is what the screen must show then.
+- **A project can still be started again and again.** Whether that is
+  allowed once a video is in progress or delivered is open with the product
+  owner; GS-10b enforces the answer.
+- **Nothing shows the offer yet.** GS-10c builds the service and the route,
+  in development with the test provider only, and GS-10d the page.
+
+### Remaining work
+
+GS-10a waits for the product owner's yes before merge. Then GS-10b, GS-10c and
+GS-10d, then progress (GS-11), preview and download (GS-12) and the browser
+test (GS-13).
