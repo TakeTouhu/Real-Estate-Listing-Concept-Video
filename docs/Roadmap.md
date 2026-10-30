@@ -430,6 +430,15 @@ a started job through the launch, the send and the copy of each clip, and
 through the release of its Unit when a clip cannot be made. GS-9b-2 builds the
 steps after the copy.
 
+**GS-9b-2 — the steps after the copy** (ADR-0107, no migration): the assembly
+also builds media validation and its failure resolution, scene delivery (F),
+the composition plan (I), the composition (J) and the final validation that
+publishes (G), on the machine's FFmpeg and ffprobe over the shared folder, and
+still runs none of them. The database suite now makes a real video through
+every step: a started job ends `DELIVERABLE_READY` with its Unit consumed, and
+a job whose clips are unusable is retried once and then releases its Unit. The
+database CI job installs FFmpeg for it. GS-9c is the command that runs them.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

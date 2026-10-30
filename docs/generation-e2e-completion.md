@@ -5171,3 +5171,212 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-9b-1 waits for the product owner's yes before merge. Then GS-9b-2, GS-9c
 and GS-9d, and the screens (GS-10 to GS-12).
+
+## GS-9b-2 — the development pipeline's steps after the copy
+
+Base: `82cb2ac` (PR #130 merge commit on `main`).
+ADR: `docs/decisions/0107-the-pipelines-steps-after-the-copy.md`
+
+The third milestone of row GS-9 of the approved plan
+(`/mnt/project-files/cto/generation-e2e-proposal.md`: the pipeline command,
+run only when a person or a test starts it, only with the test provider, never
+in production). **No migration; no route, no page, no environment variable.**
+Nothing calls the assembly until the command (GS-9c).
+
+GS-9b-1 built the steps from a waiting job to each clip copied into the shared
+folder. This milestone builds the rest, up to a published video.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `f0b7c53` | the six steps in the assembly, the exported temporary file factory, the database suite's two new tests, the database CI job's FFmpeg, the static tests' admissions, ADR-0107 and the documentation |
+| this commit | the review's answers, the checks mutation testing asked for, and this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-9b-2 does
+
+- **Six more steps, built and not run.** `assembleDevelopmentPipeline` also
+  returns media validation, the resolution of an unusable clip, scene delivery
+  (F), the composition plan (I), the composition (J) and the final validation
+  (G). Each gets a worker's context with its step's label; the final
+  validation takes its context per pass.
+- **The machine's FFmpeg and ffprobe, without a shell.** One process runner
+  serves the clip maker, the probes and the composer.
+- **One validator for clips and videos**, over the shared folder, at its
+  512 MiB ceiling.
+- **The repository's own disclosure images.** The composer reads
+  `assets/disclosure/` beside the assembly and refuses an image whose hash is
+  not the committed one.
+- **The Clean Master at its internal key** in the same folder, which no signed
+  URL reaches.
+- **An unusable clip is retried once** on the test route's prices; the second
+  failure fails the job and releases the Unit.
+- **The database CI job installs FFmpeg** and runs on Ubuntu 24.04, because
+  the pipeline's database suite now makes a real video.
+
+```mermaid
+sequenceDiagram
+    participant C as Command (GS-9c)
+    participant V as Media validation
+    participant R as Failure resolution
+    participant F as Scene delivery (F)
+    participant I as Composition plan (I)
+    participant J as Composition (J)
+    participant G as Final validation (G)
+    participant S as Shared folder
+    C->>V: a pass
+    V->>S: read each copied clip, ffprobe it
+    V-->>C: VALID, or INVALID_MEDIA
+    C->>R: a pass (an unusable clip)
+    R-->>C: one retry admitted, or the job failed and the Unit released
+    C->>F: a pass
+    F-->>C: each valid scene delivered
+    C->>I: a pass
+    I-->>C: the video's version planned
+    C->>J: a pass
+    J->>S: Clean Master at its internal key, video with its disclosure
+    C->>G: a pass with its context
+    G->>S: read the video back, ffprobe it
+    G-->>C: published, the Unit consumed
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI, FFmpeg 6.1.1 as on
+Ubuntu 24.04).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on `f0b7c53` and on this commit, each exit status read |
+| `pnpm test` | 6,627 tests in 246 files passed on `f0b7c53`, and 6,628 on this commit, exit 0 |
+| `pnpm test:db` | 1,851 tests in 70 files passed on `f0b7c53`, exit 0; the pipeline suite's 4 pass on this commit, exit 0 |
+| `pnpm test:media` | 172 tests in 5 files passed on `f0b7c53`, exit 0 |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/development-pipeline.db.test.ts` (2 more, 4 in all):
+  - **A video is made.** A job started by the real start commit becomes a
+    video: each clip is made with FFmpeg from a real JPEG, copied and
+    validated; F delivers both scenes; I plans the video; J composes it; G
+    publishes it. The job is `DELIVERABLE_READY` and the Unit `CONSUMED`;
+    every verdict, both receipts and the Unit's use are on the system clock;
+    each receipt names the bytes stored; the Clean Master cannot be signed;
+    and the video is a 1280×720, 10-second file that differs from its Clean
+    Master.
+  - **An unusable clip is retried once.** When each clip is not a video, each
+    scene is retried once (ordinal 2, with a pricing snapshot), the test
+    provider answers the same request with the same clip, and the second
+    failure fails the job and releases the Unit on the system clock. The other
+    scene's work is handed back for five minutes; once L has closed that scene
+    and the work is due, it is resolved `OBSOLETE`, and no third attempt is
+    ever made.
+- `apps/worker/src/development-pipeline/assembly.test.ts` (2 more checks, 1
+  more test): the six steps built; the disclosure directory is the
+  repository's and holds every image the catalogue names, as committed; the
+  final validation's context.
+- `packages/domain/src/media-recovery/dormancy.test.ts` (1 more): the assembly
+  calls neither the planner nor the recovery repository's entry points.
+
+### Mutation testing
+
+The same harness as GS-9b-1. 33 of 35 killed after two checks were added; the
+other two are equivalent here. Then one more, for a ban the review asked for.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| N01, N18 | the probe says every clip, or every video, is unusable | killed |
+| N02, N03, N07, N23, N24 | the validator, the composition's folder, the Clean Master, the reader or the publisher on another bucket | killed |
+| N04 | temporary files refused | killed |
+| N05, N06 | another disclosure directory; the composer without it | killed |
+| N08, N20 | the inspector or the composer's process runner failing | killed |
+| N10, N21 | the recovery planner without a rate, or on the epoch | killed |
+| N11, N12 | one id for every recovery attempt, or every pricing snapshot | killed |
+| N14, N16, N17 | the resolution, the final validation or media validation on the epoch | killed |
+| N15 | the composition on the epoch | survived, then killed by the added check of the composition's and the Clean Master's receipts |
+| N19 | the temporary file factory not exported | killed |
+| N22 | one id for every version | survived, then killed by the added check that the version's id is a random id; a fixed id of the same shape needs two jobs in one pass, which the command's run covers (GS-9d) |
+| N09, N13 | one lease token for every media validation, or every resolution | survived: equivalent here. Each claim moves the row's version, and a late finalize must name the version it claimed, so a stale worker is refused whatever its token; the token is a second fence only concurrent workers could reach |
+| T01 to T05, T11 | a step run, Transaction I or H called, a recovery admitted, a process launched, I's candidates read, all in the assembly | killed by the static tests |
+| T06 to T10 | the worker's start-up building G, the validator, F, the resolution or the composer | killed by the static tests |
+| T12 | the assembly calling a planner's `.plan(` | killed by the test added after the review |
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: each step is built as its own
+database or media suite builds it, the six share one bucket, the clocks and
+lease tokens are separate, each static admission is the assembly's exact path
+and keeps every ban on running a step, launching a process or calling a
+transaction, nothing reaches a network, a paid provider, a credential or a
+scheduler, and the Clean Master stays at its internal key. Answered in this
+commit:
+
+- **Should fix: four architecture rows still said nothing builds F, I, J and
+  its pieces, or G.** Each now says only the development pipeline's assembly
+  does.
+- **Should fix: the setup guide did not say `pnpm test:db` needs FFmpeg.**
+  `docs/local-setup.md` now does.
+- **Should fix: the recovery test's second round was loosely checked.** It now
+  checks one settlement and one handed back, no third attempt, the handed-back
+  work due five minutes after the pass, and, once L has closed the other
+  scene and the work is due, its resolution `OBSOLETE` with still no third
+  attempt: the fact ADR-0107 hands to the command.
+- **Minor: the test did not prove the disclosure was drawn.** It now checks
+  that each receipt names the bytes stored and that the Clean Master cannot be
+  signed; the disclosure's pixels are the media suite's to prove
+  (`composition-runner.media.test.ts`), and the ADR and the test say so.
+- **Minor: ADR-0107 said every step takes a context per transition.** Media
+  validation records no transition and takes none; the ADR says so.
+- **Minor: the admission table claimed a ban that did not exist.** A test now
+  bans the assembly calling the planner's `.plan(` or the recovery
+  repository's admission or discovery (T12).
+- **Nit: a test docblock cited ADR-0106 only.** It cites ADR-0107 too.
+- **Nit: the disclosure check counted six images.** It now checks every image
+  the catalogue names, by name and SHA-256.
+- **Question: what could a run against the wrong database do?** The steps act
+  on every organization's rows in the database they are given, and today only
+  the refusal in production guards them. Nothing calls the assembly yet; what
+  else the command checks before its first pass is now recorded in ADR-0107's
+  *Not decided here* for GS-9c.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the development pipeline row and the CI database job's FFmpeg |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-9b-2.md`: no HTTP change; the assembly's new members and the storage export |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-9b-2*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/generation-e2e-gap-analysis.md`
+(GS-9d's CI half moves here). `docs/decisions/TODO.md` is unchanged: nothing
+new is left open by this milestone; the command's open questions are recorded
+in ADR-0107's *Not decided here* for GS-9c.
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing calls the assembly, and it is refused in production. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs the steps yet.** The command (GS-9c) will, and decides their
+  order and when it stops.
+- **`pnpm test:db` now needs FFmpeg and ffprobe** on the path locally.
+- **The development reconciliation values are not production's**, which are
+  still open (`docs/decisions/TODO.md`).
+
+### Remaining work
+
+GS-9b-2 waits for the product owner's yes before merge. Then GS-9c (the
+command), GS-9d (the command's own run), and the screens (GS-10 to GS-12).

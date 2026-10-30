@@ -21,8 +21,10 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const CORE_DIR = __dirname;
 /**
- * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
- * for the test provider, is refused in production, and runs nothing itself.
+ * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): it builds the
+ * steps for the test provider, is refused in production, and runs nothing
+ * itself. It builds the validator, the probe, the inspector and the process
+ * runner, and still names no child process itself.
  */
 const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const CORE_FILES = ["streaming-transfer.ts", "staging.ts", "defect.ts", "index.ts"];
@@ -271,7 +273,10 @@ describe("no production composition", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
-      if (!name.endsWith(VALIDATOR)) {
+      // The assembly builds these to validate and compose on the machine's
+      // tools; it still launches nothing itself (below).
+      const assembly = name === DEVELOPMENT_ASSEMBLY;
+      if (!name.endsWith(VALIDATOR) && !assembly) {
         for (const banned of ["new S3ManagedOutputMediaValidator", "S3ManagedOutputMediaValidator("]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
@@ -284,8 +289,7 @@ describe("no production composition", () => {
           "FfprobeCleanMasterInspector(",
           "createDefaultProcessRunner(",
         ]) {
-          // For the test provider's clip maker.
-          if (name === DEVELOPMENT_ASSEMBLY && banned === "createDefaultProcessRunner(") continue;
+          if (assembly) continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
         // Only the dormant inspector may reference a child process at all.

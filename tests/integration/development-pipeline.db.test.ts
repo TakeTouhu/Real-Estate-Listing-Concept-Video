@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -10,9 +12,12 @@ import {
   createUnitEntitlementRepository,
 } from "@app/database";
 import {
+  MEDIA_FAILURE_RESOLUTION_RETRY_DELAY_MS,
   PRESERVATION_RULES,
   SYSTEM_NEGATIVE_CONSTRAINTS,
   buildAssetStorageKey,
+  managedCleanMasterKey,
+  managedDeliverableOutputKey,
   managedGenerationOutputKey,
   type CompiledPrompt,
   type StoryboardScene,
@@ -28,14 +33,16 @@ import { ctx } from "./orchestration-fixture";
 
 /**
  * The development pipeline's assembly against live PostgreSQL (GS-9b,
- * ADR-0106): a job started by the real start commit is launched, its scenes'
- * photos are signed and sent to the test provider, and each clip is copied
- * into the shared folder, on the system clock and the billing cycle's own
- * revenue, as the pipeline command will run them.
+ * ADR-0106, ADR-0107): a job started by the real start commit is launched, its
+ * scenes' photos are signed and sent to the test provider, each clip is copied
+ * into the shared folder and validated, and the video is planned, composed with
+ * its disclosure, validated and published, on the system clock and the billing
+ * cycle's own revenue, as the pipeline command will run them.
  *
- * The clip maker is a stand-in that keeps the photo it was given and writes a
- * few bytes: this suite's CI job has no FFmpeg. The clip itself is GS-6's
- * (`tests/media/fake-clip.media.test.ts`).
+ * The steps run the machine's FFmpeg and ffprobe, which this suite's CI job
+ * installs (ADR-0107). Where a test needs a clip it can control, a stand-in
+ * clip maker keeps the photo it was given and writes a few bytes that are not
+ * a video.
  */
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
@@ -46,7 +53,6 @@ const ASSET = "ast_itest_devpipe";
 const PROJECT = "vpr_itest_devpipe";
 const FINGERPRINT = "sha256:devpipe";
 const SECRET = "development-pipeline-signing-secret-0123";
-const PHOTO = Buffer.from("the scene's photo, as the web app stored it");
 const CLIP = Buffer.from("a clip the stand-in made");
 
 const prisma = new PrismaClient();
@@ -62,6 +68,8 @@ const CYCLE_END = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth() + 1,
 const CYCLE = CYCLE_START.toISOString().slice(0, 7);
 
 let dir: string;
+/** The scene's photo, as the web app stored it: a real JPEG, made once by FFmpeg. */
+let PHOTO: Buffer;
 let made: Buffer[];
 let render: "MAKE" | "FAIL";
 
@@ -74,7 +82,8 @@ const renderer: FakeClipRenderer = {
   },
 };
 
-function pipeline(): DevelopmentPipeline {
+/** The steps, with the stand-in clip maker or FFmpeg's. */
+function pipeline(clips: "STAND_IN" | "FFMPEG" = "STAND_IN"): DevelopmentPipeline {
   return assembleDevelopmentPipeline(
     {
       NODE_ENV: "test",
@@ -83,7 +92,7 @@ function pipeline(): DevelopmentPipeline {
       STORAGE_SIGNING_SECRET: SECRET,
     },
     { providerFolder: join(dir, "provider") },
-    { prisma, renderer },
+    clips === "STAND_IN" ? { prisma, renderer } : { prisma },
   );
 }
 
@@ -223,8 +232,22 @@ async function attempts(job: string) {
 async function cleanup(): Promise<void> {
   const scope = { videoProject: { organizationId: ORG } };
   const jobs = (await prisma.generationJob.findMany({ where: scope, select: { id: true } })).map((job) => job.id);
+  const versions = { deliverableVersion: { generationJobId: { in: jobs } } };
+  // Every pointer and history row is RESTRICT, so each goes before what it names.
+  await prisma.generationScene.updateMany({
+    where: { generationJobId: { in: jobs } },
+    data: { currentDeliveredRequestId: null },
+  });
+  await prisma.generationJob.updateMany({ where: { id: { in: jobs } }, data: { currentDeliverableVersionId: null } });
   await prisma.generationTransitionEvent.deleteMany({ where: { organizationId: ORG } });
   await prisma.generationPricingSnapshot.deleteMany({ where: { sceneGeneration: scope } });
+  await prisma.generationDeliverableInput.deleteMany({ where: versions });
+  await prisma.generationDeliverableComposition.deleteMany({ where: versions });
+  await prisma.generationDeliverableValidation.deleteMany({ where: versions });
+  await prisma.generationDeliverableCleanMaster.deleteMany({ where: versions });
+  await prisma.generationDeliverableVersion.deleteMany({ where: { generationJobId: { in: jobs } } });
+  await prisma.managedOutputMediaFailureResolution.deleteMany({ where: { validation: { sceneGeneration: scope } } });
+  await prisma.managedOutputMediaValidation.deleteMany({ where: { sceneGeneration: scope } });
   await prisma.sceneGeneration.deleteMany({ where: scope });
   await prisma.sceneGenerationRequest.deleteMany({ where: { generationScene: { generationJobId: { in: jobs } } } });
   await prisma.generationScene.deleteMany({ where: { generationJobId: { in: jobs } } });
@@ -243,6 +266,13 @@ async function cleanup(): Promise<void> {
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "devpipe-"));
+  if (!HAS_DB) return;
+  const photo = join(dir, "photo.jpg");
+  await promisify(execFile)("ffmpeg", [
+    ...["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720"],
+    ...["-frames:v", "1", photo],
+  ]);
+  PHOTO = await readFile(photo);
 });
 
 beforeEach(async () => {
@@ -336,4 +366,156 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
       "CANCELLED_PRE_SUBMISSION",
     ]);
   });
+
+  it("makes the video: validates each clip, delivers the scenes, composes, validates and publishes", async () => {
+    const job = await start();
+    const before = Date.now();
+    const steps = pipeline("FFMPEG");
+    expect((await steps.launch.runOnce(10)).launched).toBe(1);
+    expect((await steps.submission.runOnce(10)).sent).toBe(2);
+    await steps.providerOutput.runProviderOutputBatchOnce({
+      limit: 10,
+      context: developmentPipelineContext("provider_output"),
+    });
+
+    // Each clip FFmpeg made from the photo is read back from the folder and found usable.
+    const validated = await steps.mediaValidation.runOnce(10);
+    expect(validated.outcomes.map(({ outcome }) => outcome)).toEqual([{ kind: "VALID" }, { kind: "VALID" }]);
+    const delivered = await steps.sceneDelivery.runOnce(10);
+    expect([delivered.delivered, delivered.jobsAdvanced]).toEqual([2, 1]);
+    const planned = await steps.compositionPlan.runOnce(10);
+    expect([planned.planned, planned.failed]).toEqual([1, 0]);
+    const plan = planned.outcomes[0]?.outcome;
+    if (plan?.kind !== "PLANNED") throw new Error(`plan: ${plan?.kind}`);
+    const version = plan.deliverableVersionId;
+    expect(version).toMatch(/^gdv_[\w-]{16}$/);
+    const composed = await steps.composition.runOnce(10);
+    expect(composed).toMatchObject({ claimed: 1, finalized: 1, deferred: 0, blocked: 0, failed: 0 });
+    const published = await steps.deliverableValidation.runOnce(
+      10,
+      developmentPipelineContext("deliverable_validation"),
+    );
+    expect(published.outcomes).toEqual([
+      { deliverableVersionId: version, outcome: { kind: "PUBLISHED_AND_CONSUMED" } },
+    ]);
+
+    const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
+    expect([ended.state, ended.reservation?.state, ended.currentDeliverableVersionId]).toEqual([
+      "DELIVERABLE_READY",
+      "CONSUMED",
+      version,
+    ]);
+    // Every verdict and the Unit's use, on the system clock.
+    const verdicts = await prisma.managedOutputMediaValidation.findMany({
+      where: { sceneGeneration: { videoProject: { organizationId: ORG } } },
+    });
+    const where = { deliverableVersionId: version };
+    const composition = await prisma.generationDeliverableComposition.findUniqueOrThrow({ where });
+    const receipt = await prisma.generationDeliverableCleanMaster.findUniqueOrThrow({ where });
+    const checked = await prisma.generationDeliverableValidation.findUniqueOrThrow({ where });
+    for (const at of [
+      ...verdicts.map((v) => v.validatedAt),
+      composition.outputVerifiedAt,
+      receipt.verifiedAt,
+      checked.validatedAt,
+      ended.reservation?.consumedAt,
+    ]) {
+      expect(at?.getTime()).toBeGreaterThanOrEqual(before);
+      expect(at?.getTime()).toBeLessThanOrEqual(Date.now());
+    }
+
+    // The video, with its disclosure, and its Clean Master are both in the folder.
+    const keys = { organizationId: ORG, deliverableVersionId: version };
+    const video = await shared().getObject(managedDeliverableOutputKey(keys));
+    const master = await shared().getObject(managedCleanMasterKey(keys));
+    expect([video === null, master === null]).toEqual([false, false]);
+    expect(Buffer.from(video!).equals(Buffer.from(master!))).toBe(false);
+    // Each receipt describes the bytes stored, and the Clean Master is signed for
+    // no one. The disclosure's pixels are the media suite's to prove
+    // (`composition-runner.media.test.ts`).
+    const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    expect([composition.outputSha256, receipt.sha256]).toEqual([sha(video!), sha(master!)]);
+    await expect(shared().createSignedDownloadUrl(managedCleanMasterKey(keys), 60)).rejects.toThrow();
+    const path = join(dir, "video.mp4");
+    await writeFile(path, video!);
+    const { stdout } = await promisify(execFile)("ffprobe", [
+      ...["-v", "error", "-select_streams", "v:0", "-of", "json"],
+      ...["-show_entries", "stream=width,height:format=duration", path],
+    ]);
+    const probed = JSON.parse(stdout) as { streams: { width: number; height: number }[]; format: { duration: string } };
+    expect(probed.streams).toEqual([{ width: 1280, height: 720 }]);
+    expect(Number(probed.format.duration)).toBeCloseTo(10, 0);
+  }, 180_000);
+
+  it("recovers an unusable clip once, then gives the Unit back", async () => {
+    const job = await start();
+    const steps = pipeline();
+    expect((await steps.launch.runOnce(10)).launched).toBe(1);
+    const round = async () => {
+      expect((await steps.submission.runOnce(10)).sent).toBe(2);
+      await steps.providerOutput.runProviderOutputBatchOnce({
+        limit: 10,
+        context: developmentPipelineContext("provider_output"),
+      });
+      // The stand-in's bytes are not a video, and ffprobe says so.
+      const validated = await steps.mediaValidation.runOnce(10);
+      expect(validated.outcomes.map(({ outcome }) => outcome)).toEqual([
+        { kind: "INVALID_MEDIA" },
+        { kind: "INVALID_MEDIA" },
+      ]);
+      return steps.mediaFailureResolution.runOnce(10);
+    };
+
+    // Each scene's first failure is retried once, priced on the test route.
+    const first = await round();
+    expect([first.claimed, first.recovered, first.settled, first.deferred]).toEqual([2, 2, 0, 0]);
+    const recoveries = await prisma.sceneGeneration.findMany({
+      where: { videoProject: { organizationId: ORG }, attemptKind: "SYSTEM_RECOVERY" },
+      include: { pricingSnapshot: true },
+    });
+    expect(recoveries.map((r) => [r.attemptOrdinal, r.pricingSnapshot === null])).toEqual([
+      [2, false],
+      [2, false],
+    ]);
+
+    // The retry fails too, so the job fails and the Unit comes back.
+    const before = Date.now();
+    const second = await round();
+    expect([second.claimed, second.recovered, second.settled, second.deferred]).toEqual([2, 0, 1, 0]);
+    // One scene's failure settles the job. The other's is owed nothing yet, so
+    // it is handed back for five minutes, and no third attempt is made.
+    const kinds = second.outcomes.map(({ result }) =>
+      result.kind === "SETTLEMENT" ? result.outcome.kind : result.kind,
+    );
+    expect(kinds.sort()).toEqual(["NOT_EXHAUSTED", "SETTLED"]);
+    const recovering = { videoProject: { organizationId: ORG }, attemptKind: "SYSTEM_RECOVERY" as const };
+    expect(await prisma.sceneGeneration.count({ where: recovering })).toBe(2);
+    // The retry is the same request, so the test provider answers it with the clip it made first.
+    expect(made).toEqual([PHOTO, PHOTO]);
+    const ended = await prisma.generationJob.findUniqueOrThrow({ where: { id: job }, include: { reservation: true } });
+    expect([ended.state, ended.reservation?.state]).toEqual(["FAILED_TERMINAL", "RELEASED"]);
+    expect(ended.reservation?.releasedAt?.getTime()).toBeGreaterThanOrEqual(before);
+    expect(ended.reservation?.releasedAt?.getTime()).toBeLessThanOrEqual(Date.now());
+    const open = {
+      status: "PENDING" as const,
+      validation: { sceneGeneration: { videoProject: { organizationId: ORG } } },
+    };
+    const handedBack = await prisma.managedOutputMediaFailureResolution.findMany({ where: open });
+    expect(handedBack).toHaveLength(1);
+    const due = handedBack[0]!.nextAttemptAt!.getTime() - MEDIA_FAILURE_RESOLUTION_RETRY_DELAY_MS;
+    expect(due).toBeGreaterThanOrEqual(before);
+    expect(due).toBeLessThanOrEqual(Date.now());
+
+    // L closes the other scene, so its failure is owed nothing: when it is next
+    // due, it is resolved without a retry.
+    const closed = await steps.failedJobSceneClosure.runOnce(10);
+    expect([closed.closed, closed.failed]).toEqual([1, 0]);
+    await prisma.managedOutputMediaFailureResolution.updateMany({
+      where: open,
+      data: { nextAttemptAt: new Date(Date.now() - 1_000) },
+    });
+    const third = await steps.mediaFailureResolution.runOnce(10);
+    expect(third.outcomes.map(({ result }) => result)).toEqual([{ kind: "RESOLVED", resolutionKind: "OBSOLETE" }]);
+    expect(await prisma.sceneGeneration.count({ where: recovering })).toBe(2);
+  }, 60_000);
 });

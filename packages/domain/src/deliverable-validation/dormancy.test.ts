@@ -31,6 +31,11 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0107): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const MODULE_DIR = __dirname;
 const VALIDATION_REPOSITORY = join(
   REPO_ROOT,
@@ -149,6 +154,8 @@ describe("the capability exists but nothing runs it", () => {
       // legitimately appears.
       if (name.endsWith("deliverable-validation-repository.ts")) continue;
       if (name.endsWith("packages/database/src/index.ts")) continue;
+      // The assembly builds the validation and runs no batch.
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       for (const banned of CONSTRUCTORS) {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }

@@ -22,6 +22,11 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0107): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const MODULE_DIR = __dirname;
 const RESOLUTION_REPOSITORY = join(
   REPO_ROOT,
@@ -90,6 +95,7 @@ describe("the capability exists but nothing runs it", () => {
       if (name.endsWith("media-failure-resolution/runner.ts")) continue;
       if (name.endsWith("media-failure-resolution/index.ts")) continue;
       if (name.endsWith("packages/domain/src/index.ts")) continue;
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       for (const banned of [
         "new MediaFailureResolutionRunner",
         "MediaFailureResolutionRunner(",
@@ -103,6 +109,7 @@ describe("the capability exists but nothing runs it", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("packages/database/src/media-failure-resolution-repository.ts")) continue;
       if (name.endsWith("packages/database/src/index.ts")) continue;
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       expect(
         `${name}: ${text.includes("createMediaFailureResolutionRepository(")}`,
       ).toBe(`${name}: false`);
@@ -154,6 +161,9 @@ describe("the capability exists but nothing runs it", () => {
           "createMediaFailureResolutionRepository",
           "settleExhaustedMediaFailure",
         ]) {
+          // The assembly builds the runner and its repository, and calls neither.
+          const built = ["MediaFailureResolutionRunner", "createMediaFailureResolutionRepository"];
+          if (name === DEVELOPMENT_ASSEMBLY && built.includes(banned)) continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
       }

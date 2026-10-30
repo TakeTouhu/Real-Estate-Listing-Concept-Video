@@ -69,6 +69,7 @@ export {
   MEDIA_VALIDATION_TEMP_PREFIX,
   ManagedOutputMediaValidationDefect,
   S3ManagedOutputMediaValidator,
+  nodeManagedOutputTempFileFactory,
 } from "./media-validation";
 export type {
   ManagedOutputMediaProbe,

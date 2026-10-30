@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,11 +8,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   AttemptFailureSettlementRunner,
   AttemptSubmissionRunner,
+  CompositionPlanRunner,
+  DISCLOSURE_LAYER_ASSETS,
+  DeliverableCompositionRunner,
+  DeliverableValidationRunner,
   FailedJobSceneClosureRunner,
   JobLaunchRunner,
+  MediaFailureResolutionRunner,
+  MediaValidationLifecycleRunner,
+  ValidatedSceneDeliveryRunner,
   validateReconciliationPolicy,
 } from "@app/domain";
 import {
+  DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY,
   DEVELOPMENT_RECONCILIATION,
   DEVELOPMENT_SIGNED_URL_BASE,
   assembleDevelopmentPipeline,
@@ -97,7 +106,24 @@ describe("assembling the development pipeline", () => {
     expect(steps.failedJobSceneClosure).toBeInstanceOf(FailedJobSceneClosureRunner);
     expect(typeof steps.providerOutput.runProviderOutputBatchOnce).toBe("function");
     expect(typeof steps.reconciliation.runOnce).toBe("function");
+    expect(steps.mediaValidation).toBeInstanceOf(MediaValidationLifecycleRunner);
+    expect(steps.mediaFailureResolution).toBeInstanceOf(MediaFailureResolutionRunner);
+    expect(steps.sceneDelivery).toBeInstanceOf(ValidatedSceneDeliveryRunner);
+    expect(steps.compositionPlan).toBeInstanceOf(CompositionPlanRunner);
+    expect(steps.composition).toBeInstanceOf(DeliverableCompositionRunner);
+    expect(steps.deliverableValidation).toBeInstanceOf(DeliverableValidationRunner);
     expect([existsSync(shared), existsSync(join(provider, "clips"))]).toEqual([true, true]);
+  });
+
+  it("composes with the repository's own disclosure images", () => {
+    const repository = join(__dirname, "..", "..", "..", "..");
+    expect(DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY).toBe(join(repository, "assets", "disclosure"));
+    // Every image the composer may ask for is there, as committed.
+    for (const layer of DISCLOSURE_LAYER_ASSETS) {
+      const bytes = readFileSync(join(DEVELOPMENT_DISCLOSURE_LAYER_DIRECTORY, layer.fileName));
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      expect([layer.fileName, sha256]).toEqual([layer.fileName, layer.sha256]);
+    }
   });
 
   it("signs photo URLs under an https base whose host never resolves", () => {
@@ -126,5 +152,6 @@ describe("assembling the development pipeline", () => {
     });
     expect(second.correlationId).not.toBe(first.correlationId);
     expect(developmentPipelineContext("provider_output").eventType).toBe("pipeline.provider_output");
+    expect(developmentPipelineContext("deliverable_validation").eventType).toBe("pipeline.deliverable_validation");
   });
 });

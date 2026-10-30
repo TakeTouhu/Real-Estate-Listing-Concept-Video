@@ -2011,3 +2011,15 @@ refused in production.
 
 **Rolling back.** To GS-9a's build: safe. The assembly stores nothing of its
 own; the folders it creates are the shared folder and the test provider's.
+
+## GS-9b-2 — the development pipeline's steps after the copy
+
+**No migration** (ADR-0107). No schema, enum, constraint or row changes, and no
+new environment variable.
+
+**What changes at deploy.** Nothing. Nothing calls the assembly, and it is
+refused in production. CI's database job now installs FFmpeg; a local
+`pnpm test:db` needs `ffmpeg` and `ffprobe`.
+
+**Rolling back.** To GS-9b-1's build: safe. The assembly stores nothing of its
+own; what its steps write is the rows and objects the steps already write.
