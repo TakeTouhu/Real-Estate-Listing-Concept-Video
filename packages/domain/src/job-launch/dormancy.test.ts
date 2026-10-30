@@ -26,6 +26,11 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const MODULE_DIR = __dirname;
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const LAUNCH_REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "job-launch-repository.ts");
 const ENDING_REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "unlaunchable-job-ending-repository.ts");
 const LAUNCHED_ENDING_REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "launched-job-ending-repository.ts");
@@ -72,6 +77,8 @@ describe("the planner, the runner and the commit exist but nothing runs them", (
   it("are not constructed in production", () => {
     for (const { name, text } of productionSources()) {
       if (name.startsWith("packages/domain/src/job-launch/")) continue;
+      // Every check here is of a constructor, and the assembly builds them all.
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       expect(`${name}: ${text.includes("JobLaunchPlanner(")}`).toBe(`${name}: false`);
       expect(`${name}: ${text.includes("JobLaunchRunner(")}`).toBe(`${name}: false`);
       if (name !== "packages/database/src/job-launch-repository.ts") {

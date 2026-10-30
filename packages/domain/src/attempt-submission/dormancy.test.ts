@@ -24,6 +24,11 @@ const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const MODULE_DIR = __dirname;
 const REPOSITORY = join(REPO_ROOT, "packages", "database", "src", "attempt-submission-repository.ts");
 const SENDER = "packages/video-providers/src/prepared-generation-sender.ts";
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -70,10 +75,11 @@ describe("the repository, the runner and the sender exist but nothing runs them"
         .filter(({ text }) => text.includes(marker))
         .map(({ name }) => name);
     expect(callers("createAttemptSubmissionRepository(")).toEqual([
+      DEVELOPMENT_ASSEMBLY,
       "packages/database/src/attempt-submission-repository.ts",
     ]);
-    expect(callers("AttemptSubmissionRunner(")).toEqual([]);
-    expect(callers("createPreparedGenerationSender(")).toEqual([SENDER]);
+    expect(callers("AttemptSubmissionRunner(")).toEqual([DEVELOPMENT_ASSEMBLY]);
+    expect(callers("createPreparedGenerationSender(")).toEqual([DEVELOPMENT_ASSEMBLY, SENDER]);
   });
 });
 

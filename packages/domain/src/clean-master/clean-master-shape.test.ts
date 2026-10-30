@@ -25,6 +25,8 @@ const LOCAL_STORAGE = "packages/storage/src/local-storage.ts";
 const SHARED_FOLDER = "packages/storage/src/shared-folder-storage.ts";
 const DOWNLOAD_ROUTE = "apps/web/src/app/api/storage/download/route.ts";
 const UPLOAD_ROUTE = "apps/web/src/app/api/storage/upload/route.ts";
+/** The test provider's photo reader in the development pipeline (ADR-0106). */
+const PHOTO_READER = "apps/worker/src/development-pipeline/photo-reader.ts";
 
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -163,6 +165,7 @@ describe("DS-4 shape", () => {
     expect(matching(["packages", "apps"], /\bverifyStorageToken\b/)).toEqual([
       DOWNLOAD_ROUTE,
       UPLOAD_ROUTE,
+      PHOTO_READER,
       SIGNING,
     ]);
     expect(matching(["packages", "apps"], /\bcreateSigned(?:Download|Upload)Url\b/)).toEqual([
@@ -188,10 +191,14 @@ describe("DS-4 shape", () => {
     }
   });
 
-  it("serves stored bytes from one route, for the key a verified token names", () => {
-    expect(matching(["apps"], /\.getObject\(/)).toEqual([DOWNLOAD_ROUTE]);
+  it("serves stored bytes from one route and one photo reader, for the key a verified token names", () => {
+    // And hands them to the test provider from one reader, the same way.
+    expect(matching(["apps"], /\.getObject\(/)).toEqual([DOWNLOAD_ROUTE, PHOTO_READER]);
     const route = read(DOWNLOAD_ROUTE);
     expect(route.match(/\.getObject\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);
     expect(route).toContain(`verifyStorageToken(token, getServerEnv().STORAGE_SIGNING_SECRET, "download")`);
+    const reader = read(PHOTO_READER);
+    expect(reader.match(/\.getObject\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);
+    expect(reader).toContain(`verifyStorageToken(token, options.secret, "download")`);
   });
 });

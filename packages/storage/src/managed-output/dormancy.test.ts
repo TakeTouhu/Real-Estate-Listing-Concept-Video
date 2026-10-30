@@ -20,6 +20,11 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const CORE_DIR = __dirname;
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 const CORE_FILES = ["streaming-transfer.ts", "staging.ts", "defect.ts", "index.ts"];
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
@@ -202,6 +207,8 @@ describe("no production composition", () => {
       if (name.endsWith("managed-output/streaming-transfer.ts")) continue;
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
+      // The assembly copies the test provider's clips into the shared folder.
+      if (name === DEVELOPMENT_ASSEMBLY) continue;
       for (const banned of ["new StreamingManagedOutputTransfer", "StreamingManagedOutputTransfer("]) {
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
@@ -239,7 +246,8 @@ describe("no production composition", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
-      if (!name.endsWith(AUTHORIZED_SINK)) {
+      // The assembly stages into the shared folder's S3-shaped client, not an S3Client.
+      if (!name.endsWith(AUTHORIZED_SINK) && name !== DEVELOPMENT_ASSEMBLY) {
         for (const banned of ["new S3ManagedOutputStagingSink", "S3ManagedOutputStagingSink("]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
@@ -276,6 +284,8 @@ describe("no production composition", () => {
           "FfprobeCleanMasterInspector(",
           "createDefaultProcessRunner(",
         ]) {
+          // For the test provider's clip maker.
+          if (name === DEVELOPMENT_ASSEMBLY && banned === "createDefaultProcessRunner(") continue;
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
         }
         // Only the dormant inspector may reference a child process at all.
@@ -318,6 +328,8 @@ describe("no production composition", () => {
         "runProviderOutputAttemptOnce",
         "runProviderOutputBatchOnce",
       ]) {
+        // The assembly builds the runner and runs no batch.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

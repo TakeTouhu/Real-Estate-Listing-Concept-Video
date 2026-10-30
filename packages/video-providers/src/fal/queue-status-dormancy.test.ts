@@ -25,6 +25,11 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const ADAPTER_DIR = __dirname;
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 
 function sourceFiles(dir: string): { name: string; text: string }[] {
   const found: { name: string; text: string }[] = [];
@@ -95,6 +100,8 @@ describe("the concrete fal status adapter has no production composition", () => 
         "runProviderOutputAttemptOnce",
         "runProviderOutputBatchOnce",
       ]) {
+        // The assembly builds the runner on the test provider's status source, not fal's.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === "createProviderOutputRunner") continue;
         expect(`${name}:${banned}: ${code(text).includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

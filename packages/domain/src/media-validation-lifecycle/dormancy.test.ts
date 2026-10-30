@@ -23,6 +23,11 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const LIFECYCLE_DIR = __dirname;
+/**
+ * The development pipeline's assembly (GS-9b, ADR-0106): it builds the steps
+ * for the test provider, is refused in production, and runs nothing itself.
+ */
+const DEVELOPMENT_ASSEMBLY = "apps/worker/src/development-pipeline/assembly.ts";
 
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
@@ -111,6 +116,8 @@ describe("the lifecycle exists but nothing runs it", () => {
         }
         if (name.endsWith("managed-output/index.ts")) continue;
         if (name.endsWith("packages/storage/src/index.ts")) continue;
+        // For the test provider's clip maker.
+        if (name === DEVELOPMENT_ASSEMBLY && banned === "createDefaultProcessRunner(") continue;
         expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);
       }
     }

@@ -4969,3 +4969,205 @@ Stripe charges remain BLOCKED.
 GS-9a waits for the product owner's yes before merge. Then GS-9b, GS-9c and
 GS-9d, and the screens (GS-10 to GS-12).
 
+
+## GS-9b-1 — the development pipeline's assembly
+
+Base: `2285690` (PR #129 merge commit on `main`).
+ADR: `docs/decisions/0106-the-development-pipelines-assembly.md`
+
+The second milestone of row GS-9 of the approved plan
+(`/mnt/project-files/cto/generation-e2e-proposal.md`: the pipeline command,
+run only when a person or a test starts it, only with the test provider, never
+in production). **No migration; no route, no page, no environment variable.**
+Nothing calls the assembly until the command (GS-9c).
+
+GS-9b is split in two: this milestone builds the steps from a waiting job to
+each clip copied into the shared folder, with Transactions K and L and the
+maintenance at the provider boundary; GS-9b-2 builds the rest.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `65c3f0e` | the assembly, the photo reader, their tests, the database suite, the static tests' admissions, ADR-0106 and the documentation |
+| this commit | a check that K and L run on the system clock (from mutation testing), the review's answers and this record |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-9b-1 does
+
+- **One assembly, in the worker.** `assembleDevelopmentPipeline(env,
+  { providerFolder }, { prisma, renderer? })` builds the launch, the
+  submission, the provider output, the maintenance at the provider boundary
+  and K and L, and returns them. It runs none. Nothing in the worker's
+  start-up, the web app or the operator commands reaches it.
+- **Refused before anything is opened**: in production (given or ambient
+  `NODE_ENV`), unless `VIDEO_PROVIDER=fake`, without `SHARED_STORAGE_DIR`, or
+  with a relative test provider folder.
+- **The shared folder, signed under an address that cannot resolve.** Photo
+  URLs are signed under `https://development.invalid/api/storage`, which
+  preparation accepts and nobody can fetch.
+- **The test provider reads a photo as the download route serves it**: under
+  the base's download path, with an unexpired download token signed with the
+  shared folder's secret, for a key that may be signed.
+- **One studio** serves the test provider, its status source and its byte
+  source. The launch prices against the test route's fixed rate; the gate
+  reads the billing cycle's own revenue.
+- **Development reconciliation values**: a one-hour window, presumed lost
+  after 15 minutes at the boundary. Production's are still an activation
+  decision.
+
+```mermaid
+sequenceDiagram
+    participant C as Command (GS-9c)
+    participant A as Assembly
+    participant L as Launch
+    participant S as Submission
+    participant P as Test provider (studio)
+    participant O as Provider output
+    participant F as Shared folder
+    C->>A: assembleDevelopmentPipeline(env, folder, prisma)
+    A-->>C: the steps (none run)
+    C->>L: a pass
+    L-->>C: the job launched, its attempts admitted
+    C->>S: a pass
+    S->>F: sign each scene's photo under development.invalid
+    S->>P: send (no network)
+    P->>F: read the photo through its token
+    P-->>S: accepted once the clip is made
+    C->>O: a batch
+    O->>P: status, then the clip's bytes
+    O->>F: copy and verify the clip
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI).
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint` / `pnpm typecheck` | clean on this commit, each exit status read |
+| `pnpm test` | 6,626 tests in 246 files passed on this commit, exit 0 |
+| `pnpm test:db` | 1,849 tests in 70 files passed on `65c3f0e` with the clock check, exit 0; the pipeline suite's 2 pass on this commit, exit 0 |
+| `pnpm test:media` | not run locally: no media code changed; CI's media job runs it |
+| `pnpm build` | not run locally; CI's verify job builds |
+| `prisma migrate diff` | not run: no schema or migration changed; CI's database job checks it |
+
+New tests:
+
+- `tests/integration/development-pipeline.db.test.ts` (2): a job started by
+  the real start commit is launched, both scenes' photos are read by the test
+  provider through the URLs preparation signed and sent, and each clip is
+  copied into the shared folder and verified, with nothing left for the
+  maintenance; and when the test provider cannot make a clip, the first scene
+  is refused, the second is not sent, K releases the Unit and L cancels the
+  second attempt, both on the system clock.
+- `apps/worker/src/development-pipeline/assembly.test.ts` (9): each refusal,
+  before any folder exists; every step built; the base; the development
+  policy; the contexts.
+- `apps/worker/src/development-pipeline/photo-reader.test.ts` (4): the photo
+  read; nothing for a missing key, another secret's token, an upload token
+  under the download path, an expired token, another origin, scheme or path,
+  no token, or no URL.
+- `apps/worker/src/development-pipeline/dormancy.test.ts` (2): the folder holds
+  two files that run no step, start nothing, reach no network or real
+  provider, and that nothing else names.
+
+### Mutation testing
+
+The same harness as GS-9a. 45 of 45 killed, one of them after a check was
+added.
+
+| Id | Mutant | Result |
+| --- | --- | --- |
+| A01 to A05 | each refusal removed or loosened | killed |
+| A06, A07, A23 | the default relative base; the reader under another base; the reader seeing no photo | killed |
+| A08 | the given clip maker ignored | killed |
+| A09, A10 | no rate; the gate on production's prices | killed |
+| A11, A12 | the copy staged into another bucket; a 4-byte limit | killed |
+| A13 to A15, A22 | the context's label, correlation, actor or user changed | killed |
+| A16 | the stale threshold equal to the window | killed |
+| A17 | one id for every attempt | killed |
+| A18 to A20 | the status source, the byte source or the studio not the provider's | killed |
+| A21 | K settling at the epoch | survived, then killed by the added check of the release instant |
+| A24 | L closing at the epoch | killed by the same check |
+| P01 to P07 | the reader's base, origin, purpose, token, verdict, parse and path checks | killed |
+| S01 to S10 | a timer, a step run, a batch run, K's commit called, an `S3Client`, an ffprobe, a fetch, a second rate source, a key no token names, the folder reached from start-up | killed by the static tests |
+| R01 to R04 | upload tokens read; a second or a different rate line; an HTTP module | killed (added after the review) |
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex was
+at its usage limit), found nothing blocking: the wiring matches the database
+suites' for each runner, the refusals come before anything is opened, nothing
+reaches a network or a paid provider, the photo reader reads no key a token
+does not name, and every static admission names the assembly by path and
+keeps the calls banned. Answered in this commit:
+
+- **Should fix: the upload token was refused by its path, not its purpose.**
+  The test now puts it under the download path (R01).
+- **Should fix: the rate's admission was wider than the ADR said.** The test
+  now admits the one exact line, once (R02, R03), and the ADR quotes it.
+- **Should fix: "fetches nothing" was enforced by `fetch(` alone.** The folder's
+  test also bans the HTTP and socket modules, HTTP clients, the AWS SDK, an
+  `S3Client`, the AI providers, the WaveSpeed and fal adapters and the provider
+  factory (R04).
+- **Should fix: architecture rows still said nothing builds the planner, the
+  gate, the sender, the endings, K and L** until GS-9. Each now names the
+  assembly, and the new row's refusal list is complete.
+- **Minor: the Mermaid node was over 120 columns.** Shortened.
+- **Minor: "a token the pipeline signed" overclaimed.** The reader takes any
+  download token signed with the shared secret, the web app's included, and
+  the web app's route would serve a pipeline token; the reader, the ADR and
+  the API summary now say so. Nothing stores the URL.
+- **Minor: the DS-4 test's title named one route.** It names the reader too.
+- **Minor: the database suite checked outcomes by kind.** It now checks each
+  outcome whole and the second test's launch; the maintenance check stays a
+  smoke check, its stale and exhaustion paths being the reconciliation
+  suite's.
+- **Minor: a run across a month's end could start the job outside the seeded
+  period.** The job starts at the instant the period was chosen from.
+- **Minor: the exported types were not listed.** The ADR and the API summary
+  list them.
+- **Question: should the output pass and the maintenance read only the test
+  provider's attempts?** A development database holds no other provider's,
+  since nothing can send one while paid activation is blocked; if one did, the
+  studio refuses to answer for it and nothing is written, and the maintenance
+  would apply the development values. Recorded in ADR-0106's *Not decided
+  here* for the command (GS-9c).
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the worker node and the development pipeline row, and the rows of the steps it builds |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-9b-1.md`: no HTTP change; the worker's new module |
+| Change log / release notes | the commit list above and the pull request description |
+| Database migration notes | `docs/migration-notes.md`, *GS-9b-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/generation-e2e-gap-analysis.md` (the
+9b split). `docs/decisions/TODO.md` is unchanged: production's reconciliation
+values are already recorded as open.
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: nothing calls the assembly, and it is refused in production. No
+scheduler, credential or payment integration. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing runs the steps yet.** The command (GS-9c) will.
+- **The steps after the copy are not built** (GS-9b-2).
+- **The development reconciliation values are not production's**, which are
+  still open (`docs/decisions/TODO.md`).
+
+### Remaining work
+
+GS-9b-1 waits for the product owner's yes before merge. Then GS-9b-2, GS-9c
+and GS-9d, and the screens (GS-10 to GS-12).

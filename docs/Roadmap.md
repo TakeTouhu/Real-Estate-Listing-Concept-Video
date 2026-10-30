@@ -419,6 +419,17 @@ compared in UTC whatever the session's time zone. GS-9 is split into four
 milestones: this, the development assembly (GS-9b), the pipeline command
 (GS-9c) and its end-to-end test (GS-9d).
 
+**GS-9b-1 — the development pipeline's assembly** (ADR-0106, no migration): in
+the worker, one function builds the launch, the submission, the provider
+output, the maintenance at the provider boundary and Transactions K and L on
+the test provider and the shared folder, and runs none of them. It is refused
+in production and unless `VIDEO_PROVIDER=fake`, before anything is opened.
+Photos are signed under an `https` address that never resolves, and the test
+provider reads each one as the download route serves it. A database suite runs
+a started job through the launch, the send and the copy of each clip, and
+through the release of its Unit when a clip cannot be made. GS-9b-2 builds the
+steps after the copy.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
