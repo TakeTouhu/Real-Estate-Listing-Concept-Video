@@ -5678,6 +5678,10 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 - **The funding is a forecast.** Another start, a purchase or a release
   between the offer and the start can change the split or make the Units
   short; the start's own answer is what the screen must show then.
+- **A period overlapping the renewal period without containing now is not
+  seen.** Only a ledger already wrong holds one; the offer then offers the
+  plan's allowance and the start refuses (`INTERNAL_ERROR`), as ADR-0109
+  Decision 3 records. The Units page has the same blind spot.
 - **A project can still be started again and again.** Whether that is
   allowed once a video is in progress or delivered is open with the product
   owner; GS-10b enforces the answer.

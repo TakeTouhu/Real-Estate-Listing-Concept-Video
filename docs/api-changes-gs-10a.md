@@ -19,9 +19,9 @@ offer(actorUserId: string, organizationId: string, videoProjectId: string): Prom
 What a start of the project's storyboard would be now, for the start screen.
 Reads only: it opens no Unit period and asks nothing of the start commit.
 Needs `video.generate` and `unit.consume` (`FORBIDDEN` otherwise); a project
-out of reach or of a deleted Property is `NOT_FOUND`; a Unit period that is
-not the subscription's renewal period, or that cannot be read, is
-`INTERNAL_ERROR`.
+out of reach or of a deleted Property is `NOT_FOUND`; a Unit period containing
+now that is not the subscription's renewal period, or one whose balance cannot
+be read, is `INTERNAL_ERROR`.
 
 ### Added: `@app/domain`, `StartOffer`
 

@@ -65,8 +65,18 @@ the same facts without opening it:
   period: what remains of it;
 - no period: the plan's whole allowance and no add-on block, which is what
   opening it would freeze (ADR-0066 Decision 3, the rule the Units page uses);
-- a period there that is not the renewal period, or one whose balance cannot
-  be read: `INTERNAL_ERROR`, which the start refuses too.
+- a period containing now that is not the renewal period: `INTERNAL_ERROR`,
+  which the start refuses too;
+- a renewal period whose balance cannot be read: `INTERNAL_ERROR`. The start
+  never reads that balance outside its commit, so this refusal is the offer's
+  own, a defensive one.
+
+One defect it does not see: a period that overlaps the renewal period
+without containing now, or one holding the renewal period's key with other
+bounds. The offer finds no period at now and offers the plan's allowance,
+while the start's opening refuses (`INTERNAL_ERROR`). Only a ledger already
+wrong holds such a period, the start fails safe, and the Units page has the
+same blind spot; seeing it would need an overlap read on the ledger port.
 
 ## Decision 4 — The funding it shows is a forecast
 

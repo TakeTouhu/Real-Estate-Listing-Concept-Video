@@ -608,12 +608,14 @@ async function offered(actor = ids.OWNER): Promise<StartOffer> {
 }
 
 async function offerRefusedWith(code: string, actor = ids.OWNER): Promise<AppError> {
+  const periods = reader.periods.length;
   const error = await service()
     .offer(actor, orgId, PROJECT)
     .then(() => null, (thrown: unknown) => thrown);
   expect(error).toBeInstanceOf(AppError);
   expect((error as AppError).code).toBe(code);
   expect(starts.records).toEqual([]);
+  expect(reader.periods).toHaveLength(periods);
   return error as AppError;
 }
 
@@ -661,7 +663,9 @@ describe("the start offer", () => {
     expect((await service().start(ids.OWNER, input({ confirmed }))).kind).toBe("STARTED");
   });
 
-  it("forecasts Base Units first, then additional Units of the video's quality only, oldest first", async () => {
+  // Which add-on blocks fund a video, by quality and age, is planUnitAllocation's and pinned by its own tests;
+  // the short-Units test below shows a block of the other quality is not counted.
+  it("forecasts Base Units first, within the HQ ceiling, then add-on Units", async () => {
     qualities = { offers: () => true };
     await openApril({
       baseRemainingUnits: 10,
@@ -778,6 +782,13 @@ describe("the start offer", () => {
     const unusable = (overrides: Partial<StoryboardScene> = {}) =>
       scene("scn_1", 1, { compiledPrompt: null, ...overrides });
     const cases: [string, () => void, StartOffer["kind"], string][] = [
+      // A project never composed is read as not fresh too.
+      [
+        "never composed",
+        () => (view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false }),
+        "NOT_COMPOSED",
+        "VALIDATION_FAILED",
+      ],
       ["stale and HQ", () => (view = { ...view, project: hq(), fresh: false }), "STALE", "VALIDATION_FAILED"],
       [
         "HQ and unusable",

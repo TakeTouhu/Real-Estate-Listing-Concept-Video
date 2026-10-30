@@ -230,10 +230,11 @@ describe.skipIf(!HAS_DB)("the start service against the start commit", () => {
     expect(await written()).toEqual({ jobs: 0, reservations: 0, scenes: 0, periods: 0, started: 0, periodOpened: 0 });
     const outcome = await service.start(owner, input());
     if (outcome.kind !== "STARTED") throw new Error(`expected STARTED, got ${outcome.kind}`);
-    expect(outcome.allocations.map((a) => [a.sourceType, a.quality, a.quantity])).toEqual([["BASE", "HIGH_QUALITY", 1]]);
+    const funded = outcome.allocations.map((a) => [a.sourceType, a.quality, a.quantity]);
+    expect(funded).toEqual([["BASE", "HIGH_QUALITY", 1]]);
   });
 
-  it("offers short Units, as the start answers them, once the plan's one HQ Unit is spent", async () => {
+  it("answers short Units, opening nothing, once the plan's one HQ Unit is spent", async () => {
     expect((await service.start(owner, input())).kind).toBe("STARTED");
     const after = await written();
     expect(await service.offer(owner, ORG, PROJECT)).toEqual({
