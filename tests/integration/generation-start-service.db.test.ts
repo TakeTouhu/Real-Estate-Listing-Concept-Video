@@ -26,6 +26,8 @@ const DOMAIN = "start-service.itest";
 const ORG = "org_itest_start_service";
 const PROPERTY = "prp_itest_start_service";
 const PROJECT = "vpr_itest_start_service";
+/** A second 1080p project, which spends the plan's one HQ Unit first. */
+const OTHER_PROJECT = "vpr_itest_start_service_other";
 const ASSETS = ["ast_itest_start_service_1", "ast_itest_start_service_2"];
 const SCENES = ["sbs_itest_start_service_1", "sbs_itest_start_service_2"];
 const FINGERPRINT = "sha256:start-service";
@@ -147,35 +149,45 @@ beforeEach(async () => {
       },
     });
   }
-  // 1080p, so HQ: the Standard plan's one HQ Unit is all a start of it can draw.
-  await prisma.videoProject.create({
-    data: {
-      id: PROJECT,
-      organizationId: ORG,
-      propertyId: PROPERTY,
-      name: "Walkthrough",
-      durationSeconds: 10,
-      aspectRatio: "16:9",
-      targetOutputResolution: "1080p",
-      createdBy: owner,
-    },
-  });
-  await storyboards.scenes.saveComposition(ORG, PROJECT, {
-    scenes: SCENES.map((id, index) => ({
-      id,
-      videoProjectId: PROJECT,
-      propertyId: PROPERTY,
-      assetId: ASSETS[index]!,
-      position: index + 1,
-      roomType: "KITCHEN",
-      durationSeconds: 5,
-      cameraMotion: null,
-      compiledPrompt: `a bright room, scene ${index + 1}`,
-      sourceAnalysisRevision: 1,
-    })),
-    compositionFingerprint: FINGERPRINT,
-  });
+  // 1080p, so HQ: the Standard plan's one HQ Unit is all a start of either can draw.
+  const projects = [[PROJECT, SCENES], [OTHER_PROJECT, SCENES.map((id) => `${id}_other`)]] as const;
+  for (const [projectId, sceneIds] of projects) {
+    await prisma.videoProject.create({
+      data: {
+        id: projectId,
+        organizationId: ORG,
+        propertyId: PROPERTY,
+        name: "Walkthrough",
+        durationSeconds: 10,
+        aspectRatio: "16:9",
+        targetOutputResolution: "1080p",
+        createdBy: owner,
+      },
+    });
+    await storyboards.scenes.saveComposition(ORG, projectId, {
+      scenes: sceneIds.map((id, index) => ({
+        id,
+        videoProjectId: projectId,
+        propertyId: PROPERTY,
+        assetId: ASSETS[index]!,
+        position: index + 1,
+        roomType: "KITCHEN",
+        durationSeconds: 5,
+        cameraMotion: null,
+        compiledPrompt: `a bright room, scene ${index + 1}`,
+        sourceAnalysisRevision: 1,
+      })),
+      compositionFingerprint: FINGERPRINT,
+    });
+  }
 });
+
+/** A start of the other project, which spends the plan's one HQ Unit. */
+async function spendTheHqUnit(): Promise<void> {
+  const confirmed = { qualityTier: "HIGH_QUALITY" as const, storyboardSceneIds: SCENES.map((id) => `${id}_other`) };
+  const spent = await service.start(owner, input({ videoProjectId: OTHER_PROJECT, confirmed }));
+  expect(spent.kind).toBe("STARTED");
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -209,7 +221,7 @@ describe.skipIf(!HAS_DB)("the start service against the start commit", () => {
   });
 
   it("answers short Units with the real eligible count, once the plan's one HQ Unit is spent", async () => {
-    expect((await service.start(owner, input())).kind).toBe("STARTED");
+    await spendTheHqUnit();
     const after = await written();
     expect(await service.start(owner, input({ idempotencyKey: "start-service-key-2" }))).toEqual({
       kind: "INSUFFICIENT_UNITS",
@@ -235,7 +247,7 @@ describe.skipIf(!HAS_DB)("the start service against the start commit", () => {
   });
 
   it("answers short Units, opening nothing, once the plan's one HQ Unit is spent", async () => {
-    expect((await service.start(owner, input())).kind).toBe("STARTED");
+    await spendTheHqUnit();
     const after = await written();
     expect(await service.offer(owner, ORG, PROJECT)).toEqual({
       kind: "INSUFFICIENT_UNITS",
@@ -243,6 +255,17 @@ describe.skipIf(!HAS_DB)("the start service against the start commit", () => {
       requiredUnits: 1,
       eligibleUnits: 0,
     });
+    expect(await written()).toEqual(after);
+  });
+
+  it("offers no second start of a project whose video is in progress, and refuses one, writing nothing", async () => {
+    const first = await service.start(owner, input());
+    if (first.kind !== "STARTED") throw new Error(`expected STARTED, got ${first.kind}`);
+    const after = await written();
+    const offer = await service.offer(owner, ORG, PROJECT);
+    expect(offer).toEqual({ kind: "VIDEO_EXISTS", jobId: first.job.id, delivered: false });
+    const second = await service.start(owner, input({ idempotencyKey: "start-service-key-2" }));
+    expect(second).toEqual({ kind: "VIDEO_EXISTS", job: first.job });
     expect(await written()).toEqual(after);
   });
 

@@ -1256,13 +1256,16 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 ## Open in GS-10 — starting a project's video again
 
 - [ ] **Decide whether a project with a video in progress or delivered may be
-      started again.** Today each start with a new key reserves its Units, so
-      pressing start twice reserves twice, and the price of making a delivered
+      started again.** Before GS-10b each start with a new key reserved its
+      Units, so pressing start twice reserved twice, and the price of making a delivered
       video again is not set (ADR-0052 says only that a regeneration uses
       more Units). Put to the product owner on 2026-10-30 with three options:
       only after a failure (recommended), also after delivery as a new video
-      at its full Units, or at any time. GS-10b enforces the answer in the
-      start commit and reports it in the start offer (ADR-0109).
+      at its full Units, or at any time. GS-10b (ADR-0110) applies the
+      recommended answer while the question is open: a project is started
+      again only once its video ended without one and its Units came back.
+      Another answer changes `holdsItsProject` (ADR-0110 Decision 1); after
+      delivery also needs the new video's price.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

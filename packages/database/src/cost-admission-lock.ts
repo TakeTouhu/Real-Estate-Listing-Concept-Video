@@ -38,6 +38,13 @@
  * cost-admission advisory lock -> reservation row lock -> everything else
  * ```
  *
+ * Three advisory locks below sit outside this order, each taken only as its
+ * own workflow's first statement, so nothing holding another lock ever waits
+ * for one: the start commit's project-start lock (ADR-0110), then the
+ * reservation-admission lock, before this one; and the launch lock (ADR-0095),
+ * whose holder never takes this one. Each relies on READ COMMITTED: a statement
+ * after the wait reads what the holder committed.
+ *
  * The Phase 4C-3B-2E row locks — `scene_generation_requests`,
  * `generation_scenes`, `video_projects` — are taken inside their own
  * transactions and are never held while this one is acquired, so there is no
@@ -143,12 +150,12 @@ export async function acquireEntitlementPeriodOpeningLock(
  * Taken by `reserve()` **first**, before the cost-admission lock. Two attempts
  * for one job may carry instants in different periods — or one in none — and
  * would otherwise take different cost-admission locks, or none, and never see
- * each other. It is the only lock ever taken before the cost-admission lock, and
- * it cannot form a cycle with it: only Transaction B (`reserve()`) and the start
- * commit (ADR-0087) take it, each as its first statement, so no transaction
- * holding the cost-admission lock or any row lock ever waits for it. The start
- * commit takes it for the job it is about to create, then runs Transaction B,
- * which takes it again and is granted it at once.
+ * each other. It cannot form a cycle with the cost-admission lock: only
+ * Transaction B (`reserve()`) and the start commit (ADR-0087) take it, each
+ * before any other lock but the project-start lock, so no transaction holding
+ * the cost-admission lock or any row lock ever waits for it. The start commit
+ * takes it for the job it is about to create, then runs Transaction B, which
+ * takes it again and is granted it at once.
  */
 export async function acquireReservationAdmissionLock(
   tx: Tx,
@@ -179,6 +186,30 @@ export async function acquireJobLaunchLock(tx: Tx, organizationId: string): Prom
     SELECT pg_advisory_xact_lock(
       hashtext(${`job-launch:${organizationId}`}),
       hashtext('launch')
+    )::text AS locked
+  `;
+}
+
+/**
+ * The project-start lock (GS-10b, ADR-0110): one start of a project at a time.
+ *
+ * Taken by the start commit **first**, before the reservation-admission lock.
+ * Its read of the jobs that hold the project and its new job become one
+ * decision, so two starts of one project with different keys can never both
+ * find it free. The cost-admission lock would order them too, but only while
+ * both instants fall in one period; this one does not depend on the period.
+ * Only the start commit takes it, as its first statement, so it sits outside
+ * the cost-admission order: nothing holding another lock ever waits for it.
+ */
+export async function acquireProjectStartLock(
+  tx: Tx,
+  organizationId: string,
+  videoProjectId: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtext(${`project-start:${organizationId}`}),
+      hashtext(${videoProjectId})
     )::text AS locked
   `;
 }

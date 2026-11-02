@@ -94,6 +94,8 @@ export type StartGenerationOutcome =
     }
   /** This start key already started this job. */
   | { readonly kind: "ALREADY_STARTED"; readonly job: GenerationJob }
+  /** Another video of the project is in progress or delivered: its job (ADR-0110). */
+  | { readonly kind: "VIDEO_EXISTS"; readonly job: GenerationJob }
   /** The storyboard is no longer the one the customer confirmed. */
   | { readonly kind: "STORYBOARD_CHANGED" }
   /** The project's resolution no longer gives the quality the customer confirmed. */
@@ -125,6 +127,11 @@ export type StartOffer =
        */
       readonly funding: { readonly baseUnits: number; readonly addOnUnits: number };
     }
+  /**
+   * A video of the project is in progress, or delivered, so it is not started
+   * again (ADR-0110): its job, and whether it has delivered a video.
+   */
+  | { readonly kind: "VIDEO_EXISTS"; readonly jobId: string; readonly delivered: boolean }
   /** The project has no composed storyboard. */
   | { readonly kind: "NOT_COMPOSED" }
   /** The approved photos have changed since the storyboard was composed. */
@@ -166,6 +173,11 @@ export class GenerationStartService {
   async offer(actorUserId: string, organizationId: string, videoProjectId: string): Promise<StartOffer> {
     const view = await this.reachableStoryboard(actorUserId, organizationId, videoProjectId);
     const project = view.project;
+    // A project's video in progress or delivered is shown, not offered again (ADR-0110).
+    const holding = await this.deps.starts.findHolding(organizationId, project.id);
+    if (holding !== null) {
+      return { kind: "VIDEO_EXISTS", jobId: holding.id, delivered: holding.currentDeliverableVersionId !== null };
+    }
     if (project.compositionFingerprint === null || view.scenes.length === 0) return { kind: "NOT_COMPOSED" };
     if (!view.fresh) return { kind: "STALE" };
 
@@ -230,6 +242,16 @@ export class GenerationStartService {
     // finds its job after the customer recomposed or the photos changed.
     const started = await this.deps.starts.findStarted(organizationId, project.id, idempotencyKey);
     if (started !== null) return { kind: "ALREADY_STARTED", job: started };
+    // One video at a time: a project is started again only once its video
+    // ended without one and its Units came back. The commit checks it again
+    // under its lock (ADR-0110).
+    const holding = await this.deps.starts.findHolding(organizationId, project.id);
+    if (holding !== null) {
+      // This key's own start may have committed between the two reads: then
+      // it is a replay still, and is answered as one.
+      const replayed = await this.deps.starts.findStarted(organizationId, project.id, idempotencyKey);
+      return replayed !== null ? { kind: "ALREADY_STARTED", job: replayed } : { kind: "VIDEO_EXISTS", job: holding };
+    }
 
     if (project.compositionFingerprint === null || view.scenes.length === 0) {
       throw new AppError("VALIDATION_FAILED", "This project has no composed storyboard");
@@ -286,6 +308,8 @@ export class GenerationStartService {
         };
       case "EXISTING":
         return { kind: "ALREADY_STARTED", job: outcome.job };
+      case "VIDEO_EXISTS":
+        return { kind: "VIDEO_EXISTS", job: outcome.job };
       case "PROJECT_NOT_FOUND":
       case "PROPERTY_DELETED":
         throw new AppError("NOT_FOUND", "Video project not found");

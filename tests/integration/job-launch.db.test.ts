@@ -603,12 +603,20 @@ describe.skipIf(!HAS_DB)("the concurrent-job limit", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("the same video started twice", () => {
-  it("waits, whole, until the first one's identical requests end", async () => {
+describe.skipIf(!HAS_DB)("the same video started again", () => {
+  it("waits, whole, until the failed first one's identical requests end", async () => {
     const first = await startJob(ORG_B, 1, 1);
-    const second = await startJob(ORG_B, 2, 1);
     await runner().runOnce(10);
     expect(await jobState(first)).toBe("GENERATING");
+    // The first video failed and its Units came back while its requests were
+    // still being generated, as when another of its scenes failed for good:
+    // its project may be started again (ADR-0110), with identical requests.
+    await prisma.generationJob.update({ where: { id: first }, data: { state: "FAILED_TERMINAL" } });
+    await prisma.generationReservation.update({
+      where: { generationJobId: first },
+      data: { state: "RELEASED", releasedAt: STARTED_AT },
+    });
+    const second = await startJob(ORG_B, 2, 1);
 
     const before = await written();
     expect((await runner().runOnce(10)).outcomes).toEqual([

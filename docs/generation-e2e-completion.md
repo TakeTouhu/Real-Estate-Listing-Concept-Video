@@ -5743,3 +5743,153 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 GS-10a waits for the product owner's yes before merge. Then GS-10b, GS-10c and
 GS-10d, then progress (GS-11), preview and download (GS-12) and the browser
 test (GS-13).
+
+## GS-10b — one video of a project at a time
+
+Base: `c7598a2` (PR #133 merge commit on `main`).
+ADR: `docs/decisions/0110-one-video-of-a-project-at-a-time.md`
+
+The second milestone of row GS-10 of the approved plan. **No migration; no
+route, no page, no environment variable.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `b1fc511` | the rule, the commit's lock and read, the service and offer, their tests, ADR-0110 and the documentation |
+| `06ecfa9` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-10b does
+
+- **A project is started again only once its video ended without one and its
+  Units came back.** A delivered video, one in progress, and a failed one whose
+  Units are still held each keep the project (`holdsItsProject`). This is the
+  recommended answer to the question put to the product owner on 2026-10-30,
+  applied while it is open.
+- **The start commit decides it under a lock of its own.** Its first statement
+  takes a per-project advisory lock; after the replay read it finds the newest
+  job that holds the project and answers `VIDEO_EXISTS` with it, writing
+  nothing. Two starts of one project now queue, whatever period each falls in.
+- **The service and the offer say so first.** The start answers
+  `VIDEO_EXISTS` before it opens the Unit period; the offer answers it, with
+  the job and whether it has delivered a video, before anything about the
+  storyboard.
+
+```mermaid
+sequenceDiagram
+    participant S as Start route (GS-10c)
+    participant V as GenerationStartService
+    participant R as Start repository
+    participant C as Start commit
+    S->>V: start(member, project, key, confirmation)
+    V->>V: permissions, reach
+    V->>R: findStarted, then findHolding (no lock)
+    alt a job holds the project
+        V->>R: findStarted again
+        V-->>S: ALREADY_STARTED if it is this key's, else VIDEO_EXISTS (its job)
+    else free
+        V->>V: storyboard, quality, length; open the Unit period
+        V->>C: start(record)
+        C->>C: project-start lock, then reservation- and cost-admission locks
+        C->>C: project and Property FOR SHARE, replay read
+        C->>C: the newest job holding the project
+        alt one does
+            C-->>V: VIDEO_EXISTS, nothing written
+        else none
+            C->>C: storyboard, job, Transaction B, scenes, audit
+            C-->>V: STARTED
+        end
+    end
+```
+
+### Verification
+
+Measured locally on `06ecfa9` (PostgreSQL 16 configured like CI), each exit
+status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,673 passed in 247 files (9 new: the rule against every state, its tie to the job state machine, the lock taken first, and the start and offer answering a held project, a replay and a double click) |
+| `pnpm test:db` | 1,864 passed in 70 files (8 new): the query against every job and reservation state, the newest holding job and its tenant scope, a second start refused until the first video failed and gave its Units back, a delivered video, two concurrent starts in one period and across a period boundary, the key's index as a backstop, and the service's `VIDEO_EXISTS`; one older launch test reworked to start again after a failure |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10a, against the start's unit suites and both start
+database suites: 25 mutants on the rule, the service's and the offer's reads
+and their order, the commit's lock, its read and its order, and the query
+(each branch, its order, its tenant scope, its input checks). All 25 killed;
+the missing lock and a lock keyed by the job are also killed by the database
+suite alone, by the two starts across a period boundary. Three more on the
+review's fix: all killed, one after its test was made to tell the replay
+read's job from the hold read's.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex is
+at its usage limit), found nothing blocking: the query says what
+`holdsItsProject` says for every state, the lock cannot form a cycle, the read
+after it sees a competing start's committed job, and nothing reaches across
+organizations or a deleted Property. Answered in `06ecfa9`:
+
+- **Should fix: a double click could be answered `VIDEO_EXISTS`.** The
+  service's replay read and hold read are two statements; a retry whose first
+  request committed between them found the project held by its own job. It now
+  reads the key's job again when it finds the project held, and answers a
+  replay; a unit test has the first request commit in between.
+- **Should fix: a comment said two same-key starts meet at the key's unique
+  index.** The project-start lock orders them now; the comment says only a job
+  written outside a start can reach the index.
+- **Minor.** The lock module now places the three advisory locks taken before
+  or apart from the cost-admission lock, and says they rely on READ COMMITTED;
+  ADR-0110 records that the older single-scene job creation neither reads nor
+  locks (nothing in production constructs it); the TODO entry no longer says
+  "today" of what this change ends; a test comment cites ADR-0082 and ADR-0083.
+- **Gap and nits.** A database test now shows a held project with a stale
+  confirmation is answered `VIDEO_EXISTS`, not refused for its storyboard; a
+  variable is named for what it holds; ADR-0110 says the rule is written twice,
+  that its status applies the default, and that any reservation but `RELEASED`
+  holds; the sequence diagram draws the reads against the repository.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start commit's and the start service's rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10b.md`: no HTTP change; `VIDEO_EXISTS`, `findHolding`, `holdsItsProject` |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the question stays open with the product owner).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the start and its commit are constructed by tests only. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The rule is the recommended default, not yet the product owner's answer.**
+  Allowing a start after delivery would free a delivered job's project and
+  needs the new video's price first.
+- **A project started again after a failure may wait to launch** while the
+  failed job's identical requests are still with the provider: the launch's
+  existing `SAME_REQUEST_RUNNING` guard (ADR-0095).
+- **Nothing shows it yet.** GS-10c builds the route, in development with the
+  test provider only, and GS-10d the page.
+
+### Remaining work
+
+GS-10b waits for the product owner's yes before merge. Then GS-10c and GS-10d,
+then progress (GS-11), preview and download (GS-12) and the browser test
+(GS-13).

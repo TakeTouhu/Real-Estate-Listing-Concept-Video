@@ -95,6 +95,8 @@ describe("the database package's public surface", () => {
     expect(Object.keys(database)).not.toContain("acquireCostAdmissionLock");
     expect("acquireCostAdmissionLock" in database).toBe(false);
     expect("costAdmissionLockKeys" in database).toBe(false);
+    // GS-10b (ADR-0110): the start commit's own lock, taken before any other.
+    expect("acquireProjectStartLock" in database).toBe(false);
   });
 
   it("keeps the cost-admission lock key formula in exactly one module", () => {

@@ -2047,3 +2047,20 @@ new environment variable.
 which nothing outside tests constructs until GS-10c's route.
 
 **Rolling back.** To GS-9c's build: safe. The offer writes nothing.
+
+## GS-10b — one video of a project at a time
+
+**No migration** (ADR-0110). No schema, enum, constraint or row changes, and no
+new environment variable. A unique index cannot express the rule, which spans
+a job and its reservation; the start commit's read under its new project-start
+advisory lock does.
+
+**What changes at deploy.** Nothing. The start commit and service are
+constructed by tests only until GS-10c's route.
+
+**Existing data.** None is needed: before this build nothing outside tests
+started a video. A project that already holds two jobs is answered with the
+newest one that holds it.
+
+**Rolling back.** To GS-10a's build: safe. Nothing is stored; the lock is
+transaction-scoped.
