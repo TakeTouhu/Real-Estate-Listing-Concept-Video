@@ -5925,10 +5925,12 @@ The exact head SHA is reported with the pull request.
   sends a signed-out visitor to sign in, reads the form (organization,
   Property, quality, scenes in order, key), and starts through the service as
   the signed-in member.
-- **Every answer lands on a page.** A start, or a replay of the same
-  confirmation, lands on the project page; anything else lands on the start
-  page saying why nothing was started, or, after a failure that may have come
-  after the write, to check the project page first.
+- **Every answer of the start lands on a page.** A start, or a replay of the
+  same confirmation, lands on the project page; anything else the service
+  answers lands on the start page saying why nothing (new) was started, or,
+  after a failure that may have come after the write, that trying again is
+  safe. Only what the route refuses before the start (`404`, `403`, `422`) is
+  a JSON error.
 
 ```mermaid
 sequenceDiagram

@@ -14,10 +14,18 @@ import { AppError } from "@app/shared";
  */
 
 const QUALITIES: readonly GenerationQualityTier[] = ["NORMAL", "HIGH_QUALITY"];
-const MAX_ID_LENGTH = 64;
+/** The ids the app makes: a prefix and URL-safe base64, up to 64 characters. */
+const ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Visible ASCII, which is what the start page makes a key of. */
+const KEY = new RegExp(`^[!-~]{1,${MAX_IDEMPOTENCY_KEY_LENGTH}}$`);
+
+/** Whether a value can be one of the app's ids. */
+export function isId(value: unknown): value is string {
+  return typeof value === "string" && ID.test(value);
+}
 
 function id(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH ? value : null;
+  return isId(value) ? value : null;
 }
 
 /** The Property the start page belongs to, which only says where to send the customer. */
@@ -37,8 +45,7 @@ export function readGenerationStartForm(videoProjectId: string, form: FormData):
     organizationId === null ||
     qualityTier === undefined ||
     typeof key !== "string" ||
-    key.length === 0 ||
-    key.length > MAX_IDEMPOTENCY_KEY_LENGTH ||
+    !KEY.test(key) ||
     sceneIds.length === 0 ||
     sceneIds.length !== sent.length
   ) {
@@ -83,20 +90,24 @@ export function landingFor(outcome: StartGenerationOutcome): StartLanding {
 }
 
 /**
- * The words for a start that failed. A refused permission, a project not found
- * and a storyboard that cannot be started say nothing was started; any other
- * failure may have come after the write, so the customer is sent to look
- * before trying again.
+ * The words for a start that failed.
+ *
+ * A refused permission and a project not found are judged before the start
+ * reads its key, so a retry of a start that did happen, by a member who has
+ * since lost a permission or the project, gets them too: they say nothing
+ * *new* was started. A storyboard that cannot be started is judged after the
+ * key, so nothing was. Any other failure may have come after the write; a
+ * retry is safe, since a project's video is never started twice (ADR-0110).
  */
 export function failureMessage(error: AppError): string {
   switch (error.code) {
     case "FORBIDDEN":
-      return "You cannot start videos for this project. Nothing was started.";
+      return "You cannot start videos for this project. Nothing new was started.";
     case "NOT_FOUND":
-      return "The video project was not found. Nothing was started.";
+      return "The video project was not found. Nothing new was started.";
     case "VALIDATION_FAILED":
       return "This storyboard cannot be started as it is. Nothing was started. Review it again.";
     default:
-      return "The start could not be confirmed. Check the project page before trying again.";
+      return "The start could not be confirmed. Review it and try again: a video already started is not started twice.";
   }
 }

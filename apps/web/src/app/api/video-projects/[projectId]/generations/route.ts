@@ -6,6 +6,7 @@ import { getGenerationStartService } from "@/lib/generation-start";
 import {
   NOT_USABLE,
   failureMessage,
+  isId,
   landingFor,
   readGenerationStartForm,
   readPropertyId,
@@ -44,8 +45,11 @@ export async function POST(
   } catch {
     return appErrorToResponse(new AppError("VALIDATION_FAILED", "A start is sent as a form"));
   }
+  // Both say where to send the customer, so neither can be just any text.
   const propertyId = readPropertyId(form);
-  if (propertyId === null) return appErrorToResponse(new AppError("VALIDATION_FAILED", "propertyId is required"));
+  if (propertyId === null || !isId(projectId)) {
+    return appErrorToResponse(new AppError("VALIDATION_FAILED", "A start names a Property and a project by their ids"));
+  }
   const pages = startPages(propertyId, projectId);
   const input = readGenerationStartForm(projectId, form);
   if (input === null) return redirectWithError(request.url, pages.start, NOT_USABLE);

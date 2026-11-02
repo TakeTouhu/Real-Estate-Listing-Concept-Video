@@ -14,20 +14,20 @@ page, which GS-10d adds.
 
 | Field | Shape |
 | --- | --- |
-| `organizationId` | 1 to 64 characters |
-| `propertyId` | 1 to 64 characters; only says where to send the customer |
+| `organizationId` | an id: 1 to 64 letters, digits, `_` or `-` |
+| `propertyId` | an id; only says where to send the customer |
 | `qualityTier` | `NORMAL` or `HIGH_QUALITY` |
-| `sceneId` | repeated, one per scene in the storyboard's order; at least one, each 1 to 64 characters |
-| `idempotencyKey` | 1 to 200 characters; the same key is the same start |
+| `sceneId` | repeated, one per scene in the storyboard's order; at least one, each an id |
+| `idempotencyKey` | 1 to 200 visible ASCII characters; the same key is the same start |
 
 | Response | When |
 | --- | --- |
-| `404` `NOT_FOUND` (JSON envelope) | the start is not built here: production, or a provider other than `fake`. Nothing else is read |
+| `404` `NOT_FOUND` (JSON envelope) | the start is not built here: production, or a provider other than `fake`. Nothing else is read. (A `GET` answers `405`: only `POST` is exported) |
 | `403` `FORBIDDEN` (JSON envelope) | the `Origin` is missing or not this host |
 | `303` to `/login` | signed out |
-| `422` `VALIDATION_FAILED` (JSON envelope) | the body is not a form, or `propertyId` is missing or not an id |
+| `422` `VALIDATION_FAILED` (JSON envelope) | the body is not a form, or `propertyId` or the project id in the path is not an id |
 | `303` to `/properties/{propertyId}/video-projects/{projectId}?started=1` | started, or this key already started it |
-| `303` to `/properties/{propertyId}/video-projects/{projectId}/start?error=…` | nothing was started: an unreadable form, `VIDEO_EXISTS`, a changed storyboard or quality, a quality not offered, too long, no plan, Units short, refused permission, a project not found, a storyboard that cannot be started; or the start could not be confirmed (check the project page first) |
+| `303` to `/properties/{propertyId}/video-projects/{projectId}/start?error=…` | nothing was started: an unreadable form, `VIDEO_EXISTS`, a changed storyboard or quality, a quality not offered, too long, no plan, Units short, refused permission or a project not found (nothing *new* was started), a storyboard that cannot be started; or the start could not be confirmed (trying again is safe) |
 | `500` | an unexpected failure, not turned into a message |
 
 The messages are listed in ADR-0111 Decision 4. The start page itself arrives
@@ -44,6 +44,6 @@ refuses it.
 
 ### Added: `apps/web`, the start form
 
-`readGenerationStartForm(projectId, form)`, `readPropertyId(form)`,
+`isId(value)`, `readGenerationStartForm(projectId, form)`, `readPropertyId(form)`,
 `startPages(propertyId, projectId)`, `landingFor(outcome)` and
 `failureMessage(error)` in `apps/web/src/lib/generation-start-form.ts`.

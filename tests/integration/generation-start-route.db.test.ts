@@ -15,6 +15,12 @@ const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 const ORG = "org_itest_start_route";
 const OWNER = "usr_itest_start_route_owner";
+/** A member who may view videos but not start one: no `video.generate`, no `unit.consume`. */
+const VIEWER = "usr_itest_start_route_viewer";
+/** Another organization, and its owner, who is no member of the first. */
+const OTHER_ORG = "org_itest_start_route_other";
+const OTHER_OWNER = "usr_itest_start_route_other";
+const USERS = [OWNER, VIEWER, OTHER_OWNER];
 const PROPERTY = "prp_itest_start_route";
 const ASSETS = ["ast_itest_start_route_1", "ast_itest_start_route_2", "ast_itest_start_route_3"];
 const ROOMS = ["LIVING_ROOM", "KITCHEN", "BEDROOM"] as const;
@@ -24,7 +30,8 @@ const DAY = 24 * 60 * 60 * 1000;
 vi.mock("@/lib/env", () => ({
   getServerEnv: () => ({ NODE_ENV: "test", VIDEO_PROVIDER: "fake", USER_SESSION_TTL_SECONDS: 3600 }),
 }));
-vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve({ user: { id: OWNER } }) }));
+const signedIn = vi.hoisted(() => ({ id: "" }));
+vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve({ user: { id: signedIn.id } }) }));
 
 const { POST } = await import("@/app/api/video-projects/[projectId]/generations/route");
 const { getGenerationStartService } = await import("@/lib/generation-start");
@@ -51,9 +58,9 @@ async function cleanup(): Promise<void> {
   await prisma.assetAnalysis.deleteMany({ where: { organizationId: ORG } });
   await prisma.mediaAsset.deleteMany({ where: { organizationId: ORG } });
   await prisma.property.deleteMany({ where: { organizationId: ORG } });
-  await prisma.auditLog.deleteMany({ where: { organizationId: ORG } });
-  await prisma.organization.deleteMany({ where: { id: ORG } });
-  await prisma.user.deleteMany({ where: { id: OWNER } });
+  await prisma.auditLog.deleteMany({ where: { organizationId: { in: [ORG, OTHER_ORG] } } });
+  await prisma.organization.deleteMany({ where: { id: { in: [ORG, OTHER_ORG] } } });
+  await prisma.user.deleteMany({ where: { id: { in: USERS } } });
 }
 
 let projectId: string;
@@ -61,9 +68,18 @@ let projectId: string;
 beforeEach(async () => {
   if (!HAS_DB) return;
   await cleanup();
-  await prisma.user.create({ data: { id: OWNER, email: `${OWNER}@example.com`, name: "Owner" } });
-  await prisma.organization.create({ data: { id: ORG, name: ORG, slug: ORG.replaceAll("_", "-") } });
-  await prisma.membership.create({ data: { organizationId: ORG, userId: OWNER, role: "OWNER" } });
+  signedIn.id = OWNER;
+  for (const id of USERS) await prisma.user.create({ data: { id, email: `${id}@example.com`, name: id } });
+  for (const id of [ORG, OTHER_ORG]) {
+    await prisma.organization.create({ data: { id, name: id, slug: id.replaceAll("_", "-") } });
+  }
+  await prisma.membership.createMany({
+    data: [
+      { organizationId: ORG, userId: OWNER, role: "OWNER" },
+      { organizationId: ORG, userId: VIEWER, role: "VIEWER" },
+      { organizationId: OTHER_ORG, userId: OTHER_OWNER, role: "OWNER" },
+    ],
+  });
   // A Standard plan that started before now, whatever the clock says now.
   const provisioned = await createSubscriptionRepository(prisma).provision({
     id: `sub_${ORG}`,
@@ -186,6 +202,28 @@ describe.skipIf(!HAS_DB)("the start route through the web app's composition, in 
       started: null,
     });
     expect(await jobs()).toHaveLength(1);
+  });
+
+  const REFUSED = "You cannot start videos for this project. Nothing new was started.";
+  const NOT_FOUND = "The video project was not found. Nothing new was started.";
+
+  it.each([
+    ["a member who may not start videos", VIEWER, ORG, REFUSED],
+    ["a member of another organization, naming it", OTHER_OWNER, OTHER_ORG, NOT_FOUND],
+    ["a member of another organization, naming this one", OTHER_OWNER, ORG, REFUSED],
+  ])("starts nothing for %s", async (_who, actor, organizationId, message) => {
+    const form = await confirmation("route-key-4");
+    form.set("organizationId", organizationId);
+    signedIn.id = actor;
+
+    expect(await post(form)).toEqual({
+      path: `/properties/${PROPERTY}/video-projects/${projectId}/start`,
+      error: message,
+      started: null,
+    });
+    expect(await jobs()).toEqual([]);
+    const started = { action: "generation.started", organizationId: { in: [ORG, OTHER_ORG] } };
+    expect(await prisma.auditLog.count({ where: started })).toBe(0);
   });
 
   it("starts nothing from a confirmation of another storyboard", async () => {

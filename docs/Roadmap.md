@@ -480,9 +480,9 @@ page, starts a project's video through the start service as the signed-in
 member and sends the customer to the project page, or back to the start page
 saying why nothing was started. The web app builds the start only where the
 test provider's route kit is handed out (not production, `VIDEO_PROVIDER=fake`),
-with the kit's qualities; anywhere else the route answers `404`. It checks the
-post's `Origin` first, as the purchase route does. A started job waits for the
-development pipeline command.
+with the kit's qualities; anywhere else the route answers `404`. Where it is
+built, it checks the post's `Origin` before the session, as the purchase route
+does. A started job waits for the development pipeline command.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

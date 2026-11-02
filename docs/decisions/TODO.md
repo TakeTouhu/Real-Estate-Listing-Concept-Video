@@ -268,7 +268,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       route, and it is not limited either. Since GS-10c (ADR-0111 Decision 5)
       the start route (`POST /api/video-projects/{id}/generations`, built only
       in development with the test provider) is the first generation route;
-      it must be limited before any production route serves a start.
+      it must be limited, and its form's size bounded, before any production
+      route serves a start.
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
