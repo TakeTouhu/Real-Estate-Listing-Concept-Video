@@ -1595,8 +1595,8 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
 
 /**
  * The start commit's repository (GS-4b, ADR-0087), and the replay read the
- * start service makes first (GS-4c, ADR-0088). Nothing constructs it yet: the
- * start route (GS-10) will.
+ * start service makes first (GS-4c, ADR-0088). The web app's start constructs
+ * it, only where the test provider is (GS-10c, ADR-0111).
  */
 export function createGenerationStartRepository(prisma: PrismaClient): GenerationStartRepository {
   // The key the column's CHECK accepts. Checked before any read of it: a

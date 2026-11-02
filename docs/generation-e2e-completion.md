@@ -5893,3 +5893,62 @@ production scheduler and live Stripe charges remain BLOCKED.
 GS-10b waits for the product owner's yes before merge. Then GS-10c and GS-10d,
 then progress (GS-11), preview and download (GS-12) and the browser test
 (GS-13).
+
+## GS-10c — the start route, in development only
+
+Base: `fd6345c` (PR #134 merge commit on `main`).
+ADR: `docs/decisions/0111-start-route-in-development.md`
+
+The third milestone of row GS-10 of the approved plan. **No migration; no page,
+no environment variable.** The route exists only in development with the test
+provider; in production it answers `404`.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| this commit | the composition, the route, the form, their tests, ADR-0111 and the documentation |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-10c does
+
+- **The web app builds the start only where the test provider's route is
+  handed out.** `getGenerationStartService()` asks `createFakeRouteKit`, whose
+  own guard refuses production (given or ambient) and any provider but `fake`;
+  where it refuses, there is no start. The start's qualities are the kit's,
+  Normal and HQ, from the policy the development pipeline hands its
+  paid-submission gate.
+- **`POST /api/video-projects/{projectId}/generations` starts a project's
+  video** from a form: where the start is not built it answers `404` before
+  reading anything; then it refuses a post whose `Origin` is not this host,
+  sends a signed-out visitor to sign in, reads the form (organization,
+  Property, quality, scenes in order, key), and starts through the service as
+  the signed-in member.
+- **Every answer lands on a page.** A start, or a replay of the same
+  confirmation, lands on the project page; anything else lands on the start
+  page saying why nothing was started, or, after a failure that may have come
+  after the write, to check the project page first.
+
+```mermaid
+sequenceDiagram
+    participant B as Start page (GS-10d)
+    participant R as Start route
+    participant W as Web composition
+    participant V as GenerationStartService
+    B->>R: POST form (organization, Property, quality, scenes, key)
+    R->>W: getGenerationStartService()
+    alt production, or a provider other than fake
+        W-->>R: null
+        R-->>B: 404
+    else development with the test provider
+        W-->>R: the start, with the kit's qualities
+        R->>R: Origin, session, form
+        R->>V: start(member, project, key, confirmation)
+        alt STARTED or ALREADY_STARTED
+            R-->>B: 303 project page ?started=1
+        else refused, or failed
+            R-->>B: 303 start page ?error=why nothing was started
+        end
+    end
+```

@@ -959,7 +959,7 @@ function qualityTierOf(current: StoryboardView): "NORMAL" | "HIGH_QUALITY" {
   return current.project.targetOutputResolution === "1080p" ? "HIGH_QUALITY" : "NORMAL";
 }
 
-describe("dormancy", () => {
+describe("who constructs it", () => {
   const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
   function productionSources(dir: string): { name: string; text: string }[] {
@@ -978,11 +978,11 @@ describe("dormancy", () => {
     return found;
   }
 
-  it("is constructed by nothing outside tests until the start route (GS-10)", () => {
+  it("is constructed outside tests only by the web app's start, built where the test provider is (GS-10c)", () => {
     const sources = [...productionSources(join(REPO_ROOT, "apps")), ...productionSources(join(REPO_ROOT, "packages"))];
     const constructors = sources
       .filter(({ text }) => text.includes("new GenerationStartService("))
       .map(({ name }) => name);
-    expect(constructors).toEqual([]);
+    expect(constructors).toEqual(["apps/web/src/lib/generation-start.ts"]);
   });
 });

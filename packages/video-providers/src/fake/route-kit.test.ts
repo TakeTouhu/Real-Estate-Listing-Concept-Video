@@ -262,13 +262,14 @@ function callers(name: string): string[] {
 
 describe("who builds the kit, or a policy or catalog like it", () => {
   /**
-   * The development pipeline's assembly (GS-9b, ADR-0106) is the factory's
-   * first caller. The start route (GS-10) adds itself here when it is
-   * reviewed. The two builders the factory uses have no production check of
-   * their own, so nothing else may call them.
+   * The development pipeline's assembly (GS-9b, ADR-0106) and the web app's
+   * start (GS-10c, ADR-0111) are the factory's callers. The two builders the
+   * factory uses have no production check of their own, so nothing else may
+   * call them.
    */
-  it("is the package that defines the factory and the development pipeline", () => {
+  it("is the package that defines the factory, the development pipeline and the web app's start", () => {
     expect(callers("createFakeRouteKit")).toEqual([
+      "apps/web/src/lib/generation-start.ts",
       "apps/worker/src/development-pipeline/assembly.ts",
       "packages/video-providers/src/fake/route-kit.ts",
       "packages/video-providers/src/index.ts",

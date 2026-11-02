@@ -31,7 +31,8 @@ import type { GenerationQualityTier } from "./types";
  * Decides whether a member may start the video a project's storyboard
  * describes, and builds what the start commit (ADR-0087) records. Its offer
  * (GS-10a, ADR-0109) is what the start screen shows before the customer
- * confirms. Nothing outside tests constructs it until the start route (GS-10).
+ * confirms. The web app constructs it only where the test provider is: in
+ * development with `VIDEO_PROVIDER=fake` (GS-10c, ADR-0111).
  */
 
 /** Audit vocabulary for the start. One entry per started job, written in its commit. */
