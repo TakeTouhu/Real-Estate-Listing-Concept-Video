@@ -5907,7 +5907,9 @@ Commits, oldest first:
 
 | Commit | What it carries |
 | --- | --- |
-| this commit | the composition, the route, the form, their tests, ADR-0111 and the documentation |
+| `ca42d5a` | the composition, the route, the form, their tests, ADR-0111 and the documentation |
+| `ee77202` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
 
 The exact head SHA is reported with the pull request.
 
@@ -5954,3 +5956,94 @@ sequenceDiagram
         end
     end
 ```
+
+### Verification
+
+Measured locally on `ee77202` (PostgreSQL 16 configured like CI), each exit
+status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,724 passed in 249 files (51 new: the route's order of refusals, the form's shapes at their bounds, every answer's landing and words, the composition built only where the kit is, once, with the kit's qualities; three static tests now name the web composition) |
+| `pnpm test:db` | 1,869 passed in 71 files (5 new): through the web app's own composition, the composed storyboard started once at HQ and its Units reserved, the same confirmation landing where the start did, a new one answered with the project's video, a changed storyboard, a member without the permissions and another organization's member each starting nothing |
+| `pnpm build` | succeeded; the build lists `/api/video-projects/[projectId]/generations` |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10b, against the route and composition unit suites and
+the route's database suite. On `ca42d5a`, 31 mutants on the route's checks and
+their order, the form's shapes, the landings and words, and the composition:
+all killed (the production quality offer only by the database suite then).
+On `ee77202`, 40 mutants with the review's changes: 39 killed, the production
+quality offer now by the unit suite as well. The survivor is equivalent:
+`encodeURIComponent` on a Property id, which can now hold only characters it
+leaves as they are.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex is
+at its usage limit), found nothing blocking: no way to build or reach the
+start in production or with another provider, the checks in the right order,
+redirects that stay on the site, and no provider, model or job id in a URL or
+message. Answered in `ee77202`:
+
+- **Should fix: "Nothing was started" could be false on a retry.** The start
+  service judges permissions and reach before it reads the key, so a retry of
+  a start that happened, by a member who has since lost a permission or the
+  project, is refused. Those two now say nothing *new* was started.
+- **Should fix: no tenant or permission test through the real composition.**
+  The database test now posts as a member without `video.generate` and
+  `unit.consume`, and as another organization's member naming either
+  organization; each starts nothing and writes no `generation.started`.
+- **Minor.** The `404` is described as what it is (it does not hide the path:
+  a `GET` answers `405`); a failure that may have come after the write says a
+  retry is safe instead of pointing at a page that shows no job until GS-11;
+  the composition's unit test now proves the kit's qualities and that only the
+  guard's refusal is turned into "no start"; ADR-0111 says a started job holds
+  its project and Units until the pipeline command runs.
+- **Nits.** Ids must be the app's ids and keys visible ASCII, so a control
+  character is refused as an unreadable form instead of reaching PostgreSQL,
+  and the project id in the path is checked like the Property's; the missing
+  bound on the form's size is recorded with the rate-limit TODO.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start route's row; the start, start commit and route kit rows name the web composition |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10c.md`: the route, its fields and answers |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10c*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (rate limiting and the `Origin` check name the start
+route).
+
+### Activation status
+
+Nothing paid or scheduled is activated. In production the route answers `404`
+and no start is built; in development the test provider makes the video and
+nothing is paid for. Paid Provider Activation, production Provider
+credentials, production paid AI calls, the production scheduler and live
+Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing on the site posts to the route yet.** GS-10d adds the start page.
+- **A started job waits for the development pipeline command**, holding its
+  project and its Units until then; the project page shows it from GS-11.
+- **No rate limit and no bound on the form's size**, like every route today
+  (`docs/decisions/TODO.md`).
+- **The re-start rule is still the recommended default** (ADR-0110), with the
+  product owner's answer pending.
+
+### Remaining work
+
+GS-10c waits for the product owner's yes before merge. Then GS-10d (the start
+page), progress (GS-11), preview and download (GS-12) and the browser test
+(GS-13).
