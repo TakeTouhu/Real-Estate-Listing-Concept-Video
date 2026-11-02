@@ -38,6 +38,13 @@
  * cost-admission advisory lock -> reservation row lock -> everything else
  * ```
  *
+ * Three advisory locks below sit outside this order, each taken only as its
+ * own workflow's first statement, so nothing holding another lock ever waits
+ * for one: the start commit's project-start lock (ADR-0110), then the
+ * reservation-admission lock, before this one; and the launch lock (ADR-0095),
+ * whose holder never takes this one. Each relies on READ COMMITTED: a statement
+ * after the wait reads what the holder committed.
+ *
  * The Phase 4C-3B-2E row locks — `scene_generation_requests`,
  * `generation_scenes`, `video_projects` — are taken inside their own
  * transactions and are never held while this one is acquired, so there is no

@@ -57,18 +57,18 @@ describe("qualityTierForResolution", () => {
 
 describe("holdsItsProject (ADR-0110)", () => {
   it("frees a project only once its job ended without a video and its Units, if it reserved any, came back", () => {
-    const held: string[] = [];
+    const free: string[] = [];
     for (const jobState of GENERATION_JOB_STATES) {
       for (const reservationState of [null, ...GENERATION_RESERVATION_STATES]) {
-        if (!holdsItsProject(jobState, reservationState)) held.push(`${jobState}/${reservationState}`);
+        if (!holdsItsProject(jobState, reservationState)) free.push(`${jobState}/${reservationState}`);
       }
     }
-    expect(held).toEqual(["FAILED_TERMINAL/null", "FAILED_TERMINAL/RELEASED", "CANCELLED/null", "CANCELLED/RELEASED"]);
+    expect(free).toEqual(["FAILED_TERMINAL/null", "FAILED_TERMINAL/RELEASED", "CANCELLED/null", "CANCELLED/RELEASED"]);
   });
 
   it("names as ended without a video exactly the job states with no way out", () => {
     // DELIVERABLE_READY has a way out, to a revision, and a delivered video
-    // never fails (ADR-0084): a job that delivered one holds its project.
+    // never fails (ADR-0082, ADR-0083): a job that delivered one holds its project.
     const final = GENERATION_JOB_STATES.filter((from) =>
       GENERATION_JOB_STATES.every((to) => !canTransitionJob(from, to)),
     );

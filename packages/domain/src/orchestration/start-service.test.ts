@@ -167,12 +167,14 @@ class RecordingStarts implements GenerationStartRepository {
   readonly periodsAtStart: number[] = [];
   readonly holdingReads: [string, string][] = [];
   replay: GenerationJob | null = null;
+  /** What the replay read answers from its second read on, when set: a start that committed meanwhile. */
+  lateReplay: GenerationJob | null = null;
   holding: GenerationJob | null = null;
   answer: GenerationStartOutcome | null = null;
 
   findStarted(organizationId: string, videoProjectId: string, idempotencyKey: string) {
     this.replayReads.push([organizationId, videoProjectId, idempotencyKey]);
-    return Promise.resolve(this.replay);
+    return Promise.resolve(this.replayReads.length > 1 ? (this.lateReplay ?? this.replay) : this.replay);
   }
 
   findHolding(organizationId: string, videoProjectId: string) {
@@ -492,7 +494,11 @@ describe("one video at a time (ADR-0110)", () => {
       // Never composed: a held project is answered before its storyboard is judged.
       view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false };
       expect(await service().start(ids.OWNER, input())).toEqual({ kind: "VIDEO_EXISTS", job: held });
-      expect(starts.replayReads).toEqual([[orgId, PROJECT, KEY]]);
+      // Read again once the project is found held, in case this key's own start committed meanwhile.
+      expect(starts.replayReads).toEqual([
+        [orgId, PROJECT, KEY],
+        [orgId, PROJECT, KEY],
+      ]);
       expect(starts.holdingReads).toEqual([[orgId, PROJECT]]);
       expect(starts.records).toEqual([]);
       expect(reader.periods).toEqual([]);
@@ -505,6 +511,19 @@ describe("one video at a time (ADR-0110)", () => {
     starts.holding = earlier;
     expect(await service().start(ids.OWNER, input())).toEqual({ kind: "ALREADY_STARTED", job: earlier });
     expect(starts.holdingReads).toEqual([]);
+  });
+
+  it("answers as a replay when this key's own start committed between the replay read and the hold read", async () => {
+    // A double click: the first request commits after the second's replay
+    // read found nothing, so the second finds the project held by its own job.
+    // Its job moved on between the hold read and the second replay read: the
+    // answer is the replay read's.
+    starts.holding = job("gjob_own", { state: "RESERVED" });
+    const own = job("gjob_own", { state: "GENERATING", stateVersion: 4 });
+    starts.lateReplay = own;
+    expect(await service().start(ids.OWNER, input())).toEqual({ kind: "ALREADY_STARTED", job: own });
+    expect(starts.records).toEqual([]);
+    expect(reader.periods).toEqual([]);
   });
 
   it("passes on the commit's finding that another start took the project meanwhile", async () => {

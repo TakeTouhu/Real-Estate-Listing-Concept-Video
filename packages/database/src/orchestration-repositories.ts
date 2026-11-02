@@ -1643,9 +1643,10 @@ export function createGenerationStartRepository(prisma: PrismaClient): Generatio
         return await prisma.$transaction((tx) => startWithin(tx, record));
       } catch (error) {
         if (error instanceof StartRefused) return error.outcome;
-        // Two starts with one key: the second waited on the first's row in the
-        // unique index and was refused once the first committed. It answers as
-        // a replay, with the job the first one started.
+        // A job with this key committed while this start was writing its own:
+        // its row in the unique index refused this one. Two starts no longer
+        // meet here, as the project-start lock orders them (ADR-0110), so only
+        // a job written outside a start can; it is answered as a replay.
         if (isStartKeyConflict(error)) {
           const job = await findStarted(record.organizationId, record.videoProjectId, record.idempotencyKey);
           if (job !== null) return { kind: "EXISTING", job };

@@ -246,7 +246,12 @@ export class GenerationStartService {
     // ended without one and its Units came back. The commit checks it again
     // under its lock (ADR-0110).
     const holding = await this.deps.starts.findHolding(organizationId, project.id);
-    if (holding !== null) return { kind: "VIDEO_EXISTS", job: holding };
+    if (holding !== null) {
+      // This key's own start may have committed between the two reads: then
+      // it is a replay still, and is answered as one.
+      const replayed = await this.deps.starts.findStarted(organizationId, project.id, idempotencyKey);
+      return replayed !== null ? { kind: "ALREADY_STARTED", job: replayed } : { kind: "VIDEO_EXISTS", job: holding };
+    }
 
     if (project.compositionFingerprint === null || view.scenes.length === 0) {
       throw new AppError("VALIDATION_FAILED", "This project has no composed storyboard");

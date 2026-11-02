@@ -1256,8 +1256,8 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 ## Open in GS-10 — starting a project's video again
 
 - [ ] **Decide whether a project with a video in progress or delivered may be
-      started again.** Today each start with a new key reserves its Units, so
-      pressing start twice reserves twice, and the price of making a delivered
+      started again.** Before GS-10b each start with a new key reserved its
+      Units, so pressing start twice reserved twice, and the price of making a delivered
       video again is not set (ADR-0052 says only that a regeneration uses
       more Units). Put to the product owner on 2026-10-30 with three options:
       only after a failure (recommended), also after delivery as a new video

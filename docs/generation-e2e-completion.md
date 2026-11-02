@@ -5756,7 +5756,8 @@ Commits, oldest first:
 
 | Commit | What it carries |
 | --- | --- |
-| the first commit | the rule, the commit's lock and read, the service and offer, their tests, ADR-0110 and the documentation |
+| `b1fc511` | the rule, the commit's lock and read, the service and offer, their tests, ADR-0110 and the documentation |
+| the second commit | the answers to the review |
 
 The exact head SHA is reported with the pull request.
 
@@ -5780,12 +5781,14 @@ The exact head SHA is reported with the pull request.
 sequenceDiagram
     participant S as Start route (GS-10c)
     participant V as GenerationStartService
+    participant R as Start repository
     participant C as Start commit
     S->>V: start(member, project, key, confirmation)
-    V->>V: permissions, reach, replay read
-    V->>C: findHolding (no lock)
+    V->>V: permissions, reach
+    V->>R: findStarted, then findHolding (no lock)
     alt a job holds the project
-        V-->>S: VIDEO_EXISTS (its job)
+        V->>R: findStarted again
+        V-->>S: ALREADY_STARTED if it is this key's, else VIDEO_EXISTS (its job)
     else free
         V->>V: storyboard, quality, length; open the Unit period
         V->>C: start(record)
@@ -5800,6 +5803,33 @@ sequenceDiagram
         end
     end
 ```
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex is
+at its usage limit), found nothing blocking: the query says what
+`holdsItsProject` says for every state, the lock cannot form a cycle, the read
+after it sees a competing start's committed job, and nothing reaches across
+organizations or a deleted Property. Answered in the second commit:
+
+- **Should fix: a double click could be answered `VIDEO_EXISTS`.** The
+  service's replay read and hold read are two statements; a retry whose first
+  request committed between them found the project held by its own job. It now
+  reads the key's job again when it finds the project held, and answers a
+  replay; a unit test has the first request commit in between.
+- **Should fix: a comment said two same-key starts meet at the key's unique
+  index.** The project-start lock orders them now; the comment says only a job
+  written outside a start can reach the index.
+- **Minor.** The lock module now places the three advisory locks taken before
+  or apart from the cost-admission lock, and says they rely on READ COMMITTED;
+  ADR-0110 records that the older single-scene job creation neither reads nor
+  locks (nothing in production constructs it); the TODO entry no longer says
+  "today" of what this change ends; a test comment cites ADR-0082 and ADR-0083.
+- **Gap and nits.** A database test now shows a held project with a stale
+  confirmation is answered `VIDEO_EXISTS`, not refused for its storyboard; a
+  variable is named for what it holds; ADR-0110 says the rule is written twice,
+  that its status applies the default, and that any reservation but `RELEASED`
+  holds; the sequence diagram draws the reads against the repository.
 
 ### Required documentation
 

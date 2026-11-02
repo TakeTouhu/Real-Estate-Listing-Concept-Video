@@ -1,6 +1,7 @@
 # ADR-0110 — One video of a project at a time
 
-Status: Accepted (GS-10b, 2026-11-02). The second milestone of row GS-10 of
+Status: Accepted (GS-10b, 2026-11-02), applying the recommended answer while
+the product owner's is pending. The second milestone of row GS-10 of
 the generation-to-preview plan the product owner approved on 2026-10-26
 (`/mnt/project-files/cto/generation-e2e-proposal.md`). Builds on ADR-0087 (the
 start commit), ADR-0088 (the start service) and ADR-0109 (the start offer).
@@ -18,7 +19,8 @@ The question is still open. This milestone applies the recommended answer: it
 is the one that never holds a customer's Units twice for one project, and the
 other two each need a price decision first. The pull request waits for the
 product owner's yes, and `docs/decisions/TODO.md` keeps the question open until
-it is answered; another answer changes Decision 1's rule and nothing else.
+it is answered. Another answer changes Decision 1's rule, which is written twice:
+`holdsItsProject` and its query form in the start commit.
 
 ## Decision 1 — A job holds its project until it ended without a video and its Units came back
 
@@ -30,9 +32,11 @@ reservation is `RELEASED` or it has none.
 - **A delivered video holds its project for good.** `DELIVERABLE_READY` never
   fails, and a replacement or a regeneration that fails returns to it with the
   customer's video (ADR-0082, ADR-0083).
-- **A failed video whose Units are not back holds it** (`RESERVING`,
-  `RESERVED`, `RECONCILIATION_HOLD`): while the provider's answer on one of its
-  requests is unknown, the customer has one video's Units held, not two.
+- **A failed video whose Units are not back holds it**: its reservation is
+  anything but `RELEASED`. While the provider's answer on one of its requests
+  is unknown (`RECONCILIATION_HOLD`), the customer has one video's Units held,
+  not two. A failed job with a `CONSUMED` reservation should not exist; if one
+  did, it would hold the project.
 - **A job with no reservation never reserved any**, so once it ended it holds
   nothing.
 
@@ -47,7 +51,9 @@ Decision 1); if there is one it returns `VIDEO_EXISTS` with that job and writes
 nothing. The start service answers `VIDEO_EXISTS` with it.
 
 - **A replay comes first.** A start whose key started the job that holds the
-  project answers `ALREADY_STARTED`, as before.
+  project answers `ALREADY_STARTED`, as before. The service's two reads are not
+  one statement, so when it finds the project held it reads the key's job
+  again: a retry whose first request committed in between is still a replay.
 - **Reach comes first.** A deleted Property's project is not found, whatever
   its jobs.
 - **The service reads it too, before the commit**, after its own replay read
@@ -108,6 +114,11 @@ service until GS-10c's route.
   (`SAME_REQUEST_RUNNING`, ADR-0095), so that guard stays.
 - Regenerating a scene or changing a delivered video's disclosure or logo is
   not a start and is not affected.
+- The older job creation (`GenerationJobRepository.create`, the single-scene
+  path) neither reads the jobs holding the project nor takes the lock. Nothing
+  in production constructs it; only the start makes whole videos.
+- The lock, like the others, relies on READ COMMITTED: the read after the wait
+  sees the job the holder committed.
 - If the product owner allows starting again after delivery, Decision 1 frees a
   delivered job's project and the price of the new video must be decided; if
   at any time, the rule and the lock go.

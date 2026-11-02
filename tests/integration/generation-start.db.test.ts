@@ -893,6 +893,10 @@ describe.skipIf(!HAS_DB)("one video of a project at a time (ADR-0110)", () => {
     const after = await written();
     const again = () => starts.start(record(PROJECT_HQ, HQ_SCENES));
     expect(await again()).toEqual({ kind: "VIDEO_EXISTS", job: expect.objectContaining({ id: first.jobId }) });
+    // Answered before the storyboard is judged: a stale confirmation is not what refuses it.
+    const stale = record(PROJECT_HQ, HQ_SCENES);
+    const staleStart = { ...stale, storyboard: { ...stale.storyboard, compositionFingerprint: "sha256:stale" } };
+    expect(await starts.start(staleStart)).toMatchObject({ kind: "VIDEO_EXISTS", job: { id: first.jobId } });
     // Failed, but its Units are held while the provider's answer is unknown.
     await leave(first.jobId, "FAILED_TERMINAL", "RECONCILIATION_HOLD");
     expect(await again()).toMatchObject({ kind: "VIDEO_EXISTS", job: { id: first.jobId } });
