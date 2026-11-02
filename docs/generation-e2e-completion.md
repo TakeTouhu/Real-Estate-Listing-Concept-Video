@@ -5743,3 +5743,99 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 GS-10a waits for the product owner's yes before merge. Then GS-10b, GS-10c and
 GS-10d, then progress (GS-11), preview and download (GS-12) and the browser
 test (GS-13).
+
+## GS-10b — one video of a project at a time
+
+Base: `c7598a2` (PR #133 merge commit on `main`).
+ADR: `docs/decisions/0110-one-video-of-a-project-at-a-time.md`
+
+The second milestone of row GS-10 of the approved plan. **No migration; no
+route, no page, no environment variable.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| the first commit | the rule, the commit's lock and read, the service and offer, their tests, ADR-0110 and the documentation |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-10b does
+
+- **A project is started again only once its video ended without one and its
+  Units came back.** A delivered video, one in progress, and a failed one whose
+  Units are still held each keep the project (`holdsItsProject`). This is the
+  recommended answer to the question put to the product owner on 2026-10-30,
+  applied while it is open.
+- **The start commit decides it under a lock of its own.** Its first statement
+  takes a per-project advisory lock; after the replay read it finds the newest
+  job that holds the project and answers `VIDEO_EXISTS` with it, writing
+  nothing. Two starts of one project now queue, whatever period each falls in.
+- **The service and the offer say so first.** The start answers
+  `VIDEO_EXISTS` before it opens the Unit period; the offer answers it, with
+  the job and whether it has delivered a video, before anything about the
+  storyboard.
+
+```mermaid
+sequenceDiagram
+    participant S as Start route (GS-10c)
+    participant V as GenerationStartService
+    participant C as Start commit
+    S->>V: start(member, project, key, confirmation)
+    V->>V: permissions, reach, replay read
+    V->>C: findHolding (no lock)
+    alt a job holds the project
+        V-->>S: VIDEO_EXISTS (its job)
+    else free
+        V->>V: storyboard, quality, length; open the Unit period
+        V->>C: start(record)
+        C->>C: project-start lock, then reservation- and cost-admission locks
+        C->>C: project and Property FOR SHARE, replay read
+        C->>C: the newest job holding the project
+        alt one does
+            C-->>V: VIDEO_EXISTS, nothing written
+        else none
+            C->>C: storyboard, job, Transaction B, scenes, audit
+            C-->>V: STARTED
+        end
+    end
+```
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start commit's and the start service's rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10b.md`: no HTTP change; `VIDEO_EXISTS`, `findHolding`, `holdsItsProject` |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md` and
+`docs/decisions/TODO.md` (the question stays open with the product owner).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the start and its commit are constructed by tests only. Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The rule is the recommended default, not yet the product owner's answer.**
+  Allowing a start after delivery would free a delivered job's project and
+  needs the new video's price first.
+- **A project started again after a failure may wait to launch** while the
+  failed job's identical requests are still with the provider: the launch's
+  existing `SAME_REQUEST_RUNNING` guard (ADR-0095).
+- **Nothing shows it yet.** GS-10c builds the route, in development with the
+  test provider only, and GS-10d the page.
+
+### Remaining work
+
+GS-10b waits for the product owner's yes before merge. Then GS-10c and GS-10d,
+then progress (GS-11), preview and download (GS-12) and the browser test
+(GS-13).

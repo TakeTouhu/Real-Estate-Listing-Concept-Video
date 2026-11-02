@@ -5,7 +5,16 @@ import {
   createPrismaStoryboardRepositories,
   createUnitEntitlementRepository,
 } from "@app/database";
-import type { DisclosureMode, GenerationStartRecord, StoryboardScene } from "@app/domain";
+import {
+  GENERATION_JOB_STATES,
+  GENERATION_RESERVATION_STATES,
+  holdsItsProject,
+  type DisclosureMode,
+  type GenerationJobState,
+  type GenerationReservationState,
+  type GenerationStartRecord,
+  type StoryboardScene,
+} from "@app/domain";
 import { ctx } from "./orchestration-fixture";
 
 /**
@@ -33,6 +42,8 @@ const ASSET_A2 = "ast_itest_start_a2";
 const ASSET_B1 = "ast_itest_start_b1";
 /** 1080p, so HQ: the plan's one HQ Unit is all a start of it can draw. */
 const PROJECT_HQ = "vpr_itest_start_hq";
+/** Another 1080p project, to spend that one HQ Unit from a second project. */
+const PROJECT_HQ_2 = "vpr_itest_start_hq_2";
 /** 720p, so Normal. */
 const PROJECT_NORMAL = "vpr_itest_start_normal";
 const PROJECT_B = "vpr_itest_start_b";
@@ -238,6 +249,7 @@ beforeEach(async () => {
   await cleanup();
   await seedTenant(ORG_A, PROP_A, [ASSET_A1, ASSET_A2], [
     [PROJECT_HQ, "1080p"],
+    [PROJECT_HQ_2, "1080p"],
     [PROJECT_NORMAL, "720p"],
   ]);
   await seedTenant(ORG_B, PROP_B, [ASSET_B1], [[PROJECT_B, "1080p"]]);
@@ -246,6 +258,7 @@ beforeEach(async () => {
     storyboardScene("sbs_start_hq_2", PROJECT_HQ, 2, ASSET_A2, { roomType: "LIVING_ROOM", cameraMotion: null }),
   ]);
   await compose(PROJECT_NORMAL, [storyboardScene("sbs_start_n_1", PROJECT_NORMAL, 1, ASSET_A2)]);
+  await compose(PROJECT_HQ_2, [storyboardScene("sbs_start_hq2_1", PROJECT_HQ_2, 1, ASSET_A1)]);
 });
 
 afterAll(async () => {
@@ -463,8 +476,9 @@ describe.skipIf(!HAS_DB)("a start key", () => {
   });
 
   it("lets two starts with one key in one period take turns, the second answering with the first's job", async () => {
-    // Both wait at their period's cost-admission lock, so whichever goes
-    // second reads the first's committed job as a replay.
+    // One waits at the period's cost-admission lock, the other at the
+    // project-start lock (ADR-0110), so whichever goes second reads the
+    // first's committed job as a replay.
     const key = "start-key-concurrent";
     const lock = await holdOpen(async (tx) => {
       await holdCostAdmissionLock(tx, "2026-11");
@@ -490,8 +504,8 @@ describe.skipIf(!HAS_DB)("a start key", () => {
   it("lets the start key decide between two starts in different periods", async () => {
     // A start made as one period ends and its replay made as the next begins
     // take different cost-admission locks. The first is held at its audit
-    // entry, after its job is written; the second's job then waits on the
-    // first's entry in the key's index, and answers with the first's job.
+    // entry, after its job is written; the second waits at the project-start
+    // lock (ADR-0110) and, once the first commits, reads its job as a replay.
     await openDecember();
     const key = "start-key-boundary";
     const first = record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key });
@@ -650,7 +664,7 @@ describe.skipIf(!HAS_DB)("a refused start", () => {
   });
 
   it("rolls the job back when the plan's one HQ Unit is spent", async () => {
-    expect((await starts.start(record(PROJECT_HQ, HQ_SCENES))).kind).toBe("STARTED");
+    expect((await starts.start(record(PROJECT_HQ_2, ["sbs_start_hq2_1"]))).kind).toBe("STARTED");
     const before = await written();
     const start = record(PROJECT_HQ, HQ_SCENES);
     expect(await starts.start(start)).toEqual({ kind: "INSUFFICIENT_ENTITLEMENT", eligibleUnits: 0 });
@@ -792,5 +806,204 @@ describe.skipIf(!HAS_DB)("a start and a composition", () => {
     } finally {
       await reader.release();
     }
+  });
+});
+
+/** Move a job, and its reservation where it has one, to the given states, as the workflows would leave them. */
+async function leave(
+  jobId: string,
+  jobState: GenerationJobState,
+  reservationState?: GenerationReservationState,
+): Promise<void> {
+  await prisma.generationJob.update({ where: { id: jobId }, data: { state: jobState } });
+  if (reservationState === undefined) return;
+  await prisma.generationReservation.update({
+    where: { generationJobId: jobId },
+    data: { state: reservationState, releasedAt: reservationState === "RELEASED" ? STARTED_AT : null },
+  });
+}
+
+/** A job written directly, as a job no start made: no reservation unless one is added. */
+async function bareJob(id: string, videoProjectId: string, createdAt: Date, state: GenerationJobState = "CREATED") {
+  await prisma.generationJob.create({
+    data: {
+      id,
+      videoProjectId,
+      requestedByUserId: USER,
+      qualityTier: "NORMAL",
+      targetOutputResolution: "720p",
+      targetAspectRatio: "16:9",
+      requestedDurationSeconds: 5,
+      disclosureMode: "THROUGHOUT",
+      requiredVideoUnits: 1,
+      requiredHighQualityUnits: 0,
+      state,
+      createdAt,
+    },
+  });
+}
+
+describe.skipIf(!HAS_DB)("one video of a project at a time (ADR-0110)", () => {
+  it("finds the job holding a project for every job and reservation state, as the domain rule says", async () => {
+    const reserved = record(PROJECT_HQ, HQ_SCENES);
+    expect((await starts.start(reserved)).kind).toBe("STARTED");
+    await bareJob("genjob_start_bare", PROJECT_NORMAL, STARTED_AT);
+    const found: string[] = [];
+    const expected: string[] = [];
+    for (const jobState of GENERATION_JOB_STATES) {
+      for (const reservationState of GENERATION_RESERVATION_STATES) {
+        await leave(reserved.jobId, jobState, reservationState);
+        const holding = await starts.findHolding(ORG_A, PROJECT_HQ);
+        found.push(`${jobState}/${reservationState}: ${holding?.id ?? "free"}`);
+        const holds = holdsItsProject(jobState, reservationState);
+        expected.push(`${jobState}/${reservationState}: ${holds ? reserved.jobId : "free"}`);
+      }
+      await leave("genjob_start_bare", jobState);
+      const holding = await starts.findHolding(ORG_A, PROJECT_NORMAL);
+      found.push(`${jobState}/none: ${holding?.id ?? "free"}`);
+      expected.push(`${jobState}/none: ${holdsItsProject(jobState, null) ? "genjob_start_bare" : "free"}`);
+    }
+    expect(found).toEqual(expected);
+  });
+
+  it("answers the newest job holding the project, for its own organization and project only", async () => {
+    await bareJob("genjob_start_old", PROJECT_HQ, new Date("2026-11-01T00:00:00.000Z"));
+    await bareJob("genjob_start_new_a", PROJECT_HQ, STARTED_AT);
+    await bareJob("genjob_start_new_b", PROJECT_HQ, STARTED_AT);
+    await bareJob("genjob_start_newest_free", PROJECT_HQ, IN_DECEMBER, "CANCELLED");
+    expect(await starts.findHolding(ORG_A, PROJECT_HQ)).toMatchObject({
+      id: "genjob_start_new_b",
+      organizationId: ORG_A,
+      videoProjectId: PROJECT_HQ,
+    });
+    expect(await starts.findHolding(ORG_B, PROJECT_HQ)).toBeNull();
+    expect(await starts.findHolding(ORG_A, PROJECT_NORMAL)).toBeNull();
+    const missing = undefined as unknown as string;
+    const pairs = [[missing, PROJECT_HQ], [ORG_A, missing], ["", PROJECT_HQ], [ORG_A, ""]];
+    for (const [organizationId, videoProjectId] of pairs) {
+      await expect(starts.findHolding(organizationId!, videoProjectId!)).rejects.toThrow(
+        "one organization and one project",
+      );
+    }
+  });
+
+  it("refuses a second start while the video is in progress, until it failed and its Units came back", async () => {
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    expect((await starts.start(first)).kind).toBe("STARTED");
+    const after = await written();
+    const again = () => starts.start(record(PROJECT_HQ, HQ_SCENES));
+    expect(await again()).toEqual({ kind: "VIDEO_EXISTS", job: expect.objectContaining({ id: first.jobId }) });
+    // Failed, but its Units are held while the provider's answer is unknown.
+    await leave(first.jobId, "FAILED_TERMINAL", "RECONCILIATION_HOLD");
+    expect(await again()).toMatchObject({ kind: "VIDEO_EXISTS", job: { id: first.jobId } });
+    expect(await written()).toEqual(after);
+
+    await leave(first.jobId, "FAILED_TERMINAL", "RELEASED");
+    const restart = record(PROJECT_HQ, HQ_SCENES);
+    const restarted = await starts.start(restart);
+    if (restarted.kind !== "STARTED") throw new Error(`expected STARTED, got ${restarted.kind}`);
+    // The HQ Unit the failed video gave back is the one this start draws.
+    const funded = restarted.allocations.map((a) => [a.sourceType, a.quality, a.quantity]);
+    expect(funded).toEqual([["BASE", "HIGH_QUALITY", 1]]);
+    expect(await again()).toMatchObject({ kind: "VIDEO_EXISTS", job: { id: restart.jobId } });
+  });
+
+  it("refuses a second start of a delivered video, and starts a replay of it", async () => {
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    expect((await starts.start(first)).kind).toBe("STARTED");
+    await leave(first.jobId, "DELIVERABLE_READY", "CONSUMED");
+    expect(await starts.start(record(PROJECT_HQ, HQ_SCENES))).toMatchObject({
+      kind: "VIDEO_EXISTS",
+      job: { id: first.jobId, state: "DELIVERABLE_READY" },
+    });
+    const replay = { ...record(PROJECT_HQ, HQ_SCENES), idempotencyKey: first.idempotencyKey };
+    expect(await starts.start(replay)).toMatchObject({ kind: "EXISTING", job: { id: first.jobId } });
+    // Another project of the organization is its own.
+    expect((await starts.start(record(PROJECT_NORMAL, ["sbs_start_n_1"]))).kind).toBe("STARTED");
+  });
+
+  it("lets one of two starts of a project with different keys in one period start; the other gets it", async () => {
+    const lock = await holdOpen(async (tx) => {
+      await holdCostAdmissionLock(tx, "2026-11");
+    });
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    const second = record(PROJECT_HQ, HQ_SCENES);
+    let both: Promise<Awaited<ReturnType<typeof starts.start>>[]>;
+    try {
+      both = Promise.all([starts.start(first), starts.start(second)]);
+      void both.catch(() => undefined);
+      expect(await waitForBlocked(2)).toBe(true);
+    } finally {
+      await lock.release();
+    }
+    const outcomes = await both;
+    expect(outcomes.map((o) => o.kind).sort()).toEqual(["STARTED", "VIDEO_EXISTS"]);
+    const ids = outcomes.map((o) => (o.kind === "STARTED" || o.kind === "VIDEO_EXISTS" ? o.job.id : null));
+    expect(ids[0]).toBe(ids[1]);
+    expect(await written()).toMatchObject({ jobs: 1, reservations: 1, scenes: 2, audits: 1 });
+  });
+
+  it("lets one of two such starts in different periods start, which only the project-start lock orders", async () => {
+    // As one period ends and the next begins, the two take different
+    // cost-admission locks. The first is held at its audit entry, after its
+    // job is written; without the project-start lock the second would not see
+    // that job and would start a second video.
+    await openDecember();
+    const first = record(PROJECT_HQ, HQ_SCENES);
+    const second = record(PROJECT_HQ, HQ_SCENES, { startedAt: IN_DECEMBER });
+    const organization = await holdOpen(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${ORG_A} FOR UPDATE`;
+    });
+    let outcomes: Promise<Awaited<ReturnType<typeof starts.start>>[]>;
+    try {
+      const starting = starts.start(first);
+      void starting.catch(() => undefined);
+      expect(await waitForBlocked(1)).toBe(true);
+      const competing = starts.start(second);
+      void competing.catch(() => undefined);
+      expect(await waitForBlocked(2)).toBe(true);
+      outcomes = Promise.all([starting, competing]);
+      void outcomes.catch(() => undefined);
+    } finally {
+      await organization.release();
+    }
+    const [started, refused] = await outcomes;
+    expect(started).toMatchObject({ kind: "STARTED", job: { id: first.jobId } });
+    expect(refused).toEqual({ kind: "VIDEO_EXISTS", job: expect.objectContaining({ id: first.jobId }) });
+    expect(await written()).toMatchObject({ jobs: 1, reservations: 1, audits: 1 });
+  });
+
+  it("still answers a replay the key's index finds, should a job with the key be written outside a start", async () => {
+    // Two starts can no longer race to the key's index: the project-start
+    // lock orders them. The index stays the backstop, and the start still
+    // answers its refusal as a replay.
+    const key = "start-key-outside";
+    const outside = await holdOpen(async (tx) => {
+      await tx.generationJob.create({
+        data: {
+          id: "genjob_start_outside",
+          videoProjectId: PROJECT_HQ,
+          requestedByUserId: USER,
+          qualityTier: "HIGH_QUALITY",
+          targetOutputResolution: "1080p",
+          targetAspectRatio: "16:9",
+          requestedDurationSeconds: 10,
+          disclosureMode: "THROUGHOUT",
+          requiredVideoUnits: 1,
+          requiredHighQualityUnits: 1,
+          idempotencyKey: key,
+        },
+      });
+    });
+    let starting: ReturnType<typeof settled<Awaited<ReturnType<typeof starts.start>>>>;
+    try {
+      starting = settled(starts.start(record(PROJECT_HQ, HQ_SCENES, { idempotencyKey: key })));
+      expect(await waitForBlocked(1)).toBe(true);
+      expect(starting.done()).toBe(false);
+    } finally {
+      await outside.release();
+    }
+    expect(await starting.value).toMatchObject({ kind: "EXISTING", job: { id: "genjob_start_outside" } });
+    expect(await written()).toMatchObject({ jobs: 1, reservations: 0, audits: 0 });
   });
 });

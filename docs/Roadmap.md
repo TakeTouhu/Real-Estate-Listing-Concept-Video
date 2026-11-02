@@ -466,6 +466,14 @@ into four milestones: this, the product owner's rule on starting again
 (GS-10b), the start route in development only (GS-10c) and the start page
 (GS-10d). Nothing outside tests constructs the service yet.
 
+**GS-10b — one video of a project at a time** (ADR-0110, no migration): a
+project is started again only once its video ended without one and its Units
+came back. The start commit, under a new per-project advisory lock taken
+first, finds the job that holds the project and answers `VIDEO_EXISTS` with it,
+writing nothing; the start service and the offer answer the same before
+anything else about the storyboard. It applies the recommended answer to the
+question put to the product owner on 2026-10-30, which is still open.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

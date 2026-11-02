@@ -1,7 +1,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { qualityTierForResolution } from "./start";
+import { holdsItsProject, JOB_STATES_ENDED_WITHOUT_A_VIDEO, qualityTierForResolution } from "./start";
+import { canTransitionJob } from "./state-machines";
+import { GENERATION_JOB_STATES, GENERATION_RESERVATION_STATES } from "./types";
 
 /**
  * The start commit (GS-4b, ADR-0087): the quality a project starts at, and
@@ -53,6 +55,27 @@ describe("qualityTierForResolution", () => {
   });
 });
 
+describe("holdsItsProject (ADR-0110)", () => {
+  it("frees a project only once its job ended without a video and its Units, if it reserved any, came back", () => {
+    const held: string[] = [];
+    for (const jobState of GENERATION_JOB_STATES) {
+      for (const reservationState of [null, ...GENERATION_RESERVATION_STATES]) {
+        if (!holdsItsProject(jobState, reservationState)) held.push(`${jobState}/${reservationState}`);
+      }
+    }
+    expect(held).toEqual(["FAILED_TERMINAL/null", "FAILED_TERMINAL/RELEASED", "CANCELLED/null", "CANCELLED/RELEASED"]);
+  });
+
+  it("names as ended without a video exactly the job states with no way out", () => {
+    // DELIVERABLE_READY has a way out, to a revision, and a delivered video
+    // never fails (ADR-0084): a job that delivered one holds its project.
+    const final = GENERATION_JOB_STATES.filter((from) =>
+      GENERATION_JOB_STATES.every((to) => !canTransitionJob(from, to)),
+    );
+    expect(final).toEqual([...JOB_STATES_ENDED_WITHOUT_A_VIDEO]);
+  });
+});
+
 describe("the start key's migration", () => {
   it("is migration 32, and adds one nullable column, its unique index and its length check", () => {
     const dirs = readdirSync(MIGRATIONS, { withFileTypes: true })
@@ -75,11 +98,27 @@ describe("the start key's migration", () => {
 });
 
 describe("the start commit", () => {
+  it("takes the project-start lock first, and nothing else takes it (ADR-0110)", () => {
+    const { within } = startSource();
+    const first = within.indexOf("await acquireProjectStartLock(tx, organizationId, videoProjectId);");
+    expect(first).toBeGreaterThan(-1);
+    expect(within.slice(0, first)).not.toContain("tx.");
+    expect(within.slice(0, first)).not.toMatch(/acquire\w*Lock\(/);
+    const takers = [...productionSources(join(REPO_ROOT, "apps")), ...productionSources(join(REPO_ROOT, "packages"))]
+      .filter(({ text }) => text.includes("acquireProjectStartLock("))
+      .map(({ name, text }) => `${name}: ${text.split("acquireProjectStartLock(").length - 1}`);
+    expect(takers).toEqual([
+      "packages/database/src/cost-admission-lock.ts: 1",
+      "packages/database/src/orchestration-repositories.ts: 1",
+    ]);
+  });
+
   it("takes Transaction B's two locks before it holds the project row", () => {
     // The cost-admission lock is the outermost lock in the system: no row lock
     // may be held while it is acquired (cost-admission-lock.ts).
     const { within } = startSource();
     const order = [
+      "acquireProjectStartLock(tx, organizationId, videoProjectId)",
       "acquireReservationAdmissionLock(tx, organizationId, record.jobId)",
       "findPeriodContaining(tx, organizationId, record.startedAt)",
       "acquireCostAdmissionLock(tx, organizationId, period.billingCycleKey)",
@@ -105,6 +144,7 @@ describe("the start commit", () => {
     for (const later of [
       "tx.generationJob.findFirst(",
       "tx.storyboardScene.findMany(",
+      "findHoldingJob(",
       "tx.generationJob.create(",
       "reserveJobWithin(",
     ]) {
@@ -112,11 +152,13 @@ describe("the start commit", () => {
     }
   });
 
-  it("refuses a deleted Property, answers a replay, checks the storyboard, writes, reserves, copies, then audits", () => {
+  it("refuses a deleted Property, answers a replay, refuses a held project, checks the storyboard, then writes", () => {
     const { within } = startSource();
     const order = [
       'if (project.propertyStatus === "DELETED") return { kind: "PROPERTY_DELETED" };',
       "tx.generationJob.findFirst(",
+      "await findHoldingJob(tx, organizationId, videoProjectId);",
+      'if (holding !== null) return { kind: "VIDEO_EXISTS", job: holding };',
       "tx.storyboardScene.findMany(",
       '"STORYBOARD_CHANGED"',
       '"QUALITY_CHANGED"',

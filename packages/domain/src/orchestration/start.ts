@@ -9,7 +9,7 @@ import type {
   SceneGenerationRequestRecord,
   TransitionContext,
 } from "./ports";
-import type { GenerationQualityTier } from "./types";
+import type { GenerationJobState, GenerationQualityTier, GenerationReservationState } from "./types";
 
 /**
  * Starting a whole video: the start commit (GS-4b, ADR-0087).
@@ -34,6 +34,23 @@ export function qualityTierForResolution(resolution: TargetOutputResolution): Ge
     case "1080p":
       return "HIGH_QUALITY";
   }
+}
+
+/** The job states in which a job ended without a video. */
+export const JOB_STATES_ENDED_WITHOUT_A_VIDEO: readonly GenerationJobState[] = ["FAILED_TERMINAL", "CANCELLED"];
+
+/**
+ * Whether a job holds its project, so that no other start of it is made
+ * (GS-10b, ADR-0110): every job does, unless it ended without a video and its
+ * Units came back. A job with no reservation never reserved any. A delivered
+ * video never fails, so a job that delivered one holds its project for good.
+ */
+export function holdsItsProject(
+  jobState: GenerationJobState,
+  reservationState: GenerationReservationState | null,
+): boolean {
+  if (!JOB_STATES_ENDED_WITHOUT_A_VIDEO.includes(jobState)) return true;
+  return reservationState !== null && reservationState !== "RELEASED";
 }
 
 /** One storyboard scene the start will copy, with the ids its copies take. */
@@ -101,6 +118,8 @@ export type GenerationStartOutcome =
     }
   /** A start with this key already started this job. */
   | { readonly kind: "EXISTING"; readonly job: GenerationJob }
+  /** Another job holds the project: the newest such job (ADR-0110). */
+  | { readonly kind: "VIDEO_EXISTS"; readonly job: GenerationJob }
   /** No such project in this organization. */
   | { readonly kind: "PROJECT_NOT_FOUND" }
   /** The project's Property is deleted, so its photos cannot be generated from (ADR-0088). */
@@ -117,8 +136,8 @@ export type GenerationStartOutcome =
 export interface GenerationStartRepository {
   /**
    * The start commit, under the project row held `FOR SHARE` (ADR-0086,
-   * ADR-0087). Leaves the job `RESERVED` and its scenes and requests `PENDING`:
-   * it admits no attempt.
+   * ADR-0087), one start of a project at a time (ADR-0110). Leaves the job
+   * `RESERVED` and its scenes and requests `PENDING`: it admits no attempt.
    */
   start(record: GenerationStartRecord): Promise<GenerationStartOutcome>;
   /**
@@ -127,4 +146,10 @@ export interface GenerationStartRepository {
    * (ADR-0088).
    */
   findStarted(organizationId: string, videoProjectId: string, idempotencyKey: string): Promise<GenerationJob | null>;
+  /**
+   * The newest job that holds this project ({@link holdsItsProject}), or
+   * `null`. Read scoped to the organization. The commit makes the same read
+   * under its lock (ADR-0110).
+   */
+  findHolding(organizationId: string, videoProjectId: string): Promise<GenerationJob | null>;
 }

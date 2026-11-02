@@ -165,12 +165,19 @@ class RecordingStarts implements GenerationStartRepository {
   readonly replayReads: [string, string, string][] = [];
   /** How many periods were open when each start reached the commit. */
   readonly periodsAtStart: number[] = [];
+  readonly holdingReads: [string, string][] = [];
   replay: GenerationJob | null = null;
+  holding: GenerationJob | null = null;
   answer: GenerationStartOutcome | null = null;
 
   findStarted(organizationId: string, videoProjectId: string, idempotencyKey: string) {
     this.replayReads.push([organizationId, videoProjectId, idempotencyKey]);
     return Promise.resolve(this.replay);
+  }
+
+  findHolding(organizationId: string, videoProjectId: string) {
+    this.holdingReads.push([organizationId, videoProjectId]);
+    return Promise.resolve(this.holding);
   }
 
   start(record: GenerationStartRecord): Promise<GenerationStartOutcome> {
@@ -342,6 +349,7 @@ describe("a start", () => {
     // the period the commit reserves from was open before the commit ran.
     expect(storyboardReads).toEqual([[ids.OWNER, orgId, PROJECT]]);
     expect(starts.replayReads).toEqual([[orgId, PROJECT, KEY]]);
+    expect(starts.holdingReads).toEqual([[orgId, PROJECT]]);
     expect(starts.periodsAtStart).toEqual([1]);
     expect(reader.periods.map((p) => [p.startsAt.toISOString(), p.endsAt.toISOString()])).toEqual([
       ["2026-04-15T00:00:00.000Z", "2026-05-15T00:00:00.000Z"],
@@ -464,6 +472,75 @@ describe("a replay", () => {
     const earlier = job("gjob_earlier");
     starts.answer = { kind: "EXISTING", job: earlier };
     expect(await service().start(ids.OWNER, input())).toEqual({ kind: "ALREADY_STARTED", job: earlier });
+  });
+});
+
+/** A video in progress, one delivered, and a delivered one being changed: each holds its project. */
+function heldJobs(): GenerationJob[] {
+  return [
+    job("gjob_running", { state: "GENERATING" }),
+    job("gjob_done", { state: "DELIVERABLE_READY", currentDeliverableVersionId: "gdv_1" }),
+    job("gjob_revising", { state: "REVISING", currentDeliverableVersionId: "gdv_1" }),
+  ];
+}
+
+describe("one video at a time (ADR-0110)", () => {
+  it("answers a project with a video in progress or delivered with its job, before the storyboard", async () => {
+    for (const held of heldJobs()) {
+      starts = new RecordingStarts();
+      starts.holding = held;
+      // Never composed: a held project is answered before its storyboard is judged.
+      view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false };
+      expect(await service().start(ids.OWNER, input())).toEqual({ kind: "VIDEO_EXISTS", job: held });
+      expect(starts.replayReads).toEqual([[orgId, PROJECT, KEY]]);
+      expect(starts.holdingReads).toEqual([[orgId, PROJECT]]);
+      expect(starts.records).toEqual([]);
+      expect(reader.periods).toEqual([]);
+    }
+  });
+
+  it("answers a replay of the job that holds the project as already started", async () => {
+    const earlier = job("gjob_earlier", { state: "GENERATING" });
+    starts.replay = earlier;
+    starts.holding = earlier;
+    expect(await service().start(ids.OWNER, input())).toEqual({ kind: "ALREADY_STARTED", job: earlier });
+    expect(starts.holdingReads).toEqual([]);
+  });
+
+  it("passes on the commit's finding that another start took the project meanwhile", async () => {
+    const other = job("gjob_other");
+    starts.answer = { kind: "VIDEO_EXISTS", job: other };
+    expect(await service().start(ids.OWNER, input())).toEqual({ kind: "VIDEO_EXISTS", job: other });
+    expect(starts.records).toHaveLength(1);
+  });
+
+  it("offers no start of a held project: its job, and whether it has delivered a video", async () => {
+    view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false };
+    const offers: StartOffer[] = [];
+    for (const held of heldJobs()) {
+      starts.holding = held;
+      offers.push(await offered());
+    }
+    expect(offers).toEqual([
+      { kind: "VIDEO_EXISTS", jobId: "gjob_running", delivered: false },
+      { kind: "VIDEO_EXISTS", jobId: "gjob_done", delivered: true },
+      { kind: "VIDEO_EXISTS", jobId: "gjob_revising", delivered: true },
+    ]);
+    expect(starts.holdingReads).toEqual([
+      [orgId, PROJECT],
+      [orgId, PROJECT],
+      [orgId, PROJECT],
+    ]);
+  });
+
+  it("reads no job of a project the member may not start or does not reach", async () => {
+    starts.holding = job("gjob_running", { state: "GENERATING" });
+    await refusedWith("FORBIDDEN", input(), ids.VIEWER);
+    await offerRefusedWith("FORBIDDEN", ids.VIEWER);
+    property = { ...property, status: "DELETED" };
+    await refusedWith("NOT_FOUND");
+    await offerRefusedWith("NOT_FOUND");
+    expect(starts.holdingReads).toEqual([]);
   });
 });
 
@@ -782,6 +859,15 @@ describe("the start offer", () => {
     const unusable = (overrides: Partial<StoryboardScene> = {}) =>
       scene("scn_1", 1, { compiledPrompt: null, ...overrides });
     const cases: [string, () => void, StartOffer["kind"], string][] = [
+      [
+        "held and never composed",
+        () => {
+          starts.holding = job("gjob_running", { state: "GENERATING" });
+          view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false };
+        },
+        "VIDEO_EXISTS",
+        "VIDEO_EXISTS",
+      ],
       // A project never composed is read as not fresh too.
       [
         "never composed",

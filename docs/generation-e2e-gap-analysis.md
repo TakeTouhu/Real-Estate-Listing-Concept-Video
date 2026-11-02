@@ -335,8 +335,10 @@ GS-10 is split into four milestones, each its own pull request:
 - **GS-10a** (ADR-0109, no migration): the start offer, a read that writes
   nothing and answers what the start would, with the quality, scenes, length,
   Units and their forecast funding.
-- **GS-10b**: the product owner's answer on starting again, enforced in the
-  start commit and reported by the offer.
+- **GS-10b** (ADR-0110, no migration): the product owner's answer on starting
+  again, enforced in the start commit and reported by the offer. The question
+  is still open, so the recommended answer is applied: only after a failure
+  whose Units came back.
 - **GS-10c**: the web composition and the start route, built only in
   development with the test provider and refused otherwise.
 - **GS-10d**: the start page and the project page's link to it.

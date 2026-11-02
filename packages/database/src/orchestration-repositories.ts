@@ -53,6 +53,7 @@ import {
   computeGenerationRequestHash,
   isDisclosureMode,
   isTargetOutputResolution,
+  JOB_STATES_ENDED_WITHOUT_A_VIDEO,
   MAX_IDEMPOTENCY_KEY_LENGTH,
   nextUserRegenerationOrdinal,
   planUnitAllocation,
@@ -66,6 +67,7 @@ import { AppError, randomId } from "@app/shared";
 import { auditLogData } from "./audit-log-data";
 import {
   acquireCostAdmissionLock,
+  acquireProjectStartLock,
   acquireReservationAdmissionLock,
 } from "./cost-admission-lock";
 import { findPeriodContaining, loadPeriodBalance, toAllocation } from "./unit-entitlement-repository";
@@ -1334,12 +1336,39 @@ function isStartKeyConflict(error: unknown): boolean {
 }
 
 /**
+ * The newest job of the project that holds it, so that no other start of it
+ * is made (ADR-0110): every job does, unless it ended without a video and its
+ * reservation, if it has one, was released. The query form of the domain's
+ * `holdsItsProject`.
+ */
+async function findHoldingJob(
+  db: Pick<Tx, "generationJob">,
+  organizationId: string,
+  videoProjectId: string,
+): Promise<GenerationJob | null> {
+  const row = await db.generationJob.findFirst({
+    where: {
+      videoProjectId,
+      ...jobScope(organizationId),
+      OR: [
+        { state: { notIn: [...JOB_STATES_ENDED_WITHOUT_A_VIDEO] } },
+        { reservation: { is: { state: { not: "RELEASED" } } } },
+      ],
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  return row === null ? null : toJob(row, organizationId);
+}
+
+/**
  * The start commit (ADR-0087), inside the transaction `start()` opened.
  *
  * ```text
- * reservation-admission lock (job) -> cost-admission lock (organization + cycle)
- *   -> project and Property rows FOR SHARE -> replay -> storyboard -> job
- *   -> Transaction B (its two locks already held) -> scenes, requests, audit
+ * project-start lock (project) -> reservation-admission lock (job)
+ *   -> cost-admission lock (organization + cycle)
+ *   -> project and Property rows FOR SHARE -> replay -> a job holding the project
+ *   -> storyboard -> job -> Transaction B (its two locks already held)
+ *   -> scenes, requests, audit
  * ```
  *
  * Every refusal before the job is written returns with nothing written. One
@@ -1349,7 +1378,13 @@ function isStartKeyConflict(error: unknown): boolean {
 async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<GenerationStartOutcome> {
   const { organizationId, videoProjectId, context } = record;
 
-  // ---- Transaction B's two locks, taken first (ADR-0087 Decision 3). ------
+  // ---- One start of this project at a time (ADR-0110). --------------------
+  // Taken before anything else, and by nothing but this commit: the read of
+  // the jobs holding the project below and the job this start writes are one
+  // decision, whatever period each start's instant falls in.
+  await acquireProjectStartLock(tx, organizationId, videoProjectId);
+
+  // ---- Transaction B's two locks (ADR-0087 Decision 3). -------------------
   // The cost-admission lock is the outermost lock in the system: no row lock
   // is held while it is acquired (`cost-admission-lock.ts`). The start holds
   // the project row until it commits, so it takes both locks before that row,
@@ -1392,6 +1427,10 @@ async function startWithin(tx: Tx, record: GenerationStartRecord): Promise<Gener
     where: { videoProjectId, idempotencyKey: record.idempotencyKey },
   });
   if (started !== null) return { kind: "EXISTING", job: toJob(started, organizationId) };
+
+  // ---- One video at a time: another job may hold the project (ADR-0110). --
+  const holding = await findHoldingJob(tx, organizationId, videoProjectId);
+  if (holding !== null) return { kind: "VIDEO_EXISTS", job: holding };
 
   // ---- Exactly the composition the service judged current. ---------------
   const scenes = await tx.storyboardScene.findMany({
@@ -1587,6 +1626,15 @@ export function createGenerationStartRepository(prisma: PrismaClient): Generatio
 
   return {
     findStarted,
+
+    async findHolding(organizationId, videoProjectId): Promise<GenerationJob | null> {
+      // Missing, either would widen the read past one project or one tenant.
+      const ids: unknown[] = [organizationId, videoProjectId];
+      if (ids.some((id) => typeof id !== "string" || id.length === 0)) {
+        throw new AppError("VALIDATION_FAILED", "A read of a project's video names one organization and one project");
+      }
+      return findHoldingJob(prisma, organizationId, videoProjectId);
+    },
 
     async start(record): Promise<GenerationStartOutcome> {
       requireStartKey(record.idempotencyKey);
