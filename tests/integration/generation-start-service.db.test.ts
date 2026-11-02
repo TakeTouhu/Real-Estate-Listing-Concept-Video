@@ -218,6 +218,34 @@ describe.skipIf(!HAS_DB)("the start service against the start commit", () => {
     expect(await written()).toEqual(after);
   });
 
+  it("offers the funding the start then reserves, opening no period", async () => {
+    expect(await service.offer(owner, ORG, PROJECT)).toEqual({
+      kind: "READY",
+      qualityTier: "HIGH_QUALITY",
+      scenes: SCENES.map((id) => ({ id, durationSeconds: 5 })),
+      durationSeconds: 10,
+      requiredUnits: 1,
+      funding: { baseUnits: 1, addOnUnits: 0 },
+    });
+    expect(await written()).toEqual({ jobs: 0, reservations: 0, scenes: 0, periods: 0, started: 0, periodOpened: 0 });
+    const outcome = await service.start(owner, input());
+    if (outcome.kind !== "STARTED") throw new Error(`expected STARTED, got ${outcome.kind}`);
+    const funded = outcome.allocations.map((a) => [a.sourceType, a.quality, a.quantity]);
+    expect(funded).toEqual([["BASE", "HIGH_QUALITY", 1]]);
+  });
+
+  it("answers short Units, opening nothing, once the plan's one HQ Unit is spent", async () => {
+    expect((await service.start(owner, input())).kind).toBe("STARTED");
+    const after = await written();
+    expect(await service.offer(owner, ORG, PROJECT)).toEqual({
+      kind: "INSUFFICIENT_UNITS",
+      qualityTier: "HIGH_QUALITY",
+      requiredUnits: 1,
+      eligibleUnits: 0,
+    });
+    expect(await written()).toEqual(after);
+  });
+
   it("leaves the period it opened, with that period's own audit entry, when the commit then refuses", async () => {
     // The storyboard the service judges current is not the one the project
     // holds, so the commit refuses after the period is opened.

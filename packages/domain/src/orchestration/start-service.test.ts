@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import { authorizedRoutes } from "../authorization/routing";
+import type { PeriodEntitlementBalance } from "../entitlement/allocation";
 import type { GenerationReservationAllocation } from "../entitlement/ports";
-import type { OrganizationSubscription } from "../entitlement/subscription";
+import { renewEntitlementPeriod, type OrganizationSubscription } from "../entitlement/subscription";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import { PermissionGrantService } from "../identity/permission-grant-service";
@@ -27,6 +28,7 @@ import {
   routeQualityOffer,
   GenerationStartService,
   type StartGenerationInput,
+  type StartOffer,
   type StartQualityOffer,
 } from "./start-service";
 
@@ -594,6 +596,263 @@ describe("the commit's answer", () => {
     }
   });
 });
+
+/** The offer, having asked nothing of the commit and opened no period. */
+async function offered(actor = ids.OWNER): Promise<StartOffer> {
+  const periods = reader.periods.length;
+  const offer = await service().offer(actor, orgId, PROJECT);
+  expect(starts.records).toEqual([]);
+  expect(starts.replayReads).toEqual([]);
+  expect(reader.periods).toHaveLength(periods);
+  return offer;
+}
+
+async function offerRefusedWith(code: string, actor = ids.OWNER): Promise<AppError> {
+  const periods = reader.periods.length;
+  const error = await service()
+    .offer(actor, orgId, PROJECT)
+    .then(() => null, (thrown: unknown) => thrown);
+  expect(error).toBeInstanceOf(AppError);
+  expect((error as AppError).code).toBe(code);
+  expect(starts.records).toEqual([]);
+  expect(reader.periods).toHaveLength(periods);
+  return error as AppError;
+}
+
+/** Open April's period as the start would, and set what remains of it. */
+async function openApril(balance: PeriodEntitlementBalance): Promise<void> {
+  const opened = await renewEntitlementPeriod({ subscriptions: reader, ledger }, orgId, NOW);
+  if (opened.kind !== "OPENED") throw new Error(`expected OPENED, got ${opened.kind}`);
+  reader.balances.set(opened.period.id, balance);
+}
+
+function block(id: string, quality: "NORMAL" | "HIGH_QUALITY", remainingUnits: number, purchasedAt: string) {
+  return { id, quality, remainingUnits, purchasedAtEpochMs: iso(purchasedAt).getTime(), withdrawn: false };
+}
+
+/** A storyboard of `seconds` in two scenes, of a 1080p project where `hq`. */
+function storyboardOf(seconds: number, hq = false): void {
+  const first = Math.floor(seconds / 2);
+  view = {
+    project: project({ targetOutputResolution: hq ? "1080p" : "720p" }),
+    scenes: [scene("scn_1", 1, { durationSeconds: first }), scene("scn_2", 2, { durationSeconds: seconds - first })],
+    fresh: true,
+  };
+}
+
+describe("the start offer", () => {
+  it("offers the storyboard at its project's quality, with its scenes, length and Units, writing nothing", async () => {
+    expect(await offered()).toEqual({
+      kind: "READY",
+      qualityTier: "NORMAL",
+      scenes: [
+        { id: "scn_1", durationSeconds: 3 },
+        { id: "scn_2", durationSeconds: 3 },
+      ],
+      durationSeconds: 6,
+      requiredUnits: 1,
+      funding: { baseUnits: 1, addOnUnits: 0 },
+    });
+    expect(storyboardReads).toEqual([[ids.OWNER, orgId, PROJECT]]);
+  });
+
+  it("offers what the start then accepts: the scenes and quality the customer confirms", async () => {
+    const offer = await offered();
+    if (offer.kind !== "READY") throw new Error(`expected READY, got ${offer.kind}`);
+    const confirmed = { qualityTier: offer.qualityTier, storyboardSceneIds: offer.scenes.map((s) => s.id) };
+    expect((await service().start(ids.OWNER, input({ confirmed }))).kind).toBe("STARTED");
+  });
+
+  // Which add-on blocks fund a video, by quality and age, is planUnitAllocation's and pinned by its own tests;
+  // the short-Units test below shows a block of the other quality is not counted.
+  it("forecasts Base Units first, within the HQ ceiling, then add-on Units", async () => {
+    qualities = { offers: () => true };
+    await openApril({
+      baseRemainingUnits: 10,
+      includedHighQualityRemainingUnits: 1,
+      blocks: [
+        block("uab_normal", "NORMAL", 5, "2026-04-15T01:00:00.000Z"),
+        block("uab_hq_newer", "HIGH_QUALITY", 4, "2026-04-18T00:00:00.000Z"),
+        block("uab_hq_older", "HIGH_QUALITY", 1, "2026-04-16T00:00:00.000Z"),
+      ],
+    });
+    storyboardOf(90, true);
+    expect(await offered()).toMatchObject({
+      kind: "READY",
+      qualityTier: "HIGH_QUALITY",
+      requiredUnits: 3,
+      funding: { baseUnits: 1, addOnUnits: 2 },
+    });
+    reader.balances.set(reader.periods[0]!.id, {
+      baseRemainingUnits: 2,
+      includedHighQualityRemainingUnits: 1,
+      blocks: [block("uab_normal", "NORMAL", 5, "2026-04-15T01:00:00.000Z")],
+    });
+    storyboardOf(90);
+    expect(await offered()).toMatchObject({ kind: "READY", funding: { baseUnits: 2, addOnUnits: 1 } });
+  });
+
+  it("answers short Units with how many the video's own quality could cover", async () => {
+    qualities = { offers: () => true };
+    await openApril({
+      baseRemainingUnits: 10,
+      includedHighQualityRemainingUnits: 1,
+      blocks: [block("uab_normal", "NORMAL", 5, "2026-04-15T01:00:00.000Z")],
+    });
+    storyboardOf(90, true);
+    expect(await offered()).toEqual({
+      kind: "INSUFFICIENT_UNITS",
+      qualityTier: "HIGH_QUALITY",
+      requiredUnits: 3,
+      eligibleUnits: 1,
+    });
+  });
+
+  it("reads a period nobody has opened as opening it would hold it, and does not open it", async () => {
+    qualities = { offers: () => true };
+    // Standard: 15 Base Units, of which 1 may fund HQ.
+    storyboardOf(90, true);
+    expect(await offered()).toMatchObject({ kind: "INSUFFICIENT_UNITS", requiredUnits: 3, eligibleUnits: 1 });
+    storyboardOf(90);
+    expect(await offered()).toMatchObject({ kind: "READY", funding: { baseUnits: 3, addOnUnits: 0 } });
+    // Premium: 40 Base Units, of which 5 may fund HQ.
+    subscribe({ planKey: "premium" });
+    storyboardOf(90, true);
+    expect(await offered()).toMatchObject({ kind: "READY", funding: { baseUnits: 3, addOnUnits: 0 } });
+    expect(reader.periods).toEqual([]);
+  });
+
+  it("answers an organization with no plan, or one whose plan has not started", async () => {
+    reader.subscriptions.clear();
+    expect(await offered()).toEqual({ kind: "NO_PLAN" });
+    subscribe({ anchorAt: iso("2026-05-01T00:00:00.000Z") });
+    expect(await offered()).toEqual({ kind: "NO_PLAN" });
+  });
+
+  it("surfaces a period the plan did not open, or one the ledger cannot read, as the start does", async () => {
+    reader.periods.push({
+      id: "uep_by_hand",
+      organizationId: orgId,
+      planKey: "standard",
+      billingCycleKey: "by-hand",
+      baseUnits: 15,
+      includedHighQualityUnits: 1,
+      highQualityAddOnAvailable: false,
+      startsAt: iso("2026-04-01T00:00:00.000Z"),
+      endsAt: iso("2026-05-01T00:00:00.000Z"),
+      commercialReference: null,
+      createdAt: iso("2026-04-01T00:00:00.000Z"),
+    });
+    await offerRefusedWith("INTERNAL_ERROR");
+    reader.periods.length = 0;
+    await openApril({ baseRemainingUnits: 15, includedHighQualityRemainingUnits: 1, blocks: [] });
+    reader.balance = () => Promise.resolve(null);
+    await offerRefusedWith("INTERNAL_ERROR");
+  });
+
+  it("answers a storyboard not composed, stale, or holding a scene generation could not use", async () => {
+    view = { project: project({ compositionFingerprint: null }), scenes: [scene("scn_1", 1)], fresh: true };
+    expect(await offered()).toEqual({ kind: "NOT_COMPOSED" });
+    view = { project: project(), scenes: [], fresh: true };
+    expect(await offered()).toEqual({ kind: "NOT_COMPOSED" });
+    view = { project: project(), scenes: [scene("scn_1", 1), scene("scn_2", 2)], fresh: false };
+    expect(await offered()).toEqual({ kind: "STALE" });
+    view = { ...view, fresh: true, scenes: [scene("scn_1", 1), scene("scn_2", 2, { compiledPrompt: null })] };
+    expect(await offered()).toEqual({ kind: "RECOMPOSE" });
+    view = { ...view, scenes: [scene("scn_1", 1, { cameraMotion: "spin wildly" }), scene("scn_2", 2)] };
+    expect(await offered()).toEqual({ kind: "RECOMPOSE" });
+    view = { ...view, scenes: [scene("scn_1", 1, { cameraMotion: null }), scene("scn_2", 2)] };
+    expect((await offered()).kind).toBe("READY");
+  });
+
+  it("answers HQ as not offered while no verified route serves it", async () => {
+    storyboardOf(6, true);
+    expect(await offered()).toEqual({ kind: "QUALITY_NOT_OFFERED", qualityTier: "HIGH_QUALITY" });
+  });
+
+  it("answers a storyboard longer than a video may be with its length, and offers ninety seconds", async () => {
+    storyboardOf(91);
+    expect(await offered()).toEqual({ kind: "LENGTH_NOT_SUPPORTED", durationSeconds: 91 });
+    storyboardOf(90);
+    expect(await offered()).toMatchObject({ kind: "READY", durationSeconds: 90, requiredUnits: 3 });
+  });
+
+  it("answers in the start's order, and as the start then answers", async () => {
+    const hq = () => project({ targetOutputResolution: "1080p" });
+    const unusable = (overrides: Partial<StoryboardScene> = {}) =>
+      scene("scn_1", 1, { compiledPrompt: null, ...overrides });
+    const cases: [string, () => void, StartOffer["kind"], string][] = [
+      // A project never composed is read as not fresh too.
+      [
+        "never composed",
+        () => (view = { project: project({ compositionFingerprint: null }), scenes: [], fresh: false }),
+        "NOT_COMPOSED",
+        "VALIDATION_FAILED",
+      ],
+      ["stale and HQ", () => (view = { ...view, project: hq(), fresh: false }), "STALE", "VALIDATION_FAILED"],
+      [
+        "HQ and unusable",
+        () => (view = { ...view, project: hq(), scenes: [unusable(), scene("scn_2", 2)] }),
+        "QUALITY_NOT_OFFERED",
+        "QUALITY_NOT_OFFERED",
+      ],
+      [
+        "unusable and long",
+        () => (view = { ...view, scenes: [unusable({ durationSeconds: 91 }), scene("scn_2", 2)] }),
+        "RECOMPOSE",
+        "VALIDATION_FAILED",
+      ],
+      [
+        "long and no plan",
+        () => {
+          storyboardOf(91);
+          reader.subscriptions.clear();
+        },
+        "LENGTH_NOT_SUPPORTED",
+        "LENGTH_NOT_SUPPORTED",
+      ],
+    ];
+    for (const [name, arrange, offerKind, startAnswer] of cases) {
+      view = { project: project(), scenes: [scene("scn_1", 1), scene("scn_2", 2)], fresh: true };
+      starts = new RecordingStarts();
+      subscribe();
+      arrange();
+      expect([name, (await offered()).kind]).toEqual([name, offerKind]);
+      const confirmed = { qualityTier: qualityTierOf(view), storyboardSceneIds: view.scenes.map((s) => s.id) };
+      const started = await service()
+        .start(ids.OWNER, input({ confirmed }))
+        .then((outcome) => outcome.kind, (thrown: unknown) => (thrown as AppError).code);
+      expect([name, started]).toEqual([name, startAnswer]);
+    }
+  });
+
+  it("is offered to the members the start lets start, and to no one else, before reading anything", async () => {
+    for (const role of ["ADMIN", "CREATOR"] as const) {
+      property = { ...property, responsibleUserId: ids[role] };
+      expect((await offered(ids[role])).kind).toBe("READY");
+    }
+    storyboardReads = [];
+    for (const actor of [ids.VIEWER, ids.BILLING, ids.outsider]) await offerRefusedWith("FORBIDDEN", actor);
+    const grants = new PermissionGrantService(deps);
+    await grants.grant(ids.OWNER, orgId, ids.VIEWER, "unit.consume");
+    await grants.grant(ids.OWNER, orgId, ids.BILLING, "video.generate");
+    for (const actor of [ids.VIEWER, ids.BILLING]) await offerRefusedWith("FORBIDDEN", actor);
+    expect(storyboardReads).toEqual([]);
+  });
+
+  it("answers a Property out of reach, or deleted, as a missing project; offers an archived one", async () => {
+    property = { ...property, responsibleUserId: ids.OWNER };
+    expect((await offerRefusedWith("NOT_FOUND", ids.CREATOR)).message).toBe("Video project not found");
+    property = { ...property, responsibleUserId: null, status: "DELETED" };
+    expect((await offerRefusedWith("NOT_FOUND")).message).toBe("Video project not found");
+    property = { ...property, status: "ARCHIVED" };
+    expect((await offered()).kind).toBe("READY");
+  });
+});
+
+function qualityTierOf(current: StoryboardView): "NORMAL" | "HIGH_QUALITY" {
+  return current.project.targetOutputResolution === "1080p" ? "HIGH_QUALITY" : "NORMAL";
+}
 
 describe("dormancy", () => {
   const REPO_ROOT = join(__dirname, "..", "..", "..", "..");

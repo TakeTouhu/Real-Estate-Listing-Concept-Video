@@ -455,6 +455,17 @@ end-to-end test GS-9d planned, so GS-9 ends here. Only a test can start a
 video until GS-10 gives the customer a way to; the command then takes it to
 publication.
 
+**GS-10a — what the start screen offers** (ADR-0109, no migration): the start
+service gains `offer`, a read that writes nothing and answers, in the start's
+own order, what a start of the project's storyboard would be now: its quality,
+scenes, length and Units, with a forecast of how many would come from Base
+Units and how many from add-on Units; or why not (not composed, stale,
+compose again, quality not offered, too long, no plan, Units short). A Unit
+period nobody has opened is read as opening it would hold it. GS-10 is split
+into four milestones: this, the product owner's rule on starting again
+(GS-10b), the start route in development only (GS-10c) and the start page
+(GS-10d). Nothing outside tests constructs the service yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

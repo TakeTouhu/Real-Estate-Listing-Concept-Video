@@ -2037,3 +2037,13 @@ other than the test provider.
 
 **Rolling back.** To GS-9b-2's build: safe. The command stores nothing of its
 own; what its steps write is the rows and objects the steps already write.
+
+## GS-10a — what the start screen offers
+
+**No migration** (ADR-0109). No schema, enum, constraint or row changes, and no
+new environment variable.
+
+**What changes at deploy.** Nothing. The offer is a read on the start service,
+which nothing outside tests constructs until GS-10c's route.
+
+**Rolling back.** To GS-9c's build: safe. The offer writes nothing.

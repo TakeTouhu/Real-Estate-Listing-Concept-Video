@@ -1,3 +1,4 @@
+import type { PeriodEntitlementBalance } from "../entitlement/allocation";
 import { entitlementSnapshotForPlan } from "../entitlement/plan-entitlement";
 import type {
   OpenEntitlementPeriodInput,
@@ -26,7 +27,7 @@ import type { InMemoryUnitsReader } from "./in-memory-units";
  * written purchase are the database's; its tests cover them.
  */
 export class InMemoryUnitPurchases
-  implements UnitPurchaseRepository, Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt">
+  implements UnitPurchaseRepository, Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt" | "balance">
 {
   readonly blocks: UnitAddOnBlock[] = [];
 
@@ -75,6 +76,10 @@ export class InMemoryUnitPurchases
 
   findPeriodAt(organizationId: string, at: Date): Promise<UnitEntitlementPeriod | null> {
     return this.reader.findPeriodAt(organizationId, at);
+  }
+
+  balance(organizationId: string, entitlementPeriodId: string): Promise<PeriodEntitlementBalance | null> {
+    return this.reader.balance(organizationId, entitlementPeriodId);
   }
 
   async findByIdempotencyKey(organizationId: string, idempotencyKey: string): Promise<UnitPurchase | null> {
