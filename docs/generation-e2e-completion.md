@@ -5757,7 +5757,8 @@ Commits, oldest first:
 | Commit | What it carries |
 | --- | --- |
 | `b1fc511` | the rule, the commit's lock and read, the service and offer, their tests, ADR-0110 and the documentation |
-| the second commit | the answers to the review |
+| `06ecfa9` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
 
 The exact head SHA is reported with the pull request.
 
@@ -5804,13 +5805,36 @@ sequenceDiagram
     end
 ```
 
+### Verification
+
+Measured locally on `06ecfa9` (PostgreSQL 16 configured like CI), each exit
+status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,673 passed in 247 files (9 new: the rule against every state, its tie to the job state machine, the lock taken first, and the start and offer answering a held project, a replay and a double click) |
+| `pnpm test:db` | 1,864 passed in 70 files (8 new): the query against every job and reservation state, the newest holding job and its tenant scope, a second start refused until the first video failed and gave its Units back, a delivered video, two concurrent starts in one period and across a period boundary, the key's index as a backstop, and the service's `VIDEO_EXISTS`; one older launch test reworked to start again after a failure |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10a, against the start's unit suites and both start
+database suites: 25 mutants on the rule, the service's and the offer's reads
+and their order, the commit's lock, its read and its order, and the query
+(each branch, its order, its tenant scope, its input checks). All 25 killed;
+the missing lock and a lock keyed by the job are also killed by the database
+suite alone, by the two starts across a period boundary. Three more on the
+review's fix: all killed, one after its test was made to tell the replay
+read's job from the hold read's.
+
 ### Review
 
 An independent review, by a subagent reading the git objects only (Codex is
 at its usage limit), found nothing blocking: the query says what
 `holdsItsProject` says for every state, the lock cannot form a cycle, the read
 after it sees a competing start's committed job, and nothing reaches across
-organizations or a deleted Property. Answered in the second commit:
+organizations or a deleted Property. Answered in `06ecfa9`:
 
 - **Should fix: a double click could be answered `VIDEO_EXISTS`.** The
   service's replay read and hold read are two statements; a retry whose first
