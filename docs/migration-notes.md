@@ -2102,3 +2102,14 @@ and `generation_scenes."generationJobId"`.
 until GS-11b's project page.
 
 **Rolling back.** To GS-10d's build: safe. The read writes nothing.
+
+## GS-11b — a project's video on its project page
+
+**No migration** (ADR-0114). No schema, enum, constraint or row changes, and no
+new route or environment variable.
+
+**What changes at deploy.** The project page reads its project's newest video.
+Where nothing can start a video, as in production, no project has one and the
+page shows nothing new.
+
+**Rolling back.** To GS-11a's build: safe. The page writes nothing.

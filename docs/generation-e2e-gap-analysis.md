@@ -375,6 +375,6 @@ GS-11 is split into two milestones, each its own pull request:
 - **GS-11a** (ADR-0113, no migration): the read. The project's newest video
   for a member holding `video.view` with the Property in reach: its phase, its
   Units, its scenes and its id as the support reference, in one snapshot.
-- **GS-11b**: the project page shows it, with ADR-0052's message for a video
-  that ended without one, whether its Units came back, whether it can be
-  started again, and its support reference.
+- **GS-11b** (ADR-0114, no migration): the project page shows it, with
+  ADR-0052's message for a video that ended without one, whether its Units
+  came back, whether it can be started again, and its support reference.

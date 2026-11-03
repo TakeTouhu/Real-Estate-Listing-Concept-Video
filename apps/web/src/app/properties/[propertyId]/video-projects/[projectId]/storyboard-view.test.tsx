@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoProjectDto } from "@/lib/storyboard";
+import { videoProgressPanel, type VideoProgressPanel } from "@/lib/video-progress-view";
 import { StoryboardView, type SceneRow } from "./storyboard-view";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -56,6 +57,7 @@ function view(
     canCompose?: boolean;
     startHref?: string | null;
     started?: boolean;
+    progress?: VideoProgressPanel | null;
   } = {},
 ) {
   return render(
@@ -69,6 +71,7 @@ function view(
       canCompose={overrides.canCompose ?? true}
       startHref={overrides.startHref ?? null}
       started={overrides.started ?? false}
+      progress={overrides.progress ?? null}
     />,
   );
 }
@@ -264,6 +267,34 @@ describe("starting the video (GS-10d, ADR-0112)", () => {
     cleanup();
     view({ scenes: THREE_SCENES, fresh: true, started: false });
     expect(screen.queryByText(STARTED)).toBeNull();
+  });
+});
+
+describe("the project's video", () => {
+  const PROGRESS = videoProgressPanel({
+    kind: "PROGRESS",
+    progress: {
+      phase: "FAILED",
+      qualityTier: "HIGH_QUALITY",
+      durationSeconds: 45,
+      units: { count: 2, state: "RELEASED" },
+      scenes: { ready: 1, total: 3 },
+      supportReference: "gjob_1",
+    },
+  });
+
+  it("shows the video's progress after the start's notice and before the project's settings", () => {
+    const { container } = view({ scenes: THREE_SCENES, fresh: true, started: true, progress: PROGRESS });
+    const text = container.textContent ?? "";
+    expect(screen.getByRole("heading", { name: "Video" })).toBeTruthy();
+    expect(text.indexOf("The start was confirmed")).toBeLessThan(text.indexOf("Support reference"));
+    expect(text.indexOf("Support reference")).toBeLessThan(text.indexOf("Project settings"));
+  });
+
+  it("shows nothing about a video for a project that has none", () => {
+    view({ scenes: THREE_SCENES, fresh: true, progress: null });
+    expect(screen.queryByRole("heading", { name: "Video" })).toBeNull();
+    expect(screen.queryByText(/Support reference/)).toBeNull();
   });
 });
 
