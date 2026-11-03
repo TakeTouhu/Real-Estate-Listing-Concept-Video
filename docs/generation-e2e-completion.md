@@ -6047,3 +6047,109 @@ Stripe charges remain BLOCKED.
 GS-10c waits for the product owner's yes before merge. Then GS-10d (the start
 page), progress (GS-11), preview and download (GS-12) and the browser test
 (GS-13).
+
+## GS-10d — the start page, in development only
+
+Base: `f02673a` (PR #135 merge commit on `main`).
+ADR: `docs/decisions/0112-start-page-in-development.md`
+
+The fourth and last milestone of row GS-10 of the approved plan. **No
+migration; no new route, no environment variable.** The page exists only where
+the start is built, in development with the test provider; in production it is
+not found and the project page has no link to it.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| the first commit | the start page, the project page's link and notice, their tests, ADR-0112 and the documentation |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-10d does
+
+- **The start page shows the start's own offer.** Where the start is not built
+  it is not found before anything is read. Otherwise it finds the member's
+  organization that reaches the Property, asks the start service's offer as
+  the member (its permissions first, then its reach), and checks that the
+  project is this Property's, as the project page does.
+- **A ready offer is shown as the customer will confirm it**: the quality
+  (Normal or HQ), the scenes in order with their rooms and lengths, the Units
+  it would reserve and where they would come from, that they are used only if
+  the video is delivered, and what the video is and is not. Every other offer
+  says why not and what to do; a member who may not start videos is told so.
+- **Its one form is the route's.** Every field is hidden and comes from the
+  offer, with a key the server makes each time the page is shown, so a double
+  click starts once and starting again means reviewing again.
+- **The project page links to it**, for a member holding `video.generate` and
+  `unit.consume`, and says the video was started on the way back from a start.
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant P as Project page
+    participant S as Start page
+    participant V as GenerationStartService
+    participant R as Start route
+    C->>P: open the project
+    P-->>C: "Review and start the video" (start built, member may start)
+    C->>S: open the start page
+    alt start not built (production, or not the test provider)
+        S-->>C: 404
+    else development with the test provider
+        S->>V: offer(member, organization, project)
+        V-->>S: READY, or why not
+        S-->>C: the offer; for READY, the form with a new key
+        C->>R: POST the form
+        alt STARTED or ALREADY_STARTED
+            R-->>C: 303 project page ?started=1
+            C->>P: "Your video was started and its Units are reserved"
+        else refused, or failed
+            R-->>C: 303 start page ?error=why
+            C->>S: the message above a fresh offer
+        end
+    end
+```
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start page's row; the start route's row says the page posts to it |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10d.md`: no API change; the page and the project page's changes |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10d*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/generation-e2e-gap-analysis.md`.
+
+### Activation status
+
+Nothing paid or scheduled is activated. In production the start page is not
+found and the project page links to nothing new; in development the test
+provider makes the video and nothing is paid for. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The notice after a start repeats the route's answer**; it does not read the
+  job. The video's progress is shown from GS-11.
+- **No test renders the page through the web app's composition and
+  PostgreSQL.** The root's database suites type-check without JSX. The page's
+  unit tests prove its reads and that its form is what the route reads; the
+  route's database test proves that form starts the video; GS-13's browser
+  test covers the whole path.
+- **A started job waits for the development pipeline command**, holding its
+  project and its Units until then (ADR-0111).
+- **The re-start words follow the recommended default** (ADR-0110), with the
+  product owner's answer pending.
+
+### Remaining work
+
+GS-10d waits for the product owner's yes before merge; with it, row GS-10 is
+complete. Then progress (GS-11), preview and download (GS-12) and the browser
+test (GS-13).

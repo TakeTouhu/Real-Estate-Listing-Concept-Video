@@ -2077,3 +2077,16 @@ nothing on the site posts to it until GS-10d's page.
 
 **Rolling back.** To GS-10b's build: safe. Jobs started through the route stay
 as any started job does, and the development pipeline command takes them on.
+
+## GS-10d — the start page, in development only
+
+**No migration** (ADR-0112). No schema, enum, constraint or row changes, and no
+new route or environment variable.
+
+**What changes at deploy.** In production, nothing: the start page is not
+found and the project page has no link to it. In development with
+`VIDEO_PROVIDER=fake` (the default), the project page links to the start page,
+whose form starts the video.
+
+**Rolling back.** To GS-10c's build: safe. Nothing is stored by the page;
+videos started from it stay as any started video does.

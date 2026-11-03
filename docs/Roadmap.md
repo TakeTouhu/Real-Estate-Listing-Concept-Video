@@ -484,6 +484,16 @@ with the kit's qualities; anywhere else the route answers `404`. Where it is
 built, it checks the post's `Origin` before the session, as the purchase route
 does. A started job waits for the development pipeline command.
 
+**GS-10d — the start page, in development only** (ADR-0112, no migration):
+`/properties/{propertyId}/video-projects/{projectId}/start` shows the start's
+offer as the signed-in member: the quality, the scenes in order, the length,
+the Units it would reserve and where they would come from, or why the video
+cannot be started now. A ready offer has one form, every field hidden, with a
+key made each time the page is shown, which posts to the start route. The
+project page links to it for a member holding `video.generate` and
+`unit.consume`, and says the video was started on the way back. Where the
+start is not built the page is not found and the link is not shown.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

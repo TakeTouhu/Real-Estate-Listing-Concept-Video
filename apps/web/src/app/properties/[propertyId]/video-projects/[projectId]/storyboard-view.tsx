@@ -46,6 +46,13 @@ interface Props {
   readonly minimumScenes: number;
   /** Whether this member's role carries `video.generate`. Decided by the server. */
   readonly canCompose: boolean;
+  /**
+   * The start page, for a member who may start videos where the start is built
+   * (development with the test provider, ADR-0112); `null` anywhere else.
+   */
+  readonly startHref: string | null;
+  /** Whether the customer just came back from starting this project's video. */
+  readonly started: boolean;
 }
 
 type Freshness = "NEVER_COMPOSED" | "FRESH" | "STALE";
@@ -73,6 +80,8 @@ export function StoryboardView({
   approvedCount,
   minimumScenes,
   canCompose,
+  startHref,
+  started,
 }: Props) {
   const freshness = freshnessOf(scenes, fresh);
   // The DTO carries the token, because that is the API contract. The label is a
@@ -81,6 +90,13 @@ export function StoryboardView({
 
   return (
     <>
+      {started ? (
+        <p className="card status-ok" role="status">
+          Your video was started and its Units are reserved. They are used only if the video is delivered; if no
+          video is delivered, they come back.
+        </p>
+      ) : null}
+
       <div className="card">
         <h2>Project settings</h2>
         <dl>
@@ -125,6 +141,12 @@ export function StoryboardView({
       </div>
 
       <FreshnessBanner freshness={freshness} />
+
+      {startHref !== null ? (
+        <p className="card">
+          <a href={startHref}>Review and start the video</a>
+        </p>
+      ) : null}
 
       {canCompose ? (
         <ComposePanel

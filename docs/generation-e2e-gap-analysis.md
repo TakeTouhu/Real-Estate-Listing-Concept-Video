@@ -344,4 +344,7 @@ GS-10 is split into four milestones, each its own pull request:
   checked for its `Origin` like the purchase route. The start is built only
   where the test provider's route kit is handed out, with the kit's qualities;
   anywhere else the route answers `404`.
-- **GS-10d**: the start page and the project page's link to it.
+- **GS-10d** (ADR-0112, no migration): the start page and the project page's
+  link to it, shown only where the start is built. The page shows the start's
+  offer and, for a ready one, the form the route reads, with a key made each
+  time it is shown.
