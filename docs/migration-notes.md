@@ -2064,3 +2064,16 @@ newest one that holds it.
 
 **Rolling back.** To GS-10a's build: safe. Nothing is stored; the lock is
 transaction-scoped.
+
+## GS-10c — the start route, in development only
+
+**No migration** (ADR-0111). No schema, enum, constraint or row changes, and no
+new environment variable.
+
+**What changes at deploy.** In production, nothing: the route answers `404`
+and no start is built. In development with `VIDEO_PROVIDER=fake` (the
+default), `POST /api/video-projects/{projectId}/generations` starts videos;
+nothing on the site posts to it until GS-10d's page.
+
+**Rolling back.** To GS-10b's build: safe. Jobs started through the route stay
+as any started job does, and the development pipeline command takes them on.

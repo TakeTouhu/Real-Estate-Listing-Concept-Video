@@ -228,14 +228,17 @@ describe("the start commit", () => {
     expect(check).toBeLessThan(within.indexOf("tx.auditLog.create("));
   });
 
-  it("is constructed by nothing yet: the start route (GS-10) will", () => {
+  it("is constructed outside its own package only by the web app's start (GS-10c)", () => {
     const constructors = [
       ...productionSources(join(REPO_ROOT, "apps")),
       ...productionSources(join(REPO_ROOT, "packages")),
     ]
       .filter(({ text }) => text.includes("createGenerationStartRepository("))
       .map(({ name }) => name);
-    expect(constructors).toEqual(["packages/database/src/orchestration-repositories.ts"]);
+    expect(constructors).toEqual([
+      "apps/web/src/lib/generation-start.ts",
+      "packages/database/src/orchestration-repositories.ts",
+    ]);
   });
 });
 

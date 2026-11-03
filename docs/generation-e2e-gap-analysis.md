@@ -339,6 +339,9 @@ GS-10 is split into four milestones, each its own pull request:
   again, enforced in the start commit and reported by the offer. The question
   is still open, so the recommended answer is applied: only after a failure
   whose Units came back.
-- **GS-10c**: the web composition and the start route, built only in
-  development with the test provider and refused otherwise.
+- **GS-10c** (ADR-0111, no migration): the web composition and the start
+  route, `POST /api/video-projects/{projectId}/generations`, a form post
+  checked for its `Origin` like the purchase route. The start is built only
+  where the test provider's route kit is handed out, with the kit's qualities;
+  anywhere else the route answers `404`.
 - **GS-10d**: the start page and the project page's link to it.

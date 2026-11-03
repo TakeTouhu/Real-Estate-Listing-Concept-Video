@@ -265,14 +265,19 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       generation when it lands in Phase 4.
       Since UP-3 (ADR-0068 Decision 5) the Unit purchase route
       (`POST /api/organizations/{id}/unit-purchases`) is the first billing
-      route, and it is not limited either.
+      route, and it is not limited either. Since GS-10c (ADR-0111 Decision 5)
+      the start route (`POST /api/video-projects/{id}/generations`, built only
+      in development with the test provider) is the first generation route;
+      it must be limited, and its form's size bounded, before any production
+      route serves a start.
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
       which keeps it off a form posted from another site but not from another
       origin of the same site. UP-3 checks `Origin` on the Unit purchase route
-      only (`isSameOriginPost`, ADR-0068 Decisions 4 and 5); every other form
-      and JSON mutation route relies on `SameSite=Lax` alone. Applying the check
+      (`isSameOriginPost`, ADR-0068 Decisions 4 and 5) and GS-10c on the start
+      route (ADR-0111 Decision 1); every other form and JSON mutation route
+      relies on `SameSite=Lax` alone. Applying the check
       across them is one cross-cutting milestone, like rate limiting, and needs
       the deployment's proxy to pass the addressed host.
 - [ ] **Decide whether analysis should run in the request or on the queue.**
