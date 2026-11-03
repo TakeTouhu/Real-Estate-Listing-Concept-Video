@@ -494,6 +494,17 @@ project page links to it for a member holding `video.generate` and
 `unit.consume`, and says the start was confirmed on the way back. Where the
 start is not built the page is not found and the link is not shown.
 
+**GS-11a — a project's video, as its customer sees it** (ADR-0113, no
+migration): a read of the project's newest video for any member who can read
+its storyboard (`video.view` and the Property in reach): its phase in UXFlow's
+words (queued, generating scenes, composing, validating, completed, revising,
+failed, cancelled), whether its Units are reserved, used or back, how many of
+its scenes are made, and its own id as the reference the customer quotes to
+support. It names no provider, model or failure class, and reads the job, its
+Units and its scenes in one snapshot. GS-11 is split in two: this, and the
+project page that shows it with ADR-0052's message for a video that ended
+without one (GS-11b). Nothing outside tests constructs the read yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

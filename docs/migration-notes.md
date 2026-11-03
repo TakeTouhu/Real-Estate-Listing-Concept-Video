@@ -2090,3 +2090,15 @@ whose form starts the video.
 
 **Rolling back.** To GS-10c's build: safe. Nothing is stored by the page;
 videos started from it stay as any started video does.
+
+## GS-11a — a project's video, as its customer sees it
+
+**No migration** (ADR-0113). No schema, enum, constraint or row changes, and no
+new route or environment variable. The read uses the existing indexes on
+`generation_jobs."videoProjectId"`, `generation_reservations."generationJobId"`
+and `generation_scenes."generationJobId"`.
+
+**What changes at deploy.** Nothing. The read is constructed by tests only
+until GS-11b's project page.
+
+**Rolling back.** To GS-10d's build: safe. The read writes nothing.
