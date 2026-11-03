@@ -65,6 +65,26 @@ export function startPages(propertyId: string, videoProjectId: string): { projec
   return { project, start: `${project}/start` };
 }
 
+/**
+ * What the project page shows of the start (GS-10d, ADR-0112 Decision 4): a
+ * link to the start page for a member holding `video.generate` and
+ * `unit.consume`, and the notice after a start (`?started=1`), both only where
+ * the start is built.
+ */
+export function startOnProjectPage(
+  built: boolean,
+  permissions: readonly string[],
+  propertyId: string,
+  videoProjectId: string,
+  startedParam: string | readonly string[] | undefined,
+): { readonly startHref: string | null; readonly started: boolean } {
+  const mayStart = permissions.includes("video.generate") && permissions.includes("unit.consume");
+  return {
+    startHref: built && mayStart ? startPages(propertyId, videoProjectId).start : null,
+    started: built && startedParam === "1",
+  };
+}
+
 export const NOT_USABLE = "The start request could not be read. Nothing was started. Review the video again.";
 
 /**

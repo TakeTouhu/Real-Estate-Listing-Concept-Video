@@ -25,7 +25,7 @@ export default async function StartVideoPage({
   searchParams,
 }: {
   params: Promise<{ propertyId: string; projectId: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string | string[] }>;
 }) {
   const starts = getGenerationStartService();
   if (starts === null) notFound();
@@ -33,17 +33,16 @@ export default async function StartVideoPage({
   if (!current) redirect("/login");
   const { propertyId, projectId } = await params;
   const { error } = await searchParams;
+  const message = typeof error === "string" ? error : null;
 
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
 
   for (const { organization } of organizations) {
-    let property;
-    try {
-      property = await services.properties.get(current.user.id, organization.id, propertyId);
-    } catch {
-      continue;
-    }
+    const property = await services.properties
+      .get(current.user.id, organization.id, propertyId)
+      .catch(() => null);
+    if (property === null) continue;
 
     // The start's own read: its permissions first, then its reach.
     let offer: StartOffer | null;
@@ -89,7 +88,7 @@ export default async function StartVideoPage({
           // A new key for every offer shown: posting this form twice starts
           // once, and starting again means reviewing again (ADR-0111 Decision 3).
           idempotencyKey={crypto.randomUUID()}
-          error={error ?? null}
+          error={message}
         />
       </section>
     );

@@ -51,7 +51,11 @@ interface Props {
    * (development with the test provider, ADR-0112); `null` anywhere else.
    */
   readonly startHref: string | null;
-  /** Whether the customer just came back from starting this project's video. */
+  /**
+   * Whether the start route just sent the customer back here (`?started=1`),
+   * for a start or a replay of one. It does not read the job, so the notice
+   * says only what stays true.
+   */
   readonly started: boolean;
 }
 
@@ -92,8 +96,8 @@ export function StoryboardView({
     <>
       {started ? (
         <p className="card status-ok" role="status">
-          Your video was started and its Units are reserved. They are used only if the video is delivered; if no
-          video is delivered, they come back.
+          The start was confirmed. A started video&apos;s Units are used only if it is delivered; if no video is
+          delivered, they come back.
         </p>
       ) : null}
 

@@ -54,8 +54,10 @@ For a `READY` offer:
   total length.
 - **The Units it would reserve, and the forecast split**: "Starting now would
   reserve *n* HQ Units: *b* of your plan's Base Units and *a* additional HQ
-  Units". The words say "would", and that the start reserves when the customer
-  confirms, so the split can differ (ADR-0109 Decision 4).
+  Units", naming only the sources that give some. The words say "would", and
+  that the start reserves when the customer confirms, so the split can differ,
+  or the Units fall short, if Units are reserved, released or bought meanwhile
+  (ADR-0109 Decision 4).
 - **What happens to them**: they are used only if the video is delivered; if
   none is, they come back (ADR-0052 Decision 19, ADR-0053).
 - **What the video is**: made from the approved photos, carrying the notice
@@ -69,18 +71,20 @@ Every other offer says why the start would not happen now and what to do:
 
 | Offer | The page says |
 | --- | --- |
-| `VIDEO_EXISTS` | the project's video is in progress, or has been delivered; a project has one video at a time and is started again only when its video ends without being delivered |
+| `VIDEO_EXISTS` | the project's video has been delivered, or is in progress or its Units have not come back yet; a project has one video at a time and is started again only once its video has ended without being delivered and its Units have come back |
 | `NOT_COMPOSED` | there is no storyboard yet: compose one on the project page |
 | `STALE` | the approved photos changed: compose again on the project page |
 | `RECOMPOSE` | the storyboard must be composed again before a video can be made from it |
 | `QUALITY_NOT_OFFERED` | videos of its quality (Normal or HQ) cannot be made yet |
 | `LENGTH_NOT_SUPPORTED` | the storyboard's length, longer than a video VTaVision makes |
-| `NO_PLAN` | no plan yet, or not started; VTaVision sets it up when the contract starts |
+| `NO_PLAN` | no plan yet, or not started yet; videos can be started once it has |
 | `INSUFFICIENT_UNITS` | the Units this video needs and how many the Units it may use cover; ask a member who manages billing about additional Units of its quality |
 
 The `VIDEO_EXISTS` words follow the re-start rule in force (ADR-0110), the
-recommended default while the product owner's answer is pending. The job is
-never shown. As ADR-0109 Decision 4 requires, nothing more of the
+recommended default while the product owner's answer is pending: a failed
+video holds its project until its Units are released, and the offer says only
+whether a video was delivered, so "in progress" and "Units not back yet" are
+said together. The job is never shown. As ADR-0109 Decision 4 requires, nothing more of the
 organization's Units is shown than the start itself reveals.
 
 A message the route sent back (`?error=`) is shown above the offer, as an
@@ -105,9 +109,11 @@ starting again means reviewing again, as with a Unit purchase (ADR-0068).
   the member's effective permissions hold both `video.generate` and
   `unit.consume`. It is shown whatever the storyboard's state: the start page
   says why a start would not happen.
-- **A notice on the way back from a start** (`?started=1`, which the route
-  sends): the video was started and its Units are reserved; they are used only
-  if the video is delivered. Shown only where the start is built.
+- **A notice when the start route sends the customer back** (`?started=1`,
+  after a start or a replay of one): the start was confirmed, and a started
+  video's Units are used only if it is delivered; if none is, they come back.
+  It does not read the job, so it says nothing that a later failure, delivery
+  or reload would make false. Shown only where the start is built.
 
 In production neither appears.
 
@@ -115,6 +121,8 @@ In production neither appears.
 
 - **Progress.** The notice repeats the route's answer; it does not read the
   job. The project page shows the video's progress from GS-11.
+- **Repeated query parameters.** A `?error=` given more than once is not shown;
+  `?started=` counts only as exactly `1`.
 - **Preview and download** are GS-12.
 - **A browser test of the page through the web app's composition** is GS-13.
   The root's database suites type-check without JSX, so they cannot render

@@ -63,7 +63,9 @@ describe("an offer that can be started", () => {
       "Bedroom · 6 seconds",
     ]);
     expect(body).toContain(
-      "Starting now would reserve 2 HQ Units: 1 of your plan's Base Units and 1 additional HQ Units",
+      "Starting now would reserve 2 HQ Units: 1 of your plan's Base Units and 1 additional HQ Unit. The start " +
+        "reserves them when you confirm, so the split can differ, or the Units fall short, if Units are reserved, " +
+        "released or bought meanwhile.",
     );
     expect(body).toContain(
       "The Units are used only if the video is delivered. If no video is delivered, they come back.",
@@ -93,15 +95,22 @@ describe("an offer that can be started", () => {
     });
   });
 
+  it("names only the Units' sources that give some", () => {
+    const { container } = show({ ...READY, requiredUnits: 3, funding: { baseUnits: 3, addOnUnits: 0 } });
+    expect(text(container)).toContain("Starting now would reserve 3 HQ Units: 3 of your plan's Base Units. The start");
+    cleanup();
+    const both = show({ ...READY, requiredUnits: 5, funding: { baseUnits: 2, addOnUnits: 3 } }).container;
+    expect(text(both)).toContain("reserve 5 HQ Units: 2 of your plan's Base Units and 3 additional HQ Units. The");
+  });
+
   it("names a Normal video's Units by their quality, and a scene whose room it does not know plainly", () => {
     const { container } = show(
       { ...READY, qualityTier: "NORMAL", requiredUnits: 1, funding: { baseUnits: 0, addOnUnits: 1 } },
       null,
       new Map([["scn_b", "Living room"]]),
     );
-    expect(text(container)).toContain(
-      "reserve 1 Normal Units: 0 of your plan's Base Units and 1 additional Normal Units",
-    );
+    expect(text(container)).toContain("Starting now would reserve 1 Normal Unit: 1 additional Normal Unit. The start");
+    expect(screen.getByRole("button").textContent).toBe("Start the video and reserve 1 Normal Unit");
     expect([...container.querySelectorAll("li")].map(text)).toEqual([
       "Living room · 5 seconds",
       "Scene · 4 seconds",
@@ -132,14 +141,15 @@ describe("an offer that cannot be started", () => {
     [
       "a video in progress",
       { kind: "VIDEO_EXISTS", jobId: "job_1", delivered: false },
-      "This project's video is in progress. A project has one video at a time, and is started again only when " +
-        "its video ends without being delivered.",
+      "This project's video is in progress, or its Units have not come back yet. A project has one video at a " +
+        "time, and is started again only once its video has ended without being delivered and its Units have " +
+        "come back.",
     ],
     [
       "a delivered video",
       { kind: "VIDEO_EXISTS", jobId: "job_1", delivered: true },
       "This project's video has been delivered. A project has one video at a time, and is started again only " +
-        "when its video ends without being delivered.",
+        "once its video has ended without being delivered and its Units have come back.",
     ],
     [
       "no storyboard",
@@ -170,8 +180,7 @@ describe("an offer that cannot be started", () => {
     [
       "no plan",
       { kind: "NO_PLAN" },
-      "This organization has no plan yet, or its plan has not started. VTaVision sets it up when your contract " +
-        "starts.",
+      "This organization has no plan yet, or its plan has not started yet. Videos can be started once it has.",
     ],
     [
       "too few Units",

@@ -241,7 +241,7 @@ describe("authorization presentation", () => {
 
 describe("starting the video (GS-10d, ADR-0112)", () => {
   const START = "/properties/prp_1/video-projects/vpr_1/start";
-  const STARTED = /Your video was started and its Units are reserved/;
+  const STARTED = /The start was confirmed/;
 
   it("links to the start page where the server gives one", () => {
     view({ scenes: THREE_SCENES, fresh: true, startHref: START });
@@ -251,7 +251,7 @@ describe("starting the video (GS-10d, ADR-0112)", () => {
 
   it("has no link and no start control anywhere else", () => {
     const { container } = view({ scenes: THREE_SCENES, fresh: true, startHref: null });
-    expect(screen.queryByRole("link", { name: "Review and start the video" })).toBeNull();
+    expect(screen.queryByText("Review and start the video")).toBeNull();
     expect(container.innerHTML).not.toContain("/start");
   });
 
@@ -259,7 +259,7 @@ describe("starting the video (GS-10d, ADR-0112)", () => {
     view({ scenes: THREE_SCENES, fresh: true, started: true });
     const notice = screen.getByText(STARTED);
     expect(notice.getAttribute("role")).toBe("status");
-    expect(notice.textContent).toContain("used only if the video is delivered");
+    expect(notice.textContent).toContain("A started video's Units are used only if it is delivered");
 
     cleanup();
     view({ scenes: THREE_SCENES, fresh: true, started: false });

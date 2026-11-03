@@ -31,8 +31,9 @@ showing of the page.
 
 - A "Review and start the video" link to the start page, only where the start
   is built and the member holds `video.generate` and `unit.consume`.
-- `?started=1`, which the start route sends after a start, shows that the video
-  was started and its Units are reserved, only where the start is built.
+- `?started=1`, which the start route sends after a start or a replay of one,
+  shows that the start was confirmed and that a started video's Units are used
+  only if it is delivered, only where the start is built.
 
 ## Internal API
 
@@ -45,3 +46,9 @@ be started.
 ### Changed: `apps/web`, `StoryboardView`
 
 Two new properties: `startHref` (the start page, or `null`) and `started`.
+
+### Added: `apps/web`, `startOnProjectPage(built, permissions, propertyId, projectId, started)`
+
+In `apps/web/src/lib/generation-start-form.ts`: the project page's link and
+notice, from whether the start is built, the member's effective permissions
+and the `started` query parameter.

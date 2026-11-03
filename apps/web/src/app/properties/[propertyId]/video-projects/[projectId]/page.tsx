@@ -3,7 +3,7 @@ import { MIN_STORYBOARD_SCENES } from "@app/domain";
 import { getAnalysisService } from "@/lib/analysis";
 import { getCurrentUser } from "@/lib/auth";
 import { getGenerationStartService } from "@/lib/generation-start";
-import { startPages } from "@/lib/generation-start-form";
+import { startOnProjectPage } from "@/lib/generation-start-form";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { humanizeRoomType } from "@/lib/review-view";
@@ -33,13 +33,13 @@ export default async function StoryboardPage({
   searchParams,
 }: {
   params: Promise<{ propertyId: string; projectId: string }>;
-  searchParams: Promise<{ started?: string }>;
+  searchParams: Promise<{ started?: string | string[] }>;
 }) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { propertyId, projectId } = await params;
   const { started } = await searchParams;
-  // Only where the start is built: development with the test provider (ADR-0111, ADR-0112).
+  // Built only in development with the test provider (ADR-0111, ADR-0112).
   const startBuilt = getGenerationStartService() !== null;
 
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
@@ -110,12 +110,7 @@ export default async function StoryboardPage({
           approvedCount={approvedCount}
           minimumScenes={MIN_STORYBOARD_SCENES}
           canCompose={permissions.includes("video.generate")}
-          startHref={
-            startBuilt && permissions.includes("video.generate") && permissions.includes("unit.consume")
-              ? startPages(property.id, view.project.id).start
-              : null
-          }
-          started={startBuilt && started === "1"}
+          {...startOnProjectPage(startBuilt, permissions, property.id, view.project.id, started)}
         />
       </section>
     );

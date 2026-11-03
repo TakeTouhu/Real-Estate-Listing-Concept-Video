@@ -109,7 +109,7 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-async function page(query: { error?: string } = {}, propertyId = "prp_1"): Promise<HTMLElement> {
+async function page(query: { error?: string | string[] } = {}, propertyId = "prp_1"): Promise<HTMLElement> {
   const element = (await StartVideoPage({
     params: Promise.resolve({ propertyId, projectId: "vpr_1" }),
     searchParams: Promise.resolve(query),
@@ -147,6 +147,12 @@ describe("the start page", () => {
     expect(container.querySelector("input[name=organizationId]")?.getAttribute("value")).toBe("org_1");
   });
 
+  it("shows a message only when the route sent one", async () => {
+    const container = await page({ error: ["one", "two"] });
+    expect(container.querySelector("[role=alert]")).toBeNull();
+    expect(container.querySelectorAll("form")).toHaveLength(1);
+  });
+
   it("makes a new key each time it is shown", async () => {
     const first = keyOf(await page());
     cleanup();
@@ -179,7 +185,7 @@ describe("the start page", () => {
     expect(container.querySelector("input[name=organizationId]")?.getAttribute("value")).toBe("org_2");
   });
 
-  it("is not found for a Property out of reach, or a project of another Property", async () => {
+  it("sends a Property out of reach, or a project of another Property, home as not found", async () => {
     await expect(page({}, "prp_other")).rejects.toThrow("redirect /?error=Property%20not%20found");
     expect(state.reads).toEqual(["session"]);
 

@@ -491,7 +491,7 @@ the Units it would reserve and where they would come from, or why the video
 cannot be started now. A ready offer has one form, every field hidden, with a
 key made each time the page is shown, which posts to the start route. The
 project page links to it for a member holding `video.generate` and
-`unit.consume`, and says the video was started on the way back. Where the
+`unit.consume`, and says the start was confirmed on the way back. Where the
 start is not built the page is not found and the link is not shown.
 
 Completion criteria as met: a composed deliverable is proved technically valid,

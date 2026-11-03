@@ -6083,7 +6083,8 @@ The exact head SHA is reported with the pull request.
   offer, with a key the server makes each time the page is shown, so a double
   click starts once and starting again means reviewing again.
 - **The project page links to it**, for a member holding `video.generate` and
-  `unit.consume`, and says the video was started on the way back from a start.
+  `unit.consume`, and says the start was confirmed when the route sends the
+  customer back.
 
 ```mermaid
 sequenceDiagram
@@ -6104,7 +6105,7 @@ sequenceDiagram
         C->>R: POST the form
         alt STARTED or ALREADY_STARTED
             R-->>C: 303 project page ?started=1
-            C->>P: "Your video was started and its Units are reserved"
+            C->>P: "The start was confirmed"
         else refused, or failed
             R-->>C: 303 start page ?error=why
             C->>S: the message above a fresh offer
@@ -6137,7 +6138,8 @@ scheduler and live Stripe charges remain BLOCKED.
 ### Known limitations
 
 - **The notice after a start repeats the route's answer**; it does not read the
-  job. The video's progress is shown from GS-11.
+  job, so it says only that the start was confirmed. The video's progress is
+  shown from GS-11.
 - **No test renders the page through the web app's composition and
   PostgreSQL.** The root's database suites type-check without JSX. The page's
   unit tests prove its reads and that its form is what the route reads; the

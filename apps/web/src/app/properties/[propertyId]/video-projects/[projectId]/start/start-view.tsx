@@ -46,13 +46,22 @@ export function StartView({ organizationId, propertyId, projectId, offer, roomLa
   );
 }
 
+/** A count of Units of one quality: "1 HQ Unit", "2 HQ Units". */
+function units(count: number, quality: string): string {
+  return `${count} ${quality} Unit${count === 1 ? "" : "s"}`;
+}
+
 /** Why a start would not happen now, and what to do about it. */
 export function refusal(offer: Exclude<StartOffer, { kind: "READY" }>): string {
   switch (offer.kind) {
     case "VIDEO_EXISTS":
+      // A failed video holds its project until its Units are back (ADR-0110).
       return (
-        `${offer.delivered ? "This project's video has been delivered." : "This project's video is in progress."} ` +
-        "A project has one video at a time, and is started again only when its video ends without being delivered."
+        (offer.delivered
+          ? "This project's video has been delivered. "
+          : "This project's video is in progress, or its Units have not come back yet. ") +
+        "A project has one video at a time, and is started again only once its video has ended without being " +
+        "delivered and its Units have come back."
       );
     case "NOT_COMPOSED":
       return "This project has no storyboard yet. Compose one on the project page, then review the video here.";
@@ -70,14 +79,11 @@ export function refusal(offer: Exclude<StartOffer, { kind: "READY" }>): string {
     case "LENGTH_NOT_SUPPORTED":
       return `The storyboard is ${offer.durationSeconds} seconds long, longer than a video VTaVision makes.`;
     case "NO_PLAN":
-      return (
-        "This organization has no plan yet, or its plan has not started. VTaVision sets it up when your contract " +
-        "starts."
-      );
+      return "This organization has no plan yet, or its plan has not started yet. Videos can be started once it has.";
     case "INSUFFICIENT_UNITS": {
       const quality = QUALITY_NAMES[offer.qualityTier];
       return (
-        `This video needs ${offer.requiredUnits} ${quality} Units, and the Units it may use cover ` +
+        `This video needs ${units(offer.requiredUnits, quality)}, and the Units it may use cover ` +
         `${offer.eligibleUnits}. Ask a member who manages billing about additional ${quality} Units.`
       );
     }
@@ -107,9 +113,9 @@ function Ready({
         ))}
       </ol>
       <p>
-        Starting now would reserve {offer.requiredUnits} {quality} Units: {offer.funding.baseUnits} of your plan&apos;s
-        Base Units and {offer.funding.addOnUnits} additional {quality} Units. The start reserves them when you confirm,
-        so the split can differ if Units are used or bought meanwhile.
+        Starting now would reserve {units(offer.requiredUnits, quality)}: {funding(offer, quality)}. The start reserves
+        them when you confirm, so the split can differ, or the Units fall short, if Units are reserved, released or
+        bought meanwhile.
       </p>
       <p>
         The Units are used only if the video is delivered. If no video is delivered, they come back.
@@ -128,7 +134,7 @@ function Ready({
         ))}
         <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         <button type="submit">
-          Start the video and reserve {offer.requiredUnits} {quality} Units
+          Start the video and reserve {units(offer.requiredUnits, quality)}
         </button>
       </form>
       <p className="muted">
@@ -137,4 +143,14 @@ function Ready({
       </p>
     </div>
   );
+}
+
+/** Where the Units would come from, naming only the sources that give some. */
+function funding(offer: Extract<StartOffer, { kind: "READY" }>, quality: string): string {
+  const { baseUnits, addOnUnits } = offer.funding;
+  const sources = [
+    baseUnits > 0 ? `${baseUnits} of your plan's Base Units` : null,
+    addOnUnits > 0 ? `${addOnUnits} additional ${quality} Unit${addOnUnits === 1 ? "" : "s"}` : null,
+  ];
+  return sources.filter((source) => source !== null).join(" and ");
 }
