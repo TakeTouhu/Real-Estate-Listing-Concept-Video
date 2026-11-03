@@ -20,22 +20,22 @@ import type { GenerationJobState, GenerationQualityTier, GenerationReservationSt
  * from a composed storyboard.
  */
 export type VideoProgressPhase =
-  /** Started, with its Units reserved, and not generating yet. */
+  /** Started, and not generating yet. */
   | "QUEUED"
   | "GENERATING_SCENES"
   | "COMPOSING"
   | "VALIDATING"
-  /** Delivered to the organization's workspace. */
+  /** Delivered to the organization's workspace, and still current. */
   | "COMPLETED"
-  /** Delivered, and a new version of it is being made. */
-  | "REVISING"
   | "FAILED"
   | "CANCELLED";
 
 /**
  * What became of the Units the video reserved. `RESERVED` covers every hold
  * that is neither used nor back, whatever is still settling it. `NONE` is a
- * video that never reserved any.
+ * video that never reserved any. A video still in progress can read `RELEASED`:
+ * a submission given up on releases its Units before the job is ended
+ * (ADR-0037 Decision 6).
  */
 export type VideoProgressUnits = "RESERVED" | "CONSUMED" | "RELEASED" | "NONE";
 
@@ -43,6 +43,11 @@ export type VideoProgressUnits = "RESERVED" | "CONSUMED" | "RELEASED" | "NONE";
 export interface VideoProgressRecord {
   readonly jobId: string;
   readonly jobState: GenerationJobState;
+  /**
+   * Whether the job has delivered a video. It keeps it while a new version is
+   * made: a revision moves the job back through generating without dropping it.
+   */
+  readonly delivered: boolean;
   readonly qualityTier: GenerationQualityTier;
   readonly durationSeconds: number;
   /** The Units the video needs, frozen when it started. */
@@ -50,7 +55,7 @@ export interface VideoProgressRecord {
   /** Its reservation's state, or `null` when it has none. */
   readonly reservationState: GenerationReservationState | null;
   readonly sceneCount: number;
-  /** How many of its scenes are made. */
+  /** How many of its scenes are made (`READY`); a scene being made again is not counted. */
   readonly scenesReady: number;
 }
 
@@ -71,14 +76,22 @@ export interface VideoProgress {
   readonly scenes: { readonly ready: number; readonly total: number };
   /**
    * What the customer quotes to support about this video (UXFlow, "Error
-   * recovery"): the video's own id, which support can look up, and which
-   * names nothing outside VTaVision.
+   * recovery"): the video's own id, by which support will look it up, and
+   * which names nothing outside VTaVision.
    */
   readonly supportReference: string;
 }
 
-/** The phase a job's state is shown as. Every state has one. */
-export function videoProgressPhaseOf(state: GenerationJobState): VideoProgressPhase {
+/**
+ * The phase a job is shown in. Every state has one.
+ *
+ * A delivered video stays the customer's while a new version of it is made,
+ * and a failed new version leaves it current (ADR-0052 Decision 19), so a job
+ * that has delivered one is shown as completed until it ends. How a new
+ * version's own progress is shown is decided with regeneration.
+ */
+export function videoProgressPhaseOf(state: GenerationJobState, delivered: boolean): VideoProgressPhase {
+  if (delivered && state !== "FAILED_TERMINAL" && state !== "CANCELLED") return "COMPLETED";
   switch (state) {
     case "CREATED":
     case "RESERVING":
@@ -93,10 +106,10 @@ export function videoProgressPhaseOf(state: GenerationJobState): VideoProgressPh
       return "COMPOSING";
     case "DELIVERABLE_VALIDATING":
       return "VALIDATING";
+    // A delivered video; `REVISING` is only ever between one and its new version.
     case "DELIVERABLE_READY":
-      return "COMPLETED";
     case "REVISING":
-      return "REVISING";
+      return "COMPLETED";
     case "FAILED_TERMINAL":
       return "FAILED";
     case "CANCELLED":
@@ -123,15 +136,18 @@ export function videoProgressUnitsOf(state: GenerationReservationState | null): 
 /**
  * The customer's view of one video.
  *
- * @throws AppError INTERNAL_ERROR for a video that ended without one but used
- *   its Units: it contradicts ADR-0052 Decision 19, and the customer is told a
- *   failed video used no Unit, so it is surfaced rather than described.
+ * @throws AppError INTERNAL_ERROR for a video whose Units contradict ADR-0052
+ *   (Decision 19 and the Unit rule): one that ended without a video but used
+ *   them, or a delivered one whose Units are still held or came back. The
+ *   customer would be told something false either way, so it is surfaced
+ *   rather than described, in words that claim nothing about it.
  */
 export function videoProgressOf(record: VideoProgressRecord): VideoProgress {
-  const phase = videoProgressPhaseOf(record.jobState);
+  const phase = videoProgressPhaseOf(record.jobState, record.delivered);
   const units = videoProgressUnitsOf(record.reservationState);
-  if ((phase === "FAILED" || phase === "CANCELLED") && units === "CONSUMED") {
-    throw new AppError("INTERNAL_ERROR", "A video that ended without one used its Units", {
+  const ended = phase === "FAILED" || phase === "CANCELLED";
+  if ((ended && units === "CONSUMED") || (phase === "COMPLETED" && (units === "RESERVED" || units === "RELEASED"))) {
+    throw new AppError("INTERNAL_ERROR", "This video's progress could not be read", {
       details: { jobId: record.jobId },
     });
   }

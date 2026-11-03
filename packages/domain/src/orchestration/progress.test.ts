@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { AppError } from "@app/shared";
 import { AuthService } from "../identity/auth-service";
+import { GroupService } from "../identity/group-service";
 import { OrganizationService } from "../identity/organization-service";
 import type { Role } from "../identity/roles";
 import type { Property } from "../property/types";
@@ -30,6 +31,7 @@ function record(overrides: Partial<VideoProgressRecord> = {}): VideoProgressReco
   return {
     jobId: "gjob_1",
     jobState: "GENERATING",
+    delivered: false,
     qualityTier: "HIGH_QUALITY",
     durationSeconds: 45,
     requiredUnits: 2,
@@ -42,7 +44,8 @@ function record(overrides: Partial<VideoProgressRecord> = {}): VideoProgressReco
 
 describe("the phase a job is shown in", () => {
   it("gives every job state a phase, in UXFlow's words", () => {
-    expect(Object.fromEntries(GENERATION_JOB_STATES.map((state) => [state, videoProgressPhaseOf(state)]))).toEqual({
+    const phases = GENERATION_JOB_STATES.map((state) => [state, videoProgressPhaseOf(state, false)]);
+    expect(Object.fromEntries(phases)).toEqual({
       CREATED: "QUEUED",
       RESERVING: "QUEUED",
       RESERVED: "QUEUED",
@@ -52,7 +55,25 @@ describe("the phase a job is shown in", () => {
       COMPOSING: "COMPOSING",
       DELIVERABLE_VALIDATING: "VALIDATING",
       DELIVERABLE_READY: "COMPLETED",
-      REVISING: "REVISING",
+      REVISING: "COMPLETED",
+      FAILED_TERMINAL: "FAILED",
+      CANCELLED: "CANCELLED",
+    });
+  });
+
+  it("shows a delivered video as completed while a new version of it is made", () => {
+    const phases = GENERATION_JOB_STATES.map((state) => [state, videoProgressPhaseOf(state, true)]);
+    expect(Object.fromEntries(phases)).toEqual({
+      CREATED: "COMPLETED",
+      RESERVING: "COMPLETED",
+      RESERVED: "COMPLETED",
+      GENERATING: "COMPLETED",
+      SCENES_READY: "COMPLETED",
+      COMPOSITION_PENDING: "COMPLETED",
+      COMPOSING: "COMPLETED",
+      DELIVERABLE_VALIDATING: "COMPLETED",
+      DELIVERABLE_READY: "COMPLETED",
+      REVISING: "COMPLETED",
       FAILED_TERMINAL: "FAILED",
       CANCELLED: "CANCELLED",
     });
@@ -83,6 +104,10 @@ describe("a video's progress", () => {
     });
   });
 
+  it("carries a Normal video's quality as Normal", () => {
+    expect(videoProgressOf(record({ qualityTier: "NORMAL" })).qualityTier).toBe("NORMAL");
+  });
+
   it("describes a video that ended without one whose Units are back, held, or were never reserved", () => {
     for (const jobState of ["FAILED_TERMINAL", "CANCELLED"] as const) {
       for (const [reservationState, units] of [
@@ -95,16 +120,35 @@ describe("a video's progress", () => {
     }
   });
 
-  it("describes a delivered video that used its Units", () => {
-    const progress = videoProgressOf(record({ jobState: "DELIVERABLE_READY", reservationState: "CONSUMED" }));
-    expect(progress).toMatchObject({ phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } });
+  it("describes a delivered video that used its Units, or never reserved any", () => {
+    for (const [reservationState, units] of [
+      ["CONSUMED", "CONSUMED"],
+      [null, "NONE"],
+    ] as const) {
+      const progress = videoProgressOf(record({ jobState: "DELIVERABLE_READY", delivered: true, reservationState }));
+      expect(progress).toMatchObject({ phase: "COMPLETED", units: { count: 2, state: units } });
+    }
   });
 
-  it("refuses to describe a video that ended without one but used its Units", () => {
-    for (const jobState of ["FAILED_TERMINAL", "CANCELLED"] as const) {
+  it("describes a video in progress whose Units came back before it ended", () => {
+    // A submission given up on releases its Units before the job is ended (ADR-0037 Decision 6).
+    expect(videoProgressOf(record({ reservationState: "RELEASED" }))).toMatchObject({
+      phase: "GENERATING_SCENES",
+      units: { count: 2, state: "RELEASED" },
+    });
+  });
+
+  it("refuses to describe a video whose Units contradict whether it was delivered", () => {
+    for (const contradiction of [
+      { jobState: "FAILED_TERMINAL", reservationState: "CONSUMED" },
+      { jobState: "CANCELLED", reservationState: "CONSUMED" },
+      { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RESERVED" },
+      { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RELEASED" },
+      { jobState: "GENERATING", delivered: true, reservationState: "RECONCILIATION_HOLD" },
+    ] as const) {
       const error = (() => {
         try {
-          videoProgressOf(record({ jobId: "gjob_9", jobState, reservationState: "CONSUMED" }));
+          videoProgressOf(record({ jobId: "gjob_9", ...contradiction }));
           return null;
         } catch (thrown) {
           return thrown;
@@ -112,6 +156,8 @@ describe("a video's progress", () => {
       })();
       expect(error).toBeInstanceOf(AppError);
       expect((error as AppError).code).toBe("INTERNAL_ERROR");
+      // Words that claim nothing about the video's Units.
+      expect((error as AppError).message).toBe("This video's progress could not be read");
       expect((error as AppError).details).toEqual({ jobId: "gjob_9" });
     }
   });
@@ -257,6 +303,22 @@ describe("who may read it", () => {
   it("reads a project in a CREATOR's reach", async () => {
     property = { ...property, responsibleUserId: ids.CREATOR };
     expect((await service().progress(ids.CREATOR, orgId, PROJECT))?.phase).toBe("GENERATING_SCENES");
+  });
+
+  it("reads a project in a MANAGER's group, and refuses one whose Property is in no group of its", async () => {
+    const groups = new GroupService(deps);
+    const mine = await groups.create(ids.OWNER, orgId, "North");
+    const other = await groups.create(ids.OWNER, orgId, "South");
+    await groups.addMember(ids.OWNER, orgId, mine.id, ids.MANAGER);
+    property = { ...property, groupId: other.id };
+    await refusedWith("NOT_FOUND", ids.MANAGER);
+    property = { ...property, groupId: mine.id };
+    expect((await service().progress(ids.MANAGER, orgId, PROJECT))?.phase).toBe("GENERATING_SCENES");
+  });
+
+  it("still reads a project whose Property was deleted, as its other reads do", async () => {
+    property = { ...property, status: "DELETED" };
+    expect(await service().progress(ids.OWNER, orgId, PROJECT)).toEqual(videoProgressOf(record()));
   });
 
   it("surfaces a video that ended without one but used its Units", async () => {

@@ -25,6 +25,7 @@ import {
   PROJECT_A,
   PROJECT_B,
   PROP_A,
+  seedPriorDeliverable,
   seedTenants,
   wipeOrchestration,
 } from "./orchestration-fixture";
@@ -44,8 +45,9 @@ const progress = HAS_DB
 
 const DOMAIN = "video-progress.itest";
 const EARLIER = new Date("2026-09-15T00:00:00.000Z");
-let sequence = 0;
+const BETWEEN = new Date("2026-09-15T12:00:00.000Z");
 const LATER = new Date("2026-09-16T00:00:00.000Z");
+let sequence = 0;
 
 interface SeededJob {
   readonly organizationId?: string;
@@ -108,6 +110,12 @@ async function seedJob(id: string, job: SeededJob): Promise<void> {
   }
 }
 
+/** Points the job at a delivered version of its own, as delivering it does. */
+async function deliver(id: string): Promise<void> {
+  const versionId = await seedPriorDeliverable(prisma, id, id.replace(/^gjob_/, ""));
+  await prisma.generationJob.update({ where: { id }, data: { currentDeliverableVersionId: versionId } });
+}
+
 describe.skipIf(!HAS_DB)("a project's newest video", () => {
   beforeEach(async () => {
     await wipeOrchestration(prisma);
@@ -129,16 +137,20 @@ describe.skipIf(!HAS_DB)("a project's newest video", () => {
   });
 
   it("is the newest job, with its reservation and how many of its scenes are made", async () => {
+    // Neither the first row written, the last, nor the greatest id is the
+    // newest, so only the start time orders them.
     await seedJob("gjob_vp_old", { state: "FAILED_TERMINAL", reservation: "RELEASED", scenes: ["FAILED_TERMINAL"] });
     await seedJob("gjob_vp_new", {
       state: "GENERATING",
       createdAt: LATER,
       scenes: ["READY", "REVISING", "GENERATING", "READY", "PENDING"],
     });
+    await seedJob("gjob_vp_mid", { state: "CANCELLED", reservation: "RELEASED", createdAt: BETWEEN });
 
     expect(await progress.findLatest(ORG_A, PROJECT_A)).toEqual({
       jobId: "gjob_vp_new",
       jobState: "GENERATING",
+      delivered: false,
       qualityTier: "HIGH_QUALITY",
       durationSeconds: 45,
       requiredUnits: 2,
@@ -149,9 +161,25 @@ describe.skipIf(!HAS_DB)("a project's newest video", () => {
   });
 
   it("breaks a tie in start time by id, as the start orders a project's jobs", async () => {
+    // The greatest id is neither the first row written nor the last.
     await seedJob("gjob_vp_a", { state: "FAILED_TERMINAL", reservation: "RELEASED" });
-    await seedJob("gjob_vp_b", { state: "RESERVED" });
-    expect((await progress.findLatest(ORG_A, PROJECT_A))?.jobId).toBe("gjob_vp_b");
+    await seedJob("gjob_vp_c", { state: "RESERVED" });
+    await seedJob("gjob_vp_b", { state: "CANCELLED", reservation: "RELEASED" });
+    expect((await progress.findLatest(ORG_A, PROJECT_A))?.jobId).toBe("gjob_vp_c");
+  });
+
+  it("reads a video being made again as delivered, with the Units it used", async () => {
+    // A revision's shape (ADR-0110 Decision 4): generating again, its Units
+    // used, and the video it delivered still current.
+    await seedJob("gjob_vp_revision", { state: "GENERATING", reservation: "CONSUMED", scenes: ["READY", "REVISING"] });
+    await deliver("gjob_vp_revision");
+    expect(await progress.findLatest(ORG_A, PROJECT_A)).toMatchObject({
+      jobState: "GENERATING",
+      delivered: true,
+      reservationState: "CONSUMED",
+      sceneCount: 2,
+      scenesReady: 1,
+    });
   });
 
   it("reads a job with no reservation and no scenes", async () => {
@@ -227,6 +255,7 @@ describe.skipIf(!HAS_DB)("a project's newest video", () => {
       progress,
     });
     await seedJob("gjob_vp_service", { state: "DELIVERABLE_READY", reservation: "CONSUMED", scenes: ["READY"] });
+    await deliver("gjob_vp_service");
 
     expect(await service.progress(owner, ORG_A, PROJECT_A)).toEqual({
       phase: "COMPLETED",

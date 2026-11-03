@@ -2,8 +2,8 @@
  * A project's newest video, for its progress (GS-11a, ADR-0113). Read only.
  *
  * One statement, so the job's state, its reservation's and its scenes' are of
- * one snapshot: a job failing and its Units coming back commit together, and a
- * read cannot see one without the other.
+ * one moment: where a job's end and its Units coming back commit together, a
+ * read never sees one without the other.
  *
  * The organization is the project's: a project of another organization reads
  * as one with no video, before anything of its jobs is returned.
@@ -22,6 +22,7 @@ import { AppError } from "@app/shared";
 interface ProgressRow {
   readonly jobId: string;
   readonly jobState: string;
+  readonly delivered: boolean;
   readonly qualityTier: string;
   readonly durationSeconds: number;
   readonly requiredUnits: number;
@@ -42,6 +43,7 @@ export function createVideoProgressRepository(prisma: PrismaClient): VideoProgre
       const rows = await prisma.$queryRaw<ProgressRow[]>`
         SELECT j."id"                         AS "jobId",
                j."state"::text                AS "jobState",
+               j."currentDeliverableVersionId" IS NOT NULL AS "delivered",
                j."qualityTier"::text          AS "qualityTier",
                j."requestedDurationSeconds"   AS "durationSeconds",
                j."requiredVideoUnits"         AS "requiredUnits",
@@ -66,6 +68,7 @@ export function createVideoProgressRepository(prisma: PrismaClient): VideoProgre
       return {
         jobId: row.jobId,
         jobState: member(GENERATION_JOB_STATES, row.jobState),
+        delivered: row.delivered,
         qualityTier: member(GENERATION_QUALITY_TIERS, row.qualityTier),
         durationSeconds: row.durationSeconds,
         requiredUnits: row.requiredUnits,

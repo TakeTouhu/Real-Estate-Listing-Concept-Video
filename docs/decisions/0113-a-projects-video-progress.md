@@ -47,6 +47,12 @@ The newest job of the project, by when it started and then by id, as the start
 orders them (ADR-0110). With one video of a project at a time, that is the one
 in progress, the delivered one, or the last that ended without a video.
 
+The start's own check (`findHolding`) reads the newest job that *holds* the
+project instead. The two differ only where an older job still holds it behind
+a newer one, which ADR-0110's lock rules out for every job started since; only
+data from before it, or from the single-scene path nothing in production
+builds, could show it.
+
 ## Decision 3 — The phases, in UXFlow's words
 
 | Job state | Phase |
@@ -55,16 +61,24 @@ in progress, the delivered one, or the last that ended without a video.
 | `GENERATING` | `GENERATING_SCENES` |
 | `SCENES_READY`, `COMPOSITION_PENDING`, `COMPOSING` | `COMPOSING` |
 | `DELIVERABLE_VALIDATING` | `VALIDATING` |
-| `DELIVERABLE_READY` | `COMPLETED` |
-| `REVISING` | `REVISING` |
+| `DELIVERABLE_READY`, `REVISING` | `COMPLETED` |
 | `FAILED_TERMINAL` | `FAILED` |
 | `CANCELLED` | `CANCELLED` |
+| any other, with a delivered video | `COMPLETED` |
 
 - **No video passes through "analyzing"**: the photos are analyzed before the
   storyboard is composed, and a video starts from a composed storyboard.
-- **`REVISING` is a delivered video of which a new version is being made.**
-  Nothing a customer can reach makes one yet; it is named rather than shown as
-  another phase, so that the delivered video is not described as lost.
+- **A delivered video stays completed while a new version of it is made.** A
+  revision moves the job from `DELIVERABLE_READY` back through `GENERATING` to
+  validating, keeping its delivered version current
+  (`currentDeliverableVersionId`, ADR-0110 Decision 4); `REVISING` itself is
+  never committed. A failed new version leaves the delivered one current and
+  its Units are not charged again (ADR-0052 Decision 19). So the read takes
+  whether the job has delivered a video with its state, and a job that has
+  is `COMPLETED` until it ends. Shown by its state alone, a delivered video
+  would read as generating again with its Units used. How a new version's own
+  progress is shown is decided with regeneration, which nothing a customer can
+  reach starts yet (`docs/decisions/TODO.md`). No phase is added to UXFlow's.
 - **No phase names a provider, a model, an attempt, a retry or why a video
   failed.** The failure class (`BLOCKED`, `INVALID_MEDIA`, `INTEGRITY_MISMATCH`
   and the rest) is never read, so it cannot be shown.
@@ -78,28 +92,50 @@ in progress, the delivered one, or the last that ended without a video.
 | `RELEASED` | `RELEASED` |
 | none | `NONE`: the video never reserved any |
 
-With the count the video needs, frozen when it started. A video that ended
-without one but whose Units were used contradicts ADR-0052 Decision 19, and the
-customer is told a failed video used no Unit, so it is not described: the read
-answers `INTERNAL_ERROR`.
+With the count the video needs, frozen when it started.
+
+**A video still in progress can read `RELEASED`.** Reconciliation that gives
+up on a submission releases its Units without touching the job, and the job
+ends without a video afterwards (ADR-0037 Decision 6). Until it does, the read
+says what is true: the video is still in its phase, and its Units are back.
+
+**Two shapes contradict ADR-0052 and are not described**:
+
+- a video that ended without one (`FAILED`, `CANCELLED`) whose Units were
+  used, when the customer is told a failed video used no Unit (Decision 19);
+- a completed video whose Units are still held or came back, when a delivered
+  video uses them.
+
+Either answers `INTERNAL_ERROR` with the job's id in its details and a
+message that claims nothing about the video or its Units ("This video's
+progress could not be read"), so a route that shows the message tells the
+customer nothing false. A completed video with no reservation (`NONE`) is
+described as it is.
 
 ## Decision 5 — The scenes
 
-How many scenes the video has, and how many are made (`READY`).
+How many scenes the video has, and how many are made (`READY`). A scene being
+made again for a new version (`REVISING`) is not counted; the count is a video
+in progress's, and a completed video's is not shown as progress.
 
 ## Decision 6 — The support reference is the video's own id
 
 UXFlow asks for a support reference id. The read gives the job's id: it is
 VTaVision's own, unique, names nothing outside VTaVision (no provider, model or
-storage key), and support finds the video by it. Reading it already needs
+storage key), and support will be able to find the video by it: SaaSOperations
+("Support tooling") already plans a search by job id, which does not exist yet.
+Reading it already needs
 `video.view` and reach, so it tells nobody anything they could not already
 see. Where it is shown is the page's decision (GS-11b).
 
 ## Decision 7 — One snapshot
 
-The job, its reservation and its scenes are read in one statement. A failing
-job and its Units coming back commit together, so the read never sees a failed
-video holding Units that are in fact back, or the reverse.
+The job, its reservation and its scenes are read in one statement, so the
+three are of one moment. Where a job's end and its Units coming back commit
+together, the read never sees one without the other: a failed or cancelled
+video never reads as holding Units that are in fact back. The reverse can be
+seen and is true for a while (Decision 4): Units given back by reconciliation
+before the job ends.
 
 ## Decision 8 — What stays out
 
