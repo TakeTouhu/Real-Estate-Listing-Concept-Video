@@ -6210,3 +6210,171 @@ scheduler and live Stripe charges remain BLOCKED.
 GS-10d waits for the product owner's yes before merge; with it, row GS-10 is
 complete. Then progress (GS-11), preview and download (GS-12) and the browser
 test (GS-13).
+
+## GS-11a — a project's video, as its customer sees it
+
+Base: `971b625` (PR #136 merge commit on `main`).
+ADR: `docs/decisions/0113-a-projects-video-progress.md`
+
+The first of two milestones of row GS-11 of the approved plan. **No
+migration; no route, no page and no environment variable.** Nothing outside
+tests constructs the read until GS-11b's project page.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `c967a66` | the read, its domain and database tests, ADR-0113 and the documentation |
+| `a621e05` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-11a does
+
+- **It reads a project's newest video for any member who can read its
+  storyboard**: `video.view`, then the project's Property in reach, each
+  refused before anything about the video is read. A project of another
+  organization, or out of reach, is not found.
+- **It says where the video is in UXFlow's words**: queued, generating scenes,
+  composing, validating, completed, failed or cancelled. No video passes
+  through "analyzing", which happens before the storyboard. A delivered video
+  stays completed while a new version of it is made, so it is never described
+  as being generated again.
+- **It says what became of the Units**: reserved (neither used nor back yet),
+  used, back, or never reserved; with how many the video needs. A video still
+  in progress can read "back" when reconciliation gave its Units up before the
+  job ended. A video that ended without one but used its Units, or a completed
+  one whose Units are held or back, contradicts ADR-0052 and is refused, in
+  words that claim nothing about it, rather than described.
+- **It says how many scenes are made**, out of how many.
+- **It gives the video's own id as the support reference** UXFlow asks for.
+- **It names no provider, model, attempt or failure class**, and reads the
+  job, its reservation and its scenes in one statement, so the three are of
+  one moment.
+
+```mermaid
+sequenceDiagram
+    participant P as Project page (GS-11b)
+    participant V as VideoProgressService
+    participant I as Identity and Property repositories
+    participant D as Video progress repository
+    P->>V: progress(member, organization, project)
+    V->>I: membership: video.view
+    V->>I: the project, its Property, the member's reach
+    alt refused, or out of reach
+        V-->>P: FORBIDDEN or NOT_FOUND (nothing about the video read)
+    else in reach
+        V->>D: findLatest(organization, project)
+        D-->>V: newest job, its reservation's state, scene counts (one statement)
+        V-->>P: null, or phase, Units, scenes, support reference
+    end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI), each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `c967a66` and on `a621e05` |
+| `pnpm test` | 6,768 passed in 253 files on `c967a66` (12 new); 6,773 on `a621e05` (17 new in all: every job state's phase, delivered or not; every reservation state's Units; the fields carried, Normal quality; an ended, a delivered and an in-progress video's Units; every contradiction refused in neutral words; who may read it: each role, null with no video, `FORBIDDEN`, `NOT_FOUND` out of reach, missing or another organization's, a `CREATOR`'s and a `MANAGER`'s reach, a deleted Property's project) |
+| `pnpm test:db` | 1,877 passed in 72 files on `c967a66`; 1,878 on `a621e05` (9 new: none started; the newest job, written neither first nor last; a tie by id; no reservation and no scenes; every job and reservation state; a revision's shape; no organization reads another's; empty ids refused; the service through the real repositories) |
+| `pnpm build` | succeeded on `a621e05` |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10d. On `c967a66`, 18 mutants against the domain
+suite (each phase and Units mapping, the contradiction check, the fields
+carried, the permission, the project and reach checks, a project with no
+video): 17 killed; the survivor (quality fixed at HQ) is killed by a test
+added in `a621e05`. 9 mutants against the database suite (the tenant
+condition, the order and its tie, the scene counts, the reservation join, the
+id check, the Unit count): all killed.
+
+On `a621e05`, with the review's changes: 28 domain mutants (adding the
+delivered branch and each of its ended states, each contradiction and the
+in-progress `RELEASED` that is not one, the message and its details, a
+deleted Property's project refused) and 14 database mutants (adding the
+delivered column and its mapping, ordering by last change, by id alone and
+with no tie break): all killed.
+
+### Review
+
+An independent reviewer read `c967a66` from git objects only and found nothing
+blocking: the authorization order, the tenant condition, the one-statement
+read and the job id as the support reference were confirmed. Its other
+findings, each answered in `a621e05`:
+
+- **Should fix: a video being revised read as not delivered.** A revision
+  moves the job from `DELIVERABLE_READY` back through `GENERATING`, keeping its
+  delivered version current, and `REVISING` is never committed; so the read
+  showed a delivered video as generating again with its Units used. The read
+  now takes whether the job has delivered a video, and such a job is
+  completed until it ends; `REVISING` is no longer a phase. A database test
+  writes a revision's real shape (generating, Units used, the version
+  current). The reviewer also suggested counting a revised scene as made; the
+  count stays a video in progress's, as a completed video's is not shown as
+  progress. What the page says while a new version is made is recorded in
+  `docs/decisions/TODO.md` (*Open in GS-11a*), to decide with regeneration.
+- **Should fix: ADR-0113 Decision 7 overclaimed.** Reconciliation can give a
+  video's Units back before its job ends (ADR-0037 Decision 6), so a video in
+  progress can read "Units back". The ADR, the repository's header and the
+  domain type now say so, and a test describes that video.
+- **Should fix: the ordering tests could not tell a mutated `ORDER BY`.** Rows
+  were written in start order, so ordering by last change passed. The newest
+  job is now neither the first row written, the last, nor the greatest id,
+  and the tie's greatest id is neither the first nor the last written.
+- **Minor: `REVISING` is not one of UXFlow's states.** It is no longer a phase
+  (above); no phase is added to UXFlow's.
+- **Minor: the contradiction check covered one case and its message claimed
+  something.** A completed video whose Units are held or back is refused too,
+  and the message is now "This video's progress could not be read", with the
+  job's id only in the details.
+- **Minor: no completion-report section.** This section.
+- **Minor: Decision 1's deleted Property and a `MANAGER`'s group reach were
+  untested.** Both are now tested.
+- **Nits.** `QUEUED` no longer says its Units are reserved; the ADR says
+  support *will* be able to find a video by its id, citing SaaSOperations'
+  planned search; and Decision 2 says where the start's own check reads a
+  different job (only on data from before ADR-0110).
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the progress read's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-11a.md`: no HTTP change; the read, its result and its repository |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-11a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md`, `docs/generation-e2e-gap-analysis.md`
+(GS-11 and its split) and `docs/decisions/TODO.md` (*Open in GS-11a*).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer can reach
+changes: the read is constructed by tests only. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Nothing shows the progress yet.** GS-11b puts it on the project page.
+- **No time estimate**: none is shown until provider times are measured (the
+  plan's default 3).
+- **The progress is read when the page is read**; nothing pushes a change to
+  the customer, and email notification comes later (the plan's default 4).
+- **A new version's own progress is not shown**: a delivered video reads as
+  completed while one is made. What the page says then is decided with
+  regeneration, which nothing a customer can reach starts yet
+  (`docs/decisions/TODO.md`, *Open in GS-11a*).
+
+### Remaining work
+
+GS-11a waits for the product owner's yes before merge. Then GS-11b (the
+project page), preview and download (GS-12) and the browser test (GS-13).
