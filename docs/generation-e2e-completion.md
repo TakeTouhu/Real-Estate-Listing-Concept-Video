@@ -6062,7 +6062,8 @@ Commits, oldest first:
 
 | Commit | What it carries |
 | --- | --- |
-| the first commit | the start page, the project page's link and notice, their tests, ADR-0112 and the documentation |
+| `ff606fc` | the start page, the project page's link and notice, their tests, ADR-0112 and the documentation |
+| `c2ee894` | the answers to the review |
 | this commit | the verification, mutation testing and review results below |
 
 The exact head SHA is reported with the pull request.
@@ -6112,6 +6113,60 @@ sequenceDiagram
         end
     end
 ```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI), each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `ff606fc` and on `c2ee894` |
+| `pnpm test` | 6,756 passed in 252 files on `c2ee894` (32 new: the start page's reads in order, not found where the start is not built before the session is read, the refused member, the next organization, a project of another Property; every offer's words, the form read back through the route's own reader, a new key each showing; the project page's link and notice, built or not, for each permission) |
+| `pnpm test:db` | 1,869 passed in 71 files on `ff606fc`; `c2ee894` changes nothing it covers |
+| `pnpm build` | succeeded on both; the build lists `/properties/[propertyId]/video-projects/[projectId]/start` |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10c, against the start page's, the project page's and
+the form module's unit suites. On `ff606fc`, 44 mutants on the page's order of
+checks and reads, the refused member, the next organization and the other
+Property, the key, the form's fields and order, every refusal's words, the
+notice and the link and the permissions they need: all killed. On `c2ee894`,
+53 mutants with the review's changes (the held project's words, singular and
+plural Units, only the sources that give Units, a repeated `?error=` or
+`?started=`): all killed.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex is
+at its usage limit), found nothing blocking: the page and the link appear only
+where the start is built and the page reads nothing before that check, no
+other organization's or Property's project is shown, the Units shown stay
+within ADR-0109 Decision 4, the form is the route's, and no provider or model
+is named. Answered in `c2ee894`:
+
+- **Should fix: the notice after a start could become false.** It said the
+  Units were reserved, but it reads only `?started=1`: after a reload once the
+  video was delivered or failed, or a replay of a failed start's key, it was
+  wrong. It now says the start was confirmed and that a started video's Units
+  are used only if it is delivered.
+- **Should fix: a held project's words contradicted ADR-0110.** A failed video
+  holds its project until its Units are released, and the offer says only
+  whether a video was delivered. The page now says a video not delivered is in
+  progress or its Units have not come back yet, and that a project is started
+  again only once its video ended undelivered and its Units came back.
+- **Should fix: the project page's gate had no test.** It is now
+  `startOnProjectPage`, tested on its own (it was already moved before the
+  review's report arrived, and its mutants killed).
+- **Minor.** The forecast says the split can differ, or the Units fall short,
+  if Units are reserved, released or bought meanwhile.
+- **Nits.** A repeated `?error=` is not shown and only `?started=1` counts;
+  sources giving no Units are not named and one Unit is singular; a plan not
+  started yet is worded as such; the start page's Property read is typed; a
+  test is named for what it checks. The same refusal can read twice, in the
+  route's alert and in the page's card, when the route sends it back; that is
+  left as it is.
 
 ### Required documentation
 
