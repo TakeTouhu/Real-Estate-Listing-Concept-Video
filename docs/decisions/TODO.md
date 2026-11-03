@@ -1272,6 +1272,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       Another answer changes `holdsItsProject` (ADR-0110 Decision 1); after
       delivery also needs the new video's price.
 
+## Open in GS-11a — how a new version of a delivered video shows its progress
+
+- [ ] **Decide what the customer sees while a new version of a delivered video
+      is made.** A revision moves its job back through generating, composing
+      and validating with the delivered version kept current, and a failed one
+      leaves that version current (ADR-0052 Decision 19). ADR-0113 shows such a
+      job as completed, with the Units it used, until it ends: the delivered
+      video is still the customer's. Whether the page also says a new version
+      is being made, its phase and its own Units is decided with regeneration
+      (and its price, above), which nothing a customer can reach starts yet. It
+      may add a phase to UXFlow's; that is a product decision. Found by
+      GS-11a's review.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

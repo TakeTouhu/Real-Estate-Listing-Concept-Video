@@ -348,3 +348,33 @@ GS-10 is split into four milestones, each its own pull request:
   link to it, shown only where the start is built. The page shows the start's
   offer and, for a ready one, the form the route reads, with a key made each
   time it is shown.
+
+## GS-11 — progress on the project page, and the failure message
+
+On `971b625` a customer can start a project's video in development, and the
+pipeline command takes it to a delivered video or to a failure whose Units
+come back. A survey on that commit found:
+
+- **Nothing reads a project's video for the customer.** The start service's
+  `findHolding` says only whether a job holds the project, and only to a member
+  who may start videos.
+- **The project page shows nothing after a start** but the notice that the
+  start was confirmed (ADR-0112).
+- **The job states are not the customer's.** UXFlow names queued, analyzing,
+  generating scenes, composing, validating, completed, failed and cancelled;
+  the job has twelve states, and no video passes through analyzing.
+- **A failure screen has its contract** (UXFlow, "Error recovery"): a reason
+  the customer understands, whether the Unit was consumed or released, whether
+  the video can be started again, and a support reference id, with no control
+  that retries the failed video. Its message is ADR-0052's, the same for every
+  failure class, and is in Japanese while the site's copy is English.
+- **No support reference exists** anywhere in the product.
+
+GS-11 is split into two milestones, each its own pull request:
+
+- **GS-11a** (ADR-0113, no migration): the read. The project's newest video
+  for a member holding `video.view` with the Property in reach: its phase, its
+  Units, its scenes and its id as the support reference, in one snapshot.
+- **GS-11b**: the project page shows it, with ADR-0052's message for a video
+  that ended without one, whether its Units came back, whether it can be
+  started again, and its support reference.

@@ -47,6 +47,7 @@ export { createJobLaunchRepository } from "./job-launch-repository";
 export { createLaunchedJobEndingRepository } from "./launched-job-ending-repository";
 export { createUnlaunchableJobEndingRepository } from "./unlaunchable-job-ending-repository";
 export { createAttemptSubmissionRepository } from "./attempt-submission-repository";
+export { createVideoProgressRepository } from "./video-progress-repository";
 export {
   ENTITLEMENT_AUDIT_ACTION,
   createUnitEntitlementRepository,
