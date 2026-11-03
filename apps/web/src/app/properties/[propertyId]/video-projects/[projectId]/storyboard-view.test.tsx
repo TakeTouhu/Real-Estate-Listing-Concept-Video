@@ -54,6 +54,8 @@ function view(
     approvedCount?: number;
     minimumScenes?: number;
     canCompose?: boolean;
+    startHref?: string | null;
+    started?: boolean;
   } = {},
 ) {
   return render(
@@ -65,6 +67,8 @@ function view(
       approvedCount={overrides.approvedCount ?? 0}
       minimumScenes={overrides.minimumScenes ?? 3}
       canCompose={overrides.canCompose ?? true}
+      startHref={overrides.startHref ?? null}
+      started={overrides.started ?? false}
     />,
   );
 }
@@ -232,6 +236,34 @@ describe("authorization presentation", () => {
     // The storyboard itself stays readable.
     expect(screen.getByText("(3 scenes)")).toBeTruthy();
     expect(screen.getByText(FRESH)).toBeTruthy();
+  });
+});
+
+describe("starting the video (GS-10d, ADR-0112)", () => {
+  const START = "/properties/prp_1/video-projects/vpr_1/start";
+  const STARTED = /The start was confirmed/;
+
+  it("links to the start page where the server gives one", () => {
+    view({ scenes: THREE_SCENES, fresh: true, startHref: START });
+    const link = screen.getByRole("link", { name: "Review and start the video" });
+    expect(link.getAttribute("href")).toBe(START);
+  });
+
+  it("has no link and no start control anywhere else", () => {
+    const { container } = view({ scenes: THREE_SCENES, fresh: true, startHref: null });
+    expect(screen.queryByText("Review and start the video")).toBeNull();
+    expect(container.innerHTML).not.toContain("/start");
+  });
+
+  it("says the video was started, and what happens to its Units, only on the way back from a start", () => {
+    view({ scenes: THREE_SCENES, fresh: true, started: true });
+    const notice = screen.getByText(STARTED);
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.textContent).toContain("A started video's Units are used only if it is delivered");
+
+    cleanup();
+    view({ scenes: THREE_SCENES, fresh: true, started: false });
+    expect(screen.queryByText(STARTED)).toBeNull();
   });
 });
 

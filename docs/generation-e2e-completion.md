@@ -6047,3 +6047,166 @@ Stripe charges remain BLOCKED.
 GS-10c waits for the product owner's yes before merge. Then GS-10d (the start
 page), progress (GS-11), preview and download (GS-12) and the browser test
 (GS-13).
+
+## GS-10d — the start page, in development only
+
+Base: `f02673a` (PR #135 merge commit on `main`).
+ADR: `docs/decisions/0112-start-page-in-development.md`
+
+The fourth and last milestone of row GS-10 of the approved plan. **No
+migration; no new route, no environment variable.** The page exists only where
+the start is built, in development with the test provider; in production it is
+not found and the project page has no link to it.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `ff606fc` | the start page, the project page's link and notice, their tests, ADR-0112 and the documentation |
+| `c2ee894` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-10d does
+
+- **The start page shows the start's own offer.** Where the start is not built
+  it is not found before anything is read. Otherwise it finds the member's
+  organization that reaches the Property, asks the start service's offer as
+  the member (its permissions first, then its reach), and checks that the
+  project is this Property's, as the project page does.
+- **A ready offer is shown as the customer will confirm it**: the quality
+  (Normal or HQ), the scenes in order with their rooms and lengths, the Units
+  it would reserve and where they would come from, that they are used only if
+  the video is delivered, and what the video is and is not. Every other offer
+  says why not and what to do; a member who may not start videos is told so.
+- **Its one form is the route's.** Every field is hidden and comes from the
+  offer, with a key the server makes each time the page is shown, so a double
+  click starts once and starting again means reviewing again.
+- **The project page links to it**, for a member holding `video.generate` and
+  `unit.consume`, and says the start was confirmed when the route sends the
+  customer back.
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant P as Project page
+    participant S as Start page
+    participant V as GenerationStartService
+    participant R as Start route
+    C->>P: open the project
+    P-->>C: "Review and start the video" (start built, member may start)
+    C->>S: open the start page
+    alt start not built (production, or not the test provider)
+        S-->>C: 404
+    else development with the test provider
+        S->>V: offer(member, organization, project)
+        V-->>S: READY, or why not
+        S-->>C: the offer; for READY, the form with a new key
+        C->>R: POST the form
+        alt STARTED or ALREADY_STARTED
+            R-->>C: 303 project page ?started=1
+            C->>P: "The start was confirmed"
+        else refused, or failed
+            R-->>C: 303 start page ?error=why
+            C->>S: the message above a fresh offer
+        end
+    end
+```
+
+### Verification
+
+Measured locally (PostgreSQL 16 configured like CI), each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `ff606fc` and on `c2ee894` |
+| `pnpm test` | 6,756 passed in 252 files on `c2ee894` (32 new: the start page's reads in order, not found where the start is not built before the session is read, the refused member, the next organization, a project of another Property; every offer's words, the form read back through the route's own reader, a new key each showing; the project page's link and notice, built or not, for each permission) |
+| `pnpm test:db` | 1,869 passed in 71 files on `ff606fc`; `c2ee894` changes nothing it covers |
+| `pnpm build` | succeeded on both; the build lists `/properties/[propertyId]/video-projects/[projectId]/start` |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-10c, against the start page's, the project page's and
+the form module's unit suites. On `ff606fc`, 44 mutants on the page's order of
+checks and reads, the refused member, the next organization and the other
+Property, the key, the form's fields and order, every refusal's words, the
+notice and the link and the permissions they need: all killed. On `c2ee894`,
+53 mutants with the review's changes (the held project's words, singular and
+plural Units, only the sources that give Units, a repeated `?error=` or
+`?started=`): all killed.
+
+### Review
+
+An independent review, by a subagent reading the git objects only (Codex is
+at its usage limit), found nothing blocking: the page and the link appear only
+where the start is built and the page reads nothing before that check, no
+other organization's or Property's project is shown, the Units shown stay
+within ADR-0109 Decision 4, the form is the route's, and no provider or model
+is named. Answered in `c2ee894`:
+
+- **Should fix: the notice after a start could become false.** It said the
+  Units were reserved, but it reads only `?started=1`: after a reload once the
+  video was delivered or failed, or a replay of a failed start's key, it was
+  wrong. It now says the start was confirmed and that a started video's Units
+  are used only if it is delivered.
+- **Should fix: a held project's words contradicted ADR-0110.** A failed video
+  holds its project until its Units are released, and the offer says only
+  whether a video was delivered. The page now says a video not delivered is in
+  progress or its Units have not come back yet, and that a project is started
+  again only once its video ended undelivered and its Units came back.
+- **Should fix: the project page's gate had no test.** It is now
+  `startOnProjectPage`, tested on its own (it was already moved before the
+  review's report arrived, and its mutants killed).
+- **Minor.** The forecast says the split can differ, or the Units fall short,
+  if Units are reserved, released or bought meanwhile.
+- **Nits.** A repeated `?error=` is not shown and only `?started=1` counts;
+  sources giving no Units are not named and one Unit is singular; a plan not
+  started yet is worded as such; the start page's Property read is typed; a
+  test is named for what it checks. The same refusal can read twice, in the
+  route's alert and in the page's card, when the route sends it back; that is
+  left as it is.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start page's row; the start route's row says the page posts to it |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-10d.md`: no API change; the page and the project page's changes |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-10d*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` and `docs/generation-e2e-gap-analysis.md`.
+
+### Activation status
+
+Nothing paid or scheduled is activated. In production the start page is not
+found and the project page links to nothing new; in development the test
+provider makes the video and nothing is paid for. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **The notice after a start repeats the route's answer**; it does not read the
+  job, so it says only that the start was confirmed. The video's progress is
+  shown from GS-11.
+- **No test renders the page through the web app's composition and
+  PostgreSQL.** The root's database suites type-check without JSX. The page's
+  unit tests prove its reads and that its form is what the route reads; the
+  route's database test proves that form starts the video; GS-13's browser
+  test covers the whole path.
+- **A started job waits for the development pipeline command**, holding its
+  project and its Units until then (ADR-0111).
+- **The re-start words follow the recommended default** (ADR-0110), with the
+  product owner's answer pending.
+
+### Remaining work
+
+GS-10d waits for the product owner's yes before merge; with it, row GS-10 is
+complete. Then progress (GS-11), preview and download (GS-12) and the browser
+test (GS-13).

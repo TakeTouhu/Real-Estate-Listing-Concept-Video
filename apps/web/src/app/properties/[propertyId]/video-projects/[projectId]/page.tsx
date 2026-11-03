@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { MIN_STORYBOARD_SCENES } from "@app/domain";
 import { getAnalysisService } from "@/lib/analysis";
 import { getCurrentUser } from "@/lib/auth";
+import { getGenerationStartService } from "@/lib/generation-start";
+import { startOnProjectPage } from "@/lib/generation-start-form";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { humanizeRoomType } from "@/lib/review-view";
@@ -28,12 +30,17 @@ export const dynamic = "force-dynamic";
  */
 export default async function StoryboardPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ propertyId: string; projectId: string }>;
+  searchParams: Promise<{ started?: string | string[] }>;
 }) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { propertyId, projectId } = await params;
+  const { started } = await searchParams;
+  // Built only in development with the test provider (ADR-0111, ADR-0112).
+  const startBuilt = getGenerationStartService() !== null;
 
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
@@ -103,6 +110,7 @@ export default async function StoryboardPage({
           approvedCount={approvedCount}
           minimumScenes={MIN_STORYBOARD_SCENES}
           canCompose={permissions.includes("video.generate")}
+          {...startOnProjectPage(startBuilt, permissions, property.id, view.project.id, started)}
         />
       </section>
     );
