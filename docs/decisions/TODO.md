@@ -1875,6 +1875,9 @@ them is **built**. Each item below records the settled decision and what remains
       `ObjectStorage` port, without the domain depending on Google Cloud SDK
       types, and establish GCS's absence-versus-permission semantics as the S3
       equivalent was established in Phase 5B.
+      *It must implement the port's `readObject`, a byte range of an object
+      as a stream read only as it is sent, that holds nothing open once it is
+      read or cancelled (ADR-0115).*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

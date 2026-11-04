@@ -77,7 +77,7 @@ export class LocalObjectStorage implements ObjectStorage {
     const size = value.byteLength;
     const bytes = resolveObjectByteRange(range, size);
     if (bytes === null) return Promise.resolve({ kind: "UNSATISFIABLE", size });
-    // A copy, so a later write to the key cannot change bytes already being sent.
+    // A copy, so nothing the reader does to what it is handed changes what is stored.
     const chunk = value.slice(bytes.start, bytes.start + bytes.length);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {

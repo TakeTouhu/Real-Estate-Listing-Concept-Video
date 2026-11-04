@@ -1,7 +1,8 @@
 # API Changes — GS-12a
 
 Serving a stored video, a range at a time (ADR-0115). **No migration, no new
-route and no environment variable.**
+route path and no environment variable**; the download route answers `HEAD`
+itself.
 
 ## HTTP
 
@@ -14,15 +15,18 @@ The token is checked as before, and is the route's only check.
 | --- | --- |
 | no `Range` header | `200`, the whole object |
 | `Range: bytes=a-b`, `bytes=a-` or `bytes=-n`, naming bytes the object holds | `206`, those bytes, `Content-Range: bytes first-last/size` |
-| one byte range naming none of its bytes | `416`, no body, `Content-Range: bytes */size` |
+| one byte range that is not satisfiable (a first byte at or past the end, `bytes=-0`) | `416`, no body, `Content-Range: bytes */size` |
+| a suffix of an empty object | `200`, the whole object |
 | several ranges, another unit, or a malformed header | `200`, the whole object (RFC 9110, section 14.2) |
+| a range with `If-Range` | `200`, the whole object: no validator is sent, so the condition is never met |
 | nothing stored at the key | `404` `Not found`, as before |
 | no token, a bad or expired one, an upload token, or one naming an internal key or a scene video | `401` `Unauthorized` |
 
 Every `200`, `206` and `416` carries `Accept-Ranges: bytes`,
 `Cache-Control: private, no-store`,
 `Content-Security-Policy: default-src 'none'; sandbox` and
-`X-Content-Type-Options: nosniff`. `Content-Length` is the bytes sent.
+`X-Content-Type-Options: nosniff`. `Content-Length` is the bytes sent. The
+`401` and `404` now carry `Cache-Control: private, no-store` too.
 
 `Content-Type` is `video/mp4` for a customer's video
 (`org/{organizationId}/deliverables/{deliverableVersionId}/output`),
@@ -31,6 +35,11 @@ Every `200`, `206` and `416` carries `Accept-Ranges: bytes`,
 
 Nothing a customer reaches signs a video's key yet (GS-12b, GS-12c).
 
+### Added: `HEAD /api/storage/download?token=…`
+
+The `GET` answer's status and headers, with no body; the object is let go at
+once. Next.js answered `HEAD` through the `GET` handler before.
+
 ## Internal API
 
 ### Added: `@app/domain`, `ObjectStorage.readObject(key, range)`
@@ -38,13 +47,14 @@ Nothing a customer reaches signs a video's key yet (GS-12b, GS-12c).
 An object, or one byte range of it, as a stream: `{ kind: "ABSENT" }`,
 `{ kind: "UNSATISFIABLE", size }`, or
 `{ kind: "READ", size, start, length, body }`. A `null` range reads the whole
-object. Implemented by `LocalObjectStorage` and the shared folder's web view.
+object. The caller reads the stream to its end or cancels it. Implemented by
+`LocalObjectStorage` and the shared folder's web view.
 
 ### Added: `@app/domain`, `ObjectByteRange`, `ObjectRead`, `resolveObjectByteRange(range, size)`
 
 The two range forms (`FROM` a first byte to a last one or the end, the `LAST`
 *n* bytes), the read's answer, and the bytes a range names in an object of a
-given size, or `null` when it names none.
+given size, or `null` when it is not satisfiable.
 
 ### Added: `@app/domain`, `isSceneOutputStorageKey(key)`, `SCENE_OUTPUT_STORAGE_SEGMENT`
 

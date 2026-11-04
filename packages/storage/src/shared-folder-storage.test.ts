@@ -7,10 +7,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { chown, mkdir, mkdtemp, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { chown, mkdir, mkdtemp, open, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   managedCleanMasterKey,
   managedDeliverableOutputKey,
@@ -460,9 +460,6 @@ async function chunksOf(read: ObjectRead): Promise<Uint8Array[]> {
 
 const joined = (chunks: Uint8Array[]) => new Uint8Array(Buffer.concat(chunks));
 
-/** How many files this process has open, where the system says. */
-const openFiles = () => readdirSync("/proc/self/fd").length;
-
 describe("the web app's streamed read (ADR-0115)", () => {
   const VIDEO = managedDeliverableOutputKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
   const file = () => join(root, "objects", ...VIDEO.split("/"));
@@ -487,22 +484,22 @@ describe("the web app's streamed read (ADR-0115)", () => {
     expect(joined(await chunksOf(last))).toEqual(bytes(8, 9));
   });
 
-  it("answers a range past the end with the object's size and reads nothing", async () => {
+  it.runIf(existsSync(PROC_FD))("answers a range past the end with the object's size and reads nothing", async () => {
     await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3));
-    const before = openFiles();
+    const before = openFilesBelow(base);
     expect(await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 3, end: null })).toEqual({
       kind: "UNSATISFIABLE",
       size: 3,
     });
-    expect(openFiles()).toBe(before);
+    expect(openFilesBelow(base)).toBe(before);
   });
 
-  it("streams a large object in bounded chunks, across their edges, and closes it at the end", async () => {
+  it.runIf(existsSync(PROC_FD))("streams a large object in bounded chunks, across edges, then closes it", async () => {
     const size = SHARED_FOLDER_READ_CHUNK_BYTES * 2 + 5;
     const data = new Uint8Array(size);
     for (let i = 0; i < size; i += 1) data[i] = i % 251;
     await store.objectStorage.putObject(VIDEO, data);
-    const before = openFiles();
+    const before = openFilesBelow(base);
     const whole = await chunksOf(await store.objectStorage.readObject(VIDEO, null));
     expect(whole.map((chunk) => chunk.byteLength)).toEqual([
       SHARED_FOLDER_READ_CHUNK_BYTES,
@@ -516,19 +513,19 @@ describe("the web app's streamed read (ADR-0115)", () => {
       await store.objectStorage.readObject(VIDEO, { kind: "FROM", start, end: start + 3 }),
     );
     expect(joined(across)).toEqual(data.slice(start, start + 4));
-    expect(openFiles()).toBe(before);
+    expect(openFilesBelow(base)).toBe(before);
   });
 
-  it("closes the object when the reader stops early", async () => {
+  it.runIf(existsSync(PROC_FD))("closes the object when the reader stops early", async () => {
     await store.objectStorage.putObject(VIDEO, new Uint8Array(SHARED_FOLDER_READ_CHUNK_BYTES * 2));
-    const before = openFiles();
+    const before = openFilesBelow(base);
     const read = await store.objectStorage.readObject(VIDEO, null);
     if (read.kind !== "READ") throw new Error("expected a read");
-    expect(openFiles()).toBe(before + 1);
+    expect(openFilesBelow(base)).toBe(before + 1);
     const reader = read.body.getReader();
     await reader.read();
     await reader.cancel();
-    expect(openFiles()).toBe(before);
+    expect(openFilesBelow(base)).toBe(before);
   });
 
   it("keeps reading the object it opened when the key is written again", async () => {
@@ -538,9 +535,9 @@ describe("the web app's streamed read (ADR-0115)", () => {
     expect(joined(await chunksOf(read))).toEqual(bytes(1, 2, 3));
   });
 
-  it("reads nothing ahead, and fails, naming no path, when the object is cut short while it is read", async () => {
+  it.runIf(existsSync(PROC_FD))("reads nothing ahead, failing without a path when the file is cut short", async () => {
     await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3, 4));
-    const before = openFiles();
+    const before = openFilesBelow(base);
     const read = await store.objectStorage.readObject(VIDEO, null);
     // Nothing is read before the reader asks, so the cut is seen.
     await truncate(file(), 1);
@@ -551,7 +548,47 @@ describe("the web app's streamed read (ADR-0115)", () => {
     expect(failure).toBeInstanceOf(AppError);
     expect((failure as AppError).message).not.toContain(base);
     expect((failure as AppError).message).not.toContain("org_1");
-    expect(openFiles()).toBe(before);
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("fails a read the system refuses, naming no path, and closes the object", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    if (read.kind !== "READ") throw new Error("expected a read");
+    // The next read of any open file is refused, as a failing disk would.
+    const probe = await open(file());
+    const handles = Object.getPrototypeOf(probe) as { read: (...args: unknown[]) => Promise<unknown> };
+    await probe.close();
+    const refused = Object.assign(new Error(`EIO: i/o error, read '${file()}'`), { code: "EIO" });
+    const spy = vi.spyOn(handles, "read").mockRejectedValueOnce(refused);
+    try {
+      const failure = await chunksOf(read).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(AppError);
+      expect((failure as AppError).message).toBe("The shared storage folder could not read an object (EIO)");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("reads an empty object as no bytes, holding nothing open", async () => {
+    await store.objectStorage.putObject(VIDEO, new Uint8Array(0));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    expect(read).toMatchObject({ kind: "READ", size: 0, start: 0, length: 0 });
+    expect(openFilesBelow(base)).toBe(before);
+    expect(joined(await chunksOf(read))).toEqual(new Uint8Array(0));
+    const suffix = await store.objectStorage.readObject(VIDEO, { kind: "LAST", length: 10 });
+    expect(suffix).toMatchObject({ kind: "READ", size: 0, start: 0, length: 0 });
+    expect(openFilesBelow(base)).toBe(before);
+    expect(await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 0, end: null })).toEqual({
+      kind: "UNSATISFIABLE",
+      size: 0,
+    });
   });
 
   it("refuses a key that is not canonical", async () => {

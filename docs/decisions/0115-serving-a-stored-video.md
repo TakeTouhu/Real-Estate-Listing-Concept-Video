@@ -37,9 +37,12 @@ use, is unchanged.
 The range is one of RFC 9110's two forms: from a first byte to a last one or
 to the end, or the last *n* bytes. `resolveObjectByteRange` turns it into the
 bytes of an object of a given size, as section 14.1.2 says: a last byte past
-the end and a suffix longer than the object are cut to it; a first byte at or
-past the end, a suffix of no bytes and any range of an empty object name no
-bytes.
+the end and a suffix longer than the object are cut to it, so a suffix of an
+empty object is all of it, no bytes; a first byte at or past the end and a
+suffix of no bytes are not satisfiable.
+
+The stream is the caller's to read to its end or to cancel: a store may hold
+the object open until then.
 
 ## Decision 2 — The shared folder streams from the file it opened
 
@@ -47,8 +50,8 @@ The web app's view of the shared folder (ADR-0085) opens the object's file
 once, by the folder's own rules (`openRead`), and reads the range from that
 open file in chunks of at most 1 MiB, each only when the reader asks for it:
 nothing is read ahead. The file is closed when its last byte is handed over,
-when the reader cancels, and when a read fails, and also at once when the
-range names no bytes.
+when the reader cancels, and when a read fails; it is closed at once when the
+range is not satisfiable, and when the object is empty.
 
 - **The object read is the one opened.** A put replaces a key's file by
   renaming a new one over it, so a request that opened the old file goes on
@@ -69,15 +72,27 @@ The route still authorizes by its token alone, as before, and now:
 | --- | --- |
 | no `Range` header | `200`, the whole object |
 | one byte range the object holds bytes of (`bytes=a-b`, `bytes=a-`, `bytes=-n`) | `206`, those bytes, with `Content-Range: bytes first-last/size` |
-| one byte range the object holds none of | `416`, no body, with `Content-Range: bytes */size` |
+| one byte range that is not satisfiable (a first byte at or past the end, `bytes=-0`) | `416`, no body, with `Content-Range: bytes */size` |
+| a suffix of an empty object | `200`, the whole object: no `Content-Range` can name none of its bytes |
 | several ranges, another unit, or a header that is not well formed | `200`, the whole object: a server may always ignore a range it does not serve (RFC 9110, section 14.2), and a player asks for one at a time |
+| a range with `If-Range` | `200`, the whole object: the route sends no validator, so the condition is never met (section 13.1.5) |
 | nothing stored at the key | `404`, as before |
 
 Every answer that serves or refuses a range carries `Accept-Ranges: bytes`
 and the route's private headers (`Cache-Control: private, no-store`, the
 sandboxing content security policy and `nosniff`), and `Content-Length` is
-the bytes sent. The body is streamed: the web app never holds the object
-whole.
+the bytes sent. The `401` and `404` answers now carry
+`Cache-Control: private, no-store` too. The body is streamed: the web app
+never holds the object whole.
+
+**What the store holds open is let go when nothing will send it.** Next.js
+answers a `HEAD` by running the `GET` handler and never reads the body, and
+gives up a body without cancelling it when the client is gone before it is
+sent, so either would keep the file open until it is collected. The route
+therefore answers `HEAD` itself, with the `GET` answer's status and headers,
+cancelling its body at once; and a `GET` whose client leaves before its body
+is sent cancels it. Once the body is being sent, the sender cancels it when the
+client leaves.
 
 ## Decision 4 — A customer's video is served as one
 
@@ -110,8 +125,8 @@ give. This closes the open item in `docs/decisions/TODO.md`.
   video's link also needs the member's session is decided with the preview.
 - **No production storage adapter exists** (ADR-0085). Whichever is built
   must implement `readObject`, which the port requires.
-- **No migration**, no new route, no environment variable and no new
-  permission.
+- **No migration**, no new route path (the download route answers `HEAD`
+  itself), no environment variable and no new permission.
 
 ## Consequences
 
@@ -121,6 +136,6 @@ give. This closes the open item in `docs/decisions/TODO.md`.
 - Photos are now streamed too and accept ranges; their bytes, content types
   and headers are otherwise as before.
 - Every `ObjectStorage` in the tests gained `readObject`.
-- The web app keeps a request's file open while its response is read; a
-  reader that stops pulling without cancelling holds it until the response is
-  dropped.
+- The web app keeps a request's file open while its response is sent; a
+  client that stops reading without leaving holds it until it leaves or reads
+  on.

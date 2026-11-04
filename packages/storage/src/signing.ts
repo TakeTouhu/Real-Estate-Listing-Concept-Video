@@ -28,7 +28,8 @@ function sign(payload: string, secret: string): string {
  *
  * Throws for an internal-only key (ADR-0074): the Clean Master, and anything
  * else under `org/{organizationId}/internal/`, is never given a URL. Nor is a
- * key that is not canonical, which a store could map onto another object.
+ * scene video under `org/{organizationId}/generations/` (ADR-0115), nor a key
+ * that is not canonical, which a store could map onto another object.
  */
 export function signStorageToken(token: SignedKeyToken, secret: string): string {
   assertSignableStorageKey(token.key);
@@ -64,9 +65,10 @@ export function signedStorageUrl(input: {
  * Verify a storage token. Returns the token when the signature is valid, the
  * purpose matches, and it has not expired; otherwise null.
  *
- * Also null for an internal-only or non-canonical key, however the token was
- * made (ADR-0074), so a route that redeems tokens serves and accepts nothing in
- * the internal namespace, and answers exactly as it does for a forged token.
+ * Also null for an internal-only, scene or non-canonical key, however the
+ * token was made (ADR-0074, ADR-0115), so a route that redeems tokens serves and
+ * accepts nothing in the internal namespace and no scene video, and answers
+ * exactly as it does for a forged token.
  */
 export function verifyStorageToken(
   raw: string,

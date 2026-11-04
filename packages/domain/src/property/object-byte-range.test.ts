@@ -27,12 +27,16 @@ describe("the bytes a range names", () => {
     expect(resolveObjectByteRange({ kind: "LAST", length: 50 }, 10)).toEqual({ start: 0, length: 10 });
   });
 
-  it("names no bytes for a start past the end, an empty suffix or an empty object", () => {
+  it("is all of an empty object, no bytes, for a suffix of any length (RFC 9110, section 14.1.2)", () => {
+    expect(resolveObjectByteRange({ kind: "LAST", length: 1 }, 0)).toEqual({ start: 0, length: 0 });
+    expect(resolveObjectByteRange({ kind: "LAST", length: 500 }, 0)).toEqual({ start: 0, length: 0 });
+  });
+
+  it("is not satisfiable from a start at or past the end, or for an empty suffix", () => {
     expect(resolveObjectByteRange({ kind: "FROM", start: 10, end: null }, 10)).toBeNull();
     expect(resolveObjectByteRange({ kind: "FROM", start: 10, end: 20 }, 10)).toBeNull();
     expect(resolveObjectByteRange({ kind: "LAST", length: 0 }, 10)).toBeNull();
     expect(resolveObjectByteRange({ kind: "FROM", start: 0, end: null }, 0)).toBeNull();
-    expect(resolveObjectByteRange({ kind: "LAST", length: 1 }, 0)).toBeNull();
     // An end before its start names nothing; the route never asks for one.
     expect(resolveObjectByteRange({ kind: "FROM", start: 5, end: 4 }, 10)).toBeNull();
   });

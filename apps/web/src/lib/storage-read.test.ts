@@ -32,6 +32,7 @@ describe("a request's byte range", () => {
       "bytes=5-4",
       "bytes=0-1,4-5",
       "items=0-1",
+      "notbytes=0-1",
       "bytes=a-b",
       "bytes=1.5-2",
       "bytes=-1-2",

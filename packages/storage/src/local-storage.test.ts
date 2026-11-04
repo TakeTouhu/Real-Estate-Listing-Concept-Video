@@ -50,4 +50,14 @@ describe("the in-memory store's streamed read", () => {
     await storage.putObject(KEY, new Uint8Array([9, 9]));
     expect(await bytesOf(read)).toEqual(new Uint8Array([1, 2]));
   });
+
+  it("hands over a copy, so what the reader does to it never changes what is stored", async () => {
+    const storage = new LocalObjectStorage({ secret: "s" });
+    await storage.putObject(KEY, new Uint8Array([1, 2, 3]));
+    const read = await storage.readObject(KEY, null);
+    if (read.kind !== "READ") throw new Error("expected a read");
+    const { value } = await read.body.getReader().read();
+    value?.fill(0);
+    expect(await bytesOf(await storage.readObject(KEY, null))).toEqual(new Uint8Array([1, 2, 3]));
+  });
 });

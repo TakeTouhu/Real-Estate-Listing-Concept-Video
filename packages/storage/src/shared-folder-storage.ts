@@ -370,9 +370,10 @@ function fileBody(handle: FileHandle): S3ObjectBody {
 }
 
 /**
- * A stream of `length` bytes of the open file from `start`, read in bounded
- * chunks only as the reader pulls them (nothing is read ahead), closing the
- * file at the end, on cancel or on a failed read. A failed read names no path.
+ * A stream of `length` bytes (at least one) of the open file from `start`, read
+ * in bounded chunks only as the reader pulls them (nothing is read ahead),
+ * closing the file at the end, on cancel or on a failed read. A failed read
+ * names no path.
  */
 function rangeStream(handle: FileHandle, start: number, length: number): ReadableStream<Uint8Array> {
   let position = start;
@@ -386,12 +387,6 @@ function rangeStream(handle: FileHandle, start: number, length: number): Readabl
   return new ReadableStream<Uint8Array>(
     {
       async pull(controller) {
-        // An empty range ends at once.
-        if (position >= end) {
-          await close();
-          controller.close();
-          return;
-        }
         const chunk = new Uint8Array(Math.min(SHARED_FOLDER_READ_CHUNK_BYTES, end - position));
         let bytesRead: number;
         try {
@@ -424,6 +419,15 @@ function rangeStream(handle: FileHandle, start: number, length: number): Readabl
     // Nothing is read before the reader asks for it.
     { highWaterMark: 0 },
   );
+}
+
+/** A stream of no bytes, already ended. */
+function emptyStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  });
 }
 
 export function createSharedFolderStorage(
@@ -546,6 +550,11 @@ function createObjectStorageView(
       if (bytes === null) {
         await closeQuietly(handle);
         return { kind: "UNSATISFIABLE", size };
+      }
+      if (bytes.length === 0) {
+        // An empty object: nothing to read, so nothing is held open.
+        await closeQuietly(handle);
+        return { kind: "READ", size, start: bytes.start, length: 0, body: emptyStream() };
       }
       return {
         kind: "READ",

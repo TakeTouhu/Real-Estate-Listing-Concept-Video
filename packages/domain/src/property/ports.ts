@@ -180,7 +180,10 @@ export type ObjectRead =
       /** The first byte read, and how many: the whole object when no range was asked for. */
       readonly start: number;
       readonly length: number;
-      /** Those bytes, read as they are sent: never the whole object at once. */
+      /**
+       * Those bytes, as a stream. The caller reads it to its end or cancels it:
+       * a store may hold the object open until then.
+       */
       readonly body: ReadableStream<Uint8Array>;
     };
 
@@ -204,10 +207,11 @@ export interface ObjectStorage {
 }
 
 /**
- * The bytes a range names in an object of `size` bytes, or `null` when it names
- * none (RFC 9110, section 14.1.2): a start at or past the end, a suffix of no
- * bytes, or any range of an empty object. An end past the last byte, and a
- * suffix longer than the object, are cut to it. No range is the whole object.
+ * The bytes a range names in an object of `size` bytes, or `null` when it is not
+ * satisfiable (RFC 9110, section 14.1.2): a first byte at or past the end, or a
+ * suffix of no bytes. A last byte past the end, and a suffix longer than the
+ * object, are cut to it, so a suffix of an empty object is all of it: no bytes.
+ * No range is the whole object.
  */
 export function resolveObjectByteRange(
   range: ObjectByteRange | null,
@@ -215,7 +219,7 @@ export function resolveObjectByteRange(
 ): { readonly start: number; readonly length: number } | null {
   if (range === null) return { start: 0, length: size };
   if (range.kind === "LAST") {
-    if (range.length <= 0 || size === 0) return null;
+    if (range.length <= 0) return null;
     const length = Math.min(range.length, size);
     return { start: size - length, length };
   }

@@ -121,7 +121,8 @@ disablement for SSO-enforced organizations.
 - **Internal-only objects are never given a signed URL.** Anything under
   `org/{organizationId}/internal/`, such as the Clean Master, is refused by the
   signer and by the verifier, for upload and download alike, as is any key that
-  is not canonical (ADR-0074)
+  is not canonical (ADR-0074), and any scene video under
+  `org/{organizationId}/generations/` (ADR-0115)
 
 ## Upload security
 
