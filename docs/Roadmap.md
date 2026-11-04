@@ -506,6 +506,17 @@ Units and its scenes in one snapshot. GS-11 is split in two: this, and the
 project page that shows it with ADR-0052's message for a video that ended
 without one (GS-11b). Nothing outside tests constructs the read yet.
 
+**GS-11b — a project's video on its project page** (ADR-0114, no migration):
+the project page shows its newest video in a "Video" panel, wherever the page
+is: its phase, quality and length, how many scenes are made while it is made,
+what became of its Units, and its support reference. A video that ended
+without one shows ADR-0052's message as written, in Japanese, and whether a
+new video can be started for the project (once its Units came back, ADR-0110).
+A video not delivered whose Units were used is not described: it reads as
+unreadable, with its reference, and is logged as an error. Nothing on the panel
+retries the video, and the page shows the progress as of when it was loaded.
+Row GS-11 is complete.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 
