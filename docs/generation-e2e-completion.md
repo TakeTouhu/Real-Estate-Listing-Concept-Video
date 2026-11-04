@@ -6378,3 +6378,179 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-11a waits for the product owner's yes before merge. Then GS-11b (the
 project page), preview and download (GS-12) and the browser test (GS-13).
+
+## GS-11b — a project's video on its project page
+
+Base: `78e62eb` (PR #137 merge commit on `main`).
+ADR: `docs/decisions/0114-video-progress-on-the-project-page.md`
+
+The second and last milestone of row GS-11 of the approved plan. **No
+migration; no route and no environment variable.** Row GS-11 is complete with
+it.
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `d0281c4` | the panel, the page's read, their tests, ADR-0114 and the documentation |
+| `0bc7dee` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-11b does
+
+- **The project page shows its newest video** in a region named "Video",
+  after the start's notice and before the project's settings, read as the
+  signed-in member in the organization whose storyboard the page shows. A
+  project with no video shows nothing new.
+- **It is shown wherever the page is.** It only reads; where nothing can start
+  a video, as in production, no project has one, so the page shows nothing
+  new there.
+- **It says where the video is in UXFlow's words**, its quality (Normal or HQ)
+  and length, how many scenes are made while it is made, what became of its
+  Units, and its support reference; while it is made, that the page shows the
+  progress as of when it was loaded.
+- **A video that ended without one shows ADR-0052's message as written**, in
+  Japanese and marked so, what became of its Units in words that never
+  contradict the message, and whether a new video can be started for the
+  project (ADR-0110). Nothing on the panel is a control.
+- **A video not delivered whose Units were used is not described.** The read
+  refuses it (ADR-0113 Decision 4, extended to every phase by ADR-0114
+  Decision 4); the panel says only that its progress could not be read, with
+  its reference, and the page logs it as an error with its id, organization
+  and project.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant P as Project page
+    participant S as Storyboard service
+    participant V as VideoProgressService (ADR-0113)
+    participant L as Logger
+    B->>P: GET /properties/{p}/video-projects/{v}
+    P->>S: the storyboard, organization by organization
+    S-->>P: the project, in the organization that holds it
+    P->>V: progress(member, that organization, project)
+    alt no video
+        V-->>P: null
+        P-->>B: the page, no Video panel
+    else a video it describes
+        V-->>P: phase, Units, scenes, support reference
+        P-->>B: the page with the Video panel
+    else Units contradict ADR-0052
+        V-->>P: INTERNAL_ERROR with the job's id
+        P->>L: error: job, organization, project
+        P-->>B: the panel: progress could not be read, support reference
+    else any other failure
+        V-->>P: thrown
+        P-->>B: the page's error, as for its other reads
+    end
+```
+
+### Verification
+
+Measured locally, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `d0281c4` and on `0bc7dee` |
+| `pnpm test` | 6,800 passed in 257 files on `0bc7dee`: 27 new against GS-11a's 6,773 (the panel's words for each phase, each Units state, one Unit and several, a video that could not be read and a project with none; the page's read: the member, organization and project read, none, the domain's own refusal shown as unreadable and reported, every other failure left to the page and not reported; the panel's markup: a region labelled "Video", ADR-0052's message marked as Japanese, the reference as code, no control, nothing that names a provider; the page: the organization whose storyboard it shows, none, unreadable and reported, other failures; the panel's place on the page), and three more contradiction cases in the domain's refusal test |
+| `pnpm build` | succeeded on `0bc7dee` |
+| `pnpm test:db` | `tests/integration/video-progress.db.test.ts`: 9 passed on `0bc7dee` (the service through the real repositories, with the wider refusal). The rest of the database suite was not run: no database code changed |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-11a. On `d0281c4`, 37 mutants against the panel's
+words, the page's read, the panel's markup, the storyboard view and the page
+(each phase name, ADR-0052's message, the singular Unit, the in-progress
+phases, each tone, the scene count, the message and the new start shown only
+for an ended video, held Units waiting, the reload note, each Units sentence,
+the quality and length, the support reference, a project with no video, the
+refusal's code and id checks, the project read, `lang="ja"`, each line of the
+panel, the panel's placement and the organization read): all killed.
+
+On `0bc7dee`, with the review's changes and the domain suite added: 46
+mutants, the 37 above with their anchors moved and 9 more: the report dropped,
+or made without its organization and project; the refusal narrowed back to
+videos that ended; the region unnamed, announced as live, or labelled by a
+heading id that is not there; "it was not used" and "is reserved" of one Unit
+made plural; and the page dropping the report. All killed.
+
+### Review
+
+An independent reviewer read `d0281c4` from git objects only and found nothing
+blocking: the read's organization and member, ADR-0052's message as written,
+Units that never contradict it, no control on the panel and nothing that names
+a provider were confirmed. Its other findings, each answered in `0bc7dee`:
+
+- **Should fix: an unreadable video was reported to no one.** Its Units are
+  wrong in the database and someone has to put them right. The page now logs
+  it as an error with the video's id, its organization and its project, and
+  the tests check the report and that nothing else is reported.
+- **Should fix: the unreadable test fed a hand-built error.** It now feeds the
+  domain's own refusal (`videoProgressOf` of a failed video whose Units were
+  used), so a change to the refusal's code or details fails it.
+- **Minor: "This project can be started again" read as a promise to this
+  member.** It now reads "A new video can be started for this project", and
+  ADR-0114 says it describes the project: whether this member may start one
+  is the start's to say (ADR-0112).
+- **Minor: a video still being made whose Units were used was described as
+  having used them.** Only the commit that delivers a video uses its Units, so
+  the read now refuses every video not delivered whose Units were used
+  (ADR-0114 Decision 4), with three new contradiction cases.
+- **Minor: how the page builds its read is not tested.** Its tests replace it,
+  as the page's other reads' tests do; the type checker and the build check
+  it, and the read itself is tested against the database (ADR-0113). Recorded
+  in ADR-0114's consequences.
+- **Minor: the page has a new way to fail, in production too.** One more read,
+  which fails the page as its other reads do; in production it finds no
+  video. Recorded in ADR-0114's consequences.
+- **Nits.** The panel is a region labelled by its heading rather than a live
+  status, as it is read when the page loads; the ADR places it after the
+  storyboard and its photos, lists the in-progress Units sentences, and says
+  "every panel of a video it describes"; "as of when the page was loaded",
+  "is/are reserved for it, and used only if it is delivered", and "it was not
+  used" of one Unit. The reviewer's suggestion to read the progress alongside
+  the page's other reads is not taken: it needs the organization the
+  storyboard read found.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the project page's "Video" panel row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-11b.md`: no HTTP change; the page, the domain refusal, the page's read and logger, the panel |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-11b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-11b; row GS-11 complete) and
+`docs/generation-e2e-gap-analysis.md` (GS-11b).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The panel is on a page production
+serves, and shows nothing there: no video can be started in production.
+Paid Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No refresh**: the page shows the progress as of when it was loaded and
+  says so; nothing pushes a change, and email notification comes later (the
+  plan's default 4).
+- **No time estimate** until provider times are measured (the plan's default
+  3).
+- **A delivered video cannot be previewed or downloaded yet** (GS-12).
+- **A new version's own progress is not shown** (`docs/decisions/TODO.md`,
+  *Open in GS-11a*).
+- **How the page builds its read is not covered by a test** (above).
+
+### Remaining work
+
+GS-11b waits for the product owner's yes before merge. Then preview and
+download (GS-12) and the browser test (GS-13).
