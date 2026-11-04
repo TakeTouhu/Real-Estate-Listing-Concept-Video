@@ -31,7 +31,7 @@ function record(overrides: Partial<VideoProgressRecord> = {}): VideoProgressReco
   return {
     jobId: "gjob_1",
     jobState: "GENERATING",
-    delivered: false,
+    deliveredVersionId: null,
     qualityTier: "HIGH_QUALITY",
     durationSeconds: 45,
     requiredUnits: 2,
@@ -125,7 +125,7 @@ describe("a video's progress", () => {
       ["CONSUMED", "CONSUMED"],
       [null, "NONE"],
     ] as const) {
-      const progress = videoProgressOf(record({ jobState: "DELIVERABLE_READY", delivered: true, reservationState }));
+      const progress = videoProgressOf(record({ jobState: "DELIVERABLE_READY", deliveredVersionId: "gdv_1", reservationState }));
       expect(progress).toMatchObject({ phase: "COMPLETED", units: { count: 2, state: units } });
     }
   });
@@ -145,9 +145,9 @@ describe("a video's progress", () => {
       { jobState: "CREATED", reservationState: "CONSUMED" },
       { jobState: "GENERATING", reservationState: "CONSUMED" },
       { jobState: "DELIVERABLE_VALIDATING", reservationState: "CONSUMED" },
-      { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RESERVED" },
-      { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RELEASED" },
-      { jobState: "GENERATING", delivered: true, reservationState: "RECONCILIATION_HOLD" },
+      { jobState: "DELIVERABLE_READY", deliveredVersionId: "gdv_1", reservationState: "RESERVED" },
+      { jobState: "DELIVERABLE_READY", deliveredVersionId: "gdv_1", reservationState: "RELEASED" },
+      { jobState: "GENERATING", deliveredVersionId: "gdv_1", reservationState: "RECONCILIATION_HOLD" },
     ] as const) {
       const error = (() => {
         try {

@@ -253,6 +253,10 @@ row, recovery reason, the original block or verdict cause, timestamp, and the
 resulting new recovery-cycle identifier. The original terminal evidence is
 immutable and is never rewritten by the recovery (ADR-0052 Decision 20).
 
+A link to watch a delivered video is audited when it is given
+(`video.preview_link_issued`, on the version, ADR-0116), as a photo's link is;
+it is not a share link.
+
 Share-link audit events are reserved for the post-release share feature and have
 no initial-release surface.
 

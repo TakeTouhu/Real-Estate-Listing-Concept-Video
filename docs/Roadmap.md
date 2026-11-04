@@ -528,6 +528,15 @@ where they are and are refused by their own segment. GS-12 is split in three:
 this, the preview on the project page (GS-12b) and the download (GS-12c).
 Nothing a customer reaches signs a video yet.
 
+**GS-12b-1 — a link to watch a project's delivered video** (ADR-0116, no
+migration): the progress record names the job's delivered version, and a
+reader of a project's progress is given a signed link to that version's video,
+for 300 seconds, while its progress shows it completed, including while a new
+version is made and when its Property was deleted. Each link is audited when
+it is given. The signed route still checks the token alone. GS-12b is split in
+two: this, and the player on the project page (GS-12b-2). Nothing outside
+tests constructs the link yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

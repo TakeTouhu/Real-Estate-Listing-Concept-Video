@@ -62,7 +62,7 @@ describe("the project page's read of its video", () => {
         videoProgressOf({
           jobId: "gjob_9",
           jobState: "FAILED_TERMINAL",
-          delivered: false,
+          deliveredVersionId: null,
           qualityTier: "HIGH_QUALITY",
           durationSeconds: 30,
           requiredUnits: 2,

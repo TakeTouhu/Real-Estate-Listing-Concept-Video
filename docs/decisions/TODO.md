@@ -1283,7 +1283,10 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       is being made, its phase and its own Units is decided with regeneration
       (and its price, above), which nothing a customer can reach starts yet. It
       may add a phase to UXFlow's; that is a product decision. Found by
-      GS-11a's review.
+      GS-11a's review. The preview (GS-12b, ADR-0116) gives a link only while
+      the progress shows the video completed, so the same decision says
+      whether a delivered video whose new version ended its job can still be
+      watched.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
