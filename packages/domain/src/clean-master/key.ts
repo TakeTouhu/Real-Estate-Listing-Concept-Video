@@ -55,18 +55,35 @@ export function isCanonicalStorageKey(key: string): boolean {
   );
 }
 
+/** The third segment of every scene video's key (`managedGenerationOutputKey`). */
+export const SCENE_OUTPUT_STORAGE_SEGMENT = "generations";
+
 /**
- * `true` when a signed URL may name the key: canonical, and not internal-only.
- * The verifier ignores any token for which this is false.
+ * `true` when the key names a scene video: `org/{organizationId}/generations/…`.
+ *
+ * Scene media is internal (ADR-0052 Decision 17): the customer's video is made
+ * from it and is the only one a customer is given. Its keys predate the
+ * internal namespace, so they are refused by their own segment rather than
+ * moved (ADR-0115).
+ */
+export function isSceneOutputStorageKey(key: string): boolean {
+  const parts = key.split("/");
+  return parts[0] === "org" && parts[2] === SCENE_OUTPUT_STORAGE_SEGMENT;
+}
+
+/**
+ * `true` when a signed URL may name the key: canonical, not internal-only, and
+ * not a scene video (ADR-0115). The verifier ignores any token for which this
+ * is false.
  */
 export function isSignableStorageKey(key: string): boolean {
-  return isCanonicalStorageKey(key) && !isInternalStorageKey(key);
+  return isCanonicalStorageKey(key) && !isInternalStorageKey(key) && !isSceneOutputStorageKey(key);
 }
 
 /**
  * Throws unless a signed URL may name the key. Every signer calls this before it
- * signs anything, so an internal object can never be given a URL, whichever
- * code path asked for one.
+ * signs anything, so an internal object or a scene video can never be given a
+ * URL, whichever code path asked for one.
  *
  * Reaching it is a defect in the caller, never a customer's doing: no route
  * accepts a key from a customer. So it is an internal error, and its message
@@ -76,7 +93,7 @@ export function assertSignableStorageKey(key: string): void {
   if (!isSignableStorageKey(key)) {
     throw new AppError(
       "INTERNAL_ERROR",
-      "An internal-only or non-canonical storage key is never given a signed URL",
+      "An internal-only, scene or non-canonical storage key is never given a signed URL",
     );
   }
 }

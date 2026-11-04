@@ -63,6 +63,10 @@ class NullStorage implements ObjectStorage {
   getObject() {
     return Promise.resolve(null);
   }
+  readObject() {
+    // Nothing these tests serve is read as a stream.
+    return Promise.resolve({ kind: "ABSENT" as const });
+  }
   deleteObject() {
     return Promise.resolve();
   }

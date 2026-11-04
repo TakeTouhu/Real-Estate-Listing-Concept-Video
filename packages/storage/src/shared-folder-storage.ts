@@ -23,7 +23,14 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
-import { isCanonicalStorageKey, type ObjectStorage, type SignedUrl } from "@app/domain";
+import {
+  isCanonicalStorageKey,
+  resolveObjectByteRange,
+  type ObjectByteRange,
+  type ObjectRead,
+  type ObjectStorage,
+  type SignedUrl,
+} from "@app/domain";
 import { AppError } from "@app/shared";
 import type { DeliverableObjectClient } from "./managed-output/deliverable-composition-io";
 import type {
@@ -362,6 +369,67 @@ function fileBody(handle: FileHandle): S3ObjectBody {
   };
 }
 
+/**
+ * A stream of `length` bytes (at least one) of the open file from `start`, read
+ * in bounded chunks only as the reader pulls them (nothing is read ahead),
+ * closing the file at the end, on cancel or on a failed read. A failed read
+ * names no path.
+ */
+function rangeStream(handle: FileHandle, start: number, length: number): ReadableStream<Uint8Array> {
+  let position = start;
+  const end = start + length;
+  let closed = false;
+  const close = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await closeQuietly(handle);
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        const chunk = new Uint8Array(Math.min(SHARED_FOLDER_READ_CHUNK_BYTES, end - position));
+        let bytesRead: number;
+        try {
+          ({ bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position));
+        } catch (error) {
+          await close();
+          const code = errorCode(error);
+          const message = `The shared storage folder could not read an object (${code})`;
+          controller.error(new AppError("INTERNAL_ERROR", message));
+          return;
+        }
+        if (bytesRead === 0) {
+          // The file is shorter than it was when opened: never pad, never hang.
+          await close();
+          controller.error(new AppError("INTERNAL_ERROR", "A stored object ended before its size"));
+          return;
+        }
+        position += bytesRead;
+        controller.enqueue(chunk.subarray(0, bytesRead));
+        // The last byte is handed over: the file is closed now, not on a later pull.
+        if (position >= end) {
+          await close();
+          controller.close();
+        }
+      },
+      async cancel() {
+        await close();
+      },
+    },
+    // Nothing is read before the reader asks for it.
+    { highWaterMark: 0 },
+  );
+}
+
+/** A stream of no bytes, already ended. */
+function emptyStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  });
+}
+
 export function createSharedFolderStorage(
   options: SharedFolderStorageOptions,
 ): SharedFolderStorage {
@@ -466,6 +534,35 @@ function createObjectStorageView(
       } finally {
         await closeQuietly(opened.handle);
       }
+    },
+
+    async readObject(key: string, range: ObjectByteRange | null): Promise<ObjectRead> {
+      const file = fileOf(key);
+      let opened: Awaited<ReturnType<Folder["openRead"]>>;
+      try {
+        opened = await folder.openRead(file);
+      } catch (error) {
+        throw failed("read", error);
+      }
+      if (opened === null) return { kind: "ABSENT" };
+      const { handle, size } = opened;
+      const bytes = resolveObjectByteRange(range, size);
+      if (bytes === null) {
+        await closeQuietly(handle);
+        return { kind: "UNSATISFIABLE", size };
+      }
+      if (bytes.length === 0) {
+        // An empty object: nothing to read, so nothing is held open.
+        await closeQuietly(handle);
+        return { kind: "READ", size, start: bytes.start, length: 0, body: emptyStream() };
+      }
+      return {
+        kind: "READ",
+        size,
+        start: bytes.start,
+        length: bytes.length,
+        body: rangeStream(handle, bytes.start, bytes.length),
+      };
     },
 
     async deleteObject(key: string): Promise<void> {

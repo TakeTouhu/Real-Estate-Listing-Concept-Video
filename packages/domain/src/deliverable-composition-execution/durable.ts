@@ -210,6 +210,25 @@ export function managedDeliverableOutputKey(input: {
 /** The content type the canonical deliverable object is stored with. */
 export const DELIVERABLE_OUTPUT_CONTENT_TYPE = "video/mp4";
 
+/**
+ * `true` when the key has the shape {@link managedDeliverableOutputKey} builds:
+ * `org/{organizationId}/deliverables/{deliverableVersionId}/output`. How the
+ * signed download route knows to serve a customer's video as one (ADR-0115),
+ * since the key carries no extension.
+ */
+export function isDeliverableOutputKey(key: string): boolean {
+  const parts = key.split("/");
+  const [org, organizationId = "", segment, versionId = "", output] = parts;
+  return (
+    parts.length === 5 &&
+    org === "org" &&
+    organizationId.length > 0 &&
+    segment === "deliverables" &&
+    versionId.length > 0 &&
+    output === "output"
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Resource bounds
 // ---------------------------------------------------------------------------

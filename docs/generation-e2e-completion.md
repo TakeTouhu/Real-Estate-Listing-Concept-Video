@@ -6554,3 +6554,190 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 
 GS-11b waits for the product owner's yes before merge. Then preview and
 download (GS-12) and the browser test (GS-13).
+
+## GS-12a — serving a stored video, a range at a time
+
+Base: `dc41123` (PR #138 merge commit on `main`).
+ADR: `docs/decisions/0115-serving-a-stored-video.md`
+
+The first of three milestones of row GS-12 of the approved plan (GS-12a the
+serving, GS-12b the preview, GS-12c the download; see
+`docs/generation-e2e-gap-analysis.md`, *GS-12*). **No migration, no new route
+path and no environment variable.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `56532c5` | the streamed, ranged read, the route, the scene-video refusal, their tests, ADR-0115 and the documentation |
+| `20fc912` | the DS-4 shape test, which pinned the route's `getObject`, reads its `readObject` |
+| `9e78d64` | the answers to the review |
+| this commit | the verification, mutation testing and review results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-12a does
+
+- **Storage reads a byte range of an object as a stream** (`readObject`),
+  with RFC 9110's range rules (`resolveObjectByteRange`). The shared folder
+  reads the file it opened in chunks of at most 1 MiB, only as they are sent,
+  and closes it at the end, on cancel, on a failed read, and at once for an
+  unsatisfiable range or an empty object. A file cut short fails the stream.
+- **The signed download route streams what it serves** and answers one byte
+  range: `206` with `Content-Range`, `416` with the object's size, the whole
+  object for several ranges, a malformed header, `If-Range` or an empty
+  object. Every answer about an object says `Accept-Ranges: bytes` and keeps
+  its private headers; `401` and `404` are no longer cacheable.
+- **A customer's video is served as `video/mp4`**, known by its key's shape.
+- **What the store holds open is let go when nothing will send it.** The
+  route answers `HEAD` itself and cancels the body; a `GET` whose client is
+  gone before its body is sent cancels it.
+- **No signed URL names a scene video.** The signers and the verifier refuse
+  `org/{organizationId}/generations/…` as they refuse the internal namespace;
+  scene videos are not moved.
+- **Nothing a customer reaches signs a video yet** (GS-12b, GS-12c).
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (a player)
+    participant R as GET /api/storage/download
+    participant V as verifyStorageToken
+    participant S as ObjectStorage.readObject
+    participant F as Shared folder file
+    B->>R: ?token=…, Range: bytes=a-b
+    R->>V: token, "download"
+    alt forged, expired, upload, internal or scene key
+        V-->>R: null
+        R-->>B: 401, not cached
+    else a verified key
+        V-->>R: key
+        R->>S: key, range (none with If-Range)
+        S->>F: open once, stat the size
+        alt nothing stored
+            S-->>R: ABSENT
+            R-->>B: 404, not cached
+        else range not satisfiable
+            S->>F: close
+            S-->>R: UNSATISFIABLE, size
+            R-->>B: 416, Content-Range: bytes */size
+        else bytes to send
+            S-->>R: READ: size, start, length, stream
+            R-->>B: 206 (or 200), Content-Range, video/mp4
+            loop as the player pulls
+                B->>R: pull
+                R->>F: read at most 1 MiB at a position
+            end
+            R->>F: close at the end, on cancel or on a failed read
+        end
+    end
+```
+
+### Verification
+
+Measured locally, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `56532c5` and on `9e78d64` |
+| `pnpm test` | on `56532c5`, one failure: the DS-4 shape test pinned the route's `getObject` (fixed in `20fc912`). On `9e78d64`, 6,843 passed in 260 files: 43 new against GS-11b's 6,800 (range resolution and parsing, an empty object's suffix, the deliverable key's shape, scene keys refused by the signer and the verifier, the in-memory store's read and its copy, the shared folder's streamed read: whole, ranged, unsatisfiable, chunked across edges, cancelled, reading the file it opened, a file cut short, a failed read naming no path, an empty object holding nothing open; the route: `200`, `206`, `416`, ignored ranges, `If-Range`, an empty object, `404` and `401` not cached, a scene token refused, `HEAD`, a client gone before and after the answer, a body being sent left to its sender) |
+| `pnpm build` | succeeded on `56532c5` and on `9e78d64` |
+| `pnpm test:db` | `tests/integration/property-reach.db.test.ts`: 6 passed (its storage fake gained `readObject`). The rest of the database suite was not run: no database code changed |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-11b. On `20fc912`, 46 mutants against the range
+resolution, the scene-key and deliverable-key checks, the in-memory read, the
+shared folder's stream (read-ahead, closing at the end, on cancel and when
+unsatisfiable, the read position, the chunk bound, a short file, absence), the
+route (each status, `Content-Range`, `Content-Length`, `Accept-Ranges`,
+`Cache-Control`, ranges ignored) and the header parser: 45 killed. The
+survivor, the unit not anchored at the header's start, was killed by a new
+case (`notbytes=0-1`).
+
+On `9e78d64`, 62 mutants: the 46 with their anchors moved and 16 more: an
+empty suffix satisfiable and an empty object's suffix not; `HEAD` keeping or
+sending the body; a client gone before or after the answer not let go; `GET`
+never letting go; `If-Range` ignored; an empty object answered `206`; `404`
+and `401` cacheable; the shared folder streaming an empty object from its
+file or leaving it open; a failed read leaving the file open or naming its
+error's text; the in-memory store handing over its stored bytes. 61 killed;
+the survivor is equivalent: the route skips cancelling a body being sent,
+which would refuse anyway.
+
+### Review
+
+An independent reviewer read `56532c5` from git objects only. Its blocking
+finding was the DS-4 shape test, already fixed in `20fc912`. The range
+arithmetic, the header parser, the stream's chunking, closing and
+no-read-ahead, the signer and verifier refusals, the deliverable key's shape
+and the documentation's figures were confirmed. Its other findings, each
+answered in `9e78d64`:
+
+- **Should fix: an open file was kept when nothing read or cancelled the
+  body.** Next.js answers `HEAD` through `GET` without reading the body, and
+  drops a body unsent when the client is already gone. The route now answers
+  `HEAD` itself and cancels the body, and cancels a `GET`'s body when its
+  client leaves before it is sent; the port says the caller reads or cancels
+  the stream; ADR-0115 corrected; route tests cover both.
+- **Minor: `If-Range` was ignored.** A range with it is now served whole: the
+  route sends no validator, so the condition is never met.
+- **Minor: the new open-file tests counted every file of the process and
+  needed `/proc`.** They count the test folder's open files and run where the
+  system lists them, as the file's other such tests do.
+- **Minor: test gaps.** A failed read (naming no path, closing the file),
+  `bytes=-0`, an empty object, `Accept-Ranges` on `416` and the in-memory
+  store's copy are now tested; the copy's comment says what it protects.
+- **Minor: the security documentation and the signer's comments named only
+  the internal namespace.** Both now name scene videos.
+- **Minor: the RFC was misread for an empty object.** A suffix of an empty
+  object is satisfiable (RFC 9110, section 14.1.2); it is served whole, as
+  `200`, since no `Content-Range` can name none of its bytes.
+- **Nits.** The port's stream comment no longer claims chunks; the shared
+  folder closes an empty object's file at once, as the ADR says; the Google
+  Cloud Storage item names `readObject`; `401` and `404` are no longer
+  cacheable. Not taken: validating offsets in `resolveObjectByteRange` (its
+  type documents them and its one caller guarantees them), and case-folding
+  the namespace checks (a case-insensitive folder would need a signer bypass
+  first, as for the internal namespace). For GS-12b: a link lives 300
+  seconds, which bounds how long one link can seek, and the route's sandboxing
+  policy is to be checked against the player the page uses.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the streamed read and route row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-12a.md`: the download route's `GET` and `HEAD`, the port, the key checks, the route's helpers |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-12a*: no migration, no key moves |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-12a), `docs/generation-e2e-gap-analysis.md`
+(GS-12 and its split), `docs/SecurityCompliance.md` (scene videos refused) and
+`docs/decisions/TODO.md` (scene videos stay where they are; serving from
+storage built; the Google Cloud Storage adapter must implement `readObject`).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The route change is live wherever the
+web app runs, for photos too; no signed link to a video is made anywhere.
+Paid Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No customer can watch or download a video yet** (GS-12b, GS-12c).
+- **The token is the route's only check**, as it is for photos; whether a
+  video's link also needs the member's session is decided with the preview.
+- **No production storage adapter exists**; the Google Cloud Storage adapter
+  must implement `readObject` when built.
+- **A client that stops reading without leaving** holds its file open until
+  it leaves or reads on.
+
+### Remaining work
+
+GS-12a waits for the product owner's yes before merge. Then the preview
+(GS-12b), the download (GS-12c) and the browser test (GS-13).

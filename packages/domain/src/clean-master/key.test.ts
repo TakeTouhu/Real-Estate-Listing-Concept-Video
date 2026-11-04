@@ -10,6 +10,7 @@ import {
   assertSignableStorageKey,
   isCanonicalStorageKey,
   isInternalStorageKey,
+  isSceneOutputStorageKey,
   isSignableStorageKey,
   managedCleanMasterKey,
   type ManagedCleanMasterKey,
@@ -143,5 +144,38 @@ describe("the internal namespace", () => {
         managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" }),
       ),
     ).not.toThrow();
+  });
+});
+
+describe("a scene video's key (ADR-0115)", () => {
+  const SCENE = managedGenerationOutputKey({ organizationId: "org_a", attemptId: "sgen_1" });
+
+  it("is never signable, as scene media is internal (ADR-0052 Decision 17)", () => {
+    expect(isSceneOutputStorageKey(SCENE)).toBe(true);
+    expect(isSceneOutputStorageKey("org/org_a/generations")).toBe(true);
+    expect(isSignableStorageKey(SCENE)).toBe(false);
+    expect(() => assertSignableStorageKey(SCENE)).toThrow(
+      expect.objectContaining({ code: "INTERNAL_ERROR", httpStatus: 500 }),
+    );
+    expect(() => assertSignableStorageKey(SCENE)).toThrow(/^[^/]*$/);
+  });
+
+  it("is told by its segment's place, and nothing else is refused for it", () => {
+    for (const key of [
+      "org/org_a/properties/generations/x",
+      "org/generations/x",
+      "org/org_a/Generations/sgen_1/output",
+      "orgs/org_a/generations/sgen_1/output",
+      managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" }),
+      buildAssetStorageKey({
+        organizationId: "org_a",
+        propertyId: "prp_1",
+        assetId: "ast_1",
+        variant: "original",
+        extension: "jpg",
+      }),
+    ]) {
+      expect(`${key}: ${isSceneOutputStorageKey(key)} ${isSignableStorageKey(key)}`).toBe(`${key}: false true`);
+    }
   });
 });

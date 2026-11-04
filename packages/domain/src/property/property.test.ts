@@ -45,6 +45,10 @@ class FakeStorage implements ObjectStorage {
   /** Keys this fake was asked to delete, and an optional injected failure. */
   readonly deleted: string[] = [];
   failDeleteFor?: (key: string) => boolean;
+  readObject() {
+    // Nothing these tests serve is read as a stream.
+    return Promise.resolve({ kind: "ABSENT" as const });
+  }
   deleteObject(key: string) {
     this.deleted.push(key);
     if (this.failDeleteFor?.(key)) return Promise.reject(new Error(`storage down for ${key}`));

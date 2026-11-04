@@ -378,3 +378,41 @@ GS-11 is split into two milestones, each its own pull request:
 - **GS-11b** (ADR-0114, no migration): the project page shows it, with
   ADR-0052's message for a video that ended without one, whether its Units
   came back, whether a new video can be started, and its support reference.
+
+## GS-12 — preview and download
+
+On `dc41123` the project page shows a project's video and whether it was
+delivered (ADR-0114), and nothing lets the customer watch or keep it. A survey
+on that commit found:
+
+- **No read hands out the delivered video.** The job points at its delivered
+  version (`currentDeliverableVersionId`), and the version's key at the
+  customer's video, but the progress read (ADR-0113) names neither.
+- **Nothing checks `video.view` or `video.download` for a video**, and no
+  audit entry records a video's download. Both permissions are held by every
+  role but `BILLING`.
+- **The signed download route cannot serve a video.** It reads the whole
+  object into memory, serves no byte range, so a player cannot seek, and
+  names the type from the key's extension, which a deliverable's key does not
+  have (ADR-0085, *Not decided here*).
+- **The storage port has no streamed read.**
+- **Scene videos are signable.** Their keys sit outside the internal
+  namespace the signers refuse (ADR-0074), and `docs/decisions/TODO.md` asks
+  whether they move before any route lets a customer download a deliverable.
+- **The route authorizes by the token alone**, with no session, and nothing
+  limits how often a link is asked for.
+- **What a deleted Property's video and a failed revision show** is the trash
+  rule's (ADR-0052: preview and download stay allowed while authorized) and
+  ADR-0113's (the newest video of the project).
+- **The project page's "Video" panel has no place for a player.**
+
+GS-12 is split into three milestones, each its own pull request:
+
+- **GS-12a** (ADR-0115, no migration): storage reads a byte range of an
+  object as a stream; the signed route streams it and serves one range, a
+  customer's video as `video/mp4`; and no signed URL names a scene video.
+  Nothing a customer reaches signs a video yet.
+- **GS-12b**: the delivered video's read and a player on the project page,
+  for a member holding `video.view`, through a short-lived signed link.
+- **GS-12c**: the download, for a member holding `video.download`, audited,
+  through a short-lived signed link served as an attachment.

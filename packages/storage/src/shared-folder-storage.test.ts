@@ -7,16 +7,17 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { chown, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chown, mkdir, mkdtemp, open, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   managedCleanMasterKey,
   managedDeliverableOutputKey,
   managedGenerationOutputKey,
   sha256Digest,
   safePositiveByteCount,
+  type ObjectRead,
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { createCleanMasterStore } from "./managed-output/clean-master-store";
@@ -442,6 +443,158 @@ describe("the web app's view", () => {
     await store.objectStorage.putObject(ASSET, bytes(1));
     await store.objectStorage.putObject(ASSET, bytes(2));
     expect(await readdir(join(root, "staging"))).toEqual([]);
+  });
+});
+
+/** Every chunk a read hands over, in order. */
+async function chunksOf(read: ObjectRead): Promise<Uint8Array[]> {
+  if (read.kind !== "READ") throw new Error(`expected a read, got ${read.kind}`);
+  const chunks: Uint8Array[] = [];
+  const reader = read.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return chunks;
+    chunks.push(value);
+  }
+}
+
+const joined = (chunks: Uint8Array[]) => new Uint8Array(Buffer.concat(chunks));
+
+describe("the web app's streamed read (ADR-0115)", () => {
+  const VIDEO = managedDeliverableOutputKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
+  const file = () => join(root, "objects", ...VIDEO.split("/"));
+
+  it("reads nothing at a key where nothing is stored", async () => {
+    expect(await store.objectStorage.readObject(VIDEO, null)).toEqual({ kind: "ABSENT" });
+    expect(await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 0, end: 1 })).toEqual({
+      kind: "ABSENT",
+    });
+  });
+
+  it("reads the whole object, or the bytes a range names, with the object's size", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
+    const whole = await store.objectStorage.readObject(VIDEO, null);
+    expect(whole).toMatchObject({ kind: "READ", size: 10, start: 0, length: 10 });
+    expect(joined(await chunksOf(whole))).toEqual(bytes(0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
+    const middle = await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 3, end: 5 });
+    expect(middle).toMatchObject({ kind: "READ", size: 10, start: 3, length: 3 });
+    expect(joined(await chunksOf(middle))).toEqual(bytes(3, 4, 5));
+    const last = await store.objectStorage.readObject(VIDEO, { kind: "LAST", length: 2 });
+    expect(last).toMatchObject({ kind: "READ", size: 10, start: 8, length: 2 });
+    expect(joined(await chunksOf(last))).toEqual(bytes(8, 9));
+  });
+
+  it.runIf(existsSync(PROC_FD))("answers a range past the end with the object's size and reads nothing", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3));
+    const before = openFilesBelow(base);
+    expect(await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 3, end: null })).toEqual({
+      kind: "UNSATISFIABLE",
+      size: 3,
+    });
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("streams a large object in bounded chunks, across edges, then closes it", async () => {
+    const size = SHARED_FOLDER_READ_CHUNK_BYTES * 2 + 5;
+    const data = new Uint8Array(size);
+    for (let i = 0; i < size; i += 1) data[i] = i % 251;
+    await store.objectStorage.putObject(VIDEO, data);
+    const before = openFilesBelow(base);
+    const whole = await chunksOf(await store.objectStorage.readObject(VIDEO, null));
+    expect(whole.map((chunk) => chunk.byteLength)).toEqual([
+      SHARED_FOLDER_READ_CHUNK_BYTES,
+      SHARED_FOLDER_READ_CHUNK_BYTES,
+      5,
+    ]);
+    const digest = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
+    expect(digest(joined(whole))).toBe(digest(data));
+    const start = SHARED_FOLDER_READ_CHUNK_BYTES - 2;
+    const across = await chunksOf(
+      await store.objectStorage.readObject(VIDEO, { kind: "FROM", start, end: start + 3 }),
+    );
+    expect(joined(across)).toEqual(data.slice(start, start + 4));
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("closes the object when the reader stops early", async () => {
+    await store.objectStorage.putObject(VIDEO, new Uint8Array(SHARED_FOLDER_READ_CHUNK_BYTES * 2));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    if (read.kind !== "READ") throw new Error("expected a read");
+    expect(openFilesBelow(base)).toBe(before + 1);
+    const reader = read.body.getReader();
+    await reader.read();
+    await reader.cancel();
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it("keeps reading the object it opened when the key is written again", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3));
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    await store.objectStorage.putObject(VIDEO, bytes(9, 9, 9, 9));
+    expect(joined(await chunksOf(read))).toEqual(bytes(1, 2, 3));
+  });
+
+  it.runIf(existsSync(PROC_FD))("reads nothing ahead, failing without a path when the file is cut short", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3, 4));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    // Nothing is read before the reader asks, so the cut is seen.
+    await truncate(file(), 1);
+    const failure = await chunksOf(read).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AppError);
+    expect((failure as AppError).message).not.toContain(base);
+    expect((failure as AppError).message).not.toContain("org_1");
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("fails a read the system refuses, naming no path, and closes the object", async () => {
+    await store.objectStorage.putObject(VIDEO, bytes(1, 2, 3));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    if (read.kind !== "READ") throw new Error("expected a read");
+    // The next read of any open file is refused, as a failing disk would.
+    const probe = await open(file());
+    const handles = Object.getPrototypeOf(probe) as { read: (...args: unknown[]) => Promise<unknown> };
+    await probe.close();
+    const refused = Object.assign(new Error(`EIO: i/o error, read '${file()}'`), { code: "EIO" });
+    const spy = vi.spyOn(handles, "read").mockRejectedValueOnce(refused);
+    try {
+      const failure = await chunksOf(read).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(AppError);
+      expect((failure as AppError).message).toBe("The shared storage folder could not read an object (EIO)");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(openFilesBelow(base)).toBe(before);
+  });
+
+  it.runIf(existsSync(PROC_FD))("reads an empty object as no bytes, holding nothing open", async () => {
+    await store.objectStorage.putObject(VIDEO, new Uint8Array(0));
+    const before = openFilesBelow(base);
+    const read = await store.objectStorage.readObject(VIDEO, null);
+    expect(read).toMatchObject({ kind: "READ", size: 0, start: 0, length: 0 });
+    expect(openFilesBelow(base)).toBe(before);
+    expect(joined(await chunksOf(read))).toEqual(new Uint8Array(0));
+    const suffix = await store.objectStorage.readObject(VIDEO, { kind: "LAST", length: 10 });
+    expect(suffix).toMatchObject({ kind: "READ", size: 0, start: 0, length: 0 });
+    expect(openFilesBelow(base)).toBe(before);
+    expect(await store.objectStorage.readObject(VIDEO, { kind: "FROM", start: 0, end: null })).toEqual({
+      kind: "UNSATISFIABLE",
+      size: 0,
+    });
+  });
+
+  it("refuses a key that is not canonical", async () => {
+    for (const key of NOT_CANONICAL) {
+      await expect(store.objectStorage.readObject(key, null)).rejects.toBeInstanceOf(AppError);
+    }
   });
 });
 

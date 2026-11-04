@@ -158,6 +158,36 @@ export interface SignedUrl {
 }
 
 /**
+ * Which bytes of an object to read (ADR-0115): from `start` to `end`, both
+ * included, or to its last byte when `end` is `null`; or its last `length`
+ * bytes. Offsets are whole, non-negative numbers, and `end` is never before
+ * `start`.
+ */
+export type ObjectByteRange =
+  | { readonly kind: "FROM"; readonly start: number; readonly end: number | null }
+  | { readonly kind: "LAST"; readonly length: number };
+
+/** What a read of an object found. */
+export type ObjectRead =
+  /** Nothing is stored at the key. */
+  | { readonly kind: "ABSENT" }
+  /** The object is there, but holds none of the bytes asked for. */
+  | { readonly kind: "UNSATISFIABLE"; readonly size: number }
+  | {
+      readonly kind: "READ";
+      /** The whole object's size in bytes. */
+      readonly size: number;
+      /** The first byte read, and how many: the whole object when no range was asked for. */
+      readonly start: number;
+      readonly length: number;
+      /**
+       * Those bytes, as a stream. The caller reads it to its end or cancels it:
+       * a store may hold the object open until then.
+       */
+      readonly body: ReadableStream<Uint8Array>;
+    };
+
+/**
  * Object-storage abstraction. Keys are opaque, organization-prefixed paths.
  * Signed URLs are short-lived and single-purpose (upload XOR download).
  */
@@ -166,8 +196,36 @@ export interface ObjectStorage {
   createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl>;
   putObject(key: string, data: Uint8Array): Promise<void>;
   getObject(key: string): Promise<Uint8Array | null>;
+  /**
+   * The object's bytes, or a range of them, as a stream (ADR-0115): how a
+   * video is served, so neither a large object nor a player's seek is read
+   * whole into memory. `null` reads the whole object.
+   */
+  readObject(key: string, range: ObjectByteRange | null): Promise<ObjectRead>;
   deleteObject(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
+}
+
+/**
+ * The bytes a range names in an object of `size` bytes, or `null` when it is not
+ * satisfiable (RFC 9110, section 14.1.2): a first byte at or past the end, or a
+ * suffix of no bytes. A last byte past the end, and a suffix longer than the
+ * object, are cut to it, so a suffix of an empty object is all of it: no bytes.
+ * No range is the whole object.
+ */
+export function resolveObjectByteRange(
+  range: ObjectByteRange | null,
+  size: number,
+): { readonly start: number; readonly length: number } | null {
+  if (range === null) return { start: 0, length: size };
+  if (range.kind === "LAST") {
+    if (range.length <= 0) return null;
+    const length = Math.min(range.length, size);
+    return { start: size - length, length };
+  }
+  if (range.start >= size || (range.end !== null && range.end < range.start)) return null;
+  const end = range.end === null ? size - 1 : Math.min(range.end, size - 1);
+  return { start: range.start, length: end - range.start + 1 };
 }
 
 // --- Media pipeline ---------------------------------------------------------
