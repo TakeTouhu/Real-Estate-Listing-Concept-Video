@@ -26,6 +26,7 @@ import {
   MAX_DELIVERABLE_OUTPUT_BYTES,
   isCompositionBlockCode,
   isCompositionRetryCode,
+  isDeliverableOutputKey,
   managedDeliverableOutputKey,
   validateCompositionBatchLimit,
   validateCompositionLeaseMs,
@@ -237,5 +238,28 @@ describe("the Clean Master's defects (ADR-0077 to ADR-0079)", () => {
     expect(defect.message).toBe(
       "A composed deliverable cannot be recorded without the Clean Master it was made from",
     );
+  });
+});
+
+describe("a customer's video is known by its key's shape (ADR-0115)", () => {
+  it("is every key the builder makes", () => {
+    const key = managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" });
+    expect(isDeliverableOutputKey(key)).toBe(true);
+  });
+
+  it("is no other key", () => {
+    for (const key of [
+      "org/org_a/deliverables/gdv_1",
+      "org/org_a/deliverables/gdv_1/output/x",
+      "org//deliverables/gdv_1/output",
+      "org/org_a/deliverables//output",
+      "orgs/org_a/deliverables/gdv_1/output",
+      "org/org_a/generations/gdv_1/output",
+      "org/org_a/deliverables/gdv_1/master",
+      "org/org_a/internal/clean-masters/gdv_1",
+      "org/org_a/properties/prp_1/assets/ast_1/normalized.jpg",
+    ]) {
+      expect(`${key}: ${isDeliverableOutputKey(key)}`).toBe(`${key}: false`);
+    }
   });
 });

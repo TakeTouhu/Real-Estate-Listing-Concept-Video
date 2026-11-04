@@ -1501,12 +1501,15 @@ them is **built**. Each item below records the settled decision and what remains
       regeneration, once that content's old final video passes its 30 days.
       Decide before any deletion of masters is built; it does not change how
       DS-5 makes one.
-- [ ] **Decide whether scene outputs move under the internal namespace** before
+- [x] **Decide whether scene outputs move under the internal namespace** before
       any route lets a customer download a deliverable. ADR-0052 Decision 17
       makes scene media internal; their keys,
       `org/{organizationId}/generations/{attemptId}/output`, are outside
       `org/{organizationId}/internal/`, so the signers' refusal (ADR-0074) does
       not cover them. Nothing signs them today.
+      *Decided in GS-12a (ADR-0115 Decision 5): they do not move. The signers
+      and the verifier refuse a key whose third segment is `generations` as
+      they refuse one whose third is `internal`.*
 - [ ] **Build the internal service-recovery budget.** `base-plan included-user
       slots × 1` → **3 / 10 / 30** per organization per renewal period, from base
       plan slots — **not** active users and **not** purchased additional seats —
@@ -1734,12 +1737,17 @@ them is **built**. Each item below records the settled decision and what remains
       closes only a `FAILED_TERMINAL` job's (ADR-0084, *Not decided here*). A
       job `CANCELLED` before it generated may leave `PENDING` scenes; nothing
       cancels a job today.
-- [ ] **Serve the customer's video from storage (GS-12).** The download route
+- [x] **Serve the customer's video from storage (GS-12).** The download route
       reads a whole object into memory and names its content type from the
       key's extension; a deliverable's key has none, and a video may be
       hundreds of megabytes (ADR-0085, *Not decided here*). Preview and
       download need a streamed response with the video's own content type,
       over the shared folder now and over Google Cloud Storage in production.
+      *Built in GS-12a (ADR-0115, no migration): the storage port reads a
+      byte range as a stream, the shared folder streams from the file it
+      opened, and the route serves one range and a customer's video as
+      `video/mp4`. The production adapter, when built, must implement the
+      port's `readObject` (see *Build the Google Cloud Storage adapter*).*
 - [ ] **Remove what a killed process leaves in the shared folder.** An upload
       a crashed worker never completed or aborted, a staged file a killed
       process never moved, and the empty folders a deleted key leaves stay in

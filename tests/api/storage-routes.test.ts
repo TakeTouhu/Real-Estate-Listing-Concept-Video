@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { managedCleanMasterKey } from "@app/domain";
+import { managedCleanMasterKey, managedDeliverableOutputKey, managedGenerationOutputKey } from "@app/domain";
 import { LocalObjectStorage, signStorageToken, type SignedPurpose } from "@app/storage";
 
 /**
@@ -50,11 +50,87 @@ describe("the signed download route", () => {
     );
     const response = await download(new Request(url("download", token)));
     expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(BYTES);
   });
 
   it("never serves the Clean Master, answering as for a forged token", async () => {
     const response = await download(new Request(url("download", minted(MASTER, "download"))));
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized");
+  });
+});
+
+describe("a video through the signed download route (ADR-0115)", () => {
+  const VIDEO = managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" });
+  const CLIP = new Uint8Array([10, 11, 12, 13, 14]);
+
+  beforeEach(async () => {
+    await local.putObject(VIDEO, CLIP);
+  });
+
+  function get(key: string, range?: string): Promise<Response> {
+    const headers = range === undefined ? undefined : { range };
+    return download(new Request(url("download", minted(key, "download")), { headers }));
+  }
+
+  it("serves the whole video as one, privately, saying ranges are served", async () => {
+    const response = await get(VIDEO);
+    expect(response.status).toBe(200);
+    expect(Object.fromEntries(response.headers)).toMatchObject({
+      "content-type": "video/mp4",
+      "content-length": "5",
+      "accept-ranges": "bytes",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; sandbox",
+    });
+    expect(response.headers.get("content-range")).toBeNull();
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(CLIP);
+  });
+
+  it("serves the bytes a range names, as part of the video", async () => {
+    const middle = await get(VIDEO, "bytes=1-2");
+    expect(middle.status).toBe(206);
+    expect(middle.headers.get("content-range")).toBe("bytes 1-2/5");
+    expect(middle.headers.get("content-length")).toBe("2");
+    expect(middle.headers.get("content-type")).toBe("video/mp4");
+    expect(new Uint8Array(await middle.arrayBuffer())).toEqual(new Uint8Array([11, 12]));
+    const last = await get(VIDEO, "bytes=-2");
+    expect(last.status).toBe(206);
+    expect(last.headers.get("content-range")).toBe("bytes 3-4/5");
+    expect(new Uint8Array(await last.arrayBuffer())).toEqual(new Uint8Array([13, 14]));
+    const rest = await get(VIDEO, "bytes=0-");
+    expect(rest.status).toBe(206);
+    expect(rest.headers.get("content-range")).toBe("bytes 0-4/5");
+  });
+
+  it("answers a range past the end with the video's size and no bytes", async () => {
+    const response = await get(VIDEO, "bytes=5-");
+    expect(response.status).toBe(416);
+    expect(response.headers.get("content-range")).toBe("bytes */5");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toBe("");
+  });
+
+  it("serves the whole video for a range it does not serve", async () => {
+    for (const range of ["bytes=4-1", "bytes=0-1,3-4"]) {
+      const response = await get(VIDEO, range);
+      expect(response.status).toBe(200);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(CLIP);
+    }
+  });
+
+  it("answers not found for a video no longer stored", async () => {
+    await local.deleteObject(VIDEO);
+    expect((await get(VIDEO)).status).toBe(404);
+    expect((await get(VIDEO, "bytes=0-1")).status).toBe(404);
+  });
+
+  it("never serves a scene video, answering as for a forged token", async () => {
+    const scene = managedGenerationOutputKey({ organizationId: "org_a", attemptId: "sgen_1" });
+    await local.putObject(scene, CLIP);
+    const response = await get(scene);
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized");
   });

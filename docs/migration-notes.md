@@ -2115,3 +2115,19 @@ unreadable and logged as an error (`component: "video-progress"`), with its
 id, organization and project.
 
 **Rolling back.** To GS-11a's build: safe. The page writes nothing.
+
+## GS-12a — serving a stored video, a range at a time
+
+**No migration** (ADR-0115). No schema, enum, constraint or row changes, and no
+new route or environment variable. No stored key moves: scene videos stay at
+`org/{organizationId}/generations/{attemptId}/output` and are refused by the
+signers and the verifier by that segment.
+
+**What changes at deploy.** The signed download route streams what it serves
+and answers byte ranges, for photos too: a photo's bytes, content type and
+headers are as before, plus `Accept-Ranges: bytes`, and a request with a
+`Range` header the photo holds bytes of is answered `206`. A link that names a
+scene video is refused as unauthorized; nothing has ever signed one.
+
+**Rolling back.** To GS-11b's build: safe. Nothing is written, and no link a
+customer holds names a video.

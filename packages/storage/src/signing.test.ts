@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { managedCleanMasterKey } from "@app/domain";
+import { managedCleanMasterKey, managedGenerationOutputKey } from "@app/domain";
 import { LocalObjectStorage } from "./local-storage";
 import { signStorageToken, verifyStorageToken, type SignedPurpose } from "./signing";
 
@@ -100,6 +100,28 @@ describe("storage token signing", () => {
       await expect(storage.createSignedDownloadUrl(KEY, 60)).resolves.toMatchObject({
         url: expect.stringContaining("/api/storage/download?token="),
       });
+    });
+  });
+
+  describe("scene videos (ADR-0115)", () => {
+    const SCENE = managedGenerationOutputKey({ organizationId: "org_1", attemptId: "sgen_1" });
+
+    it("are never signed nor honoured, for either purpose", () => {
+      for (const purpose of ["upload", "download"] as const) {
+        expect(() => signStorageToken({ key: SCENE, purpose, expiresAtSeconds: NOW + 60 }, SECRET)).toThrow(
+          expect.objectContaining({ code: "INTERNAL_ERROR" }),
+        );
+        const payload = Buffer.from(JSON.stringify([SCENE, purpose, NOW + 60]), "utf8").toString("base64url");
+        const minted = `${payload}.${createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+        expect(verifyStorageToken(minted, SECRET, purpose, NOW)).toBeNull();
+      }
+    });
+
+    it("are refused by the local adapter's signed URLs, and still read server-side", async () => {
+      const storage = new LocalObjectStorage({ secret: SECRET });
+      await storage.putObject(SCENE, new Uint8Array([4]));
+      await expect(storage.createSignedDownloadUrl(SCENE, 60)).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await storage.getObject(SCENE)).toEqual(new Uint8Array([4]));
     });
   });
 });

@@ -46,6 +46,7 @@ export {
   MAX_DELIVERABLE_OUTPUT_BYTES,
   isCompositionBlockCode,
   isCompositionRetryCode,
+  isDeliverableOutputKey,
   managedDeliverableOutputKey,
   validateCompositionBatchLimit,
   validateCompositionLeaseMs,

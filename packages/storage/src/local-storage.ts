@@ -1,4 +1,10 @@
-import type { ObjectStorage, SignedUrl } from "@app/domain";
+import {
+  resolveObjectByteRange,
+  type ObjectByteRange,
+  type ObjectRead,
+  type ObjectStorage,
+  type SignedUrl,
+} from "@app/domain";
 import { signedStorageUrl } from "./signing";
 import { assertNotProduction, type ProductionGuardOptions } from "./production-guard";
 
@@ -63,6 +69,23 @@ export class LocalObjectStorage implements ObjectStorage {
   getObject(key: string): Promise<Uint8Array | null> {
     const value = this.objects.get(key);
     return Promise.resolve(value ? Uint8Array.from(value) : null);
+  }
+
+  readObject(key: string, range: ObjectByteRange | null): Promise<ObjectRead> {
+    const value = this.objects.get(key);
+    if (value === undefined) return Promise.resolve({ kind: "ABSENT" });
+    const size = value.byteLength;
+    const bytes = resolveObjectByteRange(range, size);
+    if (bytes === null) return Promise.resolve({ kind: "UNSATISFIABLE", size });
+    // A copy, so a later write to the key cannot change bytes already being sent.
+    const chunk = value.slice(bytes.start, bytes.start + bytes.length);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (chunk.byteLength > 0) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    return Promise.resolve({ kind: "READ", size, start: bytes.start, length: bytes.length, body });
   }
 
   deleteObject(key: string): Promise<void> {

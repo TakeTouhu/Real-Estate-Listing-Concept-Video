@@ -517,6 +517,17 @@ unreadable, with its reference, and is logged as an error. Nothing on the panel
 retries the video, and the page shows the progress as of when it was loaded.
 Row GS-11 is complete.
 
+**GS-12a — serving a stored video, a range at a time** (ADR-0115, no
+migration): storage reads an object, or one byte range of it, as a stream, and
+the shared folder reads it from the file it opened, a bounded chunk at a time
+and only as it is sent. The signed download route streams what it serves,
+answers one byte range with `206` (or `416` for a range the object holds none
+of), and serves a customer's video as `video/mp4`, so a player can start before
+the whole video arrives and seek. No signed URL names a scene video: they stay
+where they are and are refused by their own segment. GS-12 is split in three:
+this, the preview on the project page (GS-12b) and the download (GS-12c).
+Nothing a customer reaches signs a video yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

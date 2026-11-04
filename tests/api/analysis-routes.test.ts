@@ -89,6 +89,10 @@ class MapStorage implements ObjectStorage {
   getObject(key: string) {
     return Promise.resolve(this.objects.get(key) ?? null);
   }
+  readObject() {
+    // Nothing these tests serve is read as a stream.
+    return Promise.resolve({ kind: "ABSENT" as const });
+  }
   deleteObject(key: string) {
     this.objects.delete(key);
     return Promise.resolve();
