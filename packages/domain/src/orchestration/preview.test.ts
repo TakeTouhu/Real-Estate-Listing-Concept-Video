@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { managedDeliverableOutputKey } from "../deliverable-composition-execution/durable";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
+import { PermissionGrantService } from "../identity/permission-grant-service";
 import type { Property } from "../property/types";
 import type { VideoProject } from "../storyboard/types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
@@ -94,7 +95,8 @@ describe("a link to watch a project's delivered video", () => {
     });
   }
 
-  const audits = () => deps.repos.auditLogs.all().filter((entry) => entry.action === VideoAuditAction.PreviewLinkIssued);
+  const audits = () =>
+    deps.repos.auditLogs.all().filter((entry) => entry.action === VideoAuditAction.PreviewLinkIssued);
 
   async function refusal(actor: string, projectId = PROJECT): Promise<AppError> {
     const error = await service()
@@ -172,7 +174,9 @@ describe("a link to watch a project's delivered video", () => {
   it("signs the delivered version while a new one is made, as its progress shows it completed", async () => {
     latest = delivered({ jobState: "GENERATING", scenesReady: 2 });
     expect(await service().link(owner, orgId, PROJECT)).not.toBeNull();
-    expect(signed).toHaveLength(1);
+    const key = managedDeliverableOutputKey({ organizationId: orgId, deliverableVersionId: VERSION });
+    expect(signed).toEqual([[key, 300]]);
+    expect(audits().map(({ resourceId }) => resourceId)).toEqual([VERSION]);
   });
 
   it("gives no link, and signs and audits nothing, for a project with no video to watch", async () => {
@@ -180,7 +184,10 @@ describe("a link to watch a project's delivered video", () => {
       null,
       delivered({ jobState: "COMPOSING", deliveredVersionId: null, reservationState: "RESERVED" }),
       delivered({ jobState: "FAILED_TERMINAL", deliveredVersionId: null, reservationState: "RELEASED" }),
-      // A delivered video whose job ended is not shown as completed.
+      // A job marked delivered with no version set names no video to sign.
+      delivered({ deliveredVersionId: null }),
+      // One that never reserved Units, delivered and then cancelled: its
+      // progress does not show it completed.
       delivered({ jobState: "CANCELLED", reservationState: null }),
     ]) {
       latest = none;
@@ -192,6 +199,9 @@ describe("a link to watch a project's delivered video", () => {
 
   it("refuses those who may not read its progress, before anything is signed", async () => {
     expect((await refusal(billing)).code).toBe("FORBIDDEN");
+    // Seeing the Property is not enough: watching its video needs video.view.
+    await new PermissionGrantService(deps).grant(owner, orgId, billing, "property.view");
+    expect((await refusal(billing)).code).toBe("FORBIDDEN");
     // A CREATOR reaches only the Properties it is responsible for.
     expect((await refusal(creator)).code).toBe("NOT_FOUND");
     expect((await refusal(owner, "vpr_missing")).code).toBe("NOT_FOUND");
@@ -200,10 +210,19 @@ describe("a link to watch a project's delivered video", () => {
   });
 
   it("refuses a video whose Units contradict its delivery, as its progress does", async () => {
-    latest = delivered({ reservationState: "RELEASED" });
-    const error = await refusal(owner);
-    expect(error.code).toBe("INTERNAL_ERROR");
-    expect(error.details).toEqual({ jobId: "gjob_1" });
+    for (const contradiction of [
+      delivered({ reservationState: "RELEASED" }),
+      // Not delivered, its Units used.
+      delivered({ jobState: "GENERATING", deliveredVersionId: null }),
+      // Delivered, then ended with its Units used: no code ends such a job (a
+      // failed new version rolls back to the delivered one).
+      delivered({ jobState: "CANCELLED" }),
+    ]) {
+      latest = contradiction;
+      const error = await refusal(owner);
+      expect(error.code).toBe("INTERNAL_ERROR");
+      expect(error.details).toEqual({ jobId: "gjob_1" });
+    }
     expect(signed).toEqual([]);
     expect(audits()).toEqual([]);
   });

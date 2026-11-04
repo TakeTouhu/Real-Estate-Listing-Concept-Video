@@ -125,7 +125,8 @@ describe("a video's progress", () => {
       ["CONSUMED", "CONSUMED"],
       [null, "NONE"],
     ] as const) {
-      const progress = videoProgressOf(record({ jobState: "DELIVERABLE_READY", deliveredVersionId: "gdv_1", reservationState }));
+      const delivered = record({ jobState: "DELIVERABLE_READY", deliveredVersionId: "gdv_1", reservationState });
+      const progress = videoProgressOf(delivered);
       expect(progress).toMatchObject({ phase: "COMPLETED", units: { count: 2, state: units } });
     }
   });

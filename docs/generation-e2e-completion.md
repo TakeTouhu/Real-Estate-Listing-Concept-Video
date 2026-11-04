@@ -6741,3 +6741,167 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 
 GS-12a waits for the product owner's yes before merge. Then the preview
 (GS-12b), the download (GS-12c) and the browser test (GS-13).
+
+## GS-12b-1 — a link to watch a project's delivered video
+
+Base: `8360158` (PR #139 merge commit on `main`).
+ADR: `docs/decisions/0116-a-link-to-watch-a-delivered-video.md`
+
+The second of four milestones of row GS-12 of the approved plan: GS-12b, the
+preview, is split in two (GS-12b-1 the link, GS-12b-2 the player on the
+project page; see `docs/generation-e2e-gap-analysis.md`, *GS-12*). **No
+migration, no HTTP change and no environment variable.**
+
+Commits, oldest first:
+
+| Commit | What it carries |
+| --- | --- |
+| `aacbe71` | the progress record's delivered version, the link service, their tests, ADR-0116 and the documentation |
+| this commit | the answers to the review, two tests for the mutants that survived, and the results below |
+
+The exact head SHA is reported with the pull request.
+
+### What GS-12b-1 does
+
+- **The progress record names the delivered version** (`deliveredVersionId`,
+  the job's `currentDeliverableVersionId`) instead of only whether there is
+  one. What the page shows is unchanged.
+- **A reader of the progress is given a link to the delivered video**
+  (`VideoPreviewService.link`): `video.view` and the Property in reach, read
+  through the one function the progress uses (`readNewestVideo`); the job's
+  current version, at `managedDeliverableOutputKey`; for 300 seconds; only
+  while its progress shows it completed, including while a new version is
+  made and when its Property was deleted. A video whose Units contradict
+  ADR-0052 is refused as its progress is.
+- **Each link is audited when it is given** (`video.preview_link_issued`, on
+  the version, with its job). It is signed first; an entry that cannot be
+  appended gives no link.
+- **The signed route still checks the token alone.**
+- **Nothing outside tests constructs the service yet** (GS-12b-2).
+
+```mermaid
+sequenceDiagram
+    participant P as Project page (GS-12b-2)
+    participant L as VideoPreviewService.link
+    participant R as readNewestVideo
+    participant D as Video progress repository
+    participant S as Signer
+    participant A as Audit log
+    P->>L: member, organization, project
+    L->>R: video.view, project, Property in reach
+    alt refused
+        R-->>L: FORBIDDEN or NOT_FOUND
+        L-->>P: thrown
+    else a reader
+        R->>D: newest job of the project
+        D-->>R: state, delivered version, reservation
+        R-->>L: record or null
+        alt no video, not completed, or no version
+            L-->>P: null (nothing signed or audited)
+        else Units contradict the delivery
+            L-->>P: INTERNAL_ERROR (nothing signed)
+        else completed
+            L->>S: org/{org}/deliverables/{version}/output, 300 s
+            S-->>L: url, expiresAt
+            L->>A: video.preview_link_issued, version, jobId
+            L-->>P: url, expiresAt
+        end
+    end
+```
+
+### Verification
+
+Measured locally, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean, on `aacbe71` and on this commit |
+| `pnpm test` | on `aacbe71`, 6,850 passed in 261 files: 7 new against GS-12a's 6,843 (the link for an owner and a responsible viewer, its key, life and audit; while a new version is made; no link and nothing signed or audited for no video, one not delivered or one that ended without one; refusals; contradicting Units; a deleted Property; signing and audit failures). On this commit, the same 6,850 with more cases in them (below) |
+| `pnpm build` | succeeded on `aacbe71` and on this commit |
+| `pnpm test:db` | `tests/integration/video-progress.db.test.ts`: 9 passed, reading `null` for a video not delivered and the version's id for one being made again. The rest of the database suite was not run: only this read's query changed |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+The same harness as GS-12a. On `aacbe71`, 17 mutants against the link (the
+version guard, the completed check, the link's life, the audit awaited, its
+resource, metadata, action, resource type and member, the key, signing before
+auditing), the shared read (the permission, the reach check, the project
+check) and the progress phase (the delivered flag inverted or never seen),
+and 3 against the repository (the column read, the mapping): 18 killed. The
+two survivors were killed by new cases: a job marked delivered with no version
+set, and a member granted `property.view` without `video.view`.
+
+After the review's answers changed the order of the checks, the 17 link and
+read mutants were run again with one more (the version guard before the
+contradiction check): all killed, once the case of a video that never
+reserved Units, delivered and then cancelled, was restored.
+
+### Review
+
+An independent reviewer read `aacbe71` from git objects only. Nothing
+blocking. It confirmed that the key is always the caller's organization's and
+the job's own published version, that no internal or scene key can be signed,
+that the read's extraction and the progress are unchanged, and the audit
+order. Its findings, each answered in this commit:
+
+- **Should fix: the link lets a member keep the video, which the ADR did not
+  say.** A player's link is the route's download token, so a client can ask
+  for the whole video, as a photo's link already allows. ADR-0116 Decision 4
+  now says so: no player can be given a video it cannot keep, `video.download`
+  governs the download action (GS-12c, an attachment, audited as a
+  download), and every role holds both permissions or neither; only an
+  individual `video.view` grant separates them.
+- **Should fix: a delivered video's job never ends without it.** A failed new
+  version rolls back to the delivered one (ADR-0110 Decision 1), so ADR-0116's
+  bullet and the `TODO.md` sentence were wrong; both are corrected. A
+  delivered video ended with its Units used is now tested as the contradiction
+  its progress refuses.
+- **Minor: a video not delivered whose Units were used got no link instead of
+  the progress's refusal.** The contradiction check now runs first, so the
+  link refuses every video its progress refuses; tested.
+- **Minor: test gaps.** The guard for a job marked delivered with no version
+  and the key and audit while a new version is made are now tested. The real
+  signer and route are exercised with the link when the page builds the
+  service with the real store (GS-12b-2).
+- **Nits.** Two test lines over 120 columns shortened; comments and the ADR no
+  longer describe the player as built; the ADR no longer says every
+  publication consumes Units (a replacement consumes none); the next ADR is
+  no longer cited by number.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the link service row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-12b-1.md`: the service, the shared read, the audit vocabulary, the progress record |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-12b-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-12b-1), `docs/generation-e2e-gap-analysis.md`
+(GS-12b's split), `docs/SecurityCompliance.md` (the link is audited, and is not
+a share link) and `docs/decisions/TODO.md` (the preview follows the progress
+while a new version is made).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer reaches gives a
+link to a video. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **No customer can watch a video yet** (GS-12b-2), nor download one (GS-12c).
+- **A member who may watch a video can keep it**, as with photos (ADR-0116
+  Decision 4).
+- **No production storage adapter exists** (ADR-0115).
+
+### Remaining work
+
+GS-12b-1 waits for the product owner's yes before merge. Then the player on
+the project page (GS-12b-2), the download (GS-12c) and the browser test
+(GS-13).

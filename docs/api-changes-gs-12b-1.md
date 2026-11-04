@@ -21,8 +21,9 @@ the video it names are the progress's:
 | The project's newest video | The answer |
 | --- | --- |
 | none started, not delivered yet, or ended without one | `null`; nothing is signed or audited |
+| shown as delivered by its state, with no version set | `null`; nothing is signed or audited |
 | delivered, including while a new version of it is made | a link to the job's current version, at `managedDeliverableOutputKey`; one audit entry |
-| delivered, with Units that contradict its delivery | `AppError` `INTERNAL_ERROR`, details `{ jobId }`; nothing signed |
+| delivered or not, with Units that contradict it (ADR-0113 Decision 4) | `AppError` `INTERNAL_ERROR`, details `{ jobId }`; nothing signed |
 | a member without `video.view` | `AppError` `FORBIDDEN` |
 | a project not the organization's, or its Property out of reach | `AppError` `NOT_FOUND` |
 

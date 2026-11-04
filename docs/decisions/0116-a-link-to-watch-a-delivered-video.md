@@ -14,8 +14,8 @@ time, as `video/mp4` (ADR-0115), but nothing signs a video's key: the progress
 read (ADR-0113) says whether a project's video was delivered and not which
 version. The job points at its delivered version
 (`currentDeliverableVersionId`), and only Transaction G sets that pointer, in
-the commit that publishes a version proved technically valid and consumes its
-Units (ADR-0080). The version's video is stored at
+the commit that publishes a version proved technically valid (ADR-0080). The
+version's video is stored at
 `managedDeliverableOutputKey` (`org/{organizationId}/deliverables/{versionId}/output`).
 
 ADR-0052 makes a delivered video previewable with `video.view` and
@@ -30,7 +30,7 @@ GS-12b is split into two milestones, each its own pull request:
 
 - **GS-12b-1** (this ADR, no migration): the link, as a domain service nothing
   outside tests constructs yet.
-- **GS-12b-2** (ADR-0117): a player on the project page that plays it, and
+- **GS-12b-2** (its own ADR): a player on the project page that plays it, and
   renews a link that has run out.
 
 ## Decision 1 — The link: `VideoPreviewService.link`
@@ -54,7 +54,8 @@ delivered video, or `null` when it has none to watch.
    the link names a version proved technically valid and published, never a
    new version still being made.
 4. **A video whose Units contradict ADR-0052 is refused as its progress is**
-   (ADR-0113 Decision 4): `INTERNAL_ERROR` with its id, and no link.
+   (ADR-0113 Decision 4), delivered or not: `INTERNAL_ERROR` with its id, and
+   no link. The check runs before the delivered version is looked at.
 5. **A deleted Property's video is still given a link**, as its progress is
    read: ADR-0052 keeps preview available for a Property in trash when
    authorized. Nothing new can be made of it (ADR-0088).
@@ -66,7 +67,7 @@ It writes nothing but its audit entry.
 As long as a photo's. A link is a bearer token for one key (ADR-0115), so its
 life bounds how long anyone holding it can play the video; a player keeps
 asking for ranges while it plays and seeks, so a link may run out while the
-video is open. The page renews it (GS-12b-2, ADR-0117) rather than signing it
+video is open. The project page is to renew it (GS-12b-2) rather than sign it
 for longer.
 
 ## Decision 3 — Each link is audited when it is given
@@ -90,22 +91,36 @@ does not already fix, and would make the route answer photos and videos
 differently.
 
 This is not a share link (ADR-0052 Decision 12): it is given only to a signed
-in reader, is audited, lives five minutes, and the page never offers it as a
-link to copy.
+in reader, is audited, and lives five minutes; the player is to play it, not
+offer it as a link to copy (GS-12b-2).
+
+**Watching a video hands its bytes to the member's browser.** The link is the
+route's download token: a player asks for the video a range at a time, and
+nothing stops a client holding the link from asking for the whole of it,
+exactly as a photo's preview link already allows. No player can be given a
+video it cannot keep, so `video.view` cannot technically stop a member from
+saving what they watch. What `video.download` governs is the download itself
+(GS-12c): the action offered to members holding it, served as an attachment,
+and audited as a download. Every role holds both permissions or neither
+(ADR-0052 Decision 10); only an individual `video.view` grant without
+`video.download` separates them, and that member can save what they are
+allowed to watch.
 
 ## Decision 5 — What stays out
 
-- **The player and the page** (GS-12b-2, ADR-0117). Nothing outside tests
-  constructs `VideoPreviewService`, so no customer is given a link yet.
+- **The player and the page** (GS-12b-2). Nothing outside tests constructs
+  `VideoPreviewService`, so no customer is given a link yet.
 - **The download** (GS-12c): `video.download`, audited, served as an
   attachment.
 - **The disclosure mode, the version and its date beside the video, and old
   versions during their 30 days** (ADR-0052 Decision 17). Only the current
   version can be delivered today; nothing a customer reaches makes another.
-- **A delivered video whose job ended afterwards.** Only a new version can end
-  a delivered video's job, and nothing a customer reaches starts one; its
-  progress does not show it completed, so it is given no link. What the
-  customer sees then is decided with regeneration (`docs/decisions/TODO.md`).
+- **What the page says while a new version is made.** A delivered video's job
+  never ends without it: a failed new version rolls back to the delivered one
+  (ADR-0110 Decision 1), so the delivered version is watched while a new one
+  is made and after one fails. What else the customer sees then is decided
+  with regeneration (`docs/decisions/TODO.md`), which nothing a customer
+  reaches starts yet.
 - **A limit on how often a link is asked for**, beyond the page's: each one is
   audited.
 - **No migration**, no new table, column, route, permission or environment

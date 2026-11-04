@@ -4,14 +4,14 @@ import type { ObjectStorage, SignedUrl } from "../property/ports";
 import { readNewestVideo, videoProgressOf, type VideoProgressServiceDeps } from "./progress";
 
 /**
- * A link that plays a project's delivered video in its organization's
- * workspace (GS-12b, ADR-0116). The video plays in the member's browser
- * straight from the signed download route, a range at a time (ADR-0115).
+ * A link to a project's delivered video, for its organization's workspace
+ * (GS-12b, ADR-0116). The signed download route serves it a range at a time
+ * (ADR-0115), for a player in the member's browser (GS-12b-2).
  */
 
 /**
  * How long a link to watch a video lives: as long as a photo's (ADR-0116
- * Decision 2). The page renews one that has run out.
+ * Decision 2). The project page is to renew one that has run out (GS-12b-2).
  */
 export const VIDEO_PREVIEW_LINK_TTL_SECONDS = 300;
 
@@ -41,12 +41,13 @@ export class VideoPreviewService {
    *
    * Its readers are the progress's ({@link readNewestVideo}, whose refusals it
    * throws). A video whose Units contradict ADR-0052 is refused as its
-   * progress is (ADR-0113 Decision 4): no link is given to it.
+   * progress is (ADR-0113 Decision 4), delivered or not: no link is given to
+   * it.
    */
   async link(actorUserId: string, organizationId: string, videoProjectId: string): Promise<SignedUrl | null> {
     const record = await readNewestVideo(this.deps, actorUserId, organizationId, videoProjectId);
-    if (record === null || record.deliveredVersionId === null) return null;
-    if (videoProgressOf(record).phase !== "COMPLETED") return null;
+    if (record === null) return null;
+    if (videoProgressOf(record).phase !== "COMPLETED" || record.deliveredVersionId === null) return null;
     const deliverableVersionId = record.deliveredVersionId;
     const key = managedDeliverableOutputKey({ organizationId, deliverableVersionId });
     const link = await this.deps.storage.createSignedDownloadUrl(key, VIDEO_PREVIEW_LINK_TTL_SECONDS);

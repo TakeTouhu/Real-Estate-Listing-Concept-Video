@@ -419,7 +419,7 @@ GS-12 is split into three milestones, each its own pull request:
     the delivered version; a reader of the progress is given a 300-second
     link to it while its progress shows it completed, audited each time.
     Nothing outside tests constructs it.
-  - **GS-12b-2** (ADR-0117): a player on the project page that plays it and
-    renews a link that has run out.
+  - **GS-12b-2**: a player on the project page that plays it and renews a
+    link that has run out.
 - **GS-12c**: the download, for a member holding `video.download`, audited,
   through a short-lived signed link served as an attachment.
