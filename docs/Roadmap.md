@@ -541,12 +541,13 @@ tests constructs the link yet.
 migration): the project page's "Video" panel plays a delivered video with the
 browser's own controls, from a link it asks for only when the progress shows
 the video completed. Nothing plays until the member presses play, and the
-controls offer no download where the browser honours that. How long a link has
-left is measured on the page's own clock. When the video fails after its link
-ran out, each link is renewed at most once and the video goes back to where it
-was; a new link the page gives for another reason never restarts a video being
-watched. Each page load that shows a delivered video audits one link, and so
-does each renewal. GS-12b is complete; the download (GS-12c) follows.
+controls offer no download where the browser honours that. A link's age is
+measured from when it reached the page, never against the server's clock, and
+counts time the device slept. When the video fails after its link ran out, each
+link is renewed at most once and the video goes back to where it was; a new
+link the page gives for another reason never restarts a video being watched.
+Each page load that shows a delivered video audits one link, and so does each
+renewal. GS-12b is complete; the download (GS-12c) follows.
 
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.

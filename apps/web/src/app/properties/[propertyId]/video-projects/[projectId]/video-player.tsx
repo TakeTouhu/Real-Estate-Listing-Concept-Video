@@ -16,13 +16,26 @@ export const PLAYBACK_FAILED = "The video could not be played. Reload the page t
 /** A link as this page holds it. */
 interface HeldLink {
   readonly src: string;
-  /** When it is taken as run out, on this page's own clock (`performance.now()`). */
-  readonly runsOutAt: number;
+  /** How long after it arrived it is taken as run out. */
+  readonly goodForMs: number;
+  /** When it arrived, on the page's own clock (`performance.now()`), which stops while the device sleeps. */
+  readonly arrivedAt: number;
+  /** When it arrived by the browser's date, which keeps counting while the device sleeps. */
+  readonly arrivedOn: number;
 }
 
 function held(source: VideoPlayerSource): HeldLink {
-  const lifetimeMs = source.lifetimeSeconds * 1000;
-  return { src: source.src, runsOutAt: performance.now() + lifetimeMs - LINK_EXPIRY_MARGIN_MS };
+  const goodForMs = source.lifetimeSeconds * 1000 - LINK_EXPIRY_MARGIN_MS;
+  return { src: source.src, goodForMs, arrivedAt: performance.now(), arrivedOn: Date.now() };
+}
+
+/**
+ * Whether a link has run out: the longer of the two times since it arrived,
+ * each measured on one clock, so neither clock is compared with the server's.
+ */
+function hasRunOut(link: HeldLink): boolean {
+  const age = Math.max(performance.now() - link.arrivedAt, Date.now() - link.arrivedOn);
+  return age >= link.goodForMs;
 }
 
 /**
@@ -35,9 +48,10 @@ function held(source: VideoPlayerSource): HeldLink {
  *
  * A link lives five minutes (ADR-0116), and a player keeps asking for ranges
  * while the video is watched, so one may run out while it is open. How long a
- * link has left is measured on this page's own clock from when it arrived,
- * never against the server's, so a browser whose clock is wrong renews no
- * sooner and no later. When the video fails once its link has run out, it
+ * link has had is measured from when it arrived, never against the server's
+ * clock, so a browser whose date is set wrong renews no sooner and no later;
+ * the browser's date counts too, as the page's own clock stops while the
+ * device sleeps. When the video fails once its link has run out, it
  * takes a newer link the page already gave or asks the page for one, once, and
  * goes back to where it was, playing if it was. Any other failure says so.
  * Nothing waits on a timer: a refresh that cannot reach the server loads the
@@ -56,7 +70,7 @@ export function VideoPlayer({ source }: { source: VideoPlayerSource }) {
   const [current, setCurrent] = useState<HeldLink>(() => held(source));
   /** A newer link the page gave, waiting while the member watches. */
   const waiting = useRef<HeldLink | null>(null);
-  /** Whether the member has started the video: from then on a new link waits until it is needed. */
+  /** Whether the member has played or moved the video: from then on a new link waits until it is needed. */
   const started = useRef(false);
   /**
    * Whether the video was last played rather than paused. Read from the
@@ -97,14 +111,15 @@ export function VideoPlayer({ source }: { source: VideoPlayerSource }) {
     if (element === null) return;
     // A new link is on its way: the one failing again is the one it replaces.
     if (renewedFrom.current === current.src) return;
-    const now = performance.now();
-    if (now < current.runsOutAt) {
+    if (!hasRunOut(current)) {
+      // Nothing resumes from a failure: a later link starts where the member puts it.
+      resume.current = null;
       setFailed(current.src);
       return;
     }
     resume.current = { time: element.currentTime, playing: playing.current };
     const next = waiting.current;
-    if (next !== null && now < next.runsOutAt) {
+    if (next !== null && !hasRunOut(next)) {
       take(next);
       return;
     }
@@ -139,6 +154,9 @@ export function VideoPlayer({ source }: { source: VideoPlayerSource }) {
         }}
         onPause={() => {
           playing.current = false;
+        }}
+        onSeeked={() => {
+          started.current = true;
         }}
         onError={onError}
         onLoadedMetadata={onLoadedMetadata}

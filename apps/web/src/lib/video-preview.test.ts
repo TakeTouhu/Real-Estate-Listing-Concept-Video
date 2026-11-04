@@ -41,7 +41,7 @@ describe("the project page's video link", () => {
       expiresAt: new Date("2026-11-04T09:05:00.000Z"),
     });
     const at = (iso: string) => () => Date.parse(iso);
-    expect(await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1", at("2026-11-04T09:00:00.999Z"))).toEqual({
+    expect(await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1", at("2026-11-04T09:00:00.400Z"))).toEqual({
       src: "https://app.test/api/storage/download?token=t",
       lifetimeSeconds: 299,
     });

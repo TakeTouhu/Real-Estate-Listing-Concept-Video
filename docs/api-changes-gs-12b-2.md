@@ -32,18 +32,20 @@ is a completed video, and the player's source type.
 
 ### Added: `apps/web`, `VideoPlayer`, `LINK_EXPIRY_MARGIN_MS`, `PLAYBACK_FAILED`
 
-A Client Component beside the project page: the browser's player
-(`controls`, `playsInline`, `preload="metadata"`, `controlsList="nodownload"`)
-for a `VideoPlayerSource`. It measures the link's seconds on the page's own
-clock (`performance.now()`) from when the link arrived. When the video fails
-within 30 seconds (`LINK_EXPIRY_MARGIN_MS`) of its link running out, or after,
-it takes a newer link the page already gave, or calls `router.refresh()` once
-for that link, and resumes where it was, playing if it was; a failure while
-the new link is awaited asks for no other. It starts no timer. Any other
-failure, including one the browser met before the page could listen, shows
-`PLAYBACK_FAILED` as an alert the video names (`aria-describedby`). A link the
-page gives for another reason is taken at once before the member plays the
-video or after it failed, and otherwise waits until the playing one is needed.
+A Client Component beside the project page: the browser's player (`controls`,
+`playsInline`, `preload="metadata"`, `controlsList="nodownload"`) for a
+`VideoPlayerSource`. It measures the link's age from when it arrived, as the
+longer of the time on the page's own clock (`performance.now()`) and by the
+browser's date, which keeps counting while the device sleeps. When the video
+fails within 30 seconds (`LINK_EXPIRY_MARGIN_MS`) of its link running out, or
+after, it takes a newer link the page already gave, if that one has not run out
+too, or calls `router.refresh()` once for that link, and resumes where it was,
+playing if it was; a failure while the new link is awaited asks for no other.
+It starts no timer. Any other failure, including one the browser met before the
+page could listen, shows `PLAYBACK_FAILED` as an alert the video names
+(`aria-describedby`), and nothing resumes from it. A link the page gives for
+another reason is taken at once before the member plays or moves the video, or
+after it failed, and otherwise waits until the playing one is needed.
 
 ### Changed: `apps/web`, `VideoProgressPanel` and `StoryboardView`
 

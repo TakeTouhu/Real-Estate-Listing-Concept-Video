@@ -6920,7 +6920,8 @@ Commits, oldest first:
 | Commit | What it carries |
 | --- | --- |
 | `c63a703` | the page's link, the player, the panel's place for it, their tests, ADR-0117 and the documentation |
-| this commit | the answers to the review (the link measured on the page's own clock, a new link that waits while the member watches, an early failure reported), their tests, and the results below |
+| `65165d3` | the answers to the first review (the link measured from its arrival, a new link that waits while the member watches, an early failure reported), their tests, and the results |
+| this commit | the answers to the second review (time the device slept counted, nothing resumed after a failure, a moved video keeps its link), their tests, and the results below |
 
 The exact head SHA is reported with the pull request.
 
@@ -6935,17 +6936,19 @@ The exact head SHA is reported with the pull request.
   `playsInline`, `preload="metadata"`, `controlsList="nodownload"`, no
   autoplay, labelled "The delivered video".
 - **A link that runs out while the video is open is renewed.** The page hands
-  the player the whole seconds the link has left, by the server's clock; the
-  player measures them on its own clock (`performance.now()`) from when the
-  link arrived, less 30 seconds. When the video fails after that, the player
+  the player the whole seconds the link has left, by the server's clock. The
+  player measures the link's age from when it arrived, as the longer of the
+  time on its own clock (`performance.now()`) and by the browser's date, so a
+  date set wrong changes nothing and time the device slept counts, and takes
+  it as run out 30 seconds early. When the video fails after that, the player
   takes a newer link the page already gave, or asks the page for one
   (`router.refresh()`), at most once per link, and goes back to where it was,
   playing if it was last played. A failure while the new link is awaited asks
   for no other. Nothing waits on a timer: a refresh that cannot reach the
   server loads the page afresh, as Next.js does.
 - **A link the page gives for any other reason never restarts a video being
-  watched**: it is taken at once before the member plays the video or after it
-  failed, and otherwise waits until the playing one is needed.
+  watched**: it is taken at once before the member plays or moves the video,
+  or after it failed, and otherwise waits until the playing one is needed.
 - **Any other failure says so**, including one the browser met before the page
   could listen for it: "The video could not be played. Reload the page to try
   again.", as an alert the video names.
@@ -6960,7 +6963,7 @@ sequenceDiagram
     P->>L: member, organization, project (only when completed)
     L-->>P: url, expiresAt (audited)
     P-->>V: src, lifetimeSeconds
-    V->>V: runs out at now() + lifetime − 30 s
+    V->>V: run out once its age (page clock or date, the longer) reaches lifetime − 30 s
     B->>R: ranges, as the member watches
     R-->>B: 206
     R-->>B: 401 once the token has expired
@@ -6985,7 +6988,7 @@ Measured locally, each exit status read:
 | Check | Result |
 | --- | --- |
 | `pnpm lint`, `pnpm typecheck` | clean, on `c63a703` and on this commit |
-| `pnpm test` | on `c63a703`, 6,867 passed in 263 files: 17 new against GS-12b-1's 6,850 (the player's attributes, a failure while the link is good, a renewal resuming playing or paused, at most one renewal per link, nothing played on load; the page's link for a completed video only, with no player when none is given and its failures through; the panel and view passing the player; `isCompletedVideo`). On this commit, 6,874 passed in 263 files: the player's 6 cases become 12 (a refused resume, a wrong browser date, a renewed link renewed in its turn, a renewed link failing while good, a link waiting while the member watches and taken when needed, a waiting link run out too, a new link taken at once before play and after a failure, an early failure; the earlier cases for one renewal per link and nothing played on load folded into others), and one more for the seconds counted on the server's clock |
+| `pnpm test` | on `c63a703`, 6,867 passed in 263 files: 17 new against GS-12b-1's 6,850 (the player's attributes, a failure while the link is good, a renewal resuming playing or paused, at most one renewal per link, nothing played on load; the page's link for a completed video only, with no player when none is given and its failures through; the panel and view passing the player; `isCompletedVideo`). On this commit, 6,874 passed in 263 files: the player's 6 cases become 12 (a refused resume, a wrong browser date, a renewed link renewed in its turn, a renewed link failing while good, a link waiting while the member watches and taken when needed, a waiting link run out too, a new link taken at once before play and after a failure, an early failure; the earlier cases for one renewal per link and nothing played on load folded into others), and one more for the seconds counted on the server's clock. On this commit, 6,879 passed in 263 files: 5 more player cases (time asleep counted, a link good for most of its life, a link kept while the video is paused part way and once it was moved without playing, nothing resumed after a failure), and the position checks reset before each load |
 | `pnpm build` | succeeded on `c63a703` and on this commit |
 | `pnpm test:db`, `pnpm test:media` | not run: nothing they cover changed |
 | Chromium probe | Playwright's Chromium against a stand-in for the route that refuses an expired token with `401` (scratch files, not committed): a range refused mid-play fires `error` with `MEDIA_ERR_NETWORK`, the video reads paused before it, a `pause` follows, and a new `src` with the position put back on `loadedmetadata` plays on. The bundled Chromium has no H.264 decoder, so the probe played a VP9 clip |
@@ -7020,6 +7023,13 @@ reported), 7 against the link (asked for any video, no link answered as one,
 seconds as milliseconds or rounded up, negative seconds, the server's clock
 ignored, its src) and the same 5 against the page, panel and view: all
 killed.
+
+After the second review, 48 mutants: 36 against the player (the 31 above, less
+the two that measured the arrival or the failure on the date alone, which the
+run-out check now measures both ways, plus time asleep not counted, the page's
+own clock not counted, either arrival lost, the run-out boundary, the resume
+kept after a failure and a moved video not counted), the same 7 against the
+link and 5 against the page, panel and view: all killed.
 
 ### Review
 
@@ -7057,6 +7067,37 @@ each answered in this commit:
 - **Accessibility.** The alert has the page's tone class and the video names
   it (`aria-describedby`).
 
+A second independent reviewer read `65165d3` from git objects only. Nothing
+blocking: it confirmed that renewals are bounded to one per link and one per
+about four and a half minutes, that the browser's event order is read right,
+that a refresh which cannot reach the server falls back to a browser
+navigation, and that the same link cannot come back. Its findings, each
+answered in this commit:
+
+- **Should fix: a device that slept made a run-out link say the video could
+  not be played.** The page's own clock stops while a phone is locked or a
+  laptop lid is closed, so after fifteen minutes asleep the link looked good
+  and was not renewed. The link's age is now the longer of the time on the
+  page's own clock and by the browser's date, each from its arrival, so a
+  date set wrong still changes nothing and time asleep counts. A date changed
+  while the page is open can make one link look run out early; it is renewed
+  once, like any other. Tested.
+- **Minor: a resume position outlived a failure.** A waiting link taken when
+  the playing one ran out, failing before it loaded, left the position to be
+  applied, and played, by the next link. A failure now clears it. Tested.
+- **Minor: ADR-0117 said a refresh answered with an error reloads the page.**
+  Only an error status does; a page that fails while it is built shows the
+  app's error page, as a reload would, and a refresh answer Next.js drops
+  leaves the player waiting. The ADR now says so.
+- **Test gaps.** A link given while the video is paused part way, position
+  checks that passed because the test environment keeps the position across a
+  new link, and seconds that rounding would also have passed are now pinned.
+- **Nits.** The API summary says a waiting link is taken only if it has not
+  run out too; the architecture rows say the page has the link signed for its
+  player and the panel has no control of its own; a test pins that a link is
+  taken as good for most of its life; a member who moved the video without
+  playing it keeps their link too.
+
 ### Required documentation
 
 | Item | Where |
@@ -7091,6 +7132,8 @@ scheduler and live Stripe charges remain BLOCKED.
   player's link serves it, or run a browser that decodes it.
 - **A refresh of the page for another reason gives and audits a link** even
   when it only waits beside the one playing.
+- **Should Next.js drop a refresh's answer**, the player waits with no message
+  until the member reloads (ADR-0117 Decision 3).
 - **No production storage adapter exists** (ADR-0115).
 
 ### Remaining work

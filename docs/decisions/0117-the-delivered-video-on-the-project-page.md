@@ -61,10 +61,14 @@ delivered video".
 
 The page hands the player the link with the whole seconds it has left,
 counted on the server's clock when the page is built (`lifetimeSeconds`). The
-player measures them on the page's own clock (`performance.now()`) from when
-the link arrived, never against the browser's date, so a browser whose clock
-is wrong renews no sooner and no later. A link is taken as run out 30 seconds
-before its seconds are spent, for the time it took to reach the page.
+player measures the link's age from when it arrived, never against the
+server's clock, so a browser whose date is set wrong renews no sooner and no
+later. The age is the longer of the time since its arrival on the page's own
+clock (`performance.now()`) and by the browser's date: the first stops while
+the device sleeps, and the second keeps counting. A link is taken as run out
+30 seconds before its seconds are spent, for the time it took to reach the
+page. A date changed while the page is open can make one link look run out
+early; it is then renewed once, like any other.
 
 - **When the video fails after its link has run out**, the player takes a
   newer link the page already gave it, if that one has not run out too, or
@@ -76,18 +80,21 @@ before its seconds are spent, for the time it took to reach the page.
   awaited asks for no other. Nothing waits on a timer, which the project's
   guard against schedulers and polling loops forbids in production code. None
   is needed: a refresh that cannot reach the server, or is answered with an
-  error, loads the page afresh (Next.js falls back to a browser navigation),
-  and the page cannot give back the link that ran out, since a link is asked
-  for only minutes after it was signed and a new one names a later expiry.
+  error status, loads the page afresh (Next.js falls back to a browser
+  navigation), a page that fails while it is built shows the app's error page
+  as a reload would, and the page cannot give back the link that ran out,
+  since a link is asked for only minutes after it was signed and a new one
+  names a later expiry. Should Next.js drop a refresh's answer, the player
+  waits with no message until the member reloads.
 - **Any other failure says so**: a failure while the link is still good (a
   file that cannot be read or decoded), including one the browser met before
   the page could listen for it, says "The video could not be played. Reload
   the page to try again." as an alert the video names, and asks for nothing.
 - **A link the page gives for any other reason** (the page is refreshed after a
   change elsewhere on it, such as its storyboard composed again) is taken at
-  once before the member first plays the video or after it failed. While the
-  member watches it waits until the playing one is needed, so the video is
-  never restarted under them.
+  once before the member first plays or moves the video, or after it failed.
+  Once the member has played or moved it, it waits until the playing one is
+  needed, so the video is never restarted under them.
 - **A renewal reloads the page's data**, as a reload would: the progress is
   read again, a new link given and audited, and the photos' links signed
   again. A video no longer completed by then shows no player.
