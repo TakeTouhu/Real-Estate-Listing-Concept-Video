@@ -192,13 +192,15 @@ describe("DS-4 shape", () => {
   });
 
   it("serves stored bytes from one route and one photo reader, for the key a verified token names", () => {
-    // And hands them to the test provider from one reader, the same way.
-    expect(matching(["apps"], /\.getObject\(/)).toEqual([DOWNLOAD_ROUTE, PHOTO_READER]);
+    // And hands them to the test provider from one reader, the same way. The
+    // route streams them, a range at a time (ADR-0115); the reader reads them
+    // whole.
+    expect(matching(["apps"], /\.(?:getObject|readObject)\(/)).toEqual([DOWNLOAD_ROUTE, PHOTO_READER]);
     const route = read(DOWNLOAD_ROUTE);
-    expect(route.match(/\.getObject\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);
+    expect(route.match(/\.(?:getObject|readObject)\([^)]*\)/g)).toEqual([".readObject(verified.key, range)"]);
     expect(route).toContain(`verifyStorageToken(token, getServerEnv().STORAGE_SIGNING_SECRET, "download")`);
     const reader = read(PHOTO_READER);
-    expect(reader.match(/\.getObject\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);
+    expect(reader.match(/\.(?:getObject|readObject)\([^)]*\)/g)).toEqual([".getObject(verified.key)"]);
     expect(reader).toContain(`verifyStorageToken(token, options.secret, "download")`);
   });
 });
