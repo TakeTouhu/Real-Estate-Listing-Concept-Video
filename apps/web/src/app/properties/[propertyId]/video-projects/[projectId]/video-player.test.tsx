@@ -8,28 +8,27 @@ import { LINK_EXPIRY_MARGIN_MS, PLAYBACK_FAILED, VideoPlayer } from "./video-pla
  * The delivered video's player (GS-12b-2, ADR-0117): it plays from its link,
  * reads nothing but the video's length before it is played, and asks the page
  * once for a new link when the video fails after its link ran out, going back
- * to where it was.
+ * to where it was. How long a link has left is measured on the page's own
+ * clock from when it arrived, and a link the page gives while the member
+ * watches waits until it is needed.
  */
 
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
-const NOW = Date.parse("2026-11-04T09:00:00.000Z");
-const FIRST: VideoPlayerSource = {
-  src: "https://app.test/api/storage/download?token=first",
-  expiresAt: "2026-11-04T09:05:00.000Z",
-};
-const SECOND: VideoPlayerSource = {
-  src: "https://app.test/api/storage/download?token=second",
-  expiresAt: "2026-11-04T09:10:00.000Z",
-};
+const FIRST: VideoPlayerSource = { src: "https://app.test/api/storage/download?token=first", lifetimeSeconds: 300 };
+const SECOND: VideoPlayerSource = { src: "https://app.test/api/storage/download?token=second", lifetimeSeconds: 300 };
+const THIRD: VideoPlayerSource = { src: "https://app.test/api/storage/download?token=third", lifetimeSeconds: 300 };
+/** How long, from its arrival, a five-minute link is taken as good. */
+const GOOD_FOR_MS = 300_000 - LINK_EXPIRY_MARGIN_MS;
 
+let clock: number;
 let play: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   refresh.mockReset();
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(NOW);
+  clock = 1_000;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
   play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
 });
 
@@ -43,15 +42,17 @@ function video(): HTMLVideoElement {
   return screen.getByLabelText("The delivered video") as HTMLVideoElement;
 }
 
-/**
- * The video at `time`, last played or paused by the member. It reads paused
- * either way, as a browser marks it before it reports a failure.
- */
-function at(time: number, playing: boolean): void {
+/** The member played the video and, unless still `playing`, paused it at `time`. */
+function watched(time: number, playing: boolean): void {
   fireEvent.play(video());
   if (!playing) fireEvent.pause(video());
   video().currentTime = time;
-  Object.defineProperty(video(), "paused", { configurable: true, value: true });
+}
+
+/** The video fails, as a browser reports it: the error, then the video marked paused. */
+function fails(): void {
+  fireEvent.error(video());
+  fireEvent.pause(video());
 }
 
 describe("the delivered video's player", () => {
@@ -65,25 +66,36 @@ describe("the delivered video's player", () => {
     expect(video().getAttribute("preload")).toBe("metadata");
     expect(video().hasAttribute("autoplay")).toBe(false);
     expect(video().className).toBe("video-player");
+    expect(video().hasAttribute("aria-describedby")).toBe(false);
     expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.loadedMetadata(video());
+    expect(play).not.toHaveBeenCalled();
+    expect(video().currentTime).toBe(0);
   });
 
   it("says it cannot be played when it fails while its link is still good, and asks for no new link", () => {
     render(<VideoPlayer source={FIRST} />);
-    vi.setSystemTime(Date.parse(FIRST.expiresAt) - LINK_EXPIRY_MARGIN_MS - 1);
-    fireEvent.error(video());
-    expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
+    clock += GOOD_FOR_MS - 1;
+    fails();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(PLAYBACK_FAILED);
+    expect(alert.className).toBe("status-bad");
+    expect(video().getAttribute("aria-describedby")).toBe(alert.id);
     expect(refresh).not.toHaveBeenCalled();
   });
 
   it("asks the page once for a new link when it fails as its link runs out, and resumes playing where it was", () => {
     const { rerender } = render(<VideoPlayer source={FIRST} />);
-    at(42.5, true);
-    vi.setSystemTime(Date.parse(FIRST.expiresAt) - LINK_EXPIRY_MARGIN_MS);
-    fireEvent.error(video());
+    watched(42.5, true);
+    clock += GOOD_FOR_MS;
+    fails();
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(LINK_EXPIRY_MARGIN_MS).toBe(30_000);
+    // Failing again while the new link is on its way asks for no other.
+    fails();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
 
     rerender(<VideoPlayer source={SECOND} />);
     expect(video().getAttribute("src")).toBe(SECOND.src);
@@ -100,35 +112,126 @@ describe("the delivered video's player", () => {
 
   it("resumes a paused video paused", () => {
     const { rerender } = render(<VideoPlayer source={FIRST} />);
-    at(10, false);
-    vi.setSystemTime(Date.parse(FIRST.expiresAt) + 1);
-    fireEvent.error(video());
+    watched(10, false);
+    clock += GOOD_FOR_MS + 1;
+    fails();
     rerender(<VideoPlayer source={SECOND} />);
     fireEvent.loadedMetadata(video());
     expect(video().currentTime).toBe(10);
     expect(play).not.toHaveBeenCalled();
   });
 
-  it("asks for a new link at most once per link, and says so when that one fails too", () => {
+  it("lets a browser that will not resume playing leave the video paused where it was", () => {
+    const refusal = Promise.reject(new DOMException("blocked", "NotAllowedError"));
+    const handled = vi.spyOn(refusal, "then");
+    play.mockReturnValue(refusal);
     const { rerender } = render(<VideoPlayer source={FIRST} />);
-    vi.setSystemTime(Date.parse(FIRST.expiresAt) + 1);
-    fireEvent.error(video());
-    fireEvent.error(video());
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
-
-    // The new link plays afresh, and is itself renewed once when it runs out.
+    watched(7, true);
+    clock += GOOD_FOR_MS;
+    fails();
     rerender(<VideoPlayer source={SECOND} />);
+    fireEvent.loadedMetadata(video());
+    // The refusal is handled, not left to fail the page.
+    expect(handled).toHaveBeenCalledWith(undefined, expect.any(Function));
+    expect(video().currentTime).toBe(7);
+    expect(play).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).toBeNull();
-    vi.setSystemTime(Date.parse(SECOND.expiresAt) + 1);
-    fireEvent.error(video());
-    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("plays nothing on its own when the page loads", () => {
+  it("measures a link on the page's own clock, so a browser whose date is wrong renews no sooner", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2030-01-01T00:00:00.000Z"));
     render(<VideoPlayer source={FIRST} />);
+    watched(3, true);
+    fails();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
+  });
+
+  it("renews the new link in its turn when it runs out", () => {
+    const { rerender } = render(<VideoPlayer source={FIRST} />);
+    watched(20, true);
+    clock += GOOD_FOR_MS;
+    fails();
+    rerender(<VideoPlayer source={SECOND} />);
+    clock += GOOD_FOR_MS;
+    fails();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    rerender(<VideoPlayer source={THIRD} />);
+    expect(video().getAttribute("src")).toBe(THIRD.src);
+  });
+
+  it("says it cannot be played when the new link fails while it is still good", () => {
+    const { rerender } = render(<VideoPlayer source={FIRST} />);
+    watched(20, true);
+    clock += GOOD_FOR_MS;
+    fails();
+    // A new link is measured from when it came, however long that took.
+    clock += 60_000;
+    rerender(<VideoPlayer source={SECOND} />);
+    clock += GOOD_FOR_MS - 1;
+    fails();
+    expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a link the page gives while the member watches until the one playing runs out", () => {
+    const { rerender } = render(<VideoPlayer source={FIRST} />);
+    watched(30, true);
+    clock += 60_000;
+    rerender(<VideoPlayer source={SECOND} />);
+    expect(video().getAttribute("src")).toBe(FIRST.src);
+    expect(video().currentTime).toBe(30);
+
+    clock += GOOD_FOR_MS - 60_000;
+    watched(95, true);
+    fails();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(video().getAttribute("src")).toBe(SECOND.src);
     fireEvent.loadedMetadata(video());
-    expect(play).not.toHaveBeenCalled();
-    expect(video().currentTime).toBe(0);
+    expect(video().currentTime).toBe(95);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a new link when the one waiting has run out too", () => {
+    const { rerender } = render(<VideoPlayer source={FIRST} />);
+    watched(30, true);
+    rerender(<VideoPlayer source={SECOND} />);
+    clock += GOOD_FOR_MS;
+    fails();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(video().getAttribute("src")).toBe(FIRST.src);
+    rerender(<VideoPlayer source={THIRD} />);
+    expect(video().getAttribute("src")).toBe(THIRD.src);
+  });
+
+  it("takes a new link at once before the video is played, and after it has failed", () => {
+    const { rerender } = render(<VideoPlayer source={FIRST} />);
+    rerender(<VideoPlayer source={SECOND} />);
+    expect(video().getAttribute("src")).toBe(SECOND.src);
+
+    watched(5, true);
+    fails();
+    expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
+    rerender(<VideoPlayer source={THIRD} />);
+    expect(video().getAttribute("src")).toBe(THIRD.src);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure the browser met before the page could listen for it", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "error");
+    Object.defineProperty(HTMLMediaElement.prototype, "error", {
+      configurable: true,
+      get: () => ({ code: 4 }),
+    });
+    try {
+      render(<VideoPlayer source={FIRST} />);
+      expect(screen.getByRole("alert").textContent).toBe(PLAYBACK_FAILED);
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      if (original) Object.defineProperty(HTMLMediaElement.prototype, "error", original);
+    }
   });
 });

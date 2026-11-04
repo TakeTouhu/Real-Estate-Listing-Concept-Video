@@ -81,7 +81,7 @@ describe("the project's video", () => {
     const src = "https://app.test/api/storage/download?token=t";
     const { container } = shown(
       { kind: "PROGRESS", progress: { ...FAILED_VIDEO, phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } } },
-      { src, expiresAt: "2026-11-04T09:05:00.000Z" },
+      { src, lifetimeSeconds: 300 },
     );
     const video = screen.getByLabelText("The delivered video");
     expect(screen.getByRole("region", { name: "Video" }).contains(video)).toBe(true);

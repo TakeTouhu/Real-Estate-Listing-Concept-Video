@@ -39,6 +39,9 @@ export function getVideoPreviewService(): VideoPreviewService {
  * whose video is anything else signs and audits nothing. The link service
  * reads the video again and may still answer none. Its failures are the
  * page's, as a photo link's are.
+ *
+ * How long the link has left is counted here, on the server's clock, as whole
+ * seconds; the player counts them down on its own.
  */
 export async function readVideoPreview(
   preview: Pick<VideoPreviewService, "link">,
@@ -46,8 +49,10 @@ export async function readVideoPreview(
   actorUserId: string,
   organizationId: string,
   videoProjectId: string,
+  now: () => number = Date.now,
 ): Promise<VideoPlayerSource | null> {
   if (!completed) return null;
   const link = await preview.link(actorUserId, organizationId, videoProjectId);
-  return link === null ? null : { src: link.url, expiresAt: link.expiresAt.toISOString() };
+  if (link === null) return null;
+  return { src: link.url, lifetimeSeconds: Math.max(0, Math.floor((link.expiresAt.getTime() - now()) / 1000)) };
 }

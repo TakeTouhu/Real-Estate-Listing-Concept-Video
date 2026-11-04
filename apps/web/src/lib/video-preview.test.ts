@@ -7,6 +7,8 @@ import { readVideoPreview } from "./video-preview";
  * completed, as the member, and handed to the player as plain data.
  */
 
+const NOW = Date.parse("2026-11-04T09:00:00.000Z");
+
 function preview(answer: { url: string; expiresAt: Date } | null | Error) {
   const calls: [string, string, string][] = [];
   return {
@@ -21,16 +23,30 @@ function preview(answer: { url: string; expiresAt: Date } | null | Error) {
 }
 
 describe("the project page's video link", () => {
-  it("asks for a link to a completed video as the member, and passes it on with when it runs out", async () => {
+  it("asks for a link to a completed video as the member, and passes it on with how long it has left", async () => {
     const { calls, service } = preview({
       url: "https://app.test/api/storage/download?token=t",
       expiresAt: new Date("2026-11-04T09:05:00.000Z"),
     });
-    expect(await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1")).toEqual({
+    expect(await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1", () => NOW)).toEqual({
       src: "https://app.test/api/storage/download?token=t",
-      expiresAt: "2026-11-04T09:05:00.000Z",
+      lifetimeSeconds: 300,
     });
     expect(calls).toEqual([["usr_1", "org_1", "vpr_1"]]);
+  });
+
+  it("counts whole seconds left on the server's clock, and none for a link already run out", async () => {
+    const { service } = preview({
+      url: "https://app.test/api/storage/download?token=t",
+      expiresAt: new Date("2026-11-04T09:05:00.000Z"),
+    });
+    const at = (iso: string) => () => Date.parse(iso);
+    expect(await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1", at("2026-11-04T09:00:00.999Z"))).toEqual({
+      src: "https://app.test/api/storage/download?token=t",
+      lifetimeSeconds: 299,
+    });
+    const late = await readVideoPreview(service, true, "usr_1", "org_1", "vpr_1", at("2026-11-04T09:05:01.000Z"));
+    expect(late?.lifetimeSeconds).toBe(0);
   });
 
   it("asks for none for a video that is not completed", async () => {

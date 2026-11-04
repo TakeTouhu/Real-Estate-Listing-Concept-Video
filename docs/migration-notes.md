@@ -2153,10 +2153,10 @@ progress as before.
 new route, permission or environment variable.
 
 **What changes at deploy.** The project page asks for a link to a project's
-video when its progress shows it completed, and plays it; each such page load
-writes one `video.preview_link_issued` audit entry. Where nothing can start a
-video, as in production (ADR-0111), no project has one and the page is
-unchanged.
+video when its progress shows it completed, and plays it; each such page load,
+and each renewal the player asks for, writes one `video.preview_link_issued`
+audit entry. Where nothing can start a video, as in production (ADR-0111), no
+project has one and the page is unchanged.
 
 **Rolling back.** To GS-12b-1's build: safe. The audit entries already written
 stay; nothing else is written.

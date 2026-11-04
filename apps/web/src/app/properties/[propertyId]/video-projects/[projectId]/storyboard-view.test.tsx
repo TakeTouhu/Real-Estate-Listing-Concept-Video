@@ -294,7 +294,7 @@ describe("the project's video", () => {
   });
 
   it("hands the delivered video's link to the panel's player", () => {
-    const player = { src: "https://app.test/api/storage/download?token=t", expiresAt: "2026-11-04T09:05:00.000Z" };
+    const player = { src: "https://app.test/api/storage/download?token=t", lifetimeSeconds: 300 };
     view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS, player });
     expect(screen.getByLabelText("The delivered video").getAttribute("src")).toBe(player.src);
   });

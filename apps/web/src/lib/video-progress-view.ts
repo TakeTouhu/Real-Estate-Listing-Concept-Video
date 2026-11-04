@@ -22,12 +22,13 @@ export function isCompletedVideo(read: VideoProgressRead): boolean {
 }
 
 /**
- * What the player plays: a signed link to the delivered video and when it runs
- * out, as an ISO 8601 instant, so it passes to a Client Component as it is.
+ * What the player plays: a signed link to the delivered video, and how many
+ * seconds it had left when the page was rendered, by the server's clock. The
+ * player counts them down on its own clock, never comparing the two (ADR-0117).
  */
 export interface VideoPlayerSource {
   readonly src: string;
-  readonly expiresAt: string;
+  readonly lifetimeSeconds: number;
 }
 
 /** UXFlow's normalized states, as the page names them. */
