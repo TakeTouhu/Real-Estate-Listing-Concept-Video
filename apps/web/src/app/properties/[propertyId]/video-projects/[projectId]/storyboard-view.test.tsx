@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoProjectDto } from "@/lib/storyboard";
-import { videoProgressPanel, type VideoProgressPanel } from "@/lib/video-progress-view";
+import { videoProgressPanel, type VideoPlayerSource, type VideoProgressPanel } from "@/lib/video-progress-view";
 import { StoryboardView, type SceneRow } from "./storyboard-view";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -58,6 +58,7 @@ function view(
     startHref?: string | null;
     started?: boolean;
     progress?: VideoProgressPanel | null;
+    player?: VideoPlayerSource | null;
   } = {},
 ) {
   return render(
@@ -72,6 +73,7 @@ function view(
       startHref={overrides.startHref ?? null}
       started={overrides.started ?? false}
       progress={overrides.progress ?? null}
+      player={overrides.player ?? null}
     />,
   );
 }
@@ -289,6 +291,12 @@ describe("the project's video", () => {
     expect(screen.getByRole("heading", { name: "Video" })).toBeTruthy();
     expect(text.indexOf("The start was confirmed")).toBeLessThan(text.indexOf("Support reference"));
     expect(text.indexOf("Support reference")).toBeLessThan(text.indexOf("Project settings"));
+  });
+
+  it("hands the delivered video's link to the panel's player", () => {
+    const player = { src: "https://app.test/api/storage/download?token=t", expiresAt: "2026-11-04T09:05:00.000Z" };
+    view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS, player });
+    expect(screen.getByLabelText("The delivered video").getAttribute("src")).toBe(player.src);
   });
 
   it("shows nothing about a video for a project that has none", () => {

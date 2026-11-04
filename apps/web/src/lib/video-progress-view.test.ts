@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { VideoProgress } from "@app/domain";
-import { NOT_DELIVERED_MESSAGE, PHASE_NAMES, unitsOf, videoProgressPanel } from "./video-progress-view";
+import {
+  isCompletedVideo,
+  NOT_DELIVERED_MESSAGE,
+  PHASE_NAMES,
+  unitsOf,
+  videoProgressPanel,
+} from "./video-progress-view";
 
 /**
  * How the project page words its video (GS-11b, ADR-0114): each phase in
@@ -158,5 +164,15 @@ describe("what was read", () => {
       reload: null,
       supportReference: "gjob_9",
     });
+  });
+});
+
+describe("which video has a player (ADR-0117)", () => {
+  it("is only a video its progress shows completed", () => {
+    for (const phase of Object.keys(PHASE_NAMES) as (keyof typeof PHASE_NAMES)[]) {
+      expect(isCompletedVideo({ kind: "PROGRESS", progress: progress({ phase }) })).toBe(phase === "COMPLETED");
+    }
+    expect(isCompletedVideo({ kind: "NONE" })).toBe(false);
+    expect(isCompletedVideo({ kind: "UNREADABLE", supportReference: "gjob_9" })).toBe(false);
   });
 });

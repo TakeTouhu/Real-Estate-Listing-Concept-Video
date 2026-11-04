@@ -537,6 +537,15 @@ it is given. The signed route still checks the token alone. GS-12b is split in
 two: this, and the player on the project page (GS-12b-2). Nothing outside
 tests constructs the link yet.
 
+**GS-12b-2 — the delivered video on the project page** (ADR-0117, no
+migration): the project page's "Video" panel plays a delivered video with the
+browser's own controls, from a link it asks for only when the progress shows
+the video completed. Nothing plays until the member presses play, and the
+controls offer no download. A link that runs out while the video is open is
+renewed once, and the video goes back to where it was. Each page load that
+shows a delivered video audits one link. GS-12b is complete; the download
+(GS-12c) follows.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

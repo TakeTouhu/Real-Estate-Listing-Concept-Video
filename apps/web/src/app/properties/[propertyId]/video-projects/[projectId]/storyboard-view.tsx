@@ -1,5 +1,5 @@
 import { cameraMotionDisplay, type VideoProjectDto } from "@/lib/storyboard";
-import type { VideoProgressPanel as ProgressPanel } from "@/lib/video-progress-view";
+import type { VideoPlayerSource, VideoProgressPanel as ProgressPanel } from "@/lib/video-progress-view";
 import { ComposePanel } from "./compose-panel";
 import { VideoProgressPanel } from "./video-progress-panel";
 
@@ -61,6 +61,8 @@ interface Props {
   readonly started: boolean;
   /** The project's video as it was read, or `null` when it has none (ADR-0114). */
   readonly progress: ProgressPanel | null;
+  /** The delivered video's link, or `null` when it has none to play (ADR-0117). */
+  readonly player: VideoPlayerSource | null;
 }
 
 type Freshness = "NEVER_COMPOSED" | "FRESH" | "STALE";
@@ -91,6 +93,7 @@ export function StoryboardView({
   startHref,
   started,
   progress,
+  player,
 }: Props) {
   const freshness = freshnessOf(scenes, fresh);
   // The DTO carries the token, because that is the API contract. The label is a
@@ -106,7 +109,7 @@ export function StoryboardView({
         </p>
       ) : null}
 
-      {progress !== null ? <VideoProgressPanel panel={progress} /> : null}
+      {progress !== null ? <VideoProgressPanel panel={progress} player={player} /> : null}
 
       <div className="card">
         <h2>Project settings</h2>

@@ -53,6 +53,15 @@ h1 {
   margin: 1rem 0;
 }
 
+.video-player {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0.75rem 0;
+  background: #000;
+  border-radius: 6px;
+}
+
 .status-ok {
   color: var(--ok);
   font-weight: 600;

@@ -16,6 +16,20 @@ export type VideoProgressRead =
   /** The read refused to describe it (ADR-0113 Decision 4); its id is still quoted to support. */
   | { readonly kind: "UNREADABLE"; readonly supportReference: string };
 
+/** Whether what was read is a video its progress shows as delivered: the only one with a player (ADR-0117). */
+export function isCompletedVideo(read: VideoProgressRead): boolean {
+  return read.kind === "PROGRESS" && read.progress.phase === "COMPLETED";
+}
+
+/**
+ * What the player plays: a signed link to the delivered video and when it runs
+ * out, as an ISO 8601 instant, so it passes to a Client Component as it is.
+ */
+export interface VideoPlayerSource {
+  readonly src: string;
+  readonly expiresAt: string;
+}
+
 /** UXFlow's normalized states, as the page names them. */
 export const PHASE_NAMES: Record<VideoProgressPhase, string> = {
   QUEUED: "Queued",

@@ -1272,6 +1272,15 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       Another answer changes `holdsItsProject` (ADR-0110 Decision 1); after
       delivery also needs the new video's price.
 
+## Found in GS-12b-2 — the browser test cannot decode the delivered video
+
+- [ ] **Decide how GS-13 proves the delivered video plays.** Playwright's
+      bundled Chromium has no H.264 decoder (`canPlayType` answers nothing for
+      `avc1`), so it cannot play the delivered video (ADR-0117 Decision 4).
+      Either the test proves the player's link serves the video (`206`,
+      `video/mp4`) without decoding it, or CI installs a browser that decodes
+      H.264. Decided with GS-13's gap analysis.
+
 ## Open in GS-11a — how a new version of a delivered video shows its progress
 
 - [ ] **Decide what the customer sees while a new version of a delivered video
