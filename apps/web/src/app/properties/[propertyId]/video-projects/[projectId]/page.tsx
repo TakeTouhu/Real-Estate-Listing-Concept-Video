@@ -10,8 +10,9 @@ import { humanizeRoomType } from "@/lib/review-view";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
 import { resolveStoryboardForProperty } from "@/lib/storyboard-route";
 import { thumbnailUrls } from "@/lib/thumbnails";
+import { getVideoPreviewService, readVideoPreview } from "@/lib/video-preview";
 import { getVideoProgressLogger, getVideoProgressService, readVideoProgress } from "@/lib/video-progress";
-import { videoProgressPanel } from "@/lib/video-progress-view";
+import { isCompletedVideo, videoProgressPanel } from "@/lib/video-progress-view";
 import { StoryboardView, type SceneRow } from "./storyboard-view";
 
 export const dynamic = "force-dynamic";
@@ -74,14 +75,21 @@ export default async function StoryboardPage({
     );
     const thumbnails = await thumbnailUrls(current.user.id, organization.id, assets);
     // The project's newest video, read as the storyboard is (ADR-0113, ADR-0114).
-    const progress = videoProgressPanel(
-      await readVideoProgress(
-        getVideoProgressService(),
-        getVideoProgressLogger(),
-        current.user.id,
-        organization.id,
-        view.project.id,
-      ),
+    const video = await readVideoProgress(
+      getVideoProgressService(),
+      getVideoProgressLogger(),
+      current.user.id,
+      organization.id,
+      view.project.id,
+    );
+    const progress = videoProgressPanel(video);
+    // A link to play it, for a video its progress shows delivered (ADR-0117).
+    const player = await readVideoPreview(
+      getVideoPreviewService(),
+      isCompletedVideo(video),
+      current.user.id,
+      organization.id,
+      view.project.id,
     );
     const filenames = new Map(assets.map((asset) => [asset.id, asset.originalFilename]));
 
@@ -124,6 +132,7 @@ export default async function StoryboardPage({
           canCompose={permissions.includes("video.generate")}
           {...startOnProjectPage(startBuilt, permissions, property.id, view.project.id, started)}
           progress={progress}
+          player={player}
         />
       </section>
     );

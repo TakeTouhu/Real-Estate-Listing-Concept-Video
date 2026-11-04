@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoProgress } from "@app/domain";
-import { NOT_DELIVERED_MESSAGE, videoProgressPanel, type VideoProgressRead } from "@/lib/video-progress-view";
+import {
+  NOT_DELIVERED_MESSAGE,
+  videoProgressPanel,
+  type VideoPlayerSource,
+  type VideoProgressRead,
+} from "@/lib/video-progress-view";
 import { VideoProgressPanel } from "./video-progress-panel";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 /**
  * The project's video on the project page (GS-11b, ADR-0114): each line the
@@ -13,10 +20,10 @@ import { VideoProgressPanel } from "./video-progress-panel";
 
 afterEach(cleanup);
 
-function shown(read: VideoProgressRead) {
+function shown(read: VideoProgressRead, player: VideoPlayerSource | null = null) {
   const panel = videoProgressPanel(read);
   if (panel === null) throw new Error("no panel");
-  return render(<VideoProgressPanel panel={panel} />);
+  return render(<VideoProgressPanel panel={panel} player={player} />);
 }
 
 const FAILED_VIDEO: VideoProgress = {
@@ -68,6 +75,26 @@ describe("the project's video", () => {
     });
     expect(screen.getByRole("region", { name: "Video" }).className).toBe("card status-ok");
     expect(screen.getByText("It used 2 HQ Units.")).toBeTruthy();
+  });
+
+  it("plays a delivered video in the panel from its link, under its status (ADR-0117)", () => {
+    const src = "https://app.test/api/storage/download?token=t";
+    const { container } = shown(
+      { kind: "PROGRESS", progress: { ...FAILED_VIDEO, phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } } },
+      { src, lifetimeSeconds: 300 },
+    );
+    const video = screen.getByLabelText("The delivered video");
+    expect(screen.getByRole("region", { name: "Video" }).contains(video)).toBe(true);
+    expect(video.getAttribute("src")).toBe(src);
+    // Right under its status, before what became of its Units.
+    expect(video.previousElementSibling?.textContent).toContain("Completed");
+    expect(video.nextElementSibling?.textContent).toBe("It used 2 HQ Units.");
+    expect(container.querySelectorAll("video")).toHaveLength(1);
+  });
+
+  it("shows no player without a link", () => {
+    const { container } = shown(FAILED);
+    expect(container.querySelector("video")).toBeNull();
   });
 
   it("shows a video it could not read with that alone, and its reference", () => {

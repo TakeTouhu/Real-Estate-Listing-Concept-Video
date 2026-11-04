@@ -11,7 +11,7 @@ import { readNewestVideo, videoProgressOf, type VideoProgressServiceDeps } from 
 
 /**
  * How long a link to watch a video lives: as long as a photo's (ADR-0116
- * Decision 2). The project page is to renew one that has run out (GS-12b-2).
+ * Decision 2). The project page renews one that has run out (ADR-0117).
  */
 export const VIDEO_PREVIEW_LINK_TTL_SECONDS = 300;
 
