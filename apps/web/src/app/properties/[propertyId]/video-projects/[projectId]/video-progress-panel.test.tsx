@@ -30,16 +30,19 @@ const FAILED_VIDEO: VideoProgress = {
 const FAILED: VideoProgressRead = { kind: "PROGRESS", progress: FAILED_VIDEO };
 
 describe("the project's video", () => {
-  it("shows a failed video with ADR-0052's message in Japanese, its Units, the start again and its reference", () => {
+  it("shows a failed video with ADR-0052's message in Japanese, its Units, a new start and its reference", () => {
     const { container } = shown(FAILED);
-    const box = screen.getByRole("status");
+    const box = screen.getByRole("region", { name: "Video" });
+    expect(box.tagName).toBe("SECTION");
     expect(box.className).toBe("card status-bad");
+    // Read when the page loads: nothing announces it as live.
+    expect(container.querySelector("[role=status], [aria-live]")).toBeNull();
     expect(screen.getByRole("heading", { name: "Video" })).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.getByText(/HQ · 45 seconds/)).toBeTruthy();
     expect(screen.getByText(NOT_DELIVERED_MESSAGE).getAttribute("lang")).toBe("ja");
     expect(screen.getByText("The 2 HQ Units reserved for it came back; none was used.")).toBeTruthy();
-    expect(screen.getByText("This project can be started again.")).toBeTruthy();
+    expect(screen.getByText("A new video can be started for this project.")).toBeTruthy();
     expect(screen.getByText("gjob_failed").tagName).toBe("CODE");
     // No control on it: nothing here retries the failed video.
     expect(container.querySelectorAll("a, button, form")).toHaveLength(0);
@@ -50,12 +53,12 @@ describe("the project's video", () => {
       kind: "PROGRESS",
       progress: { ...FAILED_VIDEO, phase: "COMPOSING", units: { count: 2, state: "RESERVED" } },
     });
-    expect(screen.getByRole("status").className).toBe("card");
+    expect(screen.getByRole("region", { name: "Video" }).className).toBe("card");
     expect(screen.getByText("Composing")).toBeTruthy();
     expect(screen.getByText("1 of 3 scenes made")).toBeTruthy();
     expect(screen.getByText(/reload the page/)).toBeTruthy();
     expect(screen.queryByText(NOT_DELIVERED_MESSAGE)).toBeNull();
-    expect(screen.queryByText(/can be started again/)).toBeNull();
+    expect(screen.queryByText(/can be started/)).toBeNull();
   });
 
   it("shows a delivered video as completed", () => {
@@ -63,7 +66,7 @@ describe("the project's video", () => {
       kind: "PROGRESS",
       progress: { ...FAILED_VIDEO, phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } },
     });
-    expect(screen.getByRole("status").className).toBe("card status-ok");
+    expect(screen.getByRole("region", { name: "Video" }).className).toBe("card status-ok");
     expect(screen.getByText("It used 2 HQ Units.")).toBeTruthy();
   });
 

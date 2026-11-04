@@ -137,16 +137,17 @@ export function videoProgressUnitsOf(state: GenerationReservationState | null): 
  * The customer's view of one video.
  *
  * @throws AppError INTERNAL_ERROR for a video whose Units contradict ADR-0052
- *   (Decision 19 and the Unit rule): one that ended without a video but used
- *   them, or a delivered one whose Units are still held or came back. The
- *   customer would be told something false either way, so it is surfaced
- *   rather than described, in words that claim nothing about it.
+ *   (Decision 19 and the Unit rule): one not delivered whose Units were used
+ *   (only the commit that delivers a video uses them, ADR-0114 Decision 4),
+ *   or a delivered one whose Units are still held or came back. The customer
+ *   would be told something false either way, so it is surfaced rather than
+ *   described, in words that claim nothing about it.
  */
 export function videoProgressOf(record: VideoProgressRecord): VideoProgress {
   const phase = videoProgressPhaseOf(record.jobState, record.delivered);
   const units = videoProgressUnitsOf(record.reservationState);
-  const ended = phase === "FAILED" || phase === "CANCELLED";
-  if ((ended && units === "CONSUMED") || (phase === "COMPLETED" && (units === "RESERVED" || units === "RELEASED"))) {
+  const delivered = phase === "COMPLETED";
+  if ((!delivered && units === "CONSUMED") || (delivered && (units === "RESERVED" || units === "RELEASED"))) {
     throw new AppError("INTERNAL_ERROR", "This video's progress could not be read", {
       details: { jobId: record.jobId },
     });

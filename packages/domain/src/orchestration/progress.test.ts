@@ -142,6 +142,9 @@ describe("a video's progress", () => {
     for (const contradiction of [
       { jobState: "FAILED_TERMINAL", reservationState: "CONSUMED" },
       { jobState: "CANCELLED", reservationState: "CONSUMED" },
+      { jobState: "CREATED", reservationState: "CONSUMED" },
+      { jobState: "GENERATING", reservationState: "CONSUMED" },
+      { jobState: "DELIVERABLE_VALIDATING", reservationState: "CONSUMED" },
       { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RESERVED" },
       { jobState: "DELIVERABLE_READY", delivered: true, reservationState: "RELEASED" },
       { jobState: "GENERATING", delivered: true, reservationState: "RECONCILIATION_HOLD" },

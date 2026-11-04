@@ -45,9 +45,9 @@ export interface VideoProgressPanel {
   readonly units: string | null;
   /** ADR-0052's message, for a video that ended without one. */
   readonly notDelivered: string | null;
-  /** Whether the project can be started again, for a video that ended without one. */
+  /** Whether a new video can be started for the project, for a video that ended without one. */
   readonly startAgain: string | null;
-  /** That the page shows the progress as it was read. */
+  /** That the page shows the progress as of when it was read. */
   readonly reload: string | null;
   readonly supportReference: string;
 }
@@ -92,14 +92,15 @@ function panelOf(progress: VideoProgress): VideoProgressPanel {
     scenes: inProgress ? `${scenes.ready} of ${scenes.total} scenes made` : null,
     units: unitsSentence(progress),
     notDelivered: ended ? NOT_DELIVERED_MESSAGE : null,
-    // A project is started again once its video ended without one and its
-    // Units came back (ADR-0110).
+    // A new video of the project can start once this one ended without one
+    // and its Units came back (ADR-0110). Whether this member may start it is
+    // the start's to say (ADR-0112).
     startAgain: !ended
       ? null
       : units.state === "RESERVED"
-        ? "This project can be started again once its Units have come back."
-        : "This project can be started again.",
-    reload: inProgress ? "This is its progress when the page was loaded; reload the page to see it now." : null,
+        ? "A new video can be started for this project once its Units have come back."
+        : "A new video can be started for this project.",
+    reload: inProgress ? "This is its progress as of when the page was loaded; reload the page to see it now." : null,
     supportReference: progress.supportReference,
   };
 }
@@ -107,18 +108,19 @@ function panelOf(progress: VideoProgress): VideoProgressPanel {
 /** What became of its Units, in words that never contradict ADR-0052. */
 function unitsSentence({ phase, units, qualityTier }: VideoProgress): string {
   const reserved = unitsOf(units.count, qualityTier);
+  const one = units.count === 1;
+  const unused = one ? "it was not used" : "none was used";
   switch (units.state) {
     case "NONE":
       return "It reserved no Units.";
     case "CONSUMED":
       return `It used ${reserved}.`;
     case "RELEASED":
-      return `The ${reserved} reserved for it came back; none was used.`;
+      return `The ${reserved} reserved for it came back; ${unused}.`;
     case "RESERVED":
       return phase === "FAILED" || phase === "CANCELLED"
-        ? `The ${reserved} reserved for it ${units.count === 1 ? "is" : "are"} still held, and come${
-            units.count === 1 ? "s" : ""
-          } back once settled; none was used.`
-        : `${reserved} reserved for it, used only if it is delivered.`;
+        ? `The ${reserved} reserved for it ${one ? "is" : "are"} still held, and come${one ? "s" : ""} back once ` +
+            `settled; ${unused}.`
+        : `${reserved} ${one ? "is" : "are"} reserved for it, and used only if it is delivered.`;
   }
 }

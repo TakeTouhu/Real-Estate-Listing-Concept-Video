@@ -2110,6 +2110,8 @@ new route or environment variable.
 
 **What changes at deploy.** The project page reads its project's newest video.
 Where nothing can start a video, as in production, no project has one and the
-page shows nothing new.
+page shows nothing new. A video not delivered whose Units were used is shown as
+unreadable and logged as an error (`component: "video-progress"`), with its
+id, organization and project.
 
 **Rolling back.** To GS-11a's build: safe. The page writes nothing.

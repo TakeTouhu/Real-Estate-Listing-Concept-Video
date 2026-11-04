@@ -16,6 +16,8 @@ const state = vi.hoisted(() => ({
   organizations: [] as { id: string; properties: string[] }[],
   /** What the progress read answers, or throws. */
   progress: null as unknown,
+  /** What the page reported as an error. */
+  errors: [] as [string, unknown][],
 }));
 
 vi.mock("next/navigation", () => ({
@@ -72,6 +74,9 @@ vi.mock("@/lib/video-progress", async (actual) => ({
       return state.progress instanceof Error ? Promise.reject(state.progress) : Promise.resolve(state.progress);
     },
   }),
+  getVideoProgressLogger: () => ({
+    error: (message: string, fields?: unknown) => void state.errors.push([message, fields]),
+  }),
 }));
 
 function project(id: string) {
@@ -118,6 +123,7 @@ beforeEach(() => {
     { id: "org_2", properties: ["prp_1"] },
   ];
   state.progress = FAILED;
+  state.errors = [];
 });
 
 afterEach(cleanup);
@@ -137,6 +143,7 @@ describe("the project page's video", () => {
     expect(text).toContain("Video");
     expect(text).toContain("動画を正常に生成できませんでした。");
     expect(text).toContain("Support reference: gjob_1");
+    expect(state.errors).toEqual([]);
   });
 
   it("shows nothing about a video for a project that has none", async () => {
@@ -144,13 +151,19 @@ describe("the project page's video", () => {
     expect(await page()).not.toContain("Support reference");
   });
 
-  it("shows a video the read will not describe as unreadable, with its reference", async () => {
+  it("shows a video the read will not describe as unreadable, with its reference, and reports it", async () => {
     state.progress = new AppError("INTERNAL_ERROR", "This video's progress could not be read", {
       details: { jobId: "gjob_9" },
     });
     const text = await page();
     expect(text).toContain("This video's progress could not be read.");
     expect(text).toContain("Support reference: gjob_9");
+    expect(state.errors).toEqual([
+      [
+        "A video's Units contradict whether it was delivered",
+        { jobId: "gjob_9", organizationId: "org_2", videoProjectId: "vpr_1" },
+      ],
+    ]);
   });
 
   it("lets any other failure of the read through", async () => {

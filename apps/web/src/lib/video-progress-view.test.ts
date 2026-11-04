@@ -5,8 +5,8 @@ import { NOT_DELIVERED_MESSAGE, PHASE_NAMES, unitsOf, videoProgressPanel } from 
 /**
  * How the project page words its video (GS-11b, ADR-0114): each phase in
  * UXFlow's words, the Units in words that never contradict ADR-0052, and for a
- * video that ended without one ADR-0052's own message, whether the project can
- * be started again and the reference to quote to support.
+ * video that ended without one ADR-0052's own message, whether a new video can
+ * be started for the project and the reference to quote to support.
  */
 
 function progress(overrides: Partial<VideoProgress> = {}): VideoProgress {
@@ -54,10 +54,10 @@ describe("a video being made", () => {
       tone: "neutral",
       summary: "HQ · 45 seconds",
       scenes: "1 of 3 scenes made",
-      units: "2 HQ Units reserved for it, used only if it is delivered.",
+      units: "2 HQ Units are reserved for it, and used only if it is delivered.",
       notDelivered: null,
       startAgain: null,
-      reload: "This is its progress when the page was loaded; reload the page to see it now.",
+      reload: "This is its progress as of when the page was loaded; reload the page to see it now.",
       supportReference: "gjob_1",
     });
   });
@@ -75,9 +75,15 @@ describe("a video being made", () => {
   it("says a Normal video's quality, and Units that came back or were never reserved", () => {
     expect(panel({ qualityTier: "NORMAL", units: { count: 1, state: "RELEASED" } })).toMatchObject({
       summary: "Normal · 45 seconds",
-      units: "The 1 Normal Unit reserved for it came back; none was used.",
+      units: "The 1 Normal Unit reserved for it came back; it was not used.",
     });
     expect(panel({ units: { count: 2, state: "NONE" } })?.units).toBe("It reserved no Units.");
+    expect(panel({ units: { count: 2, state: "RELEASED" } })?.units).toBe(
+      "The 2 HQ Units reserved for it came back; none was used.",
+    );
+    expect(panel({ units: { count: 1, state: "RESERVED" } })?.units).toBe(
+      "1 HQ Unit is reserved for it, and used only if it is delivered.",
+    );
   });
 });
 
@@ -98,7 +104,7 @@ describe("a delivered video", () => {
 });
 
 describe("a video that ended without one", () => {
-  it("shows ADR-0052's message, that its Units came back, and that the project can be started again", () => {
+  it("shows ADR-0052's message, that its Units came back, and that a new video can be started", () => {
     expect(panel({ phase: "FAILED", units: { count: 2, state: "RELEASED" } })).toEqual({
       status: "Failed",
       tone: "bad",
@@ -106,7 +112,7 @@ describe("a video that ended without one", () => {
       scenes: null,
       units: "The 2 HQ Units reserved for it came back; none was used.",
       notDelivered: NOT_DELIVERED_MESSAGE,
-      startAgain: "This project can be started again.",
+      startAgain: "A new video can be started for this project.",
       reload: null,
       supportReference: "gjob_1",
     });
@@ -119,7 +125,7 @@ describe("a video that ended without one", () => {
         tone: "bad",
         units: "It reserved no Units.",
         notDelivered: NOT_DELIVERED_MESSAGE,
-        startAgain: "This project can be started again.",
+        startAgain: "A new video can be started for this project.",
       });
     }
   });
@@ -127,10 +133,10 @@ describe("a video that ended without one", () => {
   it("says Units still held are not used, and the project waits for them (ADR-0110)", () => {
     expect(panel({ phase: "FAILED", units: { count: 2, state: "RESERVED" } })).toMatchObject({
       units: "The 2 HQ Units reserved for it are still held, and come back once settled; none was used.",
-      startAgain: "This project can be started again once its Units have come back.",
+      startAgain: "A new video can be started for this project once its Units have come back.",
     });
     expect(panel({ phase: "CANCELLED", units: { count: 1, state: "RESERVED" } })?.units).toBe(
-      "The 1 HQ Unit reserved for it is still held, and comes back once settled; none was used.",
+      "The 1 HQ Unit reserved for it is still held, and comes back once settled; it was not used.",
     );
   });
 });

@@ -377,4 +377,4 @@ GS-11 is split into two milestones, each its own pull request:
   Units, its scenes and its id as the support reference, in one snapshot.
 - **GS-11b** (ADR-0114, no migration): the project page shows it, with
   ADR-0052's message for a video that ended without one, whether its Units
-  came back, whether it can be started again, and its support reference.
+  came back, whether a new video can be started, and its support reference.
