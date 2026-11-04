@@ -22,7 +22,7 @@ import { AppError } from "@app/shared";
 interface ProgressRow {
   readonly jobId: string;
   readonly jobState: string;
-  readonly delivered: boolean;
+  readonly deliveredVersionId: string | null;
   readonly qualityTier: string;
   readonly durationSeconds: number;
   readonly requiredUnits: number;
@@ -43,7 +43,7 @@ export function createVideoProgressRepository(prisma: PrismaClient): VideoProgre
       const rows = await prisma.$queryRaw<ProgressRow[]>`
         SELECT j."id"                         AS "jobId",
                j."state"::text                AS "jobState",
-               j."currentDeliverableVersionId" IS NOT NULL AS "delivered",
+               j."currentDeliverableVersionId" AS "deliveredVersionId",
                j."qualityTier"::text          AS "qualityTier",
                j."requestedDurationSeconds"   AS "durationSeconds",
                j."requiredVideoUnits"         AS "requiredUnits",
@@ -68,7 +68,7 @@ export function createVideoProgressRepository(prisma: PrismaClient): VideoProgre
       return {
         jobId: row.jobId,
         jobState: member(GENERATION_JOB_STATES, row.jobState),
-        delivered: row.delivered,
+        deliveredVersionId: row.deliveredVersionId,
         qualityTier: member(GENERATION_QUALITY_TIERS, row.qualityTier),
         durationSeconds: row.durationSeconds,
         requiredUnits: row.requiredUnits,

@@ -44,10 +44,13 @@ export interface VideoProgressRecord {
   readonly jobId: string;
   readonly jobState: GenerationJobState;
   /**
-   * Whether the job has delivered a video. It keeps it while a new version is
-   * made: a revision moves the job back through generating without dropping it.
+   * The job's current delivered version, or `null` when it has delivered none.
+   * It keeps it while a new version is made: a revision moves the job back
+   * through generating without dropping it. Only the commit that delivers a
+   * version sets it (Transaction G), so it names a valid, published video
+   * (GS-12b, ADR-0116).
    */
-  readonly delivered: boolean;
+  readonly deliveredVersionId: string | null;
   readonly qualityTier: GenerationQualityTier;
   readonly durationSeconds: number;
   /** The Units the video needs, frozen when it started. */
@@ -144,7 +147,7 @@ export function videoProgressUnitsOf(state: GenerationReservationState | null): 
  *   described, in words that claim nothing about it.
  */
 export function videoProgressOf(record: VideoProgressRecord): VideoProgress {
-  const phase = videoProgressPhaseOf(record.jobState, record.delivered);
+  const phase = videoProgressPhaseOf(record.jobState, record.deliveredVersionId !== null);
   const units = videoProgressUnitsOf(record.reservationState);
   const delivered = phase === "COMPLETED";
   if ((!delivered && units === "CONSUMED") || (delivered && (units === "RESERVED" || units === "RELEASED"))) {
@@ -170,28 +173,42 @@ export interface VideoProgressServiceDeps {
   readonly progress: VideoProgressRepository;
 }
 
+/**
+ * The project's newest video as the database holds it, or `null` when none was
+ * started, for a reader of the storyboard: `video.view`, and the project's
+ * Property in reach. How the progress and the preview (ADR-0116) both read it.
+ *
+ * @throws AppError FORBIDDEN when the member lacks `video.view`.
+ * @throws AppError NOT_FOUND when the project is not this organization's or
+ *   its Property is out of the member's reach: answered alike, before
+ *   anything about its video is read.
+ */
+export async function readNewestVideo(
+  deps: VideoProgressServiceDeps,
+  actorUserId: string,
+  organizationId: string,
+  videoProjectId: string,
+): Promise<VideoProgressRecord | null> {
+  const actor = await authorizeOrganization(deps.identity, actorUserId, organizationId, "video.view");
+  const project = await deps.projects.findById(organizationId, videoProjectId);
+  if (
+    project === null ||
+    (await findReachableProperty(deps.identity, deps.properties, actor, project.propertyId)) === null
+  ) {
+    throw new AppError("NOT_FOUND", "Video project not found");
+  }
+  return deps.progress.findLatest(organizationId, project.id);
+}
+
 export class VideoProgressService {
   constructor(private readonly deps: VideoProgressServiceDeps) {}
 
   /**
-   * The project's newest video, or `null` when none was started. Its readers
-   * are the storyboard's: `video.view`, and the project's Property in reach.
-   *
-   * @throws AppError FORBIDDEN when the member lacks `video.view`.
-   * @throws AppError NOT_FOUND when the project is not this organization's or
-   *   its Property is out of the member's reach: answered alike, before
-   *   anything about its video is read.
+   * The project's newest video, or `null` when none was started, for a reader
+   * of the storyboard ({@link readNewestVideo}, whose refusals it throws).
    */
   async progress(actorUserId: string, organizationId: string, videoProjectId: string): Promise<VideoProgress | null> {
-    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "video.view");
-    const project = await this.deps.projects.findById(organizationId, videoProjectId);
-    if (
-      project === null ||
-      (await findReachableProperty(this.deps.identity, this.deps.properties, actor, project.propertyId)) === null
-    ) {
-      throw new AppError("NOT_FOUND", "Video project not found");
-    }
-    const record = await this.deps.progress.findLatest(organizationId, project.id);
+    const record = await readNewestVideo(this.deps, actorUserId, organizationId, videoProjectId);
     return record === null ? null : videoProgressOf(record);
   }
 }

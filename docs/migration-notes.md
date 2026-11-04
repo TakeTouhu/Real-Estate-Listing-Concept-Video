@@ -2133,3 +2133,16 @@ signed one.
 
 **Rolling back.** To GS-11b's build: safe. Nothing is written, and no link a
 customer holds names a video.
+
+## GS-12b-1 — a link to watch a project's delivered video
+
+**No migration** (ADR-0116). No schema, enum, constraint or row changes, and no
+new route, permission or environment variable. The progress read selects the
+job's `currentDeliverableVersionId` itself instead of whether it is set.
+
+**What changes at deploy.** Nothing a customer reaches: no page or route
+constructs the link service yet, so no link to a video is given and no
+`video.preview_link_issued` entry is written. The project page reads the same
+progress as before.
+
+**Rolling back.** To GS-12a's build: safe. Nothing is written.

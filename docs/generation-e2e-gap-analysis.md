@@ -413,6 +413,13 @@ GS-12 is split into three milestones, each its own pull request:
   customer's video as `video/mp4`; and no signed URL names a scene video.
   Nothing a customer reaches signs a video yet.
 - **GS-12b**: the delivered video's read and a player on the project page,
-  for a member holding `video.view`, through a short-lived signed link.
+  for a member holding `video.view`, through a short-lived signed link. Split
+  in two on `8360158`, each its own pull request:
+  - **GS-12b-1** (ADR-0116, no migration): the link. The progress record names
+    the delivered version; a reader of the progress is given a 300-second
+    link to it while its progress shows it completed, audited each time.
+    Nothing outside tests constructs it.
+  - **GS-12b-2**: a player on the project page that plays it and renews a
+    link that has run out.
 - **GS-12c**: the download, for a member holding `video.download`, audited,
   through a short-lived signed link served as an attachment.

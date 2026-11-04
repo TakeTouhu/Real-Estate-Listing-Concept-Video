@@ -110,10 +110,11 @@ async function seedJob(id: string, job: SeededJob): Promise<void> {
   }
 }
 
-/** Points the job at a delivered version of its own, as delivering it does. */
-async function deliver(id: string): Promise<void> {
+/** Points the job at a delivered version of its own, as delivering it does; that version. */
+async function deliver(id: string): Promise<string> {
   const versionId = await seedPriorDeliverable(prisma, id, id.replace(/^gjob_/, ""));
   await prisma.generationJob.update({ where: { id }, data: { currentDeliverableVersionId: versionId } });
+  return versionId;
 }
 
 describe.skipIf(!HAS_DB)("a project's newest video", () => {
@@ -150,7 +151,7 @@ describe.skipIf(!HAS_DB)("a project's newest video", () => {
     expect(await progress.findLatest(ORG_A, PROJECT_A)).toEqual({
       jobId: "gjob_vp_new",
       jobState: "GENERATING",
-      delivered: false,
+      deliveredVersionId: null,
       qualityTier: "HIGH_QUALITY",
       durationSeconds: 45,
       requiredUnits: 2,
@@ -168,14 +169,14 @@ describe.skipIf(!HAS_DB)("a project's newest video", () => {
     expect((await progress.findLatest(ORG_A, PROJECT_A))?.jobId).toBe("gjob_vp_c");
   });
 
-  it("reads a video being made again as delivered, with the Units it used", async () => {
+  it("reads a video being made again as delivered, with its version and the Units it used", async () => {
     // A revision's shape (ADR-0110 Decision 4): generating again, its Units
     // used, and the video it delivered still current.
     await seedJob("gjob_vp_revision", { state: "GENERATING", reservation: "CONSUMED", scenes: ["READY", "REVISING"] });
-    await deliver("gjob_vp_revision");
+    const versionId = await deliver("gjob_vp_revision");
     expect(await progress.findLatest(ORG_A, PROJECT_A)).toMatchObject({
       jobState: "GENERATING",
-      delivered: true,
+      deliveredVersionId: versionId,
       reservationState: "CONSUMED",
       sceneCount: 2,
       scenesReady: 1,

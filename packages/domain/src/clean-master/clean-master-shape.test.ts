@@ -170,6 +170,8 @@ describe("DS-4 shape", () => {
     ]);
     expect(matching(["packages", "apps"], /\bcreateSigned(?:Download|Upload)Url\b/)).toEqual([
       "packages/domain/src/generation/execution-preflight.ts",
+      // The link to watch a delivered video (ADR-0116), for its customer's own key.
+      "packages/domain/src/orchestration/preview.ts",
       "packages/domain/src/property/asset-service.ts",
       "packages/domain/src/property/ports.ts",
       LOCAL_STORAGE,
