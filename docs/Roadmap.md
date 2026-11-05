@@ -558,6 +558,15 @@ this, the link to a project's delivered video for a member holding
 `video.download`, audited (GS-12c-2), and the download on the project page
 (GS-12c-3). Nothing signs a named link yet.
 
+**GS-12c-2 — a link to download a project's delivered video** (ADR-0119, no
+migration): a member holding `video.download`, with the Property in reach, is
+given a 300-second link that saves the video a link to watch it names, as the
+project's name with `.mp4`. Watching and downloading are separate permissions:
+`video.view` alone gives no download link, and `video.download` alone does not
+let a member watch. Each link is audited as `video.download_link_issued` on the
+version. Nothing outside tests asks for one yet; the download on the project
+page follows (GS-12c-3).
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

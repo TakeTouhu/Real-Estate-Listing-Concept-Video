@@ -4,6 +4,7 @@ import type { IdentityServiceDeps } from "../identity/ports";
 import type { PropertyRepository } from "../property/ports";
 import { findReachableProperty } from "../property/reach";
 import type { VideoProjectRepository } from "../storyboard/ports";
+import type { VideoProject } from "../storyboard/types";
 import type { GenerationJobState, GenerationQualityTier, GenerationReservationState } from "./types";
 
 /**
@@ -173,23 +174,28 @@ export interface VideoProgressServiceDeps {
   readonly progress: VideoProgressRepository;
 }
 
+/** What a member may do with a project's video: watch it, or download it (ADR-0119 Decision 2). */
+export type VideoReadPermission = "video.view" | "video.download";
+
 /**
- * The project's newest video as the database holds it, or `null` when none was
- * started, for a reader of the storyboard: `video.view`, and the project's
- * Property in reach. How the progress and the preview (ADR-0116) both read it.
+ * A project and its newest video as the database holds it (`null` when none
+ * was started), for a member holding `permission` with the project's Property
+ * in reach. How the progress and the preview (ADR-0116) read it, with
+ * `video.view`, and the download (ADR-0119), with `video.download`.
  *
- * @throws AppError FORBIDDEN when the member lacks `video.view`.
+ * @throws AppError FORBIDDEN when the member lacks `permission`.
  * @throws AppError NOT_FOUND when the project is not this organization's or
  *   its Property is out of the member's reach: answered alike, before
  *   anything about its video is read.
  */
-export async function readNewestVideo(
+export async function readProjectVideo(
   deps: VideoProgressServiceDeps,
   actorUserId: string,
   organizationId: string,
   videoProjectId: string,
-): Promise<VideoProgressRecord | null> {
-  const actor = await authorizeOrganization(deps.identity, actorUserId, organizationId, "video.view");
+  permission: VideoReadPermission,
+): Promise<{ readonly project: VideoProject; readonly video: VideoProgressRecord | null }> {
+  const actor = await authorizeOrganization(deps.identity, actorUserId, organizationId, permission);
   const project = await deps.projects.findById(organizationId, videoProjectId);
   if (
     project === null ||
@@ -197,7 +203,22 @@ export async function readNewestVideo(
   ) {
     throw new AppError("NOT_FOUND", "Video project not found");
   }
-  return deps.progress.findLatest(organizationId, project.id);
+  return { project, video: await deps.progress.findLatest(organizationId, project.id) };
+}
+
+/**
+ * The project's newest video as the database holds it, or `null` when none was
+ * started, for a reader of the storyboard: `video.view`, and the project's
+ * Property in reach ({@link readProjectVideo}, whose refusals it throws). How
+ * the progress and the preview (ADR-0116) both read it.
+ */
+export async function readNewestVideo(
+  deps: VideoProgressServiceDeps,
+  actorUserId: string,
+  organizationId: string,
+  videoProjectId: string,
+): Promise<VideoProgressRecord | null> {
+  return (await readProjectVideo(deps, actorUserId, organizationId, videoProjectId, "video.view")).video;
 }
 
 export class VideoProgressService {
