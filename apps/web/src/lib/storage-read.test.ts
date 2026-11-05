@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { managedDeliverableOutputKey } from "@app/domain";
-import { parseRangeHeader, storageContentType } from "./storage-read";
+import { attachmentDisposition, parseRangeHeader, storageContentType } from "./storage-read";
 
 /**
  * How the signed download route reads a request (ADR-0115): the one byte range
- * it asks for, or none, and the content type of what it names.
+ * it asks for, or none, and the content type of what it names; and how it
+ * names a download (ADR-0118).
  */
 describe("a request's byte range", () => {
   it("is none without a header", () => {
@@ -57,5 +58,57 @@ describe("the content type it is served with", () => {
       "application/octet-stream",
     );
     expect(storageContentType("org/org_1/deliverables/gdv_1/output.txt")).toBe("application/octet-stream");
+  });
+});
+
+describe("how a download is named (ADR-0118)", () => {
+  /** RFC 6266's two forms, the plain one a quoted string of printable ASCII, the other RFC 8187 `attr-char`s. */
+  const SHAPE = new RegExp(
+    String.raw`^attachment; filename="([\x20-\x21\x23-\x5b\x5d-\x7e]*)"; ` +
+      String.raw`filename\*=UTF-8''([A-Za-z0-9!#$&+\-.^_${"`"}|~%]*)$`,
+  );
+
+  function parts(filename: string): { plain: string; encoded: string } {
+    const match = SHAPE.exec(attachmentDisposition(filename));
+    if (match === null) throw new Error(`not a disposition: ${attachmentDisposition(filename)}`);
+    return { plain: match[1]!, encoded: match[2]! };
+  }
+
+  it("names a plain name as it is, in both forms", () => {
+    expect(attachmentDisposition("Harbour View.mp4")).toBe(
+      `attachment; filename="Harbour View.mp4"; filename*=UTF-8''Harbour%20View.mp4`,
+    );
+  });
+
+  it("carries any other name whole in its UTF-8 form, and as _ where the plain form cannot", () => {
+    expect(attachmentDisposition("渋谷 Café 😀.mp4")).toBe(
+      `attachment; filename="__ Caf_ _.mp4"; filename*=UTF-8''%E6%B8%8B%E8%B0%B7%20Caf%C3%A9%20%F0%9F%98%80.mp4`,
+    );
+  });
+
+  it("escapes what either form would misread", () => {
+    expect(attachmentDisposition("50% (final)*'s; v1,2.mp4")).toBe(
+      `attachment; filename="50_ (final)*'s; v1,2.mp4"; filename*=UTF-8''50%25%20%28final%29%2A%27s%3B%20v1%2C2.mp4`,
+    );
+  });
+
+  it("keeps its plain form quoted whatever it is given", () => {
+    expect(attachmentDisposition('a"b\\c%.mp4')).toBe(
+      `attachment; filename="a_b_c_.mp4"; filename*=UTF-8''a%22b%5Cc%25.mp4`,
+    );
+  });
+
+  it("is one header value that gives back the name, for every name a token may carry", () => {
+    for (const name of [
+      "Harbour View.mp4",
+      "渋谷区 3LDK マンション.mp4",
+      "a%20b.mp4",
+      "!#$&+-.^_`|~ 'quoted' (x) [y] {z} @=;,.mp4",
+      "😀".repeat(60),
+    ]) {
+      const { plain, encoded } = parts(name);
+      expect(decodeURIComponent(encoded)).toBe(name);
+      expect([...plain]).toHaveLength([...name].length);
+    }
   });
 });

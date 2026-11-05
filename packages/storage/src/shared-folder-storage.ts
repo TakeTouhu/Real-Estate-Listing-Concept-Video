@@ -29,6 +29,7 @@ import {
   type ObjectByteRange,
   type ObjectRead,
   type ObjectStorage,
+  type SignedDownloadOptions,
   type SignedUrl,
 } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -492,9 +493,14 @@ function createObjectStorageView(
 
   // The signer refuses an internal-only key (ADR-0074); the executor turns that
   // into a rejected promise, as the port promises.
-  const sign = (key: string, purpose: SignedPurpose, ttlSeconds: number): Promise<SignedUrl> =>
+  const sign = (
+    key: string,
+    purpose: SignedPurpose,
+    ttlSeconds: number,
+    attachmentFilename?: string,
+  ): Promise<SignedUrl> =>
     new Promise((resolve) =>
-      resolve(signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: now() })),
+      resolve(signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: now(), attachmentFilename })),
     );
 
   return {
@@ -502,8 +508,8 @@ function createObjectStorageView(
       return sign(key, "upload", ttlSeconds);
     },
 
-    createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-      return sign(key, "download", ttlSeconds);
+    createSignedDownloadUrl(key: string, ttlSeconds: number, options?: SignedDownloadOptions): Promise<SignedUrl> {
+      return sign(key, "download", ttlSeconds, options?.attachmentFilename);
     },
 
     async putObject(key: string, data: Uint8Array): Promise<void> {

@@ -3,6 +3,7 @@ import {
   type ObjectByteRange,
   type ObjectRead,
   type ObjectStorage,
+  type SignedDownloadOptions,
   type SignedUrl,
 } from "@app/domain";
 import { signedStorageUrl } from "./signing";
@@ -45,9 +46,14 @@ export class LocalObjectStorage implements ObjectStorage {
     this.now = options.now ?? (() => new Date());
   }
 
-  private signedUrl(key: string, purpose: "upload" | "download", ttlSeconds: number): SignedUrl {
+  private signedUrl(
+    key: string,
+    purpose: "upload" | "download",
+    ttlSeconds: number,
+    attachmentFilename?: string,
+  ): SignedUrl {
     const { secret, basePath } = this;
-    return signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: this.now() });
+    return signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: this.now(), attachmentFilename });
   }
 
   // Both signed URLs go through `signStorageToken`, which refuses an
@@ -57,8 +63,10 @@ export class LocalObjectStorage implements ObjectStorage {
     return new Promise((resolve) => resolve(this.signedUrl(key, "upload", ttlSeconds)));
   }
 
-  createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
-    return new Promise((resolve) => resolve(this.signedUrl(key, "download", ttlSeconds)));
+  createSignedDownloadUrl(key: string, ttlSeconds: number, options?: SignedDownloadOptions): Promise<SignedUrl> {
+    return new Promise((resolve) =>
+      resolve(this.signedUrl(key, "download", ttlSeconds, options?.attachmentFilename)),
+    );
   }
 
   putObject(key: string, data: Uint8Array): Promise<void> {

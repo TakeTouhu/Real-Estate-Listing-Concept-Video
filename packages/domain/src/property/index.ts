@@ -5,3 +5,4 @@ export * from "./audit";
 export * from "./property-service";
 export * from "./asset-service";
 export * from "./reach";
+export * from "./attachment-filename";

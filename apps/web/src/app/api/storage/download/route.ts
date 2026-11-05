@@ -1,7 +1,7 @@
 import { verifyStorageToken } from "@app/storage";
 import { getServerEnv } from "@/lib/env";
 import { getPropertyServices } from "@/lib/property";
-import { parseRangeHeader, storageContentType } from "@/lib/storage-read";
+import { attachmentDisposition, parseRangeHeader, storageContentType } from "@/lib/storage-read";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,8 @@ const PRIVATE_HEADERS = {
  * must never be cached by shared caches.
  *
  * The object is streamed as it is sent, never read whole, and one byte range
- * of it is served when asked for, so a video plays and seeks (ADR-0115).
+ * of it is served when asked for, so a video plays and seeks (ADR-0115). A
+ * token that names a file has it saved under that name (ADR-0118).
  */
 export async function GET(request: Request): Promise<Response> {
   const response = await answer(request);
@@ -61,6 +62,9 @@ async function answer(request: Request): Promise<Response> {
     "Content-Type": storageContentType(verified.key),
     "Content-Length": String(read.length),
   };
+  if (verified.attachmentFilename !== undefined) {
+    headers["Content-Disposition"] = attachmentDisposition(verified.attachmentFilename);
+  }
   // An empty object is served whole: no Content-Range can name none of its bytes.
   if (range === null || read.length === 0) return new Response(read.body, { status: 200, headers });
   headers["Content-Range"] = `bytes ${read.start}-${read.start + read.length - 1}/${read.size}`;

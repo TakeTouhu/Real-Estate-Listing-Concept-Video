@@ -163,6 +163,55 @@ describe("a video through the signed download route (ADR-0115)", () => {
   });
 });
 
+describe("a download saved under a name (ADR-0118)", () => {
+  const VIDEO = managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" });
+  const CLIP = new Uint8Array([10, 11, 12, 13, 14]);
+  const NAME = "渋谷 Harbour View (1).mp4";
+  const DISPOSITION =
+    `attachment; filename="__ Harbour View (1).mp4"; ` +
+    `filename*=UTF-8''%E6%B8%8B%E8%B0%B7%20Harbour%20View%20%281%29.mp4`;
+
+  beforeEach(async () => {
+    await local.putObject(VIDEO, CLIP);
+  });
+
+  async function named(key = VIDEO): Promise<string> {
+    return (await local.createSignedDownloadUrl(key, 60, { attachmentFilename: NAME })).url;
+  }
+
+  it("is served as an attachment under its name, whole or a range at a time, and to HEAD", async () => {
+    const whole = await download(new Request(`http://localhost${await named()}`));
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("content-disposition")).toBe(DISPOSITION);
+    expect(whole.headers.get("content-type")).toBe("video/mp4");
+    expect(whole.headers.get("cache-control")).toBe("private, no-store");
+    expect(new Uint8Array(await whole.arrayBuffer())).toEqual(CLIP);
+    const part = await download(new Request(`http://localhost${await named()}`, { headers: { range: "bytes=1-2" } }));
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-disposition")).toBe(DISPOSITION);
+    const head = await downloadHead(new Request(`http://localhost${await named()}`, { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-disposition")).toBe(DISPOSITION);
+  });
+
+  it("is served to be shown when its link names no file", async () => {
+    const { url: plain } = await local.createSignedDownloadUrl(VIDEO, 60);
+    const shown = await download(new Request(`http://localhost${plain}`));
+    expect(shown.status).toBe(200);
+    expect(shown.headers.get("content-disposition")).toBeNull();
+  });
+
+  it("names nothing in an answer that serves nothing", async () => {
+    const outside = await download(new Request(`http://localhost${await named()}`, { headers: { range: "bytes=9-" } }));
+    expect(outside.status).toBe(416);
+    expect(outside.headers.get("content-disposition")).toBeNull();
+    await local.deleteObject(VIDEO);
+    const gone = await download(new Request(`http://localhost${await named()}`));
+    expect(gone.status).toBe(404);
+    expect(gone.headers.get("content-disposition")).toBeNull();
+  });
+});
+
 describe("what the signed download route holds open (ADR-0115)", () => {
   const VIDEO = managedDeliverableOutputKey({ organizationId: "org_a", deliverableVersionId: "gdv_1" });
   const CLIP = new Uint8Array([10, 11, 12, 13, 14]);

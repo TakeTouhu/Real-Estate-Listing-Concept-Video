@@ -424,4 +424,14 @@ GS-12 is split into three milestones, each its own pull request:
     Playwright's bundled Chromium cannot decode H.264, so the browser test
     (GS-13) cannot play the delivered video in it.
 - **GS-12c**: the download, for a member holding `video.download`, audited,
-  through a short-lived signed link served as an attachment.
+  through a short-lived signed link served as an attachment. Split in three on
+  `cccbd7c`, each its own pull request, after a survey found that the signed
+  route serves everything to be shown (no `Content-Disposition`) and that a
+  delivered video's key names no file:
+  - **GS-12c-1** (ADR-0118, no migration): a signed link that names the file
+    it saves, and the route serving it as an attachment under that name.
+    Nothing signs one yet.
+  - **GS-12c-2**: the link to a project's delivered video for a member holding
+    `video.download`, saved as the project's name with `.mp4`, audited each
+    time.
+  - **GS-12c-3**: the download on the project page.
