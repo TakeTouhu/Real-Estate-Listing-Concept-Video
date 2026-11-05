@@ -124,4 +124,83 @@ describe("storage token signing", () => {
       expect(await storage.getObject(SCENE)).toEqual(new Uint8Array([4]));
     });
   });
+
+  describe("a download's file name (ADR-0118)", () => {
+    const NAME = "渋谷 Harbour View.mp4";
+
+    /** A token made with the secret but without the signer, as a bypass would. */
+    function minted(fields: readonly unknown[]): string {
+      const payload = Buffer.from(JSON.stringify(fields), "utf8").toString("base64url");
+      return `${payload}.${createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+    }
+
+    it("is carried by a download's token, and by none without one", () => {
+      const named = signStorageToken(
+        { key: KEY, purpose: "download", expiresAtSeconds: NOW + 60, attachmentFilename: NAME },
+        SECRET,
+      );
+      expect(verifyStorageToken(named, SECRET, "download", NOW)).toEqual({
+        key: KEY,
+        purpose: "download",
+        expiresAtSeconds: NOW + 60,
+        attachmentFilename: NAME,
+      });
+      const plain = signStorageToken({ key: KEY, purpose: "download", expiresAtSeconds: NOW + 60 }, SECRET);
+      expect(verifyStorageToken(plain, SECRET, "download", NOW)).toStrictEqual({
+        key: KEY,
+        purpose: "download",
+        expiresAtSeconds: NOW + 60,
+      });
+      // The name is signed: a token cannot be renamed.
+      const [payload, signature] = named.split(".") as [string, string];
+      const renamed = Buffer.from(JSON.stringify([KEY, "download", NOW + 60, "other.mp4"]), "utf8").toString(
+        "base64url",
+      );
+      expect(renamed).not.toBe(payload);
+      expect(verifyStorageToken(`${renamed}.${signature}`, SECRET, "download", NOW)).toBeNull();
+    });
+
+    it("is never signed for an upload, nor when it is not safe to send", () => {
+      expect(() =>
+        signStorageToken({ key: KEY, purpose: "upload", expiresAtSeconds: NOW + 60, attachmentFilename: NAME }, SECRET),
+      ).toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
+      for (const unsafe of ["", 'a".mp4', "a\r\nSet-Cookie: x.mp4", "a/b.mp4", "\ud800.mp4", "a".repeat(241)]) {
+        expect(() =>
+          signStorageToken(
+            { key: KEY, purpose: "download", expiresAtSeconds: NOW + 60, attachmentFilename: unsafe },
+            SECRET,
+          ),
+        ).toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
+      }
+    });
+
+    it("is never honoured on an upload, nor when it is not one safe to send, however the token was made", () => {
+      expect(verifyStorageToken(minted([KEY, "upload", NOW + 60, NAME]), SECRET, "upload", NOW)).toBeNull();
+      for (const name of [null, 7, ["a.mp4"], "", 'a".mp4', "a\nb.mp4", "a".repeat(241)]) {
+        expect(verifyStorageToken(minted([KEY, "download", NOW + 60, name]), SECRET, "download", NOW)).toBeNull();
+      }
+      expect(verifyStorageToken(minted([KEY, "download", NOW + 60, NAME, "x"]), SECRET, "download", NOW)).toBeNull();
+      expect(verifyStorageToken(minted([KEY, "download"]), SECRET, "download", NOW)).toBeNull();
+      // An expired or internal key's token is refused as before, name or not.
+      expect(verifyStorageToken(minted([KEY, "download", NOW, NAME]), SECRET, "download", NOW)).toBeNull();
+      const master = managedCleanMasterKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
+      expect(verifyStorageToken(minted([master, "download", NOW + 60, NAME]), SECRET, "download", NOW)).toBeNull();
+      // The same hand-made token with a safe name is honoured: the refusal is the name.
+      expect(verifyStorageToken(minted([KEY, "download", NOW + 60, NAME]), SECRET, "download", NOW)).toMatchObject({
+        attachmentFilename: NAME,
+      });
+    });
+
+    it("is signed by the local adapter only when asked for", async () => {
+      const storage = new LocalObjectStorage({ secret: SECRET, now: () => new Date(NOW * 1000) });
+      const token = ({ url }: { url: string }) => decodeURIComponent(url.split("token=")[1]!);
+      const named = await storage.createSignedDownloadUrl(KEY, 60, { attachmentFilename: NAME });
+      expect(verifyStorageToken(token(named), SECRET, "download", NOW)?.attachmentFilename).toBe(NAME);
+      const plain = await storage.createSignedDownloadUrl(KEY, 60);
+      expect(verifyStorageToken(token(plain), SECRET, "download", NOW)).not.toHaveProperty("attachmentFilename");
+      await expect(
+        storage.createSignedDownloadUrl(KEY, 60, { attachmentFilename: "a/b.mp4" }),
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    });
+  });
 });

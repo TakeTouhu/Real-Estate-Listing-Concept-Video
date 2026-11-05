@@ -437,6 +437,16 @@ describe("the web app's view", () => {
     await expect(store.objectStorage.createSignedDownloadUrl(MASTER, 60)).rejects.toBeInstanceOf(
       AppError,
     );
+    // A download saved under a name carries it, signed (ADR-0118); one without carries none.
+    const named = await store.objectStorage.createSignedDownloadUrl(ASSET, 60, { attachmentFilename: "a b.jpg" });
+    expect(verifyStorageToken(token(named.url), SECRET, "download")).toMatchObject({
+      key: ASSET,
+      attachmentFilename: "a b.jpg",
+    });
+    expect(verifyStorageToken(token(download.url), SECRET, "download")).not.toHaveProperty("attachmentFilename");
+    await expect(
+      store.objectStorage.createSignedDownloadUrl(ASSET, 60, { attachmentFilename: "a\nb.jpg" }),
+    ).rejects.toBeInstanceOf(AppError);
   });
 
   it("leaves no staged file behind", async () => {

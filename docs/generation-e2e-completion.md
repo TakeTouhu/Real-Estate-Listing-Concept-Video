@@ -7140,3 +7140,166 @@ scheduler and live Stripe charges remain BLOCKED.
 
 GS-12b-2 waits for the product owner's yes before merge. Then the download
 (GS-12c) and the browser test (GS-13).
+
+## GS-12c-1 — a download link that names the file it saves
+
+Base: `cccbd7c` (PR #141 merge commit on `main`).
+ADR: `docs/decisions/0118-a-download-link-that-names-its-file.md`
+
+The first of three milestones of GS-12c, the download (GS-12c-1 the named
+link, GS-12c-2 the link to a project's delivered video, GS-12c-3 the download
+on the project page; see `docs/generation-e2e-gap-analysis.md`, *GS-12*).
+**No migration, no new route and no environment variable.**
+
+GS-12c-1 and GS-12c-2 were built, reviewed and mutation-tested together, then
+split in two pull requests to keep each near 500 changed lines. This pull
+request carries the first half as one commit; the exact head SHA is reported
+with the pull request.
+
+### What GS-12c-1 does
+
+- **A download link may name the file it saves.** The signed token carries the
+  name as a fourth field, signed with the rest, for a download only. A token
+  without one has the same payload as before.
+- **Only a name safe to send is signed or honoured** (`isAttachmentFilename`):
+  not empty, at most 240 UTF-8 bytes, neither end a dot or white space, and no
+  control or invisible format character (the zero-width joiner and non-joiner
+  aside), line or paragraph separator, half of a surrogate pair or any of
+  `\ / : * ? " < > |`. The signer refuses any other, or a name on an upload,
+  as a defect; the verifier ignores a token carrying one however it was made,
+  as it does a fifth field.
+- **The port takes the name as an option**
+  (`createSignedDownloadUrl(key, ttlSeconds, { attachmentFilename })`), and both
+  stores pass it to the one signing helper.
+- **The route serves a named link as an attachment**: `Content-Disposition:
+  attachment` with the name whole as UTF-8 (`filename*`, RFC 8187) and, for a
+  client that reads only the plain form, with `_` for each character it cannot
+  carry; on `200`, `206` and `HEAD`, never on an answer that serves nothing.
+- **Nothing signs a named link yet** (GS-12c-2), so the route answers as
+  before.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller (GS-12c-2)
+    participant St as ObjectStorage
+    participant Si as Signer
+    participant B as Member's browser
+    participant R as Signed download route
+    participant V as Verifier
+    C->>St: createSignedDownloadUrl(key, 300, { attachmentFilename })
+    St->>Si: key, download, expiry, name
+    alt an upload, or a name not safe to send
+        Si-->>C: INTERNAL_ERROR (nothing signed)
+    else
+        Si-->>C: /api/storage/download?token=…
+    end
+    B->>R: GET the link (a range or all of it)
+    R->>V: token
+    alt forged, expired, a name on an upload or one not safe to send
+        V-->>R: null
+        R-->>B: 401, no file named
+    else a download that names a file
+        V-->>R: key, name
+        R-->>B: 200 or 206, Content-Disposition: attachment; filename; filename*
+    end
+```
+
+### Verification
+
+Measured locally on this pull request's commit, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,897 passed in 264 files: 18 new against GS-12b-2's 6,879 (6 on the name a link may carry, 4 on the signed token, 5 on the header, 3 on the route) |
+| `pnpm build` | succeeded |
+| `pnpm test:db` | not run: no repository, query or schema changed |
+| `pnpm test:media` | not run: nothing it covers changed |
+| Chromium 141 (Playwright's), against a stand-in server sending the route's headers | the answer is saved, sandboxing policy and all, as `渋谷 Harbour View (1).mp4`, whether followed as a link or as a `303` answer to a form's post, and the page stays where it was; under a locale that is not UTF-8 it is saved as `download` (ADR-0118 Decision 2) |
+
+### Mutation testing
+
+**42 of 42 killed** on this commit, each mutant run against the five test files this
+pull request touches, and the tree checked unchanged after each:
+
+- the name rule: 18 (an empty name, controls, invisible format characters, the
+  joiners refused, the zero-width space allowed, lone surrogates, line and
+  paragraph separators, `\`, `/` and `"`, a dot or white space at either end, the
+  240-byte bound counted in code units or moved, the assertion that never
+  throws, only the first unsafe character replaced);
+- the token: 10 (a name not signed, signed on an upload or unsafe, a fifth field,
+  a name on an upload, not a string or unsafe honoured, a name dropped by the
+  verifier or by the URL helper, a three-field token sent through the name
+  checks);
+- the two stores: 2 (each drops the name);
+- the header: 10 (`%`, `"` and `\` kept in the plain form, `*` and `'` not encoded,
+  lower-case escapes, the raw name in either form, only the first character
+  replaced or escaped);
+- the route: 2 (it never names the file; it drops the name).
+
+### Review
+
+An independent reviewer read the two halves together (`b59b1b4`), from git
+objects only. Nothing blocking. It confirmed that the header cannot be split
+or injected, that the RFC 8187 encoding is right, that the verifier cannot
+throw, and that a token without a name verifies exactly as before. Its findings
+on this half, each answered before the split:
+
+- **Minor: the header's plain form relied on its caller.** It now replaces a
+  quote and a backslash itself, so it stays one quoted value whatever it is
+  given. Tested.
+- **Minor: the name is readable in the link.** ADR-0118 now says so: a token
+  is signed, not encrypted, a link is given only to the member who asked for
+  it, and a signed URL is never logged.
+- **Minor: joiners became `_`.** The zero-width joiner and non-joiner, which
+  emoji sequences and Persian are written with, are now allowed; direction
+  controls, the zero-width space and the soft hyphen are still refused.
+  Tested.
+- **Minor: the verifier accepted `.`, `..`, a space, `.mp4` and names ending in
+  a dot or space.** A name may no longer start or end with a dot or white
+  space. Tested.
+- **Test gap: no browser evidence.** Checked in Chromium (above); Firefox was
+  not.
+- **Nit: a resumed download.** The route sends no validator, so a browser
+  restarts a broken download rather than resuming it; ADR-0118 now says only
+  that a range asked for with the link is answered with the same name.
+
+Its findings on the other half (a test that did not pin `video.download` on
+its own, reads before a refusal, another organization, cross-references, the
+cut and the trimming of a video's name) are answered in GS-12c-2's commit.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the signed route's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-12c-1.md`: the route's attachment, the port's option, the token and the name rule |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-12c-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-12c-1), `docs/generation-e2e-gap-analysis.md`
+(GS-12c's split) and `docs/SecurityCompliance.md` (the signed file name).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer reaches signs a
+named link. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **No customer can download a video yet** (GS-12c-2, GS-12c-3).
+- **A browser under a locale that is not UTF-8 saves a name outside ASCII as
+  `download`**, Chromium at least; the browser test (GS-13) runs under a UTF-8
+  locale.
+- **No production storage adapter exists** (ADR-0115).
+
+### Remaining work
+
+GS-12c-1 waits for the product owner's yes before merge. Then the link to a
+project's delivered video (GS-12c-2), the download on the project page
+(GS-12c-3) and the browser test (GS-13).

@@ -123,6 +123,10 @@ disablement for SSO-enforced organizations.
   signer and by the verifier, for upload and download alike, as is any key that
   is not canonical (ADR-0074), and any scene video under
   `org/{organizationId}/generations/` (ADR-0115)
+- **A download link's file name is signed with it**, for a download only, and
+  only one safe to send in a header: no control, invisible format character,
+  line break, quote, backslash or path separator (ADR-0118). It is readable in
+  the link, which is never logged
 
 ## Upload security
 

@@ -2160,3 +2160,16 @@ project has one and the page is unchanged.
 
 **Rolling back.** To GS-12b-1's build: safe. The audit entries already written
 stay; nothing else is written.
+
+## GS-12c-1 — a download link that names the file it saves
+
+**No migration** (ADR-0118). No schema, enum, constraint or row changes, and no
+new route, permission or environment variable.
+
+**What changes at deploy.** Nothing a customer sees: nothing signs a named link
+yet, so no token names a file and the signed download route answers exactly as
+before. Tokens already given stay valid: a token's payload without a name is
+unchanged.
+
+**Rolling back.** To GS-12b-2's build: safe. Nothing is written, and no token
+given before the rollback names a file.

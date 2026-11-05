@@ -187,13 +187,22 @@ export type ObjectRead =
       readonly body: ReadableStream<Uint8Array>;
     };
 
+/** How a signed download link serves its object. */
+export interface SignedDownloadOptions {
+  /**
+   * Serve it as an attachment, saved under this name (ADR-0118), rather than
+   * shown in the browser. It must pass `isAttachmentFilename`.
+   */
+  readonly attachmentFilename: string;
+}
+
 /**
  * Object-storage abstraction. Keys are opaque, organization-prefixed paths.
  * Signed URLs are short-lived and single-purpose (upload XOR download).
  */
 export interface ObjectStorage {
   createSignedUploadUrl(key: string, ttlSeconds: number): Promise<SignedUrl>;
-  createSignedDownloadUrl(key: string, ttlSeconds: number): Promise<SignedUrl>;
+  createSignedDownloadUrl(key: string, ttlSeconds: number, options?: SignedDownloadOptions): Promise<SignedUrl>;
   putObject(key: string, data: Uint8Array): Promise<void>;
   getObject(key: string): Promise<Uint8Array | null>;
   /**

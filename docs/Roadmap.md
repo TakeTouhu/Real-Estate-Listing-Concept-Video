@@ -549,6 +549,15 @@ link the page gives for another reason never restarts a video being watched.
 Each page load that shows a delivered video audits one link, and so does each
 renewal. GS-12b is complete; the download (GS-12c) follows.
 
+**GS-12c-1 — a download link that names the file it saves** (ADR-0118, no
+migration): a signed download link may carry the name its object is saved
+under, signed with it, for a download only and only a name safe to send in a
+header; the route then serves it as an attachment under that name, in both
+RFC 6266 forms. Every other link is served as before. GS-12c is split in three:
+this, the link to a project's delivered video for a member holding
+`video.download`, audited (GS-12c-2), and the download on the project page
+(GS-12c-3). Nothing signs a named link yet.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

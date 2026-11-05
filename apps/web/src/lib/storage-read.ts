@@ -2,7 +2,8 @@ import { DELIVERABLE_OUTPUT_CONTENT_TYPE, isDeliverableOutputKey, type ObjectByt
 
 /**
  * How the signed download route reads what it serves (ADR-0115): the one byte
- * range a request asks for, and the content type of the object it names.
+ * range a request asks for, the content type of the object it names, and how a
+ * download is named (ADR-0118).
  */
 
 const RANGE = /^bytes=\s*(\d*)\s*-\s*(\d*)\s*$/i;
@@ -38,4 +39,33 @@ export function storageContentType(key: string): string {
   if (key.endsWith(".webp")) return "image/webp";
   if (key.endsWith(".jpg")) return "image/jpeg";
   return "application/octet-stream";
+}
+
+/** Not an RFC 8187 `attr-char`, though `encodeURIComponent` leaves it as it is. */
+const NOT_ATTR_CHAR = /['()*]/g;
+
+/**
+ * Not printable ASCII; or a quote or backslash, which would end or escape the
+ * quoted name; or a `%`, which a browser may read as an escape in it.
+ */
+const NOT_PLAIN = /[^\x20-\x7e]|["%\\]/gu;
+
+/**
+ * The `Content-Disposition` of an object served as an attachment, saved under
+ * `filename` (RFC 6266): the name itself as UTF-8 (RFC 8187), which every
+ * current browser reads, and for one that reads only the plain form, the same
+ * name with each character it cannot carry as `_`.
+ *
+ * The plain form is safe whatever the name. The name is one a signed token
+ * carried, which `isAttachmentFilename` checked, so it is also well formed, as
+ * `encodeURIComponent` needs, and holds no quote, backslash, control or line
+ * break that could end the header or a value early.
+ */
+export function attachmentDisposition(filename: string): string {
+  const plain = filename.replace(NOT_PLAIN, "_");
+  const encoded = encodeURIComponent(filename).replace(
+    NOT_ATTR_CHAR,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${plain}"; filename*=UTF-8''${encoded}`;
 }
