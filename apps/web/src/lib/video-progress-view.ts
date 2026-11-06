@@ -31,6 +31,18 @@ export interface VideoPlayerSource {
   readonly lifetimeSeconds: number;
 }
 
+/**
+ * The download button's form (GS-12c-3, ADR-0120): the route it posts to, and
+ * the organization and Property the page was read for. The route asks the
+ * download service, which decides who may download; the Property only says
+ * which page to come back to.
+ */
+export interface VideoDownloadForm {
+  readonly action: string;
+  readonly organizationId: string;
+  readonly propertyId: string;
+}
+
 /** UXFlow's normalized states, as the page names them. */
 export const PHASE_NAMES: Record<VideoProgressPhase, string> = {
   QUEUED: "Queued",

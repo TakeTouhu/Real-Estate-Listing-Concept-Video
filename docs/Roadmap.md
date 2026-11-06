@@ -567,6 +567,16 @@ let a member watch. Each link is audited as `video.download_link_issued` on the
 version. Nothing outside tests asks for one yet; the download on the project
 page follows (GS-12c-3).
 
+**GS-12c-3 — the download on the project page** (ADR-0120, no migration): the
+"Video" panel shows a "Download video" button under the player, for a
+delivered video and a member holding `video.download`. Showing it signs and
+audits nothing; pressing it posts to `POST /api/video-projects/{id}/download`,
+which asks for the audited link and sends the browser to it, so the file is
+saved under the project's name and the page stays put. A download that gives
+no link comes back to the page with one of three fixed notices; the page never
+shows text the URL carries. GS-12 is complete; the browser test (GS-13)
+follows.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

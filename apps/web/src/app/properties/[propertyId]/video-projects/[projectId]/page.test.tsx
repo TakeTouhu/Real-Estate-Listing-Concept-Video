@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   link: null as unknown,
   /** What the page reported as an error. */
   errors: [] as [string, unknown][],
+  /** What the member's role carries. */
+  permissions: [] as string[],
 }));
 
 vi.mock("next/navigation", () => ({
@@ -38,7 +40,7 @@ vi.mock("@/lib/identity", () => ({
           state.organizations.map(({ id }) => ({
             organization: { id, name: `Studio ${id}` },
             role: "VIEWER",
-            permissions: ["video.view"],
+            permissions: state.permissions,
           })),
         ),
     },
@@ -90,6 +92,16 @@ vi.mock("@/lib/video-preview", async (actual) => ({
   }),
 }));
 
+vi.mock("@/lib/video-download", async (actual) => ({
+  ...(await actual<typeof import("@/lib/video-download")>()),
+  getVideoDownloadService: () => ({
+    link: (actor: string, organizationId: string, projectId: string) => {
+      state.reads.push(`download ${actor} ${organizationId} ${projectId}`);
+      return Promise.resolve(null);
+    },
+  }),
+}));
+
 function project(id: string) {
   return {
     id,
@@ -136,14 +148,15 @@ beforeEach(() => {
   state.progress = FAILED;
   state.link = null;
   state.errors = [];
+  state.permissions = ["video.view"];
 });
 
 afterEach(cleanup);
 
-async function page(): Promise<string> {
+async function page(searchParams: { download?: string | string[] } = {}): Promise<string> {
   const element = (await StoryboardPage({
     params: Promise.resolve({ propertyId: "prp_1", projectId: "vpr_1" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(searchParams),
   })) as ReactElement;
   return (render(element).container.textContent ?? "").replace(/\s+/g, " ");
 }
@@ -217,5 +230,46 @@ describe("the project page's player (ADR-0117)", () => {
     expect(await player()).toBeNull();
     state.link = new Error("store down");
     await expect(page()).rejects.toThrow("store down");
+  });
+});
+
+describe("the project page's download (ADR-0120)", () => {
+  const COMPLETED: VideoProgress = { ...FAILED, phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } };
+
+  async function button(): Promise<HTMLFormElement | null> {
+    await page();
+    return document.querySelector<HTMLFormElement>("form[action$='/download']");
+  }
+
+  it("gives a member holding video.download a button for a delivered video, asking for no link to show it", async () => {
+    state.progress = COMPLETED;
+    state.permissions = ["video.view", "video.download"];
+    const form = await button();
+    expect(form?.getAttribute("action")).toBe("/api/video-projects/vpr_1/download");
+    const fields = [...(form?.querySelectorAll("input") ?? [])].map((input) => [input.name, input.value]);
+    // The organization whose storyboard the page shows, and the page's Property.
+    expect(fields).toEqual([
+      ["organizationId", "org_2"],
+      ["propertyId", "prp_1"],
+    ]);
+    // Showing the button records nothing: a download is asked for only when it is pressed.
+    expect(state.reads.filter((read) => read.startsWith("download"))).toEqual([]);
+  });
+
+  it("gives no button to a member without video.download, or for a video that is not delivered", async () => {
+    state.progress = COMPLETED;
+    expect(await button()).toBeNull();
+    cleanup();
+    state.progress = FAILED;
+    state.permissions = ["video.view", "video.download"];
+    expect(await button()).toBeNull();
+  });
+
+  it("says why the last download gave no link, only in the page's own words", async () => {
+    expect(await page({ download: "forbidden" })).toContain("You may not download this video.");
+    cleanup();
+    const text = await page({ download: "Your video was deleted" });
+    expect(text).not.toContain("Your video was deleted");
+    expect(document.querySelector(".status-bad[role=status]")).toBeNull();
   });
 });

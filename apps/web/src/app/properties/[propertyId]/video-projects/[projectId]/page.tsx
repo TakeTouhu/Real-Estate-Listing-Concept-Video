@@ -10,6 +10,7 @@ import { humanizeRoomType } from "@/lib/review-view";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
 import { resolveStoryboardForProperty } from "@/lib/storyboard-route";
 import { thumbnailUrls } from "@/lib/thumbnails";
+import { downloadNotice, downloadOnProjectPage } from "@/lib/video-download";
 import { getVideoPreviewService, readVideoPreview } from "@/lib/video-preview";
 import { getVideoProgressLogger, getVideoProgressService, readVideoProgress } from "@/lib/video-progress";
 import { isCompletedVideo, videoProgressPanel } from "@/lib/video-progress-view";
@@ -36,12 +37,12 @@ export default async function StoryboardPage({
   searchParams,
 }: {
   params: Promise<{ propertyId: string; projectId: string }>;
-  searchParams: Promise<{ started?: string | string[] }>;
+  searchParams: Promise<{ started?: string | string[]; download?: string | string[] }>;
 }) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { propertyId, projectId } = await params;
-  const { started } = await searchParams;
+  const { started, download } = await searchParams;
   // Built only in development with the test provider (ADR-0111, ADR-0112).
   const startBuilt = getGenerationStartService() !== null;
 
@@ -133,6 +134,14 @@ export default async function StoryboardPage({
           {...startOnProjectPage(startBuilt, permissions, property.id, view.project.id, started)}
           progress={progress}
           player={player}
+          download={downloadOnProjectPage(
+            isCompletedVideo(video),
+            permissions,
+            organization.id,
+            property.id,
+            view.project.id,
+          )}
+          downloadNotice={downloadNotice(download)}
         />
       </section>
     );

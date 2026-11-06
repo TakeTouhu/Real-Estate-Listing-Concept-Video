@@ -5,6 +5,7 @@ import type { VideoProgress } from "@app/domain";
 import {
   NOT_DELIVERED_MESSAGE,
   videoProgressPanel,
+  type VideoDownloadForm,
   type VideoPlayerSource,
   type VideoProgressRead,
 } from "@/lib/video-progress-view";
@@ -20,10 +21,14 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 afterEach(cleanup);
 
-function shown(read: VideoProgressRead, player: VideoPlayerSource | null = null) {
+function shown(
+  read: VideoProgressRead,
+  player: VideoPlayerSource | null = null,
+  download: VideoDownloadForm | null = null,
+) {
   const panel = videoProgressPanel(read);
   if (panel === null) throw new Error("no panel");
-  return render(<VideoProgressPanel panel={panel} player={player} />);
+  return render(<VideoProgressPanel panel={panel} player={player} download={download} />);
 }
 
 const FAILED_VIDEO: VideoProgress = {
@@ -90,6 +95,27 @@ describe("the project's video", () => {
     expect(video.previousElementSibling?.textContent).toContain("Completed");
     expect(video.nextElementSibling?.textContent).toBe("It used 2 HQ Units.");
     expect(container.querySelectorAll("video")).toHaveLength(1);
+  });
+
+  it("puts the download button under the player, posting the page's organization and Property (ADR-0120)", () => {
+    const { container } = shown(
+      { kind: "PROGRESS", progress: { ...FAILED_VIDEO, phase: "COMPLETED", units: { count: 2, state: "CONSUMED" } } },
+      { src: "https://app.test/api/storage/download?token=t", lifetimeSeconds: 300 },
+      { action: "/api/video-projects/vpr_1/download", organizationId: "org_1", propertyId: "prp_1" },
+    );
+    const button = screen.getByRole("button", { name: "Download video" });
+    expect(button.getAttribute("type")).toBe("submit");
+    const form = button.closest("form");
+    expect(screen.getByRole("region", { name: "Video" }).contains(form)).toBe(true);
+    expect(form?.getAttribute("method")).toBe("post");
+    expect(form?.getAttribute("action")).toBe("/api/video-projects/vpr_1/download");
+    expect(form?.previousElementSibling?.tagName).toBe("VIDEO");
+    const fields = [...(form?.querySelectorAll("input") ?? [])].map((input) => [input.type, input.name, input.value]);
+    expect(fields).toEqual([
+      ["hidden", "organizationId", "org_1"],
+      ["hidden", "propertyId", "prp_1"],
+    ]);
+    expect(container.querySelectorAll("form, button")).toHaveLength(2);
   });
 
   it("shows no player without a link", () => {
