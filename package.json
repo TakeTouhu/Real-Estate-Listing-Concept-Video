@@ -16,12 +16,14 @@
     "test:coverage": "vitest run --coverage",
     "test:db": "vitest run --config vitest.integration.config.ts",
     "test:media": "vitest run --config vitest.media.config.ts",
+    "test:e2e": "playwright test",
     "build": "pnpm --filter @app/web build",
     "dev": "pnpm --filter @app/web dev",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@playwright/test": "1.56.1",
     "@prisma/client": "5.22.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

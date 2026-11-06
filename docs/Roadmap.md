@@ -577,6 +577,16 @@ no link comes back to the page with one of three fixed notices; the page never
 shows text the URL carries. GS-12 is complete; the browser test (GS-13)
 follows.
 
+**GS-13a — the browser test** (ADR-0121, no migration): `pnpm test:e2e` runs
+Playwright's Chromium against the web app under `next dev`, with the test
+provider, a shared folder and a disposable local database, and CI runs it in
+an `e2e` job. The first test signs a new owner up, sets up MFA with its own
+authenticator, has the operator command give the organization a plan and
+uploads a Property's photos. GS-13 is split in four: this; starting a photo's
+analysis from a page, which none offers yet (GS-13b); the rest of the way to a
+downloaded video (GS-13c); and a video that is not made, with the plan's
+completion report (GS-13d).
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

@@ -2201,3 +2201,16 @@ the page is unchanged.
 **Rolling back.** To GS-12c-2's build: safe. The audit entries already written
 stay; a link already given keeps working until it runs out, and a page loaded
 before the rollback posts to a route that is gone (`404`).
+
+## GS-13a — the browser test
+
+**No migration** (ADR-0121). No schema, enum, constraint or row changes, and no
+route, permission or environment variable of the app's. A development
+dependency is added (`@playwright/test` 1.56.1), with a root script
+(`pnpm test:e2e`) and a CI job (`e2e`).
+
+**What changes at deploy.** Nothing: the browser test runs only in CI and on a
+developer's machine, against a disposable database.
+
+**Rolling back.** To GS-12c-3's build: safe. Nothing is written but the test's
+own rows in its own database.

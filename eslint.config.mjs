@@ -10,6 +10,10 @@ export default tseslint.config(
       "**/coverage/**",
       "**/*.config.js",
       "**/next-env.d.ts",
+      // The browser test's reports, results and shared folder (ADR-0121).
+      "playwright-report/**",
+      "test-results/**",
+      ".e2e/**",
     ],
   },
   eslint.configs.recommended,

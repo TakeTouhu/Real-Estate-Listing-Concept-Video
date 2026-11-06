@@ -47,6 +47,8 @@ export default defineConfig({
       "tests/integration/**",
       // Real-FFmpeg suites; run via vitest.media.config.ts.
       "tests/media/**",
+      // Browser tests; run by Playwright (playwright.config.ts).
+      "tests/e2e/**/*.spec.ts",
     ],
     coverage: {
       provider: "v8",

@@ -141,3 +141,74 @@ jobs:
 
       - name: Database integration tests
         run: pnpm run test:db
+
+  e2e:
+    # The browser test (ADR-0121): Chromium drives the web app, run by
+    # `next dev` with the test provider and a shared folder, against a
+    # PostgreSQL service container with throwaway credentials. FFmpeg draws the
+    # photos it uploads. No provider, network media or secret is involved.
+    runs-on: ubuntu-24.04
+    # The two installs may take thirty minutes each; nothing else runs long.
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: revt
+          POSTGRES_PASSWORD: revt-ci-local
+          POSTGRES_DB: revt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://revt:revt-ci-local@localhost:5432/revt?schema=public
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        # The package mirror has been slow, and has hung, here before: a hang fails the job instead of holding it.
+        timeout-minutes: 30
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install --yes --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @app/database run db:generate
+
+      - name: Apply migrations to an empty database
+        run: pnpm --filter @app/database run db:migrate
+
+      - name: Install Chromium for Playwright
+        timeout-minutes: 30
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: pnpm run test:e2e
+
+      - name: Keep the report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

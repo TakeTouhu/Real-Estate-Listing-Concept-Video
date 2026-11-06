@@ -34,6 +34,23 @@ Every input is generated in the test or committed in `assets/disclosure/`; no
 customer or provider media is used. Without FFmpeg the run fails, its tests
 reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
+## `tests/e2e/*.spec.ts`
+
+The browser test (ADR-0121): Playwright's Chromium drives the web app, which
+the run starts under `next dev` with the test provider and a shared folder
+under `.e2e/`. It is **excluded** from `pnpm test` and run explicitly, with a
+disposable, migrated database on this machine and FFmpeg on the `PATH`:
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/revt_e2e?schema=public"
+pnpm --filter @app/database run db:migrate
+pnpm test:e2e
+```
+
+Each test signs up its own owner and organization, so runs never meet. Its
+helpers live in `tests/e2e/support/`; their own unit tests (`*.test.ts`) run
+with `pnpm test`. CI runs it in the `e2e` job.
+
 ## Unit tests
 
 Unit tests live next to their source as `*.test.ts` and run via the root
