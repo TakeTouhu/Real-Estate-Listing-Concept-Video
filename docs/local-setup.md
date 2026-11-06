@@ -269,7 +269,9 @@ pnpm test:e2e                                # playwright.config.ts
 
 It keeps the web app's photos under `.e2e/` and its results under
 `test-results/` and `playwright-report/`, all git-ignored; delete them to
-start over. Add `--trace on` to record a trace. CI runs it in the `e2e` job.
+start over. Add `--trace on` to record a trace; a trace records every request,
+signed links and the session cookie included, so keep it on your machine and
+never share or upload it. CI runs it in the `e2e` job, which keeps no trace.
 
 ## Notes
 

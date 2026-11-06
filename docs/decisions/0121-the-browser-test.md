@@ -32,8 +32,8 @@ needs:
 
 ## Decision 1 — Playwright drives Chromium against `next dev`
 
-`pnpm test:e2e` runs `playwright test` (`@playwright/test` 1.56.1, pinned as
-every tool is), configured in `playwright.config.ts`:
+`pnpm test:e2e` runs `playwright test` (`@playwright/test` 1.56.1, pinned to
+an exact version), configured in `playwright.config.ts`:
 
 - **The web app** is started by the run itself, `next dev` on port 3210, and
   stopped after it; a server already on that port fails the run rather than
@@ -42,18 +42,27 @@ every tool is), configured in `playwright.config.ts`:
   for every secret the schema asks for (`tests/e2e/support/environment.ts`).
   None is a secret and none is production's.
 - **The database** is `DATABASE_URL`, which must name a database on this
-  machine, as the development pipeline requires (ADR-0108 Decision 6); its
-  address is checked and never printed. It must be disposable and migrated.
+  machine by the development pipeline's rule (ADR-0108 Decision 6): a local
+  host, and no `host` parameter but a socket path, since Prisma connects to
+  that parameter before the address's host. Its address is checked and never
+  printed. It must be disposable and migrated.
   The run refuses `NODE_ENV=production`.
 - **Every command the test runs** (the operator's here; the pipeline's later)
   gets the same environment, so a photo the web app stored is the one the
   command reads.
-- **One worker**, one Chromium project. A page is given two minutes to load,
-  because `next dev` compiles each page the first time it is asked for, and a
-  test five minutes.
-- **Nothing logs a signed link.** `next dev` logs each request's address, so
-  only its errors are shown. A failed test keeps a screenshot; traces are off
-  unless asked for (`--trace on`).
+- **One worker**, one Chromium project. Because `next dev` compiles each page
+  and route the first time it is asked for, a navigation is given two
+  minutes, an action one, an assertion thirty seconds, a test five minutes and
+  the whole run thirty. The first CI run, on an empty `.next`, took 27
+  seconds.
+- **Nothing logs a signed link.** `next dev` logs each request's address to
+  standard output, which is not shown: only its standard error, Next's own
+  errors, is. The app's own log goes to standard output too, so it is not
+  shown either. A failed test keeps a screenshot; traces, which record every
+  request and so the signed links and the session cookie, are off unless
+  asked for (`--trace on`) and never kept by CI. A test never opens a signed
+  link as a page, so no call log carries one, and keeps only the status of a
+  signed link's answer; the pages this test visits show none.
 
 ## Decision 2 — Each test starts from its own customer
 
@@ -85,7 +94,7 @@ client, the migrations on the empty database, Playwright's Chromium with its
 system libraries, then `pnpm test:e2e`. A failed run keeps its report and
 results for seven days. Installing FFmpeg and Chromium each fails after thirty
 minutes: the package mirror has taken 24 minutes on that step before, and has
-hung on it.
+hung on it. The job fails after ninety.
 
 ## Decision 5 — Chromium runs under a UTF-8 locale
 
@@ -100,9 +109,9 @@ the Units page says the organization has no plan, then, once the operator has
 given one, that it is Premium with 40 of 40 Base Units left; the owner creates
 a Property, confirming the photos' rights, and uploads three photos FFmpeg
 draws from its own test patterns (so no customer photo is used and nothing
-binary is committed), each straight to its signed upload link; each is shown
-ready, and after a reload the Property lists the three as `READY` at
-1280×720.
+binary is committed), each straight to its signed upload link, which answers
+`200` to each; each is shown ready, and after a reload the Property lists the
+three as `READY` at 1280×720.
 
 ## Decision 7 — What stays out
 

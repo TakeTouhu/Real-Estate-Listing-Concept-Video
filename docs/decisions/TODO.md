@@ -1298,7 +1298,11 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       the quality a route offers but not its scene lengths: a storyboard of
       3-second scenes started on the test route (5 to 15 seconds) reserved its
       Unit, found no route at launch (`NO_ROUTE`) and waits with no end (the
-      waiting job refused for configuration, above). Put to the product owner
+      waiting job refused for configuration, below). A reservation pending
+      with no end is what ADR-0052 Decision 19 forbids, so this is a defect
+      to fix before GS-13c and before any activation, not only a question;
+      the start is offered only in development with the test provider
+      (ADR-0111), so no customer can reach it yet. Put to the product owner
       on 2026-11-06, with the start refusing such a storyboard before it
       reserves anything recommended.
 

@@ -442,7 +442,8 @@ GS-12 is split into three milestones, each its own pull request:
 
 Surveyed on `c4360e4` by clicking the whole flow through by hand in Chromium,
 against `next dev` with the test provider, a shared folder and a migrated local
-database. With the two workarounds below, a new owner reached a delivered
+database. Starting each photo's analysis by its route and composing scenes of
+5 seconds or more (the two findings below), a new owner reached a delivered
 video, watched its link served (`206`, `video/mp4`) and saved it as
 `渋谷 Harbour View.mp4` (H.264, 1280×720, 15 seconds), with 39 of 40 Base Units
 left; a video whose clips the test provider could not make showed the agreed

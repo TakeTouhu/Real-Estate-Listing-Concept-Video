@@ -28,6 +28,13 @@ test("an owner signs up, sets up MFA, is given a plan and uploads a Property's p
   await expect(page.getByRole("heading", { name: "Shibuya Harbour View" })).toBeVisible();
 
   // Each photo goes from the browser straight to its signed upload link, then is processed.
+  // Only each answer's status is kept: a signed link is never printed.
+  const signedUploads: number[] = [];
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (response.request().method() !== "PUT" || url.pathname !== "/api/storage/upload") return;
+    if (url.searchParams.has("token")) signedUploads.push(response.status());
+  });
   const photos = await makePhotos(testInfo.outputPath());
   await (await hydrated(page.locator('input[type="file"]'))).setInputFiles(photos);
   const uploads = page.locator(".upload-list li");
@@ -35,6 +42,7 @@ test("an owner signs up, sets up MFA, is given a plan and uploads a Property's p
   for (const photo of photos) {
     await expect(uploads.filter({ hasText: basename(photo) })).toContainText("ready");
   }
+  expect(signedUploads).toEqual(photos.map(() => 200));
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Photos (3/20)" })).toBeVisible();

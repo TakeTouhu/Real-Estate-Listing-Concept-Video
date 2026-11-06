@@ -9,7 +9,17 @@ describe("the browser test's authenticator", () => {
   it("decodes base32 as RFC 4648 does, ignoring spaces, padding and case", () => {
     expect(decodeBase32(KEY_BASE32)).toEqual(KEY);
     expect(decodeBase32("gezd gnbv gy3t qojq gezd gnbv gy3t qojq")).toEqual(KEY);
-    expect(decodeBase32("MZXW6===")).toEqual(Buffer.from("foo"));
+    // RFC 4648's own vectors, so every length of a last, partial group is read.
+    for (const [encoded, plain] of [
+      ["MY======", "f"],
+      ["MZXQ====", "fo"],
+      ["MZXW6===", "foo"],
+      ["MZXW6YQ=", "foob"],
+      ["MZXW6YTB", "fooba"],
+      ["MZXW6YTBOI======", "foobar"],
+    ] as const) {
+      expect(decodeBase32(encoded)).toEqual(Buffer.from(plain));
+    }
     expect(() => decodeBase32("not base32!")).toThrow("The key is not base32");
   });
 

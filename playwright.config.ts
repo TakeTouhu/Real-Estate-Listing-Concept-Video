@@ -28,6 +28,7 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   // `next dev` compiles each page the first time it is asked for.
   timeout: 5 * 60_000,
+  globalTimeout: 30 * 60_000,
   expect: { timeout: 30_000 },
   reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
   use: {

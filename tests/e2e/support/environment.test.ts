@@ -12,13 +12,23 @@ describe("the browser test's environment", () => {
     expect(() => e2eDatabaseUrl({})).toThrow("needs DATABASE_URL");
     expect(() => e2eDatabaseUrl({ DATABASE_URL: " " })).toThrow("needs DATABASE_URL");
     expect(() => e2eDatabaseUrl({ DATABASE_URL: "not an address" })).toThrow("is not an address");
-    const remote = "postgresql://u:hunter2@db.example.com:5432/prod";
-    expect(() => e2eDatabaseUrl({ DATABASE_URL: remote })).toThrow("must name a database on this machine");
-    try {
-      e2eDatabaseUrl({ DATABASE_URL: remote });
-    } catch (error) {
-      expect(String(error)).not.toContain("hunter2");
-      expect(String(error)).not.toContain("db.example.com");
+    const socket = "postgresql://u:p@localhost/x?host=/var/run/postgresql";
+    expect(e2eDatabaseUrl({ DATABASE_URL: socket })).toBe(socket);
+    for (const remote of [
+      "postgresql://u:hunter2@db.example.com:5432/prod",
+      "postgresql://u:hunter2@localhost:5432/prod?host=db.example.com",
+    ]) {
+      const refusal = (() => {
+        try {
+          e2eDatabaseUrl({ DATABASE_URL: remote });
+        } catch (error) {
+          return String(error);
+        }
+        return "accepted";
+      })();
+      expect(refusal).toContain("must name a database on this machine");
+      expect(refusal).not.toContain("hunter2");
+      expect(refusal).not.toContain("db.example.com");
     }
   });
 

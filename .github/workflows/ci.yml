@@ -148,6 +148,8 @@ jobs:
     # PostgreSQL service container with throwaway credentials. FFmpeg draws the
     # photos it uploads. No provider, network media or secret is involved.
     runs-on: ubuntu-24.04
+    # The two installs may take thirty minutes each; nothing else runs long.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16

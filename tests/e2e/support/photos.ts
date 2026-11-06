@@ -19,7 +19,7 @@ export async function makePhotos(dir: string): Promise<string[]> {
       const path = join(dir, `room-${index + 1}.jpg`);
       await run("ffmpeg", [
         ...["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", `${pattern}=size=1280x720`],
-        ...["-frames:v", "1", path],
+        ...["-frames:v", "1", "-update", "1", path],
       ]);
       return path;
     }),

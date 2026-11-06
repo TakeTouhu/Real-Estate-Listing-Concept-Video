@@ -23,21 +23,24 @@ const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::
 
 /**
  * The database the test writes to: `DATABASE_URL`, which must name a database
- * on this machine, as the development pipeline requires (ADR-0108 Decision 6).
- * Its address is checked and never printed.
+ * on this machine, by the development pipeline's rule (ADR-0108 Decision 6):
+ * a local host, and no `host` parameter but a socket path. Its address is
+ * checked and never printed.
  */
 export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string {
   const value = source.DATABASE_URL;
   if (value === undefined || value.trim() === "") {
     throw new Error("The browser test needs DATABASE_URL: a disposable, migrated PostgreSQL database on this machine");
   }
-  let host: string;
+  let url: URL;
   try {
-    host = new URL(value).hostname;
+    url = new URL(value);
   } catch {
     throw new Error("The browser test's DATABASE_URL is not an address");
   }
-  if (!LOCAL_HOSTS.has(host)) {
+  // Prisma connects to a `host` parameter before the address's host; only a socket path stays here.
+  const socket = url.searchParams.get("host");
+  if (!LOCAL_HOSTS.has(url.hostname) || (socket !== null && !socket.startsWith("/"))) {
     throw new Error("The browser test's DATABASE_URL must name a database on this machine");
   }
   return value;
