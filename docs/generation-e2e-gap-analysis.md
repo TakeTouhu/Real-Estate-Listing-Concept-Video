@@ -437,3 +437,53 @@ GS-12 is split into three milestones, each its own pull request:
   - **GS-12c-3** (ADR-0120, no migration): the download on the project page,
     a button that posts for the link and fixed notices for a download that
     gave none.
+
+## GS-13 — the browser test, and the plan's completion report
+
+Surveyed on `c4360e4` by clicking the whole flow through by hand in Chromium,
+against `next dev` with the test provider, a shared folder and a migrated local
+database. With the two workarounds below, a new owner reached a delivered
+video, watched its link served (`206`, `video/mp4`) and saved it as
+`渋谷 Harbour View.mp4` (H.264, 1280×720, 15 seconds), with 39 of 40 Base Units
+left; a video whose clips the test provider could not make showed the agreed
+failure message and gave its Unit back (40 of 40).
+
+What the browser test needs, beyond the app: `next dev` (the start and the
+shared folder exist only outside production), the operator command for the
+plan (ADR-0066), MFA for the `OWNER` (MFA-3), a wait until React has hydrated
+a client component, and a UTF-8 locale for Chromium (ADR-0118 Decision 2).
+
+Found:
+
+- **No page starts a photo's analysis.** Uploaded photos stay "Not analyzed
+  yet" on the review page, which offers nothing; only
+  `POST /api/properties/{p}/assets/{a}/analysis` starts one. Without it no
+  photo can be approved, so no storyboard or video can be made from the pages
+  alone. A product change: put to the product owner on 2026-11-06, with a
+  button on the review page recommended.
+- **The start admits a storyboard whose scenes the route cannot make.** A
+  storyboard composed with 3-second scenes was started, reserving its Unit;
+  the test provider's route makes 5 to 15 seconds, so the launch found no
+  route (`NO_ROUTE`), and the job waits, its Unit reserved, with no end
+  (`docs/decisions/TODO.md`, the waiting job refused for configuration). A
+  product change: put to the product owner on 2026-11-06, with the start
+  refusing such a storyboard before it reserves anything recommended.
+- **Playwright's Chromium cannot decode H.264** (ADR-0117 Decision 4): the
+  player's video fails as unsupported (`MEDIA_ERR_SRC_NOT_SUPPORTED`).
+  **Decided:** the browser test proves the player's link serves the delivered
+  video (`206`, `video/mp4`, a byte range) and that the file the download saves
+  decodes, by FFmpeg, as an H.264 video at the project's size and length. It
+  does not install another browser: a browser's own decoder is the browser's,
+  and every browser the product supports decodes H.264.
+
+GS-13 is split into four milestones, each its own pull request:
+
+- **GS-13a** (ADR-0121, no migration): Playwright, its CI job, and the first
+  browser test, from sign-up to a Property's uploaded photos.
+- **GS-13b**: starting a photo's analysis from a page, as the product owner
+  decides.
+- **GS-13c**: the browser test from the photos' analysis and approval to the
+  storyboard, the start, the pipeline command, the progress, the player's link
+  and the download, with the Unit used.
+- **GS-13d**: a video the test provider cannot make, and its Unit coming back;
+  and the plan's completion report.

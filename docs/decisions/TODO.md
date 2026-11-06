@@ -1274,12 +1274,33 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Found in GS-12b-2 — the browser test cannot decode the delivered video
 
-- [ ] **Decide how GS-13 proves the delivered video plays.** Playwright's
+- [x] **Decide how GS-13 proves the delivered video plays.** Playwright's
       bundled Chromium has no H.264 decoder (`canPlayType` answers nothing for
       `avc1`), so it cannot play the delivered video (ADR-0117 Decision 4).
       Either the test proves the player's link serves the video (`206`,
       `video/mp4`) without decoding it, or CI installs a browser that decodes
       H.264. Decided with GS-13's gap analysis.
+      *Decided in the GS-13 gap analysis (2026-11-06): the test proves the
+      player's link serves the video and that the downloaded file decodes, by
+      FFmpeg, as H.264 at the project's size and length; no other browser is
+      installed. Built in GS-13c.*
+
+## Found in GS-13's survey — the flow cannot yet be clicked through
+
+- [ ] **No page starts a photo's analysis.** The review page shows an uploaded
+      photo as "Not analyzed yet" and offers nothing; only
+      `POST /api/properties/{p}/assets/{a}/analysis` starts one, so no photo
+      can be approved and no video made from the pages alone. Put to the
+      product owner on 2026-11-06 (a button on the review page recommended);
+      GS-13b builds what they decide.
+- [ ] **The start admits a storyboard whose scenes the route cannot make.**
+      Composition takes the scene bounds a member types, and the start checks
+      the quality a route offers but not its scene lengths: a storyboard of
+      3-second scenes started on the test route (5 to 15 seconds) reserved its
+      Unit, found no route at launch (`NO_ROUTE`) and waits with no end (the
+      waiting job refused for configuration, above). Put to the product owner
+      on 2026-11-06, with the start refusing such a storyboard before it
+      reserves anything recommended.
 
 ## Open in GS-11a — how a new version of a delivered video shows its progress
 

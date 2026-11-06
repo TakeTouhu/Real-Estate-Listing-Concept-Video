@@ -7688,3 +7688,150 @@ BLOCKED.
 
 GS-12c-3 waits for the product owner's yes before merge. GS-12 is then
 complete; the browser test and the plan's completion report (GS-13) follow.
+
+## GS-13a — the browser test
+
+Base: `c4360e4` (PR #144 merge commit on `main`).
+ADR: `docs/decisions/0121-the-browser-test.md`
+
+The first of four milestones of GS-13, the browser test and the plan's
+completion report (see `docs/generation-e2e-gap-analysis.md`, *GS-13*).
+**No migration, no route, permission or environment variable of the app's,
+and no production code changed.** The exact head SHA is reported with the
+pull request.
+
+### What GS-13a does
+
+- **`pnpm test:e2e` runs Playwright** (`@playwright/test` 1.56.1, pinned):
+  Chromium drives the web app, which the run starts with `next dev` on port
+  3210 and stops afterwards, with the test provider, a git-ignored shared
+  folder under `.e2e/shared` and fixed throwaway values for every secret the
+  schema asks for (`tests/e2e/support/environment.ts`). A server already on
+  that port fails the run.
+- **The database is `DATABASE_URL`**, which must name a database on this
+  machine (`localhost`, `127.0.0.1` or `[::1]`); its address is checked and
+  never printed. The run refuses `NODE_ENV=production`, and every command the
+  test runs gets the same environment as the web app.
+- **Each test starts from its own customer**: a new person signs up at an
+  address no earlier run used, creates an organization, sets up MFA with the
+  test's own authenticator (RFC 6238 from Node's HMAC, unit-tested against the
+  RFCs' vectors), and the operator command gives the organization a Premium
+  plan from the first day of this month (`tests/e2e/support/owner.ts`).
+- **A client component is used only once React has hydrated it**
+  (`tests/e2e/support/hydration.ts`): `next dev` sends a page before its
+  scripts run, and a press before then is lost. A fixed wait is never used.
+- **Chromium runs under `C.UTF-8`**, so a download is saved under the name it
+  was sent (ADR-0118 Decision 2).
+- **The first test** (`tests/e2e/sign-up-and-upload.spec.ts`): the new owner
+  sets up MFA; the Units page says there is no plan, then, once the operator
+  has given one, Premium with 40 of 40 Base Units left; the owner creates a
+  Property, confirming the photos' rights, and uploads three photos FFmpeg
+  draws from its own test patterns, each straight to its signed upload link;
+  each is shown ready, and after a reload the Property lists the three as
+  `READY` at 1280×720.
+- **CI runs it in a new `e2e` job** on Ubuntu 24.04 with a PostgreSQL 16
+  service container, after FFmpeg, the dependencies, the Prisma client, the
+  migrations and Playwright's Chromium. A failed run keeps its report and
+  results for seven days. `next dev` logs each request's address, signed links
+  included, so only its errors are shown.
+
+```mermaid
+sequenceDiagram
+    actor T as Test (Chromium)
+    participant W as Web app (next dev, fake provider)
+    participant O as Operator command
+    participant D as PostgreSQL (local, migrated)
+    T->>W: sign up, create organization
+    W-->>T: /security (an OWNER must set up MFA)
+    T->>W: Set up MFA (after hydration), code from the test's TOTP
+    W-->>T: recovery codes, then the organizations page
+    T->>W: Units page: no plan yet
+    T->>O: provision-subscription --plan premium (same environment)
+    O->>D: plan from the 1st of this month
+    T->>W: reload: Premium, 40 of 40 left
+    T->>W: create Property (rights confirmed)
+    T->>W: three photos, each PUT to its signed upload link
+    W-->>T: each ready; after reload READY · 1280×720
+```
+
+### Verification
+
+Measured locally on this pull request's code, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,968 passed in 269 files: 5 new against GS-12c-3's 6,963 (3 on the authenticator: RFC 4648 base32, RFC 4226 HOTP and RFC 6238 TOTP vectors; 2 on the environment: a database on this machine only, never its address repeated, and the values the web app and commands share, with production refused) |
+| `pnpm test:e2e` | 1 passed, against a migrated local PostgreSQL 16 database, in about 36 seconds once the pages have been compiled; passed on each of six runs |
+| `pnpm build` | succeeded: no page or route changed |
+| `pnpm test:db`, `pnpm test:media` | not run: nothing they cover changed |
+
+### Mutation testing
+
+**27 of 27 killed**, the tree checked unchanged after each:
+
+- the authenticator: 10, against its unit tests (a byte taken only past 8
+  bits; the offset from 3 bits; the sign bit kept; a 60-second step; spaces
+  kept; lower case refused; no leading zeros; any character accepted; too
+  narrow an accumulator; SHA-256);
+- the environment: 11, against its unit tests (`[::1]` refused; any host;
+  production allowed; the host in the error; a blank address; the real
+  provider; a short MFA key; a relative shared folder; `NODE_ENV` set; the
+  database unchecked by `e2eEnvironment`; a short session secret);
+- the app, against the browser test: 6 (sign-up leaving the person signed
+  out; an `OWNER` not required to use MFA; the Units page's no-plan message
+  lost, or its count of Base Units left wrong; a photo's size not shown; an
+  upload sent with the wrong method).
+
+The first round of the environment's mutants found one gap, an
+`e2eEnvironment` that did not check its database: the test now asks it to
+refuse one elsewhere and none, and the mutant is killed.
+
+### Review
+
+Pending: an independent review of the code commit, from git objects only.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the browser test's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | Not applicable: no route or API changed |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-13a*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-13a), `docs/generation-e2e-gap-analysis.md`
+(GS-13's survey and split), `docs/decisions/TODO.md` (the H.264 item decided;
+two findings of the survey), `docs/local-setup.md` and `tests/README.md` (how
+to run it).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The test runs only against `next dev`
+with the test provider and a database on the machine it runs on, and refuses
+production. Paid Provider Activation, production Provider credentials,
+production paid AI calls, the production scheduler and live Stripe charges
+remain BLOCKED.
+
+### Known limitations
+
+- **The test stops at a Property's photos.** No page starts a photo's
+  analysis yet, and the start admits scene lengths the test provider cannot
+  make (both in `docs/decisions/TODO.md`, put to the product owner).
+- **Chromium only**, as ADR-0118 checked; no Firefox or WebKit.
+- **`next dev`, not a production build**: the start and the shared folder do
+  not exist in production. A production build is still checked by the
+  `verify` job.
+- **No accessibility, visual or timing checks.**
+- **The database is not emptied**: each run adds its own rows under new
+  addresses.
+
+### Remaining work
+
+GS-13a waits for the product owner's yes before merge. GS-13b (a page that
+starts a photo's analysis), GS-13c (the whole way to a downloaded video) and
+GS-13d (a video that is not made, its Unit returned, and the plan's completion
+report) follow.

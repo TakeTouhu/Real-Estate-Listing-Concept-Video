@@ -14,6 +14,10 @@ next-env.d.ts
 # Test / coverage
 coverage/
 .vitest/
+# The browser test's reports, results and shared folder (ADR-0121)
+playwright-report/
+test-results/
+.e2e/
 
 # Environment & secrets (never commit real secrets)
 .env

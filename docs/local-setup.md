@@ -252,6 +252,25 @@ run fails: the suites cannot make their inputs, so Vitest marks each file
 failed and reports its tests as skipped. CI runs them in the `media` job on
 Ubuntu 24.04, whose FFmpeg 6.1.1 their tolerances were measured with.
 
+### Browser tests
+
+The browser test (ADR-0121) drives the web app in Playwright's Chromium. It
+starts the web app itself (`next dev` on port 3210, so stop anything already
+there) with its own throwaway settings, and needs a **disposable**, migrated
+database on this machine and FFmpeg on the `PATH`. Use a database of its own:
+the test adds an owner, an organization and a plan on every run.
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/revt_e2e?schema=public"
+pnpm --filter @app/database run db:migrate   # apply migrations to the empty DB
+pnpm exec playwright install chromium        # once, if Chromium is not installed
+pnpm test:e2e                                # playwright.config.ts
+```
+
+It keeps the web app's photos under `.e2e/` and its results under
+`test-results/` and `playwright-report/`, all git-ignored; delete them to
+start over. Add `--trace on` to record a trace. CI runs it in the `e2e` job.
+
 ## Notes
 
 - `.env.local` and all `.env*` files (except `.env.example`) are git-ignored.
