@@ -5,6 +5,7 @@ import {
   createVideoProgressRepository,
   getPrismaClient,
 } from "@app/database";
+import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getPropertyServices } from "./property";
@@ -20,6 +21,7 @@ import type { VideoDownloadForm } from "./video-progress-view";
  */
 
 let service: VideoDownloadService | undefined;
+let logger: Logger | undefined;
 
 export function getVideoDownloadService(): VideoDownloadService {
   if (service) return service;
@@ -34,15 +36,23 @@ export function getVideoDownloadService(): VideoDownloadService {
   return service;
 }
 
+/** Where a download that failed is reported, for support to find. */
+export function getVideoDownloadLogger(): Pick<Logger, "error"> {
+  logger ??= createLogger({ base: { component: "video-download" } });
+  return logger;
+}
+
 /**
  * What the project page says when a download gave no link, by the code the
  * route sends it back with (`?download=`). The page shows only these: never
  * text the URL carries.
  */
 export const DOWNLOAD_NOTICES = {
-  none: "There is no delivered video to download. Reload the page to see where the video is.",
+  none: "There is no delivered video to download.",
   forbidden: "You may not download this video.",
-  failed: "The video could not be downloaded. Try again; if it keeps failing, quote the support reference below.",
+  failed:
+    "The video could not be downloaded. Try again; if it keeps failing, contact support with the video's " +
+    "support reference.",
 } as const;
 
 export type DownloadNotice = keyof typeof DOWNLOAD_NOTICES;
@@ -78,10 +88,12 @@ export type DownloadLanding =
  * Ask for a link to download the project's video (ADR-0119), and say where it
  * sends the member (ADR-0120 Decision 2). A member who may not download it and
  * a project out of reach are answered alike; any other refusal is a failure to
- * try again. What is not an `AppError` is the route's to fail with.
+ * try again, reported by its code and never with a link. What is not an
+ * `AppError` is the route's to fail with.
  */
 export async function requestDownload(
   downloads: Pick<VideoDownloadService, "link">,
+  log: Pick<Logger, "error">,
   actorUserId: string,
   organizationId: string,
   videoProjectId: string,
@@ -91,8 +103,16 @@ export async function requestDownload(
     link = await downloads.link(actorUserId, organizationId, videoProjectId);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
-    const refused = error.code === "FORBIDDEN" || error.code === "NOT_FOUND";
-    return { to: "PAGE", notice: refused ? "forbidden" : "failed" };
+    if (error.code === "FORBIDDEN" || error.code === "NOT_FOUND") return { to: "PAGE", notice: "forbidden" };
+    // The video's id, which the page quotes as its support reference, when the refusal names it.
+    const jobId = error.details?.jobId;
+    log.error("A video's download link could not be given", {
+      code: error.code,
+      organizationId,
+      videoProjectId,
+      ...(typeof jobId === "string" ? { jobId } : {}),
+    });
+    return { to: "PAGE", notice: "failed" };
   }
   return link === null ? { to: "PAGE", notice: "none" } : { to: "LINK", url: link.url };
 }

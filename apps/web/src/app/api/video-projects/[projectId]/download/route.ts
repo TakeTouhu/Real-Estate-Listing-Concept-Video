@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { isId, readPropertyId, startPages } from "@/lib/generation-start-form";
 import { appErrorToResponse } from "@/lib/http";
 import { isSameOriginPost } from "@/lib/same-origin";
-import { getVideoDownloadService, requestDownload } from "@/lib/video-download";
+import { getVideoDownloadLogger, getVideoDownloadService, requestDownload } from "@/lib/video-download";
 
 export const dynamic = "force-dynamic";
 
@@ -46,12 +46,23 @@ export async function POST(
     );
   }
 
-  const landing = await requestDownload(getVideoDownloadService(), current.user.id, organizationId, projectId);
+  const landing = await requestDownload(
+    getVideoDownloadService(),
+    getVideoDownloadLogger(),
+    current.user.id,
+    organizationId,
+    projectId,
+  );
   if (landing.to === "LINK") {
-    const response = NextResponse.redirect(new URL(landing.url, request.url), { status: 303 });
-    // The link is good for minutes: nothing keeps the answer that carries it.
-    response.headers.set("Cache-Control", "private, no-store");
-    return response;
+    // A path on this site is sent as it is, for the browser to resolve against
+    // the address it posted to: the token never rides on an address the server
+    // rebuilt from its own view of the request. The link is good for minutes,
+    // so nothing keeps the answer that carries it.
+    const location = /^\/(?![/\\])/.test(landing.url) ? landing.url : new URL(landing.url).href;
+    return new NextResponse(null, {
+      status: 303,
+      headers: { Location: location, "Cache-Control": "private, no-store" },
+    });
   }
   const page = new URL(startPages(propertyId, projectId).project, request.url);
   page.searchParams.set("download", landing.notice);

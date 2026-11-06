@@ -56,12 +56,26 @@ storyboard the page shows (`downloadOnProjectPage`).
    its answer sends the member:
    - **to the link**, with `303` and `Cache-Control: private, no-store`. The
      browser saves the file under the project's name and the page stays
-     where it was;
+     where it was. A link that is a path on this site (as every link the
+     signer makes is: `/api/storage/download?token=…`) is sent as that path,
+     for the browser to resolve against the address it posted to, so the
+     token never rides on an address the server rebuilt from its own view of
+     the request (a proxy's inner host or scheme). A link to another host is
+     sent whole; anything that would read as another host written as a path
+     (`//…`, `/\…`) is never sent as one;
    - **back to the project page** with `303` and `?download=` naming one of
-     three notices: `none` for no delivered video (the video changed since the
-     page was read), `forbidden` for a member who may not download it or a
-     project out of reach, answered alike as the service answers them (ADR-0119
-     Decision 2), and `failed` for any other refusal, to try again.
+     three notices: `none` for no delivered video, `forbidden` for a member
+     who may not download it (not a member of the organization, or one
+     without `video.download`) or a project out of reach, answered alike as the
+     service answers them (ADR-0119 Decision 2), and `failed` for any other
+     refusal, to try again. A delivered video stays delivered (ADR-0116) and a
+     project's video is never started twice (ADR-0110), so today only a post
+     the button did not make meets `none`.
+   - **A failure is reported** (`video-download`, error level) by its code,
+     the organization, the project and, when the refusal names it, the
+     video's id, which the page quotes as its support reference; never with a
+     link or token. A refusal and no video are not failures and report
+     nothing.
    - Anything that is not an application error is the route's to fail with, as
      every route's is.
 
@@ -74,11 +88,10 @@ service answers none.
 The project page reads `?download=` and shows the notice that code names, as a
 status above the "Video" panel, whether or not the project still has a video:
 
-- `none`: "There is no delivered video to download. Reload the page to see
-  where the video is."
+- `none`: "There is no delivered video to download."
 - `forbidden`: "You may not download this video."
 - `failed`: "The video could not be downloaded. Try again; if it keeps
-  failing, quote the support reference below."
+  failing, contact support with the video's support reference."
 
 Any other value shows nothing (`downloadNotice`): the page never shows text the
 URL carries. The notices say nothing of why a member may not download, and
@@ -89,13 +102,21 @@ name no permission, role, provider or model.
 - **A member granted `video.download` without `video.view`** has no button:
   the page itself is read with `video.view`. No role is like that; only an
   individual or group grant can make one.
-- **A notice stays until the page is loaded again.** A download that worked
-  after one that did not leaves the page, and its notice, where they were.
+- **A notice stays while the page's address carries its code**: a reload, a
+  refresh the player asks for (ADR-0117 Decision 3), and a download that
+  worked after one that did not all leave it shown. Opening the project page
+  again clears it.
+- **A deleted Property's video**, which ADR-0052 Decision 17 keeps
+  downloadable from the trash and the download service gives a link for
+  (ADR-0119 Decision 2): the project page of a deleted Property is not found,
+  so it has no button. The trash's own page is an open item
+  (`docs/decisions/TODO.md`).
 - **A delivered video whose file cannot be read** sends the browser to the
   signed route's own answer (`404`) in place of the page. A video is delivered
   only once its file is stored, so only a store that lost it does that.
 - **A limit on how often a member downloads**, beyond the same-origin check:
-  each press is audited.
+  each press is audited. Downloads are part of the cross-cutting rate-limit
+  milestone (`docs/decisions/TODO.md`, ADR-0054 Decision 5).
 - **Old versions during their 30 days** (ADR-0052 Decision 17) and **share
   links** (ADR-0052 Decision 12).
 - **The browser test** (GS-13), run under a UTF-8 locale (ADR-0118

@@ -241,7 +241,7 @@ describe("the project page's download (ADR-0120)", () => {
     return document.querySelector<HTMLFormElement>("form[action$='/download']");
   }
 
-  it("gives a member holding video.download a button for a delivered video, asking for no link to show it", async () => {
+  it("gives a member holding video.download a button for a delivered video, asking no link for it", async () => {
     state.progress = COMPLETED;
     state.permissions = ["video.view", "video.download"];
     const form = await button();
@@ -267,6 +267,10 @@ describe("the project page's download (ADR-0120)", () => {
 
   it("says why the last download gave no link, only in the page's own words", async () => {
     expect(await page({ download: "forbidden" })).toContain("You may not download this video.");
+    cleanup();
+    expect(await page({ download: "none" })).toContain("There is no delivered video to download.");
+    cleanup();
+    expect(await page({ download: "failed" })).toContain("The video could not be downloaded. Try again;");
     cleanup();
     const text = await page({ download: "Your video was deleted" });
     expect(text).not.toContain("Your video was deleted");
