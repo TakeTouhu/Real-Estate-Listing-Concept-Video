@@ -7502,3 +7502,189 @@ Stripe charges remain BLOCKED.
 
 GS-12c-2 waits for the product owner's yes before merge. Then the download on
 the project page (GS-12c-3) and the browser test (GS-13).
+
+## GS-12c-3 — the download on the project page
+
+Base: `5ca592e` (PR #143 merge commit on `main`).
+ADR: `docs/decisions/0120-the-download-on-the-project-page.md`
+
+The last of three milestones of GS-12c, the download (see
+`docs/generation-e2e-gap-analysis.md`, *GS-12*), and so the last of GS-12.
+**No migration, no new permission or environment variable**; one route is
+added. The exact head SHA is reported with the pull request.
+
+### What GS-12c-3 does
+
+- **A "Download video" button under the player**, for a video its progress
+  shows delivered and a member holding `video.download`, in the organization
+  whose storyboard the page shows (`downloadOnProjectPage`). Showing it signs
+  and audits nothing: a link is asked for only when it is pressed.
+- **It is a form that posts** its organization and Property to
+  `POST /api/video-projects/{projectId}/download`, never a link to follow, so
+  each recorded download is one the member asked for, not a prefetch.
+- **The route** refuses a post from another origin or none (`403`) before
+  reading anything, sends a signed-out visitor to sign in, refuses a body that
+  is not a form and ids that cannot be the app's (`422`), and asks
+  `VideoDownloadService.link` as the member (`requestDownload`, ADR-0119).
+- **A link sends the browser to it** (`303`, `Cache-Control: private,
+  no-store`): the signed route serves it as an attachment named after the
+  project (ADR-0118), the browser saves it and the page stays where it was. A
+  link on this site is sent as its path, for the browser to resolve against
+  the address it posted to, never as an address the server rebuilt.
+- **Anything else comes back to the page** with `?download=none` (no delivered
+  video), `forbidden` (a member who may not download it, or a project out of
+  reach, answered alike) or `failed` (any other refusal), each shown as a fixed
+  notice above the "Video" panel. Any other value shows nothing: the page never
+  shows text the URL carries. A failure is logged by its code, the
+  organization, the project and the video's id when the refusal names it,
+  never with the link.
+- **Built wherever the page is**, as the player is: where nothing can start a
+  video, no project has one to download.
+
+```mermaid
+sequenceDiagram
+    actor M as Member
+    participant P as Project page
+    participant R as POST /api/video-projects/{v}/download
+    participant L as VideoDownloadService.link
+    participant S as GET /api/storage/download
+    P-->>M: "Download video" (delivered video, video.download; nothing signed)
+    M->>R: form post: organizationId, propertyId
+    alt another origin, signed out or bad ids
+        R-->>M: 403, 303 /login or 422 (nothing asked)
+    else
+        R->>L: member, organization, project
+        alt a link
+            L-->>R: url (audited video.download_link_issued)
+            R-->>M: 303 to the link, no-store
+            M->>S: GET ?token=…
+            S-->>M: attachment, "<project name>.mp4" (page stays)
+        else none, refused or failed
+            L-->>R: null, FORBIDDEN / NOT_FOUND, or another AppError
+            R-->>M: 303 to the page, ?download=none|forbidden|failed
+            M->>P: GET, shows that code's fixed notice
+        end
+    end
+```
+
+### Verification
+
+Measured locally on this pull request's code (`47b5f6b`; the commit adding
+this report changes only this file), each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,963 passed in 267 files: 48 new against GS-12c-2's 6,915 (13 on the lib: where each answer sends the member, what a failure reports, who is given the button, the notices' exact words; 29 on the route: the link as a path or whole, never another host as a path, each notice and its report, an unexpected failure, POST only, origins with no body read, sign-in before the form, multipart, a non-form body, a file for an id and each bad id; 1 on the panel's form; 2 on the view; 3 on the page: the button for a member holding `video.download` with no link asked for, none otherwise, each notice only in the page's words) |
+| `pnpm build` | succeeded; the route is listed as `ƒ /api/video-projects/[projectId]/download` |
+| `pnpm test:db` | 1,883 passed in 73 files, against PostgreSQL 16 with the 33 migrations applied: 5 new, the route through the web composition (`tests/integration/video-download-route.db.test.ts`) |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+**38 of 38 killed** on the final code, each mutant run against the lib, route,
+page, view and panel tests, and the tree checked unchanged after each:
+
+- the route: 14 (no origin check; no sign-in redirect; each of the three ids
+  unchecked; a non-form body read as an empty form; asked with the Property
+  for the organization; back to the start page; the notice under another
+  name; a path made absolute; `//` or `/\` sent as a path; the answer
+  cacheable; the link in the body);
+- the lib: 14 (`NOT_FOUND` or `FORBIDDEN` as a failure; no video as a failure;
+  anything swallowed; no failure reported, no video id in it, a refusal
+  reported; the button for a video not delivered, or on `video.view`; the
+  project id not encoded; the first of several codes, a plain object lookup,
+  the URL's text, an empty notice);
+- the panel: 4 (fetched by `GET`; either field missing; above the player);
+- the view: 3 (not handed to the panel; the notice only with a video, or not
+  a status);
+- the page: 3 (the notice not read; the button whatever the video; the first
+  organization, not the storyboard's).
+
+The first round left one alive, a non-form body read as an empty form, which
+the ids then refuse with the same code: the test now pins the message too, and
+it is killed.
+
+### Review
+
+An independent reviewer read the code commit (`07c9b79`) from git objects
+only. Nothing blocking. It confirmed that the same-origin check comes before
+the session and the body, that every id is checked before the service is
+asked, that the way back to the page is built from checked ids and a fixed
+code only, that the link appears only in the `303`'s `Location`, that
+showing the button signs and audits nothing, that only `POST` is exported,
+and that the panel and view import only a type. Its findings, each answered
+in `47b5f6b`:
+
+- **Should fix: the link was made absolute from `request.url`**, which a
+  server behind a proxy may build from its inner host or scheme, sending the
+  token there. A link on this site is now sent as its path; a link to another
+  host whole; a path a browser would read as another host (`//…`, `/\…`) is
+  never sent as one. Tested and mutated.
+- **Minor: a failed download was not logged**, though its notice sends the
+  member to support. It is now logged by its code, the organization, the
+  project and any video id the refusal names, never with the link.
+- **Minor: the `none` notice said to reload**, which shows it again, and the
+  `failed` notice pointed to a reference "below" that a project with no video
+  does not show. Both are reworded, and ADR-0120 says a notice stays while
+  the address carries its code.
+- **Test gap: the notices' words were not pinned.** They are, and the page
+  renders each one.
+- **Test gap: no database-backed route test.** One now runs the route through
+  the web composition against PostgreSQL: a link served as an attachment
+  named after the project, audited each press, and nothing audited for a
+  VIEWER out of reach, another organization's owner (naming either
+  organization) or a video not delivered.
+- **Test gap: POST only, sign-in before the form, no body read from another
+  origin, multipart, a file for an id.** Each is tested.
+- **Docs: no completion section**: this one. **Nits**: ADR-0120 now names the
+  trash download and the rate-limit milestone as out of scope, and the API
+  summary names a non-member among the refused. Left as they are: three ids
+  passed by position (as `startOnProjectPage` takes them) and a status notice
+  present when the page loads (as the start's notice is).
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the button and route's row, and the download link's and signed route's rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-12c-3.md`: the route, the page's button and notices, and the web helpers |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-12c-3*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-12c-3), `docs/generation-e2e-gap-analysis.md`
+(GS-12c-3's ADR) and `docs/SecurityCompliance.md` (a link asked for only by a
+press).
+
+### Activation status
+
+Nothing paid or scheduled is activated. Where nothing can start a video, as in
+production (ADR-0111), no project has one to download and the page shows no
+button. Paid Provider Activation, production Provider credentials, production
+paid AI calls, the production scheduler and live Stripe charges remain
+BLOCKED.
+
+### Known limitations
+
+- **A member granted `video.download` without `video.view` has no button**:
+  the page is read with `video.view`. No role is like that.
+- **A notice stays while the page's address carries its code**, even after a
+  download that worked.
+- **A delivered video whose file cannot be read** leaves the page for the
+  signed route's `404`.
+- **A deleted Property's video has no button**: its project page is not
+  found. ADR-0052 keeps it downloadable from the trash, whose page is an open
+  item.
+- **Downloads are not rate-limited** beyond the same-origin check; they are
+  part of the cross-cutting rate-limit milestone.
+- **A member who may watch a video can keep it** (ADR-0116 Decision 4), and a
+  download resumed after its link ran out is refused (ADR-0119).
+- **No production storage adapter exists** (ADR-0115).
+
+### Remaining work
+
+GS-12c-3 waits for the product owner's yes before merge. GS-12 is then
+complete; the browser test and the plan's completion report (GS-13) follow.
