@@ -2185,3 +2185,19 @@ constructs `VideoDownloadService`, so no download link is given, no token names
 a file and nothing new is audited.
 
 **Rolling back.** To GS-12c-1's build: safe. Nothing is written.
+
+## GS-12c-3 — the download on the project page
+
+**No migration** (ADR-0120). No schema, enum, constraint or row changes, and no
+new permission or environment variable. One route is added:
+`POST /api/video-projects/{projectId}/download`.
+
+**What changes at deploy.** A member holding `video.download` sees a "Download
+video" button under a delivered video on its project page; each press that
+gives a link writes one `video.download_link_issued` entry (ADR-0119). Where
+nothing can start a video, as in production (ADR-0111), no project has one and
+the page is unchanged.
+
+**Rolling back.** To GS-12c-2's build: safe. The audit entries already written
+stay; a link already given keeps working until it runs out, and a page loaded
+before the rollback posts to a route that is gone (`404`).

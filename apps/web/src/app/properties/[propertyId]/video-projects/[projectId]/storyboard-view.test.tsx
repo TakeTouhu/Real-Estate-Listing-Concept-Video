@@ -2,7 +2,12 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoProjectDto } from "@/lib/storyboard";
-import { videoProgressPanel, type VideoPlayerSource, type VideoProgressPanel } from "@/lib/video-progress-view";
+import {
+  videoProgressPanel,
+  type VideoDownloadForm,
+  type VideoPlayerSource,
+  type VideoProgressPanel,
+} from "@/lib/video-progress-view";
 import { StoryboardView, type SceneRow } from "./storyboard-view";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -59,6 +64,8 @@ function view(
     started?: boolean;
     progress?: VideoProgressPanel | null;
     player?: VideoPlayerSource | null;
+    download?: VideoDownloadForm | null;
+    downloadNotice?: string | null;
   } = {},
 ) {
   return render(
@@ -74,6 +81,8 @@ function view(
       started={overrides.started ?? false}
       progress={overrides.progress ?? null}
       player={overrides.player ?? null}
+      download={overrides.download ?? null}
+      downloadNotice={overrides.downloadNotice ?? null}
     />,
   );
 }
@@ -297,6 +306,32 @@ describe("the project's video", () => {
     const player = { src: "https://app.test/api/storage/download?token=t", lifetimeSeconds: 300 };
     view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS, player });
     expect(screen.getByLabelText("The delivered video").getAttribute("src")).toBe(player.src);
+  });
+
+  it("hands the download button to the panel (ADR-0120)", () => {
+    const download = { action: "/api/video-projects/vpr_1/download", organizationId: ORG, propertyId: "prp_1" };
+    view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS, download });
+    const form = screen.getByRole("button", { name: "Download video" }).closest("form");
+    expect(form?.getAttribute("action")).toBe(download.action);
+    expect(screen.getByRole("region", { name: "Video" }).contains(form)).toBe(true);
+  });
+
+  it("says why the last download gave no link, before the video, whether or not there is one", () => {
+    const notice = "You may not download this video.";
+    const { container } = view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS, downloadNotice: notice });
+    const shown = screen.getByText(notice);
+    expect(shown.getAttribute("role")).toBe("status");
+    expect(shown.className).toBe("card status-bad");
+    const text = container.textContent ?? "";
+    expect(text.indexOf(notice)).toBeLessThan(text.indexOf("Support reference"));
+
+    cleanup();
+    view({ scenes: THREE_SCENES, fresh: true, progress: null, downloadNotice: notice });
+    expect(screen.getByText(notice)).toBeTruthy();
+
+    cleanup();
+    const { container: none } = view({ scenes: THREE_SCENES, fresh: true, progress: PROGRESS });
+    expect(none.querySelector(".status-bad[role=status]")).toBeNull();
   });
 
   it("shows nothing about a video for a project that has none", () => {

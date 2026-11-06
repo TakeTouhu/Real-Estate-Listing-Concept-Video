@@ -434,4 +434,6 @@ GS-12 is split into three milestones, each its own pull request:
   - **GS-12c-2** (ADR-0119, no migration): the link to a project's delivered
     video for a member holding `video.download`, saved as the project's name
     with `.mp4`, audited each time.
-  - **GS-12c-3**: the download on the project page.
+  - **GS-12c-3** (ADR-0120, no migration): the download on the project page,
+    a button that posts for the link and fixed notices for a download that
+    gave none.

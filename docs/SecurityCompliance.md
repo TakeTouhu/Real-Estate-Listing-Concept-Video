@@ -260,7 +260,9 @@ immutable and is never rewritten by the recovery (ADR-0052 Decision 20).
 A link to watch a delivered video is audited when it is given
 (`video.preview_link_issued`, on the version, ADR-0116), as a photo's link is;
 it is not a share link. A link to download it needs `video.download` and is
-audited apart, as `video.download_link_issued` on the version (ADR-0119).
+audited apart, as `video.download_link_issued` on the version (ADR-0119). The
+project page asks for one only when its download button is pressed, by a
+same-origin form post, never on loading the page (ADR-0120).
 
 Share-link audit events are reserved for the post-release share feature and have
 no initial-release surface.

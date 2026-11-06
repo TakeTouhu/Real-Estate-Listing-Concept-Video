@@ -1,5 +1,9 @@
 import { cameraMotionDisplay, type VideoProjectDto } from "@/lib/storyboard";
-import type { VideoPlayerSource, VideoProgressPanel as ProgressPanel } from "@/lib/video-progress-view";
+import type {
+  VideoDownloadForm,
+  VideoPlayerSource,
+  VideoProgressPanel as ProgressPanel,
+} from "@/lib/video-progress-view";
 import { ComposePanel } from "./compose-panel";
 import { VideoProgressPanel } from "./video-progress-panel";
 
@@ -63,6 +67,10 @@ interface Props {
   readonly progress: ProgressPanel | null;
   /** The delivered video's link, or `null` when it has none to play (ADR-0117). */
   readonly player: VideoPlayerSource | null;
+  /** The download button, for a delivered video and a member holding `video.download` (ADR-0120). */
+  readonly download: VideoDownloadForm | null;
+  /** Why the last download gave no link, in the page's own words; `null` when there is nothing to say. */
+  readonly downloadNotice: string | null;
 }
 
 type Freshness = "NEVER_COMPOSED" | "FRESH" | "STALE";
@@ -94,6 +102,8 @@ export function StoryboardView({
   started,
   progress,
   player,
+  download,
+  downloadNotice,
 }: Props) {
   const freshness = freshnessOf(scenes, fresh);
   // The DTO carries the token, because that is the API contract. The label is a
@@ -109,7 +119,13 @@ export function StoryboardView({
         </p>
       ) : null}
 
-      {progress !== null ? <VideoProgressPanel panel={progress} player={player} /> : null}
+      {downloadNotice !== null ? (
+        <p className="card status-bad" role="status">
+          {downloadNotice}
+        </p>
+      ) : null}
+
+      {progress !== null ? <VideoProgressPanel panel={progress} player={player} download={download} /> : null}
 
       <div className="card">
         <h2>Project settings</h2>
