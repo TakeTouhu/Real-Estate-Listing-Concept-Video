@@ -1,7 +1,12 @@
 import { managedDeliverableOutputKey } from "../deliverable-composition-execution/durable";
 import { recordAudit } from "../identity/audit";
 import type { ObjectStorage, SignedUrl } from "../property/ports";
-import { readNewestVideo, videoProgressOf, type VideoProgressServiceDeps } from "./progress";
+import {
+  readNewestVideo,
+  videoProgressOf,
+  type VideoProgressRecord,
+  type VideoProgressServiceDeps,
+} from "./progress";
 
 /**
  * A link to a project's delivered video, for its organization's workspace
@@ -19,10 +24,23 @@ export const VIDEO_PREVIEW_LINK_TTL_SECONDS = 300;
 export const VideoAuditAction = {
   /** A member was given a link to watch a delivered video (ADR-0116 Decision 3). */
   PreviewLinkIssued: "video.preview_link_issued",
+  /** A member was given a link to download a delivered video (ADR-0119 Decision 2). */
+  DownloadLinkIssued: "video.download_link_issued",
 } as const;
 
-/** The `resourceType` of a delivered video's audit entries: the version watched. Table-name form. */
+/** The `resourceType` of a delivered video's audit entries: the version watched or downloaded. Table-name form. */
 export const VIDEO_AUDIT_RESOURCE_TYPE = "generation_deliverable_version";
+
+/**
+ * The delivered version a link names: the job's current one, while the video's
+ * progress shows it completed; otherwise `null`, as for no video. A video whose
+ * Units contradict ADR-0052 is refused as its progress is (ADR-0113 Decision
+ * 4), before its version is looked at.
+ */
+export function completedVersionOf(record: VideoProgressRecord | null): string | null {
+  if (record === null || videoProgressOf(record).phase !== "COMPLETED") return null;
+  return record.deliveredVersionId;
+}
 
 export interface VideoPreviewServiceDeps extends VideoProgressServiceDeps {
   /** Signs the link; nothing else of the store is reached. */
@@ -46,9 +64,8 @@ export class VideoPreviewService {
    */
   async link(actorUserId: string, organizationId: string, videoProjectId: string): Promise<SignedUrl | null> {
     const record = await readNewestVideo(this.deps, actorUserId, organizationId, videoProjectId);
-    if (record === null) return null;
-    if (videoProgressOf(record).phase !== "COMPLETED" || record.deliveredVersionId === null) return null;
-    const deliverableVersionId = record.deliveredVersionId;
+    const deliverableVersionId = completedVersionOf(record);
+    if (record === null || deliverableVersionId === null) return null;
     const key = managedDeliverableOutputKey({ organizationId, deliverableVersionId });
     const link = await this.deps.storage.createSignedDownloadUrl(key, VIDEO_PREVIEW_LINK_TTL_SECONDS);
     await recordAudit(this.deps.identity, {

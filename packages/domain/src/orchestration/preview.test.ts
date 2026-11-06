@@ -202,6 +202,9 @@ describe("a link to watch a project's delivered video", () => {
     // Seeing the Property is not enough: watching its video needs video.view.
     await new PermissionGrantService(deps).grant(owner, orgId, billing, "property.view");
     expect((await refusal(billing)).code).toBe("FORBIDDEN");
+    // Nor is downloading it (ADR-0119).
+    await new PermissionGrantService(deps).grant(owner, orgId, billing, "video.download");
+    expect((await refusal(billing)).code).toBe("FORBIDDEN");
     // A CREATOR reaches only the Properties it is responsible for.
     expect((await refusal(creator)).code).toBe("NOT_FOUND");
     expect((await refusal(owner, "vpr_missing")).code).toBe("NOT_FOUND");

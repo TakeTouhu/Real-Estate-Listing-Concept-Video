@@ -19,3 +19,4 @@ export * from "./start";
 export * from "./start-service";
 export * from "./progress";
 export * from "./preview";
+export * from "./download";

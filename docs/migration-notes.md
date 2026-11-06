@@ -2173,3 +2173,15 @@ unchanged.
 
 **Rolling back.** To GS-12b-2's build: safe. Nothing is written, and no token
 given before the rollback names a file.
+
+## GS-12c-2 — a link to download a project's delivered video
+
+**No migration** (ADR-0119). No schema, enum, constraint or row changes, and no
+new route, permission or environment variable. The audit action
+`video.download_link_issued` is a value in the audit log's text column.
+
+**What changes at deploy.** Nothing a customer sees: nothing outside tests
+constructs `VideoDownloadService`, so no download link is given, no token names
+a file and nothing new is audited.
+
+**Rolling back.** To GS-12c-1's build: safe. Nothing is written.

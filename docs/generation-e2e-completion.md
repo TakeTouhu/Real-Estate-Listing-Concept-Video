@@ -7303,3 +7303,202 @@ remain BLOCKED.
 GS-12c-1 waits for the product owner's yes before merge. Then the link to a
 project's delivered video (GS-12c-2), the download on the project page
 (GS-12c-3) and the browser test (GS-13).
+
+## GS-12c-2 — a link to download a project's delivered video
+
+Base: `80ec5d4` (PR #142 merge commit on `main`).
+ADR: `docs/decisions/0119-a-link-to-download-a-delivered-video.md`
+
+The second of three milestones of GS-12c, the download (see
+`docs/generation-e2e-gap-analysis.md`, *GS-12*). **No migration, no new route,
+permission or environment variable.** Built, reviewed and mutation-tested
+together with GS-12c-1 before the split; this commit carries the same code on
+`main`. The exact head SHA is reported with the pull request.
+
+### What GS-12c-2 does
+
+- **A member holding `video.download` can be given a link that saves the
+  project's delivered video** (`VideoDownloadService.link`), with the Property
+  in reach. Watching is not downloading: `video.view` alone gives no link, and
+  `video.download` alone does not let a member watch.
+- **The progress, the preview and the download read the project through one
+  function** (`readProjectVideo`, which takes the permission), and name the
+  delivered version through another (`completedVersionOf`), so the three cannot
+  drift apart. A member refused, or a project out of reach, is answered before
+  anything about its video is read.
+- **The link is to the version a link to watch it names**, for 300 seconds,
+  including while a new version is made and when its Property was deleted. No
+  video, one not delivered yet and one that ended without one give `null`,
+  with nothing signed or audited; Units that contradict the delivery are
+  `INTERNAL_ERROR`.
+- **It is saved as the project's name with `.mp4`** (`videoDownloadFilename`):
+  composed, each run of white space as one space, each character a file name
+  may not hold as `_`, white space and dots at either end dropped, cut between
+  whole characters as a reader sees them to fit in 240 bytes; `video.mp4` when
+  nothing is left. Apart from composing it, the work is one pass over the name,
+  which the route bounds at 2,000 characters.
+- **Each link is audited when it is given** (`video.download_link_issued`, on
+  the version, with its job), apart from the links to watch it. It is signed
+  first; a link that could not be signed is not audited, and one whose entry
+  could not be appended is not handed out.
+- **Nothing outside tests constructs the service yet** (GS-12c-3), so no token
+  names a file and no answer changes.
+
+```mermaid
+sequenceDiagram
+    participant P as Project page (GS-12c-3)
+    participant L as VideoDownloadService.link
+    participant R as readProjectVideo
+    participant S as Signer
+    participant A as Audit log
+    P->>L: member, organization, project
+    L->>R: video.download, project, Property in reach
+    alt refused
+        R-->>L: FORBIDDEN or NOT_FOUND (its video not read)
+        L-->>P: thrown
+    else may download
+        R-->>L: project and its newest video, or null
+        alt no video, not completed, or no version
+            L-->>P: null (nothing signed or audited)
+        else Units contradict the delivery
+            L-->>P: INTERNAL_ERROR (nothing signed)
+        else completed
+            L->>S: org/{org}/deliverables/{version}/output, 300 s, "<project name>.mp4"
+            S-->>L: url, expiresAt
+            L->>A: video.download_link_issued, version, jobId
+            L-->>P: url, expiresAt
+        end
+    end
+```
+
+### Verification
+
+Measured locally on this pull request's commit, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,915 passed in 265 files: 18 new against GS-12c-1's 6,897 (7 on the name a video is saved under; 11 on the link: its key, life, name and audit, while a new version is made, no video, `video.download` against `video.view`, `video.download` alone, a project out of reach, another organization, contradicting Units, a deleted Property and failures), and a check that a member holding `video.download` alone cannot watch |
+| `pnpm build` | succeeded |
+| `pnpm test:db` | not run: no repository, query or schema changed |
+| `pnpm test:media` | not run: nothing it covers changed |
+
+### Mutation testing
+
+**27 of 27 killed** on this commit, each mutant run against the download, preview,
+progress and DS-4 shape tests, and the tree checked unchanged after each:
+
+- the file name: 16 (no room for `.mp4`, the wrong extension, no `video.mp4`
+  fallback, white space not collapsed, not composed, unsafe characters kept, a
+  cut one byte early, past a character that does not fit, between code points,
+  or not tidied after, dots or white space kept at either end, an
+  off-by-one at the end, and the ends trimmed by a backtracking pattern);
+- the service: 7 (a longer link, `video.view` required, the project's name
+  ignored, audited as a preview, no job in the entry, the wrong resource, the
+  entry not awaited);
+- the shared read: 2 (the permission ignored; the preview needing
+  `video.download`);
+- the delivered version: 2 (no phase check; the wrong version).
+
+### Review
+
+An independent reviewer read GS-12c-1 and GS-12c-2 together (`b59b1b4`), from
+git objects only. Nothing blocking. It confirmed that `readNewestVideo` and
+`completedVersionOf` behave exactly as the preview's code did, that the link
+is signed before its audit entry is written, and that every role holds both
+video permissions or neither. Its findings on this half, each answered before
+the split:
+
+- **Should fix: the test that `video.download` alone is enough proved
+  nothing**, because the member also held `video.view`. A member now granted
+  `video.download` alone is given a link, one holding `video.view` alone is
+  refused, and the preview refuses one holding `video.download` alone.
+- **Test gap: "before anything about its video is read" was not pinned.** The
+  tests count reads: a refused member and a project out of reach read none.
+- **Test gap: no other organization.** Another organization's member is
+  refused, and another organization's project is not found.
+- **Nit: wrong cross-references.** The code now cites ADR-0119's decisions.
+- **Nit: a byte-order mark became a space, not `_`.** ADR-0119 says white
+  space "and the like", and a test pins it.
+- **Nit: the cut could split a flag or an emoji sequence.** It now cuts
+  between whole characters as a reader sees them (`Intl.Segmenter`). Tested
+  with a flag.
+- **Nit: trimming the ends took time quadratic in a run of dots and spaces.**
+  It now takes one pass from each end.
+
+A second independent reviewer read this commit's code on `main`, from git
+objects only. Nothing blocking. It confirmed each fix above, that
+`video.download` is checked before the project is looked up and its Property
+reach before its video is read, that `readNewestVideo` makes the same calls in
+the same order as before, and the audit order and entry. It ran 200,000 random
+names built from the characters most likely to break one (lone surrogates,
+accents, joiners, regional indicators, tags, controls, jamo, direction marks):
+every one passed `isAttachmentFilename`. Its findings, each answered in this
+commit:
+
+- **Should fix: "only an individual grant separates" the two video
+  permissions.** A group grant can too (ADR-0052 Decision 10). ADR-0119 now
+  says so. The download asks the same permission check every route asks,
+  whose merge of group grants is tested in Phase 6G
+  (`group-permissions.test.ts`), so no test of its own was added.
+- **Should fix: "one pass however long it is" was not true of composing.**
+  Unicode composition is quadratic on a long run of marks of alternating
+  classes (8 seconds at 200,000 characters). The one route that names a project
+  bounds it at 2,000 characters (about a millisecond); ADR-0119 and this report
+  now say that.
+- **Minor: a character bigger than the room drops the rest of the name.** Kept,
+  stated in ADR-0119, and tested.
+- **Minor: a subdivision flag loses its tags.** They are format characters
+  ADR-0118 refuses; stated in ADR-0119.
+- **Minor: the architecture row lost "nothing signs a named link yet".** It now
+  says nothing outside tests asks for one yet.
+- **Test gap: the 10,000-character test did not pin the one-pass trim**, since
+  its runs were at the ends. A 200,000-character name with the run inside now
+  must take under a second (the old pattern takes minutes), and the mutant
+  that brings the pattern back is killed.
+- **Test gap: no accent at the cut.** Tested.
+- **Test gap: a fixed list of risky names.** 1,000 more are drawn the same way
+  every run from 26 risky characters.
+- **Test gap: no group grant of `video.download`.** Answered above.
+- **Nits** (the segmenter's locale, re-encoding the stem, the byte-order mark's
+  wording, a project named `CON`): the byte-order mark is now worded as
+  JavaScript reads it; the rest are left as they are, as harmless.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the download link's row, and the signed route's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-12c-2.md`: the service, the file name, the audit action and the shared read |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-12c-2*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-12c-2), `docs/generation-e2e-gap-analysis.md`
+(GS-12c-2's ADR) and `docs/SecurityCompliance.md` (the download link's audit).
+
+### Activation status
+
+Nothing paid or scheduled is activated, and nothing a customer reaches gives a
+link to download a video. Paid Provider Activation, production Provider
+credentials, production paid AI calls, the production scheduler and live
+Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No customer can download a video yet** (GS-12c-3).
+- **A member who may watch a video can keep it**, as with photos (ADR-0116
+  Decision 4): the download is the action offered and audited as one, not the
+  only way to save the bytes.
+- **A download resumed after its link ran out is refused**; the member asks
+  for a new link.
+- **A subdivision flag in a project's name is saved with `_` for its tags**,
+  and a character too big for the room ends the name (ADR-0119 Decision 1).
+- **No production storage adapter exists** (ADR-0115).
+
+### Remaining work
+
+GS-12c-2 waits for the product owner's yes before merge. Then the download on
+the project page (GS-12c-3) and the browser test (GS-13).
