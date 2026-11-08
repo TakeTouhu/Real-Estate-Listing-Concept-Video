@@ -7886,3 +7886,137 @@ GS-13a waits for the product owner's yes before merge. GS-13b (a page that
 starts a photo's analysis), GS-13c (the whole way to a downloaded video) and
 GS-13d (a video that is not made, its Unit returned, and the plan's completion
 report) follow.
+
+## GS-13b — analyze photos from the review page
+
+Base: `1615f63` (PR #145 merge commit on `main`).
+ADR: `docs/decisions/0122-analyze-photos-from-the-review-page.md`
+
+The second of four milestones of GS-13 (see
+`docs/generation-e2e-gap-analysis.md`, *GS-13*), built as the product owner
+chose on 2026-11-08: a button on the review page that analyzes the photos not
+analyzed yet, only when pressed. **No migration, no route, permission or
+environment variable**, and no change to the analyzer or the upload. The exact
+head SHA is reported with the pull request.
+
+### What GS-13b does
+
+- **"Analyze N photos not analyzed yet"** above the photos not reviewable yet,
+  while at least one photo is `READY` with no analysis, for a member holding
+  `asset.upload`, the permission the analysis route asks for
+  (`buildReviewBoard`'s `toAnalyze`). Nobody else sees it. A photo whose
+  analysis failed or is running is not offered again.
+- **One press asks the existing route for each photo in turn**
+  (`POST /api/properties/{p}/assets/{a}/analysis`, `{ organizationId }`), as
+  the member. Who may analyze, which photos may be, the audit
+  (`analysis.requested`) and a photo already analyzed all stay with
+  `AnalysisService`; nothing is analyzed before the press.
+- **While it runs** the button cannot be pressed again and says which photo it
+  is on (`Analyzing 2 of 3…`); then the page is read again from the database,
+  so analyzed photos move to "Awaiting decision".
+- **A refusal** is worded by `mapAnalysisError`: a `422`'s own message, a fixed
+  sentence otherwise. Signed out (`401`) or a role that cannot analyze (`403`)
+  stops the run and is said once; any other refusal is shown against its
+  photo's name and the run goes on.
+- **The browser test** (ADR-0121) now goes on to the review page, presses the
+  button once React has hydrated it, and finds the three photos awaiting a
+  decision at revision 1, with nothing left to analyze.
+
+```mermaid
+sequenceDiagram
+    actor M as Member (asset.upload)
+    participant P as Review page
+    participant B as AnalyzePhotosButton
+    participant R as POST …/assets/{a}/analysis
+    participant S as AnalysisService.analyzeAsset
+    P-->>M: "Analyze 3 photos not analyzed yet" (READY, no analysis)
+    M->>B: press
+    loop each photo, in turn
+        B->>R: { organizationId }
+        R->>S: member, organization, asset
+        S-->>R: analysis (audited analysis.requested), or a refusal
+        R-->>B: 200, or 401 / 403 (stop) / 404 / 422 (shown, go on)
+    end
+    B->>P: router.refresh()
+    P-->>M: photos awaiting decision; any refusal named
+```
+
+### Verification
+
+Measured locally on this pull request's code, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 6,982 passed in 271 files: 14 new against GS-13a's 6,968 (5 on the words of a refusal and the envelope's message; 3 on which photos are offered, and to whom; 6 on the button: nothing before a press, each photo in turn as the organization, the progress and no second press, a refusal against its photo, a run stopped once at `401` or `403`, the last refusals cleared at once); one existing assertion on the review board's fields now names `toAnalyze` |
+| `pnpm build` | succeeded; the review page's own code grows from 2.07 kB to 2.41 kB, its first load unchanged at 104 kB (no domain code in the browser) |
+| `pnpm test:e2e` | 1 passed against a migrated local PostgreSQL 16 database, now analyzing its three photos from the review page; in about 43 seconds once the pages have been compiled; passed on each of three runs |
+| `pnpm test:db`, `pnpm test:media` | not run: nothing they cover changed |
+
+### Mutation testing
+
+**32 of 32 killed**, the tree checked unchanged after each:
+
+- the view: 5 (offered to anyone; on `analysis.review`; a photo not ready; a
+  photo analyzed; the wrong name);
+- the words: 7 (each of `401`, `403` and `404` unmapped; any message shown;
+  an empty or a non-string message kept; a message read from the top level);
+- the button: 17 (success read as failure; the run not stopped, or not at
+  `401`, or not at `403`; a whole-run refusal named against a photo; a refusal
+  not named against its photo; the page not read again; old refusals kept;
+  left busy; pressable while running; the wrong progress; the wrong
+  organization; the refresh route; the wrong method; no JSON type; a network
+  failure silent; "photos" for one);
+- the page, against the browser test: 3 (the button never shown; a photo left
+  out; the page not read again).
+
+The first round left one alive: the last run's refusals kept while the next
+run was still going, which its end then replaced. The test now checks they are
+gone as soon as the button is pressed again, and it is killed.
+
+### Review
+
+Pending: an independent review of the code commit, from git objects only.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the button's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | Not applicable: no route or API changed; the button calls the existing analysis route |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-13b*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-13b), `docs/generation-e2e-gap-analysis.md`
+(the product owner's choice), `docs/decisions/TODO.md` (the finding decided),
+`docs/UXFlow.md` (the button) and `tests/README.md` (what the browser test
+covers).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The button is shown in production as
+in development: it analyzes with the offline, deterministic analyzer, which the
+route already used for any client calling it. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **A failed analysis cannot be retried from a page**: the refresh route exists
+  and no page offers it.
+- **One request per photo per press**, one after another; a Property's limit is
+  twenty photos.
+- **The page is read again only when the run ends**, so a photo analyzed before
+  a later refusal moves only then.
+- **The short-scene start** (GS-13's second finding) is still with the product
+  owner.
+
+### Remaining work
+
+GS-13b waits for the product owner's yes before merge. GS-13c (from the
+photos' approval to a downloaded video) and GS-13d (a video that is not made,
+its Unit returned, and the plan's completion report) follow; GS-13c also needs
+the product owner's answer on the short-scene start.

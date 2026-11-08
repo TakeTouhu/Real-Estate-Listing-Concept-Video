@@ -587,6 +587,13 @@ analysis from a page, which none offers yet (GS-13b); the rest of the way to a
 downloaded video (GS-13c); and a video that is not made, with the plan's
 completion report (GS-13d).
 
+**GS-13b — analyze photos from the review page** (ADR-0122, no migration): the
+review page offers "Analyze N photos not analyzed yet" to a member holding
+`asset.upload` when a ready photo has no analysis, as the product owner chose
+on 2026-11-08. One press asks the existing analysis route for each photo in
+turn, then reads the page again; no route or rule is added. The browser test
+now analyzes its three photos from the page.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

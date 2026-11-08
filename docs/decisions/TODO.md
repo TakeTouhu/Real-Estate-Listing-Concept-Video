@@ -1287,12 +1287,13 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
 
 ## Found in GS-13's survey — the flow cannot yet be clicked through
 
-- [ ] **No page starts a photo's analysis.** The review page shows an uploaded
+- [x] **No page starts a photo's analysis.** The review page shows an uploaded
       photo as "Not analyzed yet" and offers nothing; only
       `POST /api/properties/{p}/assets/{a}/analysis` starts one, so no photo
       can be approved and no video made from the pages alone. Put to the
       product owner on 2026-11-06 (a button on the review page recommended);
-      GS-13b builds what they decide.
+      GS-13b builds what they decide. *Decided 2026-11-08: a button on the
+      review page, analyzing only when pressed. Built in GS-13b (ADR-0122).*
 - [ ] **The start admits a storyboard whose scenes the route cannot make.**
       Composition takes the scene bounds a member types, and the start checks
       the quality a route offers but not its scene lengths: a storyboard of

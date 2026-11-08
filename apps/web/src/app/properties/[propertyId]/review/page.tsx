@@ -6,6 +6,7 @@ import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { thumbnailUrls } from "@/lib/thumbnails";
 import { buildReviewBoard, humanizeRoomType, type ReviewItem } from "@/lib/review-view";
+import { AnalyzePhotosButton } from "./analyze-photos-button";
 import { ReviewItemControls, type CorrectionTarget } from "./review-item-controls";
 import type { RoomOption } from "./correction-panel";
 
@@ -93,6 +94,13 @@ export default async function ReviewPage({
         </Section>
 
         <Section title="Not reviewable yet" count={board.notReviewable.length}>
+          {board.toAnalyze.length === 0 ? null : (
+            <AnalyzePhotosButton
+              organizationId={organization.id}
+              propertyId={property.id}
+              targets={board.toAnalyze}
+            />
+          )}
           {board.notReviewable.map((item) => (
             <Item key={item.assetId} item={item} thumbnails={thumbnails} />
           ))}

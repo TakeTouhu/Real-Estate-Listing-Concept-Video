@@ -2214,3 +2214,17 @@ developer's machine, against a disposable database.
 
 **Rolling back.** To GS-12c-3's build: safe. Nothing is written but the test's
 own rows in its own database.
+
+## GS-13b — analyze photos from the review page
+
+**No migration** (ADR-0122). No schema, enum, constraint or row changes, and no
+route, permission or environment variable. The review page gains a button that
+calls the existing analysis route.
+
+**What changes at deploy.** A member holding `asset.upload` sees the button on
+a Property's review page while a ready photo has no analysis. Pressing it
+analyzes those photos with the deterministic analyzer, as the route already
+did for any client calling it.
+
+**Rolling back.** To GS-13a's build: safe. Analyses the button started stay,
+as any analysis the route made does.
