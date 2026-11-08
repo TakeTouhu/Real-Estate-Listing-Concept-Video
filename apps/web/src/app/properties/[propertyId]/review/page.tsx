@@ -6,6 +6,7 @@ import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { thumbnailUrls } from "@/lib/thumbnails";
 import { buildReviewBoard, humanizeRoomType, type ReviewItem } from "@/lib/review-view";
+import { AnalyzePhotosButton } from "./analyze-photos-button";
 import { ReviewItemControls, type CorrectionTarget } from "./review-item-controls";
 import type { RoomOption } from "./correction-panel";
 
@@ -92,7 +93,18 @@ export default async function ReviewPage({
           ))}
         </Section>
 
-        <Section title="Not reviewable yet" count={board.notReviewable.length}>
+        <Section
+          title="Not reviewable yet"
+          count={board.notReviewable.length}
+          lead={
+            // Mounted for every viewer, so its refusals outlive the page being read again.
+            <AnalyzePhotosButton
+              organizationId={organization.id}
+              propertyId={property.id}
+              targets={board.toAnalyze}
+            />
+          }
+        >
           {board.notReviewable.map((item) => (
             <Item key={item.assetId} item={item} thumbnails={thumbnails} />
           ))}
@@ -107,10 +119,13 @@ export default async function ReviewPage({
 function Section({
   title,
   count,
+  lead = null,
   children,
 }: {
   title: string;
   count: number;
+  /** Shown whatever the count, in the same place, so its state survives a refresh. */
+  lead?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -118,6 +133,7 @@ function Section({
       <h2>
         {title} <span className="muted">({count})</span>
       </h2>
+      {lead}
       {count === 0 ? <p className="muted">Nothing here.</p> : children}
     </div>
   );

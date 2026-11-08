@@ -174,6 +174,19 @@ the immutable-per-revision rule is unchanged.
 The corrected values are what storyboard composition uses (Phase 3D-3), and a
 correction that would alter a composed storyboard makes it read stale.
 
+#### Implemented — analyze photos (GS-13b)
+
+Above the photos not reviewable yet, a member who may upload sees **Analyze N
+photos not analyzed yet** while a ready photo has no analysis (ADR-0122).
+Nothing is analyzed until it is pressed. One press analyzes those photos one
+after another, says which it is on (`Analyzing 2 of 3…`) and cannot be pressed
+again meanwhile; then the page reloads its data, and analyzed photos move to
+**awaiting decision**. A photo that could not be analyzed is named with the
+reason; being signed out, or a role that cannot analyze, is said once and
+stops the run. These stay on screen after the page reloads its data. A failed
+analysis shows its reason on its photo and is not offered again here, nor is
+one still pending. A member who cannot analyze sees no button.
+
 ### Video customization
 
 Controls:

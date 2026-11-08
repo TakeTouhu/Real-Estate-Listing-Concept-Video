@@ -167,7 +167,8 @@ describe("look-alike photos (ADR-0052 Decision 14)", () => {
       templateOf("OWNER"),
     );
     expect(board.awaiting.map((i) => i.assetId)).toEqual(["a", "b", "c"]);
-    expect(Object.keys(board).sort()).toEqual(["awaiting", "canReview", "decided", "notReviewable"]);
+    // No cluster or primary field: the photos to analyze (GS-13b) are the only addition.
+    expect(Object.keys(board).sort()).toEqual(["awaiting", "canReview", "decided", "notReviewable", "toAnalyze"]);
   });
 
   it("keeps offering approval after a look-alike is approved", () => {
@@ -313,5 +314,38 @@ describe("correction state", () => {
   it("reports no correction state for an asset with no analysis at all", () => {
     const board = buildReviewBoard([asset("a")], [], templateOf("OWNER"));
     expect(board.notReviewable[0]!.correction).toBeNull();
+  });
+});
+
+describe("photos to analyze (GS-13b, ADR-0122)", () => {
+  it("offers each ready photo with no analysis, in the order listed, to a member holding asset.upload", () => {
+    const assets = [asset("ast_new"), asset("ast_done"), asset("ast_second")];
+    const board = buildReviewBoard(assets, [analysis("ast_done")], templateOf("CREATOR"));
+    expect(board.toAnalyze).toEqual([
+      { assetId: "ast_new", filename: "ast_new.jpg" },
+      { assetId: "ast_second", filename: "ast_second.jpg" },
+    ]);
+  });
+
+  it("does not offer a photo that is not ready, or whose analysis failed or is running", () => {
+    const assets = [
+      asset("ast_processing", { status: "PROCESSING" }),
+      asset("ast_upload_failed", { status: "FAILED" }),
+      asset("ast_failed"),
+      asset("ast_pending"),
+    ];
+    const analyses = [
+      analysis("ast_failed", { status: "FAILED", failureReason: "Unreadable" }),
+      analysis("ast_pending", { status: "PENDING" }),
+    ];
+    expect(buildReviewBoard(assets, analyses, templateOf("OWNER")).toAnalyze).toEqual([]);
+  });
+
+  it("offers nothing to a role without asset.upload, which the analysis route refuses", () => {
+    for (const role of ["VIEWER", "BILLING"] as const) {
+      expect(buildReviewBoard([asset("ast_new")], [], templateOf(role)).toAnalyze).toEqual([]);
+    }
+    expect(buildReviewBoard([asset("ast_new")], [], ["analysis.review"]).toAnalyze).toEqual([]);
+    expect(buildReviewBoard([asset("ast_new")], [], ["asset.upload"]).toAnalyze).toHaveLength(1);
   });
 });

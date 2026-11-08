@@ -79,12 +79,25 @@ export interface ReviewItem {
   readonly correction: CorrectionState | null;
 }
 
+/** A photo the page offers to analyze: ready, and with no analysis yet. */
+export interface AnalyzeTarget {
+  readonly assetId: string;
+  readonly filename: string;
+}
+
 export interface ReviewBoard {
   readonly awaiting: readonly ReviewItem[];
   readonly decided: readonly ReviewItem[];
   readonly notReviewable: readonly ReviewItem[];
   /** Presentation-level authorization; the API enforces it independently. */
   readonly canReview: boolean;
+  /**
+   * The photos the "Analyze" button starts (GS-13b, ADR-0122): each `READY`
+   * one with no analysis row, for a viewer holding `asset.upload`, the
+   * permission the analysis route asks for. Empty for anyone else. A failed
+   * or running analysis is not offered again here.
+   */
+  readonly toAnalyze: readonly AnalyzeTarget[];
 }
 
 const NO_PERMISSION = "Your role cannot approve or reject photos.";
@@ -156,6 +169,7 @@ export function buildReviewBoard(
   permissions: readonly Permission[],
 ): ReviewBoard {
   const canReview = permissions.includes("analysis.review");
+  const canAnalyze = permissions.includes("asset.upload");
   const byAsset = new Map(analyses.map((a) => [a.assetId, a]));
 
   const items = assets.map((asset): ReviewItem => {
@@ -192,5 +206,10 @@ export function buildReviewBoard(
     decided: items.filter((i) => i.bucket === "DECIDED"),
     notReviewable: items.filter((i) => i.bucket === "NOT_REVIEWABLE"),
     canReview,
+    toAnalyze: canAnalyze
+      ? assets
+          .filter((asset) => asset.status === "READY" && !byAsset.has(asset.id))
+          .map((asset) => ({ assetId: asset.id, filename: asset.originalFilename }))
+      : [],
   };
 }

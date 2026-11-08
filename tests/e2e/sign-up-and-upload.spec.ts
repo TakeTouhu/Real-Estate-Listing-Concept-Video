@@ -7,10 +7,12 @@ import { makePhotos } from "./support/photos";
 /**
  * The first browser test (GS-13a, ADR-0121): a new customer reaches a
  * Property holding their photos, through the web app's own pages, in a real
- * browser. The rest of the way to a delivered video follows in GS-13b to
- * GS-13d.
+ * browser, and has them analyzed from the review page (GS-13b, ADR-0122). The
+ * rest of the way to a delivered video follows in GS-13c and GS-13d.
  */
-test("an owner signs up, sets up MFA, is given a plan and uploads a Property's photos", async ({ page }, testInfo) => {
+test("an owner signs up, sets up MFA, is given a plan, uploads a Property's photos and has them analyzed", async ({
+  page,
+}, testInfo) => {
   const owner = await signUpOwner(page, "Browser Test Realty");
 
   await page.getByRole("link", { name: "Units and plan" }).click();
@@ -49,5 +51,18 @@ test("an owner signs up, sets up MFA, is given a plan and uploads a Property's p
   for (const photo of photos) {
     const listed = page.getByRole("listitem").filter({ hasText: `${basename(photo)} — READY · 1280×720` });
     await expect(listed).toBeVisible();
+  }
+
+  // GS-13b (ADR-0122): the review page starts each photo's analysis, so each awaits a person's decision.
+  await page.getByRole("link", { name: "Review photo analyses →" }).click();
+  await expect(page.getByRole("heading", { name: "Not reviewable yet (3)" })).toBeVisible();
+  await (await hydrated(page.getByRole("button", { name: "Analyze 3 photos not analyzed yet" }))).click();
+  // Three requests in turn, then the page read again: longer than one step on a cold dev server.
+  await expect(page.getByRole("heading", { name: "Awaiting decision (3)" })).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByRole("heading", { name: "Not reviewable yet (0)" })).toBeVisible();
+  await expect(page.locator('.status-bad[role="alert"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /not analyzed yet/ })).toHaveCount(0);
+  for (const photo of photos) {
+    await expect(page.locator(".review-name", { hasText: basename(photo) })).toContainText("revision 1");
   }
 });

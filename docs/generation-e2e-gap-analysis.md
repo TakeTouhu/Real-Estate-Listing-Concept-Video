@@ -488,3 +488,12 @@ GS-13 is split into four milestones, each its own pull request:
   and the download, with the Unit used.
 - **GS-13d**: a video the test provider cannot make, and its Unit coming back;
   and the plan's completion report.
+
+GS-13b: the product owner chose on 2026-11-08 a button on the review page
+that analyzes the photos not analyzed yet, only when pressed, leaving the
+upload as it is (ADR-0122). It needs no route: the existing analysis route
+already holds the permission (`asset.upload`), the `READY`-only rule, the audit
+and the answer to a photo already analyzed, so the button asks it for each
+photo in turn. A photo whose analysis failed or is still pending is not
+offered again: retrying one from a page is left open in
+`docs/decisions/TODO.md`.
