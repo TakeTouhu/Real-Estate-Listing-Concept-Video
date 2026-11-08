@@ -11,7 +11,7 @@ export const ANALYSIS_ERRORS = {
   signIn: "Your session has ended. Sign in again to analyze photos.",
   permission: "Your role cannot analyze photos.",
   reload: "This photo is no longer available here. Reload the page.",
-  generic: "The photo could not be analyzed. Try again.",
+  generic: "The photo could not be analyzed.",
 } as const;
 
 /**

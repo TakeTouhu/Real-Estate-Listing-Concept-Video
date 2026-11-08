@@ -183,8 +183,9 @@ after another, says which it is on (`Analyzing 2 of 3…`) and cannot be pressed
 again meanwhile; then the page reloads its data, and analyzed photos move to
 **awaiting decision**. A photo that could not be analyzed is named with the
 reason; being signed out, or a role that cannot analyze, is said once and
-stops the run. A failed analysis shows its reason on its photo and is not
-offered again here. A member who cannot analyze sees no button.
+stops the run. These stay on screen after the page reloads its data. A failed
+analysis shows its reason on its photo and is not offered again here, nor is
+one still pending. A member who cannot analyze sees no button.
 
 ### Video customization
 

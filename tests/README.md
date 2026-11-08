@@ -49,9 +49,8 @@ pnpm test:e2e
 
 The test goes from sign-up to a Property's photos analyzed from the review
 page (GS-13b, ADR-0122). Each test signs up its own owner and organization, so
-runs never meet. Its
-helpers live in `tests/e2e/support/`; their own unit tests (`*.test.ts`) run
-with `pnpm test`. CI runs it in the `e2e` job.
+runs never meet. Its helpers live in `tests/e2e/support/`; their own unit tests
+(`*.test.ts`) run with `pnpm test`. CI runs it in the `e2e` job.
 
 ## Unit tests
 

@@ -57,8 +57,10 @@ test("an owner signs up, sets up MFA, is given a plan, uploads a Property's phot
   await page.getByRole("link", { name: "Review photo analyses →" }).click();
   await expect(page.getByRole("heading", { name: "Not reviewable yet (3)" })).toBeVisible();
   await (await hydrated(page.getByRole("button", { name: "Analyze 3 photos not analyzed yet" }))).click();
-  await expect(page.getByRole("heading", { name: "Awaiting decision (3)" })).toBeVisible();
+  // Three requests in turn, then the page read again: longer than one step on a cold dev server.
+  await expect(page.getByRole("heading", { name: "Awaiting decision (3)" })).toBeVisible({ timeout: 120_000 });
   await expect(page.getByRole("heading", { name: "Not reviewable yet (0)" })).toBeVisible();
+  await expect(page.locator('.status-bad[role="alert"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: /not analyzed yet/ })).toHaveCount(0);
   for (const photo of photos) {
     await expect(page.locator(".review-name", { hasText: basename(photo) })).toContainText("revision 1");

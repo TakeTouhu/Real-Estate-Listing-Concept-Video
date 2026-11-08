@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Suspense, use, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANALYSIS_ERRORS } from "@/lib/analysis-errors";
 import type { AnalyzeTarget } from "@/lib/review-view";
@@ -78,7 +79,7 @@ describe("the analyze button (GS-13b, ADR-0122)", () => {
     fetchMock.mockImplementation(() => Promise.resolve(respond(200)));
     button();
     const pressing = press();
-    expect(await screen.findByText("Analyzing 1 of 3…")).toBeTruthy();
+    expect((await screen.findByRole("status")).textContent).toBe(" Analyzing 1 of 3…");
     expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
     release(respond(200));
     await pressing;
@@ -134,5 +135,79 @@ describe("the analyze button (GS-13b, ADR-0122)", () => {
     release(respond(200));
     await again;
     expect(document.querySelectorAll(".status-bad")).toHaveLength(0);
+  });
+
+  it("shows nothing while there is nothing to analyze and nothing to say", () => {
+    const { container } = button([]);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("keeps its refusals on screen when the page, read again, offers no photo", async () => {
+    fetchMock.mockResolvedValue(respond(500));
+    const { rerender } = button([TARGETS[0]!]);
+    await press(1);
+    rerender(<AnalyzePhotosButton organizationId={ORG} propertyId={PROPERTY} targets={[]} />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe(`a.jpg: ${ANALYSIS_ERRORS.generic}`);
+  });
+
+  it("shows a refusal for each photo, even two with the same name", async () => {
+    fetchMock.mockResolvedValue(respond(500));
+    // React reports two rows sharing a key, which it may then merge or drop.
+    const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    button([
+      { assetId: "ast_a", filename: "room.jpg" },
+      { assetId: "ast_b", filename: "room.jpg" },
+    ]);
+    await press(2);
+    expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
+      `room.jpg: ${ANALYSIS_ERRORS.generic}`,
+      `room.jpg: ${ANALYSIS_ERRORS.generic}`,
+    ]);
+    expect(reported).not.toHaveBeenCalled();
+    reported.mockRestore();
+  });
+
+  it("stays unpressable until the page has been read again", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(respond(200)));
+    let land: () => void = () => undefined;
+    const reading = new Promise<void>((resolve) => (land = resolve));
+    function Reading() {
+      use(reading);
+      return null;
+    }
+    // The page as Next's router reads it again: the refresh's update waits on the data.
+    function Page() {
+      const [read, setRead] = useState(false);
+      refresh.mockImplementation(() => setRead(true));
+      return (
+        <Suspense fallback={null}>
+          <AnalyzePhotosButton organizationId={ORG} propertyId={PROPERTY} targets={TARGETS} />
+          {read ? <Reading /> : null}
+        </Suspense>
+      );
+    }
+    render(<Page />);
+    await press();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => land());
+    expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("counts the photos as they were when pressed, even if the page is read again meanwhile", async () => {
+    let release: (response: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => (release = resolve)));
+    fetchMock.mockImplementation(() => Promise.resolve(respond(200)));
+    const { rerender } = button();
+    const pressing = press();
+    expect((await screen.findByRole("status")).textContent).toBe(" Analyzing 1 of 3…");
+    rerender(<AnalyzePhotosButton organizationId={ORG} propertyId={PROPERTY} targets={TARGETS.slice(1)} />);
+    expect(screen.getByRole("status").textContent).toBe(" Analyzing 1 of 3…");
+    release(respond(200));
+    await pressing;
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+      TARGETS.map(({ assetId }) => `/api/properties/${PROPERTY}/assets/${assetId}/analysis`),
+    );
   });
 });

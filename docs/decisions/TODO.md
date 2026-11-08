@@ -1294,6 +1294,16 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       product owner on 2026-11-06 (a button on the review page recommended);
       GS-13b builds what they decide. *Decided 2026-11-08: a button on the
       review page, analyzing only when pressed. Built in GS-13b (ADR-0122).*
+- [ ] **Retry a failed or abandoned analysis from a page.** The review page
+      offers its analyze button only for a photo with no analysis (GS-13b,
+      ADR-0122). A photo whose analysis failed shows its reason and nothing
+      to do; one whose request ended before the analysis did keeps a
+      `PENDING` analysis and reads "Analysis in progress." with no end. The
+      same route would try either again, since it reuses such an analysis,
+      but a `PENDING` one may still be running, and two requests for one
+      photo each call the analyzer (*Deduplicate concurrent analysis work*,
+      above). Offering a retry, and telling an abandoned analysis from a
+      running one, is still to decide.
 - [ ] **The start admits a storyboard whose scenes the route cannot make.**
       Composition takes the scene bounds a member types, and the start checks
       the quality a route offers but not its scene lengths: a storyboard of

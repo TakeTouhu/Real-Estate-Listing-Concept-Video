@@ -7905,19 +7905,23 @@ head SHA is reported with the pull request.
   while at least one photo is `READY` with no analysis, for a member holding
   `asset.upload`, the permission the analysis route asks for
   (`buildReviewBoard`'s `toAnalyze`). Nobody else sees it. A photo whose
-  analysis failed or is running is not offered again.
+  analysis failed or is still pending is not offered again (retrying one is
+  left open in `docs/decisions/TODO.md`).
 - **One press asks the existing route for each photo in turn**
   (`POST /api/properties/{p}/assets/{a}/analysis`, `{ organizationId }`), as
   the member. Who may analyze, which photos may be, the audit
   (`analysis.requested`) and a photo already analyzed all stay with
   `AnalysisService`; nothing is analyzed before the press.
 - **While it runs** the button cannot be pressed again and says which photo it
-  is on (`Analyzing 2 of 3…`); then the page is read again from the database,
-  so analyzed photos move to "Awaiting decision".
+  is on (`Analyzing 2 of 3…`, counting the photos as pressed); then the page is
+  read again from the database, so analyzed photos move to "Awaiting
+  decision", and the button stays unpressable until that read lands.
 - **A refusal** is worded by `mapAnalysisError`: a `422`'s own message, a fixed
   sentence otherwise. Signed out (`401`) or a role that cannot analyze (`403`)
   stops the run and is said once; any other refusal is shown against its
-  photo's name and the run goes on.
+  photo's name and the run goes on. The page mounts the button for every
+  viewer in the same place, and it shows nothing while there is nothing to
+  analyze or say, so refusals stay on screen after the page is read again.
 - **The browser test** (ADR-0121) now goes on to the review page, presses the
   button once React has hydrated it, and finds the three photos awaiting a
   decision at revision 1, with nothing left to analyze.
@@ -7935,7 +7939,8 @@ sequenceDiagram
         B->>R: { organizationId }
         R->>S: member, organization, asset
         S-->>R: analysis (audited analysis.requested), or a refusal
-        R-->>B: 200, or 401 / 403 (stop) / 404 / 422 (shown, go on)
+        R-->>B: 200, or 401 / 403 (stop), or 404 / 422 / 500 (shown, go on)
+        Note over B,R: a request that never answers is shown against its photo too
     end
     B->>P: router.refresh()
     P-->>M: photos awaiting decision; any refusal named
@@ -7948,35 +7953,71 @@ Measured locally on this pull request's code, each exit status read:
 | Check | Result |
 | --- | --- |
 | `pnpm lint`, `pnpm typecheck` | clean |
-| `pnpm test` | 6,982 passed in 271 files: 14 new against GS-13a's 6,968 (5 on the words of a refusal and the envelope's message; 3 on which photos are offered, and to whom; 6 on the button: nothing before a press, each photo in turn as the organization, the progress and no second press, a refusal against its photo, a run stopped once at `401` or `403`, the last refusals cleared at once); one existing assertion on the review board's fields now names `toAnalyze` |
-| `pnpm build` | succeeded; the review page's own code grows from 2.07 kB to 2.41 kB, its first load unchanged at 104 kB (no domain code in the browser) |
-| `pnpm test:e2e` | 1 passed against a migrated local PostgreSQL 16 database, now analyzing its three photos from the review page; in about 43 seconds once the pages have been compiled; passed on each of three runs |
+| `pnpm test` | 6,987 passed in 271 files: 19 new against GS-13a's 6,968 (5 on the words of a refusal and the envelope's message; 3 on which photos are offered, and to whom; 11 on the button: nothing before a press, each photo in turn as the organization, the progress and no second press, a refusal against its photo, a run stopped once at `401` or `403`, the last refusals cleared at once, nothing shown with nothing to say, refusals kept when the page offers no photo, two photos of one name each named, the count as pressed, unpressable until the page has been read again); one existing assertion on the review board's fields now names `toAnalyze` |
+| `pnpm build` | succeeded; the review page's own code grows from 2.07 kB to 2.49 kB, its first load unchanged at 104 kB (no domain code in the browser) |
+| `pnpm test:e2e` | 1 passed against a migrated local PostgreSQL 16 database, now analyzing its three photos from the review page with no refusal shown; in about 44 seconds once the pages have been compiled; passed on each of three runs |
 | `pnpm test:db`, `pnpm test:media` | not run: nothing they cover changed |
 
 ### Mutation testing
 
-**32 of 32 killed**, the tree checked unchanged after each:
+**40 of 40 killed** on the final code, the tree checked unchanged after each:
 
 - the view: 5 (offered to anyone; on `analysis.review`; a photo not ready; a
   photo analyzed; the wrong name);
 - the words: 7 (each of `401`, `403` and `404` unmapped; any message shown;
   an empty or a non-string message kept; a message read from the top level);
-- the button: 17 (success read as failure; the run not stopped, or not at
+- the button: 24 (success read as failure; the run not stopped, or not at
   `401`, or not at `403`; a whole-run refusal named against a photo; a refusal
   not named against its photo; the page not read again; old refusals kept;
-  left busy; pressable while running; the wrong progress; the wrong
-  organization; the refresh route; the wrong method; no JSON type; a network
-  failure silent; "photos" for one);
-- the page, against the browser test: 3 (the button never shown; a photo left
-  out; the page not read again).
+  left busy; pressable while running, or while the page is read again; the
+  wrong photo in progress; the total taken from the page read again; the
+  wrong organization; the refresh route; the wrong method; no JSON type; a
+  network failure silent; "photos" for one; refusals dropped when no photo is
+  left; an empty panel shown; refusals keyed by their text; the progress not
+  a status; a refusal not an alert);
+- the page, against the browser test: 4 (no photo offered; a photo left out;
+  the section's lead never shown; the page not read again).
 
-The first round left one alive: the last run's refusals kept while the next
-run was still going, which its end then replaced. The test now checks they are
-gone as soon as the button is pressed again, and it is killed.
+The first round, on the code before the review, killed 32 of 32 once one
+survivor (the last run's refusals kept while the next ran) had its test
+strengthened. After the review rewrote the button, two survived: refusals
+keyed by their text, and the button pressable while the page is read again.
+The tests now check that React reports no shared key for two photos of one
+name, and that the button stays unpressable while a refresh waits on its data;
+both are killed.
 
 ### Review
 
-Pending: an independent review of the code commit, from git objects only.
+An independent review of the code commit `8995382`, from git objects only,
+found nothing blocking. Its findings, each answered in the second commit:
+
+- **Should fix — refusals lost on the page's refresh.** The page mounted the
+  button only while a photo was offered, so a refusal for the last one (or a
+  `403` after the member lost `asset.upload`) vanished when the page was read
+  again. Fixed: the page mounts it for every viewer in the same place, and it
+  shows nothing while there is nothing to analyze or say; tested.
+- **Should fix — "Try again" that could not be done.** A photo whose request
+  failed after its analysis was created is `PENDING` or `FAILED`, so the
+  button does not offer it again. Fixed: the words no longer ask to try
+  again; ADR-0122 now says why such a photo is not offered (the same route
+  would retry it, but a `PENDING` one may be running), and the retry is
+  recorded as open in `docs/decisions/TODO.md`.
+- **Refusals keyed by their text, the total taken from the page read again,
+  the button pressable before the page's data lands, and no `status` or
+  `alert` roles.** Each fixed and tested.
+- **"Not analyzed yet." also on a photo that is not ready.** Kept: the view's
+  wording predates GS-13b; recorded under *Known limitations*.
+- **Missing cross-references.** ADR-0122 now names the open items the route
+  already carries (the Phase 6C permission choice, rate limiting, the
+  same-origin check, concurrent analysis).
+- **Nits.** The test fixture for a photo whose upload failed is renamed; the
+  browser test waits longer for the three analyses; the sequence diagram now
+  shows a `500` and a request that never answers; `tests/README.md` is
+  reflowed. A photo being deleted mid-run is refused with the domain's
+  sentence, which names its status, as the decision controls already show a
+  `422` (TODO, *Expose a machine-readable refusal reason on review errors*).
+  `envelopeMessage` repeats the decision controls' reader rather than moving
+  it, to keep this change to the analysis.
 
 ### Required documentation
 
@@ -8005,8 +8046,14 @@ scheduler and live Stripe charges remain BLOCKED.
 
 ### Known limitations
 
-- **A failed analysis cannot be retried from a page**: the refresh route exists
-  and no page offers it.
+- **A failed or abandoned analysis cannot be retried from a page.** The same
+  route would try it again, but the button offers only a photo with no
+  analysis; a request that ended before its analysis did leaves the photo
+  reading "Analysis in progress." with no end (TODO, *Retry a failed or
+  abandoned analysis from a page*).
+- **A photo that is not ready reads "Not analyzed yet."** too (one still
+  processing, or whose upload failed), and no button is offered for it: the
+  view's wording predates GS-13b and is unchanged.
 - **One request per photo per press**, one after another; a Property's limit is
   twenty photos.
 - **The page is read again only when the run ends**, so a photo analyzed before

@@ -330,7 +330,7 @@ describe("photos to analyze (GS-13b, ADR-0122)", () => {
   it("does not offer a photo that is not ready, or whose analysis failed or is running", () => {
     const assets = [
       asset("ast_processing", { status: "PROCESSING" }),
-      asset("ast_rejected", { status: "FAILED" }),
+      asset("ast_upload_failed", { status: "FAILED" }),
       asset("ast_failed"),
       asset("ast_pending"),
     ];

@@ -494,5 +494,6 @@ that analyzes the photos not analyzed yet, only when pressed, leaving the
 upload as it is (ADR-0122). It needs no route: the existing analysis route
 already holds the permission (`asset.upload`), the `READY`-only rule, the audit
 and the answer to a photo already analyzed, so the button asks it for each
-photo in turn. A failed analysis is not offered again: refreshing one from a
-page stays out of scope.
+photo in turn. A photo whose analysis failed or is still pending is not
+offered again: retrying one from a page is left open in
+`docs/decisions/TODO.md`.

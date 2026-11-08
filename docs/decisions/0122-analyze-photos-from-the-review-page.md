@@ -29,8 +29,16 @@ not reviewable yet, when at least one photo is `READY` with no analysis and
 the member holds `asset.upload`, the permission the route asks for
 (`buildReviewBoard`'s `toAnalyze`). Nobody else sees it: a member who cannot
 analyze is offered nothing, as a member who cannot decide is offered no
-decision. A photo whose analysis failed or is running is not offered again;
-refreshing an analysis stays out of scope.
+decision. A photo whose analysis failed, or is still `PENDING`, is not
+offered again. The same route would try it again, since it reuses such an
+analysis rather than adding one, but a `PENDING` analysis may still be running
+and two requests for one photo each call the analyzer; offering a retry is
+left open (`docs/decisions/TODO.md`, *Retry a failed or abandoned analysis
+from a page*).
+
+The button sits in the same place for every viewer and shows nothing while
+there is nothing to analyze and nothing to say, so a refusal stays on screen
+after the page is read again, even when no photo is left to offer.
 
 ## Decision 2 — It asks the existing route for each photo, in turn
 
@@ -42,8 +50,10 @@ and a second press finding a photo already analyzed all stay with
 unchanged.
 
 While it runs, the button cannot be pressed again and says which photo it is
-on ("Analyzing 2 of 3…"). Then the page is read again from the database
-(`router.refresh()`), so analyzed photos move to "Awaiting decision" and a
+on ("Analyzing 2 of 3…", announced as a status), counting the photos as they
+were when pressed. Then the page is read again from the database
+(`router.refresh()`), and the button stays unpressable until that read lands,
+so its count is current. Analyzed photos move to "Awaiting decision" and a
 failed analysis shows its reason on its photo.
 
 ## Decision 3 — A refusal is shown in the page's words
@@ -52,7 +62,9 @@ A refusal is shown as `mapAnalysisError` words it, as the decision controls'
 are: a `422`'s own message, written for a person, and a fixed sentence for
 anything else. A refusal that holds for every photo (`401` signed out, `403`
 a role that cannot analyze) stops the run and is shown once; any other is
-shown against its photo's name, and the run goes on to the next.
+shown against its photo's name, and the run goes on to the next. Each is an
+alert, and none asks the member to try again, since the button does not offer
+a photo whose analysis failed.
 
 ## Decision 4 — The browser test analyzes from the page
 
@@ -62,8 +74,16 @@ photos awaiting a decision at revision 1, none left to analyze.
 
 ## What stays out
 
-- **Refreshing a failed analysis** from a page: the refresh route exists and no
-  page offers it.
+- **Retrying a failed or abandoned analysis** from a page (TODO, *Retry a
+  failed or abandoned analysis from a page*).
+- **What the route already leaves open** stays open, and the button adds no
+  new surface to it: `asset.upload` as the permission for analysis is a
+  Phase 6C choice still to confirm (TODO, *Confirm the Phase 6C choices
+  ADR-0052 did not make*); the analysis routes are not rate-limited (TODO,
+  *Add rate limiting as one cross-cutting milestone*) and rely on
+  `SameSite=Lax` without an `Origin` check (TODO, *Extend the same-origin
+  check to every cookie-based mutation route*); two requests for one photo
+  each call the analyzer (TODO, *Deduplicate concurrent analysis work*).
 - **Analysis on upload**: the product owner chose the press.
 - **The short-scene start** (GS-13's second finding): still with the product
   owner.
