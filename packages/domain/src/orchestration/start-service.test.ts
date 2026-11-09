@@ -918,6 +918,8 @@ describe("the start offer", () => {
     expect(await offered()).toEqual({
       kind: "SCENE_LENGTHS_NOT_SUPPORTED",
       durations,
+      durationSeconds: 25,
+      sceneCount: 3,
       scenes: [
         { id: "scn_1", position: 2, durationSeconds: 3 },
         { id: "scn_3", position: 6, durationSeconds: 16 },

@@ -124,7 +124,8 @@ describe("no paid boundary is reachable", () => {
   });
 
   it("schedules nothing, fetches nothing and opens no transaction of its own", () => {
-    for (const file of ["ending.ts", "launch.ts", "launched-ending.ts", "limit.ts", "planner.ts", "runner.ts"]) {
+    const files = ["ending.ts", "launch.ts", "launched-ending.ts", "limit.ts", "planner.ts", "route-qualification.ts"];
+    for (const file of [...files, "runner.ts"]) {
       const text = code(readFileSync(join(MODULE_DIR, file), "utf8"));
       for (const banned of ["fetch(", "createGeneration(", "prisma", "$transaction", "setTimeout(", "setInterval("]) {
         expect(`${file}:${banned}: ${text.includes(banned)}`).toBe(`${file}:${banned}: false`);

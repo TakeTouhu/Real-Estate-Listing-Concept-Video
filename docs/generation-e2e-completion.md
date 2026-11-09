@@ -8082,27 +8082,31 @@ variable.** The exact head SHA is reported with the pull request.
 ### What GS-13c-1 does
 
 - **One route qualification for the planner and the start.** The planner's
-  private route qualification moves, unchanged, into
-  `job-launch/route-qualification.ts` (`qualifyingRoutes`), and the planner
-  calls it. `judgeStartRoute` asks it of the facts the start commit copies
-  (the project's quality, target resolution and aspect ratio, each scene's
-  length and camera motion) and answers `ONE_ROUTE`, `SCENE_LENGTHS` (the
-  lengths the one route at that quality takes, and the scenes that are not
-  one) or `NO_ROUTE`.
+  private route qualification moves into `job-launch/route-qualification.ts`
+  (`qualifyingRoutes`) with the same behaviour (the gate's pure check now runs
+  before each scene's), and the planner calls it. `judgeStartRoute` asks it of
+  the facts the start commit copies (the project's quality, target resolution
+  and aspect ratio, each scene's length and camera motion) and answers
+  `ONE_ROUTE`, `SCENE_LENGTHS` (the lengths the one route at that quality
+  takes, and the scenes that are not one, when their lengths alone stand in
+  the way) or `NO_ROUTE`.
 - **The start is handed it** as `StartRouteCheck` (`routeCheck(policy,
   models)`); the web app's start takes `FakeRouteKit.routeCheck`, over the
   same policy and catalog the development pipeline's planner is built from.
 - **Both the offer and the start ask it** after the storyboard's own checks
   and before the length, the plan and the Units: the offer answers
-  `SCENE_LENGTHS_NOT_SUPPORTED` (the lengths, and each scene's id, position
-  and length) or `SETTINGS_NOT_SUPPORTED`; the start answers the same two
+  `SCENE_LENGTHS_NOT_SUPPORTED` (the lengths, the storyboard's length and
+  scene count, and each such scene's id, position and length) or
+  `SETTINGS_NOT_SUPPORTED`; the start answers the same two
   outcomes, with no Unit reserved, no period opened and no commit asked.
 - **The start page** shows no form for either: "Each scene of this video must
   be 5 to 15 seconds long. These scenes are not:", each scene by number, room
-  and length, and to compose again with the shortest and longest scene within
-  that range; or "This video cannot be made with this project's settings
-  yet." The start route sends either refusal back to the start page with a
-  fixed sentence.
+  and length; that a scene's length is the project's length shared between
+  its approved photos, so composing again gives the same lengths; and a new
+  project whose length, shared equally between the photos, gives each an
+  accepted length (or, for scenes too long, more approved photos). Otherwise
+  "This video cannot be made with this project's settings." The start route
+  sends either refusal back to the start page with a fixed sentence.
 
 ```mermaid
 sequenceDiagram
@@ -8132,10 +8136,79 @@ Measured locally on this pull request's code, each exit status read:
 | Check | Result |
 | --- | --- |
 | `pnpm lint`, `pnpm typecheck` | clean |
-| `pnpm test` | 7,013 passed in 272 files: 26 new against GS-13b's 6,987 (14 on the route question: one route, the scenes named by index with the lengths, listed lengths, a length not a whole second, the route at the storyboard's own quality, no route for a quality, resolution, catalog or other setting, two routes, two candidates both refusing, agreement with the planner's qualification over a grid, and the start's `routeCheck`; 4 on the start service: the facts asked, both refusals with nothing reserved, the offer of scenes to fix by their own position, settings not supported; 1 on the kit's route check; 5 on the start page; 2 on the start route's sentences). The start's order test gains four cases; one existing assertion on the import allowlist names the new file |
-| `pnpm test:db` | 1,883 passed in 73 files, against a migrated local PostgreSQL 16 database |
+| `pnpm test` | 7,016 passed in 272 files: 29 new against GS-13b's 6,987 (16 on the route question: one route, the scenes named by index with the lengths, listed lengths, a length not a whole second, the route at the storyboard's own quality, lengths named only when they alone stand in the way, a model that takes no length, no route for a quality, resolution, catalog or other setting, two routes, two candidates both refusing, agreement with the planner's qualification over a grid, and the start's `routeCheck`; 4 on the start service: the facts asked, both refusals with nothing reserved, the offer of scenes to fix with the storyboard's length and scene count and each scene's own position, settings not supported; 1 on the kit's route check; 6 on the start page; 2 on the start route's sentences). The start's order test gains four cases; the import allowlist and the module's "schedules nothing" list name the new file |
+| `pnpm test:db` | 1,884 passed in 73 files, against a migrated local PostgreSQL 16 database; one new: a 9-second project's three 3-second scenes through the web app's own start, offered as scenes to fix and refused on a post, with no job, reservation allocation, Unit period or audit entry written |
 | `pnpm build` | succeeded; the start page stays server-rendered at 226 B, first load 102 kB (no domain code in the browser) |
 | `pnpm test:e2e`, `pnpm test:media` | not run: nothing they cover changed (the browser test does not reach the start page yet) |
+
+### Mutation testing
+
+**52 of 52 killed** on the final code (one equivalent removed), the tree
+checked unchanged after each:
+
+- route qualification: 12 (two qualifying read as one; two candidates read as
+  one; the lengths fixed; accepted scenes named; indexes from 1; the start
+  ignoring the scenes' settings; a looser length rule; the planner ignoring
+  the scenes; camera motion not judged; lengths named though another setting
+  refuses; a range from zero taking nothing; the refit keeping the refused
+  lengths);
+- the start service: 19 (each refusal unanswered by the offer or the start, or
+  answered as the other; the wrong scene, a position from the index, the
+  lengths, the storyboard's length or the wrong scene count in the offer; the
+  route asked before `RECOMPOSE` or after the length; the quality, resolution,
+  aspect ratio, camera motion or length judged fixed; `routeCheck` ignoring
+  its catalog);
+- the kit and the web app's start: 3 (the check over no routes; not frozen;
+  the web app's start with a check that passes everything);
+- the start page and route: 16 (scene lengths shown as a refusal; a range or
+  a single listed length misworded; one scene as many; an unknown room
+  named "Scene"; the position or the length dropped; more photos offered when
+  only some scenes are too long, never offered, or for a list's longest read
+  as its shortest; the photo count shown as the length; composing again not
+  said to give the same lengths; no reassurance; the settings refusal
+  unworded; each route sentence);
+- the database test: 2 (the web app's start with a check that passes
+  everything; the start not refusing scene lengths).
+
+The first round, before the review, killed 40 of 41; the survivor (an offer
+that always quoted 5 to 15 seconds) was killed once the test used lengths no
+test route has. In the second round the guard for "no scene refused for its
+length" survived as equivalent: the refit check already answers no route
+then, so the guard was removed.
+
+### Review
+
+An independent review of the code commit `deaa8c7`, from git objects only,
+confirmed the planner's behaviour unchanged, the start judging the facts the
+planner later sees (no normalization between them, and the commit's scene ids
+pinning them), the order of the checks and the wiring to the kit. Its
+findings, each answered in the second commit:
+
+- **Blocking — the page's advice could never fix it.** Composition shares the
+  project's length between its approved photos; the shortest and longest
+  scene only accept or refuse that split, and a project's length is fixed, so
+  composing again gives the same lengths or a refusal. Fixed: the offer
+  carries the storyboard's length and scene count, and the page says why
+  composing again does not help and offers a new project whose length, shared
+  equally between the photos, gives each an accepted length, or, for scenes
+  too long, more approved photos; the route's sentence no longer says to
+  compose again. ADR-0123's Context is corrected, and it records that the
+  decision card's wording ("change the scenes' seconds and compose again") is
+  not something composition allows. Letting a member fix it without a new
+  project is recorded as open in `docs/decisions/TODO.md`.
+- **Should fix — no test through the real route kit and PostgreSQL.** Added
+  (the database test above); it kills both mutants it was written for.
+- **Nits.** Scenes are named for their length only when their length alone
+  stands in the way (the storyboard with each at an accepted length must
+  pass), and a model that takes no length is no route, so the page never
+  words an empty list; "yet" is dropped from the settings sentence; a scene
+  whose room is unknown reads "Scene 2 · 4 seconds"; the TODO also names jobs
+  started before GS-13c-1; "moved unchanged" now says the gate's check runs
+  earlier with the same result; the module's "schedules nothing" list names
+  the new file; listed lengths are worded through "shared equally". The
+  agreement test compares two functions sharing helpers and is kept as a
+  regression guard; the planner's own tests, unchanged and passing, pin its
+  `NO_ROUTE` and `AMBIGUOUS_ROUTE`.
 
 ### Required documentation
 
@@ -8170,9 +8243,11 @@ production scheduler and live Stripe charges remain BLOCKED.
   route table or catalog can change between the start and the launch; a job
   the launch refuses for either still waits with its Units (TODO, *Bound how
   long a waiting job refused for configuration may hold its Units*).
-- **A scene refused for its length and another setting** is named for its
-  length first; once composed again, the page says the settings are not
-  supported.
+- **Scenes too short are fixed only by a new project.** A project's length is
+  fixed at creation and no page withdraws an approval (TODO, *Let a member fix
+  a storyboard whose scenes the route cannot make without a new project*). A
+  Property with many approved photos may have no project length a video may
+  be (twenty photos at 5 seconds each need 100 seconds; a video is at most 90).
 - **Two candidate routes at one quality** that both refuse a scene's length
   are answered as settings not supported, since neither is the route; today
   each quality has one route.

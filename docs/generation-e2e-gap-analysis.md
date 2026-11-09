@@ -501,7 +501,9 @@ offered again: retrying one from a page is left open in
 GS-13c is split in two. GS-13c-1: the start refuses a storyboard whose scenes
 the route cannot make, as the product owner chose on 2026-11-08 (ADR-0123).
 The start asks the planner's own route qualification, moved out of the planner
-unchanged, of the storyboard it would copy, before anything is reserved; when
-the one route at the project's quality refuses only lengths, the start page
-names the lengths a scene may be and the scenes that are not. GS-13c-2: the
-browser test from the photos' approval to a downloaded video.
+with the same behaviour, of the storyboard it would copy, before anything is
+reserved; when the one route at the project's quality refuses only lengths,
+the start page names the lengths a scene may be, the scenes that are not, and
+what changes them (composition shares the project's length between its
+photos, so composing again does not). GS-13c-2: the browser test from the
+photos' approval to a downloaded video.

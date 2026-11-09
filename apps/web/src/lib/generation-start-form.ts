@@ -99,9 +99,8 @@ const REFUSALS: Record<Exclude<StartGenerationOutcome["kind"], "STARTED" | "ALRE
   STORYBOARD_CHANGED: "The storyboard changed after you reviewed it. Nothing was started. Review it again.",
   QUALITY_CHANGED: "The project's quality changed after you reviewed it. Nothing was started. Review it again.",
   QUALITY_NOT_OFFERED: "Videos of this project's quality cannot be made yet. Nothing was started.",
-  SCENE_LENGTHS_NOT_SUPPORTED:
-    "Some scenes are a length this video cannot be made at. Nothing was started. Compose the storyboard again.",
-  SETTINGS_NOT_SUPPORTED: "This video cannot be made with this project's settings yet. Nothing was started.",
+  SCENE_LENGTHS_NOT_SUPPORTED: "Some scenes are a length this video cannot be made at. Nothing was started.",
+  SETTINGS_NOT_SUPPORTED: "This video cannot be made with this project's settings. Nothing was started.",
   LENGTH_NOT_SUPPORTED: "The storyboard is longer than a video VTaVision makes. Nothing was started.",
   NO_PLAN: "This organization has no plan yet, or its plan has not started. Nothing was started.",
   INSUFFICIENT_UNITS: "There are not enough Units for this video. Nothing was started.",

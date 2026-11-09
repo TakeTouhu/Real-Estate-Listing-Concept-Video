@@ -333,11 +333,13 @@ On the start page (development with the test provider only, ADR-0112), a
 storyboard with a scene of a length the video cannot be made at shows **no
 start button** (ADR-0123). It says the lengths each scene must be ("Each scene
 of this video must be 5 to 15 seconds long."), lists each scene that is not by
-its number, room and length, and says to compose the storyboard again on the
-project page with its shortest and longest scene within that range; nothing has
-been reserved. A storyboard no route can make for any other reason reads
-*This video cannot be made with this project's settings yet.*, with no form.
-The page names no provider or model.
+its number, room and length, and explains that a scene's length is the
+project's length shared between its approved photos, so composing again gives
+the same lengths. It offers a new project whose length, shared equally between
+the photos, gives each an accepted length, and, for scenes too long, adding and
+approving more photos; nothing has been reserved. A storyboard no route can
+make for any other reason reads *This video cannot be made with this project's
+settings.*, with no form. The page names no provider or model.
 
 ### Generation progress
 

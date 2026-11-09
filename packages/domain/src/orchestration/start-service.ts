@@ -175,13 +175,16 @@ export type StartOffer =
   | { readonly kind: "QUALITY_NOT_OFFERED"; readonly qualityTier: GenerationQualityTier }
   /**
    * The route for the project's quality cannot make these scenes at their
-   * length: the lengths it accepts, and each such scene with the position
-   * the project page numbers it by, in order. The storyboard must be composed
-   * again (ADR-0123).
+   * length: the lengths it accepts, the storyboard's length and how many
+   * scenes share it (composition divides one by the other), and each such
+   * scene with the position the project page numbers it by, in order
+   * (ADR-0123).
    */
   | {
       readonly kind: "SCENE_LENGTHS_NOT_SUPPORTED";
       readonly durations: DurationPolicy;
+      readonly durationSeconds: number;
+      readonly sceneCount: number;
       readonly scenes: readonly {
         readonly id: string;
         readonly position: number;
@@ -236,11 +239,14 @@ export class GenerationStartService {
     const usable = (scene: StoryboardScene) =>
       scene.compiledPrompt !== null && (scene.cameraMotion === null || isCameraMotion(scene.cameraMotion));
     if (!view.scenes.every(usable)) return { kind: "RECOMPOSE" };
+    const seconds = view.scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
     const verdict = this.judgeRoute(project, view.scenes, qualityTier);
     if (verdict.kind === "SCENE_LENGTHS") {
       return {
         kind: "SCENE_LENGTHS_NOT_SUPPORTED",
         durations: verdict.durations,
+        durationSeconds: seconds,
+        sceneCount: view.scenes.length,
         scenes: verdict.scenes.map((index) => {
           const scene = view.scenes[index] as StoryboardScene;
           return { id: scene.id, position: scene.position, durationSeconds: scene.durationSeconds };
@@ -248,7 +254,6 @@ export class GenerationStartService {
       };
     }
     if (verdict.kind === "NO_ROUTE") return { kind: "SETTINGS_NOT_SUPPORTED" };
-    const seconds = view.scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
     const required = requiredUnitsFor(qualityTier, seconds);
     if (!required.ok) return { kind: "LENGTH_NOT_SUPPORTED", durationSeconds: seconds };
 

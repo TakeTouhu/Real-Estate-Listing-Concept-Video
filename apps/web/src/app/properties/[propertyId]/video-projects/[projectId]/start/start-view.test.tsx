@@ -175,7 +175,7 @@ describe("an offer that cannot be started", () => {
     [
       "settings no route can make",
       { kind: "SETTINGS_NOT_SUPPORTED" },
-      "This video cannot be made with this project's settings yet.",
+      "This video cannot be made with this project's settings.",
     ],
     [
       "a storyboard too long",
@@ -216,22 +216,26 @@ describe("scenes the video cannot be made at (ADR-0123)", () => {
   const SHORT: Extract<StartOffer, { kind: "SCENE_LENGTHS_NOT_SUPPORTED" }> = {
     kind: "SCENE_LENGTHS_NOT_SUPPORTED",
     durations: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
+    durationSeconds: 11,
+    sceneCount: 3,
     scenes: [
-      { id: "scn_b", position: 1, durationSeconds: 3 },
-      { id: "scn_c", position: 3, durationSeconds: 16 },
+      { id: "scn_b", position: 1, durationSeconds: 4 },
+      { id: "scn_c", position: 3, durationSeconds: 3 },
     ],
   };
 
-  it("names the lengths a scene may be, each scene that is not, and how to fix it, with no form", () => {
+  it("names the lengths a scene may be, each scene that is not, and what changes them, with no form", () => {
     const { container } = show(SHORT);
     expect(text(container)).toContain("Each scene of this video must be 5 to 15 seconds long. These scenes are not:");
     expect([...container.querySelectorAll("li")].map(text)).toEqual([
-      "Scene 1 · Living room · 3 seconds",
-      "Scene 3 · Bedroom · 16 seconds",
+      "Scene 1 · Living room · 4 seconds",
+      "Scene 3 · Bedroom · 3 seconds",
     ]);
     expect(text(container)).toContain(
-      "Compose the storyboard again on the project page, with its shortest and longest scene within that range, " +
-        "then review the video here. Nothing has been reserved.",
+      "A scene's length is the project's length shared between its approved photos: here 11 seconds between 3 " +
+        "photos, so composing the storyboard again gives the same lengths. To make this video, create a new " +
+        "project whose length, shared equally between the 3 photos, gives each 5 to 15 seconds. Nothing has been " +
+        "reserved.",
     );
     expect(container.querySelectorAll("form, input, button")).toHaveLength(0);
     for (const internal of ["wavespeed", "fake", "model", "provider", "job", "route"]) {
@@ -239,11 +243,39 @@ describe("scenes the video cannot be made at (ADR-0123)", () => {
     }
   });
 
-  it("speaks of one scene as one, and names a scene whose room it does not know plainly", () => {
+  it("offers more photos too for scenes too long, and only then", () => {
+    const long = {
+      ...SHORT,
+      durationSeconds: 50,
+      scenes: [
+        { id: "scn_b", position: 1, durationSeconds: 17 },
+        { id: "scn_a", position: 2, durationSeconds: 16 },
+      ],
+    };
+    expect(text(show(long).container)).toContain(
+      "gives each 5 to 15 seconds, or add and approve more photos, then compose this storyboard again. Nothing",
+    );
+    cleanup();
+    // A length between two listed ones is neither too short nor too long: only a new project fixes it.
+    const between = {
+      ...SHORT,
+      durations: { kind: "ENUMERATED", seconds: [5, 10] },
+      durationSeconds: 21,
+      scenes: [{ id: "scn_b", position: 1, durationSeconds: 7 }],
+    } as const;
+    expect(text(show(between).container)).toContain(
+      "shared equally between the 3 photos, gives each 5 or 10 seconds. Nothing has been reserved.",
+    );
+    cleanup();
+    const oneTooShort = { ...long, scenes: [...long.scenes, { id: "scn_c", position: 3, durationSeconds: 4 }] };
+    expect(text(show(oneTooShort).container)).not.toContain("more photos");
+  });
+
+  it("speaks of one scene as one, and of a scene whose room it does not know by its number alone", () => {
     const one = { ...SHORT, scenes: [{ id: "scn_x", position: 2, durationSeconds: 4 }] };
     const { container } = show(one);
     expect(text(container)).toContain("must be 5 to 15 seconds long. This scene is not:");
-    expect([...container.querySelectorAll("li")].map(text)).toEqual(["Scene 2 · Scene · 4 seconds"]);
+    expect([...container.querySelectorAll("li")].map(text)).toEqual(["Scene 2 · 4 seconds"]);
   });
 
   it("shows why the last start started nothing above the scenes to fix", () => {

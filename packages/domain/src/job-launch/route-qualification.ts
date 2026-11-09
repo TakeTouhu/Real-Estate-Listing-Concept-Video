@@ -142,8 +142,9 @@ export type StartRouteVerdict =
   | { readonly kind: "ONE_ROUTE" }
   /**
    * The one route that serves the project's quality cannot make some scenes
-   * at their length: the lengths it accepts, and those scenes' positions in
-   * the storyboard (from 0), in order.
+   * at their length, and would make the storyboard were they lengths it takes:
+   * the lengths it accepts, and those scenes' indexes in the storyboard (from
+   * 0), in order.
    */
   | { readonly kind: "SCENE_LENGTHS"; readonly durations: DurationPolicy; readonly scenes: readonly number[] }
   /** No route, or more than one: the planner would refuse it (`NO_ROUTE`, `AMBIGUOUS_ROUTE`). */
@@ -153,11 +154,12 @@ export type StartRouteVerdict =
  * The start's question (ADR-0123): would the launch find exactly one route for
  * this storyboard, as the planner does for the job copied from it?
  *
- * A length is the one setting a member chooses per scene, so when the only
+ * A scene's length is the one setting a member can change for this project
+ * (through its photos, or a new project of another length), so when the only
  * route at the project's quality and resolution refuses some scenes for their
- * length, it names them and the lengths it accepts. Any other answer is a
- * project, a route table or a catalog the member cannot fix from the
- * storyboard.
+ * length alone, it names them and the lengths it accepts: the same storyboard
+ * with each such scene at a length the route takes must pass. Any other answer
+ * is a project, a route table or a catalog the member cannot fix that way.
  */
 export function judgeStartRoute(
   facts: RouteQualificationFacts & { readonly targetOutputResolution: string },
@@ -171,9 +173,29 @@ export function judgeStartRoute(
   if (accepting.length === 1) return { kind: "ONE_ROUTE" };
   if (accepting.length > 1 || candidates.length !== 1) return { kind: "NO_ROUTE" };
 
-  const durations = (candidates[0] as RouteCandidate).entry.capability.durationSeconds;
+  const candidate = candidates[0] as RouteCandidate;
+  const durations = candidate.entry.capability.durationSeconds;
   const scenes = facts.scenes.flatMap((scene, index) =>
     durationPolicyAccepts(scene.durationSeconds, durations) ? [] : [index],
   );
-  return scenes.length === 0 ? { kind: "NO_ROUTE" } : { kind: "SCENE_LENGTHS", durations, scenes };
+  const allowed = someAcceptedLength(durations);
+  if (allowed === null) return { kind: "NO_ROUTE" };
+  // With no scene refused for its length, this is the storyboard the route
+  // already refused, so the answer is no route.
+  const refitted: RouteQualificationFacts = {
+    ...facts,
+    scenes: facts.scenes.map((scene) =>
+      durationPolicyAccepts(scene.durationSeconds, durations) ? scene : { ...scene, durationSeconds: allowed },
+    ),
+  };
+  return scenesAccepted(refitted, candidate) ? { kind: "SCENE_LENGTHS", durations, scenes } : { kind: "NO_ROUTE" };
+}
+
+/** A length the policy accepts, or `null` for one that accepts none. */
+function someAcceptedLength(durations: DurationPolicy): number | null {
+  if (durations.kind === "RANGE") {
+    const shortest = Math.max(1, Math.ceil(durations.minSeconds));
+    return durationPolicyAccepts(shortest, durations) ? shortest : null;
+  }
+  return durations.seconds.find((seconds) => durationPolicyAccepts(seconds, durations)) ?? null;
 }

@@ -164,6 +164,29 @@ describe("a storyboard no one route can make, for a reason the member cannot fix
     expect(judgeStartRoute(storyboard([3]), ROUTES, catalog([model("beta")]))).toEqual({ kind: "NO_ROUTE" });
   });
 
+  it("names lengths only when they alone stand in the way: not when another setting refuses too", () => {
+    const noMotion = catalog([model("alpha", { cameraMotion: { kind: "UNSUPPORTED" } })]);
+    expect(judgeStartRoute(storyboard([3, 6]), ROUTES, noMotion)).toEqual({ kind: "NO_ROUTE" });
+    const still = {
+      ...storyboard([3, 6]),
+      scenes: [3, 6].map((durationSeconds) => ({ durationSeconds, cameraMotion: null })),
+    };
+    expect(judgeStartRoute(still, ROUTES, noMotion)).toEqual({
+      kind: "SCENE_LENGTHS",
+      durations: RANGE_5_15,
+      scenes: [0],
+    });
+  });
+
+  it("names no lengths when the route's model takes none", () => {
+    const none = catalog([model("alpha", { durationSeconds: { kind: "ENUMERATED", seconds: [] } })]);
+    expect(judgeStartRoute(storyboard([5]), ROUTES, none)).toEqual({ kind: "NO_ROUTE" });
+    const fromNothing = catalog([model("alpha", { durationSeconds: { kind: "RANGE", minSeconds: 0, maxSeconds: 0 } })]);
+    expect(judgeStartRoute(storyboard([5]), ROUTES, fromNothing)).toEqual({ kind: "NO_ROUTE" });
+    const fromZero = catalog([model("alpha", { durationSeconds: { kind: "RANGE", minSeconds: 0, maxSeconds: 4 } })]);
+    expect(judgeStartRoute(storyboard([5]), ROUTES, fromZero)).toMatchObject({ kind: "SCENE_LENGTHS", scenes: [0] });
+  });
+
   it("has no route when every length fits but another setting does not", () => {
     const noMotion = catalog([model("alpha", { cameraMotion: { kind: "UNSUPPORTED" } })]);
     expect(judgeStartRoute(storyboard([5, 6]), ROUTES, noMotion)).toEqual({ kind: "NO_ROUTE" });

@@ -1319,6 +1319,15 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       it, naming the lengths a scene may be and the scenes that are not.
       Built in GS-13c-1 (ADR-0123), with the planner's own route
       qualification.*
+- [ ] **Let a member fix a storyboard whose scenes the route cannot make
+      without a new project.** Composition shares a project's length between
+      its approved photos; the shortest and longest scene a member types only
+      bound the split. A project's length is fixed at creation and no page
+      withdraws an approval, so the start page (GS-13c-1, ADR-0123) can offer
+      only a new project of another length, or, for scenes too long, more
+      photos. Whether a member may edit a project's length, choose which
+      approved photos a storyboard uses, or be warned when composing, is a
+      product decision still to make.
 
 ## Open in GS-11a — how a new version of a delivered video shows its progress
 
@@ -1677,7 +1686,8 @@ them is **built**. Each item below records the settled decision and what remains
       the launch window's cursor; it still holds its own organization's.
       Since GS-13c-1 (ADR-0123) the start refuses a storyboard no route can
       make, so `NO_ROUTE` and `AMBIGUOUS_ROUTE` come only from a route table
-      or catalog changed between the start and the launch.
+      or catalog changed between the start and the launch, or from a job
+      started before GS-13c-1.
 - [ ] **Release a change to the prompt's fixed rules only when no job
       waits.** Editing `PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS`
       makes every admitted, unexecuted generation's frozen prompt fail to

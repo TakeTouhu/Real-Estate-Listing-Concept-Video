@@ -599,8 +599,9 @@ migration): before anything is reserved, the start asks the launch planner's
 own route qualification whether one route can make the storyboard, as the
 product owner chose on 2026-11-08. When the one route at the project's quality
 refuses only scene lengths, the start page shows no form, names the lengths a
-scene may be ("5 to 15 seconds") and the scenes that are not, and says to
-compose again; anything else no route can make reads as settings not
+scene may be ("5 to 15 seconds") and the scenes that are not, and says what
+changes them (a new project of a length that suits the photos, or more photos
+for scenes too long); anything else no route can make reads as settings not
 supported. A storyboard the launch could never route no longer holds a Unit.
 
 Completion criteria as met: a composed deliverable is proved technically valid,

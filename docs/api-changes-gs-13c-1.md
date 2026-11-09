@@ -15,8 +15,8 @@ before any Unit is reserved:
 
 | Outcome | Message |
 | --- | --- |
-| `SCENE_LENGTHS_NOT_SUPPORTED` | Some scenes are a length this video cannot be made at. Nothing was started. Compose the storyboard again. |
-| `SETTINGS_NOT_SUPPORTED` | This video cannot be made with this project's settings yet. Nothing was started. |
+| `SCENE_LENGTHS_NOT_SUPPORTED` | Some scenes are a length this video cannot be made at. Nothing was started. |
+| `SETTINGS_NOT_SUPPORTED` | This video cannot be made with this project's settings. Nothing was started. |
 
 Every other response is unchanged.
 
@@ -28,19 +28,21 @@ Two more offers that show no form:
 
 - **Scenes of a length the video cannot be made at**: the lengths a scene may
   be ("5 to 15 seconds", or a list such as "5, 10 or 15 seconds"), each scene
-  that is not (its number, room and length), and how to compose the storyboard
-  again.
+  that is not (its number, room and length), that composing again gives the
+  same lengths, and what changes them: a new project of a length that suits
+  the photos, or, for scenes too long, more approved photos.
 - **Settings no route can make**: "This video cannot be made with this
-  project's settings yet."
+  project's settings."
 
 ## Internal API
 
 ### Added: `@app/domain`, route qualification
 
-`qualifyingRoutes(facts, target, routes, models)`, moved unchanged out of
-`JobLaunchPlanner`, and `judgeStartRoute(facts, routes, models)`, answering
-`ONE_ROUTE`, `SCENE_LENGTHS` (the lengths the one route's model takes and the
-scenes' indexes) or `NO_ROUTE`; types `RouteChoice`, `RouteQualificationFacts`
+`qualifyingRoutes(facts, target, routes, models)`, moved out of
+`JobLaunchPlanner` with the same behaviour, and `judgeStartRoute(facts,
+routes, models)`, answering `ONE_ROUTE`, `SCENE_LENGTHS` (the lengths the one
+route's model takes and the scenes' indexes, when their lengths alone stand in
+the way) or `NO_ROUTE`; types `RouteChoice`, `RouteQualificationFacts`
 and `StartRouteVerdict`
 (`packages/domain/src/job-launch/route-qualification.ts`).
 
@@ -50,8 +52,9 @@ and `StartRouteVerdict`
   `routeCheck(policy, models)` (`StartRouteFacts`, `StartRouteCheck`).
 - `StartGenerationOutcome` adds `SCENE_LENGTHS_NOT_SUPPORTED` and
   `SETTINGS_NOT_SUPPORTED`.
-- `StartOffer` adds `SCENE_LENGTHS_NOT_SUPPORTED` (with `durations` and each
-  scene's `id`, `position` and `durationSeconds`) and `SETTINGS_NOT_SUPPORTED`.
+- `StartOffer` adds `SCENE_LENGTHS_NOT_SUPPORTED` (with `durations`, the
+  storyboard's `durationSeconds` and `sceneCount`, and each such scene's `id`,
+  `position` and `durationSeconds`) and `SETTINGS_NOT_SUPPORTED`.
 
 ### Changed: `@app/video-providers`, `FakeRouteKit`
 
