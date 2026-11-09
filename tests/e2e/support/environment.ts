@@ -19,6 +19,13 @@ export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
 /** The folder the web app keeps photos and videos in, shared with the commands the test runs. */
 export const E2E_SHARED_STORAGE_DIR = join(REPO_ROOT, ".e2e", "shared");
 
+/**
+ * The test provider's own folder for its clips, given to the development
+ * pipeline (ADR-0124). Kept from run to run, as ADR-0108 Decision 1 asks: the
+ * test provider answers a later run from the clips it kept there.
+ */
+export const E2E_PROVIDER_DIR = join(REPO_ROOT, ".e2e", "provider");
+
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**

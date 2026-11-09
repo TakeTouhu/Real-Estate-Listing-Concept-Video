@@ -8257,3 +8257,155 @@ production scheduler and live Stripe charges remain BLOCKED.
 GS-13c-1 waits for the product owner's yes before merge. GS-13c-2 (the browser
 test from the photos' approval to a downloaded video) and GS-13d (a video that
 is not made, its Unit returned, and the plan's completion report) follow.
+
+## GS-13c-2 — the browser test makes and downloads a video
+
+Base: `edead63` (PR #147 merge commit on `main`).
+ADR: `docs/decisions/0124-the-browser-test-makes-and-downloads-a-video.md`
+
+The second part of GS-13c (see `docs/generation-e2e-gap-analysis.md`,
+*GS-13*): a browser test from a Property's analyzed photos to a downloaded
+video, through the web app's own pages. **No migration, and no production
+code, route, permission or environment variable changed.** The exact head SHA
+is reported with the pull request.
+
+### What GS-13c-2 does
+
+- **A second browser test** (`tests/e2e/make-and-download-a-video.spec.ts`),
+  with its own owner and Premium plan: 40 of 40 Base Units; a Property with
+  three photos uploaded and analyzed from the review page; each approved on
+  the review page; a project `渋谷 Harbour View` of 15 seconds at 720p and
+  16:9; a storyboard of three 5-second scenes; the start page reserving one
+  Normal Unit, and the project page showing the video queued with the Unit
+  reserved; the development pipeline run once; the video completed, the Unit
+  used; the player's link answering a byte range (`206`, `video/mp4`); the
+  download saved as `渋谷 Harbour View.mp4`, which FFmpeg reads as H.264 at
+  1280×720 lasting 15 seconds and decodes without an error; and 39 of 40 Base
+  Units left.
+- **Helpers**: `propertyWithAnalyzedPhotos` (the first test's steps up to the
+  review page, without its checks of each), `runPipeline` (the command once,
+  with the web app's environment and a kept provider folder under `.e2e/`,
+  stopped with its whole process group after three minutes, and failing with
+  its exit status and printed report), and `probeVideo` / `decodeVideo`
+  (FFmpeg).
+- **The player's link is asked by Node's `fetch`**, outside Playwright's
+  recorded steps, and only its answer is read.
+
+```mermaid
+sequenceDiagram
+    actor T as Browser test
+    participant W as Web app (next dev)
+    participant D as Database
+    participant P as Pipeline command
+    T->>W: approve photos, create project, compose
+    T->>W: start page: start, reserving 1 Normal Unit
+    W->>D: job QUEUED, Unit RESERVED
+    T->>P: run once (test provider, kept folder)
+    P->>D: launch, clips, composition, validation, publication: Unit CONSUMED
+    P-->>T: exit 0, nothing more to do now
+    T->>W: reload: Completed, used 1 Normal Unit
+    T->>W: player's link, bytes 0-1023 (from Node)
+    W-->>T: 206 video/mp4
+    T->>W: Download video
+    W-->>T: 渋谷 Harbour View.mp4
+    Note over T: FFmpeg: H.264, 1280×720, 15 s, decodes
+    T->>W: Units page: 39 of 40 left
+```
+
+### Verification
+
+Measured locally on this pull request's code, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean (the browser test is typechecked with the root's `tests/**`) |
+| `pnpm test:e2e` | 2 passed in 1.8 minutes, against a migrated local PostgreSQL 16 database: the new test in 1.4 minutes, the first in 20 seconds; the new test passed in three earlier runs too. The saved file read 1280×720 H.264, `yuv420p`, 15.000 seconds |
+| `pnpm test` | 7,016 passed in 272 files, unchanged: no unit-tested code changed |
+| `pnpm test:db`, `pnpm test:media`, `pnpm build` | not run: no production code, schema or media code changed; CI's `verify`, `database` and `media` jobs run them |
+
+The pipeline helper's timeout was checked by hand: given 300 ms, it rejected
+after 315 ms and left no pipeline process running.
+
+### Mutation testing
+
+**10 of 10 killed**, each a break in the app the browser test must catch, the
+tree checked unchanged after each: the download named only in its plain
+form; a range answered whole; the video served without its type; publication
+leaving the Unit unspent; the pipeline without its final validation; the
+start form sending no scenes; the review page, the project list and the
+project page each not read again after an approval, a create or a
+composition; and a delivered video not called completed. They ran on the code
+before the review's fixes, which changed the pipeline helper's folder and
+failure report, added `exact` to the Approve button's name and dropped a
+check the exit status already makes; none of these is what killed a mutant.
+
+### Review
+
+An independent review of the code commit `9935a56`, from git objects only,
+found nothing blocking. It confirmed that no signed link reaches a log, a
+recorded step or an error (the player's `src` is recorded without its value,
+traces are off, the fetch's failure drops the address, the assertions read
+only the status, type, range and length), that the hydration waits and the
+approval loop cannot race a refresh, and that nothing makes CI run the
+pipeline but the test. Its findings, each answered in the second commit:
+
+- **Should fix — the test provider's folder was emptied at every run.** It
+  was in the test's own output, which Playwright empties, though the test
+  provider answers a later run from the clips it kept (ADR-0108 Decision 1);
+  an interrupted run would make every later run fail. Fixed: a kept folder,
+  `.e2e/provider` (`E2E_PROVIDER_DIR`), git-ignored.
+- **Should fix — a failed run said nothing of why, and a hung one could
+  outlive the test.** Fixed: the helper fails with the command's exit status
+  and what it printed (counts and why it stopped), and stops a run that
+  outlasts three minutes with its whole process group.
+- **Should fix — no documentation.** Added: ADR-0124, which records the first
+  CI path that runs the pipeline command, through the test, and how this test
+  reads signed links beyond ADR-0121 Decision 1's wording; and the documents
+  below.
+- **Nits.** The helper cites ADR-0108 Decision 1 for its exit statuses and
+  says the report holds counts and pnpm's own lines; `exact` on Approve; the
+  redundant report check dropped; a comment and the ADR say the Units page's
+  39 of 40 counts a reserved Unit too, so it shows the Unit did not come back
+  and the project page shows it was used. "Normal · 15 seconds" shows in every
+  phase and is kept as the offer's echo, not as evidence of delivery. The
+  Property helper repeats the first test's form steps without its checks, and
+  is kept so the first test still asserts between them.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the browser test's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | Not applicable: no route, page or internal API changed |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-13c-2*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-13c-2),
+`docs/generation-e2e-gap-analysis.md` (GS-13c-2's ADR) and
+`docs/decisions/TODO.md` (where the decided playback proof was built).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The pipeline command runs only when
+the browser test starts it, with the test provider, against a database on the
+machine, as ADR-0108 allows; no workflow or script runs it by itself. Paid
+Provider Activation, production Provider credentials, production paid AI
+calls, the production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **Chromium alone, and no decoding in the browser**: the player's link and
+  FFmpeg prove the video, not the player playing it (ADR-0117 Decision 4).
+- **The pipeline acts on every job in its database**, so a local database
+  holding an earlier run's unfinished job makes the test wait on that job,
+  and fail if it fails; the database must be disposable (ADR-0121).
+- **One video, Normal at 720p and 16:9**; no HQ, second video, other aspect
+  ratio or regeneration.
+
+### Remaining work
+
+GS-13c-2 waits for the product owner's yes before merge. GS-13d (a video that
+is not made, its Unit returned, and the plan's completion report) follows.

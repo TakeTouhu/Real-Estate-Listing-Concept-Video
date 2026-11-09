@@ -31,7 +31,7 @@ test("an owner approves the photos, starts a video, has it made and downloads it
   // A person approves each photo, one at a time, as the review page offers.
   for (let awaiting = photos.length; awaiting > 0; awaiting -= 1) {
     await expect(page.getByRole("heading", { name: `Awaiting decision (${awaiting})` })).toBeVisible();
-    await (await hydrated(page.getByRole("button", { name: "Approve" }).first())).click();
+    await (await hydrated(page.getByRole("button", { name: "Approve", exact: true }).first())).click();
   }
   await expect(page.getByRole("heading", { name: "Awaiting decision (0)" })).toBeVisible();
   await expect(page.getByRole("heading", { name: `Decided (${photos.length})` })).toBeVisible();
@@ -68,8 +68,7 @@ test("an owner approves the photos, starts a video, has it made and downloads it
   await expect(video).toContainText("1 Normal Unit is reserved for it, and used only if it is delivered.");
 
   // Made by the pipeline, which nothing runs by itself: one run takes the job to a delivered video.
-  const report = await runPipeline(testInfo.outputPath("provider"));
-  expect(report).toContain("nothing more to do now");
+  await runPipeline();
   await page.reload();
   await expect(video).toContainText("Completed");
   await expect(video).toContainText("Normal · 15 seconds");
@@ -104,6 +103,8 @@ test("an owner approves the photos, starts a video, has it made and downloads it
   expect(facts.durationSeconds).toBeCloseTo(15, 1);
   await decodeVideo(saved);
 
+  // The count leaves out a reserved Unit as well as a used one: it shows that the Unit did not come back, and the
+  // project page above that it was used.
   await page.goto(unitsPage);
   await expect(page.getByText("39 of 40 left.")).toBeVisible();
 });

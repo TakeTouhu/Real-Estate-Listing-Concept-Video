@@ -2243,3 +2243,16 @@ before stays waiting, as it did.
 
 **Rolling back.** To GS-13b's build: safe. Nothing is written by the check;
 the start would again admit a storyboard the launch cannot route.
+
+## GS-13c-2 — the browser test makes and downloads a video
+
+**No migration** (ADR-0124). No schema, enum, constraint or row changes, and no
+route, permission, environment variable or production code. The browser test
+gains a second test and its helpers; it runs the development pipeline command
+itself, with a kept folder under `.e2e/` (git-ignored).
+
+**What changes at deploy.** Nothing: the browser test runs only in CI and on a
+developer's machine, against a disposable database.
+
+**Rolling back.** To GS-13c-1's build: safe. Nothing is written but the test's
+own rows in its own database, and clips in its own folder.
