@@ -70,6 +70,14 @@ async function auditActions(userId: string): Promise<string[]> {
   return rows.map((r) => r.action).filter((a) => a !== "user.registered");
 }
 
+async function until(condition: () => Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("the opening never waited on the rival's lock");
+}
+
 function linkRow(userId: string, overrides: Record<string, unknown> = {}) {
   const createdAt = clock.now();
   return {
@@ -160,6 +168,51 @@ describe("opening a link", () => {
     expect(await auditActions(id)).toEqual(["user.email_verification_sent", "user.email_verified"]);
     expect(await verification.verifyEmail(lastToken())).toBe("ALREADY_VERIFIED");
     expect(await auditActions(id)).toHaveLength(2);
+  });
+
+  it("waits for a verification committing meanwhile, then writes nothing", async () => {
+    const id = await user("rival");
+    const email = `rival@${DOMAIN}`;
+    const link = linkRow(id, { email });
+    await deps.repos.accountLinks.create(link, audit(id));
+    const verifiedAt = new Date(clock.now().getTime() - 1000);
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let signalHeld = (): void => undefined;
+    const held = new Promise<void>((resolve) => (signalHeld = resolve));
+    // Another link's verification, holding the user's row until released.
+    const rival = prisma.$transaction(
+      async (tx) => {
+        await tx.user.update({ where: { id }, data: { emailVerifiedAt: verifiedAt } });
+        signalHeld();
+        await released;
+      },
+      { timeout: 30_000 },
+    );
+    await Promise.race([held, rival]);
+    const opening = deps.repos.accountLinks.useForEmailVerification({
+      linkId: link.id,
+      userId: id,
+      email,
+      usedAt: clock.now(),
+      audit: audit(id),
+    });
+    try {
+      // Released only once the opening waits on the rival's lock.
+      await until(async () => {
+        const [row] = await prisma.$queryRaw<{ waiting: number }[]>`
+          SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`;
+        return (row?.waiting ?? 0) >= 1;
+      });
+    } finally {
+      release();
+    }
+    await rival;
+    expect(await opening).toBe("STALE");
+    expect((await prisma.accountLink.findUniqueOrThrow({ where: { id: link.id } })).usedAt).toBeNull();
+    expect((await prisma.user.findUniqueOrThrow({ where: { id } })).emailVerifiedAt).toEqual(verifiedAt);
+    expect(await auditActions(id)).toEqual(["test.link"]);
   });
 
   it("verifies once when one link is opened several times and another at the same moment", async () => {
