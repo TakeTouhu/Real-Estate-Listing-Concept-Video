@@ -109,11 +109,17 @@ describe("boundary", () => {
     expect(rest).not.toMatch(/MFA_SECRET_KEY/);
   });
 
-  it("resolves a session only in lib/auth.ts, where the code step is applied", () => {
+  it("resolves a session only in lib/auth.ts, where the code and email steps are applied", () => {
     expect(matching("apps/web", /resolveSession/)).toEqual(["apps/web/src/lib/auth.ts"]);
     expect(code(readFileSync(join(REPO_ROOT, "apps/web/src/lib/auth.ts"), "utf8"))).toMatch(
       /signIn\?\.step === "SIGNED_IN"/,
     );
+    // Every step comes from signInStep, so none can skip email verification (ADR-0129).
+    expect(matching("apps/web", /mfaSignInStep/)).toEqual([]);
+    expect(matching("apps/web", /signInStep\(/).sort()).toEqual([
+      "apps/web/src/app/api/auth/login/route.ts",
+      "apps/web/src/lib/auth.ts",
+    ]);
   });
 
   it("lets only the sign-in pages, the code step, MFA set-up and the verify page read a sign-in not yet in", () => {

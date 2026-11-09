@@ -10,8 +10,8 @@ change.
 
 | Route | Who | Does |
 | --- | --- | --- |
-| `GET /verify-email?token=…` | anyone | One button that posts the token. No button for a token that is empty, repeated or over 128 characters. `Referrer-Policy` `no-referrer` by meta tag |
-| `GET /verify-email` | a sign-in whose address is not verified | The address, a button that sends the link again, sign-out. Any other sign-in is sent to its next page, no sign-in to `/login` |
+| `GET /verify-email?token=…` | anyone | One button that posts the token, and a line telling anyone who did not create the account to close the page. No button for a token that is empty, repeated or over 128 characters. `Referrer-Policy` `strict-origin` by meta tag: the page's origin at most, never its path or query |
+| `GET /verify-email` | a sign-in whose address is not verified | The address, a button that sends the link again (asked for when `?notice=not-sent`), sign-out. Any other sign-in is sent to its next page, no sign-in to `/login` |
 | `GET /verify-email?notice=verified` / `invalid` | anyone | The link's outcome, with a link onward. A sign-in whose address is not verified sees `invalid` on its own page |
 | `POST /api/auth/verify-email` (form `token`) | anyone; the token is the proof | `verifyEmail(token)`, then 303 to `/verify-email?notice=verified` (verified, now or before) or `?notice=invalid` (anything else) |
 | `POST /api/auth/verify-email/resend` | a sign-in whose address is not verified | Mails a new link, then 303 to `/verify-email?notice=sent`, or `?notice=not-sent`. Another sign-in: 303 to its next page (`/` once verified); none: 303 to `/login` |

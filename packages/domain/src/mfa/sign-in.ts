@@ -26,7 +26,8 @@ export async function mfaSignInStep(
  * code first, since a sign-in that owes one has proven only the password; then
  * the account's email address (ADR-0052 Decision 18, ADR-0128); then MFA
  * set-up. `EMAIL_VERIFICATION_REQUIRED` may only verify the address, ask for
- * the link again or sign out.
+ * the link again or sign out. Only a recorded time counts as verified, so a
+ * user read without it is not let in.
  */
 export type SignInStep = MfaSignInStep | "EMAIL_VERIFICATION_REQUIRED";
 
@@ -36,6 +37,6 @@ export async function signInStep(
   session: Pick<Session, "userId" | "mfaVerifiedAt">,
 ): Promise<SignInStep> {
   const mfa = await mfaSignInStep(deps, session);
-  if (mfa === "CODE_REQUIRED" || user.emailVerifiedAt !== null) return mfa;
+  if (mfa === "CODE_REQUIRED" || user.emailVerifiedAt instanceof Date) return mfa;
   return "EMAIL_VERIFICATION_REQUIRED";
 }

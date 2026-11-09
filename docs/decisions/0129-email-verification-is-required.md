@@ -65,8 +65,12 @@ device.
 - A token longer than 128 characters is refused before it is hashed or looked
   up, by the page and by `verifyEmail`. A mailed one is 43.
 - Every link that verifies nothing gets the same answer (ADR-0128 Decision 4).
-- The page's address holds the token, so it tells no page it leads to where it
-  came from (`<meta name="referrer" content="no-referrer">`).
+- The page's address holds the token, so requests from the page carry at
+  most its origin, never its path or query
+  (`<meta name="referrer" content="strict-origin">`). Not `no-referrer`, which
+  would also make the page's own forms post `Origin: null`.
+- The page tells someone who did not create an account with the address to
+  close it (see Consequences).
 - The page shows only notices it knows by code (`?notice=sent`, `not-sent`,
   `invalid`, `verified`), never text the address carries.
 
@@ -102,7 +106,9 @@ Decision 1) and meets the verify page at its next sign-in. **No production
 database holds users:** ADR-0054 Decision 7's gates are all still BLOCKED,
 `infra/` holds no deployment, and ADR-0126 Decision 3 records production as
 not running. Development and CI accounts verify through the outbox
-(`docs/local-setup.md`, section 3c).
+(`docs/local-setup.md`, section 3c), except one whose address no email can
+reach, which sign-up accepted before AT-3b: it can never be sent a link and
+must be made again.
 
 ## Sequence
 
@@ -135,4 +141,9 @@ sequenceDiagram
 - Signing up writes the user, the password and `user.registered` in separate
   steps, as before. Making it one transaction stays in
   `docs/decisions/TODO.md`.
+- Someone can still sign up with another person's address. Since opening a
+  link needs no sign-in, the address's owner verifies that account if they
+  press the button in its email; the email and the page tell them not to
+  unless they created the account. Password reset (AT-4) is how they take it
+  back, recorded in `docs/decisions/TODO.md`.
 - **No migration**, permission or audit action. Two routes and one page.

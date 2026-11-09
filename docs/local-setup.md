@@ -111,7 +111,9 @@ address**. The link works once, for 24 hours; the verify page sends a new one.
 
 Without both settings no email is sent: the verify page says the email could
 not be sent, and the account cannot be verified. Accounts made before AT-3b
-are unverified too, and verify the same way at their next sign-in.
+are unverified too, and verify the same way at their next sign-in, except one
+whose address no email can reach (`owner@localhost`, say), which sign-up
+accepted before AT-3b: make it again.
 
 ## 4. Run the worker (optional)
 

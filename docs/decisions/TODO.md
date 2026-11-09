@@ -2163,6 +2163,16 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 6); the browser tests open the link from the outbox.
       Production still cannot send it: see "Choose the production email
       service".*
+- [ ] **Take back an account someone else made with your address.** Anyone
+      can sign up with an address that is not theirs. Opening the link needs
+      no sign-in (ADR-0129 Decision 3), so if the address's owner presses
+      the button in that email, the other person's account is verified. The
+      email and the page say to ignore it unless you created the account.
+      The owner then cannot sign up ("Email is already registered"). Password
+      reset (AT-4) is the way back, and it must end every session, as the
+      approved plan says. AT-4 must also decide what happens when the other
+      person has set up MFA on the account, which a reset alone does not
+      remove.
 - [ ] **Clear a verified address when it changes.** A verification is bound to
       the address it was sent to (ADR-0128). No product path changes a user's
       email today; whichever is added must set `emailVerifiedAt` back to null

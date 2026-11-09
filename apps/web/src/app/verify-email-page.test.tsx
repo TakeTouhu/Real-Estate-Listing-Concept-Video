@@ -79,6 +79,8 @@ describe("opening a link", () => {
       expect(form.getAttribute("action")).toBe("/api/auth/verify-email");
       const hidden = form.querySelector('input[type="hidden"]')!;
       expect([hidden.getAttribute("name"), hidden.getAttribute("value")]).toEqual(["token", "tok_abc-123"]);
+      // Someone else may have signed up with this address: they are told not to press.
+      expect(form.textContent).toContain("If you did not create an account with this address, close this page.");
       cleanup();
     }
   });
@@ -94,8 +96,8 @@ describe("opening a link", () => {
     expect(screen.getByRole("button", { name: "Verify email address" })).toBeTruthy();
   });
 
-  it("tells the referrer of no page it leads to", () => {
-    expect(verifyEmail.metadata).toEqual({ referrer: "no-referrer" });
+  it("tells no page it leads to more than its origin, and keeps its forms' origin", () => {
+    expect(verifyEmail.metadata).toEqual({ referrer: "strict-origin" });
   });
 });
 
@@ -145,6 +147,13 @@ describe("a sign-in that has not verified its address", () => {
     for (const [notice, role, text] of shown) {
       render(await VerifyEmailPage(search({ notice })));
       expect(screen.getByRole(role).textContent).toBe(text);
+      // With no email sent, there is no link to open yet.
+      const ask = screen.getByText("new@example.com").parentElement!.textContent;
+      expect(ask).toBe(
+        notice === "not-sent"
+          ? "To continue, have a link sent to new@example.com. It works once, for 24 hours."
+          : "To continue, open the link we sent to new@example.com. It works once, for 24 hours.",
+      );
       cleanup();
     }
     render(await VerifyEmailPage(search({ notice: "Your account is closed", error: "Your account is closed" })));

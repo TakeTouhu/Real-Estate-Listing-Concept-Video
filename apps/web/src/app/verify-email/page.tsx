@@ -6,8 +6,10 @@ import { VERIFY_EMAIL_NOTICES, verifyEmailNotice } from "@/lib/email-verificatio
 
 export const dynamic = "force-dynamic";
 
-// The address may hold a link's token: no page it leads to is told it.
-export const metadata: Metadata = { referrer: "no-referrer" };
+// The address may hold a link's token: requests from the page carry at most its
+// origin, never its path or query. Not "no-referrer", which would also make the
+// page's own forms post `Origin: null`.
+export const metadata: Metadata = { referrer: "strict-origin" };
 
 type Params = { token?: string | string[]; notice?: string | string[] };
 
@@ -44,7 +46,8 @@ export default async function VerifyEmailPage({ searchParams }: { searchParams: 
         </p>
       ) : null}
       <p>
-        To continue, open the link we sent to <strong>{signIn.user.email}</strong>. It works once, for 24 hours.
+        {notice === "not-sent" ? "To continue, have a link sent to " : "To continue, open the link we sent to "}
+        <strong>{signIn.user.email}</strong>. It works once, for 24 hours.
       </p>
       <form method="post" action="/api/auth/verify-email/resend" className="card">
         <p className="muted">No email? Check your spam folder, or have a new link sent.</p>
@@ -68,6 +71,7 @@ function OpenLink({ token }: { token: string | string[] }) {
       <form method="post" action="/api/auth/verify-email" className="card">
         <input type="hidden" name="token" value={token} />
         <p>Press the button to verify the email address of your account.</p>
+        <p className="muted">If you did not create an account with this address, close this page.</p>
         <button type="submit">Verify email address</button>
       </form>
     </section>

@@ -2,7 +2,7 @@ import { hotp } from "@app/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
-import type { Session } from "../identity/types";
+import type { Session, User } from "../identity/types";
 import { createTestDeps, markEmailVerified, type TestDeps } from "../testing/in-memory";
 import { createMfaSecretCipher, systemMfaRandom } from "./adapters";
 import { MfaService } from "./mfa-service";
@@ -158,5 +158,15 @@ describe("signInStep (ADR-0129)", () => {
     expect(await step(session)).toBe("EMAIL_VERIFICATION_REQUIRED");
     markEmailVerified(deps, userId);
     expect(await step(session)).toBe("SETUP_REQUIRED");
+  });
+
+  it("lets in only a user whose verification time was read, never one read without it", async () => {
+    markEmailVerified(deps, userId);
+    const session = stored(await signIn());
+    expect(await signInStep(deps, user(), session)).toBe("SIGNED_IN");
+    for (const unread of [undefined, "2026-11-09T00:00:00.000Z"]) {
+      const partial = { emailVerifiedAt: unread } as unknown as Pick<User, "emailVerifiedAt">;
+      expect(await signInStep(deps, partial, session)).toBe("EMAIL_VERIFICATION_REQUIRED");
+    }
   });
 });

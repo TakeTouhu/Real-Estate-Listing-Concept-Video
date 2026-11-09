@@ -80,6 +80,9 @@ const form = (fields: Record<string, string>) =>
   new Request("http://localhost/api/auth", { method: "POST", body: new URLSearchParams(fields) });
 const location = (response: Response) => {
   const url = new URL(response.headers.get("location")!);
+  // A redirect carries a notice or an error and nothing else: never a token, never a fragment.
+  expect([...url.searchParams.keys()].filter((key) => key !== "notice" && key !== "error")).toEqual([]);
+  expect(url.hash).toBe("");
   return { path: url.pathname, notice: url.searchParams.get("notice"), error: url.searchParams.get("error") };
 };
 const sessionCookie = (response: Response) =>
