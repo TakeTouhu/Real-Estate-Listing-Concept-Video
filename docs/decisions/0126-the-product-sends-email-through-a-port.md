@@ -64,8 +64,9 @@ already does.
 
 It is refused under `NODE_ENV=production`, given or ambient, as the shared
 folder is. `readDevelopmentEmailOutbox(folder)` gives back every message,
-oldest first, for tests and developers; a folder not made yet holds none, and
-a file in a message's form that the outbox did not write fails the read.
+oldest first, for tests and developers; a folder not made yet holds none, a
+file named as a message but not in the outbox's format fails the read, and a
+folder or file it cannot read fails with a code, never the path.
 
 The folder is `EMAIL_OUTBOX_DIR`, optional, absolute, and refused when
 `NODE_ENV=production`. It is its own folder, not inside `SHARED_STORAGE_DIR`,

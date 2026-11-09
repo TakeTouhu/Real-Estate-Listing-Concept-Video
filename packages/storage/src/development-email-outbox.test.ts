@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,19 @@ import {
 import { NonProductionAdapterError } from "./production-guard";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
+
+/** Makes the outbox's one rename fail while `on`, as a full disk or a lost folder would. */
+const renameFailure = vi.hoisted(() => ({ on: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: (from: string, to: string) =>
+      renameFailure.on
+        ? Promise.reject(Object.assign(new Error("simulated"), { code: "ENOSPC" }))
+        : actual.rename(from, to),
+  };
+});
 
 const VERIFY = outgoingEmail({
   kind: "EMAIL_VERIFICATION",
@@ -40,6 +53,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  renameFailure.on = false;
   vi.unstubAllEnvs();
   await rm(root, { recursive: true, force: true });
 });
@@ -101,7 +115,16 @@ describe("sending", () => {
     expect(readdirSync(root)).toEqual([]);
   });
 
-  it("leaves no file behind when one cannot be written, and says why by code alone", async () => {
+  it("leaves no file behind when one cannot be put in place, and says why by code alone", async () => {
+    const outbox = createDevelopmentEmailOutbox({ folder: root });
+    renameFailure.on = true;
+    const failure = await outbox.send(VERIFY).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AppError);
+    expect((failure as AppError).message).toBe("The email could not be written to the outbox (ENOSPC)");
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it("says why a file cannot be written by code alone", async () => {
     const folder = join(root, "outbox");
     const outbox = createDevelopmentEmailOutbox({ folder });
     await rm(folder, { recursive: true });
@@ -178,7 +201,20 @@ describe("reading", () => {
     };
     await writeFile(join(root, file), typeof change === "string" ? change : JSON.stringify({ ...good, ...change }));
     await expect(readDevelopmentEmailOutbox(root)).rejects.toThrow(
-      `The outbox file ${file} is not a message this outbox wrote`,
+      `The outbox file ${file} is not in the outbox's format`,
+    );
+  });
+
+  it("fails on a folder or a file it cannot read, naming the code and not the path", async () => {
+    const file = join(root, "a-file");
+    await writeFile(file, "");
+    await expect(readDevelopmentEmailOutbox(file)).rejects.toThrow(
+      new Error("The email outbox folder could not be read (ENOTDIR)"),
+    );
+    const name = "1794196800000-0b7c5d54-8a0e-4cbb-9d40-3d5d7c0e6f00.json";
+    await mkdir(join(root, "outbox", name), { recursive: true });
+    await expect(readDevelopmentEmailOutbox(join(root, "outbox"))).rejects.toThrow(
+      new Error(`The outbox file ${name} could not be read (EISDIR)`),
     );
   });
 

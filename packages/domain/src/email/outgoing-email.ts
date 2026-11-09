@@ -41,7 +41,7 @@ const LOCAL_PART = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 // A control character, or a line or paragraph separator: anything that could
-// end a header line, or hide in one.
+// end a header line.
 const SUBJECT_FORBIDDEN = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 // A control character. The body breaks lines with "\n" alone, so that one is
 // taken out before this is asked; every other, a carriage return included, is
@@ -57,7 +57,8 @@ export function isDeliverableEmailAddress(address: string): boolean {
   const normalized = normalizeEmail(address);
   if (normalized.length > EMAIL_ADDRESS_MAX_LENGTH) return false;
   const at = normalized.indexOf("@");
-  if (at < 0 || at !== normalized.lastIndexOf("@")) return false;
+  // A second "@" falls in the domain, which no domain label admits.
+  if (at < 0) return false;
   const local = normalized.slice(0, at);
   const domain = normalized.slice(at + 1);
   return local.length <= EMAIL_LOCAL_PART_MAX_LENGTH && LOCAL_PART.test(local) && DOMAIN.test(domain);
@@ -68,8 +69,8 @@ function characters(value: string): number {
 }
 
 /**
- * The one place an email is made. Refuses, with `VALIDATION_FAILED`, a
- * recipient mail cannot be addressed to, a blank or over-long subject or body,
+ * The one place an email is made. Refuses, with `VALIDATION_FAILED`, a field
+ * that is not text, a recipient mail cannot be addressed to, a blank or over-long subject or body,
  * a subject with a control character or line break, a body with any control
  * character but "\n", and a kind the product does not send. No message names
  * the address or quotes the text, so a refusal is safe to log.
@@ -80,6 +81,10 @@ export function outgoingEmail(input: {
   readonly subject: string;
   readonly text: string;
 }): OutgoingEmail {
+  if (typeof input.to !== "string" || typeof input.subject !== "string" || typeof input.text !== "string") {
+    // Only a cast reaches this; the type says each is a string.
+    throw new AppError("VALIDATION_FAILED", "The email's recipient, subject and text must each be text");
+  }
   if (!(EMAIL_KINDS as readonly string[]).includes(input.kind)) {
     throw new AppError("VALIDATION_FAILED", "The product sends no email of this kind");
   }

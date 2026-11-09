@@ -114,7 +114,7 @@ export function createDevelopmentEmailOutbox(options: DevelopmentEmailOutboxOpti
 
 function parseMessage(file: string, raw: string): DevelopmentOutboxMessage {
   const refuse = (): never => {
-    throw new Error(`The outbox file ${file} is not a message this outbox wrote`);
+    throw new Error(`The outbox file ${file} is not in the outbox's format`);
   };
   let value: unknown;
   try {
@@ -144,9 +144,10 @@ function parseMessage(file: string, raw: string): DevelopmentOutboxMessage {
 
 /**
  * Every message in the outbox folder, oldest first, for tests and developers.
- * A folder not made yet holds none. A file in the message files' form that is
- * not a message this outbox wrote fails the read, naming the file; hidden files,
- * such as a message still being written, are passed over.
+ * A folder not made yet holds none. A file named as a message but not in the
+ * outbox's format fails the read, naming the file; hidden files, such as a
+ * message still being written, are passed over. A folder or file that cannot
+ * be read fails with its code, never its path.
  */
 export async function readDevelopmentEmailOutbox(folder: string): Promise<DevelopmentOutboxMessage[]> {
   if (!isAbsolute(folder)) throw new Error("The email outbox folder must be an absolute path");
@@ -155,8 +156,15 @@ export async function readDevelopmentEmailOutbox(folder: string): Promise<Develo
     names = await readdir(folder);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return [];
-    throw error;
+    throw new Error(`The email outbox folder could not be read (${errorCode(error)})`);
   }
   const files = names.filter((name) => MESSAGE_FILE.test(name)).sort();
-  return Promise.all(files.map(async (file) => parseMessage(file, await readFile(join(folder, file), "utf8"))));
+  return Promise.all(
+    files.map(async (file) => {
+      const raw = await readFile(join(folder, file), "utf8").catch((error: unknown) => {
+        throw new Error(`The outbox file ${file} could not be read (${errorCode(error)})`);
+      });
+      return parseMessage(file, raw);
+    }),
+  );
 }

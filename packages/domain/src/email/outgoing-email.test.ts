@@ -56,6 +56,12 @@ describe("the recipient", () => {
     ["a header after a line break", "owner@example.test\r\nBcc: x@example.test"],
     ["a line feed", "owner@example.test\nx"],
     ["a list", "a@example.test,b@example.test"],
+    ["a line break in the local part", "own\r\ner@example.test"],
+    ["a header after the domain", "owner@example.test\r\nX-Injected: 1"],
+    ["a carriage return alone", "owner\r@example.test"],
+    ["a comma in the local part", "a,b@example.test"],
+    ["a semicolon in the local part", "a;b@example.test"],
+    ["a bracket in the local part", "a<b@example.test"],
     ["a display name", "Owner <owner@example.test>"],
     ["a quoted local part", '"owner"@example.test'],
     ["a leading dot", ".owner@example.test"],
@@ -108,8 +114,8 @@ describe("the subject", () => {
     ["a NUL", "Hello\u0000"],
     ["DEL", "Hello\u007f"],
     ["a C1 control", "Hello\u0085"],
-    ["a line separator", "Hello there"],
-    ["a paragraph separator", "Hello there"],
+    ["a line separator", "Hello\u2028there"],
+    ["a paragraph separator", "Hello\u2029there"],
   ])("refuses one with %s", (_reason, subject) => {
     expect(refusal({ subject }).message).toBe("The email's subject must be one line with no control characters");
   });
@@ -146,6 +152,16 @@ describe("the text", () => {
 describe("the email", () => {
   it.each(EMAIL_KINDS)("is made for the kind %s", (kind) => {
     expect(outgoingEmail({ ...VALID, kind })).toEqual({ ...VALID, kind });
+  });
+
+  it.each([
+    ["recipient", { to: 7 }],
+    ["subject", { subject: null }],
+    ["text", { text: ["a"] }],
+  ])("refuses a %s that is not text", (_field, change) => {
+    expect(refusal(change as unknown as Partial<typeof VALID>).message).toBe(
+      "The email's recipient, subject and text must each be text",
+    );
   });
 
   it("refuses a kind the product does not send", () => {

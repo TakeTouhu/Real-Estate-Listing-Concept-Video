@@ -21,7 +21,7 @@ No change.
 | Export | Shape |
 | --- | --- |
 | `EmailSender` | `send(email: OutgoingEmail): Promise<void>`; resolves once accepted, rejects when not |
-| `outgoingEmail({ kind, to, subject, text })` | the one way to make an `OutgoingEmail` (branded, frozen); throws `VALIDATION_FAILED`, naming neither the address nor the text, for an unknown kind, an address mail cannot be sent to, a subject that is blank, over 200 characters or holds a control character or line break, or a body that is blank, over 10,000 characters or holds a control character other than `\n`; normalizes the recipient |
+| `outgoingEmail({ kind, to, subject, text })` | the one way to make an `OutgoingEmail` (branded, frozen); throws `VALIDATION_FAILED`, naming neither the address nor the text, for a field that is not text (only a cast reaches it), an unknown kind, an address mail cannot be sent to, a subject that is blank, over 200 characters or holds a control character or line break, or a body that is blank, over 10,000 characters or holds a control character other than `\n`; normalizes the recipient |
 | `isDeliverableEmailAddress(address)` | whether an address, normalized, is one plain ASCII address: dot-atom local part of at most 64 characters, two or more DNS labels, at most 254 characters |
 | `EMAIL_KINDS` | `EMAIL_VERIFICATION`, `PASSWORD_RESET`, `INVITATION` |
 | `EMAIL_ADDRESS_MAX_LENGTH`, `EMAIL_LOCAL_PART_MAX_LENGTH`, `EMAIL_SUBJECT_MAX_LENGTH`, `EMAIL_TEXT_MAX_LENGTH` | 254, 64, 200, 10,000 |
@@ -31,7 +31,7 @@ No change.
 | Export | Shape |
 | --- | --- |
 | `createDevelopmentEmailOutbox({ folder, nodeEnv?, now? })` | an `EmailSender` writing each message to its own file in an absolute folder, made private to its user if missing; throws `NonProductionAdapterError` when the given or the process's `NODE_ENV` is `production`, and `CONFIGURATION_ERROR` for a relative folder or one it cannot open (a code, never the path); `send` checks the message again and fails with `INTERNAL_ERROR` and a code when it cannot write it, leaving no file |
-| `readDevelopmentEmailOutbox(folder)` | every message, oldest first, as `{ id, kind, to, subject, text, sentAt, file }`; none for a folder not made yet; fails, naming the file, on a message file the outbox did not write |
+| `readDevelopmentEmailOutbox(folder)` | every message, oldest first, as `{ id, kind, to, subject, text, sentAt, file }`; none for a folder not made yet; fails, naming the file, on a file named as a message but not in the outbox's format; a folder or file it cannot read fails with a code, never the path |
 | `DEVELOPMENT_EMAIL_OUTBOX_FORMAT` | `"vtavision-development-email/1"`, the `format` of every message file |
 
 ### Unchanged on purpose
