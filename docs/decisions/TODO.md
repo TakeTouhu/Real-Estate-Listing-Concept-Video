@@ -2368,10 +2368,20 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Five gates: one found by the Phase 6A gap analysis
+Six gates: one found by the Phase 6A gap analysis
 (`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), two by GS-1
-(ADR-0082), one by GS-5b (ADR-0091). **None may be guessed.** Every other gate is closed and recorded
-below.
+(ADR-0082), one by GS-5b (ADR-0091), one by AT-1 (ADR-0126). **None may be
+guessed.** Every other gate is closed and recorded below.
+
+- [ ] **Choose the production email service** — from AT-1 (ADR-0126); does
+      not block the accounts-and-team plan, whose emails go to the development
+      outbox, refused in production. Production has no `EmailSender`, so a
+      production build cannot send the verification link ADR-0052 Decision 18
+      requires, nor a password reset or an invitation. Which service sends
+      VTaVision's email, from which domain, with what sender authentication
+      (SPF, DKIM, DMARC), and where its credential is kept (ADR-0054 Decision
+      5) must be settled before launch; the service then implements the one
+      method of `EmailSender`.
 
 - [ ] **Decide whether a failed replacement gives back the scene regeneration
       right that started it** — does not block GS-1, whose rollback changes no

@@ -788,6 +788,20 @@ invoiced. The customer's mistake is charged, unless it is cancelled within 10
 hours of its approval with none of its Units used. The export marks a
 cancelled purchase with nothing to invoice, and the Units page says so.
 
+**Accounts and team** — the plan the product owner approved on 2026-11-09
+(`/mnt/project-files/cto/accounts-team-proposal.md`; gap analysis in
+`docs/accounts-team-gap-analysis.md`): sending email, email verification and
+password reset (ADR-0052 Decision 18), then screens for the members,
+invitations, groups, Property assignment and permissions built in Phases 6C to
+6I, with the seat limit, and a browser test (AT-1 to AT-12).
+
+**AT-1 — the product sends email through a port** (ADR-0126, no migration):
+one `EmailSender` port and one checked message (three kinds, one plain ASCII
+recipient, a one-line subject, a plain-text body), and a development outbox
+that writes each email as a private file in an absolute folder
+(`EMAIL_OUTBOX_DIR`), refused in production. Nothing sends yet; no production
+email service is chosen.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

@@ -11,6 +11,7 @@ export * from "./identity/permission-grant-service";
 export * from "./identity/group-service";
 export { normalizeEmail } from "./identity/util";
 export * from "./mfa/index";
+export * from "./email/index";
 
 export * from "./property/index";
 

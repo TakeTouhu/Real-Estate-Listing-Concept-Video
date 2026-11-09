@@ -2269,3 +2269,14 @@ developer's machine, against a disposable database.
 
 **Rolling back.** To GS-13c-2's build: safe. Nothing is written but the test's
 own rows in its own database.
+
+## AT-1 — the product sends email through a port
+
+**No migration** (ADR-0126). No schema, enum, constraint or row changes, and no
+route, permission or page. One optional environment variable,
+`EMAIL_OUTBOX_DIR`, is accepted only as an absolute path outside production;
+nothing reads it yet.
+
+**What changes at deploy.** Nothing. A production environment must leave
+`EMAIL_OUTBOX_DIR` unset: the environment schema refuses it there, as it
+refuses `SHARED_STORAGE_DIR`.
