@@ -2291,3 +2291,27 @@ now written in one transaction, using the existing unique key on
 **What changes at deploy.** Nothing. Organizations created before AT-2 are
 unchanged; one left without an `OWNER` by an interrupted creation, if any
 exists, is not repaired.
+
+## AT-3a — email verification links
+
+**Migration 33** (`00000000000033_account_links`, ADR-0128). Additive only:
+
+- enum `AccountLinkPurpose` (`EMAIL_VERIFICATION`, `PASSWORD_RESET`);
+- `users."emailVerifiedAt"`, nullable, with no default;
+- table `account_links`, with a unique `tokenHash`, an index on (`userId`,
+  `purpose`), a foreign key to `users` that cascades on delete, and two
+  CHECKs: `account_links_tokenHash_check` (64 lower-case hex characters) and
+  `account_links_window_check` (expires after it is made; used, if at all,
+  not before it is made). Prisma cannot express the CHECKs, so the schema
+  drift check does not see them.
+
+No existing row is updated or deleted, and migrations 0 to 32 are not touched.
+
+**What changes at deploy.** Nothing a person sees. Every existing user reads as
+unverified, and nothing checks the column until AT-3b. No production deployment
+is recorded, so only development and CI databases are known to hold users;
+AT-3b confirms that before its guard ships.
+
+**Rolling back.** To AT-2's build: safe while the table is unused. Reverting the
+schema means dropping `account_links`, its enum and `users."emailVerifiedAt"`,
+which loses any verification recorded since.

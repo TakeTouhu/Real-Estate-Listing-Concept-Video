@@ -9,6 +9,7 @@ export * from "./identity/organization-service";
 export * from "./identity/membership-service";
 export * from "./identity/permission-grant-service";
 export * from "./identity/group-service";
+export * from "./identity/email-verification-service";
 export { normalizeEmail } from "./identity/util";
 export * from "./mfa/index";
 export * from "./email/index";

@@ -370,7 +370,7 @@ describe("durable shape", () => {
     // place, and nothing renamed or split it or the fifteen before it.
     expect(dirs.filter((dir) => dir.includes("phase5c"))).toEqual([MIGRATION_DIR]);
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(16);
-    expect(dirs).toHaveLength(33);
+    expect(dirs).toHaveLength(34);
   });
 
   it("creates one table and rewrites no existing row", () => {

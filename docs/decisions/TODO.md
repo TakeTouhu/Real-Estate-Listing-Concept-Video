@@ -252,7 +252,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       rate-limiting login, uploads, generation and billing; none of them is
       limited today. **Shape settled (ADR-0054 Decision 5):** defense in depth
       across account / organization / IP / endpoint, covering login, password
-      reset, MFA recovery, uploads, generation, downloads and billing;
+      reset, MFA recovery, uploads, generation, downloads and billing (*and,
+      since AT-3a, ADR-0128, asking for a verification email again: each ask
+      sends mail, so unlimited asks could fill a mailbox*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
@@ -2141,6 +2143,32 @@ them is **built**. Each item below records the settled decision and what remains
       simultaneous creations collide on the same next slug. The slug appears
       on no page and in no address; a random suffix, or one read for every
       taken suffix, would end both.
+- [ ] **Make email verification mandatory** (ADR-0052 Decision 18). *AT-3a
+      (ADR-0128, migration 33) built where a verified address is recorded,
+      the 24-hour one-time link and the service that sends and checks it,
+      dormant. Remaining (AT-3b): sign-up sends the link, the verify page, the
+      guard that keeps an unverified account on it, and the browser tests
+      reading the outbox. AT-3b must also refuse at sign-up an email mail
+      cannot be sent to (`isDeliverableEmailAddress`), which could otherwise
+      never be verified; cap the length of a token its route accepts (a mailed
+      one is 43 characters); and, before the guard ships, confirm no
+      production database holds users, who would all read as unverified.*
+- [ ] **Clear a verified address when it changes.** A verification is bound to
+      the address it was sent to (ADR-0128). No product path changes a user's
+      email today; whichever is added must set `emailVerifiedAt` back to null
+      in the same transaction, or the new address reads as verified.
+- [ ] **Register an account in one transaction.** Sign-up
+      (`AuthService.register`, reachable today) writes the user, the
+      credential and `user.registered` in separate steps. A failure between
+      them leaves an account with no password, which no one can sign in to
+      and whose email can never register again, or one created unaudited. The
+      same repository pattern as ADR-0059 and ADR-0127 closes it; AT-3b, which
+      changes sign-up, is the natural place.
+- [ ] **Delete used and expired account links.** `account_links` rows stay
+      after they are used or expire (ADR-0128). They verify nothing, but the
+      table grows with every link sent. Deleting them needs a scheduled job,
+      which stays blocked until production scheduling is authorized
+      (ADR-0054 Decision 7).
 - [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes

@@ -81,7 +81,7 @@ describe("DS-3 shape", () => {
     // No longer the newest: DS-4 added migration 30 after it, DS-5b-2a
     // migration 31 and GS-4b migration 32.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(29);
-    expect(dirs).toHaveLength(33);
+    expect(dirs).toHaveLength(34);
   });
 
   it("creates the enum and two required columns, keeps no default, and rewrites no row", () => {

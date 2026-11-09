@@ -807,6 +807,12 @@ migration): the organization, its founding `OWNER` and `organization.created`
 are written together or not at all, and a slug taken meanwhile by another
 organization is looked for again, up to three attempts.
 
+**AT-3a — email verification links** (ADR-0128, migration 33): where a
+verified address is recorded (`users.emailVerifiedAt`), one-time links kept as
+their token's SHA-256 (`account_links`), and the service that mails a 24-hour
+link and verifies the address when it is opened, once. Dormant: sign-up, the
+verify page and the guard arrive in AT-3b.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

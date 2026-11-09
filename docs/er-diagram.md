@@ -787,3 +787,32 @@ is unique per project, not per organization: the job has no organization column
 and reaches its organization through its project, which belongs to exactly one
 (ADR-0087 Decision 2). Jobs created any other way, and every job created before
 migration 32, carry none. No new table or relationship.
+
+## AT-1 and AT-2
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0126, ADR-0127).
+
+## AT-3a — email verification links
+
+```mermaid
+erDiagram
+    User ||--o{ AccountLink : "is sent (CASCADE)"
+    User {
+        datetime emailVerifiedAt "nullable; when a verification link sent to email was opened"
+    }
+    AccountLink {
+        string id PK
+        string userId FK
+        enum purpose "EMAIL_VERIFICATION or PASSWORD_RESET"
+        string tokenHash UK "SHA-256 hex by CHECK; never the token"
+        string email "the address the link was sent to"
+        datetime createdAt
+        datetime expiresAt "after createdAt by CHECK"
+        datetime usedAt "nullable; not before createdAt by CHECK"
+    }
+```
+
+Migration 33. A link is mailed to a user and works once, until it expires
+(ADR-0128). Like MFA, it belongs to the person, so it carries no organization.
+Every user existing at migration 33 is unverified.

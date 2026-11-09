@@ -6,6 +6,14 @@ export const AuditAction = {
   OrganizationCreated: "organization.created",
   UserRegistered: "user.registered",
   UserLoggedIn: "user.logged_in",
+  /**
+   * A verification link was made for the account's address (ADR-0128). It is
+   * recorded before the email is handed over, so it does not say the email
+   * was accepted for delivery.
+   */
+  EmailVerificationLinkCreated: "user.email_verification_link_created",
+  /** The account's address was verified by opening such a link. */
+  EmailVerified: "user.email_verified",
   SessionRevoked: "session.revoked",
   InvitationCreated: "invitation.created",
   InvitationAccepted: "invitation.accepted",
