@@ -92,6 +92,27 @@ run from different folders, and the setting is refused in production. The
 development pipeline (section 4a) reads the same folder. Delete the folder to
 start over.
 
+## 3c. Sign up and verify your email address
+
+A new account sees only the verify page until it opens the link mailed to its
+address (ADR-0129). No email service is chosen yet, so the web app writes each
+email to a folder instead of sending it (ADR-0126). Set both in `.env.local`:
+
+```bash
+EMAIL_OUTBOX_DIR=/absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-outbox
+APP_BASE_URL=http://localhost:3000
+```
+
+`APP_BASE_URL` is the address the links start with; use the one you open the
+web app at. After signing up, open the newest file in the folder, copy the
+link from its `text` and open it in the browser, then press **Verify email
+address**. The link works once, for 24 hours; the verify page sends a new one.
+`.dev-outbox/` is git-ignored, and the folder is readable by your user alone.
+
+Without both settings no email is sent: the verify page says the email could
+not be sent, and the account cannot be verified. Accounts made before AT-3b
+are unverified too, and verify the same way at their next sign-in.
+
 ## 4. Run the worker (optional)
 
 ```bash

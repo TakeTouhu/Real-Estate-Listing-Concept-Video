@@ -813,6 +813,13 @@ their token's SHA-256 (`account_links`), and the service that mails a 24-hour
 link and verifies the address when it is opened, once. Dormant: sign-up, the
 verify page and the guard arrive in AT-3b.
 
+**AT-3b — email verification is required** (ADR-0129, no migration): sign-up
+refuses an address no email can reach and mails a link to the development
+outbox, on `APP_BASE_URL`; a sign-in whose address is not verified sees only
+the verify page, after its MFA code and before MFA set-up, and can have the
+link sent again; the link verifies with one press, with no sign-in. The browser
+tests open the link from the outbox. Production has no email service yet.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

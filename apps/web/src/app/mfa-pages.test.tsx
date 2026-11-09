@@ -12,7 +12,7 @@ import {
   totpStep,
   type Session,
 } from "@app/domain";
-import { createTestDeps, type TestDeps } from "@app/domain/testing";
+import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
 
 /**
@@ -60,7 +60,7 @@ beforeEach(async () => {
   cookie.value = undefined;
   router.push.mockReset();
   router.refresh.mockReset();
-  await auth.register({ email: "a@example.com", name: "A", password: PASSWORD });
+  markEmailVerified(deps, (await auth.register({ email: "a@example.com", name: "A", password: PASSWORD })).id);
 });
 
 afterEach(() => {

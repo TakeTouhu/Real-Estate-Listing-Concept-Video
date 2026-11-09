@@ -39,6 +39,19 @@ describe("AuthService", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
+  it("refuses an address no email can be sent to, writing nothing (ADR-0129)", async () => {
+    for (const email of ["", "owner", "owner@localhost", "a b@example.com", '"o"@example.com', "o@exa_mple.com"]) {
+      await expect(ctx.auth.register({ email, name: "O", password: PASSWORD })).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        message: "Enter an email address that can receive email",
+      });
+      expect(await ctx.deps.repos.users.findByEmail(email.trim().toLowerCase())).toBeNull();
+    }
+    expect(ctx.deps.repos.auditLogs.all()).toEqual([]);
+    const user = await ctx.auth.register({ email: "  Owner@Example.COM ", name: "O", password: PASSWORD });
+    expect(user.email).toBe("owner@example.com");
+  });
+
   it("logs in with correct credentials and rejects wrong ones", async () => {
     await ctx.auth.register({ email: "a@example.com", name: "A", password: PASSWORD });
     const result = await ctx.auth.login("a@example.com", PASSWORD);

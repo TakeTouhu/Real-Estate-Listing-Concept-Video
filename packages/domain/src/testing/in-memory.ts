@@ -768,3 +768,13 @@ export function createTestDeps(): TestDeps {
     tokens: fakeTokenService(),
   };
 }
+
+/**
+ * Test-only: the user's address verified now, as opening a verification link
+ * does (ADR-0128), for a test about something a verified account does.
+ */
+export function markEmailVerified(deps: TestDeps, userId: string): void {
+  const user = deps.repos.users.peek(userId);
+  if (!user) throw new Error(`No user ${userId}`);
+  deps.repos.users.put({ ...user, emailVerifiedAt: deps.clock.now() });
+}

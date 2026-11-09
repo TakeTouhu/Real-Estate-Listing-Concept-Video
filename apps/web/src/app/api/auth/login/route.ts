@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { mfaSignInStep } from "@app/domain";
+import { signInStep } from "@app/domain";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, nextPageFor, sessionCookieOptions } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
@@ -13,9 +13,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const password = formString(form, "password");
   try {
     const { auth, deps } = getIdentityServices();
-    const { session, token } = await auth.login(email, password);
-    // With MFA on, or required, the password is only the first step (ADR-0065 Decisions 12 and 15).
-    const next = nextPageFor(await mfaSignInStep(deps, session));
+    const { user, session, token } = await auth.login(email, password);
+    // With MFA on or required, or the email not verified, the password is only the first step
+    // (ADR-0065 Decisions 12 and 15, ADR-0129).
+    const next = nextPageFor(await signInStep(deps, user, session));
     const response = NextResponse.redirect(new URL(next, request.url), { status: 303 });
     response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
     return response;

@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import type { Session } from "../identity/types";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, markEmailVerified, type TestDeps } from "../testing/in-memory";
 import { createMfaSecretCipher, systemMfaRandom } from "./adapters";
 import { MfaService } from "./mfa-service";
-import { mfaSignInStep } from "./sign-in";
+import { mfaSignInStep, signInStep } from "./sign-in";
 import { totpStep } from "./totp";
 
 const PASSWORD = "password-123456";
@@ -107,5 +107,56 @@ describe("mfaSignInStep (ADR-0065 Decisions 12, 15 and 18)", () => {
     expect(await mfaSignInStep(deps, stored(session))).toBe("SETUP_REQUIRED");
     await organizations.setMfaRequirement(owner, organization.id, false);
     expect(await mfaSignInStep(deps, stored(session))).toBe("SIGNED_IN");
+  });
+});
+
+describe("signInStep (ADR-0129)", () => {
+  let deps: TestDeps;
+  let auth: AuthService;
+  let mfa: MfaService;
+  let userId: string;
+
+  beforeEach(async () => {
+    deps = createTestDeps();
+    auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
+    mfa = new MfaService({ ...deps, cipher: createMfaSecretCipher("22".repeat(32)), random: systemMfaRandom });
+    userId = (await auth.register({ email: EMAIL, name: "Step", password: PASSWORD })).id;
+  });
+
+  const user = () => deps.repos.users.peek(userId)!;
+  const stored = (session: Session): Session => deps.repos.sessions.byId(session.id)!;
+  const signIn = async (): Promise<Session> => (await auth.login(EMAIL, PASSWORD)).session;
+  const step = (session: Session) => signInStep(deps, user(), stored(session));
+  const code = (secret: string, offset = 0): string =>
+    hotp(decodeBase32(secret), totpStep(deps.clock.now()) + offset);
+
+  it("keeps a new account on email verification until its address is verified, then lets it in", async () => {
+    const session = await signIn();
+    expect(await step(session)).toBe("EMAIL_VERIFICATION_REQUIRED");
+    markEmailVerified(deps, userId);
+    expect(await step(session)).toBe("SIGNED_IN");
+  });
+
+  it("asks a sign-in that owes an MFA code for the code before the address", async () => {
+    markEmailVerified(deps, userId);
+    const enrolling = await signIn();
+    const { secret } = await mfa.beginSetup(enrolling);
+    await mfa.confirmSetup(enrolling, code(secret));
+    deps.repos.users.put({ ...user(), emailVerifiedAt: null });
+
+    const session = await signIn();
+    expect(await step(session)).toBe("CODE_REQUIRED");
+    await mfa.verify(session, code(secret, 1));
+    expect(await step(session)).toBe("EMAIL_VERIFICATION_REQUIRED");
+    markEmailVerified(deps, userId);
+    expect(await step(session)).toBe("SIGNED_IN");
+  });
+
+  it("asks for the address before MFA set-up", async () => {
+    await new OrganizationService(deps).createOrganization(userId, { name: "Studio" });
+    const session = await signIn();
+    expect(await step(session)).toBe("EMAIL_VERIFICATION_REQUIRED");
+    markEmailVerified(deps, userId);
+    expect(await step(session)).toBe("SETUP_REQUIRED");
   });
 });

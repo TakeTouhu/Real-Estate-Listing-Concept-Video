@@ -12,7 +12,13 @@ import {
   totpStep,
   type Role,
 } from "@app/domain";
-import { InMemoryUnitPurchases, InMemoryUnitsReader, createTestDeps, type TestDeps } from "@app/domain/testing";
+import {
+  InMemoryUnitPurchases,
+  InMemoryUnitsReader,
+  createTestDeps,
+  markEmailVerified,
+  type TestDeps,
+} from "@app/domain/testing";
 import { AppError, hotp } from "@app/shared";
 import type { OrganizationSubscription } from "@app/domain";
 
@@ -70,6 +76,7 @@ beforeEach(async () => {
   });
   env.value = { NODE_ENV: "test", MFA_SECRET_KEY: KEY };
   ownerId = (await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD })).id;
+  markEmailVerified(deps, ownerId);
   ({ organization: { id: orgId } } = await new OrganizationService(deps).createOrganization(ownerId, {
     name: "Studio Kanda",
   }));
@@ -88,6 +95,7 @@ function decodeBase32(text: string): Buffer {
 async function signInAs(role: Role | null): Promise<string> {
   const email = `${(role ?? "outsider").toLowerCase()}-${deps.ids.generate("u")}@example.com`;
   const userId = (await auth.register({ email, name: role ?? "Outsider", password: PASSWORD })).id;
+  markEmailVerified(deps, userId);
   if (role !== null) await deps.repos.memberships.create({ organizationId: orgId, userId, role });
   const { token, session } = await auth.login(email, PASSWORD);
   const mfa = new MfaService({ ...deps, cipher: createMfaSecretCipher(KEY), random: systemMfaRandom });

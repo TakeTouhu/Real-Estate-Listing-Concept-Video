@@ -8,7 +8,7 @@ import {
   totpStep,
   type Role,
 } from "@app/domain";
-import { createTestDeps, type TestDeps } from "@app/domain/testing";
+import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
 
 /**
@@ -59,7 +59,9 @@ beforeEach(async () => {
   cookie.value = undefined;
   const ids: Record<string, string> = {};
   for (const [name, email] of Object.entries(emails)) {
-    ids[name] = (await auth.register({ email, name, password: PASSWORD })).id;
+    const id = (await auth.register({ email, name, password: PASSWORD })).id;
+    markEmailVerified(deps, id);
+    ids[name] = id;
   }
   ({ organization: { id: orgId } } = await organizations.createOrganization(ids.owner!, { name: "Studio" }));
   const roles: [string, Role][] = [

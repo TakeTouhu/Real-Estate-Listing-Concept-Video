@@ -1,4 +1,5 @@
 import { AppError } from "@app/shared";
+import { isDeliverableEmailAddress } from "../email/outgoing-email";
 import { AuditAction, recordAudit } from "./audit";
 import type { IdentityServiceDeps } from "./ports";
 import type { Session, User } from "./types";
@@ -31,6 +32,10 @@ export class AuthService {
 
   async register(input: RegisterInput): Promise<User> {
     const email = normalizeEmail(input.email);
+    // An address no email can be sent to could never be verified (ADR-0129).
+    if (!isDeliverableEmailAddress(email)) {
+      throw new AppError("VALIDATION_FAILED", "Enter an email address that can receive email");
+    }
     if (input.password.length < MIN_PASSWORD_LENGTH) {
       throw new AppError("VALIDATION_FAILED", "Password is too short");
     }

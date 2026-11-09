@@ -26,6 +26,14 @@ export const E2E_SHARED_STORAGE_DIR = join(REPO_ROOT, ".e2e", "shared");
  */
 export const E2E_PROVIDER_DIR = join(REPO_ROOT, ".e2e", "provider");
 
+/**
+ * The folder the web app writes its emails to instead of sending them
+ * (ADR-0126), where the test reads a new account's verification link
+ * (ADR-0129). Kept from run to run: each test reads only mail to its own new
+ * address.
+ */
+export const E2E_EMAIL_OUTBOX_DIR = join(REPO_ROOT, ".e2e", "outbox");
+
 /** The web app's key for signed links, which the commands and the pipeline's steps the test runs use too. */
 export const E2E_STORAGE_SIGNING_SECRET = "e2e-storage-signing-secret-not-a-secret";
 
@@ -59,7 +67,8 @@ export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string 
 /**
  * The environment of the web app and of every command the test runs: one
  * database, one shared folder and one signing secret, so a photo the web app
- * stored is the one a command reads. Refused under `NODE_ENV=production`.
+ * stored is the one a command reads, and one outbox. Refused under
+ * `NODE_ENV=production`.
  */
 export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   if (source.NODE_ENV === "production") {
@@ -74,6 +83,9 @@ export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<
     MFA_SECRET_KEY: "e2e0".repeat(16),
     VIDEO_PROVIDER: "fake",
     SHARED_STORAGE_DIR: E2E_SHARED_STORAGE_DIR,
+    // Emailed links start with the web app's own address (ADR-0129).
+    EMAIL_OUTBOX_DIR: E2E_EMAIL_OUTBOX_DIR,
+    APP_BASE_URL: E2E_BASE_URL,
     NEXT_TELEMETRY_DISABLED: "1",
     LOG_LEVEL: "warn",
   };

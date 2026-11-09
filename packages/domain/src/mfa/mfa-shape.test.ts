@@ -116,12 +116,15 @@ describe("boundary", () => {
     );
   });
 
-  it("lets only the sign-in pages, the code step and MFA set-up read a sign-in that has not passed MFA", () => {
+  it("lets only the sign-in pages, the code step, MFA set-up and the verify page read a sign-in not yet in", () => {
     expect(matching("apps/web", /getSignIn\(/).sort()).toEqual([
       "apps/web/src/app/api/auth/mfa/route.ts",
+      // The verify page and its resend route, for a sign-in that has not verified its email (ADR-0129).
+      "apps/web/src/app/api/auth/verify-email/resend/route.ts",
       "apps/web/src/app/login/mfa/page.tsx",
       "apps/web/src/app/login/page.tsx",
       "apps/web/src/app/security/page.tsx",
+      "apps/web/src/app/verify-email/page.tsx",
       "apps/web/src/lib/auth.ts",
       "apps/web/src/lib/mfa.ts",
     ]);

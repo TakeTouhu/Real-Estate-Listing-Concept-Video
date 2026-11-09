@@ -16,6 +16,12 @@ export interface EmailVerificationDeps extends IdentityServiceDeps {
   readonly verificationUrl: (token: string) => string;
 }
 
+/**
+ * The longest token `verifyEmail` looks up (ADR-0129). A mailed one is 43
+ * characters; a longer one is refused before it is hashed.
+ */
+export const ACCOUNT_LINK_TOKEN_MAX_LENGTH = 128;
+
 /** `ALREADY_VERIFIED`: nothing was made or sent. */
 export type SendVerificationOutcome = "SENT" | "ALREADY_VERIFIED";
 
@@ -93,7 +99,9 @@ export class EmailVerificationService {
    * verified the address answers `ALREADY_VERIFIED` and writes nothing.
    */
   async verifyEmail(token: string): Promise<VerifyEmailOutcome> {
-    if (typeof token !== "string" || token.length === 0) return "INVALID";
+    if (typeof token !== "string" || token.length === 0 || token.length > ACCOUNT_LINK_TOKEN_MAX_LENGTH) {
+      return "INVALID";
+    }
     const link = await this.deps.repos.accountLinks.findByTokenHash(this.deps.tokens.hash(token));
     if (!link || link.purpose !== "EMAIL_VERIFICATION") return "INVALID";
     const user = await this.deps.repos.users.findById(link.userId);
