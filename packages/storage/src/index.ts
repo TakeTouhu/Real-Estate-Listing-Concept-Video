@@ -15,6 +15,16 @@ export type {
   SharedFolderStorageOptions,
 } from "./shared-folder-storage";
 /**
+ * The development outbox for the product's emails, refused in production
+ * (ADR-0126). Nothing in either application constructs it yet.
+ */
+export {
+  DEVELOPMENT_EMAIL_OUTBOX_FORMAT,
+  createDevelopmentEmailOutbox,
+  readDevelopmentEmailOutbox,
+} from "./development-email-outbox";
+export type { DevelopmentEmailOutboxOptions, DevelopmentOutboxMessage } from "./development-email-outbox";
+/**
  * The test provider's clip maker, refused in production (ADR-0092). Nothing in
  * either application constructs it yet.
  */

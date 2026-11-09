@@ -61,6 +61,24 @@ describe("serverEnvSchema", () => {
     expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production" }).success).toBe(true);
   });
 
+  it("accepts EMAIL_OUTBOX_DIR only as an absolute path outside production", () => {
+    expect(serverEnvSchema.parse(base).EMAIL_OUTBOX_DIR).toBeUndefined();
+    const dir = "/var/tmp/vtavision-outbox";
+    for (const NODE_ENV of ["development", "test"]) {
+      expect(serverEnvSchema.parse({ ...base, NODE_ENV, EMAIL_OUTBOX_DIR: dir }).EMAIL_OUTBOX_DIR).toBe(dir);
+    }
+    for (const bad of [
+      { EMAIL_OUTBOX_DIR: "" },
+      { EMAIL_OUTBOX_DIR: "relative/outbox" },
+      { EMAIL_OUTBOX_DIR: dir, NODE_ENV: "production" },
+    ]) {
+      const result = serverEnvSchema.safeParse({ ...base, ...bad });
+      expect(result.success).toBe(false);
+      const paths = result.success ? [] : result.error.issues.map((i) => i.path.join("."));
+      expect(new Set(paths)).toEqual(new Set(["EMAIL_OUTBOX_DIR"]));
+    }
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);

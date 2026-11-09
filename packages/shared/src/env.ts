@@ -55,6 +55,12 @@ export const serverEnvSchema = z
     // keeps objects in its own memory. Refused in production.
     SHARED_STORAGE_DIR: z.string().min(1).optional(),
 
+    // The folder the product's emails are written to instead of being sent,
+    // in development and CI only (ADR-0126). Absolute, for the same reason as
+    // the shared folder. Read by nothing yet. Refused in production, where no
+    // email service is chosen yet.
+    EMAIL_OUTBOX_DIR: z.string().min(1).optional(),
+
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
     // characters (ADR-0065). Optional because the worker shares this schema
     // and never needs it; the web app fails closed without it (Decision 14).
@@ -99,6 +105,23 @@ export const serverEnvSchema = z
           code: z.ZodIssueCode.custom,
           path: ["SHARED_STORAGE_DIR"],
           message: "SHARED_STORAGE_DIR is for development and CI only; it must not be set in production",
+        });
+      }
+    }
+
+    if (env.EMAIL_OUTBOX_DIR !== undefined) {
+      if (!isAbsolute(env.EMAIL_OUTBOX_DIR)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["EMAIL_OUTBOX_DIR"],
+          message: "EMAIL_OUTBOX_DIR must be an absolute path",
+        });
+      }
+      if (env.NODE_ENV === "production") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["EMAIL_OUTBOX_DIR"],
+          message: "EMAIL_OUTBOX_DIR is for development and CI only; it must not be set in production",
         });
       }
     }
