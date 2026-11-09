@@ -1,6 +1,8 @@
 import type {
   AuditLogRepository,
   Clock,
+  CreateOrganizationWithOwnerInput,
+  CreateOrganizationWithOwnerOutcome,
   CredentialRepository,
   DeletedGroup,
   GrantChangeAudit,
@@ -124,12 +126,31 @@ class InMemoryOrganizationRepository implements OrganizationRepository {
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
     private readonly roleOf: (organizationId: string, userId: string) => Role | undefined,
+    private readonly insertMembership: (input: Omit<Membership, "createdAt">) => Membership,
   ) {}
   create(input: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">): Promise<Organization> {
     const now = this.clock.now();
     const org: Organization = { ...input, mfaRequired: false, createdAt: now, updatedAt: now };
     this.byId.set(org.id, org);
     return Promise.resolve(org);
+  }
+  /**
+   * Checks the slug and writes all three with no `await` in between, as the
+   * database's transaction does; a taken slug, like the unique key, writes
+   * nothing.
+   */
+  async createWithOwner(input: CreateOrganizationWithOwnerInput): Promise<CreateOrganizationWithOwnerOutcome> {
+    if ([...this.byId.values()].some((o) => o.slug === input.organization.slug)) return { outcome: "SLUG_TAKEN" };
+    const now = this.clock.now();
+    const organization: Organization = { ...input.organization, mfaRequired: false, createdAt: now, updatedAt: now };
+    this.byId.set(organization.id, organization);
+    const membership = this.insertMembership({
+      organizationId: organization.id,
+      userId: input.ownerUserId,
+      role: "OWNER",
+    });
+    await this.auditLogs.append(input.audit);
+    return { outcome: "CREATED", organization, membership };
   }
   /** Checks and writes with no `await` in between, as the database's transaction does. */
   async setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE"> {
@@ -624,8 +645,11 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
-    organizations: new InMemoryOrganizationRepository(clock, auditLogs, (organizationId, userId) =>
-      memberships.roleOf(organizationId, userId),
+    organizations: new InMemoryOrganizationRepository(
+      clock,
+      auditLogs,
+      (organizationId, userId) => memberships.roleOf(organizationId, userId),
+      (input) => memberships.insert(input),
     ),
     memberships,
     permissionGrants,

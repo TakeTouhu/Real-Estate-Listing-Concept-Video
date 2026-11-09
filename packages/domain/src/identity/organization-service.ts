@@ -22,10 +22,21 @@ export interface CreateOrganizationResult {
   readonly membership: Membership;
 }
 
+/**
+ * How many times creating an organization looks for a free slug before it gives
+ * up, when organizations of the same name keep taking it first (ADR-0127).
+ */
+export const ORGANIZATION_SLUG_ATTEMPTS = 3;
+
 export class OrganizationService {
   constructor(private readonly deps: IdentityServiceDeps) {}
 
-  /** Create an organization and make the actor its OWNER, with an audit event. */
+  /**
+   * Create an organization and make the actor its OWNER, with an audit event,
+   * in one transaction (ADR-0127). A slug taken meanwhile by an organization
+   * of the same name is looked for again, up to
+   * {@link ORGANIZATION_SLUG_ATTEMPTS} times.
+   */
   async createOrganization(
     actorUserId: string,
     input: CreateOrganizationInput,
@@ -34,27 +45,29 @@ export class OrganizationService {
     if (name.length === 0) {
       throw new AppError("VALIDATION_FAILED", "Organization name is required");
     }
-    const slug = await this.uniqueSlug(name);
-    const organization = await this.deps.repos.organizations.create({
-      id: this.deps.ids.generate("org"),
-      name,
-      slug,
-      status: "ACTIVE",
-    });
-    const membership = await this.deps.repos.memberships.create({
-      organizationId: organization.id,
-      userId: actorUserId,
-      role: "OWNER",
-    });
-    await recordAudit(this.deps, {
-      organizationId: organization.id,
-      actorUserId,
-      action: AuditAction.OrganizationCreated,
-      resourceType: "organization",
-      resourceId: organization.id,
-      metadata: { slug },
-    });
-    return { organization, membership };
+    for (let attempt = 1; attempt <= ORGANIZATION_SLUG_ATTEMPTS; attempt += 1) {
+      const slug = await this.uniqueSlug(name);
+      const id = this.deps.ids.generate("org");
+      const created = await this.deps.repos.organizations.createWithOwner({
+        organization: { id, name, slug, status: "ACTIVE" },
+        ownerUserId: actorUserId,
+        audit: {
+          organizationId: id,
+          actorUserId,
+          action: AuditAction.OrganizationCreated,
+          resourceType: "organization",
+          resourceId: id,
+          metadata: { slug },
+        },
+      });
+      if (created.outcome === "CREATED") {
+        return { organization: created.organization, membership: created.membership };
+      }
+    }
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "Other organizations of the same name were being created at the same moment; try again",
+    );
   }
 
   /**

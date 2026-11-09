@@ -2280,3 +2280,14 @@ nothing reads it yet.
 **What changes at deploy.** Nothing. A production environment must leave
 `EMAIL_OUTBOX_DIR` unset: the environment schema refuses it there, as it
 refuses `SHARED_STORAGE_DIR`.
+
+## AT-2 — an organization is created in one transaction
+
+**No migration** (ADR-0127). No schema, enum, constraint or row changes. The
+organization, its founding `OWNER` membership and `organization.created` are
+now written in one transaction, using the existing unique key on
+`organizations.slug` to detect a slug taken meanwhile.
+
+**What changes at deploy.** Nothing. Organizations created before AT-2 are
+unchanged; one left without an `OWNER` by an interrupted creation, if any
+exists, is not repaired.

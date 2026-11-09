@@ -50,8 +50,18 @@ export interface CredentialRepository {
 }
 
 export interface OrganizationRepository {
-  /** A new organization requires no MFA of its members. */
+  /**
+   * The organization alone, for test fixtures. The product creates one only
+   * with {@link OrganizationRepository.createWithOwner} (ADR-0127).
+   * A new organization requires no MFA of its members.
+   */
   create(input: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">): Promise<Organization>;
+  /**
+   * Create the organization, its founding `OWNER` membership and `audit` in
+   * one transaction (ADR-0127): all three are written, or none is. A slug
+   * another organization holds writes nothing and answers `SLUG_TAKEN`.
+   */
+  createWithOwner(input: CreateOrganizationWithOwnerInput): Promise<CreateOrganizationWithOwnerOutcome>;
   findById(id: string): Promise<Organization | null>;
   findBySlug(slug: string): Promise<Organization | null>;
   /**
@@ -62,6 +72,17 @@ export interface OrganizationRepository {
    */
   setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE">;
 }
+
+export interface CreateOrganizationWithOwnerInput {
+  readonly organization: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">;
+  /** The user who becomes the organization's first `OWNER`. */
+  readonly ownerUserId: string;
+  readonly audit: Omit<AuditLog, "id" | "createdAt">;
+}
+
+export type CreateOrganizationWithOwnerOutcome =
+  | { readonly outcome: "CREATED"; readonly organization: Organization; readonly membership: Membership }
+  | { readonly outcome: "SLUG_TAKEN" };
 
 export interface SetMfaRequiredInput {
   readonly organizationId: string;
