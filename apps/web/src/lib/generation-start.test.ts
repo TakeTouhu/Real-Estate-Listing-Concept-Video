@@ -4,13 +4,13 @@ import type { FakeRouteKit } from "@app/video-providers";
 /**
  * Where the web app builds the start (GS-10c, ADR-0111 Decision 2): only where
  * the test provider's route is handed out, which its own guard decides, and
- * with that route's qualities.
+ * with that route's qualities and route check (ADR-0123).
  */
 const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 /** Each kit handed out, each start built with what, and a kit failure a test sets. */
 const seen = vi.hoisted(() => ({
   kits: [] as unknown[],
-  starts: [] as { readonly qualities: unknown }[],
+  starts: [] as { readonly qualities: unknown; readonly routes: unknown }[],
   kitFailure: null as Error | null,
 }));
 
@@ -88,7 +88,7 @@ describe("the test provider's route", () => {
 });
 
 describe("the start", () => {
-  it("is built once, in development with the test provider, with the route's qualities", async () => {
+  it("is built once, in development with the test provider, with the route's qualities and route check", async () => {
     env.value = DEVELOPMENT;
     const { getGenerationStartService } = await composition();
     // The domain module the fresh composition loaded.
@@ -101,6 +101,7 @@ describe("the start", () => {
     expect(seen.starts).toHaveLength(1);
     const [kit] = seen.kits as FakeRouteKit[];
     expect(seen.starts[0]?.qualities).toBe(kit?.qualityOffer);
+    expect(seen.starts[0]?.routes).toBe(kit?.routeCheck);
   });
 
   it.each([

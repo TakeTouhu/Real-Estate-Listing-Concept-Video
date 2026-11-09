@@ -37,6 +37,9 @@ export function getGenerationStartService(): GenerationStartService | null {
       // The qualities the test provider's route serves, from the policy its
       // paid-submission gate is handed too, so the two agree (ADR-0089).
       qualities: route.qualityOffer,
+      // The launch planner's route check over the same policy and catalog, so
+      // a storyboard the launch could never route is not started (ADR-0123).
+      routes: route.routeCheck,
       subscriptions: createSubscriptionRepository(prisma),
       ledger: createUnitEntitlementRepository(prisma),
       starts: createGenerationStartRepository(prisma),

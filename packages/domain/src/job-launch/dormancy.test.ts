@@ -102,7 +102,7 @@ describe("no paid boundary is reachable", () => {
           new RegExp(
             ": (" +
               [
-                "\\./(ending|launch|launched-ending|limit|planner|ports|runner)",
+                "\\./(ending|launch|launched-ending|limit|planner|ports|route-qualification|runner)",
                 "\\.\\./authorization/routing",
                 "\\.\\./generation/(capability|model-catalog|prompt-render)",
                 "\\.\\./media-recovery/ports",

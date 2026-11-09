@@ -8067,3 +8067,118 @@ GS-13b waits for the product owner's yes before merge. GS-13c (from the
 photos' approval to a downloaded video) and GS-13d (a video that is not made,
 its Unit returned, and the plan's completion report) follow; GS-13c also needs
 the product owner's answer on the short-scene start.
+
+## GS-13c-1 — the start refuses scenes no route can make
+
+Base: `d85a00b` (PR #146 merge commit on `main`).
+ADR: `docs/decisions/0123-the-start-refuses-scenes-no-route-can-make.md`
+
+The first part of GS-13c (see `docs/generation-e2e-gap-analysis.md`, *GS-13*),
+built as the product owner chose on 2026-11-08: a storyboard with a scene of a
+length the video cannot be made at is refused on the start page, before any
+Unit is reserved. **No migration, no route, permission or environment
+variable.** The exact head SHA is reported with the pull request.
+
+### What GS-13c-1 does
+
+- **One route qualification for the planner and the start.** The planner's
+  private route qualification moves, unchanged, into
+  `job-launch/route-qualification.ts` (`qualifyingRoutes`), and the planner
+  calls it. `judgeStartRoute` asks it of the facts the start commit copies
+  (the project's quality, target resolution and aspect ratio, each scene's
+  length and camera motion) and answers `ONE_ROUTE`, `SCENE_LENGTHS` (the
+  lengths the one route at that quality takes, and the scenes that are not
+  one) or `NO_ROUTE`.
+- **The start is handed it** as `StartRouteCheck` (`routeCheck(policy,
+  models)`); the web app's start takes `FakeRouteKit.routeCheck`, over the
+  same policy and catalog the development pipeline's planner is built from.
+- **Both the offer and the start ask it** after the storyboard's own checks
+  and before the length, the plan and the Units: the offer answers
+  `SCENE_LENGTHS_NOT_SUPPORTED` (the lengths, and each scene's id, position
+  and length) or `SETTINGS_NOT_SUPPORTED`; the start answers the same two
+  outcomes, with no Unit reserved, no period opened and no commit asked.
+- **The start page** shows no form for either: "Each scene of this video must
+  be 5 to 15 seconds long. These scenes are not:", each scene by number, room
+  and length, and to compose again with the shortest and longest scene within
+  that range; or "This video cannot be made with this project's settings
+  yet." The start route sends either refusal back to the start page with a
+  fixed sentence.
+
+```mermaid
+sequenceDiagram
+    actor M as Member
+    participant P as Start page / route
+    participant S as GenerationStartService
+    participant Q as StartRouteCheck (judgeStartRoute)
+    participant C as Start commit
+    M->>P: open the start page, or post the form
+    P->>S: offer() / start()
+    Note over S: composed, fresh, quality offered, every scene usable
+    S->>Q: quality, resolution, aspect, each scene's length and motion
+    Q-->>S: ONE_ROUTE / SCENE_LENGTHS (lengths, scenes) / NO_ROUTE
+    alt SCENE_LENGTHS or NO_ROUTE
+        S-->>P: SCENE_LENGTHS_NOT_SUPPORTED / SETTINGS_NOT_SUPPORTED
+        P-->>M: the scenes to fix, or settings not supported; no form, nothing reserved
+    else ONE_ROUTE
+        Note over S: length, plan, Units, as before
+        S->>C: start (reserves the Unit)
+    end
+```
+
+### Verification
+
+Measured locally on this pull request's code, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test` | 7,013 passed in 272 files: 26 new against GS-13b's 6,987 (14 on the route question: one route, the scenes named by index with the lengths, listed lengths, a length not a whole second, the route at the storyboard's own quality, no route for a quality, resolution, catalog or other setting, two routes, two candidates both refusing, agreement with the planner's qualification over a grid, and the start's `routeCheck`; 4 on the start service: the facts asked, both refusals with nothing reserved, the offer of scenes to fix by their own position, settings not supported; 1 on the kit's route check; 5 on the start page; 2 on the start route's sentences). The start's order test gains four cases; one existing assertion on the import allowlist names the new file |
+| `pnpm test:db` | 1,883 passed in 73 files, against a migrated local PostgreSQL 16 database |
+| `pnpm build` | succeeded; the start page stays server-rendered at 226 B, first load 102 kB (no domain code in the browser) |
+| `pnpm test:e2e`, `pnpm test:media` | not run: nothing they cover changed (the browser test does not reach the start page yet) |
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the start service's, test route kit's, start route's, start page's and launch planner's rows |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | `docs/api-changes-gs-13c-1.md` |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-13c-1*: no migration |
+| Completion report | this file |
+
+Also updated: `docs/Roadmap.md` (GS-13c-1),
+`docs/generation-e2e-gap-analysis.md` (GS-13c split in two),
+`docs/decisions/TODO.md` (the finding decided, and the waiting job's item
+narrowed) and `docs/UXFlow.md` (the start page's scenes to fix).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The start, and so the check, is built
+only in development with the test provider (ADR-0111). Paid Provider
+Activation, production Provider credentials, production paid AI calls, the
+production scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **No limit when composing**: the compose panel still takes any shortest and
+  longest scene, and the member learns of a length the route cannot make on
+  the start page (the card's second option, not chosen).
+- **The price and the exchange rate are not checked at the start**, and a
+  route table or catalog can change between the start and the launch; a job
+  the launch refuses for either still waits with its Units (TODO, *Bound how
+  long a waiting job refused for configuration may hold its Units*).
+- **A scene refused for its length and another setting** is named for its
+  length first; once composed again, the page says the settings are not
+  supported.
+- **Two candidate routes at one quality** that both refuse a scene's length
+  are answered as settings not supported, since neither is the route; today
+  each quality has one route.
+
+### Remaining work
+
+GS-13c-1 waits for the product owner's yes before merge. GS-13c-2 (the browser
+test from the photos' approval to a downloaded video) and GS-13d (a video that
+is not made, its Unit returned, and the plan's completion report) follow.

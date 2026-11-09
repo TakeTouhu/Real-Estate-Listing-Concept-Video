@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { StartOffer } from "@app/domain";
 import { readGenerationStartForm } from "@/lib/generation-start-form";
-import { StartView, refusal } from "./start-view";
+import { StartView, refusal, sceneLengths } from "./start-view";
 
 /**
  * The start page's body (GS-10d, ADR-0112): what it says for every offer, and
@@ -137,7 +137,7 @@ describe("an offer that can be started", () => {
 });
 
 describe("an offer that cannot be started", () => {
-  it.each<[string, Exclude<StartOffer, { kind: "READY" }>, string]>([
+  it.each<[string, Exclude<StartOffer, { kind: "READY" | "SCENE_LENGTHS_NOT_SUPPORTED" }>, string]>([
     [
       "a video in progress",
       { kind: "VIDEO_EXISTS", jobId: "job_1", delivered: false },
@@ -173,6 +173,11 @@ describe("an offer that cannot be started", () => {
       "HQ videos cannot be made yet.",
     ],
     [
+      "settings no route can make",
+      { kind: "SETTINGS_NOT_SUPPORTED" },
+      "This video cannot be made with this project's settings yet.",
+    ],
+    [
       "a storyboard too long",
       { kind: "LENGTH_NOT_SUPPORTED", durationSeconds: 95 },
       "The storyboard is 95 seconds long, longer than a video VTaVision makes.",
@@ -204,5 +209,53 @@ describe("an offer that cannot be started", () => {
     );
     expect(text(container)).toContain("You cannot start videos for this project.");
     expect(container.querySelectorAll("form, input, button")).toHaveLength(0);
+  });
+});
+
+describe("scenes the video cannot be made at (ADR-0123)", () => {
+  const SHORT: Extract<StartOffer, { kind: "SCENE_LENGTHS_NOT_SUPPORTED" }> = {
+    kind: "SCENE_LENGTHS_NOT_SUPPORTED",
+    durations: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
+    scenes: [
+      { id: "scn_b", position: 1, durationSeconds: 3 },
+      { id: "scn_c", position: 3, durationSeconds: 16 },
+    ],
+  };
+
+  it("names the lengths a scene may be, each scene that is not, and how to fix it, with no form", () => {
+    const { container } = show(SHORT);
+    expect(text(container)).toContain("Each scene of this video must be 5 to 15 seconds long. These scenes are not:");
+    expect([...container.querySelectorAll("li")].map(text)).toEqual([
+      "Scene 1 · Living room · 3 seconds",
+      "Scene 3 · Bedroom · 16 seconds",
+    ]);
+    expect(text(container)).toContain(
+      "Compose the storyboard again on the project page, with its shortest and longest scene within that range, " +
+        "then review the video here. Nothing has been reserved.",
+    );
+    expect(container.querySelectorAll("form, input, button")).toHaveLength(0);
+    for (const internal of ["wavespeed", "fake", "model", "provider", "job", "route"]) {
+      expect(container.innerHTML.toLowerCase()).not.toContain(internal);
+    }
+  });
+
+  it("speaks of one scene as one, and names a scene whose room it does not know plainly", () => {
+    const one = { ...SHORT, scenes: [{ id: "scn_x", position: 2, durationSeconds: 4 }] };
+    const { container } = show(one);
+    expect(text(container)).toContain("must be 5 to 15 seconds long. This scene is not:");
+    expect([...container.querySelectorAll("li")].map(text)).toEqual(["Scene 2 · Scene · 4 seconds"]);
+  });
+
+  it("shows why the last start started nothing above the scenes to fix", () => {
+    const { container } = show(SHORT, "Some scenes are a length this video cannot be made at. Nothing was started.");
+    expect(container.firstElementChild).toBe(screen.getByRole("alert"));
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+  });
+
+  it("words a range, a list and a single length", () => {
+    expect(sceneLengths({ kind: "RANGE", minSeconds: 5, maxSeconds: 15 })).toBe("5 to 15 seconds");
+    expect(sceneLengths({ kind: "ENUMERATED", seconds: [5, 10, 15] })).toBe("5, 10 or 15 seconds");
+    expect(sceneLengths({ kind: "ENUMERATED", seconds: [5, 10] })).toBe("5 or 10 seconds");
+    expect(sceneLengths({ kind: "ENUMERATED", seconds: [10] })).toBe("10 seconds");
   });
 });

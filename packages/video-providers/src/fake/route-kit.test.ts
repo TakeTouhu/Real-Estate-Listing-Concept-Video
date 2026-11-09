@@ -122,6 +122,22 @@ describe("the test route's policy", () => {
     expect(kit.qualityOffer.offers("HIGH_QUALITY")).toBe(true);
   });
 
+  it("checks a start against its own route and catalog: each scene 5 to 15 seconds (ADR-0123)", () => {
+    const storyboard = (seconds: number[], quality: "NORMAL" | "HIGH_QUALITY" = "NORMAL") => ({
+      qualityTier: quality,
+      targetOutputResolution: quality === "NORMAL" ? "720p" : "1080p",
+      aspectRatio: "16:9",
+      scenes: seconds.map((durationSeconds) => ({ durationSeconds, cameraMotion: "SLOW_DOLLY_FORWARD" })),
+    });
+    expect(kit.routeCheck.judge(storyboard([5, 15]))).toEqual({ kind: "ONE_ROUTE" });
+    expect(kit.routeCheck.judge(storyboard([5, 15], "HIGH_QUALITY"))).toEqual({ kind: "ONE_ROUTE" });
+    expect(kit.routeCheck.judge(storyboard([3, 6, 16]))).toEqual({
+      kind: "SCENE_LENGTHS",
+      durations: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
+      scenes: [0, 2],
+    });
+  });
+
   it("does not serve a quality at the other's size", () => {
     expect(
       authorizeRoute(facts({ nativeGenerationResolution: "1080p", targetOutputResolution: "1080p" }), kit.routePolicy),
@@ -216,6 +232,7 @@ describe("the kit", () => {
     expect(Object.isFrozen(kit)).toBe(true);
     expect(Object.isFrozen(kit.models)).toBe(true);
     expect(Object.isFrozen(kit.qualityOffer)).toBe(true);
+    expect(Object.isFrozen(kit.routeCheck)).toBe(true);
     expect(Object.isFrozen(kit.pricing)).toBe(true);
     expect(Object.isFrozen(kit.routePolicy)).toBe(true);
     expect(Object.isFrozen(kit.routePolicy.routes[0])).toBe(true);

@@ -11,9 +11,12 @@ import {
   type SubscriptionRepository,
 } from "../entitlement/subscription";
 import { MAX_IDEMPOTENCY_KEY_LENGTH } from "../entitlement/unit-purchase";
+import type { DurationPolicy } from "../generation/capability";
+import type { VideoModelCatalog } from "../generation/model-catalog";
 import type { StoryboardReader } from "../generation/ports";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
+import { judgeStartRoute, type StartRouteVerdict } from "../job-launch/route-qualification";
 import type { PropertyRepository } from "../property/ports";
 import { findReachableProperty } from "../property/reach";
 import { assertApprovedCameraMotion, isCameraMotion } from "../storyboard/camera-motion";
@@ -61,12 +64,37 @@ export function routeQualityOffer(policy: RoutePolicy): StartQualityOffer {
  */
 export const AUTHORIZED_ROUTE_QUALITY_OFFER: StartQualityOffer = routeQualityOffer(PRODUCTION_ROUTE_POLICY);
 
+/** The storyboard a start would copy into a job, as route qualification reads it. */
+export interface StartRouteFacts {
+  readonly qualityTier: GenerationQualityTier;
+  readonly targetOutputResolution: string;
+  readonly aspectRatio: string;
+  /** In position order. */
+  readonly scenes: readonly { readonly durationSeconds: number; readonly cameraMotion: string | null }[];
+}
+
+/** Whether the launch would find one route for a storyboard (ADR-0123). */
+export interface StartRouteCheck {
+  judge(facts: StartRouteFacts): StartRouteVerdict;
+}
+
+/**
+ * The launch planner's own route qualification, over the route policy and
+ * model catalog the planner is handed, so the start refuses what the launch
+ * could never route (ADR-0123).
+ */
+export function routeCheck(policy: RoutePolicy, models: VideoModelCatalog): StartRouteCheck {
+  return { judge: (facts) => judgeStartRoute(facts, policy, models) };
+}
+
 export interface GenerationStartServiceDeps {
   /** Membership lookup for authorization and reach, the clock and ids. */
   readonly identity: IdentityServiceDeps;
   readonly properties: Pick<PropertyRepository, "findById">;
   readonly storyboard: Pick<StoryboardReader, "getStoryboard">;
   readonly qualities: StartQualityOffer;
+  /** Built from the policy and catalog the launch planner is handed. */
+  readonly routes: StartRouteCheck;
   readonly subscriptions: Pick<SubscriptionRepository, "findByOrganization">;
   readonly ledger: Pick<UnitEntitlementRepository, "openPeriod" | "findPeriodAt" | "balance">;
   readonly starts: GenerationStartRepository;
@@ -103,6 +131,10 @@ export type StartGenerationOutcome =
   | { readonly kind: "QUALITY_CHANGED" }
   /** No verified route serves the project's quality yet. */
   | { readonly kind: "QUALITY_NOT_OFFERED" }
+  /** The route for the project's quality cannot make some scenes at their length. */
+  | { readonly kind: "SCENE_LENGTHS_NOT_SUPPORTED" }
+  /** No one route can make this storyboard, for a reason its scene lengths do not explain. */
+  | { readonly kind: "SETTINGS_NOT_SUPPORTED" }
   /** The storyboard is longer than a video the product sells. */
   | { readonly kind: "LENGTH_NOT_SUPPORTED" }
   /** The organization has no plan, or its plan has not started. */
@@ -141,6 +173,23 @@ export type StartOffer =
   | { readonly kind: "RECOMPOSE" }
   /** No verified route serves the project's quality yet. */
   | { readonly kind: "QUALITY_NOT_OFFERED"; readonly qualityTier: GenerationQualityTier }
+  /**
+   * The route for the project's quality cannot make these scenes at their
+   * length: the lengths it accepts, and each such scene with the position
+   * the project page numbers it by, in order. The storyboard must be composed
+   * again (ADR-0123).
+   */
+  | {
+      readonly kind: "SCENE_LENGTHS_NOT_SUPPORTED";
+      readonly durations: DurationPolicy;
+      readonly scenes: readonly {
+        readonly id: string;
+        readonly position: number;
+        readonly durationSeconds: number;
+      }[];
+    }
+  /** No one route can make this storyboard, for a reason its scene lengths do not explain. */
+  | { readonly kind: "SETTINGS_NOT_SUPPORTED" }
   /** The storyboard is longer than a video the product sells. */
   | { readonly kind: "LENGTH_NOT_SUPPORTED"; readonly durationSeconds: number }
   /** The organization has no plan, or its plan has not started. */
@@ -187,6 +236,18 @@ export class GenerationStartService {
     const usable = (scene: StoryboardScene) =>
       scene.compiledPrompt !== null && (scene.cameraMotion === null || isCameraMotion(scene.cameraMotion));
     if (!view.scenes.every(usable)) return { kind: "RECOMPOSE" };
+    const verdict = this.judgeRoute(project, view.scenes, qualityTier);
+    if (verdict.kind === "SCENE_LENGTHS") {
+      return {
+        kind: "SCENE_LENGTHS_NOT_SUPPORTED",
+        durations: verdict.durations,
+        scenes: verdict.scenes.map((index) => {
+          const scene = view.scenes[index] as StoryboardScene;
+          return { id: scene.id, position: scene.position, durationSeconds: scene.durationSeconds };
+        }),
+      };
+    }
+    if (verdict.kind === "NO_ROUTE") return { kind: "SETTINGS_NOT_SUPPORTED" };
     const seconds = view.scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
     const required = requiredUnitsFor(qualityTier, seconds);
     if (!required.ok) return { kind: "LENGTH_NOT_SUPPORTED", durationSeconds: seconds };
@@ -280,6 +341,11 @@ export class GenerationStartService {
       }
       assertApprovedCameraMotion(scene.cameraMotion);
     }
+    // A video the launch could never route would hold its Units with no end
+    // (ADR-0052 Decision 19), so it is refused before any is reserved.
+    const verdict = this.judgeRoute(project, view.scenes, qualityTier);
+    if (verdict.kind === "SCENE_LENGTHS") return { kind: "SCENE_LENGTHS_NOT_SUPPORTED" };
+    if (verdict.kind === "NO_ROUTE") return { kind: "SETTINGS_NOT_SUPPORTED" };
     const seconds = view.scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
     if (!requiredUnitsFor(qualityTier, seconds).ok) return { kind: "LENGTH_NOT_SUPPORTED" };
 
@@ -328,6 +394,23 @@ export class GenerationStartService {
           details: { organizationId, refusal: outcome.kind },
         });
     }
+  }
+
+  /**
+   * Whether the launch would route the job this storyboard starts: the facts
+   * the start commit copies, from the project and its scenes (ADR-0087).
+   */
+  private judgeRoute(
+    project: VideoProject,
+    scenes: readonly StoryboardScene[],
+    qualityTier: GenerationQualityTier,
+  ): StartRouteVerdict {
+    return this.deps.routes.judge({
+      qualityTier,
+      targetOutputResolution: project.targetOutputResolution,
+      aspectRatio: project.aspectRatio,
+      scenes: scenes.map((scene) => ({ durationSeconds: scene.durationSeconds, cameraMotion: scene.cameraMotion })),
+    });
   }
 
   /**

@@ -2228,3 +2228,18 @@ did for any client calling it.
 
 **Rolling back.** To GS-13a's build: safe. Analyses the button started stay,
 as any analysis the route made does.
+
+## GS-13c-1 — the start refuses scenes no route can make
+
+**No migration** (ADR-0123). No schema, enum, constraint or row changes, and no
+route, permission or environment variable. The start and its offer answer two
+new refusals, read from code (the route policy and model catalog the planner
+is handed).
+
+**What changes at deploy.** Nothing in production, where the start is not
+built (ADR-0111). In development with the test provider, a storyboard with a
+scene outside 5 to 15 seconds is no longer started; a job started from one
+before stays waiting, as it did.
+
+**Rolling back.** To GS-13b's build: safe. Nothing is written by the check;
+the start would again admit a storyboard the launch cannot route.

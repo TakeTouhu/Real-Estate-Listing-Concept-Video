@@ -10,6 +10,7 @@ import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import { PermissionGrantService } from "../identity/permission-grant-service";
 import type { Role } from "../identity/roles";
+import type { StartRouteVerdict } from "../job-launch/route-qualification";
 import type { Property } from "../property/types";
 import type { StoryboardView } from "../storyboard/storyboard-service";
 import type { StoryboardScene, VideoProject } from "../storyboard/types";
@@ -30,6 +31,7 @@ import {
   type StartGenerationInput,
   type StartOffer,
   type StartQualityOffer,
+  type StartRouteFacts,
 } from "./start-service";
 
 /**
@@ -57,6 +59,9 @@ let view: StoryboardView;
 let storyboardReads: [string, string, string][];
 let starts: RecordingStarts;
 let qualities: StartQualityOffer;
+/** What the route check answers, and each storyboard it was asked about. */
+let routeVerdict: StartRouteVerdict;
+let judged: StartRouteFacts[];
 
 function project(overrides: Partial<VideoProject> = {}): VideoProject {
   return {
@@ -212,6 +217,12 @@ function service(): GenerationStartService {
       },
     },
     qualities: { offers: (tier) => qualities.offers(tier) },
+    routes: {
+      judge: (facts) => {
+        judged.push(facts);
+        return routeVerdict;
+      },
+    },
     subscriptions: reader,
     ledger,
     starts,
@@ -300,6 +311,8 @@ beforeEach(async () => {
   storyboardReads = [];
   starts = new RecordingStarts();
   qualities = AUTHORIZED_ROUTE_QUALITY_OFFER;
+  routeVerdict = { kind: "ONE_ROUTE" };
+  judged = [];
   subscribe();
 });
 
@@ -384,6 +397,27 @@ describe("a start", () => {
         allocations: [{ sourceType: "ADD_ON_BLOCK", addOnBlockId: "uab_1", quality: "NORMAL", quantity: 1 }],
       },
     });
+  });
+
+  it("asks the route check about what the commit copies: quality, resolution, aspect and each scene", async () => {
+    qualities = { offers: () => true };
+    view = {
+      ...view,
+      project: project({ targetOutputResolution: "1080p", aspectRatio: "9:16" }),
+      scenes: [scene("scn_1", 1, { durationSeconds: 4 }), scene("scn_2", 2, { cameraMotion: null })],
+    };
+    expect((await service().start(ids.OWNER, input({ confirmed: HQ_CONFIRMED }))).kind).toBe("STARTED");
+    expect(judged).toEqual([
+      {
+        qualityTier: "HIGH_QUALITY",
+        targetOutputResolution: "1080p",
+        aspectRatio: "9:16",
+        scenes: [
+          { durationSeconds: 4, cameraMotion: "SLOW_PAN_LEFT" },
+          { durationSeconds: 3, cameraMotion: null },
+        ],
+      },
+    ]);
   });
 
   it("starts a 1080p project at HQ where a verified route offers it", async () => {
@@ -598,6 +632,14 @@ describe("the storyboard", () => {
   it("answers a storyboard longer than a video may be", async () => {
     view = { ...view, scenes: [scene("scn_1", 1, { durationSeconds: 45 }), scene("scn_2", 2, { durationSeconds: 46 })] };
     await answered("LENGTH_NOT_SUPPORTED");
+  });
+
+  it("answers a storyboard the launch could never route, before any Unit is reserved (ADR-0123)", async () => {
+    routeVerdict = { kind: "SCENE_LENGTHS", durations: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 }, scenes: [0] };
+    await answered("SCENE_LENGTHS_NOT_SUPPORTED");
+    routeVerdict = { kind: "NO_ROUTE" };
+    await answered("SETTINGS_NOT_SUPPORTED");
+    expect(starts.holdingReads).toHaveLength(2);
   });
 });
 
@@ -861,6 +903,41 @@ describe("the start offer", () => {
     expect((await offered()).kind).toBe("READY");
   });
 
+  it("answers scenes the route cannot make at their length: the lengths it takes, and each such scene", async () => {
+    const durations = { kind: "RANGE", minSeconds: 5, maxSeconds: 15 } as const;
+    // Each scene is named by the position the project page numbers it by.
+    view = {
+      ...view,
+      scenes: [
+        scene("scn_1", 2, { durationSeconds: 3 }),
+        scene("scn_2", 4, { durationSeconds: 6 }),
+        scene("scn_3", 6, { durationSeconds: 16 }),
+      ],
+    };
+    routeVerdict = { kind: "SCENE_LENGTHS", durations, scenes: [0, 2] };
+    expect(await offered()).toEqual({
+      kind: "SCENE_LENGTHS_NOT_SUPPORTED",
+      durations,
+      scenes: [
+        { id: "scn_1", position: 2, durationSeconds: 3 },
+        { id: "scn_3", position: 6, durationSeconds: 16 },
+      ],
+    });
+    expect(judged).toEqual([
+      {
+        qualityTier: "NORMAL",
+        targetOutputResolution: "720p",
+        aspectRatio: "16:9",
+        scenes: [3, 6, 16].map((durationSeconds) => ({ durationSeconds, cameraMotion: "SLOW_PAN_LEFT" })),
+      },
+    ]);
+  });
+
+  it("answers a storyboard no one route can make for another reason as settings not supported", async () => {
+    routeVerdict = { kind: "NO_ROUTE" };
+    expect(await offered()).toEqual({ kind: "SETTINGS_NOT_SUPPORTED" });
+  });
+
   it("answers HQ as not offered while no verified route serves it", async () => {
     storyboardOf(6, true);
     expect(await offered()).toEqual({ kind: "QUALITY_NOT_OFFERED", qualityTier: "HIGH_QUALITY" });
@@ -908,6 +985,42 @@ describe("the start offer", () => {
         "VALIDATION_FAILED",
       ],
       [
+        "HQ and unroutable",
+        () => {
+          view = { ...view, project: hq() };
+          routeVerdict = { kind: "NO_ROUTE" };
+        },
+        "QUALITY_NOT_OFFERED",
+        "QUALITY_NOT_OFFERED",
+      ],
+      [
+        "unusable and unroutable",
+        () => {
+          view = { ...view, scenes: [unusable(), scene("scn_2", 2)] };
+          routeVerdict = { kind: "NO_ROUTE" };
+        },
+        "RECOMPOSE",
+        "VALIDATION_FAILED",
+      ],
+      [
+        "scenes too short and long",
+        () => {
+          storyboardOf(91);
+          routeVerdict = { kind: "SCENE_LENGTHS", durations: { kind: "ENUMERATED", seconds: [5] }, scenes: [1] };
+        },
+        "SCENE_LENGTHS_NOT_SUPPORTED",
+        "SCENE_LENGTHS_NOT_SUPPORTED",
+      ],
+      [
+        "unroutable and long",
+        () => {
+          storyboardOf(91);
+          routeVerdict = { kind: "NO_ROUTE" };
+        },
+        "SETTINGS_NOT_SUPPORTED",
+        "SETTINGS_NOT_SUPPORTED",
+      ],
+      [
         "long and no plan",
         () => {
           storyboardOf(91);
@@ -919,6 +1032,7 @@ describe("the start offer", () => {
     ];
     for (const [name, arrange, offerKind, startAnswer] of cases) {
       view = { project: project(), scenes: [scene("scn_1", 1), scene("scn_2", 2)], fresh: true };
+      routeVerdict = { kind: "ONE_ROUTE" };
       starts = new RecordingStarts();
       subscribe();
       arrange();

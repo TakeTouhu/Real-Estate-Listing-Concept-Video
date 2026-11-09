@@ -12,7 +12,8 @@
  * own native tier, and accepts every scene's settings as admission's own check
  * does. When more than one qualifies, nothing is planned: which provider to
  * prefer is a product decision not made yet, and this planner does not make it
- * up.
+ * up. The rule is `qualifyingRoutes`, which the start asks of a storyboard too
+ * (ADR-0123).
  *
  * ## Priced now
  *
@@ -29,23 +30,15 @@
  */
 
 import { deepFreeze } from "@app/shared";
-import { authorizeRoute, type AuthorizedRoute, type RoutePolicy } from "../authorization/routing";
-import { assertSettingsSupported } from "../generation/capability";
+import type { RoutePolicy } from "../authorization/routing";
 import {
-  isSelectableModel,
   isTargetOutputResolution,
-  planGenerationResolution,
   type TargetOutputResolution,
-  type TargetResolutionDelivery,
   type VideoModelCatalog,
 } from "../generation/model-catalog";
 import { renderPrompt } from "../generation/prompt-render";
 import type { FxRateSource } from "../media-recovery/ports";
-import {
-  AUTHORIZED_AUDIO_MODE,
-  AUTHORIZED_GENERATION_MODE,
-  riskProfileKeyForQualityTier,
-} from "../orchestration/entitlement";
+import { riskProfileKeyForQualityTier } from "../orchestration/entitlement";
 import { currentlyEligibleContractsForRoute } from "../pricing/pricing-eligibility";
 import { createPricingSnapshot } from "../pricing/pricing-snapshot";
 import { validateFxSnapshot } from "../pricing/provider-cost-calculator";
@@ -58,6 +51,7 @@ import type {
   JobLaunchPlan,
   JobLaunchSceneAdmission,
 } from "./ports";
+import { qualifyingRoutes, type RouteChoice } from "./route-qualification";
 
 export interface JobLaunchPlannerDeps {
   /** Production's, or the test route's outside production (ADR-0089). The gate's own. */
@@ -67,11 +61,6 @@ export interface JobLaunchPlannerDeps {
   readonly fx: FxRateSource;
   /** Injected, so the pricing instant is a decision rather than ambient time. */
   readonly clock: () => number;
-}
-
-interface RouteChoice {
-  readonly route: AuthorizedRoute;
-  readonly delivery: TargetResolutionDelivery;
 }
 
 function noPlan(code: JobLaunchNoPlanCode): JobLaunchPlan {
@@ -155,7 +144,7 @@ export class JobLaunchPlanner {
     const { target, prompts } = frozen;
 
     // ---- 2. One route for the whole job. ----------------------------------
-    const choices = this.#qualifyingRoutes(facts, target);
+    const choices = qualifyingRoutes(facts, target, this.#routes, this.#models);
     if (choices.length === 0) return noPlan("NO_ROUTE");
     // Not the catalog's default, nor the policy's order: neither was decided as
     // the answer to which of two sellable routes a job takes.
@@ -230,78 +219,5 @@ export class JobLaunchPlanner {
       scenes,
       plannedAt: at,
     } satisfies JobLaunchPlan);
-  }
-
-  /** Every authorized route the catalog can run for this whole job, in policy order. */
-  #qualifyingRoutes(facts: JobLaunchFacts, target: TargetOutputResolution): RouteChoice[] {
-    const choices: RouteChoice[] = [];
-    for (const route of this.#routes.routes) {
-      // Whether the route sells the job's resolution is the gate's check below.
-      if (route.qualityTier !== facts.qualityTier) continue;
-      // Admission refuses a price of any other mode (`PRICING_BINDING_INVALID`),
-      // though a policy outside production may list one.
-      if (route.generationMode !== AUTHORIZED_GENERATION_MODE) continue;
-      if (route.audioMode !== AUTHORIZED_AUDIO_MODE) continue;
-
-      const entry = this.#models.find(route.requestModelKey);
-      if (entry === undefined || !isSelectableModel(entry)) continue;
-      if (entry.providerName !== route.providerName) continue;
-      if (entry.providerModelId !== route.providerModelId) continue;
-
-      // An unsupported target is an ordinary reason to skip a route here,
-      // though `planGenerationResolution` throws for it at its own boundary.
-      let delivery: TargetResolutionDelivery;
-      try {
-        delivery = planGenerationResolution(entry, target);
-      } catch {
-        continue;
-      }
-      // The catalog must reach the target from the tier the route is sold at.
-      if (delivery.nativeGenerationResolution.providerValue !== route.nativeGenerationResolution) continue;
-
-      // Every scene's settings, by the check a single-scene admission makes:
-      // nothing later checks them all before the provider is sent them (the
-      // preflight repeats only the native tier's). A rendered prompt never
-      // carries a customer negative prompt (`renderPrompt` refuses one).
-      const native = delivery.nativeGenerationResolution.providerValue;
-      const settingsAccepted = facts.scenes.every((scene) => {
-        try {
-          assertSettingsSupported(
-            {
-              durationSeconds: scene.durationSeconds,
-              nativeGenerationResolution: native,
-              aspectRatio: facts.aspectRatio,
-              cameraMotion: scene.cameraMotion,
-              negativePrompt: null,
-            },
-            entry.capability,
-          );
-          return true;
-        } catch {
-          return false;
-        }
-      });
-      if (!settingsAccepted) continue;
-
-      // The gate's own check, so a plan never admits what it would refuse: it
-      // matches a route by model id first, and a second route for the same
-      // model at another tier is not one it can authorize.
-      const authorized = authorizeRoute(
-        {
-          qualityTier: facts.qualityTier,
-          providerName: route.providerName,
-          providerModelId: route.providerModelId,
-          requestModelKey: route.requestModelKey,
-          nativeGenerationResolution: route.nativeGenerationResolution,
-          targetOutputResolution: target,
-          generationMode: route.generationMode,
-          audioMode: route.audioMode,
-        },
-        this.#routes,
-      );
-      if (!authorized.ok) continue;
-      choices.push({ route, delivery });
-    }
-    return choices;
   }
 }
