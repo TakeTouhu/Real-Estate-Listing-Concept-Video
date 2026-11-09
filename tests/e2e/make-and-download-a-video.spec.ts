@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { hydrated } from "./support/hydration";
 import { decodeVideo, probeVideo } from "./support/media";
 import { provisionPremiumPlan, signUpOwner } from "./support/owner";
 import { makePhotos } from "./support/photos";
 import { runPipeline } from "./support/pipeline";
 import { propertyWithAnalyzedPhotos } from "./support/property";
+import { startVideo } from "./support/video";
 
 /**
  * The whole way to a delivered video, in a real browser (GS-13c-2): an owner
@@ -28,44 +28,9 @@ test("an owner approves the photos, starts a video, has it made and downloads it
   const photos = await makePhotos(testInfo.outputPath());
   await propertyWithAnalyzedPhotos(page, "Shibuya Harbour View", photos);
 
-  // A person approves each photo, one at a time, as the review page offers.
-  for (let awaiting = photos.length; awaiting > 0; awaiting -= 1) {
-    await expect(page.getByRole("heading", { name: `Awaiting decision (${awaiting})` })).toBeVisible();
-    await (await hydrated(page.getByRole("button", { name: "Approve", exact: true }).first())).click();
-  }
-  await expect(page.getByRole("heading", { name: "Awaiting decision (0)" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: `Decided (${photos.length})` })).toBeVisible();
-
-  await page.getByRole("link", { name: "← Shibuya Harbour View" }).click();
-  await page.getByRole("link", { name: "Videos →" }).click();
   // A name outside ASCII, which the saved file keeps (ADR-0118 Decision 2).
   const name = "渋谷 Harbour View";
-  await (await hydrated(page.getByLabel("Project name"))).fill(name);
-  await page.getByLabel("Target length in seconds").fill("15");
-  await page.getByLabel("Aspect ratio").fill("16:9");
-  await page.getByLabel("Output resolution").selectOption("720p");
-  await page.getByRole("button", { name: "Create project" }).click();
-  await page.getByRole("link", { name }).click();
-  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-
-  // Composition shares the project's 15 seconds between the 3 approved photos: 5 seconds each, which the test
-  // provider's route makes (ADR-0123).
-  await (await hydrated(page.getByLabel("Shortest scene, in seconds"))).fill("5");
-  await page.getByLabel("Longest scene, in seconds").fill("5");
-  await page.getByRole("button", { name: "Compose storyboard" }).click();
-  await expect(page.getByRole("heading", { name: "Storyboard (3 scenes)" })).toBeVisible();
-  const fresh = "This storyboard matches the photos currently approved for this property.";
-  await expect(page.getByText(fresh)).toBeVisible();
-
-  await page.getByRole("link", { name: "Review and start the video" }).click();
-  await expect(page.getByRole("heading", { name: "Review the video" })).toBeVisible();
-  await expect(page.getByText("Quality: Normal. 3 scenes, 15 seconds in all:")).toBeVisible();
-  await page.getByRole("button", { name: "Start the video and reserve 1 Normal Unit" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "The start was confirmed." })).toBeVisible();
-  const video = page.getByRole("region", { name: "Video", exact: true });
-  await expect(video).toContainText("Queued");
-  await expect(video).toContainText("0 of 3 scenes made");
-  await expect(video).toContainText("1 Normal Unit is reserved for it, and used only if it is delivered.");
+  const video = await startVideo(page, "Shibuya Harbour View", name);
 
   // Made by the pipeline, which nothing runs by itself: one run takes the job to a delivered video.
   await runPipeline();
