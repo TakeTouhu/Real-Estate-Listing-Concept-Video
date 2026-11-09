@@ -254,7 +254,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       across account / organization / IP / endpoint, covering login, password
       reset, MFA recovery, uploads, generation, downloads and billing (*and,
       since AT-3a, ADR-0128, asking for a verification email again: each ask
-      sends mail, so unlimited asks could fill a mailbox*);
+      sends mail, so unlimited asks could fill a mailbox*) (*since AT-3b,
+      ADR-0129, that ask is a route: `POST /api/auth/verify-email/resend`, for
+      a signed-in account whose address is not verified*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
@@ -2143,7 +2145,7 @@ them is **built**. Each item below records the settled decision and what remains
       simultaneous creations collide on the same next slug. The slug appears
       on no page and in no address; a random suffix, or one read for every
       taken suffix, would end both.
-- [ ] **Make email verification mandatory** (ADR-0052 Decision 18). *AT-3a
+- [x] **Make email verification mandatory** (ADR-0052 Decision 18). *AT-3a
       (ADR-0128, migration 33) built where a verified address is recorded,
       the 24-hour one-time link and the service that sends and checks it,
       dormant. Remaining (AT-3b): sign-up sends the link, the verify page, the
@@ -2153,6 +2155,24 @@ them is **built**. Each item below records the settled decision and what remains
       never be verified; cap the length of a token its route accepts (a mailed
       one is 43 characters); and, before the guard ships, confirm no
       production database holds users, who would all read as unverified.*
+      *Done in AT-3b (ADR-0129, no migration): sign-up refuses an address
+      `isDeliverableEmailAddress` refuses and mails a link; a sign-in whose
+      address is not verified sees only the verify page, which sends the link
+      again; the link verifies with one press; a token over 128 characters is
+      refused before lookup; no production database holds users (ADR-0129
+      Decision 6); the browser tests open the link from the outbox.
+      Production still cannot send it: see "Choose the production email
+      service".*
+- [ ] **Take back an account someone else made with your address.** Anyone
+      can sign up with an address that is not theirs. Opening the link needs
+      no sign-in (ADR-0129 Decision 3), so if the address's owner presses
+      the button in that email, the other person's account is verified. The
+      email and the page say to ignore it unless you created the account.
+      The owner then cannot sign up ("Email is already registered"). Password
+      reset (AT-4) is the way back, and it must end every session, as the
+      approved plan says. AT-4 must also decide what happens when the other
+      person has set up MFA on the account, which a reset alone does not
+      remove.
 - [ ] **Clear a verified address when it changes.** A verification is bound to
       the address it was sent to (ADR-0128). No product path changes a user's
       email today; whichever is added must set `emailVerifiedAt` back to null
@@ -2163,7 +2183,9 @@ them is **built**. Each item below records the settled decision and what remains
       them leaves an account with no password, which no one can sign in to
       and whose email can never register again, or one created unaudited. The
       same repository pattern as ADR-0059 and ADR-0127 closes it; AT-3b, which
-      changes sign-up, is the natural place.
+      changes sign-up, is the natural place. *AT-3b left it out to stay
+      reviewable: it changes what follows a registration, not its writes.
+      AT-4, which writes credentials for password reset, is the next place.*
 - [ ] **Delete used and expired account links.** `account_links` rows stay
       after they are used or expire (ADR-0128). They verify nothing, but the
       table grows with every link sent. Deleting them needs a scheduled job,
@@ -2420,7 +2442,9 @@ guessed.** Every other gate is closed and recorded below.
 
 - [ ] **Choose the production email service** — from AT-1 (ADR-0126); does
       not block the accounts-and-team plan, whose emails go to the development
-      outbox, refused in production. Production has no `EmailSender`, so a
+      outbox, refused in production. *Blocks launch since AT-3b (ADR-0129):
+      every account must verify its address, so without a service no one can
+      use production.* Production has no `EmailSender`, so a
       production build cannot send the verification link ADR-0052 Decision 18
       requires, nor a password reset or an invitation. Which service sends
       VTaVision's email, from which domain, with what sender authentication

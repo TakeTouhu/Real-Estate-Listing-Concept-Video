@@ -6,6 +6,7 @@ import type { EmailSender } from "../email/ports";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { AuthService } from "./auth-service";
 import {
+  ACCOUNT_LINK_TOKEN_MAX_LENGTH,
   EMAIL_VERIFICATION_LINK_TTL_SECONDS,
   EmailVerificationService,
   emailVerificationMessage,
@@ -15,8 +16,9 @@ import {
  * Email verification (AT-3a, ADR-0128): a link mailed to the account's
  * address, kept as its token's hash with an audit entry before the email
  * leaves, which verifies that address once, within 24 hours, while the
- * account is active and still has that address. Nothing in either
- * application uses it yet.
+ * account is active and still has that address. The web app sends it at
+ * sign-up and on request, and opens it from the verify page (AT-3b,
+ * ADR-0129).
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -278,6 +280,37 @@ describe("opening a verification link", () => {
     expect(await verification.verifyEmail("token_unknown")).toBe("INVALID");
   });
 
+  it("looks up no token longer than 128 characters, and still verifies with one of 128 (ADR-0129)", async () => {
+    expect(ACCOUNT_LINK_TOKEN_MAX_LENGTH).toBe(128);
+    for (const length of [129, 128]) {
+      const { deps, verification, userId } = await setup();
+      const token = "t".repeat(length);
+      const now = deps.clock.now();
+      await deps.repos.accountLinks.create(
+        {
+          id: `lnk_${length}`,
+          userId,
+          purpose: "EMAIL_VERIFICATION",
+          tokenHash: deps.tokens.hash(token),
+          email: "owner@example.test",
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + HOUR * 1000),
+        },
+        {
+          organizationId: null,
+          actorUserId: userId,
+          action: "test",
+          resourceType: "user",
+          resourceId: userId,
+          metadata: {},
+        },
+      );
+      const find = vi.spyOn(deps.repos.accountLinks, "findByTokenHash");
+      expect(await verification.verifyEmail(token)).toBe(length === 128 ? "VERIFIED" : "INVALID");
+      expect(find).toHaveBeenCalledTimes(length === 128 ? 1 : 0);
+    }
+  });
+
   it("answers INVALID for a link made for another purpose", async () => {
     const { deps, verification, userId } = await setup();
     const now = deps.clock.now();
@@ -486,7 +519,7 @@ describe("the in-memory links", () => {
   });
 });
 
-describe("dormancy", () => {
+describe("who uses it", () => {
   /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
   function code(text: string): string {
     return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -501,17 +534,17 @@ describe("dormancy", () => {
     });
   }
 
-  it("is used by neither application yet", () => {
+  it("is built in one web module, sends from it alone and verifies from one route; the worker never uses it", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps"));
     expect(files.map(({ name }) => name)).toContain("apps/web/src/lib/identity.ts");
-    const names = [
-      "EmailVerificationService",
-      "sendVerificationLink",
-      "verifyEmail(",
-      "emailVerifiedAt",
-      "accountLinks",
-    ];
-    const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
-    expect(users.map(({ name }) => name)).toEqual([]);
+    const users = (names: readonly string[]) =>
+      files.filter(({ text }) => names.some((name) => text.includes(name))).map(({ name }) => name);
+    // ADR-0129: sign-up and the resend route send through `sendVerificationLinkTo`; the verify route opens a link.
+    expect(users(["new EmailVerificationService", ".sendVerificationLink("])).toEqual([
+      "apps/web/src/lib/email-verification.ts",
+    ]);
+    expect(users([".verifyEmail("])).toEqual(["apps/web/src/app/api/auth/verify-email/route.ts"]);
+    // Whether an address is verified is read by the domain's sign-in step alone, and links by the repository.
+    expect(users(["emailVerifiedAt", "accountLinks"])).toEqual([]);
   });
 });

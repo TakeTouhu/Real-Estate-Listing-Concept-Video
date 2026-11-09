@@ -15,7 +15,10 @@ export const dynamic = "force-dynamic";
 export default async function SecurityPage() {
   const signIn = await getSignIn();
   if (!signIn) redirect("/login");
-  if (signIn.step === "CODE_REQUIRED") redirect(nextPageFor(signIn.step));
+  // An MFA code and the email address come before MFA set-up (ADR-0129).
+  if (signIn.step === "CODE_REQUIRED" || signIn.step === "EMAIL_VERIFICATION_REQUIRED") {
+    redirect(nextPageFor(signIn.step));
+  }
   const mustSetUp = signIn.step === "SETUP_REQUIRED";
   const status = await mfaStatus(signIn.user.id);
   return (

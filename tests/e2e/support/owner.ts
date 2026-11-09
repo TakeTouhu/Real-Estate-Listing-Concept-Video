@@ -4,12 +4,14 @@ import { promisify } from "node:util";
 import { expect, type Page } from "@playwright/test";
 import { REPO_ROOT, e2eEnvironment } from "./environment";
 import { hydrated } from "./hydration";
+import { verificationLink } from "./outbox";
 import { totp } from "./totp";
 
 /**
  * The people and contracts a browser test starts from (GS-13a, ADR-0121): a
- * new person signs up, creates an organization and so becomes its `OWNER`,
- * sets up MFA as an `OWNER` must (MFA-3), and an operator gives the
+ * new person signs up, verifies their email address from the link mailed to
+ * it (ADR-0129), creates an organization and so becomes its `OWNER`, sets up
+ * MFA as an `OWNER` must (MFA-3), and an operator gives the
  * organization a plan, as the operator command does for an executed contract
  * (ADR-0066). Each test makes its own, under a new address, so a run never
  * meets an earlier one's rows.
@@ -34,9 +36,9 @@ export function contractStart(now: Date = new Date()): string {
 }
 
 /**
- * Signs a new person up, has them create `organizationName` and set up MFA
- * with an authenticator app, and leaves them signed in on the organizations
- * page.
+ * Signs a new person up, has them verify their email address, create
+ * `organizationName` and set up MFA with an authenticator app, and leaves them
+ * signed in on the organizations page.
  */
 export async function signUpOwner(page: Page, organizationName: string): Promise<Owner> {
   const email = newEmail("owner");
@@ -46,6 +48,15 @@ export async function signUpOwner(page: Page, organizationName: string): Promise
   await register.getByLabel("Email").fill(email);
   await register.getByLabel("Password (min 10 characters)").fill(`pw-${randomBytes(12).toString("hex")}`);
   await register.getByRole("button", { name: "Create account" }).click();
+  // A new account sees only the verify page until it opens the link mailed to it (ADR-0129).
+  await expect(page.getByRole("heading", { name: "Verify your email address" })).toBeVisible();
+  await expect(page.getByText(email, { exact: true })).toBeVisible();
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/verify-email$/);
+  await page.goto(await verificationLink(email));
+  await page.getByRole("button", { name: "Verify email address" }).click();
+  await expect(page.getByRole("heading", { name: "Email address verified" })).toBeVisible();
+  await page.getByRole("link", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Organizations" })).toBeVisible();
   await expect(page.getByText(`(${email})`)).toBeVisible();
 

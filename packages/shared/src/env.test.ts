@@ -79,6 +79,38 @@ describe("serverEnvSchema", () => {
     }
   });
 
+  it("accepts APP_BASE_URL only as an http(s) origin, https in production, and does not require it", () => {
+    expect(serverEnvSchema.parse(base).APP_BASE_URL).toBeUndefined();
+    expect(serverEnvSchema.parse({ ...base, NODE_ENV: "production" }).APP_BASE_URL).toBeUndefined();
+    for (const good of ["http://localhost:3210", "https://app.example.com", "https://app.example.com/"]) {
+      expect(serverEnvSchema.parse({ ...base, APP_BASE_URL: good }).APP_BASE_URL).toBe(good);
+    }
+    const production = { ...base, NODE_ENV: "production", APP_BASE_URL: "https://app.example.com" };
+    expect(serverEnvSchema.safeParse(production).success).toBe(true);
+    const notOrigin = "APP_BASE_URL must be an origin, with no path, query or fragment";
+    const refused: [Record<string, string>, string][] = [
+      [{ APP_BASE_URL: "" }, "Invalid url"],
+      [{ APP_BASE_URL: "app.example.com" }, "Invalid url"],
+      [{ APP_BASE_URL: "ftp://app.example.com" }, "APP_BASE_URL must use http or https"],
+      [{ APP_BASE_URL: "javascript:alert(1)" }, "APP_BASE_URL must use http or https"],
+      [{ APP_BASE_URL: "http://app.example.com", NODE_ENV: "production" }, "APP_BASE_URL must use https in production"],
+      [{ APP_BASE_URL: "https://user:pw@app.example.com" }, "APP_BASE_URL must not name a user"],
+      [{ APP_BASE_URL: "https://user@app.example.com" }, "APP_BASE_URL must not name a user"],
+      [{ APP_BASE_URL: "https://app.example.com/app" }, notOrigin],
+      [{ APP_BASE_URL: "https://app.example.com/?a=1" }, notOrigin],
+      [{ APP_BASE_URL: "https://app.example.com?" }, notOrigin],
+      [{ APP_BASE_URL: "https://app.example.com#top" }, notOrigin],
+      [{ APP_BASE_URL: "https://app.example.com#" }, notOrigin],
+    ];
+    for (const [bad, message] of refused) {
+      const result = serverEnvSchema.safeParse({ ...base, ...bad });
+      expect(result.success).toBe(false);
+      const issues = result.success ? [] : result.error.issues;
+      expect(new Set(issues.map((i) => i.path.join(".")))).toEqual(new Set(["APP_BASE_URL"]));
+      expect(issues.map((i) => i.message)).toContain(message);
+    }
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);

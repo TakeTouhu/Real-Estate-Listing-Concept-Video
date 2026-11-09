@@ -225,7 +225,7 @@ describe("reading", () => {
   });
 });
 
-describe("dormancy", () => {
+describe("who uses it", () => {
   /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
   function code(text: string): string {
     return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -240,7 +240,7 @@ describe("dormancy", () => {
     });
   }
 
-  it("is used by neither application yet, and neither reads its folder's setting", () => {
+  it("is opened, and its folder's setting read, only by the web app's email verification (ADR-0129)", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps"));
     // The scan reaches both applications, including where sign-up is wired.
     const scanned = files.map(({ name }) => name);
@@ -248,6 +248,6 @@ describe("dormancy", () => {
     expect(scanned).toContain("apps/worker/src/bootstrap.ts");
     const names = ["DevelopmentEmailOutbox", "EMAIL_OUTBOX_DIR", "EmailSender", "outgoingEmail("];
     const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
-    expect(users.map(({ name }) => name)).toEqual([]);
+    expect(users.map(({ name }) => name)).toEqual(["apps/web/src/lib/email-verification.ts"]);
   });
 });

@@ -26,6 +26,8 @@ test-results/
 
 # Development storage folder (SHARED_STORAGE_DIR, ADR-0085)
 .dev-storage/
+# Development email outbox (EMAIL_OUTBOX_DIR, ADR-0126)
+.dev-outbox/
 # The test provider's clips for the development pipeline (ADR-0108)
 .dev-provider/
 

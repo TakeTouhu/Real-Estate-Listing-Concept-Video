@@ -1,6 +1,13 @@
 import { isAbsolute } from "node:path";
 import { describe, expect, it } from "vitest";
-import { E2E_SHARED_STORAGE_DIR, REPO_ROOT, e2eDatabaseUrl, e2eEnvironment } from "./environment";
+import {
+  E2E_BASE_URL,
+  E2E_EMAIL_OUTBOX_DIR,
+  E2E_SHARED_STORAGE_DIR,
+  REPO_ROOT,
+  e2eDatabaseUrl,
+  e2eEnvironment,
+} from "./environment";
 
 const LOCAL = "postgresql://revt:revt@localhost:5432/revt_e2e?schema=public";
 
@@ -32,7 +39,7 @@ describe("the browser test's environment", () => {
     }
   });
 
-  it("gives the web app and every command the test provider, one shared folder and one signing secret", () => {
+  it("gives the web app and every command the test provider, one shared folder, an outbox and one secret", () => {
     const env = e2eEnvironment({ DATABASE_URL: LOCAL });
     expect(env).toMatchObject({
       DATABASE_URL: LOCAL,
@@ -41,6 +48,11 @@ describe("the browser test's environment", () => {
     });
     expect(isAbsolute(E2E_SHARED_STORAGE_DIR)).toBe(true);
     expect(E2E_SHARED_STORAGE_DIR.startsWith(REPO_ROOT)).toBe(true);
+    // Mail goes to its own folder, never inside the shared one, with links to the web app the test drives.
+    expect(env).toMatchObject({ EMAIL_OUTBOX_DIR: E2E_EMAIL_OUTBOX_DIR, APP_BASE_URL: E2E_BASE_URL });
+    expect(isAbsolute(E2E_EMAIL_OUTBOX_DIR)).toBe(true);
+    expect(E2E_EMAIL_OUTBOX_DIR.startsWith(`${REPO_ROOT}/.e2e/`)).toBe(true);
+    expect(E2E_EMAIL_OUTBOX_DIR.startsWith(E2E_SHARED_STORAGE_DIR)).toBe(false);
     expect(env.MFA_SECRET_KEY).toMatch(/^[0-9a-f]{64}$/);
     for (const name of ["SESSION_SECRET", "HEALTHCHECK_API_TOKEN", "STORAGE_SIGNING_SECRET"]) {
       expect(env[name]?.length).toBeGreaterThanOrEqual(16);

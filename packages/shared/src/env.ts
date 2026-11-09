@@ -27,6 +27,30 @@ const booleanish = z
  */
 export const WAVESPEED_OPEN_VIDEO_MODEL_ID = "wavespeed-ai/open-video/image-to-video";
 
+/**
+ * Why an application base address cannot start an emailed link, or null when
+ * it can (ADR-0129): it must be an http(s) origin, with no user, path, query or
+ * fragment, so a link built on it cannot lead anywhere else; https in
+ * production.
+ */
+function baseUrlProblem(value: string, production: boolean): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return "must be an absolute address";
+  }
+  if (url.protocol !== "https:" && (production || url.protocol !== "http:")) {
+    return production ? "must use https in production" : "must use http or https";
+  }
+  if (url.username !== "" || url.password !== "") return "must not name a user";
+  // An empty query or fragment ("?", "#") leaves the parsed URL's as "", so the text is asked.
+  if (url.pathname !== "/" || /[?#]/.test(value)) {
+    return "must be an origin, with no path, query or fragment";
+  }
+  return null;
+}
+
 export const serverEnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -57,9 +81,15 @@ export const serverEnvSchema = z
 
     // The folder the product's emails are written to instead of being sent,
     // in development and CI only (ADR-0126). Absolute, for the same reason as
-    // the shared folder. Read by nothing yet. Refused in production, where no
-    // email service is chosen yet.
+    // the shared folder. Unset, the web app sends no email (ADR-0129).
+    // Refused in production, where no email service is chosen yet.
     EMAIL_OUTBOX_DIR: z.string().min(1).optional(),
+
+    // The web app's own address, which every link it emails starts with
+    // (ADR-0129): an http(s) origin with no path, query or fragment, https in
+    // production. Never taken from a request. Optional because the worker
+    // shares this schema and emails nothing; unset, the web app emails no link.
+    APP_BASE_URL: z.string().url().optional(),
 
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
     // characters (ADR-0065). Optional because the worker shares this schema
@@ -123,6 +153,13 @@ export const serverEnvSchema = z
           path: ["EMAIL_OUTBOX_DIR"],
           message: "EMAIL_OUTBOX_DIR is for development and CI only; it must not be set in production",
         });
+      }
+    }
+
+    if (env.APP_BASE_URL !== undefined) {
+      const problem = baseUrlProblem(env.APP_BASE_URL, env.NODE_ENV === "production");
+      if (problem !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["APP_BASE_URL"], message: `APP_BASE_URL ${problem}` });
       }
     }
 

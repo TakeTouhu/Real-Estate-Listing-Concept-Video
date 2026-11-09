@@ -2315,3 +2315,19 @@ AT-3b confirms that before its guard ships.
 **Rolling back.** To AT-2's build: safe while the table is unused. Reverting the
 schema means dropping `account_links`, its enum and `users."emailVerifiedAt"`,
 which loses any verification recorded since.
+
+## AT-3b — email verification is required
+
+**No migration** (ADR-0129). Migration 33 stays the last.
+
+**What changes at deploy.** Every account whose address is not verified, which
+is every account made before AT-3b, meets the verify page at its next sign-in
+and reaches nothing else until it opens a link mailed to it. Confirmed: no
+production database holds users (ADR-0054 Decision 7's gates are all BLOCKED,
+`infra/` holds no deployment, and ADR-0126 Decision 3 records production as
+not running). Development and CI accounts verify through the outbox:
+set `EMAIL_OUTBOX_DIR` and `APP_BASE_URL` (`docs/local-setup.md`, section 3c).
+A production deployment cannot verify anyone until an email service is chosen.
+
+**Rolling back.** To AT-3a's build: safe. Nothing is written that AT-3a cannot
+read; verifications recorded since stay, and are again checked by nothing.

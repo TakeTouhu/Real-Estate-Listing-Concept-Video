@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService, OrganizationService, totpStep } from "@app/domain";
-import { createTestDeps, type TestDeps } from "@app/domain/testing";
+import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
 
 /**
@@ -47,9 +47,11 @@ beforeEach(async () => {
   identity.value = { deps, auth };
   env.value = { NODE_ENV: "test", USER_SESSION_TTL_SECONDS: 3600, MFA_SECRET_KEY: MFA_KEY };
   cookie.value = undefined;
-  await auth.register({ email: "member@example.com", name: "Member", password: PASSWORD });
+  const member = await auth.register({ email: "member@example.com", name: "Member", password: PASSWORD });
+  markEmailVerified(deps, member.id);
   // An OWNER must use MFA, so cannot turn it off (ADR-0052 Decision 18).
   const owner = await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD });
+  markEmailVerified(deps, owner.id);
   await new OrganizationService(deps).createOrganization(owner.id, { name: "Studio" });
 });
 
