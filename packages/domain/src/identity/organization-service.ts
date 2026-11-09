@@ -24,7 +24,8 @@ export interface CreateOrganizationResult {
 
 /**
  * How many times creating an organization looks for a free slug before it gives
- * up, when organizations of the same name keep taking it first (ADR-0127).
+ * up, when organizations whose names give the same slug keep taking it first
+ * (ADR-0127).
  */
 export const ORGANIZATION_SLUG_ATTEMPTS = 3;
 
@@ -33,8 +34,8 @@ export class OrganizationService {
 
   /**
    * Create an organization and make the actor its OWNER, with an audit event,
-   * in one transaction (ADR-0127). A slug taken meanwhile by an organization
-   * of the same name is looked for again, up to
+   * in one transaction (ADR-0127). A slug taken meanwhile by another
+   * organization is looked for again, up to
    * {@link ORGANIZATION_SLUG_ATTEMPTS} times.
    */
   async createOrganization(
@@ -66,7 +67,7 @@ export class OrganizationService {
     }
     throw new AppError(
       "VALIDATION_FAILED",
-      "Other organizations of the same name were being created at the same moment; try again",
+      "Other organizations with a similar name were being created at the same moment; try again",
     );
   }
 

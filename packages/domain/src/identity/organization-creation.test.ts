@@ -93,7 +93,7 @@ describe("a slug taken meanwhile", () => {
     const real = repo.createWithOwner.bind(repo);
     const tried: { id: string; slug: string; audited: unknown }[] = [];
     let refusals = ORGANIZATION_SLUG_ATTEMPTS - 1;
-    // Another organization of the same name takes each slug first, until the last attempt.
+    // Another organization takes each slug first, until the last attempt.
     vi.spyOn(repo, "createWithOwner").mockImplementation(async (input) => {
       tried.push({ id: input.organization.id, slug: input.organization.slug, audited: input.audit.organizationId });
       if (refusals === 0) return real(input);
@@ -115,9 +115,10 @@ describe("a slug taken meanwhile", () => {
     const createWithOwner = vi
       .spyOn(deps.repos.organizations, "createWithOwner")
       .mockResolvedValue({ outcome: "SLUG_TAKEN" });
+    // The stand-in writes nothing itself: this shows the service writes nothing else.
     await expect(orgs.createOrganization(owner, { name: "Acme" })).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
-      message: "Other organizations of the same name were being created at the same moment; try again",
+      message: "Other organizations with a similar name were being created at the same moment; try again",
     });
     expect(createWithOwner).toHaveBeenCalledTimes(ORGANIZATION_SLUG_ATTEMPTS);
     expect(await deps.repos.memberships.listByUser(owner)).toEqual([]);
@@ -126,25 +127,50 @@ describe("a slug taken meanwhile", () => {
 });
 
 describe("the in-memory repository", () => {
-  it("refuses a taken slug as the unique key does, writing nothing", async () => {
-    const { deps, owner } = await setup();
-    await deps.repos.organizations.create({ id: "org_first", name: "Acme", slug: "acme", status: "ACTIVE" });
-    const outcome = await deps.repos.organizations.createWithOwner({
-      organization: { id: "org_second", name: "Acme", slug: "acme", status: "ACTIVE" },
+  function creation(id: string, slug: string, owner: string) {
+    return {
+      organization: { id, name: "Acme", slug, status: "ACTIVE" as const },
       ownerUserId: owner,
       audit: {
-        organizationId: "org_second",
+        organizationId: id,
         actorUserId: owner,
         action: "organization.created",
         resourceType: "organization",
-        resourceId: "org_second",
-        metadata: { slug: "acme" },
+        resourceId: id,
+        metadata: { slug },
       },
-    });
+    };
+  }
+
+  it("refuses a taken slug as the unique key does, writing nothing", async () => {
+    const { deps, owner } = await setup();
+    await deps.repos.organizations.create({ id: "org_first", name: "Acme", slug: "acme", status: "ACTIVE" });
+    const outcome = await deps.repos.organizations.createWithOwner(creation("org_second", "acme", owner));
     expect(outcome).toEqual({ outcome: "SLUG_TAKEN" });
     expect(await deps.repos.organizations.findById("org_second")).toBeNull();
     expect(await deps.repos.memberships.listByUser(owner)).toEqual([]);
     expect(organizationAudit(deps)).toEqual([]);
+  });
+
+  it("refuses a taken identifier as the primary key does, changing nothing", async () => {
+    const { deps, owner } = await setup();
+    const first = await deps.repos.organizations.create({ ...creation("org_one", "acme", owner).organization });
+    await expect(deps.repos.organizations.createWithOwner(creation("org_one", "other", owner))).rejects.toThrow(
+      "Unique constraint failed on the fields: (`id`)",
+    );
+    expect(await deps.repos.organizations.findById("org_one")).toEqual(first);
+    expect(await deps.repos.memberships.listByUser(owner)).toEqual([]);
+  });
+
+  it("takes the organization and its OWNER back out when the audit entry cannot be appended", async () => {
+    const { deps, owner } = await setup();
+    vi.spyOn(deps.repos.auditLogs, "append").mockRejectedValueOnce(new Error("audit write failed"));
+    await expect(deps.repos.organizations.createWithOwner(creation("org_one", "acme", owner))).rejects.toThrow(
+      "audit write failed",
+    );
+    expect(await deps.repos.organizations.findById("org_one")).toBeNull();
+    expect(await deps.repos.organizations.findBySlug("acme")).toBeNull();
+    expect(await deps.repos.memberships.listByUser(owner)).toEqual([]);
   });
 });
 
@@ -171,7 +197,7 @@ describe("shape", () => {
       .map((file) => file.slice(REPO_ROOT.length + 1));
   }
 
-  it("creates an organization or a membership by no other call (ADR-0127)", () => {
+  it("calls OrganizationRepository.create and MembershipRepository.create from no product code (ADR-0127)", () => {
     expect(matching(/\b(?:organizations|memberships)\.create\(/)).toEqual([]);
     expect(matching(/\.createWithOwner\(/)).toEqual(["packages/domain/src/identity/organization-service.ts"]);
     // The scan reaches the code that creates one.

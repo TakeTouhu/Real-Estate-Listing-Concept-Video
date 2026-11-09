@@ -11,8 +11,8 @@ new route and no page.**
 | --- | --- | --- |
 | Success | the organization, its `OWNER` and `organization.created`, written in three steps; redirect to `/` | the same three, in one transaction; same redirect |
 | A write fails | the writes before it stayed: an organization with no `OWNER`, or with no audit entry | nothing is written; redirect to `/` with the error, as before |
-| An organization of the same name takes the slug first | fails on the unique key; redirect with "Could not create organization" | the slug is looked for again and the organization is created |
-| The slug is taken three times in a row | not possible as such | redirect with "Other organizations of the same name were being created at the same moment; try again", nothing written |
+| Another organization takes the slug first (a name giving the same slug, or the same form sent twice) | fails on the unique key; redirect with "Could not create organization" | the slug is looked for again and the organization is created |
+| The slug is taken three times in a row | not possible as such | redirect with "Other organizations with a similar name were being created at the same moment; try again", nothing written |
 
 A blank name is refused as before ("Organization name is required").
 

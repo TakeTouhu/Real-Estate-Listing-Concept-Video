@@ -19,8 +19,8 @@ them left one of two states:
 - an organization created with no audit entry.
 
 The same steps chose the slug by reading which slugs were taken, then
-writing. Two organizations of the same name created at once both chose the
-same slug, and the second failed on the unique key with a generic error.
+writing. Two organizations whose names give the same slug, created at once,
+both chose it, and the second failed on the unique key with a generic error.
 
 The plan's team pages, invitations and seat limit all start from an
 organization and its first `OWNER`, so this is closed first.
@@ -43,28 +43,38 @@ test fixtures. No product code calls either; a test pins that, and that
 
 ## Decision 2 — A slug taken meanwhile is looked for again
 
-When the slug's unique key refuses the organization, because an organization
-of the same name committed it first, the whole creation rolls back and the
+When the slug's unique key refuses the organization, because another
+organization committed that slug first, the whole creation rolls back and the
 repository answers `SLUG_TAKEN`. It recognizes this from the error itself:
 a unique conflict on the organization's `slug`. Any other failure, a taken
 identifier included, is raised as it was.
 
 The service then looks for a free slug again and tries with a new
 identifier, up to three attempts (`ORGANIZATION_SLUG_ATTEMPTS`). Three
-organizations of one name created at once are all created. After three
-refusals it answers `VALIDATION_FAILED` ("Other organizations of the same name
-were being created at the same moment; try again"), having written nothing.
+organizations whose names give one slug, created at once, are all created.
+After three refusals it answers `VALIDATION_FAILED` ("Other organizations with
+a similar name were being created at the same moment; try again"), having
+written nothing.
 
 The slug's form is unchanged: the name in lower-case ASCII, then `-1`, `-2`
 and so on when taken. A name with no ASCII letter or digit, such as a
-Japanese name, still becomes `org`. The slug appears on no page and in no
-address.
+Japanese name, still becomes `org`, so two different Japanese names share
+it. The slug appears on no page and in no address.
+
+**A double submit now creates two organizations.** The creation form is a
+plain form post, and a person can send it twice. When the second request
+arrived after the first committed, it already created a second organization
+(`acme-1`) before AT-2. When the two overlapped, the second used to fail on
+the slug's unique key; now it is looked for again and also created. Guarding
+the form against a second submit is recorded in `docs/decisions/TODO.md`.
 
 ## Consequences
 
-- No organization can exist without its first `OWNER` or without its
-  `organization.created` entry.
-- Creating two organizations of one name at once creates both.
+- No organization is created without its first `OWNER` or without its
+  `organization.created` entry. Organizations created before AT-2 are not
+  checked or repaired.
+- Creating two organizations whose names give one slug at once creates both,
+  and so does a double submit of the form.
 - The route, the page and the success path are unchanged; the one new answer
   is the refusal after three attempts.
 - **Not here:** the search for a free slug reads one slug at a time, so the

@@ -2124,8 +2124,15 @@ them is **built**. Each item below records the settled decision and what remains
       A crash between them leaves an organization no one belongs to (which no
       one can reach) or one created unaudited. The same repository pattern as
       ADR-0059 closes it. *Done in AT-2 (ADR-0127): one repository transaction
-      writes all three, and a slug taken meanwhile by an organization of the
-      same name is looked for again, up to three attempts.*
+      writes all three, and a slug taken meanwhile by another organization is
+      looked for again, up to three attempts.*
+- [ ] **Guard organization creation against a double submit.** The creation
+      form (`POST /api/organizations`) is a plain form post. Each request that
+      arrives creates an organization, so a form sent twice creates two
+      (`acme`, `acme-1`), and since AT-2 (ADR-0127 Decision 2) that holds even
+      when the two requests overlap. Disabling the button once sent, or an
+      idempotency key carried by the form, would make a second send create
+      nothing.
 - [ ] **Find a free organization slug without reading one slug at a time.**
       Organization creation tries the name's slug, then `-1`, `-2` and so on,
       one read each (ADR-0127 Decision 2). Every name with no ASCII letter or
