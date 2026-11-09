@@ -2256,3 +2256,16 @@ developer's machine, against a disposable database.
 
 **Rolling back.** To GS-13c-1's build: safe. Nothing is written but the test's
 own rows in its own database, and clips in its own folder.
+
+## GS-13d — the browser test of a video that is not made
+
+**No migration** (ADR-0125). No schema, enum, constraint or row changes, and no
+route, permission, environment variable or production code. The browser test
+gains a third test, which runs the development pipeline's own steps in its
+process with a clip maker that makes no clip.
+
+**What changes at deploy.** Nothing: the browser test runs only in CI and on a
+developer's machine, against a disposable database.
+
+**Rolling back.** To GS-13c-2's build: safe. Nothing is written but the test's
+own rows in its own database.

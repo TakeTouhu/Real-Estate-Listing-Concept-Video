@@ -26,6 +26,9 @@ export const E2E_SHARED_STORAGE_DIR = join(REPO_ROOT, ".e2e", "shared");
  */
 export const E2E_PROVIDER_DIR = join(REPO_ROOT, ".e2e", "provider");
 
+/** The web app's key for signed links, which the commands and the pipeline's steps the test runs use too. */
+export const E2E_STORAGE_SIGNING_SECRET = "e2e-storage-signing-secret-not-a-secret";
+
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
@@ -66,7 +69,7 @@ export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<
     DATABASE_URL: e2eDatabaseUrl(source),
     SESSION_SECRET: "e2e-session-secret-not-a-secret-0000",
     HEALTHCHECK_API_TOKEN: "e2e-healthcheck-token-not-a-secret-0",
-    STORAGE_SIGNING_SECRET: "e2e-storage-signing-secret-not-a-secret",
+    STORAGE_SIGNING_SECRET: E2E_STORAGE_SIGNING_SECRET,
     // 32 bytes as 64 hex characters, as the schema asks.
     MFA_SECRET_KEY: "e2e0".repeat(16),
     VIDEO_PROVIDER: "fake",
