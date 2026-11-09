@@ -26,7 +26,7 @@ the colleague works on it. A person who forgets a password can reset it.
 | Email verification (ADR-0052 Decision 18) | **none**: sign-up signs the person in at once, and any text is taken as an email | `POST /api/auth/register`, `AuthService.register` |
 | Password reset (ADR-0052 Decision 18) | **none** | |
 | Seat limit (3 / 10 / 30 included users) | **not enforced**; no seat is recorded beyond the plan | `customer-plan-catalog.ts` |
-| Organization creation | three writes in separate steps (open TODO) | `OrganizationService` |
+| Organization creation | three writes in separate steps (open TODO) (*one transaction since AT-2, ADR-0127*) | `OrganizationService` |
 | A second pending invitation of one email | refused by a read only (open TODO) | `MembershipService.invite` |
 
 ## The milestones

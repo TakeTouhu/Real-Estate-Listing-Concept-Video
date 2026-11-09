@@ -1,6 +1,8 @@
 import type {
   AuditLogRepository,
   Clock,
+  CreateOrganizationWithOwnerInput,
+  CreateOrganizationWithOwnerOutcome,
   CredentialRepository,
   DeletedGroup,
   GrantChangeAudit,
@@ -124,12 +126,40 @@ class InMemoryOrganizationRepository implements OrganizationRepository {
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
     private readonly roleOf: (organizationId: string, userId: string) => Role | undefined,
+    private readonly insertMembership: (input: Omit<Membership, "createdAt">) => Membership,
+    private readonly removeMembership: (organizationId: string, userId: string) => void,
   ) {}
   create(input: Omit<Organization, "createdAt" | "updatedAt" | "mfaRequired">): Promise<Organization> {
     const now = this.clock.now();
     const org: Organization = { ...input, mfaRequired: false, createdAt: now, updatedAt: now };
     this.byId.set(org.id, org);
     return Promise.resolve(org);
+  }
+  /**
+   * Checks the keys and writes all three with no `await` in between, as the
+   * database's transaction does: a taken slug writes nothing and answers
+   * `SLUG_TAKEN`, a taken identifier is refused, and an audit entry that
+   * cannot be appended takes the organization and its member back out.
+   */
+  async createWithOwner(input: CreateOrganizationWithOwnerInput): Promise<CreateOrganizationWithOwnerOutcome> {
+    if (this.byId.has(input.organization.id)) throw new Error("Unique constraint failed on the fields: (`id`)");
+    if ([...this.byId.values()].some((o) => o.slug === input.organization.slug)) return { outcome: "SLUG_TAKEN" };
+    const now = this.clock.now();
+    const organization: Organization = { ...input.organization, mfaRequired: false, createdAt: now, updatedAt: now };
+    this.byId.set(organization.id, organization);
+    const membership = this.insertMembership({
+      organizationId: organization.id,
+      userId: input.ownerUserId,
+      role: "OWNER",
+    });
+    try {
+      await this.auditLogs.append(input.audit);
+    } catch (error) {
+      this.byId.delete(organization.id);
+      this.removeMembership(organization.id, input.ownerUserId);
+      throw error;
+    }
+    return { outcome: "CREATED", organization, membership };
   }
   /** Checks and writes with no `await` in between, as the database's transaction does. */
   async setMfaRequired(input: SetMfaRequiredInput): Promise<"APPLIED" | "STALE"> {
@@ -176,6 +206,10 @@ class InMemoryMembershipRepository implements MembershipRepository {
     const membership: Membership = { ...input, createdAt: this.clock.now() };
     this.rows.set(this.key(input.organizationId, input.userId), membership);
     return membership;
+  }
+  /** Synchronous delete with no cascade, for a creation that is taken back. */
+  forget(organizationId: string, userId: string): void {
+    this.rows.delete(this.key(organizationId, userId));
   }
   has(organizationId: string, userId: string): boolean {
     return this.rows.has(this.key(organizationId, userId));
@@ -624,8 +658,12 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
   return {
     users: new InMemoryUserRepository(clock),
     credentials: new InMemoryCredentialRepository(clock),
-    organizations: new InMemoryOrganizationRepository(clock, auditLogs, (organizationId, userId) =>
-      memberships.roleOf(organizationId, userId),
+    organizations: new InMemoryOrganizationRepository(
+      clock,
+      auditLogs,
+      (organizationId, userId) => memberships.roleOf(organizationId, userId),
+      (input) => memberships.insert(input),
+      (organizationId, userId) => memberships.forget(organizationId, userId),
     ),
     memberships,
     permissionGrants,

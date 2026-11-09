@@ -802,6 +802,11 @@ that writes each email as a private file in an absolute folder
 (`EMAIL_OUTBOX_DIR`), refused in production. Nothing sends yet; no production
 email service is chosen.
 
+**AT-2 — an organization is created in one transaction** (ADR-0127, no
+migration): the organization, its founding `OWNER` and `organization.created`
+are written together or not at all, and a slug taken meanwhile by another
+organization is looked for again, up to three attempts.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

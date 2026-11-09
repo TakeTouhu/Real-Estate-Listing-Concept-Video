@@ -194,6 +194,27 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
         }),
       );
     },
+    async createWithOwner({ organization, ownerUserId, audit }) {
+      try {
+        // All three commit together, or none does (ADR-0127).
+        return await prisma.$transaction(async (tx) => {
+          const { id, name, slug, status } = organization;
+          const row = await tx.organization.create({ data: { id, name, slug, status } });
+          const owner = await tx.membership.create({
+            data: { organizationId: row.id, userId: ownerUserId, role: "OWNER" },
+          });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "CREATED", organization: toOrganization(row), membership: toMembership(owner) } as const;
+        });
+      } catch (error) {
+        // An organization of the same name committed this slug first, and the
+        // whole creation rolled back. Classified from the error itself.
+        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown; target?: unknown } };
+        const onSlug = Array.isArray(meta?.target) && meta.target.includes("slug");
+        if (code !== "P2002" || meta?.modelName !== "Organization" || !onSlug) throw error;
+        return { outcome: "SLUG_TAKEN" };
+      }
+    },
     async findById(id) {
       const r = await prisma.organization.findUnique({ where: { id } });
       return r ? toOrganization(r) : null;
