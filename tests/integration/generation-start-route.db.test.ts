@@ -226,6 +226,46 @@ describe.skipIf(!HAS_DB)("the start route through the web app's composition, in 
     expect(await prisma.auditLog.count({ where: started })).toBe(0);
   });
 
+  it("starts nothing, and reserves nothing, for scenes the test provider's route cannot make (ADR-0123)", async () => {
+    // Nine seconds between the three photos: 3-second scenes, where the route makes 5 to 15.
+    const storyboards = getStoryboardService();
+    const short = await storyboards.createProject(OWNER, ORG, PROPERTY, {
+      name: "Short",
+      durationSeconds: 9,
+      aspectRatio: "16:9",
+      targetOutputResolution: "720p",
+    });
+    await storyboards.compose(OWNER, ORG, short.id, { minSeconds: 3, maxSeconds: 3 });
+    const view = await storyboards.getStoryboard(OWNER, ORG, short.id);
+    const offer = await getGenerationStartService()?.offer(OWNER, ORG, short.id);
+    expect(offer).toEqual({
+      kind: "SCENE_LENGTHS_NOT_SUPPORTED",
+      durations: { kind: "RANGE", minSeconds: 5, maxSeconds: 15 },
+      durationSeconds: 9,
+      sceneCount: 3,
+      scenes: view.scenes.map((scene) => ({ id: scene.id, position: scene.position, durationSeconds: 3 })),
+    });
+    expect(view.scenes.map((scene) => scene.position)).toEqual([1, 2, 3]);
+
+    projectId = short.id;
+    const form = new URLSearchParams({
+      organizationId: ORG,
+      propertyId: PROPERTY,
+      qualityTier: "NORMAL",
+      idempotencyKey: "route-key-short",
+    });
+    for (const scene of view.scenes) form.append("sceneId", scene.id);
+    expect(await post(form)).toEqual({
+      path: `/properties/${PROPERTY}/video-projects/${short.id}/start`,
+      error: "Some scenes are a length this video cannot be made at. Nothing was started.",
+      started: null,
+    });
+    expect(await prisma.generationJob.count({ where: { videoProject: { organizationId: ORG } } })).toBe(0);
+    expect(await prisma.generationReservationAllocation.count({ where: { organizationId: ORG } })).toBe(0);
+    expect(await prisma.unitEntitlementPeriod.count({ where: { organizationId: ORG } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG, action: "generation.started" } })).toBe(0);
+  });
+
   it("starts nothing from a confirmation of another storyboard", async () => {
     const form = await confirmation("route-key-3");
     const scenes = form.getAll("sceneId");

@@ -1,4 +1,4 @@
-import type { StartOffer } from "@app/domain";
+import type { DurationPolicy, StartOffer } from "@app/domain";
 import { QUALITY_NAMES } from "@/lib/units-view";
 
 interface Props {
@@ -39,6 +39,8 @@ export function StartView({ organizationId, propertyId, projectId, offer, roomLa
           roomLabels={roomLabels}
           idempotencyKey={idempotencyKey}
         />
+      ) : offer.kind === "SCENE_LENGTHS_NOT_SUPPORTED" ? (
+        <SceneLengths offer={offer} roomLabels={roomLabels} />
       ) : (
         <p className="card">{refusal(offer)}</p>
       )}
@@ -51,8 +53,66 @@ function units(count: number, quality: string): string {
   return `${count} ${quality} Unit${count === 1 ? "" : "s"}`;
 }
 
+/** The lengths a scene may be: "5 to 15 seconds", "5, 10 or 15 seconds", "10 seconds". */
+export function sceneLengths(durations: DurationPolicy): string {
+  if (durations.kind === "RANGE") return `${durations.minSeconds} to ${durations.maxSeconds} seconds`;
+  const listed = durations.seconds.map(String);
+  const last = listed.pop();
+  return `${listed.length === 0 ? last : `${listed.join(", ")} or ${last}`} seconds`;
+}
+
+/** The longest length a scene may be. */
+function longest(durations: DurationPolicy): number {
+  return durations.kind === "RANGE" ? durations.maxSeconds : Math.max(...durations.seconds);
+}
+
+/**
+ * Scenes the video cannot be made at (ADR-0123): the lengths a scene may be,
+ * each scene that is not, and what changes them. Composition shares the
+ * project's length between its approved photos, so composing again gives the
+ * same lengths: a new project of another length does, and for scenes too long,
+ * more photos. No form.
+ */
+function SceneLengths({
+  offer,
+  roomLabels,
+}: {
+  readonly offer: Extract<StartOffer, { kind: "SCENE_LENGTHS_NOT_SUPPORTED" }>;
+  readonly roomLabels: ReadonlyMap<string, string>;
+}) {
+  const lengths = sceneLengths(offer.durations);
+  const tooLong = offer.scenes.every((scene) => scene.durationSeconds > longest(offer.durations));
+  return (
+    <div className="card">
+      <p>
+        {`Each scene of this video must be ${lengths} long. `}
+        {offer.scenes.length === 1 ? "This scene is not:" : "These scenes are not:"}
+      </p>
+      <ul>
+        {offer.scenes.map((scene) => {
+          const room = roomLabels.get(scene.id);
+          return (
+            <li key={scene.id}>
+              {`Scene ${scene.position}${room === undefined ? "" : ` · ${room}`} `}
+              <span className="muted">· {scene.durationSeconds} seconds</span>
+            </li>
+          );
+        })}
+      </ul>
+      <p>
+        {`A scene's length is the project's length shared between its approved photos: here ` +
+          `${offer.durationSeconds} seconds between ${offer.sceneCount} photos, so composing the storyboard again ` +
+          `gives the same lengths. To make this video, create a new project whose length, shared equally between ` +
+          `the ${offer.sceneCount} photos, gives each ${lengths}` +
+          (tooLong ? ", or add and approve more photos, then compose this storyboard again" : "") +
+          ". Nothing has been reserved."}
+      </p>
+    </div>
+  );
+}
+
 /** Why a start would not happen now, and what to do about it. */
-export function refusal(offer: Exclude<StartOffer, { kind: "READY" }>): string {
+export function refusal(offer: Exclude<StartOffer, { kind: "READY" | "SCENE_LENGTHS_NOT_SUPPORTED" }>): string {
   switch (offer.kind) {
     case "VIDEO_EXISTS":
       // A failed video holds its project until its Units are back (ADR-0110).
@@ -76,6 +136,8 @@ export function refusal(offer: Exclude<StartOffer, { kind: "READY" }>): string {
       );
     case "QUALITY_NOT_OFFERED":
       return `${QUALITY_NAMES[offer.qualityTier]} videos cannot be made yet.`;
+    case "SETTINGS_NOT_SUPPORTED":
+      return "This video cannot be made with this project's settings.";
     case "LENGTH_NOT_SUPPORTED":
       return `The storyboard is ${offer.durationSeconds} seconds long, longer than a video VTaVision makes.`;
     case "NO_PLAN":

@@ -594,6 +594,16 @@ on 2026-11-08. One press asks the existing analysis route for each photo in
 turn, then reads the page again; no route or rule is added. The browser test
 now analyzes its three photos from the page.
 
+**GS-13c-1 — the start refuses scenes no route can make** (ADR-0123, no
+migration): before anything is reserved, the start asks the launch planner's
+own route qualification whether one route can make the storyboard, as the
+product owner chose on 2026-11-08. When the one route at the project's quality
+refuses only scene lengths, the start page shows no form, names the lengths a
+scene may be ("5 to 15 seconds") and the scenes that are not, and says what
+changes them (a new project of a length that suits the photos, or more photos
+for scenes too long); anything else no route can make reads as settings not
+supported. A storyboard the launch could never route no longer holds a Unit.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

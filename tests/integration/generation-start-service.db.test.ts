@@ -61,6 +61,7 @@ const service = new GenerationStartService({
     },
   },
   qualities: { offers: () => true },
+  routes: { judge: () => ({ kind: "ONE_ROUTE" }) },
   subscriptions: createSubscriptionRepository(prisma),
   ledger: createUnitEntitlementRepository(prisma),
   starts: createGenerationStartRepository(prisma),

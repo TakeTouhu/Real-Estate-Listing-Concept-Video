@@ -4,6 +4,7 @@ import {
   epochMillisFromDate,
   extendProviderPricingCatalog,
   microUsd,
+  routeCheck,
   routeQualityOffer,
   type AuthorizedRoute,
   type FxSnapshot,
@@ -12,6 +13,7 @@ import {
   type ProviderPricingContract,
   type RoutePolicy,
   type StartQualityOffer,
+  type StartRouteCheck,
   type VerifiedModelEntry,
   type VideoModelCatalog,
 } from "@app/domain";
@@ -135,6 +137,12 @@ export interface FakeRouteKit {
   readonly routePolicy: RoutePolicy;
   /** Built from the same policy, for the start, so the two agree. */
   readonly qualityOffer: StartQualityOffer;
+  /**
+   * Built from the same policy and catalog, for the start: the launch
+   * planner's own route check, so a start is refused for a storyboard the
+   * launch could never route (ADR-0123).
+   */
+  readonly routeCheck: StartRouteCheck;
   /** Production's contracts and the test provider's two. */
   readonly pricing: ProviderPricingCatalog;
   /** The rate the test provider's prices are converted at. */
@@ -160,15 +168,17 @@ export function createFakeRouteKit(env: Pick<ServerEnv, "NODE_ENV" | "VIDEO_PROV
     qualityTiers: ["NORMAL", "HIGH_QUALITY"],
     routes: FAKE_ROUTES,
   });
+  const models: VideoModelCatalog = Object.freeze({
+    list: () => [FAKE_VIDEO_MODEL],
+    default: () => FAKE_VIDEO_MODEL,
+    find: (key: string) => (key === FAKE_VIDEO_MODEL_KEY ? FAKE_VIDEO_MODEL : undefined),
+  });
   // The kit and each part, so no composition it is handed to can swap a lookup.
   return Object.freeze({
-    models: Object.freeze({
-      list: () => [FAKE_VIDEO_MODEL],
-      default: () => FAKE_VIDEO_MODEL,
-      find: (key: string) => (key === FAKE_VIDEO_MODEL_KEY ? FAKE_VIDEO_MODEL : undefined),
-    }),
+    models,
     routePolicy,
     qualityOffer: Object.freeze(routeQualityOffer(routePolicy)),
+    routeCheck: Object.freeze(routeCheck(routePolicy, models)),
     pricing: Object.freeze(extendProviderPricingCatalog([fakeContract("720p"), fakeContract("1080p")])),
     fx: FAKE_FX_SNAPSHOT,
   });

@@ -7,6 +7,8 @@ export {
 export type { JobLaunchCapacity } from "./limit";
 export { JobLaunchPlanner } from "./planner";
 export type { FrozenFactsCode, JobLaunchPlannerDeps } from "./planner";
+export { judgeStartRoute, qualifyingRoutes } from "./route-qualification";
+export type { RouteChoice, RouteQualificationFacts, StartRouteVerdict } from "./route-qualification";
 export { JOB_ENDED_UNLAUNCHABLE_EVENT_TYPE, decideUnlaunchableJobEnding } from "./ending";
 export type { UnlaunchableJobCause, UnlaunchableJobEnding, UnlaunchableJobEndingRefusal } from "./ending";
 export {

@@ -192,6 +192,14 @@ describe("a refused start", () => {
     ],
     [{ kind: "QUALITY_NOT_OFFERED" }, "Videos of this project's quality cannot be made yet. Nothing was started."],
     [
+      { kind: "SCENE_LENGTHS_NOT_SUPPORTED" },
+      "Some scenes are a length this video cannot be made at. Nothing was started.",
+    ],
+    [
+      { kind: "SETTINGS_NOT_SUPPORTED" },
+      "This video cannot be made with this project's settings. Nothing was started.",
+    ],
+    [
       { kind: "LENGTH_NOT_SUPPORTED" },
       "The storyboard is longer than a video VTaVision makes. Nothing was started.",
     ],

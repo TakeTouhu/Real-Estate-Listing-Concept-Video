@@ -1304,7 +1304,7 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       photo each call the analyzer (*Deduplicate concurrent analysis work*,
       above). Offering a retry, and telling an abandoned analysis from a
       running one, is still to decide.
-- [ ] **The start admits a storyboard whose scenes the route cannot make.**
+- [x] **The start admits a storyboard whose scenes the route cannot make.**
       Composition takes the scene bounds a member types, and the start checks
       the quality a route offers but not its scene lengths: a storyboard of
       3-second scenes started on the test route (5 to 15 seconds) reserved its
@@ -1315,7 +1315,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       the start is offered only in development with the test provider
       (ADR-0111), so no customer can reach it yet. Put to the product owner
       on 2026-11-06, with the start refusing such a storyboard before it
-      reserves anything recommended.
+      reserves anything recommended. *Decided 2026-11-08: the start refuses
+      it, naming the lengths a scene may be and the scenes that are not.
+      Built in GS-13c-1 (ADR-0123), with the planner's own route
+      qualification.*
+- [ ] **Let a member fix a storyboard whose scenes the route cannot make
+      without a new project.** Composition shares a project's length between
+      its approved photos; the shortest and longest scene a member types only
+      bound the split. A project's length is fixed at creation and no page
+      withdraws an approval, so the start page (GS-13c-1, ADR-0123) can offer
+      only a new project of another length, or, for scenes too long, more
+      photos. Whether a member may edit a project's length, choose which
+      approved photos a storyboard uses, or be warned when composing, is a
+      product decision still to make.
 
 ## Open in GS-11a — how a new version of a delivered video shows its progress
 
@@ -1672,6 +1684,10 @@ them is **built**. Each item below records the settled decision and what remains
       activated. Since GS-9a (ADR-0105) such a job no longer keeps other
       organizations' jobs from being offered, once the pipeline command carries
       the launch window's cursor; it still holds its own organization's.
+      Since GS-13c-1 (ADR-0123) the start refuses a storyboard no route can
+      make, so `NO_ROUTE` and `AMBIGUOUS_ROUTE` come only from a route table
+      or catalog changed between the start and the launch, or from a job
+      started before GS-13c-1.
 - [ ] **Release a change to the prompt's fixed rules only when no job
       waits.** Editing `PRESERVATION_RULES` or `SYSTEM_NEGATIVE_CONSTRAINTS`
       makes every admitted, unexecuted generation's frozen prompt fail to
