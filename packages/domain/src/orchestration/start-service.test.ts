@@ -904,7 +904,7 @@ describe("the start offer", () => {
   });
 
   it("answers scenes the route cannot make at their length: the lengths it takes, and each such scene", async () => {
-    const durations = { kind: "RANGE", minSeconds: 5, maxSeconds: 15 } as const;
+    const durations = { kind: "RANGE", minSeconds: 4, maxSeconds: 12 } as const;
     // Each scene is named by the position the project page numbers it by.
     view = {
       ...view,
