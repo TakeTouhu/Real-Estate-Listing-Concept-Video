@@ -1283,7 +1283,7 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       *Decided in the GS-13 gap analysis (2026-11-06): the test proves the
       player's link serves the video and that the downloaded file decodes, by
       FFmpeg, as H.264 at the project's size and length; no other browser is
-      installed. Built in GS-13c.*
+      installed. Built in GS-13c-2 (ADR-0124).*
 
 ## Found in GS-13's survey — the flow cannot yet be clicked through
 

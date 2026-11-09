@@ -604,6 +604,15 @@ changes them (a new project of a length that suits the photos, or more photos
 for scenes too long); anything else no route can make reads as settings not
 supported. A storyboard the launch could never route no longer holds a Unit.
 
+**GS-13c-2 — the browser test makes and downloads a video** (ADR-0124, no
+migration): a second browser test takes a new owner from analyzed photos to a
+downloaded video through the pages: each photo approved, a 15-second 720p
+project, three 5-second scenes, the start reserving one Normal Unit, the
+development pipeline run once by the test, the video shown completed with the
+Unit used, the player's link answering a byte range, and the download saved
+under the project's name and decoded by FFmpeg as H.264 at 1280×720. The Units
+page ends at 39 of 40.
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

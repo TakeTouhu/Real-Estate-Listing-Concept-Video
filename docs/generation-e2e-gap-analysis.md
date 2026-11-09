@@ -506,4 +506,5 @@ reserved; when the one route at the project's quality refuses only lengths,
 the start page names the lengths a scene may be, the scenes that are not, and
 what changes them (composition shares the project's length between its
 photos, so composing again does not). GS-13c-2: the browser test from the
-photos' approval to a downloaded video.
+photos' approval to a downloaded video (ADR-0124), which runs the development
+pipeline itself, as a person would after the start.
