@@ -129,7 +129,7 @@ describe("sending a link", () => {
       }),
     ]);
     expect(rows[0]?.tokenHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(await auditActions(id)).toEqual(["user.email_verification_sent"]);
+    expect(await auditActions(id)).toEqual(["user.email_verification_link_created"]);
   });
 
   it("rolls the link back when its audit entry fails", async () => {
@@ -165,7 +165,7 @@ describe("opening a link", () => {
     expect(await verification.verifyEmail(lastToken())).toBe("VERIFIED");
     expect((await prisma.user.findUniqueOrThrow({ where: { id } })).emailVerifiedAt).toEqual(clock.now());
     expect((await prisma.accountLink.findFirstOrThrow({ where: { userId: id } })).usedAt).toEqual(clock.now());
-    expect(await auditActions(id)).toEqual(["user.email_verification_sent", "user.email_verified"]);
+    expect(await auditActions(id)).toEqual(["user.email_verification_link_created", "user.email_verified"]);
     expect(await verification.verifyEmail(lastToken())).toBe("ALREADY_VERIFIED");
     expect(await auditActions(id)).toHaveLength(2);
   });
@@ -230,7 +230,7 @@ describe("opening a link", () => {
     expect(await prisma.accountLink.count({ where: { userId: id, usedAt: { not: null } } })).toBe(1);
   });
 
-  it("writes nothing and answers STALE for a disabled account, a changed address, a used or expired link", async () => {
+  it("writes nothing for an account disabled, moved or verified, or a link expired or used", async () => {
     const id = await user("stale");
     const email = `stale@${DOMAIN}`;
     const link = linkRow(id, { email });
@@ -238,16 +238,43 @@ describe("opening a link", () => {
     const use = (usedAt: Date) =>
       deps.repos.accountLinks.useForEmailVerification({ linkId: link.id, userId: id, email, usedAt, audit: audit(id) });
     const now = clock.now();
+    const linkUsedAt = async () => (await prisma.accountLink.findUniqueOrThrow({ where: { id: link.id } })).usedAt;
+    const verifiedAt = async () => (await prisma.user.findUniqueOrThrow({ where: { id } })).emailVerifiedAt;
 
     await prisma.user.update({ where: { id }, data: { status: "DISABLED" } });
     expect(await use(now)).toBe("STALE");
+    expect(await linkUsedAt()).toBeNull();
     await prisma.user.update({ where: { id }, data: { status: "ACTIVE", email: `moved@${DOMAIN}` } });
     expect(await use(now)).toBe("STALE");
-    await prisma.user.update({ where: { id }, data: { email } });
+    expect(await linkUsedAt()).toBeNull();
+    await prisma.user.update({ where: { id }, data: { email, emailVerifiedAt: now } });
+    expect(await use(now)).toBe("STALE");
+    expect(await linkUsedAt()).toBeNull();
+    await prisma.user.update({ where: { id }, data: { emailVerifiedAt: null } });
     expect(await use(link.expiresAt)).toBe("STALE");
+    expect(await linkUsedAt()).toBeNull();
     await prisma.accountLink.update({ where: { id: link.id }, data: { usedAt: now } });
     expect(await use(now)).toBe("STALE");
 
+    expect(await verifiedAt()).toBeNull();
+    expect(await auditActions(id)).toEqual(["test.link"]);
+  });
+
+  it("is refused by the table for a use before the link was made, writing nothing", async () => {
+    const id = await user("early");
+    const email = `early@${DOMAIN}`;
+    const link = linkRow(id, { email });
+    await deps.repos.accountLinks.create(link, audit(id));
+    await expect(
+      deps.repos.accountLinks.useForEmailVerification({
+        linkId: link.id,
+        userId: id,
+        email,
+        usedAt: new Date(link.createdAt.getTime() - 1000),
+        audit: audit(id),
+      }),
+    ).rejects.toThrow(/account_links_window_check/);
+    expect((await prisma.accountLink.findUniqueOrThrow({ where: { id: link.id } })).usedAt).toBeNull();
     expect((await prisma.user.findUniqueOrThrow({ where: { id } })).emailVerifiedAt).toBeNull();
     expect(await auditActions(id)).toEqual(["test.link"]);
   });

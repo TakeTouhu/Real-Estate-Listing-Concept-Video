@@ -34,7 +34,7 @@ link in the sign-up email and the guard arrive in AT-3b.
 | `AccountLinkRepository` | `create(link, audit)` keeps a link with its audit entry in one transaction; `findByTokenHash(hash)`; `useForEmailVerification({ linkId, userId, email, usedAt, audit })` → `"APPLIED"` or `"STALE"`, marking the link used, the address verified and writing `audit` in one transaction, or writing nothing |
 | `AccountLinkAudit`, `UseEmailVerificationLinkInput` | their inputs |
 | `IdentityRepositories.accountLinks` | the repository above |
-| `AuditAction.EmailVerificationSent`, `AuditAction.EmailVerified` | `user.email_verification_sent`, `user.email_verified`; both with `organizationId` null, the user as actor and resource, and `metadata: { linkId }` |
+| `AuditAction.EmailVerificationLinkCreated`, `AuditAction.EmailVerified` | `user.email_verification_link_created` (written with the link, before its email is handed over), `user.email_verified`; both with `organizationId` null, the user as actor and resource, and `metadata: { linkId, email }` |
 
 ### Changed: `@app/domain`
 

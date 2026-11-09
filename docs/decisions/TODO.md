@@ -252,7 +252,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       rate-limiting login, uploads, generation and billing; none of them is
       limited today. **Shape settled (ADR-0054 Decision 5):** defense in depth
       across account / organization / IP / endpoint, covering login, password
-      reset, MFA recovery, uploads, generation, downloads and billing;
+      reset, MFA recovery, uploads, generation, downloads and billing (*and,
+      since AT-3a, ADR-0128, asking for a verification email again: each ask
+      sends mail, so unlimited asks could fill a mailbox*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
@@ -2146,7 +2148,15 @@ them is **built**. Each item below records the settled decision and what remains
       the 24-hour one-time link and the service that sends and checks it,
       dormant. Remaining (AT-3b): sign-up sends the link, the verify page, the
       guard that keeps an unverified account on it, and the browser tests
-      reading the outbox.*
+      reading the outbox. AT-3b must also refuse at sign-up an email mail
+      cannot be sent to (`isDeliverableEmailAddress`), which could otherwise
+      never be verified; cap the length of a token its route accepts (a mailed
+      one is 43 characters); and, before the guard ships, confirm no
+      production database holds users, who would all read as unverified.*
+- [ ] **Clear a verified address when it changes.** A verification is bound to
+      the address it was sent to (ADR-0128). No product path changes a user's
+      email today; whichever is added must set `emailVerifiedAt` back to null
+      in the same transaction, or the new address reads as verified.
 - [ ] **Register an account in one transaction.** Sign-up
       (`AuthService.register`, reachable today) writes the user, the
       credential and `user.registered` in separate steps. A failure between

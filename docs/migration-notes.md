@@ -2308,8 +2308,9 @@ exists, is not repaired.
 No existing row is updated or deleted, and migrations 0 to 32 are not touched.
 
 **What changes at deploy.** Nothing a person sees. Every existing user reads as
-unverified, and nothing checks the column until AT-3b. Only development and CI
-databases hold users today.
+unverified, and nothing checks the column until AT-3b. No production deployment
+is recorded, so only development and CI databases are known to hold users;
+AT-3b confirms that before its guard ships.
 
 **Rolling back.** To AT-2's build: safe while the table is unused. Reverting the
 schema means dropping `account_links`, its enum and `users."emailVerifiedAt"`,

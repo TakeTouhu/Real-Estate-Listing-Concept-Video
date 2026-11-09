@@ -16,9 +16,9 @@ function toAccountLink(r: DbAccountLink): AccountLink {
 }
 
 /**
- * One-time links mailed to users, in PostgreSQL (ADR-0128). Using a link takes
- * the user's row lock before it touches the link, so uses for one user run one
- * at a time; making a link touches no existing link.
+ * One-time links mailed to users, in PostgreSQL (ADR-0128). Using a link locks
+ * the user's row before it touches the link, so uses for one user run one at a
+ * time; making a link touches no existing link.
  */
 export function createPrismaAccountLinkRepository(prisma: PrismaClient): AccountLinkRepository {
   return {
@@ -41,9 +41,12 @@ export function createPrismaAccountLinkRepository(prisma: PrismaClient): Account
     async useForEmailVerification(input) {
       return prisma.$transaction(async (tx) => {
         // A second opening of this link, or another link of the user's, waits
-        // here and then sees the address verified.
+        // here and then sees the address verified. NO KEY UPDATE, the lock the
+        // update below takes anyway, so a sign-in or a new link, which only
+        // reference the row, is not held up.
         const [user] = await tx.$queryRaw<{ status: string; email: string; emailVerifiedAt: Date | null }[]>`
-          SELECT "status", "email", "emailVerifiedAt" FROM "users" WHERE "id" = ${input.userId} FOR UPDATE`;
+          SELECT "status", "email", "emailVerifiedAt" FROM "users" WHERE "id" = ${input.userId}
+          FOR NO KEY UPDATE`;
         if (!user || user.status !== "ACTIVE" || user.email !== input.email || user.emailVerifiedAt !== null) {
           return "STALE";
         }

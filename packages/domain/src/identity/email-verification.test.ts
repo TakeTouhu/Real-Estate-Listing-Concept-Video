@@ -127,10 +127,10 @@ describe("sending a verification link", () => {
       expect.objectContaining({
         organizationId: null,
         actorUserId: userId,
-        action: "user.email_verification_sent",
+        action: "user.email_verification_link_created",
         resourceType: "user",
         resourceId: userId,
-        metadata: { linkId: link?.id },
+        metadata: { linkId: link?.id, email: "owner@example.test" },
       }),
     ]);
   });
@@ -143,8 +143,8 @@ describe("sending a verification link", () => {
     const second = lastToken(sender);
     expect(second).not.toBe(first);
     expect(verificationAudit(deps).map((entry) => entry.action)).toEqual([
-      "user.email_verification_sent",
-      "user.email_verification_sent",
+      "user.email_verification_link_created",
+      "user.email_verification_link_created",
     ]);
 
     expect(await verification.verifyEmail(first)).toBe("VERIFIED");
@@ -208,7 +208,9 @@ describe("sending a verification link", () => {
     const { deps, sender, verification, userId } = await setup();
     sender.failing = true;
     await expect(verification.sendVerificationLink(userId)).rejects.toThrow("delivery refused");
-    expect(verificationAudit(deps).map((entry) => entry.action)).toEqual(["user.email_verification_sent"]);
+    // The link was made; the entry says no more than that.
+    const actions = verificationAudit(deps).map((entry) => entry.action);
+    expect(actions).toEqual(["user.email_verification_link_created"]);
     sender.failing = false;
     expect(await verification.sendVerificationLink(userId)).toBe("SENT");
     expect(await verification.verifyEmail(lastToken(sender))).toBe("VERIFIED");
@@ -222,7 +224,7 @@ describe("opening a verification link", () => {
     return { ...s, token: lastToken(s.sender) };
   }
 
-  it("verifies the address, uses the link and records one audit entry, all at the same moment", async () => {
+  it("verifies the address and uses the link at the same moment, with one audit entry", async () => {
     const { deps, verification, userId, token } = await sent();
     deps.clock.advanceSeconds(HOUR);
     const now = deps.clock.now();
@@ -239,7 +241,7 @@ describe("opening a verification link", () => {
         action: "user.email_verified",
         resourceType: "user",
         resourceId: userId,
-        metadata: { linkId: link?.id },
+        metadata: { linkId: link?.id, email: "owner@example.test" },
       }),
     );
   });
@@ -436,6 +438,13 @@ describe("the in-memory links", () => {
       expect(deps.repos.users.peek(userId)).toEqual(changed);
       expect((await deps.repos.accountLinks.findByTokenHash("hash:a"))?.usedAt).toBeNull();
     }
+  });
+
+  it("refuses a use before the link was made, as the table's CHECK does, writing nothing", async () => {
+    const { deps, userId, link, use } = await withLink();
+    await expect(use({ usedAt: new Date(link.createdAt.getTime() - 1) })).rejects.toThrow("account_links_window_check");
+    expect(deps.repos.users.peek(userId)?.emailVerifiedAt).toBeNull();
+    expect((await deps.repos.accountLinks.findByTokenHash("hash:a"))?.usedAt).toBeNull();
   });
 
   it("answers STALE and writes nothing for a link expired, used or of another purpose", async () => {

@@ -78,10 +78,10 @@ export class EmailVerificationService {
       {
         organizationId: null,
         actorUserId: userId,
-        action: AuditAction.EmailVerificationSent,
+        action: AuditAction.EmailVerificationLinkCreated,
         resourceType: "user",
         resourceId: userId,
-        metadata: { linkId: id },
+        metadata: { linkId: id, email: user.email },
       },
     );
     await this.deps.email.send(message);
@@ -112,7 +112,7 @@ export class EmailVerificationService {
         action: AuditAction.EmailVerified,
         resourceType: "user",
         resourceId: user.id,
-        metadata: { linkId: link.id },
+        metadata: { linkId: link.id, email: link.email },
       },
     });
     if (outcome === "APPLIED") return "VERIFIED";
