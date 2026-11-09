@@ -242,7 +242,10 @@ describe("dormancy", () => {
 
   it("is used by neither application yet, and neither reads its folder's setting", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps"));
-    expect(files.length).toBeGreaterThan(100);
+    // The scan reaches both applications, including where sign-up is wired.
+    const scanned = files.map(({ name }) => name);
+    expect(scanned).toContain("apps/web/src/lib/identity.ts");
+    expect(scanned).toContain("apps/worker/src/bootstrap.ts");
     const names = ["DevelopmentEmailOutbox", "EMAIL_OUTBOX_DIR", "EmailSender", "outgoingEmail("];
     const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
     expect(users.map(({ name }) => name)).toEqual([]);
