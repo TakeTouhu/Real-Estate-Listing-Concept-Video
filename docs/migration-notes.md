@@ -2331,3 +2331,13 @@ A production deployment cannot verify anyone until an email service is chosen.
 
 **Rolling back.** To AT-3a's build: safe. Nothing is written that AT-3a cannot
 read; verifications recorded since stay, and are again checked by nothing.
+
+## AT-4a — an account is registered in one transaction
+
+**No migration** (ADR-0130). Migration 33 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. Sign-up writes
+its three rows in one transaction; accounts made before are not checked.
+
+**Rolling back.** To AT-3b's build: safe. Sign-up again writes its rows in
+separate steps.

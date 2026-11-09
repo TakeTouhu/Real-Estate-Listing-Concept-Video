@@ -29,6 +29,8 @@ import type {
   OrganizationRepository,
   PasswordHasher,
   PermissionGrantRepository,
+  RegisterUserInput,
+  RegisterUserOutcome,
   SessionRepository,
   SetMfaRequiredInput,
   TokenService,
@@ -95,12 +97,32 @@ export function fakeTokenService(): TokenService {
 
 class InMemoryUserRepository implements UserRepository {
   private readonly byId = new Map<string, User>();
-  constructor(private readonly clock: Clock) {}
-  create(input: Omit<User, "createdAt" | "updatedAt" | "emailVerifiedAt">): Promise<User> {
+  constructor(
+    private readonly clock: Clock,
+    private readonly credentials: InMemoryCredentialRepository,
+    private readonly auditLogs: AuditLogRepository,
+  ) {}
+  /**
+   * Checks the keys and writes the user and its password with no `await` in
+   * between, as the database's transaction does: a taken email writes nothing
+   * and answers `EMAIL_TAKEN`, a taken identifier is refused, and an audit
+   * entry that cannot be appended takes both back out.
+   */
+  async register(input: RegisterUserInput): Promise<RegisterUserOutcome> {
+    if (this.byId.has(input.user.id)) throw new Error("Unique constraint failed on the fields: (`id`)");
+    if ([...this.byId.values()].some((u) => u.email === input.user.email)) return { outcome: "EMAIL_TAKEN" };
     const now = this.clock.now();
-    const user: User = { ...input, emailVerifiedAt: null, createdAt: now, updatedAt: now };
+    const user: User = { ...input.user, emailVerifiedAt: null, createdAt: now, updatedAt: now };
     this.byId.set(user.id, user);
-    return Promise.resolve(user);
+    this.credentials.insert({ userId: user.id, passwordHash: input.passwordHash, createdAt: now, updatedAt: now });
+    try {
+      await this.auditLogs.append(input.audit);
+    } catch (error) {
+      this.byId.delete(user.id);
+      this.credentials.remove(user.id);
+      throw error;
+    }
+    return { outcome: "CREATED", user };
   }
   /** Test-only: the stored user, read with no `await`. */
   peek(id: string): User | undefined {
@@ -181,12 +203,12 @@ class InMemoryAccountLinkRepository implements AccountLinkRepository {
 
 class InMemoryCredentialRepository implements CredentialRepository {
   private readonly byUser = new Map<string, Credential>();
-  constructor(private readonly clock: Clock) {}
-  create(input: Omit<Credential, "createdAt" | "updatedAt">): Promise<Credential> {
-    const now = this.clock.now();
-    const credential: Credential = { ...input, createdAt: now, updatedAt: now };
+  /** Written only with its user (`InMemoryUserRepository.register`). */
+  insert(credential: Credential): void {
     this.byUser.set(credential.userId, credential);
-    return Promise.resolve(credential);
+  }
+  remove(userId: string): void {
+    this.byUser.delete(userId);
   }
   findByUserId(userId: string): Promise<Credential | null> {
     return Promise.resolve(this.byUser.get(userId) ?? null);
@@ -729,10 +751,11 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     return propertyLinks.unassign(organizationId, userId);
   });
   const sessions = new InMemorySessionRepository(clock);
-  const users = new InMemoryUserRepository(clock);
+  const credentials = new InMemoryCredentialRepository();
+  const users = new InMemoryUserRepository(clock, credentials, auditLogs);
   return {
     users,
-    credentials: new InMemoryCredentialRepository(clock),
+    credentials,
     organizations: new InMemoryOrganizationRepository(
       clock,
       auditLogs,

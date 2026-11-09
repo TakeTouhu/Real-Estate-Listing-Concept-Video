@@ -40,14 +40,28 @@ export interface TokenService {
 // --- Repository ports -------------------------------------------------------
 
 export interface UserRepository {
-  /** A new user's email is not verified. */
-  create(input: Omit<User, "createdAt" | "updatedAt" | "emailVerifiedAt">): Promise<User>;
+  /**
+   * Create an account in one transaction: the user, whose email is not
+   * verified, its password and `audit` (ADR-0130). An email another account
+   * has, or takes first, writes nothing and answers `EMAIL_TAKEN`.
+   */
+  register(input: RegisterUserInput): Promise<RegisterUserOutcome>;
   findById(id: string): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
 }
 
+export interface RegisterUserInput {
+  readonly user: Omit<User, "createdAt" | "updatedAt" | "emailVerifiedAt">;
+  readonly passwordHash: string;
+  readonly audit: Omit<AuditLog, "id" | "createdAt">;
+}
+
+export type RegisterUserOutcome =
+  | { readonly outcome: "CREATED"; readonly user: User }
+  | { readonly outcome: "EMAIL_TAKEN" };
+
+/** A password is written only with its account (`UserRepository.register`). */
 export interface CredentialRepository {
-  create(input: Omit<Credential, "createdAt" | "updatedAt">): Promise<Credential>;
   findByUserId(userId: string): Promise<Credential | null>;
 }
 

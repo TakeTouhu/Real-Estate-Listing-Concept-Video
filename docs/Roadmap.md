@@ -820,6 +820,12 @@ the verify page, after its MFA code and before MFA set-up, and can have the
 link sent again; the link verifies with one press, with no sign-in. The browser
 tests open the link from the outbox. Production has no email service yet.
 
+**AT-4a — an account is registered in one transaction** (ADR-0130, no
+migration): the user, its password and `user.registered` are written together
+or not at all, and of several sign-ups for one email at once, one is made and
+the others are told the email is taken. Password reset follows in AT-4b and
+AT-4c.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

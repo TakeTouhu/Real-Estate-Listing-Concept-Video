@@ -157,12 +157,25 @@ function toAuditLog(r: DbAuditLog): AuditLog {
  */
 export function createPrismaIdentityRepositories(prisma: PrismaClient): IdentityRepositories {
   const users: UserRepository = {
-    async create(input) {
-      return toUser(
-        await prisma.user.create({
-          data: { id: input.id, email: input.email, name: input.name, status: input.status },
-        }),
-      );
+    async register({ user, passwordHash, audit }) {
+      try {
+        // The user, its password and its audit entry commit together, or none
+        // does (ADR-0130).
+        return await prisma.$transaction(async (tx) => {
+          const { id, email, name, status } = user;
+          const row = await tx.user.create({ data: { id, email, name, status } });
+          await tx.credential.create({ data: { userId: row.id, passwordHash } });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "CREATED", user: toUser(row) } as const;
+        });
+      } catch (error) {
+        // Another sign-up committed this email first, and this one rolled
+        // back whole. Classified from the error itself.
+        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown; target?: unknown } };
+        const onEmail = Array.isArray(meta?.target) && meta.target.includes("email");
+        if (code !== "P2002" || meta?.modelName !== "User" || !onEmail) throw error;
+        return { outcome: "EMAIL_TAKEN" };
+      }
     },
     async findById(id) {
       const r = await prisma.user.findUnique({ where: { id } });
@@ -175,13 +188,6 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const credentials: CredentialRepository = {
-    async create(input) {
-      return toCredential(
-        await prisma.credential.create({
-          data: { userId: input.userId, passwordHash: input.passwordHash },
-        }),
-      );
-    },
     async findByUserId(userId) {
       const r = await prisma.credential.findUnique({ where: { userId } });
       return r ? toCredential(r) : null;
