@@ -8409,3 +8409,283 @@ calls, the production scheduler and live Stripe charges remain BLOCKED.
 
 GS-13c-2 waits for the product owner's yes before merge. GS-13d (a video that
 is not made, its Unit returned, and the plan's completion report) follows.
+
+## GS-13d — the browser test of a video that is not made
+
+Base: `75dca85` (PR #148 merge commit on `main`; post-merge CI run 868
+green).
+ADR: `docs/decisions/0125-the-browser-test-of-a-video-that-is-not-made.md`
+
+The last part of GS-13 (see `docs/generation-e2e-gap-analysis.md`, *GS-13*):
+a browser test of a video that is not made, and this plan's completion report
+(*The plan*, below). **No migration, and no production code, route,
+permission or environment variable changed.** The exact head SHA is reported
+with the pull request.
+
+### What GS-13d does
+
+- **A third browser test** (`tests/e2e/a-video-that-is-not-made.spec.ts`),
+  with its own owner and Premium plan: a Property's three photos uploaded,
+  analyzed and approved; a 15-second 720p 16:9 project of three 5-second
+  scenes; the start reserving one Normal Unit, and the Units page at 39 of 40;
+  the development pipeline run once with a test provider that makes no clip,
+  its report showing the scene refused and the job closed; then the project
+  page, read without the start's notice, showing the video failed, Normal and
+  15 seconds, with ADR-0052's message, the 1 Normal Unit back and not used,
+  and a new start possible; no player and no download; the start page
+  offering the same three scenes and its button again; and the Units page at
+  40 of 40.
+- **`runPipelineMakingNoClip`** (`tests/e2e/support/clipless-pipeline.ts`):
+  in the test's process, what the command's entry point runs, in its order
+  (the database address refused unless on this machine, the assembly, foreign
+  attempts refused, the cycles at the command's default limits, the exit
+  status), with a clip maker that answers that it made nothing. It returns
+  the run's report, whose counts the test checks: one scene's failure
+  settled, the job's other two scenes closed, no clip copied. A run that is
+  not quiet, or in which a step reported a failure, fails the test with its
+  report; an error that is not the app's own is reported by its kind only.
+- **`startVideo`** (`tests/e2e/support/video.ts`): the steps from the review
+  page to the started video, moved out of the second test with every check it
+  made between them, so both tests take the same path.
+
+```mermaid
+sequenceDiagram
+    actor T as Browser test
+    participant W as Web app (next dev)
+    participant D as Database
+    participant P as Pipeline steps (in the test)
+    T->>W: approve photos, create project, compose
+    T->>W: start page: start, reserving 1 Normal Unit
+    W->>D: job QUEUED, Unit RESERVED
+    T->>W: Units page: 39 of 40 left
+    T->>P: run once, no clip made
+    P->>D: launch, scene sent, refused for good
+    P->>D: settlement: job FAILED_TERMINAL, Unit RELEASED; other scenes closed
+    P-->>T: quiet, no failure
+    T->>W: project page: Failed, ADR-0052's message, Unit came back
+    T->>W: start page: the same video offered again
+    T->>W: Units page: 40 of 40 left
+```
+
+### Verification
+
+Measured locally on this pull request's code, each exit status read:
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | clean |
+| `pnpm test:e2e` | 3 passed in 1.8 minutes, against a new, empty, migrated local PostgreSQL 16 database, as CI's: the new test in 59 seconds, the second in 32, the first in 10 |
+| `pnpm test` | 7,016 passed in 272 files, unchanged: no unit-tested code changed |
+| `pnpm test:db` | 1,884 passed in 73 files, unchanged |
+| `pnpm test:media` | 172 passed in 5 files, unchanged |
+| `pnpm build` | succeeded |
+
+The suites that cover no changed code ran for the plan's final numbers
+below, each on the same new database.
+
+### Mutation testing
+
+**9 of 12 killed**, each a break in the app the new test must catch, the tree
+checked unchanged after each. Killed: a released Unit called used;
+ADR-0052's message not shown; a new start said to wait for Units already
+back; a failed video called cancelled; the refused scene's settlement keeping
+the Unit reserved; the start's query letting a failed video whose Unit came
+back hold its project; a released Unit still counted as taken; the download
+offered for a video not delivered; and the test provider accepting a scene
+whose clip was not made.
+
+Not killed, and none a break a browser test can see:
+
+- **The domain's `holdsItsProject` made always true.** No running code calls
+  it: the start reads its query form, `findHoldingJob`, whose mutant above was
+  killed.
+- **The page asking for the player of a video not delivered.** The preview
+  service refuses such a video itself (`completedVersionOf`); the page's own
+  check is the second of two.
+- **The test provider's refusal marked retryable.** The attempt then ends
+  `FAILED_RETRYABLE` instead of `FAILED_TERMINAL`, and the settlement treats
+  both alike, by design (ADR-0083): nothing retries an attempt that made no
+  video.
+
+That last mutant was first counted killed: it ran after the provider-accepts
+mutant, whose job never ended and stayed in the local database, and the
+pipeline acts on every job. Run again on a new, empty database, as CI's, it
+survived. The test passed on such a database after the review's fixes too.
+
+### Review
+
+An independent review of the code commit `8db253e`, from git objects only,
+found nothing blocking. It confirmed that no clip kept in `.e2e/provider` can
+answer this test's request (a request's identity includes its photo's asset,
+new at each upload), that each check after the pipeline reads server-rendered
+text, that every check moved into `startVideo` intact, and that the dormancy
+rules hold. Its findings, each answered in the second commit:
+
+- **Should fix — ADR-0125 was cited but not yet written**, and nothing
+  recorded how running the steps in the test departs from the second test's
+  spawned command. Added: ADR-0125, which says what the test gives up (the
+  command's full environment check, and the three-minute stop of a process
+  group) and why the command is not used.
+- **Nits.** The test now checks the run's counts, so the failure is shown to
+  be the provider's refusal and not another way of ending a job; an error that
+  is not the app's own is reported by its kind only, as the command does,
+  since its text may name the database's host or user; a failing disconnect
+  no longer hides the run's own error; the limits come from the command's own
+  argument parser; the project page is read again without the start's notice
+  (the second test's reload keeps it, which nothing there reads); two
+  comments reworded. `CHANGELOG.md` has had no entry since Phase 5C; as in
+  every milestone since, the commit list with the pull request is the change
+  log.
+
+### Required documentation
+
+| Item | Where |
+| --- | --- |
+| Architecture diagram | `docs/architecture.md`: the browser test's row |
+| Entity-relationship diagram | Not applicable: no schema change |
+| Critical sequence diagram | the diagram above |
+| OpenAPI / API change summary | Not applicable: no route, page or internal API changed |
+| Change log / release notes | the commit list with the pull request, and its description |
+| Database migration notes | `docs/migration-notes.md`, *GS-13d*: no migration |
+| Completion report | this section, and *The plan* below |
+
+Also updated: `docs/Roadmap.md` (GS-13d) and
+`docs/generation-e2e-gap-analysis.md` (GS-13d's ADR).
+
+### Activation status
+
+Nothing paid or scheduled is activated. The pipeline's steps run only when a
+browser test starts them, with the test provider, against a database on the
+machine; no workflow or script runs them by itself. Paid Provider Activation,
+production Provider credentials, production paid AI calls, the production
+scheduler and live Stripe charges remain BLOCKED.
+
+### Known limitations
+
+- **One way of not being made**: the test provider refusing the first scene.
+  A video cancelled, refused by moderation, or failed after its scenes were
+  made ends the same way on the page and is tested below the browser.
+- **The second start is offered, not pressed** (ADR-0125 Decision 3).
+- **The pipeline acts on every job in its database**, as the command does;
+  the database must be disposable (ADR-0121).
+
+### Remaining work
+
+GS-13d waits for the product owner's yes before merge. With it, GS-13 and the
+plan are complete.
+
+## The plan — complete
+
+Approved by the product owner on 2026-10-26
+(`/mnt/project-files/cto/generation-e2e-proposal.md`), from `dbe8038`. Its
+goal, from the proposal: on a development machine, with the test provider and
+no paid call, a person goes from sign-in through upload, photo approval,
+storyboard and **start** to a video generated and composed with the
+disclosure, then **previews and downloads** it; and when no valid video is
+delivered, the reserved Unit is **released** (ADR-0052 Decision 19).
+
+Both are met, and proved in a browser on every push: the second browser test
+(ADR-0124) goes from approved photos to a downloaded H.264 video with one Unit
+used, and the third (ADR-0125) from a start to a video not made with its Unit
+back. The first (ADR-0121) covers sign-up to analyzed photos.
+
+The plan is not a Roadmap phase, so it receives no `phase-N-complete` tag
+(see the top of this record).
+
+### Milestone pull requests
+
+Each merged with the product owner's yes. Dates are UTC.
+
+| Milestone | PR | ADR | Merge commit | Merged |
+| --- | --- | --- | --- | --- |
+| GS-1 a failed deliverable settles its job | #105 | 0082 | `e446548` | 2026-10-26 |
+| GS-2a a scene whose attempts ended without a video settles its job | #106 | 0083 | `ad535fd` | 2026-10-26 |
+| GS-2b a failed job's other scenes close | #107 | 0084 | `705332b` | 2026-10-26 |
+| GS-3 a shared folder holds development and CI objects | #108 | 0085 | `b9513aa` | 2026-10-26 |
+| GS-4a a storyboard is saved in one commit | #109 | 0086 | `b746e59` | 2026-10-27 |
+| GS-4b a generation starts in one commit (migration 32) | #110 | 0087 | `cc812e9` | 2026-10-27 |
+| GS-4c the start service | #112 | 0088 | `90f0be6` | 2026-10-27 |
+| GS-5a-1 the route table and price catalog are passed in | #113 | 0089 | `18080af` | 2026-10-27 |
+| GS-5a-2 the test route is built only outside production | #114 | 0090 | `e34cf3f` | 2026-10-27 |
+| GS-5b a billing cycle's revenue is read from its period | #115 | 0091 | `22f7099` | 2026-10-28 |
+| GS-6 the test provider makes a real clip from the photo | #116 | 0092 | `9830804` | 2026-10-28 |
+| GS-7a the concurrent-job limit and a waiting job's launch plan | #118 | 0094 | `c932aa1` | 2026-10-28 |
+| GS-7b the launch commit | #119 | 0095 | `a8fa555` | 2026-10-28 |
+| GS-7c-1 the gate moves only the source it locked | #120 | 0096 | `ccbfdc6` | 2026-10-28 |
+| GS-7c-2a finding an attempt to send | #121 | 0097 | `c18d3f8` | 2026-10-29 |
+| GS-7c-2b sending an attempt once | #122 | 0098 | `81ed350` | 2026-10-29 |
+| GS-7d-1 ending a waiting job that can never launch | #123 | 0099 | `8e267b2` | 2026-10-29 |
+| GS-7d-2 ending an attempt whose Property was deleted | #124 | 0100 | `aca6c5b` | 2026-10-29 |
+| GS-7d-3a ending a deleted Property's launched job | #126 | 0102 | `5d5bbdb` | 2026-10-29 |
+| GS-7d-3b Transaction G refuses a deleted Property's first video | #127 | 0103 | `d298251` | 2026-10-29 |
+| GS-8 planning a video's composition | #128 | 0104 | `2fc1380` | 2026-10-29 |
+| GS-9a the launch window moves | #129 | 0105 | `2285690` | 2026-10-30 |
+| GS-9b-1 the development pipeline's assembly | #130 | 0106 | `82cb2ac` | 2026-10-30 |
+| GS-9b-2 the pipeline's steps after the copy | #131 | 0107 | `dcf92cf` | 2026-10-30 |
+| GS-9c the development pipeline command | #132 | 0108 | `1220ca5` | 2026-10-30 |
+| GS-10a what the start screen offers | #133 | 0109 | `c7598a2` | 2026-11-02 |
+| GS-10b one video of a project at a time | #134 | 0110 | `fd6345c` | 2026-11-02 |
+| GS-10c the start route, in development only | #135 | 0111 | `f02673a` | 2026-11-03 |
+| GS-10d the start page, in development only | #136 | 0112 | `971b625` | 2026-11-03 |
+| GS-11a a project's video, as its customer sees it | #137 | 0113 | `78e62eb` | 2026-11-03 |
+| GS-11b a project's video on its project page | #138 | 0114 | `dc41123` | 2026-11-04 |
+| GS-12a serving a stored video, a range at a time | #139 | 0115 | `8360158` | 2026-11-04 |
+| GS-12b-1 a link to watch a delivered video | #140 | 0116 | `0d5fd2c` | 2026-11-04 |
+| GS-12b-2 the delivered video on the project page | #141 | 0117 | `cccbd7c` | 2026-11-04 |
+| GS-12c-1 a download link that names its file | #142 | 0118 | `80ec5d4` | 2026-11-05 |
+| GS-12c-2 a link to download a delivered video | #143 | 0119 | `5ca592e` | 2026-11-06 |
+| GS-12c-3 the download on the project page | #144 | 0120 | `c4360e4` | 2026-11-06 |
+| GS-13a the browser test | #145 | 0121 | `1615f63` | 2026-11-06 |
+| GS-13b analyze photos from the review page | #146 | 0122 | `d85a00b` | 2026-11-08 |
+| GS-13c-1 the start refuses scenes no route can make | #147 | 0123 | `edead63` | 2026-11-09 |
+| GS-13c-2 the browser test makes and downloads a video | #148 | 0124 | `75dca85` | 2026-11-09 |
+| GS-13d the browser test of a video that is not made | this | 0125 | reported at merge | |
+
+Merged alongside the plan, each with the product owner's yes, and not part of
+it: #111 (two flaky race tests made deterministic, `e7a04b5`), #117 (the
+billing decisions of 2026-10-28, ADR-0093, `94ac595`) and #125 (a Property's
+rename and deletion written only while it stands, ADR-0101, `9c8a8b8`).
+
+One migration in the plan: `00000000000032_generation_start_key` (GS-4b). The
+proposal's thirteen rows became 42 pull requests, each kept near 500 lines.
+
+### Test results
+
+On this pull request's code, as measured above: 7,016 unit tests in 272
+files, 1,884 database tests in 73 files, 172 media tests in 5 files and 3
+browser tests, all passing, and the production build. On `main`
+after the last merge, `75dca85`, CI's `verify`, `database`, `media` and `e2e`
+jobs passed (run 868). One post-merge run was red during the plan: run 688 on
+`cc812e9`, on an older race test, which #111 made deterministic.
+
+### Known limitations
+
+- **Development only.** The start route and page exist only outside
+  production with the test provider (ADR-0111, ADR-0112), and the pipeline
+  runs only when a person or a test starts it (ADR-0108). No production
+  provider route is verified, so HQ is offered only by the test provider.
+- **Storage is the shared folder**, for development and CI (ADR-0085).
+- **Playwright's Chromium cannot decode H.264**: the link and FFmpeg prove the
+  delivered video, not a browser playing it (ADR-0117 Decision 4).
+- **No completion-time estimate, and no email notification**: the project
+  page's progress is the notification (the proposal's defaults 3 and 4).
+- **One video of a project at a time**: after a delivery the project cannot
+  start another (ADR-0110), an open question in `docs/decisions/TODO.md`.
+
+### Remaining work
+
+Open in `docs/decisions/TODO.md` from this plan, each awaiting a decision or
+its own milestone: starting a project's video again after a delivery; what a
+new version of a delivered video shows while it is made; retrying a failed
+analysis from a page; letting a member fix a storyboard whose scenes the
+route cannot make; marking a development database positively before the
+pipeline runs; raw SQL instants in UTC whatever the session's time zone; and
+the cross-phase lock tests that still wait on a timer.
+
+Before any activation, as the proposal lists (each a separate proposal): the
+internal recovery budget, a real content-moderation vendor, rate limiting,
+the Google Cloud Storage adapter, and verification of the WaveSpeedAI route.
+Then Disclosure Mode B and Mode C, and recomposition from the Clean Master
+with the company logo. Paid Provider Activation, production Provider
+credentials, production paid AI calls, the production scheduler and live
+Stripe charges remain BLOCKED until the product owner authorizes each.

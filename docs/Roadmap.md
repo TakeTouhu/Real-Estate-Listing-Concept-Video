@@ -613,6 +613,15 @@ Unit used, the player's link answering a byte range, and the download saved
 under the project's name and decoded by FFmpeg as H.264 at 1280×720. The Units
 page ends at 39 of 40.
 
+**GS-13d — the browser test of a video that is not made** (ADR-0125, no
+migration): a third browser test starts a video as the second does, then runs
+the development pipeline's own steps in the test with a test provider that
+makes no clip. The project page shows the video failed in ADR-0052's words,
+its Unit back and not used, and no video to play or download; the start page
+offers the same video again; the Units page goes from 39 back to 40 of 40.
+GS-13 is complete, and with it the generation-to-preview plan
+(`docs/generation-e2e-completion.md`, *The plan*).
+
 Completion criteria as met: a composed deliverable is proved technically valid,
 and publication and Unit consumption are one atomic, replay-safe commit.
 

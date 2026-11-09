@@ -26,7 +26,7 @@ export const E2E_SHARED_STORAGE_DIR = join(REPO_ROOT, ".e2e", "shared");
  */
 export const E2E_PROVIDER_DIR = join(REPO_ROOT, ".e2e", "provider");
 
-/** The web app's key for signed links, which the commands the test runs sign and check with too. */
+/** The web app's key for signed links, which the commands and the pipeline's steps the test runs use too. */
 export const E2E_STORAGE_SIGNING_SECRET = "e2e-storage-signing-secret-not-a-secret";
 
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);

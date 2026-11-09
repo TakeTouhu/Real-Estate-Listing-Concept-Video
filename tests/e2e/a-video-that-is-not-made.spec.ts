@@ -12,7 +12,7 @@ import { startVideo } from "./support/video";
  * without one, so its Unit comes back (ADR-0052 Decision 19): the project
  * page says it failed in ADR-0052's words and that the Unit was not used,
  * offers no video to play or download, and offers a new start, which the
- * start page makes; the Units page counts the Unit again.
+ * start page offers too; the Units page counts the Unit again.
  */
 test("a video that is not made ends failed, gives its Unit back and can be started again", async ({
   page,
@@ -24,13 +24,22 @@ test("a video that is not made ends failed, gives its Unit back and can be start
   const photos = await makePhotos(testInfo.outputPath());
   await propertyWithAnalyzedPhotos(page, "Meguro Garden House", photos);
   const video = await startVideo(page, "Meguro Garden House", "Meguro Garden House tour");
-  const projectPage = page.url();
+  // The project page without the start's notice, which belongs to the start alone.
+  const projectPage = new URL(page.url());
+  projectPage.search = "";
   // The count leaves out a reserved Unit as well as a used one.
   await page.goto(unitsPage);
   await expect(page.getByText("39 of 40 left.")).toBeVisible();
 
-  await runPipelineMakingNoClip();
-  await page.goto(projectPage);
+  // It ends as a scene the test provider refused ends (GS-2): one settled, the job's other two closed, nothing copied.
+  const run = await runPipelineMakingNoClip();
+  expect({
+    settled: run.totals.attempt_failure_settlement.changed,
+    closed: run.totals.failed_job_scene_closure.changed,
+    copied: run.totals.provider_output.changed,
+  }).toEqual({ settled: 1, closed: 2, copied: 0 });
+  await page.goto(projectPage.toString());
+  await expect(page.getByText("The start was confirmed.")).toHaveCount(0);
   await expect(video).toContainText("Failed");
   await expect(video).toContainText("Normal · 15 seconds");
   // ADR-0052's words for a video that ended without one (Decisions 5 and 19).

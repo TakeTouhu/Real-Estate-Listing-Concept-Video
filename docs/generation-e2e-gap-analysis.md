@@ -508,3 +508,8 @@ what changes them (composition shares the project's length between its
 photos, so composing again does not). GS-13c-2: the browser test from the
 photos' approval to a downloaded video (ADR-0124), which runs the development
 pipeline itself, as a person would after the start.
+
+GS-13d (ADR-0125): the browser test of a video the test provider cannot make,
+with its Unit coming back, which runs the pipeline's own steps in the test
+with a clip maker that makes no clip, since the command takes no such option;
+and the plan's completion report.
