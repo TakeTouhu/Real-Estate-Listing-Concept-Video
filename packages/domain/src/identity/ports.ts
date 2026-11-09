@@ -1,4 +1,5 @@
 import type {
+  AccountLink,
   AuditLog,
   Credential,
   Group,
@@ -39,7 +40,8 @@ export interface TokenService {
 // --- Repository ports -------------------------------------------------------
 
 export interface UserRepository {
-  create(input: Omit<User, "createdAt" | "updatedAt">): Promise<User>;
+  /** A new user's email is not verified. */
+  create(input: Omit<User, "createdAt" | "updatedAt" | "emailVerifiedAt">): Promise<User>;
   findById(id: string): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
 }
@@ -353,6 +355,33 @@ export interface AuditLogRepository {
   listByOrganization(organizationId: string): Promise<AuditLog[]>;
 }
 
+/** The audit entry a link change commits together with the change itself. */
+export type AccountLinkAudit = Omit<AuditLog, "id" | "createdAt">;
+
+export interface UseEmailVerificationLinkInput {
+  readonly linkId: string;
+  readonly userId: string;
+  /** The address the link was sent to; the user's must still be it. */
+  readonly email: string;
+  readonly usedAt: Date;
+  readonly audit: AccountLinkAudit;
+}
+
+/** One-time links mailed to users (ADR-0128). */
+export interface AccountLinkRepository {
+  /** Keep a new, unused link, committing `audit` with it. */
+  create(link: Omit<AccountLink, "usedAt">, audit: AccountLinkAudit): Promise<AccountLink>;
+  findByTokenHash(tokenHash: string): Promise<AccountLink | null>;
+  /**
+   * In one transaction, mark an email-verification link used and its user's
+   * email verified, with `audit`. Applies only while the link is unused and
+   * unexpired at `usedAt`, and the user is active, still has the link's
+   * address and is not yet verified; otherwise writes nothing and answers
+   * `STALE`.
+   */
+  useForEmailVerification(input: UseEmailVerificationLinkInput): Promise<"APPLIED" | "STALE">;
+}
+
 /** Aggregate of all repositories + service ports passed to domain services. */
 export interface IdentityRepositories {
   readonly users: UserRepository;
@@ -367,6 +396,8 @@ export interface IdentityRepositories {
   readonly sessions: SessionRepository;
   /** A user's MFA factor and recovery codes, and the MFA columns of its sessions. */
   readonly mfa: MfaRepository;
+  /** One-time links mailed to users; deleting a user deletes its links. */
+  readonly accountLinks: AccountLinkRepository;
   readonly auditLogs: AuditLogRepository;
 }
 

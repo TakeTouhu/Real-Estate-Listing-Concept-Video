@@ -20,8 +20,27 @@ export interface User {
   readonly email: string;
   readonly name: string;
   readonly status: UserStatus;
+  /** When the person opened a verification link sent to `email` (ADR-0128); null until then. */
+  readonly emailVerifiedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/** What a one-time link mailed to a user does (ADR-0128); a password reset arrives in AT-4. */
+export type AccountLinkPurpose = "EMAIL_VERIFICATION" | "PASSWORD_RESET";
+
+/** A one-time link mailed to a user. Only its token's hash is kept. */
+export interface AccountLink {
+  readonly id: string;
+  readonly userId: string;
+  readonly purpose: AccountLinkPurpose;
+  readonly tokenHash: string;
+  /** The address the link was sent to. */
+  readonly email: string;
+  readonly createdAt: Date;
+  readonly expiresAt: Date;
+  /** When the link was used; it works once. */
+  readonly usedAt: Date | null;
 }
 
 export interface Credential {

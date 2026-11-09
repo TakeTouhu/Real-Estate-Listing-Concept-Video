@@ -2141,6 +2141,24 @@ them is **built**. Each item below records the settled decision and what remains
       simultaneous creations collide on the same next slug. The slug appears
       on no page and in no address; a random suffix, or one read for every
       taken suffix, would end both.
+- [ ] **Make email verification mandatory** (ADR-0052 Decision 18). *AT-3a
+      (ADR-0128, migration 33) built where a verified address is recorded,
+      the 24-hour one-time link and the service that sends and checks it,
+      dormant. Remaining (AT-3b): sign-up sends the link, the verify page, the
+      guard that keeps an unverified account on it, and the browser tests
+      reading the outbox.*
+- [ ] **Register an account in one transaction.** Sign-up
+      (`AuthService.register`, reachable today) writes the user, the
+      credential and `user.registered` in separate steps. A failure between
+      them leaves an account with no password, which no one can sign in to
+      and whose email can never register again, or one created unaudited. The
+      same repository pattern as ADR-0059 and ADR-0127 closes it; AT-3b, which
+      changes sign-up, is the natural place.
+- [ ] **Delete used and expired account links.** `account_links` rows stay
+      after they are used or expire (ADR-0128). They verify nothing, but the
+      table grows with every link sent. Deleting them needs a scheduled job,
+      which stays blocked until production scheduling is authorized
+      (ADR-0054 Decision 7).
 - [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes

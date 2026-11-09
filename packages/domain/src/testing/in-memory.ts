@@ -1,4 +1,6 @@
 import type {
+  AccountLinkAudit,
+  AccountLinkRepository,
   AuditLogRepository,
   Clock,
   CreateOrganizationWithOwnerInput,
@@ -30,9 +32,11 @@ import type {
   SessionRepository,
   SetMfaRequiredInput,
   TokenService,
+  UseEmailVerificationLinkInput,
   UserRepository,
 } from "../identity/ports";
 import type {
+  AccountLink,
   AuditLog,
   Credential,
   Group,
@@ -92,17 +96,86 @@ export function fakeTokenService(): TokenService {
 class InMemoryUserRepository implements UserRepository {
   private readonly byId = new Map<string, User>();
   constructor(private readonly clock: Clock) {}
-  create(input: Omit<User, "createdAt" | "updatedAt">): Promise<User> {
+  create(input: Omit<User, "createdAt" | "updatedAt" | "emailVerifiedAt">): Promise<User> {
     const now = this.clock.now();
-    const user: User = { ...input, createdAt: now, updatedAt: now };
+    const user: User = { ...input, emailVerifiedAt: null, createdAt: now, updatedAt: now };
     this.byId.set(user.id, user);
     return Promise.resolve(user);
+  }
+  /** Test-only: the stored user, read with no `await`. */
+  peek(id: string): User | undefined {
+    return this.byId.get(id);
+  }
+  /**
+   * Test-only: replace a stored user, as no product path yet changes a user's
+   * address or status.
+   */
+  put(user: User): void {
+    this.byId.set(user.id, user);
   }
   findById(id: string): Promise<User | null> {
     return Promise.resolve(this.byId.get(id) ?? null);
   }
   findByEmail(email: string): Promise<User | null> {
     return Promise.resolve([...this.byId.values()].find((u) => u.email === email) ?? null);
+  }
+}
+
+/**
+ * One-time links (ADR-0128), held to what the database holds them to: a taken
+ * identifier or token hash and an unknown user are refused, as is a link that
+ * expires before it is made or is used before it is made, and an audit entry
+ * that cannot be appended takes the change back out.
+ */
+class InMemoryAccountLinkRepository implements AccountLinkRepository {
+  private readonly byId = new Map<string, AccountLink>();
+  constructor(
+    private readonly clock: Clock,
+    private readonly users: InMemoryUserRepository,
+    private readonly auditLogs: AuditLogRepository,
+  ) {}
+  async create(link: Omit<AccountLink, "usedAt">, audit: AccountLinkAudit): Promise<AccountLink> {
+    if (this.byId.has(link.id)) throw new Error("Unique constraint failed on the fields: (`id`)");
+    const links = [...this.byId.values()];
+    if (links.some((l) => l.tokenHash === link.tokenHash)) {
+      throw new Error("Unique constraint failed on the fields: (`tokenHash`)");
+    }
+    if (!this.users.peek(link.userId)) throw new Error("Foreign key constraint violated: account_links_userId_fkey");
+    if (link.expiresAt.getTime() <= link.createdAt.getTime()) throw new Error("violates account_links_window_check");
+    const stored: AccountLink = { ...link, usedAt: null };
+    this.byId.set(stored.id, stored);
+    try {
+      await this.auditLogs.append(audit);
+    } catch (error) {
+      this.byId.delete(stored.id);
+      throw error;
+    }
+    return stored;
+  }
+  findByTokenHash(tokenHash: string): Promise<AccountLink | null> {
+    return Promise.resolve([...this.byId.values()].find((l) => l.tokenHash === tokenHash) ?? null);
+  }
+  /** Checks and writes with no `await` in between, as the database's transaction does. */
+  async useForEmailVerification(input: UseEmailVerificationLinkInput): Promise<"APPLIED" | "STALE"> {
+    const link = this.byId.get(input.linkId);
+    const user = this.users.peek(input.userId);
+    if (!user || user.status !== "ACTIVE" || user.email !== input.email || user.emailVerifiedAt !== null) {
+      return "STALE";
+    }
+    if (!link || link.purpose !== "EMAIL_VERIFICATION" || link.userId !== input.userId) return "STALE";
+    if (link.email !== input.email || link.usedAt !== null) return "STALE";
+    if (link.expiresAt.getTime() <= input.usedAt.getTime()) return "STALE";
+    if (input.usedAt.getTime() < link.createdAt.getTime()) throw new Error("violates account_links_window_check");
+    this.byId.set(link.id, { ...link, usedAt: input.usedAt });
+    this.users.put({ ...user, emailVerifiedAt: input.usedAt, updatedAt: this.clock.now() });
+    try {
+      await this.auditLogs.append(input.audit);
+    } catch (error) {
+      this.byId.set(link.id, link);
+      this.users.put(user);
+      throw error;
+    }
+    return "APPLIED";
   }
 }
 
@@ -630,6 +703,7 @@ export interface PropertyAssignmentReleaser {
 }
 
 export interface TestRepositories extends IdentityRepositories {
+  readonly users: InMemoryUserRepository;
   readonly sessions: InMemorySessionRepository;
   readonly mfa: InMemoryMfaRepository;
   readonly auditLogs: InMemoryAuditLogRepository;
@@ -655,8 +729,9 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     return propertyLinks.unassign(organizationId, userId);
   });
   const sessions = new InMemorySessionRepository(clock);
+  const users = new InMemoryUserRepository(clock);
   return {
-    users: new InMemoryUserRepository(clock),
+    users,
     credentials: new InMemoryCredentialRepository(clock),
     organizations: new InMemoryOrganizationRepository(
       clock,
@@ -671,6 +746,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
     sessions,
     mfa: new InMemoryMfaRepository(sessions, auditLogs),
+    accountLinks: new InMemoryAccountLinkRepository(clock, users, auditLogs),
     auditLogs,
     propertyLinks,
   };

@@ -23,7 +23,7 @@ the colleague works on it. A person who forgets a password can reset it.
 | Individual permission grants | built, **no screen or route** | `PermissionGrantService`; ADR-0058 |
 | Property responsible user and group, and reach by them | built and enforced; **no screen changes an assignment** | `PropertyService`; ADR-0062, ADR-0064 |
 | Sending email | **none** (*a port and a development outbox since AT-1, ADR-0126*) | |
-| Email verification (ADR-0052 Decision 18) | **none**: sign-up signs the person in at once, and any text is taken as an email | `POST /api/auth/register`, `AuthService.register` |
+| Email verification (ADR-0052 Decision 18) | **none**: sign-up signs the person in at once, and any text is taken as an email (*links and their service since AT-3a, ADR-0128, dormant*) | `POST /api/auth/register`, `AuthService.register` |
 | Password reset (ADR-0052 Decision 18) | **none** | |
 | Seat limit (3 / 10 / 30 included users) | **not enforced**; no seat is recorded beyond the plan | `customer-plan-catalog.ts` |
 | Organization creation | three writes in separate steps (open TODO) (*one transaction since AT-2, ADR-0127*) | `OrganizationService` |
@@ -39,7 +39,7 @@ is split further where it would exceed about 500 changed lines.
 | --- | --- | --- |
 | AT-1 | Email port and development outbox, dormant | none |
 | AT-2 | Organization creation in one transaction | none |
-| AT-3 | Email verification | 1 |
+| AT-3 | Email verification (*split: AT-3a links and service, migration 33; AT-3b sign-up, verify page and guard*) | 1 |
 | AT-4 | Password reset | none |
 | AT-5 | Members page, read only, with seats used | none |
 | AT-6 | Invite and cancel, the seat limit, one pending invitation per email | 1 |

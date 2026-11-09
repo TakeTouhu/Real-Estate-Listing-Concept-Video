@@ -33,6 +33,7 @@ import type {
   User,
 } from "@app/domain";
 import { isPermission } from "@app/domain";
+import { createPrismaAccountLinkRepository } from "./account-link-repository";
 import { auditLogData } from "./audit-log-data";
 import { createPrismaGroupRepository } from "./group-repository";
 import { createPrismaMfaRepository } from "./mfa-repository";
@@ -90,6 +91,7 @@ function toUser(r: DbUser): User {
     email: r.email,
     name: r.name,
     status: r.status,
+    emailVerifiedAt: r.emailVerifiedAt,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
@@ -453,6 +455,7 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     invitations,
     sessions,
     mfa: createPrismaMfaRepository(prisma),
+    accountLinks: createPrismaAccountLinkRepository(prisma),
     auditLogs,
   };
 }

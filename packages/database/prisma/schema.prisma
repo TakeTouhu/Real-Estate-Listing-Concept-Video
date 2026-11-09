@@ -115,18 +115,47 @@ model Organization {
 }
 
 model User {
-  id          String         @id
-  email       String         @unique
-  name        String
-  status      UserStatus     @default(ACTIVE)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  credential  Credential?
-  memberships Membership[]
-  sessions    Session[]
-  mfaFactor   UserMfaFactor?
+  id              String         @id
+  email           String         @unique
+  name            String
+  status          UserStatus     @default(ACTIVE)
+  /// When the person opened a verification link sent to `email` (ADR-0128);
+  /// null until then.
+  emailVerifiedAt DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  credential      Credential?
+  memberships     Membership[]
+  sessions        Session[]
+  mfaFactor       UserMfaFactor?
+  accountLinks    AccountLink[]
 
   @@map("users")
+}
+
+enum AccountLinkPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+/// A one-time link mailed to a user (ADR-0128): it verifies the address it was
+/// sent to, or, from AT-4, resets the password. Only the token's SHA-256 is
+/// kept. A link works once (`usedAt`) and only until `expiresAt`.
+model AccountLink {
+  id        String             @id
+  userId    String
+  purpose   AccountLinkPurpose
+  /// SHA-256 of the link's token, as hex; never the token.
+  tokenHash String             @unique
+  /// The address the link was sent to.
+  email     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime           @default(now())
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("account_links")
 }
 
 /// A user's authenticator (TOTP) factor; the row exists exactly while MFA is on

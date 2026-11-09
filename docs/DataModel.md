@@ -34,6 +34,12 @@ governs.
 
 `id`, `email`, `name`, `status`, `created_at`, `updated_at`
 
+*Implemented with `emailVerifiedAt`, null until the person opens a
+verification link sent to `email` (AT-3a, ADR-0128). The links are
+`account_links`: one row per link mailed to a user, keeping only the SHA-256
+of its token, the address it was sent to, when it expires and when it was
+used.*
+
 ### Membership
 
 `id`, `organization_id`, `user_id`, `role`, `created_at`
